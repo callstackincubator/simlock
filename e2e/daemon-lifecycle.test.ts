@@ -296,7 +296,7 @@ describe("daemon lifecycle & recovery", () => {
         },
       },
     });
-    const idle = [
+    const targeted = [
       await waitForReadyDevice(env, "iPhone 16"),
       await waitForReadyDevice(env, "iPhone 15"),
     ];
@@ -312,6 +312,8 @@ describe("daemon lifecycle & recovery", () => {
     ]);
     expect(result.code, result.stderr).toBe(0);
     const held = result.json as { device: { driverDeviceId: string } };
+    // why: a leased learned kind keeps a spare ready copy (ADR 0069); stop shuts that one down too.
+    const idle = [...targeted, await waitForReadyDevice(env, "iPhone 17")];
     await env.driverLog.clear();
 
     expect((await env.cli(["daemon", "stop"])).code).toBe(0);

@@ -57,6 +57,6 @@ What others read:
 
 - **A warm target costs one create per lease.** Every virtual device serves one lease (ADR 0061 §2), so each grant spends a
   device; the pool creates and boots the next one off the lease path. It holds a slot and RAM while
-  it waits; a burst larger than `count` pays the boot.
+  it waits; a burst larger than the peak pays the boot. A learned kind keeps `max(peak - leased, 1)` ready while its copies are leased, a baseline kind counting those of every version (ADR 0069).
 - **A failing target retries forever.** The delay doubles from `RETRY_FIRST_MS` up to `RETRY_MAX_MS`, with no attempt limit; each
   try boots or creates a device. `retry.ts` is the one place to add a limit.

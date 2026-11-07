@@ -104,4 +104,4 @@ the status is stale.
 | [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6 |
 | [0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md) | A lease has a file folder on its worker that HTTP callers fill and read | Accepted; narrows 0005 Non-goals (file transfer) and §19b′, 0026 §1 (a core relay target) and 0028 §4 (a file PUT's deadline) |
 | [0068](0068-a-worker-pauses-warming-and-new-devices-under-host-memory-pressure.md) | A worker pauses warming and new devices under host memory pressure | Accepted; narrows 0029, adds a rank stage to 0009 |
-| [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Accepted — not yet implemented; narrows 0038 §2 and §3 |
+| [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Accepted; narrows 0038 §2 and §3 |

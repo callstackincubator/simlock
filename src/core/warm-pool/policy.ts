@@ -453,25 +453,17 @@ function plannedKinds(
 }
 
 /**
- * why: what a learned kind has: its ready idle devices, and the ones leased, reclaiming or under
- * an operation claim (a reclaim that has not yet given its claim up), which come back on their own.
- * A burst held at its peak so makes nothing more.
+ * why: the kind's devices under an open lease; the pool keeps a spare while they are held. A
+ * baseline kind is one row per name, so it counts the leased copies of every version of it, whatever
+ * their platform, model, OS or mode, as its peak does, not only those of the newest.
  */
-function haveOfKind(
-  view: WarmPolicyView,
-  isIdle: (device: VirtualDevice) => boolean,
-  spec: VirtualSpec,
-): number {
+function leasedOfKind(view: WarmPolicyView, spec: VirtualSpec): number {
   const leased = new Set(view.leases.map((lease) => lease.deviceId));
-  const ready = new Set(readyOfKind(view.devices, isIdle, spec).map((device) => device.id));
-  return view.devices.filter(
-    (device) =>
-      sameSpec(device.spec, spec) &&
-      (ready.has(device.id) ||
-        leased.has(device.id) ||
-        device.state === "reclaiming" ||
-        (device.state !== "provisioning" && view.isClaimed(device.id))),
-  ).length;
+  const ofKind = (device: VirtualDevice): boolean =>
+    spec.baseline
+      ? !device.spec.physical && device.spec.baseline?.name === spec.baseline.name
+      : sameSpec(device.spec, spec);
+  return view.devices.filter((device) => ofKind(device) && leased.has(device.id)).length;
 }
 
 /** The targets with those that resolved to one spec merged into one, counts summed. */
@@ -716,7 +708,10 @@ function planTargets(
       const filling = pending(spec);
       const configured = first[index] ?? { added: 0 };
       const missing =
-        Math.max(configuredCount - ready, learnedCount - haveOfKind(view, isIdle, spec)) -
+        Math.max(
+          configuredCount - ready,
+          Math.max(learnedCount - leasedOfKind(view, spec), 1) - ready,
+        ) -
         filling -
         configured.added;
       const learned =
