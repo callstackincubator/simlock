@@ -64,7 +64,7 @@ for (const entry of cases) {
       await expect(
         page.locator("#main").getByRole("heading", {
           level: 1,
-          name: headings[entry.name],
+          name: headings[entry.name] ?? entry.name,
           includeHidden: true,
         }),
       ).toBeAttached();
