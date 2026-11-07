@@ -1202,6 +1202,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await advance(rig, 329_000);
     expect(second.done()).toBe(false);
     await advance(rig, 1_000);
+    expect(second.done()).toBe(true);
     const answer = await envelopeOf(await second.promise);
 
     expect(answer.error).toMatchObject(refusal(queueTimeoutMessage, "COMMAND_FAILED"));
