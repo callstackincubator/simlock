@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { PNG } from "pngjs";
 
 export type VisibleState = unknown;
 
@@ -47,71 +48,48 @@ export async function visibleState(page: Page): Promise<VisibleState> {
   });
 }
 
-export async function compareCaptures(
-  page: Page,
+export function compareCaptures(
   first: Buffer,
   second: Buffer,
   firstState: VisibleState,
   secondState: VisibleState,
-): Promise<{
+): {
   matches: boolean;
   changedPixels: number;
   maxRgbDelta: number;
   alphaChanged: boolean;
   dimensionsMatch: boolean;
   stateMatches: boolean;
-}> {
+} {
   const stateMatches = JSON.stringify(firstState) === JSON.stringify(secondState);
-  const pixels = await page.evaluate(
-    async ({ a, b }) => {
-      const decode = async (encoded: string) => {
-        const binary = atob(encoded);
-        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-        const canvas = document.createElement("canvas");
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        const context = canvas.getContext("2d")!;
-        context.drawImage(bitmap, 0, 0);
-        bitmap.close();
-        return {
-          width: canvas.width,
-          height: canvas.height,
-          data: context.getImageData(0, 0, canvas.width, canvas.height).data,
-        };
-      };
-      const [left, right] = await Promise.all([decode(a), decode(b)]);
-      const dimensionsMatch = left.width === right.width && left.height === right.height;
-      let changedPixels = 0;
-      let maxRgbDelta = 0;
-      let alphaChanged = false;
-      if (dimensionsMatch) {
-        for (let offset = 0; offset < left.data.length; offset += 4) {
-          let changed = false;
-          for (let channel = 0; channel < 3; channel += 1) {
-            const delta = Math.abs(left.data[offset + channel]! - right.data[offset + channel]!);
-            maxRgbDelta = Math.max(maxRgbDelta, delta);
-            changed ||= delta !== 0;
-          }
-          if (left.data[offset + 3] !== right.data[offset + 3]) {
-            alphaChanged = true;
-            changed = true;
-          }
-          if (changed) changedPixels += 1;
-        }
+  const left = PNG.sync.read(first);
+  const right = PNG.sync.read(second);
+  const dimensionsMatch = left.width === right.width && left.height === right.height;
+  let changedPixels = 0;
+  let maxRgbDelta = 0;
+  let alphaChanged = false;
+  if (dimensionsMatch) {
+    for (let offset = 0; offset < left.data.length; offset += 4) {
+      let changed = false;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const delta = Math.abs(left.data[offset + channel]! - right.data[offset + channel]!);
+        maxRgbDelta = Math.max(maxRgbDelta, delta);
+        changed ||= delta !== 0;
       }
-      return { dimensionsMatch, changedPixels, maxRgbDelta, alphaChanged };
-    },
-    { a: first.toString("base64"), b: second.toString("base64") },
-  );
+      if (left.data[offset + 3] !== right.data[offset + 3]) {
+        alphaChanged = true;
+        changed = true;
+      }
+      if (changed) changedPixels += 1;
+    }
+  }
   return {
-    ...pixels,
+    dimensionsMatch,
+    changedPixels,
+    maxRgbDelta,
+    alphaChanged,
     matches:
-      stateMatches &&
-      pixels.dimensionsMatch &&
-      !pixels.alphaChanged &&
-      pixels.changedPixels <= 32 &&
-      pixels.maxRgbDelta <= 1,
+      stateMatches && dimensionsMatch && !alphaChanged && changedPixels <= 32 && maxRgbDelta <= 1,
     stateMatches,
   };
 }

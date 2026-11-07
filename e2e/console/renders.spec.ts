@@ -42,9 +42,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
     ["alpha change", alpha, false],
     ["dimensions", dimensions, false],
   ] as const) {
-    expect((await compareCaptures(page, base!, image!, "visible", "visible")).matches, label).toBe(
-      expected,
-    );
+    expect(compareCaptures(base!, image!, "visible", "visible").matches, label).toBe(expected);
   }
   for (const [label, left, right, changedPixels, maxRgbDelta, matches] of [
     [
@@ -72,8 +70,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
       false,
     ],
   ] as const) {
-    const result = await compareCaptures(
-      page,
+    const result = compareCaptures(
       Buffer.from(left, "base64"),
       Buffer.from(right, "base64"),
       "visible",
@@ -84,10 +81,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
     expect(result.alphaChanged, `${label} alpha`).toBe(false);
     expect(result.matches, `${label} raster budget`).toBe(matches);
   }
-  expect(
-    (await compareCaptures(page, base!, base!, "visible", "changed")).matches,
-    "visible state",
-  ).toBe(false);
+  expect(compareCaptures(base!, base!, "visible", "changed").matches, "visible state").toBe(false);
   await page.setContent(
     '<main><h1>Overview</h1><p style="color: black; width: 100px">8 workers</p><svg width="40" height="40"><path d="M0 0 L40 0 L40 40 L0 40 Z" /></svg></main>',
   );
@@ -114,7 +108,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
         );
     }, change);
     const changed = await visibleState(page);
-    const result = await compareCaptures(page, base!, base!, original, changed);
+    const result = compareCaptures(base!, base!, original, changed);
     expect(result.changedPixels, `${label} uses identical pixels`).toBe(0);
     expect(result.stateMatches, `${label} exact state`).toBe(false);
     expect(result.matches, `${label} cannot use raster allowance`).toBe(false);
@@ -212,8 +206,7 @@ for (const entry of cases) {
               first: { image: Buffer; state: unknown; pose: unknown },
               second: { image: Buffer; state: unknown; pose: unknown },
             ) => {
-              const comparison = await compareCaptures(
-                page,
+              const comparison = compareCaptures(
                 first.image,
                 second.image,
                 first.state,
@@ -449,6 +442,19 @@ for (const entry of cases) {
             ).toHaveCount(0);
             // why: Playwright's caret hiding repaints unfocused input borders differently on alternating captures.
             const first = await capture(`${entry.name}${suffix}`);
+            if (entry.name === "1-overview" && viewport.width === 1280 && run === "first") {
+              expect(
+                compareCaptures(first.image, first.image, first.state, first.state),
+                "real Overview PNG compares identical to itself",
+              ).toEqual({
+                dimensionsMatch: true,
+                changedPixels: 0,
+                maxRgbDelta: 0,
+                alphaChanged: false,
+                matches: true,
+                stateMatches: true,
+              });
+            }
             if (entry.name === "1-overview" && viewport.width === 1440 && run === "first") {
               const original = await visibleState(page);
               const heading = page.locator("main h1");
@@ -459,13 +465,7 @@ for (const entry of cases) {
               await heading.evaluate((element) => {
                 element.textContent = "Overview";
               });
-              const proof = await compareCaptures(
-                page,
-                first.image,
-                first.image,
-                original,
-                changed,
-              );
+              const proof = compareCaptures(first.image, first.image, original, changed);
               expect(proof.changedPixels, "visible mutation uses identical capture pixels").toBe(0);
               expect(proof.stateMatches, "visible overview heading mutation").toBe(false);
               expect(proof.matches, "visible mutation cannot use raster allowance").toBe(false);
