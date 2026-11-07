@@ -794,8 +794,8 @@ export interface ScriptedProcessExpectation {
 export class ScriptedProcessRunner implements ProcessRunner {
   readonly calls: ProcessInvocation[] = [];
   /**
-   * why: The handle each `spawn` returned, index-aligned with `calls`, so a test can assert what
-   * the caller did *with* the child rather than only how it was started. `unref` is the case
+   * why: The handle each `spawn` returned, so a test can assert what the caller did *with*
+   * the child rather than only how it was started. `unref` is the case
    * that needs it: nothing about the argv or the options says whether the event loop was
    * released, and a spawned child that stays referenced keeps the daemon alive after
    * `daemon stop`.
@@ -1133,7 +1133,8 @@ function captureLines(
   chunks: string[],
   lineEnd: LineEnd,
 ): void {
-  // why: No pipe means the child was spawned with `stdio: "ignore"`. Closing the buffer
+  // why: No stream means the child was spawned with its output detached (`stdio: "ignore"`, or a
+  // log file taking both descriptors). Closing the buffer
   // straight away is what keeps `for await (const line of handle.stdout)` a loop that
   // ends immediately rather than one that never yields and never returns.
   if (stream === null) {

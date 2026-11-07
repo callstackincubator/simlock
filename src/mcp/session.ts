@@ -128,7 +128,8 @@ export class McpSession {
   readonly #leaseLostListeners = new Set<(notice: LeaseLostNotice) => void>();
   readonly #deviceHealthListeners = new Set<(notice: DeviceHealthNotice) => void>();
   /** why: Serializes every mutating (and `listDevices`/`status`, for simplicity) tool call on this
-   * session so concurrent `lease_simulator`/`release_simulator` calls never interleave. */
+   * session so concurrent `lease_simulator`/`release_simulator` calls never interleave. A command
+   * can run for minutes, so `runOnDevice`/`rotateDevice` stay off it -- see their own comments. */
   #mutations: Promise<void> = Promise.resolve();
   #heldLeaseId: string | undefined;
   /**

@@ -1146,12 +1146,6 @@ describe("FakeSimlockClient", () => {
     });
   });
 
-  /**
-   * why: Every operation, not a sample of them: a fake that guards two methods and forgets a third
-   * lets a test pass on the one call the real session makes over a wire it has already closed.
-   * Each entry stubs its own implementation so a rejection can only be the dead guard's, never
-   * `notStubbed`'s.
-   */
   it.each([
     ["getCatalog", (client: FakeSimlockClient) => client.getCatalog({})],
     ["getStatus", (client: FakeSimlockClient) => client.getStatus()],

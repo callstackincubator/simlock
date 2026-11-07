@@ -595,7 +595,7 @@ describe("createLeasing", () => {
     ).toHaveLength(1);
     expect(harness.bus.replay().filter((event) => event.event === "device.reclaimed")).toEqual([]);
     // why: ios.maxDevices is 1 in this harness's config, and a quarantined device still
-    // counts against it (see capacity.ts), so a second requester cannot provision a
+    // counts against it, so a second requester cannot provision a
     // fresh device either -- it must wait rather than silently inheriting the dirty
     // one, which is exactly the bug quarantine exists to prevent (#21).
     await expect(
