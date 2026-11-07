@@ -300,9 +300,11 @@ is open, done means closed as completed.
 
 18. **A refactor changes structure, never behaviour, and needs no spec.**
     *Kind.* A refactor issue is `refactor:new`, `refactor:ready` or
-    `refactor:blocked`. Its branch is `refactor/<n>`, and its commits and
-    PR title read `refactor(<module>): …`. A change that cannot keep every
-    line of this rule is a task, not a refactor.
+    `refactor:blocked`. Its branch is `refactor/<n>`. Its PR title reads
+    `refactor(<module>): …`, and so do the commits that refactor, each
+    ending `(#<n>)`; the pin commit and the commit that deletes the pins
+    read `test(pin): … (#<n>)`. A change that cannot keep every line of
+    this rule is a task, not a refactor.
 
     *Body.* `docs/internal/templates/refactor.md`: **Why** (one or two
     sentences), **Target shape** (what moves where, or what replaces
