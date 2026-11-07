@@ -71,9 +71,11 @@ describe("device.rotate", () => {
       configOverrides: {
         capabilities: { input: { enabled: options.inputModule } },
         ...(options.gateway === undefined ? {} : { gateway: options.gateway }),
-        ...(options.httpPort === undefined
-          ? {}
-          : { http: { enabled: true, host: "127.0.0.1", port: options.httpPort } }),
+        // why: a worker with no HTTP port asked for would serve the default 4701, which another test file of the run may hold (ADR 0046).
+        http:
+          options.httpPort === undefined
+            ? { enabled: false }
+            : { enabled: true, host: "127.0.0.1", port: options.httpPort },
       },
       dataDirectory,
       deviceDataTables: fakeDeviceDataTables,
