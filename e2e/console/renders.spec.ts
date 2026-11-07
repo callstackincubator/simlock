@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 
+import { compareCaptures } from "./capture-comparison.js";
 import { expect, mintJoinToken, settled, signIn, startDaemon, test } from "./fixtures.js";
 import { renderCases, renderFixture } from "./render-fixtures.js";
 
@@ -11,6 +12,45 @@ const viewports = [
   { width: 1280, height: 800 },
   { width: 390, height: 844 },
 ];
+
+test("fresh captures allow only bounded RGB raster differences and exact visible state", async ({
+  page,
+}) => {
+  const images = await page.evaluate(() => {
+    const make = (changed: number, delta: number, alpha = 255, width = 40) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      const image = context.createImageData(width, 1);
+      for (let i = 0; i < width; i += 1) {
+        image.data.set([100 + (i < changed ? delta : 0), 100, 100, i === 0 ? alpha : 255], i * 4);
+      }
+      context.putImageData(image, 0, 0);
+      return canvas.toDataURL("image/png").split(",")[1]!;
+    };
+    return [make(0, 0), make(32, 1), make(33, 1), make(1, 2), make(0, 0, 254), make(0, 0, 255, 39)];
+  });
+  const [base, within, tooMany, tooLarge, alpha, dimensions] = images.map((image) =>
+    Buffer.from(image, "base64"),
+  );
+  for (const [label, image, expected] of [
+    ["identical", base, true],
+    ["32 pixels at one level", within, true],
+    ["33 pixels", tooMany, false],
+    ["two RGB levels", tooLarge, false],
+    ["alpha change", alpha, false],
+    ["dimensions", dimensions, false],
+  ] as const) {
+    expect((await compareCaptures(page, base!, image!, "visible", "visible")).matches, label).toBe(
+      expected,
+    );
+  }
+  expect(
+    (await compareCaptures(page, base!, base!, "visible", "changed")).matches,
+    "visible state",
+  ).toBe(false);
+});
 
 async function connectedEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
