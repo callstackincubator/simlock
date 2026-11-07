@@ -951,6 +951,29 @@ describe("AgentDeviceSupervisor state directory", () => {
   });
 
   it.each([
+    ["simulators" as const, [versionRun(), daemonSpawn()]],
+    ["phones" as const, [versionRun(), phoneSpawn()]],
+  ])(
+    "a daemon start empties the %s daemon's sessions folder and leaves the rest of its state directory",
+    async (role, expectations) => {
+      const sessions = `${home}/${stemOf(role)}/sessions`;
+      const harness = await run({
+        expectations,
+        role,
+        stateDirContents: async (filesystem) => {
+          await filesystem.mkdirp(`${sessions}/adc-1`);
+          await filesystem.writeFileAtomic(`${sessions}/adc-1/events.ndjson`, "{}\n");
+          await filesystem.mkdirp(`${sessions}/tok_one_my-session`);
+        },
+      });
+
+      expect(stateOf(harness)).toBe("running");
+      expect(await harness.filesystem.readdir(sessions)).toEqual([]);
+      expect(await harness.filesystem.exists(`${home}/${stemOf(role)}/policy.json`)).toBe(true);
+    },
+  );
+
+  it.each([
     [
       "a symlink",
       async (filesystem: MemoryFilesystem) => {
