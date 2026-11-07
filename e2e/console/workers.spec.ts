@@ -20,6 +20,7 @@ import {
   test,
 } from "./fixtures.js";
 import { returnToTab } from "./tab.js";
+import { answer } from "./stub-answers.js";
 
 interface WorkerView {
   readonly id: string;
@@ -327,6 +328,77 @@ function expectedRow(view: WorkerView): {
 }
 
 test.describe("the workers page", () => {
+  test("an operator reads slots and sees accessible state counts, squares through ten and a meter with a printed fraction above ten", async ({
+    daemon,
+    page,
+  }) => {
+    const cases = [
+      { name: "zero", limit: 0, states: [], label: "No devices", fraction: "" },
+      {
+        name: "ten",
+        limit: 10,
+        states: ["leased", "leased", "absent", "quarantined"],
+        label: "2 leased, 1 absent, 1 quarantined, 6 free",
+        fraction: "",
+      },
+      {
+        name: "twenty",
+        limit: 20,
+        states: ["leased", "leased", "absent", "quarantined"],
+        label: "2 leased, 1 absent, 1 quarantined, 16 free",
+        fraction: "2 / 20",
+      },
+    ] as const;
+    const platform = (limit: number) => ({
+      atRamBudget: false,
+      limit,
+      maxRunning: limit,
+      overLimit: false,
+      reserved: 0,
+      running: 0,
+      used: 0,
+      warm: 0,
+    });
+    await answer(page, "/v1/workers", () => ({
+      workers: cases.map(({ limit, name, states }) => ({
+        id: `wrk_${name}`,
+        label: name,
+        connection: "connected",
+        drained: false,
+        lastSeenAt: Date.now(),
+        capacity: {
+          android: platform(0),
+          global: { maxRunning: limit, overLimit: false, reserved: 0, running: 0, warm: 0 },
+          ios: platform(limit),
+        },
+        devices: states.map((state, index) => ({
+          id: `dev_${name}_${index}`,
+          physical: false,
+          servesDefaultMode: true,
+          spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+          state,
+        })),
+      })),
+    }));
+    await openConsole(page, daemon);
+    for (const { name, limit, label, fraction } of cases) {
+      const shown = row(page, name);
+      const slots = shown.getByRole("img", { name: label, exact: true });
+      await expect(slots, name).toHaveCount(1);
+      if (limit > 0) await expect(slots, name).toBeVisible();
+      await expect(slots.locator(".slot"), name).toHaveCount(limit <= 10 ? limit : 0);
+      await expect(slots.locator(".load-bar"), name).toHaveCount(limit > 10 ? 1 : 0);
+      await expect(slots, name).toHaveText(fraction);
+      if (name === "ten") {
+        await expect(slots.locator('[title="iPhone 16 18.4, absent"]')).toHaveCount(1);
+        await expect(slots.locator('[title="iPhone 16 18.4, quarantined"]')).toHaveCount(1);
+      }
+      for (const index of [4, 5, 6]) {
+        await expect(shown.getByRole("cell").nth(index), name).toHaveText("—");
+      }
+    }
+  });
+
   test("the Fleet table lists every worker with its name, system, state word, slots group and its label, running of limit, and CPU, memory and disk", async ({
     page,
   }) => {
