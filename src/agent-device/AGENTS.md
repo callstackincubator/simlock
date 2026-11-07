@@ -61,8 +61,7 @@ Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serve
 3. If the CLI hangs up while the request waits, the front cancels it (`lease.cancel`, retried until it is gone).
 4. On the grant the front forwards the allocate to agent-device with the granted device's address in place of the CLI's device selectors (a phone's address is its enrolled id). `RoutedHostLink` picks the daemon.
 5. agent-device refuses: the front releases the simlock lease. It accepts: the front keeps a map entry and relays the reply with the granted device added.
-6. Commands carry the lease id: the request rules check them, renewals run except for standalone `boot`, and `devices` is filtered.
-7. Release: agent-device first, then `lease.release`, which deletes the device; the lease end finds no scope left.
+6. Release: agent-device first, then `lease.release`, which deletes the device; the lease end finds no scope left.
 
 ## Flow: through a gateway
 
