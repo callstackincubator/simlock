@@ -10,21 +10,62 @@ export async function visibleState(page: Page): Promise<VisibleState> {
       Array.from(style)
         .sort()
         .map((name) => [name, style.getPropertyValue(name)]);
-    return Array.from(document.querySelectorAll("body, body *"))
-      .filter((element) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.right > 0 &&
-          rect.bottom > 0 &&
-          rect.left < innerWidth &&
-          rect.top < innerHeight &&
-          style.visibility === "visible" &&
-          style.display !== "none"
-        );
-      })
+    const visible = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.right > 0 &&
+        rect.bottom > 0 &&
+        rect.left < innerWidth &&
+        rect.top < innerHeight &&
+        style.visibility === "visible" &&
+        style.display !== "none"
+      );
+    };
+    const svgPaint = Array.from(document.querySelectorAll("svg"))
+      .filter(visible)
+      .map((svg) => {
+        const roots: Element[] = [svg];
+        const seen = new Set<Element>();
+        const nodes: unknown[] = [];
+        for (let index = 0; index < roots.length; index += 1) {
+          const root = roots[index]!;
+          const members = [root, ...root.querySelectorAll("*")].filter((node) => !seen.has(node));
+          for (const node of members) {
+            seen.add(node);
+            const style = styles(getComputedStyle(node));
+            const matrix = node instanceof SVGGraphicsElement ? node.getScreenCTM() : null;
+            nodes.push({
+              markup: node.outerHTML,
+              style,
+              matrix:
+                matrix === null
+                  ? null
+                  : [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f],
+            });
+            const values = [
+              ...Array.from(node.attributes, (attribute) => attribute.value),
+              ...style.map(([, value]) => value!),
+            ];
+            for (const value of values) {
+              const references = [...value.matchAll(/url\(\s*["']?#([^"')\s]+)["']?\s*\)/g)].map(
+                (match) => match[1]!,
+              );
+              if (value.startsWith("#")) references.push(value.slice(1));
+              for (const id of references) {
+                const target = document.getElementById(id);
+                if (target !== null && !seen.has(target) && !root.contains(target))
+                  roots.push(target);
+              }
+            }
+          }
+        }
+        return nodes;
+      });
+    const elements = Array.from(document.querySelectorAll("body, body *"))
+      .filter(visible)
       .map((element) => {
         const rect = element.getBoundingClientRect();
         const input = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
@@ -46,6 +87,7 @@ export async function visibleState(page: Page): Promise<VisibleState> {
           after: pseudo("::after"),
         };
       });
+    return { elements, svgPaint };
   });
 }
 
