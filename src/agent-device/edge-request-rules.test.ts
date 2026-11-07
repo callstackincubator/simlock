@@ -993,14 +993,65 @@ describe("the agent-device front's request rules", () => {
     });
   });
 
-  describe("commands the policy file refuses", () => {
-    it("`boot` passes the rules and reaches agent-device, as before this PR", async () => {
-      const rig = await setUp();
-      await granted(rig, 1);
-
-      const params = await forwarded(rig, () => runCommand(rig, "boot", 1));
-
-      expect(params["command"]).toBe("boot");
-    });
+  it("A runner sends `boot` on its lease and simlock answers it; agent-device gets no `boot`", async () => {
+    for (const scenario of [
+      { platform: "ios", model: "iPhone 16", kind: "simulator", target: "mobile", flags: {} },
+      { platform: "android", model: "Pixel 8", kind: "emulator", target: "mobile", flags: {} },
+      { platform: "ios", model: "Apple TV 4K", kind: "simulator", target: "tv", flags: {} },
+      {
+        platform: "ios",
+        model: "iPhone 16",
+        kind: "simulator",
+        target: "mobile",
+        flags: { udid: true },
+      },
+      {
+        platform: "ios",
+        model: "iPhone 16",
+        kind: "simulator",
+        target: "mobile",
+        flags: { device: true },
+      },
+      {
+        platform: "android",
+        model: "Pixel 8",
+        kind: "device",
+        target: "mobile",
+        flags: {},
+        physical: true,
+      },
+    ]) {
+      const rig: Rig = scenario.physical
+        ? await setUpWithPhone()
+        : await setUp({ drivers: bothDrivers });
+      rig.fake.nameDeviceInNextReply("none");
+      await granted(rig, 1, {
+        platform: scenario.platform,
+        target: scenario.target,
+        ...(scenario.physical ? { physical: true } : {}),
+      });
+      const address = scenario.physical ? phoneSerial : idOf(rig, 1);
+      const flags =
+        "udid" in scenario.flags
+          ? { udid: address }
+          : "device" in scenario.flags
+            ? { device: `simlock-${address}` }
+            : {};
+      const answer = await envelopeOf(await runCommand(rig, "boot", 1, { flags }));
+      expect(answer.result).toMatchObject({
+        ok: true,
+        data: {
+          platform: scenario.platform,
+          target: scenario.target,
+          device: "device" in scenario.flags ? `simlock-${address}` : scenario.model,
+          id: address,
+          kind: scenario.kind,
+          booted: true,
+        },
+      });
+      expect(
+        commandsReceived(rig).filter((request) => request.params?.["command"] === "boot"),
+      ).toEqual([]);
+    }
   });
 });
