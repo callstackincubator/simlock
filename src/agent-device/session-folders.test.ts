@@ -27,10 +27,11 @@ describe("agent-device session folders on a worker", () => {
       join(sessions, `${principals.one}_x_.._.._.._victim`),
     ];
     const other = join(sessions, `${principals.two}_${hex(2)}`);
-    // why: the wire-supplied name `x/../../../victim` must not reach a folder outside `sessions/`.
-    const victim = join(dirname(sessions), "victim");
+    // why: the in-memory filesystem keeps `..` as a name, so this folder is the exact path a lease end would remove if the wire-supplied name `x/../../../victim` reached it with its separators; `join` would fold it away.
+    const victim = `${sessions}/${principals.one}_x/../../../victim`;
     await sessionFolder(rig, join(sessions, `${principals.one}_x`));
-    for (const path of [...own, other, victim]) await sessionFolder(rig, path);
+    for (const path of [...own, other]) await sessionFolder(rig, path);
+    await rig.filesystem.mkdirp(victim);
 
     await release(rig, 1);
     await expect
