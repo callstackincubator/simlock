@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 
 import { compareCaptures, visibleState } from "./capture-comparison.js";
 import { expect, mintJoinToken, settled, signIn, startDaemon, test } from "./fixtures.js";
@@ -189,6 +189,18 @@ for (const entry of cases) {
         "usage",
         "not-found",
       ]);
+      expect(
+        cases
+          .filter(({ name }) =>
+            ["4-device-screen-drawer", "6-lease-drawer", "7-baselines"].includes(name),
+          )
+          .map(({ name, path }) => [name, path]),
+        "reference 4, 6 and 7 use existing drawer and ready/stale table routes",
+      ).toEqual([
+        ["4-device-screen-drawer", "/fleet/wrk_1/dev_1?tab=devices&drawer=screen"],
+        ["6-lease-drawer", "/leases/lse_1/"],
+        ["7-baselines", "/baselines"],
+      ]);
       const captures = new Map<string, { image: Buffer; state: unknown; pose: unknown }>();
       for (const run of ["first", "fresh"] as const) {
         const gateway = await startDaemon("gateway");
@@ -242,22 +254,29 @@ for (const entry of cases) {
                 first.state,
                 second.state,
               );
+              const evidenceName = `${run}-${name}-${kind}`;
               const retainPair =
                 !comparison.matches ||
                 ((name === "1-overview-1280x800" || name === "4-device-screen-drawer-1280x800") &&
                   run === "fresh");
               if (retainPair) {
+                const firstPath = testInfo.outputPath(`${evidenceName}-first.png`);
+                const secondPath = testInfo.outputPath(`${evidenceName}-second.png`);
+                await writeFile(firstPath, first.image);
+                await writeFile(secondPath, second.image);
                 await testInfo.attach(`${name}-${kind}-first`, {
-                  body: first.image,
+                  path: firstPath,
                   contentType: "image/png",
                 });
                 await testInfo.attach(`${name}-${kind}-second`, {
-                  body: second.image,
+                  path: secondPath,
                   contentType: "image/png",
                 });
               }
+              const comparisonPath = testInfo.outputPath(`${evidenceName}-comparison.json`);
+              await writeFile(comparisonPath, JSON.stringify(comparison, null, 2));
               await testInfo.attach(`${name}-${kind}-comparison`, {
-                body: JSON.stringify(comparison, null, 2),
+                path: comparisonPath,
                 contentType: "application/json",
               });
               if (!comparison.matches) {
@@ -408,6 +427,45 @@ for (const entry of cases) {
                 page.locator("main tbody tr").filter({ hasText: "android-35-pixel8" }),
               ).not.toContainText("stale");
               await expect(page.getByText("stale", { exact: true })).toHaveCount(1);
+              const baselineReply = await page.evaluate(async (token) => {
+                const accepted = await fetch("/v1/baselines", {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                const refused = await fetch("/v1/baselines", {
+                  headers: { Authorization: "Bearer invalid-render-token" },
+                });
+                return {
+                  status: accepted.status,
+                  contentType: accepted.headers.get("content-type"),
+                  date: accepted.headers.get("date"),
+                  refusedStatus: refused.status,
+                  baselines: (
+                    (await accepted.json()) as {
+                      baselines: { name: string; staleReason?: string }[];
+                    }
+                  ).baselines.map(({ name, staleReason }) => [name, staleReason ?? null]),
+                };
+              }, gateway.tokens.operator);
+              expect(
+                baselineReply,
+                "authorized ready/stale data and refused baseline route",
+              ).toEqual({
+                status: 200,
+                contentType: "application/json",
+                date: "Fri, 02 Oct 2026 18:20:00 GMT",
+                refusedStatus: 401,
+                baselines: [
+                  ["ios-18.4-iphone16", null],
+                  ["ios-18.4-iphone16pro", null],
+                  ["ios-18.4-ipadair11", null],
+                  ["ios-17.5-iphone15", "Runtime was replaced"],
+                  ["android-35-pixel9", null],
+                  ["android-35-pixel9pro", null],
+                  ["android-35-pixel8", null],
+                  ["android-34-pixel8", null],
+                  ["android-35-pixeltablet", null],
+                ],
+              });
             }
             if (entry.name === "inbox")
               await expect(page.getByText("Nothing needs you.")).toBeVisible();
@@ -656,7 +714,8 @@ for (const entry of cases) {
             if (entry.name === "not-found" && viewport.width === 1440) {
               await page.getByRole("button", { name: "Sign out" }).click();
               await expect(page.getByLabel("Operator token")).toBeVisible();
-              await capture("sign-in");
+              const signInCapture = await capture("sign-in");
+              await assertCapture("sign-in", "repeated", signInCapture, await snapshot());
               await signIn(page, gateway.tokens.operator);
               await expect(
                 page.getByRole("heading", { level: 1, name: "Page not found" }),
@@ -676,9 +735,16 @@ for (const entry of cases) {
                 if (scenario === "long")
                   await expect(page.locator(`[title="${expected}"]`)).toBeVisible();
                 else await expect(page.getByText(expected, { exact: true })).toBeVisible();
+                await expect(page.locator(".connection [role=status]")).toHaveText("Connected");
                 await page.evaluate(() => document.fonts.ready);
                 await settled(page);
-                await capture(`leases-${scenario}`);
+                const scenarioCapture = await capture(`leases-${scenario}`);
+                await assertCapture(
+                  `leases-${scenario}`,
+                  "repeated",
+                  scenarioCapture,
+                  await snapshot(),
+                );
               }
             }
             if (entry.name === "8-activity" && viewport.width === 1440) {
