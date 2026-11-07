@@ -75,12 +75,18 @@ a close gives the device back.
 
 ### 3. Each lease is its own agent-device tenant
 
-Every call that names a lease (allocate, heartbeat, release, a command) is
-sent with a tenant made from the principal and the lease id, cut to
-agent-device's 128 characters with a hash when longer, the way the gateway
-tenant is cut today. A call that names no lease keeps the principal's
-tenant. Two leases never share a session, whatever session names their
-callers pick.
+Every call that names a lease the token holds is sent with a tenant made
+from the principal and the lease id: an RPC that names it (allocate,
+heartbeat, release, a command), and a non-RPC call that carries
+`x-agent-device-lease-id`, which agent-device's client sends on an upload
+and an artifact download. agent-device files uploads and artifacts under
+the caller's tenant and refuses them to another, so an `install` from an
+upload must share its lease's tenant. On a gateway the gateway makes the
+tenant (`gw.<instance>.<principal>.<lease id>`) and the worker uses it as it
+is. The tenant is cut to agent-device's 128 characters with a hash when
+longer, the way the gateway tenant is cut today. A call that names no lease
+keeps the principal's tenant. Two leases never share a session, whatever
+session names their callers pick.
 
 ```mermaid
 sequenceDiagram
@@ -97,9 +103,13 @@ sequenceDiagram
 
 ### 4. simlock's own errors carry a reason and a retriable flag
 
-Every JSON-RPC error the front makes itself carries `details.reason` from a
-fixed, documented list and `details.retriable`, as agent-device's own errors
-do. The `code` values stay `INVALID_ARGS`, `COMMAND_FAILED` and
+Every error the front makes itself carries a reason from a fixed,
+documented list and a retriable flag. A JSON-RPC error carries them where
+agent-device's own errors do, `error.data.details.reason` and
+`error.data.retriable` (agent-device's client reads `retriable` only
+there). A flat error (`{ code, error, ok: false }`, on the upload, artifact
+and health routes) carries `reason` and `retriable` beside `code`. The
+`code` values stay `INVALID_ARGS`, `COMMAND_FAILED` and
 `UNAUTHORIZED`, which agent-device's client knows. Errors agent-device makes
 pass through unchanged.
 
@@ -107,9 +117,9 @@ pass through unchanged.
 
 - budgie's relay and its error-text matching can go; the runner needs
   `retainOnClose: true` on its allocate and nothing else.
-- agent-device's iOS runner prewarm, which its own `boot` starts, does not
-  start on a front-answered boot. The `e2e` runner sends
-  `prepare ios-runner` right after `boot`, which does the same work.
+- agent-device does none of its own boot work for a front-answered boot.
+  The `e2e` runner sends `prepare ios-runner` right after `boot`, which
+  readies agent-device's iOS runner.
 - `session list` sent without a lease no longer shows sessions of leases.
 - A lease's session folders (`<tenant>_<session>`) take the lease's tenant;
   the lease end still finds them, since it reads the tenant from the
