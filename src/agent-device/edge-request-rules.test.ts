@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
-import { FakeClock } from "../ports/index.js";
+import { tokenIdentity } from "../auth/testing.js";
+import type { HttpDispatch } from "../http/dispatcher-session.js";
+import { FakeClock, NoopLogger } from "../ports/index.js";
+import { FrontMap } from "./front/front-map.js";
+import { createFront } from "./front/front.js";
+import { RelayHostLink, type FleetPort } from "./front/relay-host-link.js";
+import { Renewals } from "./front/renewals.js";
 import {
   phoneSerial,
   setUpWithPhone,
@@ -64,6 +70,7 @@ function flagsOf(params: Record<string, unknown>): Record<string, unknown> {
   return (params["flags"] ?? {}) as Record<string, unknown>;
 }
 
+// why: the decomposed front's gateway adoption is exercised at its HTTP mount with a fake fleet view.
 describe("the agent-device front's request rules", () => {
   describe("rule 1, the route", () => {
     it.each([
@@ -997,6 +1004,21 @@ describe("the agent-device front's request rules", () => {
   it("A runner sends `boot` on its lease and simlock answers it; agent-device gets no `boot`", async () => {
     for (const scenario of [
       { platform: "ios", model: "iPhone 16", kind: "simulator", target: "mobile", flags: {} },
+      {
+        platform: "ios",
+        model: "iPhone 16",
+        kind: "simulator",
+        target: "mobile",
+        flags: { target: "tv" },
+      },
+      {
+        platform: "ios",
+        model: "iPhone 16",
+        kind: "simulator",
+        target: "mobile",
+        flags: {},
+        runtime: { udid: "another-device" },
+      },
       { platform: "android", model: "Pixel 8", kind: "emulator", target: "mobile", flags: {} },
       { platform: "ios", model: "Apple TV 4K", kind: "simulator", target: "tv", flags: {} },
       {
@@ -1037,8 +1059,13 @@ describe("the agent-device front's request rules", () => {
           ? { udid: address }
           : "device" in scenario.flags
             ? { device: `simlock-${address}` }
-            : {};
-      const answer = await envelopeOf(await runCommand(rig, "boot", 1, { flags }));
+            : scenario.flags;
+      const answer = await envelopeOf(
+        await runCommand(rig, "boot", 1, {
+          flags,
+          ...(scenario.runtime && { runtime: scenario.runtime }),
+        }),
+      );
       expect(answer.result).toMatchObject({
         ok: true,
         data: {
@@ -1054,6 +1081,83 @@ describe("the agent-device front's request rules", () => {
         commandsReceived(rig).filter((request) => request.params?.["command"] === "boot"),
       ).toEqual([]);
     }
+
+    const clock = new FakeClock(1_000);
+    const identity = tokenIdentity("tok_one");
+    const leaseId = hex(1);
+    const worker = {
+      id: "w1",
+      platforms: ["ios"] as const,
+      leaseMaxTtlMs: 120_000,
+      drained: false,
+    };
+    const relay = vi.fn(async () => Response.json({ ok: false }));
+    const fleet: FleetPort = {
+      instanceId: "gw1",
+      startedAt: 0,
+      capableWorkers: () => [worker],
+      holder: () => worker,
+      leaseOf: () => ({ ownerId: identity.principal, workerId: worker.id }),
+      leasesOf: () => [
+        {
+          leaseId,
+          requesterId: leaseId,
+          workerId: worker.id,
+          connected: true,
+          refreshed: true,
+          listed: {
+            address: "adopted-udid",
+            platform: "ios",
+            model: "Apple TV 4K",
+            deviceClass: "tv",
+            ttlMs: 120_000,
+            ttlDeadline: 121_000,
+          },
+        },
+      ],
+      reach: () => ({ connected: true, refreshed: true }),
+      relay,
+      onLeaseRemoved: () => undefined,
+    };
+    const link = new RelayHostLink({ clock, fleet, leaseMaxTtlMs: 120_000 });
+    const front = createFront({
+      clock,
+      dispatch: (() => {
+        throw new Error("unexpected dispatch");
+      }) as unknown as HttpDispatch,
+      link,
+      logger: new NoopLogger(),
+      map: new FrontMap(clock),
+      maxRunMs: 120_000,
+      renewals: new Renewals(clock),
+    });
+    const adopted = await envelopeOf(
+      await front.handle(
+        new Request("http://simlock.test/v1/agent-device/rpc", {
+          method: "POST",
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "agent_device.command",
+            params: { command: "boot", meta: { leaseId } },
+          }),
+        }),
+        identity,
+      ),
+    );
+    expect(adopted.result).toMatchObject({
+      ok: true,
+      data: {
+        platform: "ios",
+        target: "tv",
+        device: "Apple TV 4K",
+        id: "adopted-udid",
+        kind: "simulator",
+        booted: true,
+      },
+    });
+    expect(relay).not.toHaveBeenCalled();
+    link.dispose();
   });
   it("A `boot` that names no lease, another token's lease, an ended lease or another device is refused", async () => {
     const rig = await setUp({ drivers: bothDrivers });
