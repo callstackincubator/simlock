@@ -235,7 +235,9 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rpcAnswer.status).toBe(503);
     expect(upload.status).toBe(503);
     expect(await health.text()).toContain(`${notAvailable}${reason}`);
-    expect((await envelopeOf(rpcAnswer)).error?.data).toMatchObject({
+    const rpcError = (await envelopeOf(rpcAnswer)).error;
+    expect(rpcError?.message).toBe(`${notAvailable}${reason}`);
+    expect(rpcError?.data).toMatchObject({
       details: { reason: "SIMLOCK_UNAVAILABLE" },
       retriable: false,
     });
