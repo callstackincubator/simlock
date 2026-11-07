@@ -897,6 +897,12 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["the phone"]);
 
     await restarted(rig, member, 1);
+    const beforeBoot = reached();
+    expect((await envelopeOf(await command(rig, "boot", 1))).result).toMatchObject({
+      ok: true,
+      data: { id: phoneSerial, kind: "device" },
+    });
+    expect(reached()).toBe(beforeBoot);
     expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
     expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
     expect(reached()).toBe(3);

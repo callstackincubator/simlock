@@ -2,12 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
 import { tokenIdentity } from "../auth/testing.js";
-import type { HttpDispatch } from "../http/dispatcher-session.js";
-import { FakeClock, NoopLogger } from "../ports/index.js";
-import { FrontMap } from "./front/front-map.js";
-import { createFront } from "./front/front.js";
-import { RelayHostLink, type FleetPort } from "./front/relay-host-link.js";
-import { Renewals } from "./front/renewals.js";
+import { FakeClock } from "../ports/index.js";
+import type { WorkerView } from "../modules/index.js";
+import { fakeGatewayContext } from "../modules/testing.js";
+import { agentDeviceModule } from "./definition.js";
 import {
   phoneSerial,
   setUpWithPhone,
@@ -1096,83 +1094,110 @@ describe("the agent-device front's request rules", () => {
       ).toEqual([]);
     }
 
-    const clock = new FakeClock(1_000);
-    const identity = tokenIdentity("tok_one");
-    const leaseId = hex(1);
-    const worker = {
-      id: "w1",
-      platforms: ["ios"] as const,
-      leaseMaxTtlMs: 120_000,
-      drained: false,
-    };
-    const relay = vi.fn(async () => Response.json({ ok: false }));
-    const fleet: FleetPort = {
-      instanceId: "gw1",
-      startedAt: 0,
-      capableWorkers: () => [worker],
-      holder: () => worker,
-      leaseOf: () => ({ ownerId: identity.principal, workerId: worker.id }),
-      leasesOf: () => [
-        {
-          leaseId,
-          requesterId: leaseId,
-          workerId: worker.id,
-          connected: true,
-          refreshed: true,
-          listed: {
-            address: "adopted-udid",
-            platform: "ios",
-            model: "Apple TV 4K",
-            deviceClass: "tv",
-            ttlMs: 120_000,
-            ttlDeadline: 121_000,
-          },
-        },
-      ],
-      reach: () => ({ connected: true, refreshed: true }),
-      relay,
-      onLeaseRemoved: () => undefined,
-    };
-    const link = new RelayHostLink({ clock, fleet, leaseMaxTtlMs: 120_000 });
-    const front = createFront({
-      clock,
-      dispatch: ((operation: string) => {
-        if (operation !== "lease.list") throw new Error(`unexpected dispatch ${operation}`);
-        return Promise.resolve({ leases: [{ id: leaseId, ttlDeadline: 121_000 }] });
-      }) as unknown as HttpDispatch,
-      link,
-      logger: new NoopLogger(),
-      map: new FrontMap(clock),
-      maxRunMs: 120_000,
-      renewals: new Renewals(clock),
-    });
-    const adopted = await envelopeOf(
-      await front.handle(
-        new Request("http://simlock.test/v1/agent-device/rpc", {
-          method: "POST",
-          body: JSON.stringify({
-            id: 1,
-            jsonrpc: "2.0",
-            method: "agent_device.command",
-            params: { command: "boot", meta: { leaseId } },
-          }),
-        }),
-        identity,
-      ),
-    );
-    expect(adopted.result).toMatchObject({
-      ok: true,
-      data: {
+    for (const scenario of [
+      {
         platform: "ios",
-        target: "tv",
-        device: "Apple TV 4K",
-        id: "adopted-udid",
+        model: "Apple TV 4K",
+        deviceClass: "tv",
+        physical: false,
         kind: "simulator",
-        booted: true,
+        target: "tv",
+        address: "adopted-udid",
       },
-    });
-    expect(relay).not.toHaveBeenCalled();
-    link.dispose();
+      {
+        platform: "ios",
+        model: "iPhone",
+        deviceClass: "phone",
+        physical: true,
+        kind: "device",
+        target: "mobile",
+        address: "iphone-id",
+      },
+      {
+        platform: "android",
+        model: "Pixel",
+        deviceClass: "phone",
+        physical: true,
+        kind: "device",
+        target: "mobile",
+        address: "pixel-id",
+      },
+    ] as const) {
+      const leaseId = hex(1);
+      const entry = {
+        gatewayLeaseId: leaseId,
+        workerLeaseId: leaseId,
+        workerId: "w1",
+        ownerId: "tok_one",
+        requesterId: leaseId,
+      };
+      const view = {
+        id: "w1",
+        label: "w1",
+        connection: "connected",
+        drained: false,
+        catalogReadAt: 1_000,
+        lease: { maxTtlMs: 120_000 },
+        catalog: [
+          { platform: scenario.platform, modelClasses: { [scenario.model]: scenario.deviceClass } },
+        ],
+        leases: [{ id: leaseId, deviceId: "record", ttlMs: 120_000, ttlDeadline: 121_000 }],
+      } as unknown as WorkerView;
+      const { ctx, relayed } = await fakeGatewayContext(
+        "agent-device",
+        agentDeviceModule.config.defaults,
+        { serving: [view] },
+      );
+      const loaded = await agentDeviceModule.loadGateway!();
+      const module = loaded.createGateway({
+        ...ctx,
+        leases: { ...ctx.leases, all: () => [entry], resolve: () => entry },
+        grantedDevices: () => [
+          {
+            id: "record",
+            workerId: "w1",
+            driverDeviceId: scenario.address,
+            address: scenario.physical ? "not-the-phone-id" : scenario.address,
+            physical: scenario.physical,
+            spec: {
+              platform: scenario.platform,
+              model: scenario.model,
+              physical: scenario.physical,
+            },
+          },
+        ],
+      } as never);
+      const handle = module.mount!({
+        dispatch: (() =>
+          Promise.resolve({ leases: [{ id: leaseId, ttlDeadline: 121_000 }] })) as never,
+      });
+      const adopted = await envelopeOf(
+        await handle(
+          new Request("http://simlock.test/v1/agent-device/rpc", {
+            method: "POST",
+            body: JSON.stringify({
+              id: 1,
+              jsonrpc: "2.0",
+              method: "agent_device.command",
+              params: { command: "boot", meta: { leaseId } },
+            }),
+          }),
+          tokenIdentity("tok_one"),
+        ),
+      );
+      expect(adopted.result).toMatchObject({
+        ok: true,
+        data: {
+          platform: scenario.platform,
+          target: scenario.target,
+          device: scenario.model,
+          id: scenario.address,
+          kind: scenario.kind,
+          booted: true,
+        },
+      });
+      expect(relayed).toEqual([]);
+    }
   });
   it("A `boot` that names no lease, another token's lease, an ended lease or another device is refused", async () => {
     const rig = await setUp({ drivers: bothDrivers });

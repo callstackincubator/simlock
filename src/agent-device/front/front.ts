@@ -387,6 +387,7 @@ function adoptLeases(context: FrontContext, identity: Identity): void {
       identity,
       model: lease.model,
       platform: lease.platform,
+      ...(lease.physical === undefined ? {} : { physical: lease.physical }),
       target: lease.target,
       ttlMs: lease.ttlMs,
     });
