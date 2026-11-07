@@ -27,6 +27,7 @@ import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-
 import { heartbeat } from "./heartbeat.js";
 import type { LinkStatus } from "./host-link.js";
 import { releaseEndedLeases } from "./ended.js";
+import { answerBoot } from "./boot.js";
 import { answerOrientation, isOrientationCall } from "./orientation.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
@@ -141,6 +142,10 @@ async function routeCall(
       return frontReply(failure("agent-device allocate failed"), read);
     });
     return untilHangUp(request.signal, work);
+  }
+  if (kind === "command" && commandName(asRecord(read.params)?.["command"]) === "boot") {
+    const answer = answerBoot(context, identity, read, leaseOf(kind, read));
+    if (answer !== undefined) return answer;
   }
   const forwarded = carry(request, read.text);
   if (kind === "heartbeat") {
@@ -373,6 +378,7 @@ function adoptLeases(context: FrontContext, identity: Identity): void {
     if (context.map.get(lease.leaseId) !== undefined) continue;
     context.map.add(lease.leaseId, {
       address: lease.address,
+      bootTarget: lease.target,
       adopted: true,
       deadline: lease.ttlDeadline,
       identity,
