@@ -2,51 +2,40 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { agentDeviceLeaseMaxTtlMs } from "./shared/daemon-environment.js";
-import { adminSession, granted, maxTtlMs, principals, setUp, type Rig } from "./test-support.js";
+import { release } from "./test-edge.js";
+import { command, granted, hex, principals, secrets, setUp, type Rig } from "./test-support.js";
 
-const wipeOperations = new Set(["reclaim", "shutdown", "destroy"]);
-
-function wipes(rig: Rig): number {
-  return rig.driver.calls.filter((call) => wipeOperations.has(call.operation)).length;
-}
-
-async function sessionFolder(rig: Rig, path: string, writtenAtMs: number): Promise<void> {
-  const file = join(path, "events.ndjson");
+async function sessionFolder(rig: Rig, path: string): Promise<void> {
   await rig.filesystem.mkdirp(path);
-  await rig.filesystem.writeFileAtomic(file, '{"version":1}\n');
-  rig.filesystem.defineAttributes(path, { modifiedAtMs: writtenAtMs });
-  rig.filesystem.defineAttributes(file, { modifiedAtMs: writtenAtMs });
+  await rig.filesystem.writeFileAtomic(join(path, "events.ndjson"), '{"version":1}\n');
 }
 
 describe("agent-device session folders on a worker", () => {
-  it("a lease end removes every agent-device session folder of both daemons that nothing wrote to for longer than the agent-device lease ceiling, and keeps one written since", async () => {
+  it("a lease end removes the session folders of that lease, including one a --session name made, and keeps another live lease's folder", async () => {
     const rig = await setUp();
-    const home = dirname(rig.stateDbPath);
-    const simulatorSessions = join(home, "agent-device", "sessions");
-    const phoneSessions = join(home, "agent-device-phones", "sessions");
-    const ceilingMs = agentDeviceLeaseMaxTtlMs(maxTtlMs);
-    const writtenLongAgo = rig.clock.now();
-    rig.clock.advance(ceilingMs + 60_000);
-    const stale = [
-      join(simulatorSessions, "adc-00000000000000000000000000000001"),
-      join(simulatorSessions, `${principals.one}_adc-00000000000000000000000000000001`),
-      join(phoneSessions, `${principals.two}_my-session`),
-    ];
-    const fresh = join(simulatorSessions, `${principals.two}_adc-00000000000000000000000000000002`);
-    for (const path of stale) await sessionFolder(rig, path, writtenLongAgo);
-    await sessionFolder(rig, fresh, rig.clock.now());
-
+    const sessions = join(dirname(rig.stateDbPath), "agent-device", "sessions");
     await granted(rig, 1);
-    await rig.daemon.dispatch("lease.release-all", {}, adminSession);
-    await expect.poll(() => wipes(rig)).toBeGreaterThan(0);
+    await granted(rig, 2, {}, { token: secrets.two });
+    await command(rig, "snapshot", 1, {}, { session: "my-session" });
+    const own = [
+      join(sessions, hex(1)),
+      join(sessions, `${principals.one}_${hex(1)}`),
+      join(sessions, `${principals.one}_my-session`),
+    ];
+    const other = join(sessions, `${principals.two}_${hex(2)}`);
+    for (const path of [...own, other]) await sessionFolder(rig, path);
+
+    await release(rig, 1);
+    await expect
+      .poll(() => rig.filesystem.exists(join(sessions, hex(1))), { timeout: 5_000 })
+      .toBe(false);
 
     const left = await Promise.all(
-      [...stale, fresh].map(async (path) => ({ exists: await rig.filesystem.exists(path), path })),
+      [...own, other].map(async (path) => ({ exists: await rig.filesystem.exists(path), path })),
     );
     expect(left).toEqual([
-      ...stale.map((path) => ({ exists: false, path })),
-      { exists: true, path: fresh },
+      ...own.map((path) => ({ exists: false, path })),
+      { exists: true, path: other },
     ]);
   });
 });
