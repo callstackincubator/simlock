@@ -1209,16 +1209,23 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("an agent-device allocate that answers an error, and a grant that names no device address, release the simlock lease, and the CLI gets the error", async () => {
     const rig: Rig = await setUp();
-    rig.fake.failNextAllocate({ code: "NO_DEVICE", message: "no such device" });
+    rig.fake.failNextAllocate({
+      code: "NO_DEVICE",
+      message: "no such device",
+      details: { reason: "AGENT_DEVICE_REASON" },
+    });
 
     const answer = await envelopeOf(await allocate(rig, 1));
 
-    expect(answer.error).toMatchObject({
-      data: { code: "NO_DEVICE", message: "no such device" },
+    expect(answer.error).toEqual({
+      code: -32000,
+      data: {
+        code: "NO_DEVICE",
+        message: "no such device",
+        details: { reason: "AGENT_DEVICE_REASON" },
+      },
       message: "no such device",
     });
-    expect(answer.error?.data).not.toHaveProperty("retriable");
-    expect(answer.error?.data).not.toHaveProperty("details");
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
 
     class NoAddressDriver extends FakeDriver {
