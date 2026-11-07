@@ -12,6 +12,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
+// why: tsc starts every top-level statement of a .d.ts at the start of a line, with a keyword,
+// and indents the rest of it or closes it with `}`.
+const STATEMENT =
+  /^(?:export|import|declare|interface|type|function|class|abstract|const|let|var|enum|namespace|module)\b/;
+
 const dir = resolve(process.argv[2] ?? ".");
 const out = mkdtempSync(join(tmpdir(), "module-surface-"));
 try {
@@ -51,35 +56,44 @@ function exportsOf(file, seen) {
   const statements = statementsOf(readFileSync(file, "utf8"));
   const add = (name, text) => found.set(name, [found.get(name), text].filter(Boolean).join(" "));
   for (const s of statements) {
-    const star = /^export \* from ["']([^"']+)["'];?$/.exec(s);
-    const starAs = /^export \* as (\w+) from ["']([^"']+)["'];?$/.exec(s);
-    const list = /^export (?:type )?\{([^}]*)\}(?: from ["']([^"']+)["'])?;?$/.exec(s);
-    if (star !== null) {
-      for (const [n, t] of exportsOf(target(file, star[1]), seen)) add(n, t);
-    } else if (starAs !== null) {
-      const inner = [...exportsOf(target(file, starAs[2]), new Set())].map(
-        ([n, t]) => `${n}: ${t}`,
-      );
-      add(starAs[1], `namespace { ${inner.sort().join("; ")} }`);
-    } else if (list !== null) {
-      for (const item of list[1]
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean)) {
-        const [, local, alias] = /^(?:type )?(\S+)(?: as (\S+))?$/.exec(item) ?? [];
-        if (local === undefined) continue;
-        const text =
-          list[2] === undefined
-            ? localDeclaration(file, statements, local, seen)
-            : exportsOf(target(file, list[2]), new Set()).get(local);
-        add(alias ?? local, text ?? `unresolved ${local}`);
-      }
-    } else if (s.startsWith("export ")) {
-      const name = declaredName(s);
-      if (name !== null) add(name, squash(s.replace(/^export (?:default )?(?:declare )?/, "")));
-    }
+    for (const [name, text] of exportedBy(s, { file, statements, seen })) add(name, text);
   }
   return found;
+}
+
+// why: one statement exports through a star, a list or its own declaration.
+function exportedBy(s, at) {
+  const star = /^export \* from ["']([^"']+)["']$/.exec(s);
+  if (star !== null) return [...exportsOf(target(at.file, star[1]), at.seen)];
+  const starAs = /^export \* as (\w+) from ["']([^"']+)["']$/.exec(s);
+  if (starAs !== null) {
+    const inner = [...exportsOf(target(at.file, starAs[2]), new Set())].map(
+      ([n, t]) => `${n}: ${t}`,
+    );
+    return [[starAs[1], `namespace { ${inner.sort().join("; ")} }`]];
+  }
+  const list = /^export (?:type )?\{([^}]*)\}(?: from ["']([^"']+)["'])?$/.exec(s);
+  if (list !== null)
+    return names(list[1]).map(([local, alias]) => [alias, listed(at, local, list[2])]);
+  const name = s.startsWith("export ") ? declaredName(s) : null;
+  return name === null ? [] : [[name, squash(s.replace(/^export (?:default )?(?:declare )?/, ""))]];
+}
+
+function listed(at, local, from) {
+  const text =
+    from === undefined
+      ? localDeclaration(at.file, at.statements, local, at.seen)
+      : exportsOf(target(at.file, from), new Set()).get(local);
+  return text ?? `unresolved ${local}`;
+}
+
+// why: `a, type b as c` names a local `b` exported as `c`.
+function names(list) {
+  return list
+    .split(",")
+    .map((x) => /^(?:type )?(\S+)(?: as (\S+))?$/.exec(x.trim()))
+    .filter((m) => m !== null)
+    .map(([, local, alias]) => [local, alias ?? local]);
 }
 
 // why: `export { a }` names a declaration of the same file, or an import of one from another.
@@ -89,11 +103,8 @@ function localDeclaration(file, statements, name, seen) {
   for (const s of statements) {
     const imported = /^import (?:type )?\{([^}]*)\} from ["']([^"']+)["'];?$/.exec(s);
     if (imported === null) continue;
-    for (const item of imported[1].split(",").map((x) => x.trim())) {
-      const [, from, as] = /^(?:type )?(\S+)(?: as (\S+))?$/.exec(item) ?? [];
-      if ((as ?? from) === name)
-        return exportsOf(target(file, imported[2]), new Set(seen)).get(from);
-    }
+    const hit = names(imported[1]).find(([, as]) => as === name);
+    if (hit !== undefined) return exportsOf(target(file, imported[2]), new Set(seen)).get(hit[0]);
   }
   return undefined;
 }
@@ -116,34 +127,11 @@ function squash(s) {
   return s.replace(/\s+/g, " ").trim();
 }
 
-// why: a statement ends at a `;` at depth 0, or at a `}` back at depth 0 that ends its line, as
-// an interface, a class or a namespace does; `export { a } from` ends at its `;`.
 function statementsOf(text) {
   const out = [];
-  let depth = 0;
-  let quote = null;
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quote !== null) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = null;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") quote = c;
-    else if ("{([<".includes(c) && !(c === "<" && text[i + 1] === "=")) depth++;
-    else if ("})]".includes(c) || (c === ">" && text[i - 1] !== "="))
-      depth = Math.max(0, depth - 1);
-    const rest = text.slice(i + 1);
-    const block = c === "}" && /^[ \t]*(?:\r?\n|$)/.test(rest) && !/^\s*[|&.[]/.test(rest);
-    const ends = depth === 0 && (c === ";" || block);
-    if (ends) {
-      const s = squash(text.slice(start, i + 1));
-      if (s !== "" && s !== ";") out.push(s.replace(/;$/, ""));
-      start = i + 1;
-    }
+  for (const line of text.split("\n")) {
+    if (STATEMENT.test(line) || out.length === 0) out.push(line);
+    else out[out.length - 1] += `\n${line}`;
   }
-  const tail = squash(text.slice(start));
-  if (tail !== "") out.push(tail);
-  return out;
+  return out.map((s) => squash(s).replace(/;$/, "")).filter((s) => s !== "");
 }

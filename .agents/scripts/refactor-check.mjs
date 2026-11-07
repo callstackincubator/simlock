@@ -112,50 +112,47 @@ function fromPull() {
 // why: a moved line is one some other file of the diff removes (or adds) with the same text, so
 // a split that carries a test or a helper along reads as no change, as `--color-moved` shows it.
 function checkTestLines() {
+  const { added, removed } = diffLines();
+  const judged = (l) => l.file !== null && TEST_FILE.test(l.file) && !PIN.test(l.file);
+  const lines = [
+    ...unmoved(added, removed).map((l) => ({ ...l, verb: "adds" })),
+    ...unmoved(removed, added).map((l) => ({ ...l, verb: "removes" })),
+  ].filter(judged);
+  for (const l of lines) {
+    if (ASSERTS.test(l.text)) {
+      failures.push(`${l.file}:${l.line} ${l.verb} an assertion that did not move: ${l.text}`);
+    } else if (!TRIVIAL.test(l.text)) {
+      reviews.push(`${l.file}:${l.line} ${l.verb} a test line that did not move: ${l.text}`);
+    }
+  }
+}
+
+// why: every added and removed line of the diff, with its file and its line on its own side.
+function diffLines() {
   const added = [];
   const removed = [];
-  let file = null;
-  let oldLine = 0;
-  let newLine = 0;
+  const at = { file: null, old: 0, new: 0 };
   for (const line of git("diff", "-U0", "--no-color", "--no-renames", base, head).split("\n")) {
-    if (line.startsWith("--- ")) continue;
-    if (line.startsWith("+++ ")) continue;
-    if (line.startsWith("diff --git ")) {
-      file = / b\/(.+)$/.exec(line)?.[1] ?? null;
-      continue;
-    }
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-    if (hunk !== null) {
-      oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
-    } else if (line.startsWith("+")) {
-      added.push({ file, line: newLine++, text: line.slice(1).trim() });
-    } else if (line.startsWith("-")) {
-      removed.push({ file, line: oldLine++, text: line.slice(1).trim() });
-    }
+    if (line.startsWith("diff --git ")) at.file = / b\/(.+)$/.exec(line)?.[1] ?? null;
+    else if (hunk !== null) [at.old, at.new] = [Number(hunk[1]), Number(hunk[2])];
+    else if (/^(?:\+\+\+|---) /.test(line)) continue;
+    else if (line.startsWith("+"))
+      added.push({ file: at.file, line: at.new++, text: line.slice(1).trim() });
+    else if (line.startsWith("-"))
+      removed.push({ file: at.file, line: at.old++, text: line.slice(1).trim() });
   }
-  const unmoved = (side, other) => {
-    const pool = new Map();
-    for (const l of other) pool.set(l.text, (pool.get(l.text) ?? 0) + 1);
-    return side.filter((l) => {
-      const left = pool.get(l.text) ?? 0;
-      if (left > 0) pool.set(l.text, left - 1);
-      return left === 0;
-    });
-  };
-  const judged = (l) => l.file !== null && TEST_FILE.test(l.file) && !PIN.test(l.file);
-  for (const [lines, verb] of [
-    [unmoved(added, removed).filter(judged), "adds"],
-    [unmoved(removed, added).filter(judged), "removes"],
-  ]) {
-    for (const l of lines) {
-      if (ASSERTS.test(l.text)) {
-        failures.push(`${l.file}:${l.line} ${verb} an assertion that did not move: ${l.text}`);
-      } else if (!TRIVIAL.test(l.text)) {
-        reviews.push(`${l.file}:${l.line} ${verb} a test line that did not move: ${l.text}`);
-      }
-    }
-  }
+  return { added, removed };
+}
+
+function unmoved(side, other) {
+  const pool = new Map();
+  for (const l of other) pool.set(l.text, (pool.get(l.text) ?? 0) + 1);
+  return side.filter((l) => {
+    const left = pool.get(l.text) ?? 0;
+    if (left > 0) pool.set(l.text, left - 1);
+    return left === 0;
+  });
 }
 
 function pinFiles() {
@@ -277,32 +274,37 @@ function titlesAt(dir, files) {
 }
 
 function checkTitles(baseDir, headDir) {
-  const status = git("diff", "--name-status", "-M", base, head).split("\n").filter(Boolean);
-  const before = new Set();
-  const after = new Set();
-  for (const row of status) {
-    const [kind, from, to] = row.split("\t");
-    const oldPath = from;
-    const newPath = to ?? from;
-    if (!kind.startsWith("A") && TEST_FILE.test(oldPath) && !PIN.test(oldPath)) before.add(oldPath);
-    if (!kind.startsWith("D") && TEST_FILE.test(newPath) && !PIN.test(newPath)) after.add(newPath);
-  }
+  const { before, after } = touchedTests();
   for (const p of [...before, ...after].filter((p) => /\.test\.tsx?$/.test(p) && !LISTED.test(p))) {
     reviews.push(`${p} is not a unit or timing test; compare its titles by hand`);
   }
   const was = titlesAt(
     baseDir,
-    [...before].filter((p) => LISTED.test(p)),
+    before.filter((p) => LISTED.test(p)),
   );
   const now = titlesAt(
     headDir,
-    [...after].filter((p) => LISTED.test(p)),
+    after.filter((p) => LISTED.test(p)),
   );
   console.log(`Tests: ${was.length} before, ${now.length} after.`);
   const lost = minus(was, now);
   for (const t of lost.slice(0, SHOWN)) failures.push(`a test title is gone: ${t}`);
   if (lost.length > SHOWN) failures.push(`and ${lost.length - SHOWN} more test titles are gone`);
   for (const t of minus(now, was)) reviews.push(`a test title only the head has: ${t}`);
+}
+
+// why: a renamed test file is the same tests under a new path: its old path is read at the base
+// and its new one at the head.
+function touchedTests() {
+  const judged = (p) => TEST_FILE.test(p) && !PIN.test(p);
+  const before = new Set();
+  const after = new Set();
+  for (const row of git("diff", "--name-status", "-M", base, head).split("\n").filter(Boolean)) {
+    const [kind, from, to = from] = row.split("\t");
+    if (!kind.startsWith("A") && judged(from)) before.add(from);
+    if (!kind.startsWith("D") && judged(to)) after.add(to);
+  }
+  return { before: [...before], after: [...after] };
 }
 
 function minus(a, b) {
