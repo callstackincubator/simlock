@@ -48,4 +48,20 @@ describe("spawnPassthrough", () => {
       spawnPassthrough(nodeCommand("process.exit(process.env.PATH ? 0 : 9)")),
     ).resolves.toBe(0);
   });
+
+  it("leaves no signal handler behind after a tool exits, fails to start, or runs again", async () => {
+    const counts = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+    const before = counts();
+
+    await spawnPassthrough(nodeCommand("process.exit(0)"));
+    expect(counts(), "after a successful command").toEqual(before);
+
+    await expect(
+      spawnPassthrough({ args: [], command: "simlock-no-such-tool", env: {} }),
+    ).rejects.toThrow();
+    expect(counts(), "after a spawn error").toEqual(before);
+
+    await spawnPassthrough(nodeCommand("process.exit(0)"));
+    expect(counts(), "after a repeated command").toEqual(before);
+  });
 });

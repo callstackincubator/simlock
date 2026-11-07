@@ -32,10 +32,8 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
     for (const [signal, handler] of handlers) process.off(signal, handler);
   };
   return new Promise<number>((resolve, reject) => {
-    child.once("error", (error) => {
-      detach();
-      reject(error);
-    });
+    child.once("error", reject);
+    // why: a failed spawn emits close after error, so close alone detaches on every path.
     child.once("close", (code, signal) => {
       detach();
       // A child killed by a signal has no exit code; report it the way a shell does, so a
