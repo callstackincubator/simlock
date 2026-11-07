@@ -439,7 +439,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
         { deviceMode: "full", model: "Pixel 8", osVersion: "35", physical: false },
       ],
     ] as const;
-
     for (const [n, extra, device] of cases) {
       rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
       rig.fake.nameDeviceInNextReply({});
@@ -533,11 +532,9 @@ describe("the agent-device front, through the whole worker daemon", () => {
       });
       await rig.daemon.dispatch("device.add", { id, platform }, adminSession);
       rig.driver.setPhysicalPresence(id, true);
-
       const answer = await envelopeOf(
         await allocate(rig, 1, { platform, ...extra, physical: true }),
       );
-
       expect(answer.result).toMatchObject({
         data: {
           lease: {
