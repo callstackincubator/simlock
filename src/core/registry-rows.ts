@@ -137,6 +137,7 @@ const DEVICE_OPTIONAL_NUMBERS = [
   ["lastLeaseEndedAt", "last_lease_ended_at"],
   ["readyAt", "ready_at"],
   ["shutdownAt", "shutdown_at"],
+  ["deletedAt", "deleted_at"],
   ["foreignStateDetectedAt", "foreign_state_detected_at"],
   ["foreignProvenanceDetectedAt", "foreign_provenance_detected_at"],
   ["recoveringSince", "recovering_since"],
@@ -319,6 +320,12 @@ function leaseValues(lease: LeaseRecord): SqliteValue[] {
     lease.lastRenewedAt,
     flagValue(lease.idChosenByRequester),
   ];
+}
+
+/** why: a purged device record leaves no row behind; the driver's own data table is not the registry's to clear. */
+export function deleteDevice(database: SqliteDatabase, id: string): void {
+  database.prepare("DELETE FROM device_enrolled_apps WHERE device_id = ?").run(id);
+  database.prepare("DELETE FROM devices WHERE id = ?").run(id);
 }
 
 export function writeLease(database: SqliteDatabase, lease: LeaseRecord): void {

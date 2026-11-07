@@ -129,8 +129,12 @@ ALTER TABLE devices ADD COLUMN except_categories TEXT;
 ALTER TABLE lease_requests ADD COLUMN except_categories TEXT;
 `;
 
+const REGISTRY_V5 = `
+ALTER TABLE devices ADD COLUMN deleted_at INTEGER;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4],
+  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4, REGISTRY_V5],
   name: "registry",
-  version: 4,
+  version: 5,
 };

@@ -102,6 +102,7 @@ describe("loadConfig", () => {
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
       update: { check: true },
+      devices: { deletedRetentionMs: 60 * 60_000 },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
@@ -253,6 +254,51 @@ describe("loadConfig", () => {
     ).rejects.toThrow(/"eventLog\.maxBytes".*at least 16 MiB/);
 
     expect(accepted.eventLog.maxBytes).toBe(sixteenMiB);
+  });
+
+  it("devices.deletedRetentionMs defaults to 3600000, is accepted from lease.requestRetentionMs up, and a smaller value is refused naming both keys", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const defaulted = await loadWith({});
+    const written = await loadWith({ devices: { deletedRetentionMs: 7_200_000 } });
+    const atTheLeaseKey = await loadWith({ devices: { deletedRetentionMs: 600_000 } });
+    const bothRaised = await loadWith({
+      devices: { deletedRetentionMs: 9_000_000 },
+      lease: { requestRetentionMs: 8_000_000 },
+    });
+
+    expect(defaulted.devices.deletedRetentionMs).toBe(3_600_000);
+    expect(written.devices.deletedRetentionMs).toBe(7_200_000);
+    expect(atTheLeaseKey.devices.deletedRetentionMs).toBe(600_000);
+    expect(bothRaised.devices.deletedRetentionMs).toBe(9_000_000);
+    for (const contents of [
+      { devices: { deletedRetentionMs: 599_999 } },
+      { lease: { requestRetentionMs: 7_200_000 } },
+    ]) {
+      await expect(loadWith(contents)).rejects.toThrow(
+        /"devices\.deletedRetentionMs".*lease\.requestRetentionMs/,
+      );
+    }
+    await expect(loadWith({ devices: { deletedRetentionMs: 0 } })).rejects.toThrow(
+      /"devices\.deletedRetentionMs"/,
+    );
+    // why: a gateway holds no device records, so a lease key above the hour it ignores is no refusal.
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { requestRetentionMs: 7_200_000 } }),
+    );
+    const gateway = await loadConfig({
+      configPath,
+      filesystem,
+      role: "gateway",
+      systemStats: createStats(),
+    });
+    expect(gateway.lease.requestRetentionMs).toBe(7_200_000);
   });
 
   it("metrics.retention defaults to the larger of 90 days and eventLog.retention, and is accepted as written", async () => {
