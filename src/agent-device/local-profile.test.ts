@@ -84,6 +84,9 @@ function fakeIosDriver(clock: FakeClock): FakeDriver {
   });
 }
 
+// why: a lease outlives a daemon restart and keeps its device, and the default limits follow the host's memory, so a small CI runner would queue the restart test's third allocate.
+const roomForLeases = { strategy: "fixed", config: { maxRunning: 10 } } as const;
+
 async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const host = options.host ?? "127.0.0.1";
   const { directory, filesystem, driver: resumed } = await dataDirectoryFor(options);
@@ -101,10 +104,12 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
         options.defaults === undefined
           ? {
               capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
+              capacity: roomForLeases,
               http: { enabled: options.http ?? true, host, port },
             }
           : {
               capabilities: { "agent-device": { command: "fake-agent-device" } },
+              capacity: roomForLeases,
               ...(options.defaults === "joined"
                 ? {
                     gateway: {
