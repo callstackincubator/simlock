@@ -144,10 +144,11 @@ describe("reaching a leased device", () => {
         try {
           command.kill(signal);
           // why: the broken CLI dies while the tool keeps its inherited pipes open, so close never arrives; parent death ends the probe without a timeout being the failure.
+          // why: a CLI that stays alive without forwarding must fail the named assertions below, not this wait, so the wait's timeout is swallowed.
           await waitFor(
             () => command.stdoutSoFar().includes(`received ${signal}\n`) || !processExists(cliPid!),
             { label: "tool received the signal or the CLI exited", timeout: 10_000 },
-          );
+          ).catch(() => undefined);
           expect
             .soft(command.stdoutSoFar(), `${tool} receives ${signal}`)
             .toContain(`received ${signal}\n`);
