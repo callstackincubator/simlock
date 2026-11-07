@@ -54,7 +54,7 @@ describes what the page now shows (documentation rule 9).
 ## Stages
 
 Stage 0 blocks the rest. Stages 1–6 run in parallel, each on its own
-branch from stage 0's merge, each one Opus agent. Stage 7 runs last.
+branch from stage 0's merge, each one GPT 6.1 Sol agent. Stage 7 runs last.
 
 ### 0. Foundation and harness
 
@@ -165,3 +165,29 @@ removal of anything in `ui/src/ds/` no page uses (fallow finds it).
   and the table narrows.
 - **Streaming page input:** view only (the plan); driving the device from
   the console is a product decision with its own ADR.
+
+## Delivery execution record
+
+Feature: [#1425](https://github.com/callstackincubator/simlock/issues/1425).
+The feature body and its subissues hold the technical specs, ownership,
+source gaps and overlap findings. They remain draft pending independent spec
+checking; this record grants no issue claim or implementation permission.
+
+| Stage | Task | Depends on |
+| --- | --- | --- |
+| 0. Foundation and render harness | [#1426](https://github.com/callstackincubator/simlock/issues/1426) | — |
+| 1. Overview | [#1427](https://github.com/callstackincubator/simlock/issues/1427) | stage 0 |
+| 2. Fleet and worker page | [#1428](https://github.com/callstackincubator/simlock/issues/1428) | stage 0 |
+| 3. Leases table, summary and inspector | [#1429](https://github.com/callstackincubator/simlock/issues/1429) | stage 0 |
+| 4. Device streaming page and Watch links | [#1430](https://github.com/callstackincubator/simlock/issues/1430) | stage 0 |
+| 5. Baselines grouped table and disk usage | [#1431](https://github.com/callstackincubator/simlock/issues/1431) | stage 0 |
+| 6. Activity and pages without renders | [#1432](https://github.com/callstackincubator/simlock/issues/1432) | stage 0 |
+| 7. Breakpoints, themes and final docs | [#1434](https://github.com/callstackincubator/simlock/issues/1434) | stages 1–6 |
+
+Stage 0's reviewed branch and pinned head are the parallel pages' baseline.
+The stages' “merge” above means merge-forward integration into the retained
+feature stack, not an early merge to `main`: stages 1–6 start after foundation
+review, stage 7 after their reviews and integration. Delivery rule 15 keeps
+all PRs open and merges the complete stack together. The orchestrator orders
+parallel branches into that stack as reviews pass. All delivery agents use
+GPT 6.1 Sol as the maintainer requested.
