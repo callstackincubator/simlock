@@ -378,6 +378,13 @@ test.describe("the workers page", () => {
 
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
+    for (const index of [4, 5, 6]) {
+      await expect(
+        row(page, host.label ?? host.id)
+          .getByRole("cell")
+          .nth(index),
+      ).toHaveText("—");
+    }
     await row(page, host.label ?? host.id)
       .getByRole("cell")
       .nth(3)
