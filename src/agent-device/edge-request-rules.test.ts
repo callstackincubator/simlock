@@ -11,6 +11,7 @@ import {
   simlockPicks,
   idOf,
   batch,
+  release,
 } from "./test-edge.js";
 import {
   secrets,
@@ -1053,5 +1054,31 @@ describe("the agent-device front's request rules", () => {
         commandsReceived(rig).filter((request) => request.params?.["command"] === "boot"),
       ).toEqual([]);
     }
+  });
+  it("A `boot` that names no lease, another token's lease, an ended lease or another device is refused", async () => {
+    const rig = await setUp({ drivers: bothDrivers });
+    await granted(rig, 1);
+    await granted(rig, 2, {}, { token: secrets.two });
+    expect((await envelopeOf(await runCommand(rig, "boot", 1))).result).toMatchObject({ ok: true });
+    for (const [lease, fields, message] of [
+      [undefined, {}, "refused: boot names no lease; open a device first"],
+      [2, {}, simlockPicks],
+      [1, { flags: { udid: idOf(rig, 2) } }, simlockPicks],
+      [1, { flags: { platform: "android" } }, simlockPicks],
+      [undefined, { flags: { udid: idOf(rig, 1) } }, simlockPicks],
+    ] as const) {
+      expect((await envelopeOf(await runCommand(rig, "boot", lease, fields))).error).toMatchObject(
+        refusal(message),
+      );
+    }
+    await rig.daemon.dispatch("lease.release", { leaseId: hex(1) }, adminSession);
+    expect((await envelopeOf(await runCommand(rig, "boot", 1))).error).toMatchObject(
+      refusal("lease ended by simlock; run disconnect, then open", "UNAUTHORIZED"),
+    );
+    await granted(rig, 3);
+    await release(rig, 3);
+    expect((await envelopeOf(await runCommand(rig, "boot", 3))).error).toMatchObject(
+      refusal("refused: this lease has ended; open a device"),
+    );
   });
 });
