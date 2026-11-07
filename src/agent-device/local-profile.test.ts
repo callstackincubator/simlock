@@ -84,7 +84,7 @@ function fakeIosDriver(clock: FakeClock): FakeDriver {
   });
 }
 
-// why: a lease outlives a daemon restart and keeps its device, and the default limits follow the host's memory, so a small CI runner would queue the restart test's third allocate.
+// why: a lease outlives a daemon restart and keeps its device, and the default iOS limit is half the host's CPU count, so a 4-vCPU CI runner (2 devices) would queue the restart test's third allocate until the test times out.
 const roomForLeases = { strategy: "fixed", config: { maxRunning: 10 } } as const;
 
 async function launch(options: LaunchOptions = {}): Promise<Rig> {
