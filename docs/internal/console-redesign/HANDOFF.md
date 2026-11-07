@@ -20,12 +20,12 @@ Do not automatically launch further builds, reviews or page stages.
 ## Work started
 
 Stage 0 ([#1426](https://github.com/callstackincubator/simlock/issues/1426))
-passed independent spec checking after three findings were corrected. It is
-`task:ready`, claimed by V3RON, and its isolated build was started from the
-parent's reference commits. The builder was instructed to finish its current
-coherent build cycles, commit/push a reviewable stopping point, report exact
-remaining tests and evidence, and start no audit/review. Its completion will
-be recorded below before final handoff. No page implementation was started.
+passed independent spec checking after three findings were corrected. Its
+isolated build stopped after the first shell cycle at the maintainer's
+request. The final observed issue label is `task:draft` despite its earlier
+promotion; reconcile the posted spec and label before claiming it again.
+The claim is released with one issue Handoff comment. No page implementation
+was started, and no audit, PR review or merge was performed.
 
 ## Spec checks
 
@@ -33,7 +33,7 @@ be recorded below before final handoff. No page implementation was started.
 | --- | --- | --- |
 | Feature #1425 | Two initial findings; corrected in posted bodies | Targeted recheck of baseline acceptance, scheduling and subsequent shared-value edits; final feature promotion |
 | 0 / #1426 | Ready: 0 of 3 open, no new findings | Finish current build, then audit/review when delivery resumes |
-| 1 / #1427 | Ready: 0 of 2 open, no new findings | Already `task:ready`; waits for reviewed foundation |
+| 1 / #1427 | Ready: 0 of 2 open, no new findings | Final observed label is draft; reconcile/re-promote on resume; waits for reviewed foundation |
 | 2 / #1428 | Original control finding closed; one dependent visual-wording contradiction | Acceptance clauses now aligned; targeted fix-check still needed; remains draft |
 | 3 / #1429 | Two findings: action-test ownership and clipboard failure | Both amended in posted task/parent; targeted recheck still needed; remains draft |
 | 4 / #1430 | Two test gaps and one legacy-query note | Overlay/aspect-ratio cases and legacy key corrected; clipboard cases aligned; targeted recheck still needed; remains draft |
@@ -96,5 +96,25 @@ is claimed by this handoff.
 
 ## Foundation result
 
-Pending the already-running builder's final report. No further delegate
-will be launched as part of this stopping request.
+- Draft [PR #1435](https://github.com/callstackincubator/simlock/pull/1435),
+  branch `task/1426`, head `dc4350d29f757a3fdaf0eee8b833cad07a9d6ba8`.
+  Clean checkout at `/Users/szymon.chmal/.t3/worktrees/pitlane/t3-f18f2fb8`;
+  local HEAD matches the pushed branch. PR targets main and retains the
+  approved design package. Keep it as the bottom of the feature stack.
+- One of nine spec lines built. Chromium `shell.spec.ts`: 13/13 passed,
+  including actual color-contrast axe in both themes. Website build/OpenAPI
+  check and commit/push hooks passed. Hosted CI was running at builder
+  handoff; no hosted-green claim. PR is draft and unreviewed.
+- Remaining: holder helpers/chips, capped slots, opaque device paths,
+  shared-control behavior, deterministic render harness, complete visual and
+  viewport acceptance, public-props DataTable coverage, and retired-token
+  substitution. Account styling and shared primitives remain incomplete.
+- Diagnostic dark/light token/proxy PNGs are under the builder checkout's
+  ignored `docs/internal/console-redesign/current/`. They contain live/loading
+  data, not deterministic render acceptance or paired PR evidence.
+- Initial red failed on sidebar bounds. Proxy daemon shutdown left its
+  fixture stream open; passing reconnect coverage uses browser
+  offline/return-to-tab. Fallow passed with advisory CSS/complexity warnings.
+- No further delegates will be launched for this stopping request. Resume
+  the remaining build cycles before audit or review; do not fork page builds
+  from this incomplete foundation.
