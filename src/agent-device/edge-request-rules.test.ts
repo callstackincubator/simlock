@@ -36,6 +36,7 @@ import {
   hex,
   allocate,
   granted,
+  leases,
   requestedSpecs,
   refusal,
   runCommand,
@@ -1135,8 +1136,9 @@ describe("the agent-device front's request rules", () => {
     const link = new RelayHostLink({ clock, fleet, leaseMaxTtlMs: 120_000 });
     const front = createFront({
       clock,
-      dispatch: (() => {
-        throw new Error("unexpected dispatch");
+      dispatch: ((operation: string) => {
+        if (operation !== "lease.list") throw new Error(`unexpected dispatch ${operation}`);
+        return Promise.resolve({ leases: [{ id: leaseId, ttlDeadline: 121_000 }] });
       }) as unknown as HttpDispatch,
       link,
       logger: new NoopLogger(),
@@ -1177,6 +1179,12 @@ describe("the agent-device front's request rules", () => {
     await granted(rig, 1);
     await granted(rig, 2, {}, { token: secrets.two });
     expect((await envelopeOf(await runCommand(rig, "boot", 1))).result).toMatchObject({ ok: true });
+    const tap = tapDispatch(rig);
+    tap.rejectNext("lease.list");
+    expect((await envelopeOf(await runCommand(rig, "boot", 1))).error?.data).toMatchObject({
+      message: "could not check your leases; try again",
+      retriable: true,
+    });
     for (const [lease, fields, message] of [
       [undefined, {}, "refused: boot names no lease; open a device first"],
       [2, {}, simlockPicks],
@@ -1191,7 +1199,6 @@ describe("the agent-device front's request rules", () => {
       );
     }
     await rig.daemon.dispatch("lease.release", { leaseId: hex(1) }, adminSession);
-    await runCommand(rig, "devices", undefined);
     expect((await envelopeOf(await runCommand(rig, "boot", 1))).error).toMatchObject(
       refusal("lease ended by simlock; run disconnect, then open", "UNAUTHORIZED"),
     );
@@ -1200,5 +1207,26 @@ describe("the agent-device front's request rules", () => {
     expect((await envelopeOf(await runCommand(rig, "boot", 3))).error).toMatchObject(
       refusal("refused: this lease has ended; open a device"),
     );
+    for (const fields of [{}, { flags: { udid: true } }, { flags: { device: true } }]) {
+      const expired = await setUp({ drivers: bothDrivers });
+      await granted(expired, 4, { ttlMs: 5_000 });
+      const address = idOf(expired, 4);
+      const selector =
+        "udid" in (fields.flags ?? {})
+          ? { flags: { udid: address } }
+          : "device" in (fields.flags ?? {})
+            ? { flags: { device: `simlock-${address}` } }
+            : {};
+      expect((await envelopeOf(await runCommand(expired, "boot", 4))).result).toMatchObject({
+        ok: true,
+      });
+      expired.clock.advance(5_001);
+      await expect.poll(() => leases(expired)).toEqual([]);
+      const before = commandsReceived(expired).length;
+      expect(
+        (await envelopeOf(await runCommand(expired, "boot", 4, selector))).error,
+      ).toMatchObject(refusal("lease ended by simlock; run disconnect, then open", "UNAUTHORIZED"));
+      expect(commandsReceived(expired)).toHaveLength(before);
+    }
   });
 });

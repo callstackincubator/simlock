@@ -1,8 +1,31 @@
 import type { Identity } from "../../auth/index.js";
-import { frontReply, leaseEndedByHost, refusal, successReply } from "../shared/replies.js";
+import { failure, frontReply, leaseEndedByHost, refusal, successReply } from "../shared/replies.js";
 import type { RpcRead } from "../shared/rpc.js";
 import { asRecord } from "../shared/selectors.js";
-import type { FrontContext } from "./context.js";
+import { listLeases, type FrontContext } from "./context.js";
+
+export async function checkBootLease(
+  context: FrontContext,
+  identity: Identity,
+  read: RpcRead & { readonly kind: "request" },
+  leaseId: string | undefined,
+): Promise<Response | undefined> {
+  if (leaseId === undefined) return undefined;
+  const held = context.map.get(leaseId);
+  if (held === undefined || held.identity.principal !== identity.principal) return undefined;
+  if (held.endedBy !== undefined) return answerBoot(context, identity, read, leaseId);
+  try {
+    const listed = await listLeases(context, identity);
+    if (listed.some((lease) => lease.id === leaseId)) return undefined;
+    if (context.link.stillHeld?.(leaseId) === true) {
+      return frontReply(failure("could not check your leases; try again", 502, true), read);
+    }
+    context.map.markEnded(leaseId);
+    return frontReply(leaseEndedByHost(), read);
+  } catch {
+    return frontReply(failure("could not check your leases; try again", 502, true), read);
+  }
+}
 
 export function answerBoot(
   context: FrontContext,

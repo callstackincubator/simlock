@@ -27,7 +27,7 @@ import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-
 import { heartbeat } from "./heartbeat.js";
 import type { LinkStatus } from "./host-link.js";
 import { releaseEndedLeases } from "./ended.js";
-import { answerBoot } from "./boot.js";
+import { answerBoot, checkBootLease } from "./boot.js";
 import { answerOrientation, isOrientationCall } from "./orientation.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
@@ -118,6 +118,10 @@ async function handleRpc(
   if (status.state !== "running") return notRunning(context, identity, read, status);
   if (kind === "wrapped-lease") {
     return frontReply(refusal("refused: send lease calls as lease RPCs"), read);
+  }
+  if (kind === "command" && commandName(asRecord(read.params)?.["command"]) === "boot") {
+    const refused = await checkBootLease(context, identity, read, leaseOf(kind, read));
+    if (refused !== undefined) return refused;
   }
   const checked = await checkRequest(context, identity, read, status.platforms, request);
   if (checked.kind === "refused") return frontReply(checked.reply, read);
