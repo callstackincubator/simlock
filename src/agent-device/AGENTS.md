@@ -44,8 +44,8 @@ Front:
 
 Lease end and stop:
 
-- `AgentDeviceLeaseEnd.leaseEnded` waits for a running allocate or release, then sends `agent_device.lease.release` with the recorded scope, under leasing's signal. It then removes that lease's folders under its daemon's `sessions/`: agent-device removes none itself.
-- Each daemon start empties that daemon's `sessions/` before agent-device runs: a restart ends every agent-device lease.
+- `AgentDeviceLeaseEnd.leaseEnded` waits for a running allocate or release, then sends `agent_device.lease.release` with the recorded scope, under leasing's signal. It then removes that lease's folders under its daemon's `sessions` folder: agent-device removes none itself.
+- Each daemon start empties that daemon's `sessions` folder before agent-device runs: a restart ends every agent-device lease.
 - A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
 
 Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)):
