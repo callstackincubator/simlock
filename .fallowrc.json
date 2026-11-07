@@ -40,9 +40,11 @@
     "vitest.mutate.config.ts",
     ".agents/scripts/*.mjs",
     ".dependency-cruiser.cycles.mjs",
-    "vendor/screen-capture/scripts/*.mjs"
+    "vendor/screen-capture/scripts/*.mjs",
+    "docs/internal/console-redesign/prototype/build.mjs"
   ],
   "dynamicallyLoaded": [
+    "docs/internal/console-redesign/prototype/d.mjs",
     "e2e/fake-driver/index.ts",
     // The command tree names its modules in an `import("./commands/<name>.js")` thunk, so
     // reachability is the tree's job and never a static edge; the tree's own module list is
