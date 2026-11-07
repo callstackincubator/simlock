@@ -33,6 +33,7 @@ import {
   type Envelope,
   type Rig,
   androidDriver,
+  iosDriver,
   taggedAndroidDriver,
   sleep,
   setUp,
@@ -302,6 +303,21 @@ describe("the agent-device front, through the whole worker daemon", () => {
       const received = receivedAllocate(rig, n);
       expect(received).not.toHaveProperty("osVersion");
       expect(received).not.toHaveProperty("imageTag");
+    }
+  });
+
+  it("a runner reads the device address from the allocate reply", async () => {
+    const rig: Rig = await setUp({ drivers: (clock) => [iosDriver(clock), androidDriver(clock)] });
+    for (const [n, platform, field] of [
+      [1, "ios", "udid"],
+      [2, "android", "serial"],
+    ] as const) {
+      const answer = await envelopeOf(await allocate(rig, n, { platform }));
+      expect(answer.result).toMatchObject({
+        ok: true,
+        data: { lease: { device: { [field]: idOf(rig, n) } } },
+      });
+      expect(idOf(rig, n)).not.toBe("undefined");
     }
   });
 
