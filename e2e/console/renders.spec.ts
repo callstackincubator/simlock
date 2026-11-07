@@ -51,7 +51,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
     "visible state",
   ).toBe(false);
   await page.setContent(
-    '<main><h1>Overview</h1><p style="color: black; width: 100px">8 workers</p></main>',
+    '<main><h1>Overview</h1><p style="color: black; width: 100px">8 workers</p><svg width="40" height="40"><path d="M0 0 L40 0 L40 40 L0 40 Z" /></svg></main>',
   );
   const original = await visibleState(page);
   for (const [label, change] of [
@@ -59,6 +59,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
     ["visible data", "data"],
     ["computed presentation", "style"],
     ["geometry", "geometry"],
+    ["chart path", "path"],
   ] as const) {
     await page.evaluate((kind) => {
       const heading = document.querySelector("h1")!;
@@ -67,6 +68,12 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
       paragraph.textContent = kind === "data" ? "9 workers" : "8 workers";
       paragraph.style.color = kind === "style" ? "red" : "black";
       paragraph.style.width = kind === "geometry" ? "101px" : "100px";
+      document
+        .querySelector("path")!
+        .setAttribute(
+          "d",
+          kind === "path" ? "M0 0 L40 0 L40 40 L20 20 L0 40 Z" : "M0 0 L40 0 L40 40 L0 40 Z",
+        );
     }, change);
     const changed = await visibleState(page);
     const result = await compareCaptures(page, base!, base!, original, changed);
@@ -120,7 +127,7 @@ for (const entry of cases) {
         "usage",
         "not-found",
       ]);
-      const captures = new Map<string, { image: Buffer; state: unknown }>();
+      const captures = new Map<string, { image: Buffer; state: unknown; pose: unknown }>();
       for (const run of ["first", "fresh"] as const) {
         const gateway = await startDaemon("gateway");
         try {
@@ -133,49 +140,85 @@ for (const entry of cases) {
           });
           try {
             const page = await context.newPage();
-            const capture = async (name: string) => {
-              const path = `${directory}/${name}.png`;
+            const capturePose = () =>
+              page.evaluate(() => ({
+                windowFocused: document.hasFocus(),
+                active: document.activeElement?.outerHTML.slice(0, 500),
+                focusVisible: document.activeElement?.matches(":focus-visible"),
+                animations: document.getAnimations().map((animation) => ({
+                  playState: animation.playState,
+                  currentTime: animation.currentTime,
+                  target:
+                    animation.effect instanceof KeyframeEffect
+                      ? animation.effect.target?.outerHTML.slice(0, 500)
+                      : null,
+                })),
+              }));
+            const snapshot = async (path?: string) => {
               await expect(
                 page.locator("input:focus, textarea:focus, [contenteditable]:focus"),
               ).toHaveCount(0);
               const state = await visibleState(page);
+              const before = await capturePose();
               const image = await page.screenshot({
-                ...(run === "first" ? { path } : {}),
+                ...(path === undefined ? {} : { path }),
                 animations: "disabled",
                 caret: "initial",
               });
-              if (run === "first") captures.set(name, { image, state });
+              const after = await capturePose();
+              return { image, state, pose: { before, after } };
+            };
+            const assertCapture = async (
+              name: string,
+              kind: "fresh" | "repeated",
+              first: { image: Buffer; state: unknown; pose: unknown },
+              second: { image: Buffer; state: unknown; pose: unknown },
+            ) => {
+              const comparison = await compareCaptures(
+                page,
+                first.image,
+                second.image,
+                first.state,
+                second.state,
+              );
+              if (!comparison.matches) {
+                await testInfo.attach(`${name}-${kind}-first`, {
+                  body: first.image,
+                  contentType: "image/png",
+                });
+                await testInfo.attach(`${name}-${kind}-second`, {
+                  body: second.image,
+                  contentType: "image/png",
+                });
+                await testInfo.attach(`${name}-${kind}-comparison`, {
+                  body: JSON.stringify(comparison, null, 2),
+                  contentType: "application/json",
+                });
+                await testInfo.attach(`${name}-${kind}-visible-state`, {
+                  body: JSON.stringify({ first: first.state, second: second.state }),
+                  contentType: "application/json",
+                });
+                await testInfo.attach(`${name}-${kind}-capture-pose`, {
+                  body: JSON.stringify({ first: first.pose, second: second.pose }),
+                  contentType: "application/json",
+                });
+              }
+              expect(
+                comparison.matches,
+                `${name} ${kind} capture: ${JSON.stringify(comparison)}`,
+              ).toBe(true);
+            };
+            const capture = async (name: string) => {
+              const current = await snapshot(
+                run === "first" ? `${directory}/${name}.png` : undefined,
+              );
+              if (run === "first") captures.set(name, current);
               else {
                 const previous = captures.get(name);
                 expect(previous, `${name} first capture exists`).toBeDefined();
-                const comparison = await compareCaptures(
-                  page,
-                  previous!.image,
-                  image,
-                  previous!.state,
-                  state,
-                );
-                if (!comparison.matches) {
-                  await testInfo.attach(`${name}-first`, {
-                    body: previous!.image,
-                    contentType: "image/png",
-                  });
-                  await testInfo.attach(`${name}-fresh`, { body: image, contentType: "image/png" });
-                  await testInfo.attach(`${name}-comparison`, {
-                    body: JSON.stringify(comparison, null, 2),
-                    contentType: "application/json",
-                  });
-                  await testInfo.attach(`${name}-visible-state`, {
-                    body: JSON.stringify({ first: previous!.state, fresh: state }),
-                    contentType: "application/json",
-                  });
-                }
-                expect(
-                  comparison.matches,
-                  `${name} fresh daemon and browser capture: ${JSON.stringify(comparison)}`,
-                ).toBe(true);
+                await assertCapture(name, "fresh", previous!, current);
               }
-              return image;
+              return current;
             };
             await renderFixture(page);
             await page.goto(gateway.url);
@@ -378,13 +421,19 @@ for (const entry of cases) {
               await heading.evaluate((element) => {
                 element.textContent = "Overview";
               });
-              const proof = await compareCaptures(page, first, first, original, changed);
+              const proof = await compareCaptures(
+                page,
+                first.image,
+                first.image,
+                original,
+                changed,
+              );
               expect(proof.changedPixels, "visible mutation uses identical capture pixels").toBe(0);
               expect(proof.stateMatches, "visible overview heading mutation").toBe(false);
               expect(proof.matches, "visible mutation cannot use raster allowance").toBe(false);
             }
-            const second = await page.screenshot({ animations: "disabled", caret: "initial" });
-            expect(second, `${entry.name} repeated capture`).toEqual(first);
+            const second = await snapshot();
+            await assertCapture(`${entry.name}${suffix}`, "repeated", first, second);
             if (run === "first")
               await testInfo.attach(entry.name, {
                 path: `${directory}/${entry.name}${suffix}.png`,
