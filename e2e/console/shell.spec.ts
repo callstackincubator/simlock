@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
@@ -14,6 +16,7 @@ import {
   withActionSurfaces,
 } from "./fixtures.js";
 import { addInboxItems, endingItem, waitingItem } from "./inbox-stub.js";
+import { returnToTab } from "./tab.js";
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -26,7 +29,7 @@ test.describe("the shell", () => {
     daemon,
     page,
     proxied,
-  }) => {
+  }, testInfo) => {
     const cases = [
       { theme: "dark", session: "token", count: 0 },
       { theme: "light", session: "token", count: 1 },
@@ -38,7 +41,6 @@ test.describe("the shell", () => {
       await page.unrouteAll({ behavior: "wait" });
       await page.emulateMedia({ colorScheme: entry.theme, reducedMotion: "reduce" });
       await addInboxItems(page, () => (entry.count ? [waitingItem("req_shell", 125_000)] : []));
-      const host = entry.session === "proxy" ? proxied.daemon : daemon;
       await page.goto(entry.session === "proxy" ? proxied.url : daemon.url);
       if (entry.session === "token") await signIn(page, daemon.tokens.operator);
       const nav = page.getByRole("navigation", { name: "Console" });
@@ -68,6 +70,14 @@ test.describe("the shell", () => {
         navHeight: "32px",
         navRadius: "8px",
       });
+      const captureDir = "docs/internal/console-redesign/current";
+      await mkdir(captureDir, { recursive: true });
+      const capturePath = `${captureDir}/shell-${entry.theme}-${entry.session}.png`;
+      await page.screenshot({ path: capturePath, animations: "disabled" });
+      await testInfo.attach(`shell-${entry.theme}-${entry.session}`, {
+        path: capturePath,
+        contentType: "image/png",
+      });
       const inbox = nav.getByRole("link", { name: /^Inbox/ });
       await expect(inbox.locator(".nav-count")).toHaveCount(entry.count);
       if (entry.count) await expect(inbox.locator(".nav-count")).toHaveText("1 item");
@@ -76,12 +86,14 @@ test.describe("the shell", () => {
       await nav.getByRole("link", { name: "Fleet", exact: true }).focus();
       await page.keyboard.press("Enter");
       await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
-      await host.stop();
+      await page.context().setOffline(true);
+      await returnToTab(page);
       try {
         await expect(page.locator(".connection")).toHaveText(/^Reconnecting/);
         await expect(nav.getByRole("button", { name: "Sign out" })).toBeVisible();
       } finally {
-        await host.start();
+        await page.context().setOffline(false);
+        await returnToTab(page);
       }
       await expect(page.locator(".connection")).toHaveText("Connected", { timeout: 30_000 });
       if (entry.session === "token") {
@@ -324,8 +336,8 @@ test.describe("the shell", () => {
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 
     await page.emulateMedia({ colorScheme: "dark" });
-    expect(await background()).toBe("rgb(14, 14, 15)");
-    expect(await text()).toBe("rgb(242, 242, 240)");
+    expect(await background()).toBe("rgb(12, 12, 14)");
+    expect(await text()).toBe("rgb(236, 236, 234)");
 
     await page.emulateMedia({ colorScheme: "light" });
     expect(await background()).toBe("rgb(248, 248, 247)");

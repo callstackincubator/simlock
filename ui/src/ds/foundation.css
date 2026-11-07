@@ -1,18 +1,16 @@
-/* The console's tokens and base elements. docs/internal/DESIGN.md is the guide these follow;
- * change both together. */
-
 :root {
   color-scheme: light dark;
 
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
-  --text-md: 1rem;
-  --text-lg: 1.25rem;
-  --text-xl: 1.75rem;
-  --text-2xl: 2rem;
+  --text-2xs: 0.65625rem;
+  --text-xs: 0.71875rem;
+  --text-sm: 0.78125rem;
+  --text-md: 0.8125rem;
+  --text-lg: 0.9375rem;
+  --text-xl: 1.3125rem;
+  --text-2xl: 1.75rem;
 
   --label-tracking: 0.08em;
 
@@ -24,13 +22,15 @@
   --space-8: 32px;
   --space-12: 48px;
 
-  --radius: 0;
+  --radius: 10px;
   --focus-width: 2px;
   --duration: 120ms;
 
   /* Light theme. */
   --bg: #f8f8f7;
   --surface: #f1f1ef;
+  --surface-2: #e9e9e7;
+  --nav-current: #fbe4d3;
   --field: #e9e9e7;
   --chip: #e6e6e3;
   --border: #dededb;
@@ -51,18 +51,20 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e0e0f;
-    --surface: #161618;
+    --bg: #0c0c0e;
+    --surface: #141416;
+    --surface-2: #1b1b1f;
+    --nav-current: #2a2016;
     --field: #1e1e21;
     --chip: #232326;
-    --border: #2b2b2f;
+    --border: #232327;
     --border-strong: #75757d;
-    --text: #f2f2f0;
-    --text-muted: #a1a1a8;
+    --text: #ececea;
+    --text-muted: #8e8e97;
     --accent: #ff7a1a;
     --accent-hover: #ff9442;
     --on-accent: #0e0e0f;
-    --accent-text: #ff8c42;
+    --accent-text: #ffa061;
     --selection: #7c2d12;
 
     --status-ok: #4ade80;
@@ -78,10 +80,6 @@
   box-sizing: border-box;
 }
 
-html {
-  scrollbar-gutter: stable;
-}
-
 html,
 body {
   margin: 0;
@@ -92,7 +90,8 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-md);
-  line-height: 1.5;
+  line-height: 1.45;
+  font-feature-settings: "tnum";
   -webkit-font-smoothing: antialiased;
 }
 
