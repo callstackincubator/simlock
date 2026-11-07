@@ -231,6 +231,19 @@ async function respond(route: Route, scenario: Scenario): Promise<void> {
 
 export async function renderFixture(page: Page, scenario: Scenario = "populated"): Promise<void> {
   await page.clock.setFixedTime(NOW);
+  // why: the real SSE body stays open, so route.fetch cannot replace its Date without buffering it.
+  await page.addInitScript((date) => {
+    const fetchDaemon = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await fetchDaemon(input, init);
+      if (new URL(response.url, location.href).pathname === "/v1/events/stream") {
+        const headers = new Headers(response.headers);
+        if (headers.has("date")) headers.set("date", date);
+        Object.defineProperty(response, "headers", { value: headers });
+      }
+      return response;
+    };
+  }, new Date(NOW).toUTCString());
   await page.route(
     (url) =>
       url.pathname.startsWith("/v1/") &&
