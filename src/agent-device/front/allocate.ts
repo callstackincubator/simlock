@@ -76,7 +76,6 @@ function notPlain(params: Record<string, unknown>): boolean {
   const provider = params["leaseProvider"];
   return (
     foreignBackend(params) ||
-    params["retainOnClose"] === true ||
     (present(provider) && provider !== "proxy") ||
     Object.entries(params).some(
       ([key, value]) => present(value) && (key.startsWith("provider") || key.startsWith("aws")),

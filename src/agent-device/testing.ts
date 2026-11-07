@@ -45,6 +45,7 @@ interface FakeAgentDeviceLease {
     readonly deviceKey: unknown;
   };
   readonly ttlMs: unknown;
+  readonly retainOnClose: boolean;
 }
 
 interface FakeFailure {
@@ -525,6 +526,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.leases.set(leaseId, {
       address,
       leaseId,
+      retainOnClose: params["retainOnClose"] === true,
       scope,
       tenant,
       ttlMs: params["ttlMs"],
@@ -532,7 +534,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, {
       data: {
         ...replyDevice(picked, address),
-        lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
+        lease: {
+          ...scope,
+          ...edit,
+          leaseId,
+          tenantId: tenant,
+          ttlMs: params["ttlMs"],
+          ...(params["retainOnClose"] === true ? { retainOnClose: true } : {}),
+        },
       },
       ok: true,
     });
@@ -706,7 +715,13 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       command === "close" ||
       (command === "batch" &&
         steps.some((step) => (step as { readonly command?: unknown }).command === "close"));
-    if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
+    if (
+      !closes ||
+      typeof leaseId !== "string" ||
+      this.leases.get(leaseId)?.retainOnClose ||
+      !this.leases.delete(leaseId)
+    )
+      return [];
     return [{ leaseId, outcome: "released" }];
   }
 }
