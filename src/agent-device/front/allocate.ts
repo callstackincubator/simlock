@@ -417,6 +417,9 @@ function withGrantedDevice<T extends { text: string | undefined }>(
   const lease = asRecord(asRecord(asRecord(body["result"])?.["data"])?.["lease"]);
   if (lease === undefined) return reply;
   lease["device"] = {
+    [addressField(device.spec.platform)]: device.spec.physical
+      ? device.driverDeviceId
+      : device.address,
     model: device.spec.model,
     osVersion: device.spec.osVersion,
     physical: device.spec.physical,

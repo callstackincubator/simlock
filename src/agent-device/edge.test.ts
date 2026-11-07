@@ -368,7 +368,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
       const result = (await envelopeOf(await allocate(rig, n, extra, {}))).result as {
         data: { device: unknown; lease: Record<string, unknown> };
       };
-      expect(result.data.lease["device"]).toEqual(device);
+      expect(result.data.lease["device"]).toEqual({
+        ...device,
+        ["platform" in extra && extra.platform === "android" ? "serial" : "udid"]: idOf(rig, n),
+      });
       expect(result.data.lease["deviceKey"]).toBe(`key-${n}`);
       expect(result.data.device).toMatchObject({ id: expect.any(String) });
     }

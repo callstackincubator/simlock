@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 [agent-device](https://github.com/callstack/agent-device) is Callstack's command-line tool for driving mobile apps: it opens an app, reads the screen as a tree of elements, taps, types and takes screenshots.
 
-With Simlock, `agent-device open` leases a device from Simlock, and every later command goes to that device. Each agent gets its own device, and the device is deleted when the agent closes it.
+With Simlock, `agent-device open` leases a device from Simlock, and every later command goes to that device. Each agent gets its own device, and a normal close deletes it.
 
 ```sh
 agent-device open --platform ios --device "iPhone 16"
@@ -129,11 +129,17 @@ Each agent-device session holds one device. To use a second device, open a secon
 
 The reply to `open` names the model, OS and image tag you got, and the baseline name and version when you asked for one. On a simulator or emulator, `data.lease.device` in the `agent_device.lease.allocate` reply also carries `deviceMode`, the mode the device has (`slim` or `full`); the agent-device CLI doesn't show it yet. If every matching device is taken, `open` waits for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
 
+### Keep a device through a close
+
+A test runner can allocate with `retainOnClose: true` to keep its device through a bare `close`, `close <app>`, or a batch containing a close. Release the lease when the run finishes; otherwise it expires after its TTL.
+
+In the allocate reply JSON, `data.lease.device.udid` names an iOS device and `data.lease.device.serial` names an Android device. agent-device's client drops these fields when it rebuilds the reply. The agent-device `leaseId` is the Simlock lease id, usable with `/v1/leases/<id>/…`.
+
 ### What to expect
 
 - **The lease is an ordinary Simlock lease.** `simlock status` and the console show it, held by your token. Its id is the one agent-device chose.
 - **Commands keep the lease alive.** An agent that stops sending commands loses the device one TTL later. The TTL is the one agent-device asks for, or the worker's default (15 minutes). An admin can cap it with `capabilities.agent-device.leaseTtlCapMs`.
-- **`close` gives the device back.** Simlock ends the lease and deletes the device. The next agent gets a new one.
+- **`close` gives the device back** unless the allocate set `retainOnClose: true`. Simlock ends a plain lease and deletes the device. The next agent gets a new one.
 - **`install` sends the app from your machine.** The path is on the agent's machine, and agent-device uploads the app. A path on the worker is refused with `refused: send the app from your machine as an upload`.
 - **`devices` lists only your devices**, and nothing before `open`.
 - **A `batch` can nest at most 8 levels deep and hold at most 1000 steps in all.** A larger one is refused before any step runs, with `refused: a batch nests more than 8 levels deep` or `refused: a batch has more than 1000 steps`.
