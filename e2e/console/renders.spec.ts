@@ -80,11 +80,19 @@ for (const entry of cases) {
                 caret: "initial",
               });
               if (run === "first") captures.set(name, image);
-              else
+              else {
+                if (!image.equals(captures.get(name) ?? Buffer.alloc(0))) {
+                  await testInfo.attach(`${name}-first`, {
+                    body: captures.get(name) ?? Buffer.alloc(0),
+                    contentType: "image/png",
+                  });
+                  await testInfo.attach(`${name}-fresh`, { body: image, contentType: "image/png" });
+                }
                 expect(
                   image.equals(captures.get(name) ?? Buffer.alloc(0)),
                   `${name} fresh daemon and browser capture`,
                 ).toBe(true);
+              }
               return image;
             };
             await renderFixture(page);
