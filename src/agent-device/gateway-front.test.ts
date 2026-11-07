@@ -594,6 +594,7 @@ function expectEndedBySimlock(answer: Envelope): void {
       code: "UNAUTHORIZED",
       details: { reason: "LEASE_ENDED_BY_HOST" },
       message: endedMessage,
+      retriable: false,
     },
   });
 }
@@ -752,9 +753,14 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const refused = await allocate(rig, 2);
 
     expect(refused.status).toBe(400);
-    expect((await envelopeOf(refused)).error?.message).toBe(
+    const refusalAnswer = await envelopeOf(refused);
+    expect(refusalAnswer.error?.message).toBe(
       "refused by simlock: No worker in the fleet can currently serve this request",
     );
+    expect(refusalAnswer.error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: true,
+    });
     const before = member.fake.rpcRequests("agent_device.command").length;
     const held = await envelopeOf(await command(rig, "snapshot", 1));
     expect(held.result).toMatchObject({ command: "snapshot", ok: true });
@@ -1840,6 +1846,10 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
     const answer = await envelopeOf(await command(rig, "devices", undefined));
 
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_FAILED" },
+      retriable: true,
+    });
     expect(answer.error?.message).toBe("could not check your leases; try again");
     expect(
       rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),

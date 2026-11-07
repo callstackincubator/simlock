@@ -180,6 +180,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly releaseReplies: string[] = [];
   onHeartbeat: (() => Promise<void>) | undefined;
   #unavailable: string | undefined;
+  #unavailableRetriable = false;
   #unreachable = false;
   #failAllocate: FakeFailure | undefined;
   #failRelease: FakeFailure | undefined;
@@ -214,7 +215,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   current(): AgentDeviceUpstreamState {
     if (this.#unavailable !== undefined) {
-      return { reason: this.#unavailable, retriable: false, state: "unavailable" };
+      return {
+        reason: this.#unavailable,
+        retriable: this.#unavailableRetriable,
+        state: "unavailable",
+      };
     }
     return {
       baseUrl: this.baseUrl,
@@ -225,8 +230,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     };
   }
 
-  setUnavailable(reason: string | undefined): void {
+  setUnavailable(reason: string | undefined, retriable = false): void {
     this.#unavailable = reason;
+    this.#unavailableRetriable = retriable;
   }
 
   setUnreachable(unreachable: boolean): void {

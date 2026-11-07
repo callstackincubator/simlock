@@ -225,7 +225,11 @@ async function expectFailure({ error, expected }: Failure) {
   const body = await answer(response);
   const { status, ...data } = expected;
   expect(response.status, data.message).toBe(status);
-  expect(body.error?.data, data.message).toEqual(data);
+  expect(body.error?.data, data.message).toEqual({
+    ...data,
+    details: data.details ?? { reason: "SIMLOCK_FAILED" },
+    retriable: status === 503,
+  });
   expect(forwarded, data.message).toEqual([]);
   expect(clock.pendingTimerCount, data.message).toBe(0);
 }

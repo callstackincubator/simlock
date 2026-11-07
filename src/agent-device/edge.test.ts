@@ -99,6 +99,7 @@ function expectEndedBySimlock(answer: Envelope): void {
       code: "UNAUTHORIZED",
       details: { reason: "LEASE_ENDED_BY_HOST" },
       message: endedMessage,
+      retriable: false,
     },
   });
 }
@@ -177,7 +178,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rpcAnswer.status).toBe(503);
     expect(upload.status).toBe(503);
     expect(await health.text()).toContain(`${notAvailable}${reason}`);
-    expect((await envelopeOf(rpcAnswer)).error?.message).toBe(`${notAvailable}${reason}`);
+    expect((await envelopeOf(rpcAnswer)).error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: false,
+    });
+    rig.fake.setUnavailable("start failed", true);
+    expect((await envelopeOf(await allocate(rig, 2))).error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: true,
+    });
     expect(await upload.text()).toContain(`${notAvailable}${reason}`);
     expect(await leases(rig)).toEqual([]);
     expect(rig.fake.requests).toEqual([]);
@@ -768,6 +777,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const answer = await envelopeOf(await allocate(rig, 2, { device: "My test phone" }));
 
     expect(answer.error).toMatchObject(refusal(`refused by simlock: ${expected}`));
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "REFUSED_BY_SIMLOCK" },
+      retriable: false,
+    });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
 
@@ -1119,6 +1132,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const answer = await envelopeOf(await second.promise);
 
     expect(answer.error).toMatchObject(refusal(queueTimeoutMessage, "COMMAND_FAILED"));
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "NO_DEVICE_IN_TIME" },
+      retriable: true,
+    });
     expect(await waiting(rig)).toEqual([]);
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
@@ -1133,6 +1150,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
       data: { code: "NO_DEVICE", message: "no such device" },
       message: "no such device",
     });
+    expect(answer.error?.data).not.toHaveProperty("retriable");
+    expect(answer.error?.data).not.toHaveProperty("details");
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
 
     class NoAddressDriver extends FakeDriver {
@@ -1155,7 +1174,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     const noAddress = await envelopeOf(await allocate(bare, 2));
 
-    expect(noAddress.error?.data?.code).toBe("COMMAND_FAILED");
+    expect(noAddress.error?.data).toMatchObject({
+      code: "COMMAND_FAILED",
+      details: { reason: "SIMLOCK_FAILED" },
+      retriable: false,
+    });
     await expect.poll(async () => (await leases(bare)).length).toBe(0);
     expect(allocatesReceived(bare, 2)).toEqual([]);
   });
