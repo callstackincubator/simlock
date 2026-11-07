@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 
 export type VisibleState = unknown;
@@ -58,6 +59,8 @@ export function compareCaptures(
   changedPixels: number;
   recognizedEdgePixels: number;
   matcherPixels: number;
+  edgeMaxRgbDelta: number;
+  matcherMaxRgbDelta: number;
   maxRgbDelta: number;
   alphaChanged: boolean;
   dimensionsMatch: boolean;
@@ -69,13 +72,27 @@ export function compareCaptures(
   const dimensionsMatch = left.width === right.width && left.height === right.height;
   let changedPixels = 0;
   let maxRgbDelta = 0;
+  let recognizedEdgePixels = 0;
+  let matcherPixels = 0;
+  let edgeMaxRgbDelta = 0;
+  let matcherMaxRgbDelta = 0;
   let alphaChanged = false;
   if (dimensionsMatch) {
+    const diff = Buffer.alloc(left.data.length);
+    matcherPixels = pixelmatch(left.data, right.data, diff, left.width, left.height, {
+      threshold: 0.1,
+      includeAA: false,
+      alpha: 0,
+      aaColor: [17, 33, 65],
+      diffColor: [201, 21, 99],
+    });
     for (let offset = 0; offset < left.data.length; offset += 4) {
       let changed = false;
+      let pixelDelta = 0;
       for (let channel = 0; channel < 3; channel += 1) {
         const delta = Math.abs(left.data[offset + channel]! - right.data[offset + channel]!);
         maxRgbDelta = Math.max(maxRgbDelta, delta);
+        pixelDelta = Math.max(pixelDelta, delta);
         changed ||= delta !== 0;
       }
       if (left.data[offset + 3] !== right.data[offset + 3]) {
@@ -83,17 +100,24 @@ export function compareCaptures(
         changed = true;
       }
       if (changed) changedPixels += 1;
+      if (diff[offset] === 17 && diff[offset + 1] === 33 && diff[offset + 2] === 65) {
+        recognizedEdgePixels += 1;
+        edgeMaxRgbDelta = Math.max(edgeMaxRgbDelta, pixelDelta);
+      } else if (diff[offset] === 201 && diff[offset + 1] === 21 && diff[offset + 2] === 99) {
+        matcherMaxRgbDelta = Math.max(matcherMaxRgbDelta, pixelDelta);
+      }
     }
   }
   return {
     dimensionsMatch,
     changedPixels,
-    recognizedEdgePixels: 0,
-    matcherPixels: 0,
+    recognizedEdgePixels,
+    matcherPixels,
+    edgeMaxRgbDelta,
+    matcherMaxRgbDelta,
     maxRgbDelta,
     alphaChanged,
-    matches:
-      stateMatches && dimensionsMatch && !alphaChanged && changedPixels <= 32 && maxRgbDelta <= 1,
+    matches: stateMatches && dimensionsMatch && !alphaChanged && matcherPixels === 0,
     stateMatches,
   };
 }

@@ -105,6 +105,7 @@
     "lefthook": "^2.1.10",
     "oxfmt": "^0.75.0",
     "oxlint": "^1.74.0",
+    "pixelmatch": "7.1.0",
     "pngjs": "7.0.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

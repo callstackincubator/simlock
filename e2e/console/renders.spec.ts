@@ -481,6 +481,8 @@ for (const entry of cases) {
                 changedPixels: 0,
                 recognizedEdgePixels: 0,
                 matcherPixels: 0,
+                edgeMaxRgbDelta: 0,
+                matcherMaxRgbDelta: 0,
                 maxRgbDelta: 0,
                 alphaChanged: false,
                 matches: true,
