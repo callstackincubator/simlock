@@ -55,8 +55,12 @@ agent-device:
 ```
 
 `kind` is `simulator`, `emulator` or `device` (a physical phone). `device`
-is the device's name as agent-device reported it at allocate, else the
-lease's model. A `boot` naming no lease, or another device, is refused. The
+is the name the front has already read from agent-device's device list for
+the lease, else the lease's model; agent-device's allocate reply names no
+device, and the front makes no call to learn it. `target` is the one the
+allocate asked for. A `boot` naming no lease, another device, or a lease
+that has ended is refused; a lease simlock ended gets the same "ended by
+simlock" reply a heartbeat gets. The
 policy file keeps denying `boot` and `shutdown`, so nothing else can boot a
 device behind simlock's back.
 
@@ -104,7 +108,10 @@ sequenceDiagram
 ### 4. simlock's own errors carry a reason and a retriable flag
 
 Every error the front makes itself carries a reason from a fixed,
-documented list and a retriable flag. A JSON-RPC error carries them where
+documented list and a retriable flag. The flag follows the condition, not
+the kind of reply: a full farm, a stopping daemon or an agent-device that
+failed to start is retriable; a request simlock refuses for what it asks is
+not. A JSON-RPC error carries them where
 agent-device's own errors do, `error.data.details.reason` and
 `error.data.retriable` (agent-device's client reads `retriable` only
 there). A flat error (`{ code, error, ok: false }`, on the upload, artifact
