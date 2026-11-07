@@ -670,6 +670,7 @@ export function configFromLayers(
     },
   };
   validateLeaseTtls(merged);
+  validateDeletedRetention(merged);
   validateEventLogBounds(merged);
   validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
@@ -710,6 +711,12 @@ export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolea
 function validateLeaseTtls(config: Config): void {
   if (config.lease.defaultTtlMs > config.lease.maxTtlMs) {
     throw invalidValue("lease.defaultTtlMs", "at most lease.maxTtlMs");
+  }
+}
+
+function validateDeletedRetention(config: Config): void {
+  if (config.devices.deletedRetentionMs < config.lease.requestRetentionMs) {
+    throw invalidValue("devices.deletedRetentionMs", "at least lease.requestRetentionMs");
   }
 }
 
@@ -1162,6 +1169,7 @@ export function configValidators(
     // `lease.heartbeatIntervalMs`) are deliberately absent rather than aliased: `objectValidator`
     // warns about each as an unrecognized key and ignores it, so an old config still boots and
     // gets the new key's default rather than the value it wrote.
+    devices: objectValidator({ deletedRetentionMs: positiveNumber }),
     lease: objectValidator({
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,
