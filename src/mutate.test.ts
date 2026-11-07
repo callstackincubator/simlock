@@ -289,17 +289,21 @@ describe("mutate.mjs", () => {
 
   it("with --touched-by, mutates HEAD's line numbers of what the given ref changes, not the ref's own, nor the lines HEAD added since base", () => {
     const r = repo();
+    r.git("switch", "-q", "base");
+    r.commit({ "src/c.ts": "export const c1 = 1;\nexport const c2 = 2;\nexport const c3 = 3;\n" });
+    r.git("switch", "-q", "work");
+    r.git("merge", "-q", "--no-edit", "base");
     r.git("switch", "-q", "-c", "refactor-draft");
     r.commit({
-      "src/a.ts":
-        "export const y = 0;\nexport const z = 0;\nexport const a = 1;\nexport const b = false;\n",
+      "src/c.ts":
+        "export const c0 = 0;\nexport const c1 = 1;\nexport const c2 = 2;\nexport const c3 = 4;\n",
     });
     r.git("switch", "-q", "work");
 
-    const { output } = mutate(r, r.dir, "", ["--touched-by", "refactor-draft"]);
+    mutate(r, r.dir, "", ["--touched-by", "refactor-draft"]);
 
-    expect(strykerRuns(r)[0]).toContain("--mutate src/a.ts:2-2 ");
-    expect(output).toContain("2 mutants on 1 changed ranges; 1 alive.");
+    expect(strykerRuns(r)[0]).toContain("--mutate src/c.ts:3-3 ");
+    expect(strykerRuns(r)[0]).not.toContain("src/a.ts");
   });
 
   it("with --touched-by, mutates every line of a file the given ref moves to another path", () => {

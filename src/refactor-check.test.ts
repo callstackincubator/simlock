@@ -86,7 +86,8 @@ function check(...steps: Step[]) {
 // and its neighbours run from a copy whose worktree.sh links a node_modules holding a fake tsc
 // (it copies each source file as its declaration), and a fake pnpm answers `vitest list` from
 // the `it("...")` titles, `vitest run` from each pin's `// pins: <path> contains <text>` lines,
-// and `mutate` with FAKE_MUTATE_OUT and FAKE_MUTATE_CODE, logging its arguments.
+// and `mutate` with FAKE_MUTATE_OUT and FAKE_MUTATE_CODE, logging its arguments, the parent of
+// the commit it runs on and the pins that commit tracks.
 const SCRIPTS = ["refactor-check.mjs", "module-surface.mjs", "surface-paths.mjs", "cli-args.mjs"];
 const FAKE_WORKTREE = `#!/bin/sh
 dir=$(mktemp -d "\${TMPDIR:-/tmp}/wt.XXXXXX"); rmdir "$dir"
@@ -108,7 +109,9 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const files = args.filter((a) => a.endsWith(".ts"));
 if (args[0] === "mutate") {
-  fs.appendFileSync(process.env.FAKE_LOG, args.join(" ") + "\n");
+  const git = (...a) => require("node:child_process").spawnSync("git", a, { encoding: "utf8" }).stdout.trim() || "none";
+  const pins = git("ls-files", "*.pin.test.ts").split("\n").filter(Boolean).join(",") || "no pins";
+  fs.appendFileSync(process.env.FAKE_LOG, args.join(" ") + " on " + git("rev-parse", "HEAD^") + " with " + pins + "\n");
   process.stdout.write((process.env.FAKE_MUTATE_OUT || "0 mutants on 0 changed ranges; 0 alive.") + "\n");
   process.exit(Number(process.env.FAKE_MUTATE_CODE || 0));
 }
@@ -167,7 +170,7 @@ const SPLIT: Step = {
 const UNPIN: Step = { "src/leasing/rule.pin.test.ts": null };
 
 describe("refactor-check.mjs", { timeout: 60_000 }, () => {
-  it("passes a split whose pins hold on both ends, and prints the test counts and the mutation line", () => {
+  it("passes a split whose pins hold on both ends, mutates on the base with the pins, and prints the test counts and the mutation line", () => {
     const { dir, git } = scratch(
       { "src/leasing/rule.pin.test.ts": PIN("limit = 3") },
       SPLIT,
@@ -182,7 +185,7 @@ describe("refactor-check.mjs", { timeout: 60_000 }, () => {
       "refactor-check: passes",
     ]);
     expect(result.mutateRuns).toEqual([
-      `mutate ${git("rev-parse", "base")} --touched-by ${git("rev-parse", "work")}`,
+      `mutate ${git("rev-parse", "base")} --touched-by ${git("rev-parse", "work")} on ${git("rev-parse", "base")} with src/leasing/rule.pin.test.ts`,
     ]);
     expect(result.status).toBe(0);
   });
@@ -260,7 +263,7 @@ describe("refactor-check.mjs", { timeout: 60_000 }, () => {
 
     expect(result.err).toEqual([]);
     expect(result.mutateRuns).toEqual([
-      `mutate ${git("rev-parse", "base")} --touched-by ${git("rev-parse", "work")}`,
+      `mutate ${git("rev-parse", "base")} --touched-by ${git("rev-parse", "work")} on ${git("rev-parse", "base")} with src/leasing/rule.pin.test.ts`,
     ]);
     expect(result.status).toBe(0);
   });
