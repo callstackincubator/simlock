@@ -12,6 +12,27 @@ const viewports = [
   { width: 390, height: 844 },
 ];
 
+async function connectedEvent(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<Record<string, unknown>> {
+  const decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) throw new Error("stream closed before worker.connected");
+    pending += decoder.decode(chunk.value, { stream: true });
+    let end: number;
+    while ((end = pending.indexOf("\n\n")) !== -1) {
+      const frame = pending.slice(0, end);
+      pending = pending.slice(end + 2);
+      if (!frame.split("\n").includes("event: worker.connected")) continue;
+      const line = frame.split("\n").find((part) => part.startsWith("data: "));
+      if (line === undefined) throw new Error("worker.connected missing data");
+      return JSON.parse(line.slice(6)) as Record<string, unknown>;
+    }
+  }
+}
+
 for (const entry of cases) {
   for (const viewport of viewports) {
     test(`a reviewer opens the render harness and receives stable named screenshots from signed-in fixture pages: ${entry.name} ${viewport.width}x${viewport.height}`, async ({
@@ -293,68 +314,86 @@ for (const entry of cases) {
               }
             }
             if (entry.name === "8-activity" && viewport.width === 1440) {
-              await page.evaluate(async (token) => {
-                const response = await fetch("/v1/events/stream", {
-                  headers: { Authorization: `Bearer ${token}` },
-                });
-                if (!response.ok || response.body === null) throw new Error("stream did not open");
-                (
-                  window as typeof window & {
-                    renderReader: ReadableStreamDefaultReader<Uint8Array>;
-                  }
-                ).renderReader = response.body.getReader();
-              }, gateway.tokens.operator);
-              const token = await mintJoinToken(gateway);
-              const worker = await startDaemon("worker", {
-                config: {
-                  gateway: {
-                    label: "render-live-worker",
-                    token,
-                    url: `ws://127.0.0.1:${gateway.port}`,
-                  },
-                },
-              });
+              const rawController = new AbortController();
               try {
-                const live = await page.evaluate(async () => {
-                  const reader = (
+                const rawResponse = await fetch(new URL("/v1/events/stream", gateway.url), {
+                  headers: { Authorization: `Bearer ${gateway.tokens.operator}` },
+                  signal: rawController.signal,
+                });
+                expect(rawResponse.status).toBe(200);
+                expect(rawResponse.headers.get("content-type")).toBe("text/event-stream");
+                if (rawResponse.body === null) throw new Error("raw stream did not open");
+                const rawReader = rawResponse.body.getReader();
+                await page.evaluate(async (token) => {
+                  const response = await fetch("/v1/events/stream", {
+                    headers: { Authorization: `Bearer ${token}` },
+                  });
+                  if (!response.ok || response.body === null)
+                    throw new Error("stream did not open");
+                  (
                     window as typeof window & {
                       renderReader: ReadableStreamDefaultReader<Uint8Array>;
                     }
-                  ).renderReader;
-                  const decoder = new TextDecoder();
-                  let pending = "";
-                  while (true) {
-                    const chunk = await reader.read();
-                    if (chunk.done) throw new Error("stream closed before worker.connected");
-                    pending += decoder.decode(chunk.value, { stream: true });
-                    let end: number;
-                    while ((end = pending.indexOf("\n\n")) !== -1) {
-                      const frame = pending.slice(0, end);
-                      pending = pending.slice(end + 2);
-                      if (!frame.split("\n").includes("event: worker.connected")) continue;
-                      const line = frame.split("\n").find((part) => part.startsWith("data: "));
-                      if (line === undefined) throw new Error("worker.connected missing data");
-                      return JSON.parse(line.slice(6)) as {
-                        event: string;
-                        timestamp: number;
-                        id: string;
-                        seq: number;
-                        payload: { label: string; workerId: string };
-                      };
-                    }
-                  }
+                  ).renderReader = response.body.getReader();
+                }, gateway.tokens.operator);
+                const token = await mintJoinToken(gateway);
+                const worker = await startDaemon("worker", {
+                  config: {
+                    gateway: {
+                      label: "render-live-worker",
+                      token,
+                      url: `ws://127.0.0.1:${gateway.port}`,
+                    },
+                  },
                 });
-                expect(live.event).toBe("worker.connected");
-                expect(live.payload.label).toBe("render-live-worker");
-                expect(live.payload.workerId).toBeTruthy();
-                expect(live.id).toBeTruthy();
-                expect(typeof live.seq).toBe("number");
-                expect(live.timestamp, "real live event uses the fixture clock").toBe(
-                  Date.parse("2026-10-02T18:20:00.000Z"),
-                );
-                await expect(page.getByText("worker.connected").first()).toBeVisible();
+                try {
+                  const live = await page.evaluate(async () => {
+                    const reader = (
+                      window as typeof window & {
+                        renderReader: ReadableStreamDefaultReader<Uint8Array>;
+                      }
+                    ).renderReader;
+                    const decoder = new TextDecoder();
+                    let pending = "";
+                    while (true) {
+                      const chunk = await reader.read();
+                      if (chunk.done) throw new Error("stream closed before worker.connected");
+                      pending += decoder.decode(chunk.value, { stream: true });
+                      let end: number;
+                      while ((end = pending.indexOf("\n\n")) !== -1) {
+                        const frame = pending.slice(0, end);
+                        pending = pending.slice(end + 2);
+                        if (!frame.split("\n").includes("event: worker.connected")) continue;
+                        const line = frame.split("\n").find((part) => part.startsWith("data: "));
+                        if (line === undefined) throw new Error("worker.connected missing data");
+                        return JSON.parse(line.slice(6)) as {
+                          event: string;
+                          timestamp: number;
+                          id: string;
+                          seq: number;
+                          payload: { label: string; workerId: string };
+                        };
+                      }
+                    }
+                  });
+                  expect(live.event).toBe("worker.connected");
+                  expect(live.payload.label).toBe("render-live-worker");
+                  expect(live.payload.workerId).toBeTruthy();
+                  expect(live.id).toBeTruthy();
+                  expect(typeof live.seq).toBe("number");
+                  expect(live.timestamp, "real live event uses the fixture clock").toBe(
+                    Date.parse("2026-10-02T18:20:00.000Z"),
+                  );
+                  expect(live, "live normalization preserves every other envelope field").toEqual({
+                    ...(await connectedEvent(rawReader)),
+                    timestamp: Date.parse("2026-10-02T18:20:00.000Z"),
+                  });
+                  await expect(page.getByText("worker.connected").first()).toBeVisible();
+                } finally {
+                  await worker.dispose();
+                }
               } finally {
-                await worker.dispose();
+                rawController.abort();
               }
             }
           } finally {

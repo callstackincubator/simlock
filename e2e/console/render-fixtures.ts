@@ -240,6 +240,45 @@ export async function renderFixture(page: Page, scenario: Scenario = "populated"
         const headers = new Headers(response.headers);
         if (headers.has("date")) headers.set("date", date);
         Object.defineProperty(response, "headers", { value: headers });
+        if (response.ok && response.body !== null) {
+          // why: the daemon's live event clock is independent of the frozen browser and replay fixture.
+          const decoder = new TextDecoder();
+          const encoder = new TextEncoder();
+          let pending = "";
+          const body = response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                pending += decoder.decode(chunk, { stream: true });
+                let end: number;
+                while ((end = pending.indexOf("\n")) !== -1) {
+                  let line = pending.slice(0, end);
+                  pending = pending.slice(end + 1);
+                  if (line.startsWith("data: ")) {
+                    const ending = line.endsWith("\r") ? "\r" : "";
+                    try {
+                      const event: unknown = JSON.parse(line.slice(6));
+                      if (
+                        typeof event === "object" &&
+                        event !== null &&
+                        "timestamp" in event &&
+                        typeof event.timestamp === "number"
+                      ) {
+                        line = `data: ${JSON.stringify({ ...event, timestamp: Date.parse(date) })}${ending}`;
+                      }
+                    } catch {
+                      // why: non-JSON SSE data is passed through unchanged.
+                    }
+                  }
+                  controller.enqueue(encoder.encode(`${line}\n`));
+                }
+              },
+              flush(controller) {
+                controller.enqueue(encoder.encode(pending + decoder.decode()));
+              },
+            }),
+          );
+          Object.defineProperty(response, "body", { value: body });
+        }
       }
       return response;
     };
