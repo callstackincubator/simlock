@@ -183,7 +183,10 @@ function bodyFor(path: string, scenario: Scenario): unknown | undefined {
 async function respond(route: Route, scenario: Scenario): Promise<void> {
   const pathname = new URL(route.request().url()).pathname;
   const response = await fetchFull(route);
-  const headers = { ...response.headers(), date: new Date(NOW).toUTCString() };
+  const headers: Record<string, string> = {
+    ...response.headers(),
+    date: new Date(NOW).toUTCString(),
+  };
   delete headers.etag;
   const body = bodyFor(pathname, scenario);
   if (pathname === "/v1/leases" && scenario === "refused" && response.ok()) {
