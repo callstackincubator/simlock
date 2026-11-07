@@ -1,6 +1,6 @@
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import type { Identity } from "../auth/index.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, Filesystem } from "../ports/index.js";
 import type { ModuleRegistryView, WorkerContext, WorkerModule } from "../modules/index.js";
 import type { AgentDeviceModuleConfig } from "./definition.js";
 import { FrontMap } from "./front/front-map.js";
@@ -36,13 +36,21 @@ function createAgentDeviceEdgeParts(
   clock: Clock,
   platforms: readonly AgentDevicePlatform[],
   registry: ModuleRegistryView,
+  filesystem: Filesystem,
+  home: string,
 ): AgentDeviceEdgeParts {
   const simulatorRecord = new ReleaseScopeRecord();
   const phoneRecord = new ReleaseScopeRecord();
   return {
     leaseEnds: [
-      new AgentDeviceLeaseEnd(upstream, simulatorRecord),
-      new AgentDeviceLeaseEnd(phoneUpstream, phoneRecord),
+      new AgentDeviceLeaseEnd(upstream, simulatorRecord, {
+        directory: `${home}/agent-device/sessions`,
+        filesystem,
+      }),
+      new AgentDeviceLeaseEnd(phoneUpstream, phoneRecord, {
+        directory: `${home}/agent-device-phones/sessions`,
+        filesystem,
+      }),
     ],
     link: new RoutedHostLink(
       {
@@ -142,6 +150,8 @@ export function createWorkerWith(
       ctx.clock,
       ctx.platforms,
       ctx.registry,
+      ctx.filesystem,
+      ctx.dataDirectory,
     );
     return {
       capability: agentDeviceCapabilitySource(parts, () =>

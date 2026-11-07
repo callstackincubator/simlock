@@ -363,6 +363,11 @@ export class AgentDeviceSupervisor {
       this.#fail("state-dir", problem);
       return undefined;
     }
+    const cleared = await this.#emptySessions();
+    if (cleared !== undefined) {
+      this.#fail("state-dir", cleared);
+      return undefined;
+    }
     const policyPath = `${this.#stateDir}/policy.json`;
     await this.#o.filesystem.writeFileAtomic(policyPath, JSON.stringify(AGENT_DEVICE_POLICY));
     return this.#environment(policyPath);
@@ -506,6 +511,18 @@ export class AgentDeviceSupervisor {
     }
     const version = raced.value.stdout.split("\n")[0]?.trim() ?? "";
     return version === "" ? { message: "agent-device --version printed nothing" } : version;
+  }
+
+  // why: a daemon start ends every agent-device lease, so no session folder is live, and agent-device removes none itself.
+  async #emptySessions(): Promise<string | undefined> {
+    const path = `${this.#stateDir}/sessions`;
+    try {
+      const names = await this.#o.filesystem.readdir(path);
+      await Promise.all(names.map((name) => this.#o.filesystem.rm(`${path}/${name}`)));
+    } catch (error: unknown) {
+      if (!isMissingPathError(error)) return `${path} cannot be emptied: ${messageOf(error)}`;
+    }
+    return undefined;
   }
 
   async #prepareStateDir(): Promise<string | undefined> {
