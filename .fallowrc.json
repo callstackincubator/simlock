@@ -44,6 +44,7 @@
     "docs/internal/console-redesign/prototype/build.mjs"
   ],
   "dynamicallyLoaded": [
+    "e2e/console/render-cases/*.ts",
     "docs/internal/console-redesign/prototype/d.mjs",
     "e2e/fake-driver/index.ts",
     // The command tree names its modules in an `import("./commands/<name>.js")` thunk, so

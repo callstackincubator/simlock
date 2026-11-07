@@ -24,6 +24,23 @@ from `@playwright/test`). `d.mjs` holds every CSS value the renders use; when
 DESIGN.md is unclear, read the prototype's CSS. The prototype is mock HTML,
 not component code: copy its values, not its markup.
 
+Foundation captures the existing pages, not the later redesigned states.
+`current/1-overview.png`, `2-fleet.png`, `3-worker.png`, `5-leases.png`
+and `8-activity.png` map to their numbered references. The baseline for
+`4-streaming.png` is `current/4-device-screen-drawer.png`, with the existing
+Screen tab; `6-leases-selected.png` maps to `current/6-lease-drawer.png`;
+`7-baselines.png` maps to the existing ready/stale table in
+`current/7-baselines.png`. These drawer and table images are baseline evidence,
+not approval of the later page geometry. Stages 3, 4 and 5 replace their own
+case modules with the final inspector, stream and Baselines states.
+
+The fixture's `android-35-pixel8` is ready: it replaces the reference's
+unsupported building row as a DATA difference. Stage 5 retains the reference
+row/pill geometry, replaces Building with Ready and Build baseline with the
+Prepare baseline documentation link, and leaves the unsupported row-menu
+trigger out while retaining its reserved width. The original renders stay
+unchanged. Inbox, Queue, Usage, sign-in and not found have no reference.
+
 Pages without a render (Inbox, Queue, Usage, sign-in, not found) keep their
 structure and take the new components. Dark is the designed theme; the light
 theme takes the same structure with values the implementer derives, and the

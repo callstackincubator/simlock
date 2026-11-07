@@ -42,11 +42,13 @@ test("a reviewer opens the render harness and receives stable named screenshots 
     await settled(page);
     if (entry.name === "2-fleet") {
       await expect(page.getByText("Szymons-MacBook-Pro.local")).toBeVisible();
-      await expect(page.getByText("91%")).toBeVisible();
+      await expect(page.getByText("91%", { exact: true })).toBeVisible();
       await expect(page.locator("main tbody tr")).toHaveCount(8);
     }
     if (entry.name === "4-device-screen-drawer") {
       await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.getByRole("dialog")).toContainText("Streaming is off on mac-studio-01.");
+      await expect(page.locator("main tbody tr")).toHaveCount(2);
       await expect(page.getByRole("tab", { name: "Screen" })).toHaveAttribute(
         "aria-selected",
         "true",
@@ -71,6 +73,8 @@ test("a reviewer opens the render harness and receives stable named screenshots 
   await expect(page.getByLabel("Operator token")).toBeVisible();
   await page.screenshot({ path: `${directory}/sign-in.png`, animations: "disabled" });
   await signIn(page, gateway.tokens.operator);
+  await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
+  await page.goto(gateway.url);
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
   for (const [scenario, expected] of [
     ["empty", "No leases."],
