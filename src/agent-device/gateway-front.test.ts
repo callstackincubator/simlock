@@ -1919,7 +1919,11 @@ const hourMs = 3_600_000;
 function expectUnreachable(answer: Envelope): void {
   expect(answer.result).toBeUndefined();
   expect(answer.error).toMatchObject({
-    data: { details: { reason: "WORKER_UNREACHABLE" }, message: unreachableMessage },
+    data: {
+      details: { reason: "WORKER_UNREACHABLE" },
+      message: unreachableMessage,
+      retriable: true,
+    },
     message: unreachableMessage,
   });
 }
@@ -1928,7 +1932,7 @@ async function expectUnreachablePlain(response: Response): Promise<void> {
   expect(response.status).toBe(503);
   const body = (await response.json()) as Record<string, unknown>;
   expect(body["error"]).toBe(unreachableMessage);
-  expect(body).not.toHaveProperty("details");
+  expect(body).toMatchObject({ reason: "WORKER_UNREACHABLE", retriable: true });
 }
 
 async function expectUnreachableEverywhere(rig: Rig, n: number): Promise<void> {
