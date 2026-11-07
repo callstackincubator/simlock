@@ -423,6 +423,8 @@ test.describe("the workers page", () => {
         await expect(slots.locator('[title="iPhone 16 18.4, absent"]')).toHaveCount(1);
         await expect(slots.locator('[title="iPhone 16 18.4, quarantined"]')).toHaveCount(1);
       }
+      if (name === "twenty")
+        await expect(slots.locator(".load-bar")).toHaveCSS("--load-bar", "10%");
       for (const index of [4, 5, 6]) {
         await expect(shown.getByRole("cell").nth(index), name).toHaveText("—");
       }
