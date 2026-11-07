@@ -670,7 +670,6 @@ export function configFromLayers(
     },
   };
   validateLeaseTtls(merged);
-  validateDeletedRetention(merged);
   validateEventLogBounds(merged);
   validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
@@ -682,6 +681,8 @@ export function configFromLayers(
     // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
     // them there would fail a start over a value nothing reads.
     validateGatewayMembership(merged);
+    // why: only a worker keeps device records, so only it reads `devices.deletedRetentionMs`.
+    validateDeletedRetention(merged);
   }
   return { config: deepFreeze(merged), defaulted };
 }

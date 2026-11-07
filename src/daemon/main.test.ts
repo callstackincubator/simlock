@@ -1843,6 +1843,45 @@ describe("startDaemon state.db", () => {
     expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
   });
 
+  it("a worker drops a deleted device record older than the configured devices.deletedRetentionMs at start", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-deleted-retention-"));
+    temporaryDirectories.push(directory);
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const previous = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "1" },
+      state,
+    });
+    const device = await previous.registerDevice({
+      driverData: { fakeDeviceId: "fk-1" },
+      driverDeviceId: "drv-1",
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+    });
+    await previous.markDeviceMissing(device.id, "doctor");
+    state.close();
+    // why: 30 minutes is inside the default hour and outside the ten minutes configured below.
+    clock.advance(30 * 60_000);
+
+    await start({
+      clock,
+      configOverrides: { devices: { deletedRetentionMs: 600_000 } },
+      dataDirectory: directory,
+    });
+
+    expect(await queryState(directory, "SELECT id FROM devices")).toEqual([]);
+  });
+
   it("a worker's state.db holds both platforms' source-data tables, a gateway's holds neither", async () => {
     const worker = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
     const gateway = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));

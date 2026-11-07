@@ -287,6 +287,18 @@ describe("loadConfig", () => {
     await expect(loadWith({ devices: { deletedRetentionMs: 0 } })).rejects.toThrow(
       /"devices\.deletedRetentionMs"/,
     );
+    // why: a gateway holds no device records, so a lease key above the hour it ignores is no refusal.
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { requestRetentionMs: 7_200_000 } }),
+    );
+    const gateway = await loadConfig({
+      configPath,
+      filesystem,
+      role: "gateway",
+      systemStats: createStats(),
+    });
+    expect(gateway.lease.requestRetentionMs).toBe(7_200_000);
   });
 
   it("metrics.retention defaults to the larger of 90 days and eventLog.retention, and is accepted as written", async () => {

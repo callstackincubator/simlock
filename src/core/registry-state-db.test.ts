@@ -450,6 +450,14 @@ describe("Registry: state.db rows", () => {
     const second = await readyDevice("deleted-2");
     const third = await readyDevice("deleted-3");
     const live = await readyDevice("live");
+    const phone = await registry.enrollPhysical({
+      apps: ["com.a", "com.b"],
+      class: "phone",
+      driverDeviceId: "udid-gone",
+      model: "iPhone 15",
+      osVersion: "18.4",
+      platform: "ios",
+    });
     await registry.createLeaseRequest({
       id: "req_1",
       ownerId: "agent-1",
@@ -475,6 +483,7 @@ describe("Registry: state.db rows", () => {
     });
     await registry.beginRelease(lease.id);
     await registry.markDeviceMissing(first.id, "doctor");
+    await registry.unenrollPhysical(phone.id);
     clock.advance(30 * MINUTE);
     await registry.markDeviceMissing(second.id, "doctor");
     clock.advance(40 * MINUTE);
@@ -489,6 +498,9 @@ describe("Registry: state.db rows", () => {
     expect(listedIds(registry)).toEqual([second.id, third.id, live.id].sort());
     expect(storedIds()).toEqual([second.id, third.id, live.id].sort());
     expect(state.database.prepare("SELECT COUNT(*) AS n FROM lease_grants").get()?.n).toBe(0);
+    expect(state.database.prepare("SELECT COUNT(*) AS n FROM device_enrolled_apps").get()?.n).toBe(
+      0,
+    );
 
     clock.advance(20 * MINUTE);
     expect(clock.now()).toBe(t0 + 90 * MINUTE);

@@ -227,7 +227,8 @@ describe("Registry", () => {
     const MINUTE = 60_000;
     const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
     try {
-      const clock = new FakeClock(1_000);
+      // why: created_at 5 is two hours old at the first start, so a stamp taken from it would drop the rows at once.
+      const clock = new FakeClock(120 * MINUTE);
       const deviceData = new Map<Platform, DeviceDataTable>([
         ["android", fakeDeviceDataTable],
         ["ios", fakeDeviceDataTable],
