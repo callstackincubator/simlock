@@ -3,7 +3,7 @@
 How the web console looks. The reference is the set of renders in
 [console-redesign/renders/](console-redesign/renders/) and the prototype that
 draws them, [console-redesign/prototype/d.mjs](console-redesign/prototype/d.mjs):
-apart from the explicit Baselines reference amendment below,
+apart from the explicit Fleet and Baselines reference amendments below,
 when this guide and a render disagree, the render wins and this guide gets
 fixed. The tokens live in `ui/src/ds/foundation.css`; change this guide and
 that file together. The website and every other brand visual follow
@@ -242,6 +242,15 @@ sentences, the CLI's names, verbs on buttons, no exclamation marks, no
 subtitles that explain, no key-hint decoration, an empty page says so in one
 line.
 
+
+## Fleet reference amendment
+
+The reference's **Add worker** is a link to the existing
+[joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
+**Release leases** becomes an equally styled **View leases** link to `/leases`.
+Neither sends a write. Keep reference placement and geometry; stage-2 and
+stage-7 paired images record these exceptions. Test both links in the worker
+browser spec. (decided in delivery, pending the maintainer)
 
 ## Baselines reference amendment
 

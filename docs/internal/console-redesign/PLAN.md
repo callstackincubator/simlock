@@ -3,7 +3,7 @@
 Rebuild the console to the look in [DESIGN.md](../DESIGN.md). The reference
 is the renders here, not the words: an agent compares its page with its
 render and stops only when the two differ in data alone, apart from the
-explicit Baselines filter/link amendment under stage 5.
+explicit Fleet navigation-link and Baselines filter/link amendments under stages 2 and 5.
 
 | Render                                                   | Page                                  |
 | -------------------------------------------------------- | ------------------------------------- |
@@ -37,7 +37,7 @@ maintainer accepts or adjusts them from a screenshot.
    each page with the fixture data, and writes `current/<page>.png` beside
    this file.
 2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
-   record the explicit stage-5 Baselines filter/link amendment, then
+   record the explicit stage-2 Fleet and stage-5 Baselines amendments, then
    list every other difference that is not data: a missing element, a wrong
    size, radius, colour, weight, spacing, alignment, a line that wraps or
    is cut where the render's is not. Fix, rerun, repeat. The fixture data
@@ -117,6 +117,13 @@ Fleet: All / Issues / Busy filter and a search box, "Needs attention N"
 attention cards (two-line reason, labelled slot rows, meters, actions, lease
 count), "Healthy N" compact tiles with the `leased / slots` fraction, Worker
 events log full width. No Groups/Table toggle: the table view goes.
+
+Explicit reference amendment: **Add worker** links to the existing
+[joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
+**Release leases** becomes an equally styled **View leases** link to `/leases`;
+neither link sends a write. Preserve placement and geometry, test both links
+in the worker browser spec, and record these exceptions in paired stage-2
+and stage-7 images. (decided in delivery, pending the maintainer)
 
 Worker page: breadcrumb title with the state pill, Drain and `⋯`; four ring
 gauge cards; a left card with Slots, Host facts (worker id wraps), Baselines
