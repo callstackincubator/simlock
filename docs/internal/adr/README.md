@@ -76,7 +76,7 @@ the status is stale.
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
 | [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
-| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed); §1, §4, §5 and §8 narrowed by 0062 |
+| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed); §1, §4, §5 and §8 narrowed by 0062; §2 and §3 narrowed by 0069 |
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented; narrowed by 0046 |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
@@ -104,3 +104,4 @@ the status is stale.
 | [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6 |
 | [0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md) | A lease has a file folder on its worker that HTTP callers fill and read | Accepted; narrows 0005 Non-goals (file transfer) and §19b′, 0026 §1 (a core relay target) and 0028 §4 (a file PUT's deadline) |
 | [0068](0068-a-worker-pauses-warming-and-new-devices-under-host-memory-pressure.md) | A worker pauses warming and new devices under host memory pressure | Accepted; narrows 0029, adds a rank stage to 0009 |
+| [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Accepted — not yet implemented; narrows 0038 §2 and §3 |
