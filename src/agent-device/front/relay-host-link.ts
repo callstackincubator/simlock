@@ -192,7 +192,8 @@ export class RelayHostLink implements HostLink {
     const reach = this.options.fleet.reach(placed.workerId);
     if (reach !== undefined && !(reach.connected && reach.refreshed)) return UNREACHABLE;
     const holder = this.options.fleet.holder(placed.workerId);
-    if (holder === undefined) return { reason: HOLDER_CANNOT, state: "unavailable" };
+    if (holder === undefined)
+      return { reason: HOLDER_CANNOT, retriable: true, state: "unavailable" };
     return {
       leaseMaxTtlMs: agentDeviceLeaseMaxTtlMs(holder.leaseMaxTtlMs),
       platforms: holder.platforms,
@@ -222,7 +223,7 @@ export class RelayHostLink implements HostLink {
 
   #anyStatus(): LinkStatus {
     const capable = this.options.fleet.capableWorkers();
-    if (capable.length === 0) return { reason: NO_WORKER, state: "unavailable" };
+    if (capable.length === 0) return { reason: NO_WORKER, retriable: true, state: "unavailable" };
     const platforms = new Set(capable.flatMap((worker) => worker.platforms));
     return { platforms: [...platforms], state: "running" };
   }

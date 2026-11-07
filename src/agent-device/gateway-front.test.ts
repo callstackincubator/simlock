@@ -2003,7 +2003,7 @@ describe(
       expect(member.fake.requests.length).toBe(received);
     });
 
-    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message and no `details`, and `devices` answers the RPC reply with `details`", async () => {
+    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message, reason and retry flag, and `devices` answers the RPC reply", async () => {
       const rig = await setUp();
       const member = first(rig);
       await granted(rig, 1);

@@ -104,6 +104,8 @@ describe("the agent-device front's request rules", () => {
         code: "INVALID_ARGS",
         error: `refused: unknown route ${method} ${path}`,
         ok: false,
+        reason: "REFUSED_BY_SIMLOCK",
+        retriable: false,
       });
       expect(rig.fake.requests.length).toBe(before);
     });

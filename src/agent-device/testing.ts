@@ -214,7 +214,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   current(): AgentDeviceUpstreamState {
     if (this.#unavailable !== undefined) {
-      return { reason: this.#unavailable, state: "unavailable" };
+      return { reason: this.#unavailable, retriable: false, state: "unavailable" };
     }
     return {
       baseUrl: this.baseUrl,

@@ -2344,6 +2344,8 @@ const tooLargeReply = (size: number) => ({
   code: "INVALID_ARGS",
   error: `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (2147483648 bytes)`,
   ok: false,
+  reason: "REFUSED_BY_SIMLOCK",
+  retriable: false,
 });
 
 describe(

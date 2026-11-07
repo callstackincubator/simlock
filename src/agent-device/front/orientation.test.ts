@@ -168,6 +168,8 @@ async function expectInvalid(typed: readonly string[]) {
   expect(body.error?.data).toEqual({
     code: "INVALID_ARGS",
     message: unknownMessage(typed[0] ?? ""),
+    details: { reason: "REFUSED_BY_SIMLOCK" },
+    retriable: false,
   });
   expect(rotations).toEqual([]);
   expect(forwarded).toEqual([]);
