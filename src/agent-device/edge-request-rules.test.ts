@@ -1008,6 +1008,14 @@ describe("the agent-device front's request rules", () => {
 
   it("A runner sends `boot` on its lease and simlock answers it; agent-device gets no `boot`", async () => {
     for (const scenario of [
+      {
+        platform: "ios",
+        model: "iPhone 16",
+        kind: "simulator",
+        target: "mobile",
+        omitTarget: true,
+        flags: {},
+      },
       { platform: "ios", model: "iPhone 16", kind: "simulator", target: "mobile", flags: {} },
       {
         platform: "ios",
@@ -1055,7 +1063,7 @@ describe("the agent-device front's request rules", () => {
       rig.fake.nameDeviceInNextReply("none");
       await granted(rig, 1, {
         platform: scenario.platform,
-        target: scenario.target,
+        ...("omitTarget" in scenario ? {} : { target: scenario.target }),
         ...(scenario.physical ? { physical: true } : {}),
       });
       const address = scenario.physical ? phoneSerial : idOf(rig, 1);
@@ -1174,6 +1182,8 @@ describe("the agent-device front's request rules", () => {
       [2, {}, simlockPicks],
       [1, { flags: { udid: idOf(rig, 2) } }, simlockPicks],
       [1, { flags: { platform: "android" } }, simlockPicks],
+      [1, { input: { platform: "android" } }, simlockPicks],
+      [1, { runtime: { platform: "android" } }, simlockPicks],
       [undefined, { flags: { udid: idOf(rig, 1) } }, simlockPicks],
     ] as const) {
       expect((await envelopeOf(await runCommand(rig, "boot", lease, fields))).error).toMatchObject(
