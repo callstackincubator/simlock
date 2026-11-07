@@ -839,11 +839,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
       },
       {
         message: plainOnly,
-        params: (n) => allocateParams(n, { retainOnClose: true }),
-        title: "retainOnClose: true",
-      },
-      {
-        message: plainOnly,
         params: (n) => allocateParams(n, { providerName: "x" }),
         title: "a provider* key",
       },
@@ -1298,6 +1293,32 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(heldAtDaemonRelease).toEqual([]);
     expect(await leases(rig)).toEqual([]);
     await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
+  });
+
+  it("a runner allocates with retainOnClose, closes, and its lease stays until release", async () => {
+    const cases = [
+      (rig: Rig) => command(rig, "close", 1),
+      (rig: Rig) => command(rig, "close", 1, {}, { positionals: ["com.example.app"] }),
+      (rig: Rig) => batch(rig, 1, [{ command: "snapshot" }, { command: "close" }]),
+    ];
+    for (const close of cases) {
+      const rig: Rig = await setUp();
+      expect(
+        (await envelopeOf(await allocate(rig, 1, { retainOnClose: true }))).result,
+      ).toMatchObject({ ok: true, data: { lease: { retainOnClose: true } } });
+      expect((await envelopeOf(await close(rig))).result).toMatchObject({ ok: true });
+      expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+      expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
+      expect((await envelopeOf(await command(rig, "snapshot", 1))).result).toMatchObject({
+        ok: true,
+      });
+      expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({
+        ok: true,
+        released: true,
+      });
+      expect(await leases(rig)).toEqual([]);
+      await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
+    }
   });
 
   const ended = [{ leaseId: hex(1), outcome: "released" }];
