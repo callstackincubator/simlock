@@ -242,7 +242,11 @@ for (const entry of cases) {
                 first.state,
                 second.state,
               );
-              if (!comparison.matches) {
+              const retainPair =
+                !comparison.matches ||
+                ((name === "1-overview-1280x800" || name === "4-device-screen-drawer-1280x800") &&
+                  run === "fresh");
+              if (retainPair) {
                 await testInfo.attach(`${name}-${kind}-first`, {
                   body: first.image,
                   contentType: "image/png",
@@ -251,10 +255,12 @@ for (const entry of cases) {
                   body: second.image,
                   contentType: "image/png",
                 });
-                await testInfo.attach(`${name}-${kind}-comparison`, {
-                  body: JSON.stringify(comparison, null, 2),
-                  contentType: "application/json",
-                });
+              }
+              await testInfo.attach(`${name}-${kind}-comparison`, {
+                body: JSON.stringify(comparison, null, 2),
+                contentType: "application/json",
+              });
+              if (!comparison.matches) {
                 await testInfo.attach(`${name}-${kind}-visible-state`, {
                   body: JSON.stringify({ first: first.state, second: second.state }),
                   contentType: "application/json",
@@ -598,6 +604,46 @@ for (const entry of cases) {
                 expect(mutated.matches, `${kind} definition rejected independently of pixels`).toBe(
                   false,
                 );
+              }
+              for (const attribute of ["href", "fill"] as const) {
+                await page.evaluate((name) => {
+                  const svg = document.querySelector(".recharts-surface")!;
+                  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+                  use.id = "capture-external-reference";
+                  use.style.display = "none";
+                  use.setAttribute(
+                    name,
+                    name === "fill"
+                      ? 'url("https://example.invalid/a.svg#paint")'
+                      : "https://example.invalid/a.svg#shape",
+                  );
+                  svg.append(use);
+                }, attribute);
+                const before = await visibleState(page);
+                await page.locator("#capture-external-reference").evaluate((element, name) => {
+                  element.setAttribute(
+                    name,
+                    name === "fill"
+                      ? 'url("https://example.invalid/b.svg#paint")'
+                      : "https://example.invalid/b.svg#shape",
+                  );
+                }, attribute);
+                const after = await visibleState(page);
+                await page
+                  .locator("#capture-external-reference")
+                  .evaluate((element) => element.remove());
+                const mutated = compareCaptures(first.image, first.image, before, after);
+                expect(
+                  mutated.changedPixels,
+                  `external ${attribute} uses identical capture pixels`,
+                ).toBe(0);
+                expect(mutated.stateMatches, `external ${attribute} reference preserved`).toBe(
+                  false,
+                );
+                expect(
+                  mutated.matches,
+                  `external ${attribute} rejected independently of pixels`,
+                ).toBe(false);
               }
             }
             const second = await snapshot();

@@ -49,12 +49,36 @@ export async function visibleState(page: Page): Promise<VisibleState> {
               ...Array.from(node.attributes, (attribute) => attribute.value),
               ...style.map(([, value]) => value!),
             ];
+            const href =
+              node.getAttribute("href") ??
+              node.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+            if (href !== null) values.push(`url("${href}")`);
             for (const value of values) {
-              const references = [...value.matchAll(/url\(\s*["']?#([^"')\s]+)["']?\s*\)/g)].map(
-                (match) => match[1]!,
-              );
-              if (value.startsWith("#")) references.push(value.slice(1));
-              for (const id of references) {
+              const references = [
+                ...value.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s)]+))\s*\)/gi),
+              ].map((match) => match[1] ?? match[2] ?? match[3]!);
+              if (value.startsWith("#")) references.push(value);
+              for (const reference of references) {
+                let url: URL;
+                try {
+                  url = new URL(reference, document.baseURI);
+                } catch {
+                  continue;
+                }
+                const current = new URL(location.href);
+                if (
+                  !url.hash ||
+                  url.origin !== current.origin ||
+                  url.pathname !== current.pathname ||
+                  url.search !== current.search
+                )
+                  continue;
+                let id = url.hash.slice(1);
+                try {
+                  id = decodeURIComponent(id);
+                } catch {
+                  // why: malformed escapes still name a literal DOM id.
+                }
                 const target = document.getElementById(id);
                 if (target !== null && !seen.has(target) && !root.contains(target))
                   roots.push(target);
