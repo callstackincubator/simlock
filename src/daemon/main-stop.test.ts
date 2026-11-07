@@ -33,7 +33,12 @@ import {
   stopDaemons,
   temporaryDirectories,
 } from "./test-main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import {
+  freeLoopbackPort,
+  portLostIn,
+  startOnFreePort,
+  startUnlessPortLost,
+} from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -86,57 +91,66 @@ describe("startDaemon stopped while starting", () => {
 
 describe("startDaemon HTTP gateway startup readiness", () => {
   it("parks an HTTP request until convergence completes, instead of refusing the connection", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
-    temporaryDirectories.push(directory);
-    const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
     const secret = "slk_test_agent";
-    await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
-    const port = await freeLoopbackPort();
+    // why: each attempt has its own data folder, since a daemon that lost the port is still stopping in its folder and holds `daemon.sock`.
+    await startOnFreePort(async (port) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const filesystem = new MemoryFilesystem();
+      await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
+      const sink = new MemoryLogSink();
+      const startPromise = startDaemon({
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["26.5"],
+            clock,
+            latencyMs: { listManaged: 30_000 },
+            platform: "ios",
+          }),
+        ],
+        deviceDataTables: fakeDeviceDataTables,
+        filesystem,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+        version: "1.2.3",
+      } as StartDaemonOptions).then((daemon) => {
+        runningDaemons.push(daemon);
+        return daemon;
+      });
+      void startPromise.catch(() => undefined);
 
-    const startPromise = startDaemon({
-      clock,
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-      dataDirectory: directory,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["26.5"],
-          clock,
-          latencyMs: { listManaged: 30_000 },
-          platform: "ios",
-        }),
-      ],
-      deviceDataTables: fakeDeviceDataTables,
-      filesystem,
-      version: "1.2.3",
-    } as StartDaemonOptions).then((daemon) => {
-      runningDaemons.push(daemon);
-      return daemon;
+      // why: Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
+      // fires once the socket claim resolves, then `gateway.start()` itself awaits a real
+      // `listen()`), so there is no single microtask boundary to await here the way the
+      // socket-side test above can just retry-connect on the unix socket.
+      const watch = new AbortController();
+      const statusBeforeConvergence = await Promise.race([
+        pollUntilListening(port, secret),
+        // why: a start that lost the port stays pending behind the convergence it waits for, so the loss is read from the daemon's log and the attempt runs again.
+        portLostIn(sink, watch.signal),
+      ]).finally(() => watch.abort());
+      expect(statusBeforeConvergence).toMatchObject({ daemon: { health: "starting" } });
+
+      const parkedStatusPromise = fetch(`http://127.0.0.1:${port}/v1/leases`, {
+        headers: { authorization: `Bearer ${secret}` },
+      });
+      let settled = false;
+      void parkedStatusPromise.then(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+
+      clock.advance(30_000);
+      const daemon = await startPromise;
+      expect(daemon).toBeDefined();
+
+      const parkedResponse = await parkedStatusPromise;
+      expect(parkedResponse.status).toBe(200);
     });
-
-    // why: Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
-    // fires once the socket claim resolves, then `gateway.start()` itself awaits a real
-    // `listen()`), so there is no single microtask boundary to await here the way the
-    // socket-side test above can just retry-connect on the unix socket.
-    const statusBeforeConvergence = await pollUntilListening(port, secret);
-    expect(statusBeforeConvergence).toMatchObject({ daemon: { health: "starting" } });
-
-    const parkedStatusPromise = fetch(`http://127.0.0.1:${port}/v1/leases`, {
-      headers: { authorization: `Bearer ${secret}` },
-    });
-    let settled = false;
-    void parkedStatusPromise.then(() => {
-      settled = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(settled).toBe(false);
-
-    clock.advance(30_000);
-    const daemon = await startPromise;
-    expect(daemon).toBeDefined();
-
-    const parkedResponse = await parkedStatusPromise;
-    expect(parkedResponse.status).toBe(200);
   });
 });
 
@@ -472,28 +486,37 @@ describe("startDaemon stop with a health recovery in flight (#1000)", () => {
 
 describe("startDaemon stop with a warm target", () => {
   it("creates no further device for a target once a stop is asked for, though the creation in flight ends while the gateway stops", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
-    temporaryDirectories.push(directory);
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.hangMakeReady();
-    const daemon = await startDaemon({
-      deviceDataTables: fakeDeviceDataTables,
-      clock,
-      configOverrides: {
-        capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
-        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        warmPool: {
-          maxConcurrentBoots: 1,
-          targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
-        },
-      },
-      dataDirectory: directory,
-      drivers: [driver],
-      filesystem: new MemoryFilesystem(),
-      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      version: "1.2.3",
+    // why: each attempt has its own driver and data folder: the calls of a start that lost its port are not counted, and that daemon is still stopping in its folder.
+    const { started } = await startOnFreePort(async (port) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+      driver.hangMakeReady();
+      const sink = new MemoryLogSink();
+      const daemon = await startUnlessPortLost(
+        sink,
+        startDaemon({
+          deviceDataTables: fakeDeviceDataTables,
+          clock,
+          configOverrides: {
+            capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
+            http: { enabled: true, host: "127.0.0.1", port },
+            warmPool: {
+              maxConcurrentBoots: 1,
+              targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
+            },
+          },
+          dataDirectory: directory,
+          drivers: [driver],
+          filesystem: new MemoryFilesystem(),
+          logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+          version: "1.2.3",
+        }),
+      );
+      return { daemon, driver };
     });
+    const { daemon, driver } = started;
     runningDaemons.push(daemon);
     await expect
       .poll(() => driver.calls.filter((call) => call.operation === "makeReady").length)
@@ -511,67 +534,75 @@ describe("startDaemon stop with a warm target", () => {
 
 describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", () => {
   it("never lets the HTTP gateway outlive full teardown when daemon.stop lands while the gateway is still mid-bind", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
-    temporaryDirectories.push(directory);
-    const clock = new FakeClock(1_000);
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-    const filesystem = new MemoryFilesystem();
-    const port = await freeLoopbackPort();
-    const socketPath = join(directory, "daemon.sock");
+    // why: each attempt has its own data folder, since a daemon that lost the port is still stopping in its folder and holds `daemon.sock`.
+    await startOnFreePort(async (port) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const sink = new MemoryLogSink();
+      const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+      const filesystem = new MemoryFilesystem();
+      const socketPath = join(directory, "daemon.sock");
 
-    const restoreListen = delayTcpListen(200);
-    try {
-      const startPromise = startDaemon({
-        clock,
-        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-        dataDirectory: directory,
-        drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-        deviceDataTables: fakeDeviceDataTables,
-        filesystem,
-        logger,
-        socketPath,
-        version: "1.2.3",
-      } as StartDaemonOptions);
-      void startPromise.then((daemon) => runningDaemons.push(daemon)).catch(() => undefined);
+      const restoreListen = delayTcpListen(200);
+      try {
+        const startPromise = startDaemon({
+          clock,
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
+          filesystem,
+          logger,
+          socketPath,
+          version: "1.2.3",
+        } as StartDaemonOptions);
+        void startPromise.then((daemon) => runningDaemons.push(daemon)).catch(() => undefined);
 
-      const client = await connectRetrying(socketPath);
-      const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
-      await client.request("hello", {
-        clientVersion: "test",
-        credential: secret,
-        protocolVersion: DAEMON_PROTOCOL_VERSION,
-      });
-      const stopReply = await client.request("daemon.stop", {});
-      expect(stopReply.ok).toBe(true);
-      client.socket.end();
+        const client = await connectRetrying(socketPath);
+        const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
+        await client.request("hello", {
+          clientVersion: "test",
+          credential: secret,
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+        });
+        const stopReply = await client.request("daemon.stop", {});
+        expect(stopReply.ok).toBe(true);
+        client.socket.end();
 
-      await new Promise((resolve) => setTimeout(resolve, 400));
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const lostPort = sink.records.find(
+          (record) => record.message === "HTTP frontend failed to start",
+        );
+        if (lostPort !== undefined) {
+          throw Object.assign(new Error(String(lostPort.fields?.message)), { code: "EADDRINUSE" });
+        }
 
-      const stoppingIndex = sink.records.findIndex(
-        (record) => record.message === "Daemon stopping",
-      );
-      expect(stoppingIndex).toBeGreaterThanOrEqual(0);
-      const gatewayStoppedIndex = sink.records.findIndex(
-        (record) => record.message === "HTTP gateway stopped",
-      );
-      const gatewayListeningIndex = sink.records.findIndex(
-        (record) => record.message === "HTTP gateway listening",
-      );
-      expect(gatewayListeningIndex).toBeGreaterThanOrEqual(0);
-      expect(gatewayListeningIndex).toBeLessThan(stoppingIndex);
-      expect(gatewayStoppedIndex).toBeGreaterThanOrEqual(0);
-      expect(gatewayStoppedIndex).toBeLessThan(stoppingIndex);
+        const stoppingIndex = sink.records.findIndex(
+          (record) => record.message === "Daemon stopping",
+        );
+        expect(stoppingIndex).toBeGreaterThanOrEqual(0);
+        const gatewayStoppedIndex = sink.records.findIndex(
+          (record) => record.message === "HTTP gateway stopped",
+        );
+        const gatewayListeningIndex = sink.records.findIndex(
+          (record) => record.message === "HTTP gateway listening",
+        );
+        expect(gatewayListeningIndex).toBeGreaterThanOrEqual(0);
+        expect(gatewayListeningIndex).toBeLessThan(stoppingIndex);
+        expect(gatewayStoppedIndex).toBeGreaterThanOrEqual(0);
+        expect(gatewayStoppedIndex).toBeLessThan(stoppingIndex);
 
-      await expect(
-        fetch(`http://127.0.0.1:${port}/v1/status`, {
-          headers: { authorization: "Bearer irrelevant" },
-          signal: AbortSignal.timeout(200),
-        }),
-      ).rejects.toThrow();
-    } finally {
-      restoreListen();
-    }
+        await expect(
+          fetch(`http://127.0.0.1:${port}/v1/status`, {
+            headers: { authorization: "Bearer irrelevant" },
+            signal: AbortSignal.timeout(200),
+          }),
+        ).rejects.toThrow();
+      } finally {
+        restoreListen();
+      }
+    });
   });
 });
 
@@ -602,7 +633,7 @@ describe("startDaemon socket race with HTTP enabled", () => {
         version: "1.2.3",
       }) as StartDaemonOptions;
 
-    const first = await startDaemon(options(await freeLoopbackPort()));
+    const { started: first } = await startOnFreePort((port) => startDaemon(options(port)));
     try {
       const second = startDaemon(options(await freeLoopbackPort()));
       const outcome = await Promise.race([
@@ -681,10 +712,7 @@ describe("startDaemon HTTP gateway bind failure", () => {
     const sink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock, level: "debug", sink });
     const filesystem = new MemoryFilesystem();
-    const port = await freeLoopbackPort();
-
-    const occupier = createServer();
-    await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+    const { port, started: occupier } = await occupyFreePort();
     try {
       await expect(
         startDaemon({
@@ -717,9 +745,7 @@ describe("startDaemon HTTP gateway bind failure", () => {
       const clock = new FakeClock(1_000);
       const sink = new MemoryLogSink();
       const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-      const port = await freeLoopbackPort();
-      const occupier = createServer();
-      await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+      const { port, started: occupier } = await occupyFreePort();
       const hold = holdTcpListen();
       try {
         const settled = startDaemon({
@@ -760,6 +786,21 @@ describe("startDaemon HTTP gateway bind failure", () => {
     },
   );
 });
+
+// why: a test that needs a port taken picks one, and another process can take it before the occupier does.
+function occupyFreePort() {
+  return startOnFreePort(
+    (port) =>
+      new Promise<Server>((resolve, reject) => {
+        const occupier = createServer();
+        occupier.once("error", reject);
+        occupier.listen(port, "127.0.0.1", () => {
+          occupier.off("error", reject);
+          resolve(occupier);
+        });
+      }),
+  );
+}
 
 /** why: Delays every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) by
  * `delayMs`, real time, via `setTimeout` -- but passes a Unix-socket `listen(path, callback)`

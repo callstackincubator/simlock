@@ -1,27 +1,19 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { createServer, type AddressInfo } from "node:net";
+import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { createTestKey, keySetBody, type TestKey } from "../auth/testing.js";
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
 import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -181,18 +173,19 @@ describe("a lease's input socket", () => {
     readonly workerInput: boolean;
     readonly input?: FakeInputFactory;
   }) {
-    const port = await freeLoopbackPort();
-    const gateway = await startDaemon({
-      configOverrides: {
-        capabilities: { input: { enabled: options.gatewayInput } },
-        http: { enabled: true, host: "127.0.0.1", port },
-      },
-      dataDirectory: await directory("gateway"),
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      role: "gateway",
-      version: "1.0.0-e2e",
-    });
+    const { port, started: gateway } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          capabilities: { input: { enabled: options.gatewayInput } },
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        dataDirectory: await directory("gateway"),
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        role: "gateway",
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(gateway);
     const token = (await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin))
       .secret;
@@ -248,25 +241,26 @@ describe("a lease's input socket", () => {
     options: { readonly clock?: FakeClock; readonly proxyAuth?: Record<string, unknown> } = {},
   ) {
     const { clock, proxyAuth } = options;
-    const port = await freeLoopbackPort();
-    const worker = await startDaemon({
-      ...(clock === undefined ? {} : { clock }),
-      configOverrides: {
-        capabilities: { input: { enabled: true }, stream: { enabled: true } },
-        http: {
-          enabled: true,
-          host: "127.0.0.1",
-          port,
-          ...(proxyAuth === undefined ? {} : { proxyAuth }),
+    const { port, started: worker } = await startOnFreePort(async (port) =>
+      startDaemon({
+        ...(clock === undefined ? {} : { clock }),
+        configOverrides: {
+          capabilities: { input: { enabled: true }, stream: { enabled: true } },
+          http: {
+            enabled: true,
+            host: "127.0.0.1",
+            port,
+            ...(proxyAuth === undefined ? {} : { proxyAuth }),
+          },
         },
-      },
-      dataDirectory: await directory("standalone"),
-      deviceDataTables: fakeDeviceDataTables,
-      drivers: [driver()],
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+        dataDirectory: await directory("standalone"),
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [driver()],
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(worker);
     const { holder, operator, other } = await tokens(worker);
     const leaseId = await lease(worker, holder.token.id);

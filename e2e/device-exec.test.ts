@@ -1,9 +1,8 @@
 import { realpath } from "node:fs/promises";
-import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { waitFor, withHttpDaemon, type TestEnv } from "./helpers/index.js";
 
 /**
  * ADR 0005 §19a-§19e, end to end: a remote agent leases a device over HTTP and then drives it
@@ -18,28 +17,6 @@ import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
  * `--fake-exec-echo-stdin`, which is how a command's second stream, a non-zero exit and its
  * stdin are observable from the far end of an HTTP request.
  */
-
-/** Same reservation dance as `http-api.test.ts`: config validation rejects `http.port: 0`. */
-async function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        if (address === null || typeof address === "string") {
-          reject(new Error("failed to reserve a port: no AddressInfo"));
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-  });
-}
 
 interface SseFrame {
   readonly event: string;
@@ -80,10 +57,9 @@ interface Fleet {
 /** One daemon with HTTP on, both fake platforms scripted, and the three calls every flow here
  * makes. Factored out so each test reads as the thing it is proving rather than as setup. */
 async function fleet(): Promise<Fleet> {
-  const port = await reservePort();
-  const env = await withDaemon({
+  const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-  });
+  }));
   await env.driverScript.set({
     android: { knownModels: ["Pixel 8"], availableOsVersions: ["35"] },
     ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },

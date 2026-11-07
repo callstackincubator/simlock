@@ -9,6 +9,7 @@ import {
   freeLoopbackPort,
   holdLoopbackPort,
   REPO_ROOT,
+  startOnFreePort,
   type TestEnv,
   waitFor,
   withDaemon,
@@ -30,9 +31,31 @@ async function makeGatewayPresent(env: TestEnv): Promise<void> {
   expect(set.code, set.stderr).toBe(0);
 }
 
+async function gatewayLog(env: TestEnv): Promise<string> {
+  return readFile(join(gatewayFolder(env), "daemon.log"), "utf8").catch(() => "");
+}
+
+// why: `freeLoopbackPort` releases its port, so another process can take it before the gateway
+// binds it. The step that starts the gateway runs on a port set just before it; a gateway that
+// logs EADDRINUSE during the step has lost the port, and the step runs again on a new one.
+async function startingGateway<T>(env: TestEnv, step: () => Promise<T>): Promise<T> {
+  const { started } = await startOnFreePort(async (port) => {
+    const before = (await gatewayLog(env)).length;
+    const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
+    expect(set.code, set.stderr).toBe(0);
+    const result = await step();
+    if ((await gatewayLog(env)).slice(before).includes("EADDRINUSE")) {
+      throw Object.assign(new Error(`the gateway lost port ${String(port)}`), {
+        code: "EADDRINUSE",
+      });
+    }
+    return result;
+  });
+  return started;
+}
+
 async function startGateway(env: TestEnv): Promise<void> {
-  await makeGatewayPresent(env);
-  const started = await env.cli(["--gateway", "daemon", "start"]);
+  const started = await startingGateway(env, () => env.cli(["--gateway", "daemon", "start"]));
   expect(started.code, started.stderr).toBe(0);
   await waitFor(() => existsSync(join(gatewayFolder(env), "admin.token")), {
     label: "the gateway's admin.token written",
@@ -93,7 +116,7 @@ describe("daemon folders (ADR 0034)", () => {
       expect(existsSync(join(gatewayFolder(env), "config.json"))).toBe(true);
       expect((await stat(gatewayFolder(env))).mode & 0o777).toBe(0o700);
 
-      const status = await env.cli(["--gateway", "status", "--json"]);
+      const status = await startingGateway(env, () => env.cli(["--gateway", "status", "--json"]));
 
       expect(status.code, status.stderr).toBe(0);
       expect(daemonMode(status)).toBe("gateway");
@@ -224,9 +247,7 @@ describe("daemon folders (ADR 0034)", () => {
     const env = await withDaemon({ mode: "auto" });
 
     try {
-      await makeGatewayPresent(env);
-
-      const started = await env.cli(["daemon", "start"]);
+      const started = await startingGateway(env, () => env.cli(["daemon", "start"]));
       const status = await env.cli(["status", "--json"]);
 
       expect(started.code, started.stderr).toBe(0);
@@ -391,9 +412,9 @@ describe("daemon folders (ADR 0034)", () => {
       const mcp = await env.mcpClient();
 
       try {
-        await makeGatewayPresent(env);
-
-        const catalog = await mcp.client.callTool({ name: "list_devices", arguments: {} });
+        const catalog = await startingGateway(env, () =>
+          mcp.client.callTool({ name: "list_devices", arguments: {} }),
+        );
 
         expect(catalog.isError).toBeFalsy();
         expect(catalog.structuredContent).toEqual({
@@ -446,9 +467,9 @@ describe("daemon folders (ADR 0034)", () => {
       const mcp = await env.mcpClient({ gateway: true });
 
       try {
-        await makeGatewayPresent(env);
-
-        const result = await mcp.client.callTool({ name: "list_devices", arguments: {} });
+        const result = await startingGateway(env, () =>
+          mcp.client.callTool({ name: "list_devices", arguments: {} }),
+        );
 
         expect(result.isError).toBeFalsy();
         const status = await env.cli(["--gateway", "status", "--json"]);

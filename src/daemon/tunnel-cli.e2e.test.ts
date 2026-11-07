@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
 import { buildCliEnvironment, runCli } from "../cli/index.js";
 import { FakeDeviceTcp, FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import {
@@ -19,15 +20,6 @@ import {
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -83,30 +75,31 @@ describe("simlock tunnel against a lone worker", () => {
   });
 
   async function worker() {
-    const port = await freeLoopbackPort();
     const path = await mkdtemp(join(tmpdir(), "simlock-e2e-tunnel-cli-"));
     directories.push(path);
     const deviceTcp = new FakeDeviceTcp();
-    const daemon = await startDaemon({
-      configOverrides: {
-        capabilities: { tunnel: { enabled: true } },
-        http: { enabled: true, host: "127.0.0.1", port },
-      },
-      dataDirectory: path,
-      deviceDataTables: fakeDeviceDataTables,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["18.0"],
-          clock: new SystemClock(),
-          deviceTcp,
-          knownModels: ["Pixel-A"],
-          platform: "android",
-        }),
-      ],
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+    const { port, started: daemon } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          capabilities: { tunnel: { enabled: true } },
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        dataDirectory: path,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["18.0"],
+            clock: new SystemClock(),
+            deviceTcp,
+            knownModels: ["Pixel-A"],
+            platform: "android",
+          }),
+        ],
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(daemon);
     const holder = await daemon.dispatch("token.create", { label: "holder", role: "agent" }, admin);
     const granted = await daemon.dispatch(

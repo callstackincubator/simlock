@@ -1,10 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort, startUnlessPortLost } from "../test-support/loopback-port.js";
 import { agentDeviceModuleWith } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayModule, OptionalModuleDefinition } from "../modules/index.js";
@@ -29,15 +29,6 @@ afterEach(async () => {
     directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
   );
 });
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 function definitionsOf(...modules: FakeModule[]): OptionalModuleDefinition<unknown>[] {
   return modules.map((module) => module.definition as OptionalModuleDefinition<unknown>);
@@ -80,18 +71,32 @@ function gatewayOptions(
 async function startGateway(
   modules: readonly OptionalModuleDefinition<unknown>[],
   on: readonly string[],
+  resetCounts: () => void = () => undefined,
 ): Promise<Gateway> {
-  const directory = await mkdtemp(join(tmpdir(), "simlock-gw-modules-"));
-  directories.push(directory);
-  const clock = new FakeClock(1_000);
-  const sink = new MemoryLogSink();
-  const port = await freeLoopbackPort();
-  const start = async () => {
-    const daemon = await startDaemon(gatewayOptions(modules, on, directory, port, clock, sink));
+  const startAt = async (
+    directory: string,
+    port: number,
+    clock: FakeClock,
+    sink: MemoryLogSink,
+  ) => {
+    const daemon = await startUnlessPortLost(
+      sink,
+      startDaemon(gatewayOptions(modules, on, directory, port, clock, sink)),
+    );
     daemons.push(daemon);
     return daemon;
   };
-  const daemon = await start();
+  // why: each attempt has its own data folder, clock, sink and counts: a start that lost its port is still stopping in its folder, and leaves no line or count in what the test reads.
+  const { port, started } = await startOnFreePort(async (candidate) => {
+    resetCounts();
+    const directory = await mkdtemp(join(tmpdir(), "simlock-gw-modules-"));
+    directories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    return { clock, daemon: await startAt(directory, candidate, clock, sink), directory, sink };
+  });
+  const { clock, daemon, directory, sink } = started;
+  const start = () => startAt(directory, port, clock, sink);
   const agent = await daemon.dispatch("token.create", { label: "agent", role: "agent" }, admin);
   return {
     agentSecret: agent.secret,
@@ -159,7 +164,7 @@ describe("a gateway's optional modules", () => {
   it("a gateway with agent-device off mounts no /v1/agent-device, and never calls agent-device's loadGateway, while one with it on does", async () => {
     const definition = agentDeviceModuleWith({});
     const loadGateway = vi.spyOn(definition, "loadGateway");
-    const on = await startGateway([definition], ["agent-device"]);
+    const on = await startGateway([definition], ["agent-device"], () => loadGateway.mockClear());
     expect((await get(on, "/v1/agent-device/health")).status).toBe(200);
     expect(loadGateway).toHaveBeenCalledTimes(1);
     await on.daemon.stop("test");
@@ -175,7 +180,10 @@ describe("a gateway's optional modules", () => {
     const bare = fakeModule({ name: "bare" });
     const sided = fakeModule({ gateway: { module: pong }, name: "sided" });
 
-    const gateway = await startGateway(definitionsOf(bare, sided), ["bare", "sided"]);
+    const gateway = await startGateway(definitionsOf(bare, sided), ["bare", "sided"], () => {
+      bare.loads = 0;
+      sided.gatewayLoads = 0;
+    });
 
     expect(await (await get(gateway, "/v1/sided/x")).text()).toBe("pong");
     expect((await get(gateway, "/v1/bare/x")).status).toBe(404);
@@ -211,7 +219,10 @@ describe("a gateway's optional modules", () => {
       relayTarget: answering("mine"),
     });
     const other = fakeModule({ name: "other", relayTarget: answering("other") });
-    const gateway = await startGateway(definitionsOf(mine), ["mine"]);
+    const gateway = await startGateway(definitionsOf(mine), ["mine"], () => {
+      mine.gatewayCreates = 0;
+      mine.gatewayContexts.length = 0;
+    });
     await joinWorker(gateway, definitionsOf(mine, other), ["mine", "other"], "w1");
     expect(mine.gatewayCreates).toBe(1);
     const context = mine.gatewayContexts[0];
@@ -225,7 +236,10 @@ describe("a gateway's optional modules", () => {
 
   it("a fake gateway module's serving() lists only connected workers whose capability named after it is available, a drained one included", async () => {
     const mine = fakeModule({ gateway: { module: pong }, name: "mine" });
-    const gateway = await startGateway(definitionsOf(mine), ["mine"]);
+    const gateway = await startGateway(definitionsOf(mine), ["mine"], () => {
+      mine.gatewayCreates = 0;
+      mine.gatewayContexts.length = 0;
+    });
     await joinWorker(gateway, definitionsOf(mine), ["mine"], "serves");
     await joinWorker(gateway, definitionsOf(mine), [], "off");
     const unavailable = fakeModule({ name: "mine", state: "unavailable" });
@@ -298,6 +312,8 @@ describe("a gateway's optional modules", () => {
       name: "mine",
     });
     const gateway = await startGateway(definitionsOf(mine), ["mine"]);
+    // why: a start that lost its port is stopped, and that stop ran this hook once already.
+    entered = false;
     let stopped = false;
     const stopping = gateway.daemon.stop("test").then(() => {
       stopped = true;
