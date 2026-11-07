@@ -34,7 +34,7 @@ describe("the agent-device host", () => {
     const upstream = {
       current: () => ({
         reason: "agent-device is stopped",
-        retriable: false,
+        retriable: true,
         state: "unavailable",
       }),
       fetch: async () => new Response(),
@@ -42,7 +42,7 @@ describe("the agent-device host", () => {
 
     expect(await new AgentDeviceHost(upstream, ["ios"]).status()).toEqual({
       reason: "agent-device is stopped",
-      retriable: false,
+      retriable: true,
       state: "unavailable",
     });
   });
