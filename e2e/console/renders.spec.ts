@@ -538,6 +538,67 @@ for (const entry of cases) {
                 expect(mutated.stateMatches, `${label} exact paint inputs`).toBe(false);
                 expect(mutated.matches, `${label} rejected independently of pixels`).toBe(false);
               }
+              for (const kind of [
+                "absolute CSS",
+                "relative CSS",
+                "absolute href",
+                "relative href",
+              ] as const) {
+                await page.evaluate((reference) => {
+                  const svg = document.querySelector(".recharts-surface")!;
+                  const chart = svg.querySelector(".recharts-area-area")!;
+                  const hidden = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                  hidden.id = "capture-reference-definitions";
+                  hidden.style.display = "none";
+                  const definition = svg.querySelector("clipPath")!.cloneNode(true) as Element;
+                  definition.id = "capture-reference-clip";
+                  hidden.append(definition);
+                  document.body.append(hidden);
+                  const address = reference.startsWith("absolute")
+                    ? `${location.origin}${location.pathname}#capture-reference-clip`
+                    : `./#capture-reference-clip`;
+                  if (reference.endsWith("CSS")) {
+                    chart.setAttribute(
+                      "data-capture-old-clip",
+                      chart.getAttribute("clip-path") ?? "",
+                    );
+                    chart.setAttribute("clip-path", `url("${address}")`);
+                  } else {
+                    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+                    use.id = "capture-reference-use";
+                    use.setAttribute("href", address);
+                    svg.append(use);
+                  }
+                }, kind);
+                const before = await visibleState(page);
+                await page
+                  .locator("#capture-reference-definitions rect")
+                  .first()
+                  .evaluate((element) => {
+                    element.setAttribute("width", "1");
+                  });
+                const after = await visibleState(page);
+                await page.evaluate(() => {
+                  const chart = document.querySelector(".recharts-area-area")!;
+                  const old = chart.getAttribute("data-capture-old-clip");
+                  if (old !== null) {
+                    if (old === "") chart.removeAttribute("clip-path");
+                    else chart.setAttribute("clip-path", old);
+                    chart.removeAttribute("data-capture-old-clip");
+                  }
+                  document.querySelector("#capture-reference-use")?.remove();
+                  document.querySelector("#capture-reference-definitions")!.remove();
+                });
+                const mutated = compareCaptures(first.image, first.image, before, after);
+                expect(
+                  mutated.changedPixels,
+                  `${kind} definition uses identical capture pixels`,
+                ).toBe(0);
+                expect(mutated.stateMatches, `${kind} definition exact paint inputs`).toBe(false);
+                expect(mutated.matches, `${kind} definition rejected independently of pixels`).toBe(
+                  false,
+                );
+              }
             }
             const second = await snapshot();
             await assertCapture(`${entry.name}${suffix}`, "repeated", first, second);
