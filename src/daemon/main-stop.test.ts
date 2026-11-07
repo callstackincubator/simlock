@@ -668,9 +668,10 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
     const options = (gatewayUrl?: string): StartDaemonOptions =>
       ({
         clock: new FakeClock(1_000),
-        ...(gatewayUrl === undefined
-          ? {}
-          : { configOverrides: { gateway: { token: "join-token-395", url: gatewayUrl } } }),
+        configOverrides:
+          gatewayUrl === undefined
+            ? STANDALONE_OFF
+            : { gateway: { token: "join-token-395", url: gatewayUrl } },
         dataDirectory: directory,
         drivers: [
           new FakeDriver({

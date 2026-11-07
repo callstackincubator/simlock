@@ -47,11 +47,6 @@ describe("startDaemon version check", () => {
     const { started: daemon } = await startOnFreePort((port) =>
       startDaemon({
         clock,
-        // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
-        configOverrides:
-          overrides.role === "gateway"
-            ? { http: { enabled: true, host: "127.0.0.1", port } }
-            : STANDALONE_OFF,
         dataDirectory: directory,
         drivers: [],
         filesystem: new MemoryFilesystem(),
@@ -59,7 +54,14 @@ describe("startDaemon version check", () => {
         logger: new JsonLinesLogger({ clock, level: "debug", sink }),
         npm,
         version: "0.3.0",
+        // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
         ...overrides,
+        configOverrides: {
+          ...(overrides.role === "gateway"
+            ? { http: { enabled: true, host: "127.0.0.1", port } }
+            : STANDALONE_OFF),
+          ...overrides.configOverrides,
+        },
       } as StartDaemonOptions),
     );
     runningDaemons.push(daemon);
