@@ -441,4 +441,42 @@ describe("Registry: state.db rows", () => {
       expect(view.snapshot.devices.map((device) => device.state)).toEqual(["shutdown", "shutdown"]);
     }
   });
+
+  // why: #1410 — the proposed bound. A deleted record stays in state.db (core manual), but memory
+  // and `status.get`, which answers `snapshot.devices`, keep only the 100 most recently deleted.
+  it("the snapshot holds every live device and only the 100 most recently deleted ones, while state.db keeps every deleted row, before and after a restart", async () => {
+    const { open, readyDevice, registry, state } = await world();
+    const firstLive = await readyDevice("live-1");
+    const deletedLast = await readyDevice("deleted-last");
+    const bulk = [];
+    for (let index = 0; index < 102; index += 1) {
+      const device = await readyDevice(`bulk-${String(index)}`);
+      await registry.markDeviceMissing(device.id, "doctor");
+      bulk.push(device.id);
+    }
+    await registry.markDeviceMissing(deletedLast.id, "doctor");
+    const lastLive = await readyDevice("live-2");
+
+    const deletedIds = (view: Registry) =>
+      view.snapshot.devices
+        .filter((device) => device.state === "deleted")
+        .map((device) => device.id);
+    const liveIds = (view: Registry) =>
+      view.snapshot.devices
+        .filter((device) => device.state !== "deleted")
+        .map((device) => device.id);
+
+    expect(liveIds(registry)).toEqual([firstLive.id, lastLive.id]);
+    expect([...deletedIds(registry)].sort()).toEqual([...bulk.slice(3), deletedLast.id].sort());
+    expect(
+      state.database.prepare("SELECT COUNT(*) AS n FROM devices WHERE state = 'deleted'").get()?.n,
+    ).toBe(103);
+
+    const restarted = await open({ generate: () => "unused" });
+    expect(liveIds(restarted)).toEqual([firstLive.id, lastLive.id]);
+    expect(deletedIds(restarted)).toHaveLength(100);
+    expect(
+      state.database.prepare("SELECT COUNT(*) AS n FROM devices WHERE state = 'deleted'").get()?.n,
+    ).toBe(103);
+  });
 });
