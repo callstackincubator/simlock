@@ -321,7 +321,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false, udid or serial }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig: Rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({

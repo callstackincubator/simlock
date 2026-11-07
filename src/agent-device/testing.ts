@@ -709,14 +709,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     params: Record<string, unknown>,
     leaseId: unknown,
   ): readonly { readonly leaseId: string; readonly outcome: "released" }[] {
-    const flags = (params["flags"] ?? {}) as Record<string, unknown>;
-    const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
-    const closes =
-      command === "close" ||
-      (command === "batch" &&
-        steps.some((step) => (step as { readonly command?: unknown }).command === "close"));
     if (
-      !closes ||
+      !closesLease(command, params) ||
       typeof leaseId !== "string" ||
       this.leases.get(leaseId)?.retainOnClose ||
       !this.leases.delete(leaseId)
@@ -724,6 +718,16 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       return [];
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+function closesLease(command: string, params: Record<string, unknown>): boolean {
+  const flags = (params["flags"] ?? {}) as Record<string, unknown>;
+  const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
+  return (
+    command === "close" ||
+    (command === "batch" &&
+      steps.some((step) => (step as { readonly command?: unknown }).command === "close"))
+  );
 }
 
 // why: agent-device's allocate reply names no device; only a test that asks for one gets one.
