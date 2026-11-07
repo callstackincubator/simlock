@@ -503,6 +503,41 @@ for (const entry of cases) {
               expect(proof.changedPixels, "visible mutation uses identical capture pixels").toBe(0);
               expect(proof.stateMatches, "visible overview heading mutation").toBe(false);
               expect(proof.matches, "visible mutation cannot use raster allowance").toBe(false);
+              for (const [label, selector, attribute, replacement] of [
+                ["real chart path", ".recharts-area-area", "d", "M0,0 L1,1"],
+                ["hidden clip geometry", ".recharts-surface clipPath rect", "width", "1"],
+                [
+                  "hidden clip style",
+                  ".recharts-surface clipPath rect",
+                  "style",
+                  "transform: translate(3px)",
+                ],
+                ["hidden clip data", ".recharts-surface clipPath rect", "data-paint", "changed"],
+              ] as const) {
+                const target = page.locator(selector).first();
+                await expect(target, label).toHaveCount(1);
+                const before = await visibleState(page);
+                const previous = await target.evaluate(
+                  (element, [name, value]) => {
+                    const old = element.getAttribute(name);
+                    element.setAttribute(name, value);
+                    return old;
+                  },
+                  [attribute, replacement],
+                );
+                const after = await visibleState(page);
+                await target.evaluate(
+                  (element, [name, value]) => {
+                    if (value === null) element.removeAttribute(name!);
+                    else element.setAttribute(name!, value);
+                  },
+                  [attribute, previous],
+                );
+                const mutated = compareCaptures(first.image, first.image, before, after);
+                expect(mutated.changedPixels, `${label} uses identical capture pixels`).toBe(0);
+                expect(mutated.stateMatches, `${label} exact paint inputs`).toBe(false);
+                expect(mutated.matches, `${label} rejected independently of pixels`).toBe(false);
+              }
             }
             const second = await snapshot();
             await assertCapture(`${entry.name}${suffix}`, "repeated", first, second);
