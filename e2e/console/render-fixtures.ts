@@ -283,6 +283,10 @@ export async function renderFixture(page: Page, scenario: Scenario = "populated"
       return response;
     };
   }, new Date(NOW).toUTCString());
+  await renderScenario(page, scenario);
+}
+
+export async function renderScenario(page: Page, scenario: Scenario): Promise<void> {
   await page.route(
     (url) =>
       url.pathname.startsWith("/v1/") &&

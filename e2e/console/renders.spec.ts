@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 import { compareCaptures, visibleState } from "./capture-comparison.js";
 import { expect, mintJoinToken, settled, signIn, startDaemon, test } from "./fixtures.js";
-import { renderCases, renderFixture } from "./render-fixtures.js";
+import { renderCases, renderFixture, renderScenario } from "./render-fixtures.js";
 
 test.use({ locale: "en-US", timezoneId: "UTC", colorScheme: "dark", reducedMotion: "reduce" });
 
@@ -729,8 +729,7 @@ for (const entry of cases) {
                 ["long", "x".repeat(256)],
                 ["refused", "Fixture route refused"],
               ] as const) {
-                await page.unrouteAll({ behavior: "wait" });
-                await renderFixture(page, scenario);
+                await renderScenario(page, scenario);
                 await page.goto(new URL("/leases", gateway.url).href);
                 if (scenario === "long")
                   await expect(page.locator(`[title="${expected}"]`)).toBeVisible();
