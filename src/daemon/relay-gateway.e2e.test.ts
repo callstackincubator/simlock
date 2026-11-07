@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 
 import {
   GatewayRelay,
@@ -513,8 +513,35 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       holder,
       leaseId: grant.lease.id,
       newLease,
+      secret,
       stranger,
     };
+  }
+
+  // why: a loaded machine can hand a request to the worker after one sent later; holding a connection's bytes back makes that order certain.
+  async function lateProxy(port: number, holdMs: number) {
+    const sockets = new Set<{ destroy: () => void }>();
+    const server = createServer((client) => {
+      sockets.add(client);
+      client.pause();
+      setTimeout(() => {
+        const upstream = connect(port, "127.0.0.1");
+        sockets.add(upstream);
+        client.pipe(upstream).pipe(client);
+        client.resume();
+        client.on("error", () => upstream.destroy());
+        upstream.on("error", () => client.destroy());
+      }, holdMs);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    onTestFinished(
+      () =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          for (const socket of sockets) socket.destroy();
+        }),
+    );
+    return (server.address() as { port: number }).port;
   }
 
   it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
@@ -594,6 +621,32 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     });
     expect(channelsOpened()).toBe(opened);
   }, 120_000);
+
+  it("through a gateway, a PUT of a name whose upload is still arriving gets 409 FILE_BUSY, even when that upload reaches the worker after the PUT was sent", async () => {
+    const rig = await fileRig({ fileBytes: 32 * MIB, leaseBytes: 512 * MIB, silenceMs: 330_000 });
+    const late = await lateProxy(rig.port, 500);
+    const busy = new TransformStream<Uint8Array>();
+    const holding = fetch(
+      `http://127.0.0.1:${String(late)}/v1/leases/${rig.leaseId}/files/busy.bin`,
+      {
+        body: busy.readable,
+        duplex: "half",
+        headers: { authorization: `Bearer ${rig.secret}` },
+        method: "PUT",
+      } as RequestInit,
+    );
+    const feed = busy.writable.getWriter();
+    await feed.write(new Uint8Array(1));
+
+    const second = await rig.call("/busy.bin", { body: "x", method: "PUT" });
+    await feed.close();
+    const first = await holding;
+
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ error: { code: "FILE_BUSY", name: "busy.bin" } });
+    expect(first.status).toBe(201);
+    expect(await first.json()).toEqual({ name: "busy.bin", size: 1 });
+  }, 30_000);
 
   it("through a gateway, a caller that does not hold the lease gets 404 UNKNOWN_LEASE, and a lease whose worker is gone gets 503 WORKER_UNREACHABLE", async () => {
     const rig = await fileRig({ fileBytes: 32 * MIB, leaseBytes: MIB, silenceMs: 330_000 });
