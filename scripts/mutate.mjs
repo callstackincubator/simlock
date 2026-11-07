@@ -52,11 +52,12 @@ const git = (...argv) => execFileSync("git", argv, { encoding: "utf8" });
 
 const mergeBase = git("merge-base", base, "HEAD").trim();
 // why: with --touched-by the lines live at HEAD and the diff runs from HEAD, so a hunk's old
-// side (`---`, `-start,count`) names them.
+// side (`---`, `-start,count`) names them; with renames off a moved or renamed file reads as
+// deleted, so every line it had counts as touched.
 const diff =
   touchedBy === null
     ? git("diff", "-U0", "--no-color", mergeBase, "--", ...SOURCES)
-    : git("diff", "-U0", "--no-color", "HEAD", touchedBy, "--", ...SOURCES);
+    : git("diff", "-U0", "--no-color", "--no-renames", "HEAD", touchedBy, "--", ...SOURCES);
 const side = touchedBy === null ? "+++ " : "--- ";
 
 const changed = new Map();

@@ -287,19 +287,31 @@ describe("mutate.mjs", () => {
     expect(output).not.toContain("its result stands");
   });
 
-  it("with --touched-by, mutates the lines of HEAD's sources that the given ref changes, not the lines HEAD added since base", () => {
+  it("with --touched-by, mutates HEAD's line numbers of what the given ref changes, not the ref's own, nor the lines HEAD added since base", () => {
     const r = repo();
     r.git("switch", "-q", "-c", "refactor-draft");
     r.commit({
-      "src/a.ts": "export const a = 2;\nexport const b = true;\n",
-      "src/c.ts": "export const c = 3;\n",
+      "src/a.ts":
+        "export const y = 0;\nexport const z = 0;\nexport const a = 1;\nexport const b = false;\n",
     });
     r.git("switch", "-q", "work");
 
     const { output } = mutate(r, r.dir, "", ["--touched-by", "refactor-draft"]);
 
-    expect(strykerRuns(r)[0]).toContain("--mutate src/a.ts:1-1 ");
+    expect(strykerRuns(r)[0]).toContain("--mutate src/a.ts:2-2 ");
     expect(output).toContain("2 mutants on 1 changed ranges; 1 alive.");
+  });
+
+  it("with --touched-by, mutates every line of a file the given ref moves to another path", () => {
+    const r = repo();
+    r.git("switch", "-q", "-c", "refactor-draft");
+    r.git("mv", "src/a.ts", "src/moved.ts");
+    r.git("commit", "-q", "-m", "move");
+    r.git("switch", "-q", "work");
+
+    mutate(r, r.dir, "", ["--touched-by", "refactor-draft"]);
+
+    expect(strykerRuns(r)[0]).toContain("--mutate src/a.ts:1-2 ");
   });
 
   it("refuses a --max-lines that is not a whole number above 0, without running Stryker", () => {
