@@ -360,10 +360,13 @@ is open, done means closed as completed.
     2. **Surface unchanged.** Every module `index.ts` exports the same
        names with the same types at both ends, and no surface file, ADR
        or protocol version changed.
-    3. **Pins passed, and are gone.** The pins pass on their own commit
-       and on the head with the pins put back; no pin is left at the head.
-    4. **Survivors killed.** The mutation run of *Pins* leaves no mutant
-       alive.
+    3. **Pins passed, and are gone.** The first commit's pins pass on the
+       current merge base and on the head with the pins put back; no later
+       commit adds or edits a pin, and none is left at the head. A base
+       branch merged in moves the merge base, so its changes are never
+       read as the refactor's.
+    4. **Survivors killed.** The mutation run of *Pins*, repeated on that
+       merge base with the pins, leaves no mutant alive.
 
     The PR body carries `Tests: <n> before, <n> after.` and `Mutation:`
     with the run's last line.
