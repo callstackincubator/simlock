@@ -27,6 +27,11 @@ export function itemIdFrom(section: Section, path: string): string | undefined {
 export interface FleetAddress {
   readonly workerId?: string;
   readonly deviceId?: string;
+  readonly streaming?: true;
+}
+
+export function streamPath(_workerId: string, _deviceId: string): `/${string}` {
+  return "" as `/${string}`;
 }
 
 function decoded(segment: string): string {
