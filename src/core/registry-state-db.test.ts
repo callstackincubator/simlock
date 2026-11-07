@@ -442,41 +442,63 @@ describe("Registry: state.db rows", () => {
     }
   });
 
-  // why: #1410 — the proposed bound. A deleted record stays in state.db (core manual), but memory
-  // and `status.get`, which answers `snapshot.devices`, keep only the 100 most recently deleted.
-  it("the snapshot holds every live device and only the 100 most recently deleted ones, while state.db keeps every deleted row, before and after a restart", async () => {
-    const { open, readyDevice, registry, state } = await world();
-    const firstLive = await readyDevice("live-1");
-    const deletedLast = await readyDevice("deleted-last");
-    const bulk = [];
-    for (let index = 0; index < 102; index += 1) {
-      const device = await readyDevice(`bulk-${String(index)}`);
-      await registry.markDeviceMissing(device.id, "doctor");
-      bulk.push(device.id);
-    }
-    await registry.markDeviceMissing(deletedLast.id, "doctor");
-    const lastLive = await readyDevice("live-2");
+  it("a deleted record older than devices.deletedRetentionMs is gone from memory and state.db after the next device.deleted or startup, a younger one is still listed", async () => {
+    const MINUTE = 60_000;
+    const { clock, open, readyDevice, registry, state } = await world();
+    const t0 = clock.now();
+    const first = await readyDevice("deleted-1");
+    const second = await readyDevice("deleted-2");
+    const third = await readyDevice("deleted-3");
+    const live = await readyDevice("live");
+    await registry.createLeaseRequest({
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    const lease = await registry.createLease({
+      deviceId: first.id,
+      ownerId: "agent-1",
+      request: {
+        environment: {},
+        id: "req_1",
+        timing: {
+          estimatedBootMs: 0,
+          estimatedProvisionMs: 0,
+          estimatedReadyMs: 0,
+          estimatedReclaimMs: 0,
+        },
+      },
+      requesterId: "agent-1",
+      ttlDeadline: 5_000,
+      ttlMs: 4_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.markDeviceMissing(first.id, "doctor");
+    clock.advance(30 * MINUTE);
+    await registry.markDeviceMissing(second.id, "doctor");
+    clock.advance(40 * MINUTE);
+    await registry.markDeviceMissing(third.id, "doctor");
 
-    const deletedIds = (view: Registry) =>
-      view.snapshot.devices
-        .filter((device) => device.state === "deleted")
-        .map((device) => device.id);
-    const liveIds = (view: Registry) =>
-      view.snapshot.devices
-        .filter((device) => device.state !== "deleted")
-        .map((device) => device.id);
+    const listedIds = (view: Registry) => view.snapshot.devices.map((device) => device.id).sort();
+    const storedIds = () =>
+      state.database
+        .prepare("SELECT id FROM devices ORDER BY id")
+        .all()
+        .map((row) => String(row.id));
+    expect(listedIds(registry)).toEqual([second.id, third.id, live.id].sort());
+    expect(storedIds()).toEqual([second.id, third.id, live.id].sort());
+    expect(state.database.prepare("SELECT COUNT(*) AS n FROM lease_grants").get()?.n).toBe(0);
 
-    expect(liveIds(registry)).toEqual([firstLive.id, lastLive.id]);
-    expect([...deletedIds(registry)].sort()).toEqual([...bulk.slice(3), deletedLast.id].sort());
-    expect(
-      state.database.prepare("SELECT COUNT(*) AS n FROM devices WHERE state = 'deleted'").get()?.n,
-    ).toBe(103);
-
+    clock.advance(20 * MINUTE);
+    expect(clock.now()).toBe(t0 + 90 * MINUTE);
     const restarted = await open({ generate: () => "unused" });
-    expect(liveIds(restarted)).toEqual([firstLive.id, lastLive.id]);
-    expect(deletedIds(restarted)).toHaveLength(100);
-    expect(
-      state.database.prepare("SELECT COUNT(*) AS n FROM devices WHERE state = 'deleted'").get()?.n,
-    ).toBe(103);
+    expect(listedIds(restarted)).toEqual([second.id, third.id, live.id].sort());
+    expect(storedIds()).toEqual([second.id, third.id, live.id].sort());
+
+    clock.advance(10 * MINUTE);
+    const restartedLater = await open({ generate: () => "unused" });
+    expect(listedIds(restartedLater)).toEqual([third.id, live.id].sort());
+    expect(storedIds()).toEqual([third.id, live.id].sort());
   });
 });
