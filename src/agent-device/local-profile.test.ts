@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
+import {
+  freeLoopbackPort,
+  startOnFreePort,
+  startUnlessPortLost,
+} from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
@@ -36,7 +40,7 @@ interface Rig {
   readonly logs: MemoryLogSink;
   readonly profilePath: string;
   readonly port: number;
-  readonly restart: (options?: Switches & { readonly port?: number }) => Promise<Rig>;
+  readonly restart: (options?: Switches & { readonly anotherPort?: true }) => Promise<Rig>;
 }
 
 interface Switches {
@@ -91,7 +95,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   // why: each attempt logs into its own sink, so a start that lost its port leaves no line in the rig's logs.
   const start = async (port: number) => {
     const logs = new MemoryLogSink();
-    const daemon = await startDaemon({
+    const starting = startDaemon({
       clock,
       configOverrides:
         options.defaults === undefined
@@ -120,7 +124,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
       optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
       version: "1.2.3",
     } as StartDaemonOptions);
-    return { daemon, logs };
+    return { daemon: await startUnlessPortLost(logs, starting), logs };
   };
   const { port, started } =
     options.port === undefined
@@ -139,7 +143,8 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
       return launch({
         host,
         ...restartOptions,
-        port: restartOptions.port ?? port,
+        // why: a start with no port picks a free one, and retries on another when it is taken.
+        ...(restartOptions.anotherPort === true ? {} : { port }),
         resume: { directory, driver, filesystem },
       });
     },
@@ -324,10 +329,9 @@ describe("the local agent-device profile", () => {
     expect((await same.filesystem.stat(same.profilePath)).identity).toBe(identity);
     expect(await labelledIds(same)).toEqual([tokenId]);
 
-    const port = await freeLoopbackPort();
-    const moved = await same.restart({ port });
+    const moved = await same.restart({ anotherPort: true });
     const after = await readProfile(moved);
-    expect(after.profile.daemonBaseUrl).toBe(`http://127.0.0.1:${port}/v1/agent-device`);
+    expect(after.profile.daemonBaseUrl).toBe(`http://127.0.0.1:${moved.port}/v1/agent-device`);
     expect(after.profile.daemonAuthToken).toBe(before.profile.daemonAuthToken);
     expect(await labelledIds(moved)).toEqual([tokenId]);
 
