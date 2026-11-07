@@ -19,6 +19,9 @@ function row(overrides: Partial<LeaseRowView> = {}): LeaseRowView {
   return {
     expiring: false,
     holder: "ci-runner-3",
+    holderDisplay: "ci-runner-3",
+    holderKind: "unknown",
+    holderTitle: "tok_1",
     id: "lse_1",
     key: " lse_1",
     model: "iPhone 16",

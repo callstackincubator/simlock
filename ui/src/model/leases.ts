@@ -10,6 +10,7 @@ import {
 } from "../../../src/contract/inbox";
 import { defined } from "./defined";
 import { type ConsoleEvent, textField, workerIdOf } from "./events";
+import { agentKind, shortHolder, type AgentKind } from "./holder";
 import { formatDuration } from "./time";
 import { devicePath } from "./paths";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
@@ -114,6 +115,9 @@ export interface LeaseRowView {
   readonly id: string;
   readonly to: string;
   readonly holder: string;
+  readonly holderTitle: string;
+  readonly holderDisplay: string;
+  readonly holderKind: AgentKind;
   readonly remaining: string;
   readonly expiring: boolean;
   readonly percent: number;
@@ -137,9 +141,13 @@ export function leaseRows(input: {
     const worker = workerNameOfLease(lease, workers);
     const sub = [model, worker].filter((part) => part !== undefined).join(" · ");
     const owner = workerOfLease(lease, workers);
+    const holder = holderName(lease.requesterId, tokens);
     return {
       expiring: isExpiring(lease.ttlDeadline, now),
-      holder: holderName(lease.requesterId, tokens),
+      holder,
+      holderDisplay: shortHolder(holder),
+      holderKind: agentKind(lease.requesterId),
+      holderTitle: lease.requesterId,
       id: lease.id,
       key: `${lease.workerId ?? ""} ${lease.id}`,
       model,
