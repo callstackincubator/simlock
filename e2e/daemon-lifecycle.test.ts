@@ -6,9 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 import {
-  freeLoopbackPort,
   holdLoopbackPort,
   REPO_ROOT,
+  startOnFreePort,
   type TestEnv,
   waitFor,
   withDaemon,
@@ -75,24 +75,43 @@ describe("daemon lifecycle & recovery", () => {
     "a service manager sends SIGTERM to a running $role daemon: it stops cleanly, emits daemon.stopping reason signal, removes admin.token, exits 0",
     async ({ args, folder }) => {
       const env = await withDaemon({ mode: "auto" });
-      if (args.length > 0) {
-        const port = await freeLoopbackPort();
-        const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
-        expect(set.code, set.stderr).toBe(0);
-      }
       const directory = join(env.home, folder);
-      const child = spawn(process.execPath, [join(REPO_ROOT, "dist/daemon/main.js"), ...args], {
-        env: env.env,
-        stdio: "ignore",
-      });
-      const exited = new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (code) => resolve(code));
-      });
-      try {
-        await waitFor(() => startupFinished(directory), {
-          label: "the daemon's startup finished",
+      const readLog = () => readFile(join(directory, "daemon.log"), "utf8").catch(() => "");
+      // why: `freeLoopbackPort` releases its port, so another process can take it before the
+      // gateway binds it; a daemon whose log gains EADDRINUSE while it starts is run again on a new port.
+      const { started } = await startOnFreePort(async (port) => {
+        if (args.length > 0) {
+          const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
+          expect(set.code, set.stderr).toBe(0);
+        }
+        const logged = (await readLog()).length;
+        const spawned = spawn(process.execPath, [join(REPO_ROOT, "dist/daemon/main.js"), ...args], {
+          env: env.env,
+          stdio: "ignore",
         });
+        const closed = new Promise<number | null>((resolve, reject) => {
+          spawned.once("error", reject);
+          spawned.once("close", (code) => resolve(code));
+        });
+        const portTaken = async () => (await readLog()).slice(logged).includes("EADDRINUSE");
+        try {
+          await waitFor(async () => (await startupFinished(directory)) || (await portTaken()), {
+            label: "the daemon's startup finished",
+          });
+          if (await portTaken()) {
+            throw Object.assign(new Error(`the daemon lost port ${String(port)}`), {
+              code: "EADDRINUSE",
+            });
+          }
+        } catch (error) {
+          spawned.kill("SIGKILL");
+          await closed;
+          throw error;
+        }
+        return { child: spawned, exited: closed };
+      });
+      const { child, exited } = started;
+      try {
         expect(existsSync(join(directory, "admin.token"))).toBe(true);
 
         child.kill("SIGTERM");

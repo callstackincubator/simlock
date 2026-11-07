@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { OptionalModuleDefinition, WorkerHooks } from "../modules/index.js";
@@ -53,15 +54,6 @@ afterEach(async () => {
   );
 });
 
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
 class NotingDriver extends FakeDriver {
   constructor(
     options: ConstructorParameters<typeof FakeDriver>[0],
@@ -106,7 +98,7 @@ function definitions(...modules: FakeModule[]): OptionalModuleDefinition<unknown
   return modules.map((module) => module.definition as OptionalModuleDefinition<unknown>);
 }
 
-async function prepare(options: RigOptions) {
+async function prepare(options: RigOptions, port?: number) {
   const directory = await mkdtemp(join(tmpdir(), "simlock-modules-"));
   directories.push(directory);
   const clock = new FakeClock(1_000);
@@ -127,7 +119,6 @@ async function prepare(options: RigOptions) {
     },
     notes,
   );
-  const port = options.http === true ? await freeLoopbackPort() : undefined;
   const startOptions = {
     clock,
     configOverrides: {
@@ -162,11 +153,15 @@ async function prepare(options: RigOptions) {
   };
 }
 
-async function start(options: RigOptions): Promise<Rig> {
-  const prepared = await prepare(options);
-  const daemon = await startDaemon(prepared.startOptions);
-  daemons.push(daemon);
-  return { ...prepared, daemon };
+// why: `reset` empties what a test collects from its modules' hooks, so a start that lost its port and was stopped leaves nothing in it.
+async function start(options: RigOptions, reset?: () => void): Promise<Rig> {
+  const { started } = await startOnFreePort(async (port) => {
+    reset?.();
+    const prepared = await prepare(options, options.http === true ? port : undefined);
+    return { ...prepared, daemon: await startDaemon(prepared.startOptions) };
+  });
+  daemons.push(started.daemon);
+  return started;
 }
 
 async function agentHeaders(daemon: DaemonServer): Promise<Record<string, string>> {
@@ -773,25 +768,30 @@ describe("optional modules: stop hooks", () => {
   it("beforeDrain finishes before the HTTP gateway stops", async () => {
     let origin: string | undefined;
     const notes: string[] = [];
-    const rig = await start({
-      http: true,
-      modules: definitions(
-        fakeModule({
-          hooks: {
-            beforeDrain: async () => {
-              await sleep(50);
-              const health = await fetch(`${origin}/v1/healthz`).then(
-                (response) => String(response.status),
-                () => "refused",
-              );
-              notes.push(`gateway ${health}`);
+    const rig = await start(
+      {
+        http: true,
+        modules: definitions(
+          fakeModule({
+            hooks: {
+              beforeDrain: async () => {
+                await sleep(50);
+                const health = await fetch(`${origin}/v1/healthz`).then(
+                  (response) => String(response.status),
+                  () => "refused",
+                );
+                notes.push(`gateway ${health}`);
+              },
             },
-          },
-          name: "alpha",
-        }),
-      ),
-      on: ["alpha"],
-    });
+            name: "alpha",
+          }),
+        ),
+        on: ["alpha"],
+      },
+      () => {
+        notes.length = 0;
+      },
+    );
     origin = rig.origin;
 
     await rig.daemon.stop("test");
@@ -802,27 +802,32 @@ describe("optional modules: stop hooks", () => {
   it("by the time the stop ends, agent-device's waiting allocate is cancelled through leasing and another module's beforeDrain has run", async () => {
     const drainRan: boolean[] = [];
     let directory = "";
-    const rig = await start({
-      http: true,
-      modules: [
-        agentDeviceModuleWith({ upstream: new FakeAgentDevice() }),
-        ...definitions(
-          fakeModule({
-            hooks: {
-              beforeDrain: async () => {
-                drainRan.push(true);
+    const rig = await start(
+      {
+        http: true,
+        modules: [
+          agentDeviceModuleWith({ upstream: new FakeAgentDevice() }),
+          ...definitions(
+            fakeModule({
+              hooks: {
+                beforeDrain: async () => {
+                  drainRan.push(true);
+                },
               },
-            },
-            name: "alpha",
-          }),
-        ),
-      ],
-      on: ["agent-device", "alpha"],
-      phones: true,
-      overrides: {
-        capacity: { config: { maxRunning: 1 }, strategy: "fixed" },
+              name: "alpha",
+            }),
+          ),
+        ],
+        on: ["agent-device", "alpha"],
+        phones: true,
+        overrides: {
+          capacity: { config: { maxRunning: 1 }, strategy: "fixed" },
+        },
       },
-    });
+      () => {
+        drainRan.length = 0;
+      },
+    );
     directory = rig.directory;
     const headers = await agentHeaders(rig.daemon);
     await rig.daemon.dispatch("lease.request", ios, agent);

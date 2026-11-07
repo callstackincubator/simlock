@@ -8,7 +8,7 @@ export {
   waitForAgentDevice,
 } from "./agent-device.js";
 export type { Agent, AgentDeviceResult } from "./agent-device.js";
-export { freeLoopbackPort, holdLoopbackPort } from "./port.js";
+export { freeLoopbackPort, holdLoopbackPort, startOnFreePort } from "./port.js";
 export { selectedInDeviceHub } from "./devicehub-selection.js";
 export { deviceStreamUrl } from "./device-stream.js";
 export { withHttpDaemon } from "./http-daemon.js";

@@ -65,7 +65,7 @@ import {
   temporaryDirectories,
   writeModule,
 } from "./test-main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -1442,8 +1442,9 @@ describe("startDaemon startup readiness", () => {
 
 describe("startDaemon with HTTP off", () => {
   it("starts no HTTP gateway when http.enabled is false", async () => {
-    const port = await freeLoopbackPort();
-    await start({ configOverrides: { http: { enabled: false, host: "127.0.0.1", port } } });
+    const { port } = await startOnFreePort((port) =>
+      start({ configOverrides: { http: { enabled: false, host: "127.0.0.1", port } } }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 200));
     const outcome = await new Promise<"connected" | "refused">((resolve) => {
       const socket = connect(port, "127.0.0.1");
@@ -1467,19 +1468,20 @@ describe("startDaemon HTTP status for a quarantined device", () => {
       ["tok_agent", "slk_cause_agent", "agent"],
       ["tok_op", "slk_cause_operator", "operator"],
     ]);
-    const port = await freeLoopbackPort();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
-    const daemon = await startDaemon({
-      deviceDataTables: fakeDeviceDataTables,
-      clock,
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-      dataDirectory: directory,
-      drivers: [driver],
-      filesystem,
-      hostLoadProbe: null,
-      version: "1.2.3",
-    } as StartDaemonOptions);
+    const { port, started: daemon } = await startOnFreePort((port) =>
+      startDaemon({
+        deviceDataTables: fakeDeviceDataTables,
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [driver],
+        filesystem,
+        hostLoadProbe: null,
+        version: "1.2.3",
+      } as StartDaemonOptions),
+    );
     runningDaemons.push(daemon);
     const session = {
       manageEventSubscription: () => undefined,
@@ -1647,12 +1649,7 @@ describe("startDaemon logger wiring", () => {
 
   it("a gateway rejects worker.drain for an unknown worker with UNKNOWN_WORKER", async () => {
     // why: A gateway serves HTTP; on its default port two overlapping runs of this file collide.
-    const { daemon } = await start({
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-      },
-      role: "gateway",
-    });
+    const { daemon } = await start({ role: "gateway" });
 
     await expect(
       daemon.dispatch(
@@ -1675,14 +1672,14 @@ describe("daemon role (ADR 0034)", () => {
     temporaryDirectories.push(root);
     vi.stubEnv("SIMLOCK_HOME", root);
     try {
-      const daemon = await startDaemon({
-        configOverrides: {
-          http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        },
-        drivers: [],
-        deviceDataTables: fakeDeviceDataTables,
-        role: "gateway",
-      });
+      const { started: daemon } = await startOnFreePort((port) =>
+        startDaemon({
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          drivers: [],
+          deviceDataTables: fakeDeviceDataTables,
+          role: "gateway",
+        }),
+      );
       runningDaemons.push(daemon);
 
       expect(existsSync(join(root, "gateway", "instance.json"))).toBe(true);
@@ -1761,20 +1758,25 @@ describe("startDaemon state.db", () => {
       role: "admin",
       via: "socket",
     } as const;
-    const port = await freeLoopbackPort();
-    const launch = (now: number) =>
-      startDaemon({
-        clock: new FakeClock(now),
-        configOverrides: {
-          ...STANDALONE_OFF,
-          http: { enabled: true, host: "127.0.0.1", port },
-        },
-        dataDirectory: directory,
-        deviceDataTables: fakeDeviceDataTables,
-        drivers: [],
-        hostLoadProbe: null,
-        version: "1.2.3",
-      } as StartDaemonOptions);
+    let port = 0;
+    const launch = async (now: number) => {
+      const launched = await startOnFreePort((candidate) =>
+        startDaemon({
+          clock: new FakeClock(now),
+          configOverrides: {
+            ...STANDALONE_OFF,
+            http: { enabled: true, host: "127.0.0.1", port: candidate },
+          },
+          dataDirectory: directory,
+          deviceDataTables: fakeDeviceDataTables,
+          drivers: [],
+          hostLoadProbe: null,
+          version: "1.2.3",
+        } as StartDaemonOptions),
+      );
+      port = launched.port;
+      return launched.started;
+    };
     type Created = { readonly secret: string; readonly token: Record<string, unknown> };
     const first = await launch(1_000);
     const labelled = (await first.dispatch(

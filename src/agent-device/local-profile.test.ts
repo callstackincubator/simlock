@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createConnection, createServer } from "node:net";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
@@ -28,15 +29,6 @@ const adminSession = {
   principal: "admin",
   role: "admin",
 } as const;
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 interface Rig {
   readonly daemon: DaemonServer;
@@ -93,40 +85,48 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const { directory, filesystem, driver: resumed } = await dataDirectoryFor(options);
   const clock = new FakeClock(1_000);
   const driver = resumed ?? fakeIosDriver(clock);
-  const logs = new MemoryLogSink();
-  const port = options.port ?? (await freeLoopbackPort());
   if (options.refuseWrite === true) {
     filesystem.defineFailure(join(directory, "agent-device-profile.json"), "EACCES");
   }
-  const daemon = await startDaemon({
-    clock,
-    configOverrides:
-      options.defaults === undefined
-        ? {
-            capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
-            http: { enabled: options.http ?? true, host, port },
-          }
-        : {
-            capabilities: { "agent-device": { command: "fake-agent-device" } },
-            ...(options.defaults === "joined"
-              ? {
-                  gateway: {
-                    token: "slk_join",
-                    url: `ws://127.0.0.1:${String(await freeLoopbackPort())}`,
-                  },
-                }
-              : {}),
-            http: { port },
-          },
-    ...(options.role === undefined ? {} : { role: options.role }),
-    dataDirectory: directory,
-    deviceDataTables: fakeDeviceDataTables,
-    drivers: [driver],
-    filesystem,
-    logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
-    optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
-    version: "1.2.3",
-  } as StartDaemonOptions);
+  // why: each attempt logs into its own sink, so a start that lost its port leaves no line in the rig's logs.
+  const start = async (port: number) => {
+    const logs = new MemoryLogSink();
+    const daemon = await startDaemon({
+      clock,
+      configOverrides:
+        options.defaults === undefined
+          ? {
+              capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
+              http: { enabled: options.http ?? true, host, port },
+            }
+          : {
+              capabilities: { "agent-device": { command: "fake-agent-device" } },
+              ...(options.defaults === "joined"
+                ? {
+                    gateway: {
+                      token: "slk_join",
+                      url: `ws://127.0.0.1:${String(await freeLoopbackPort())}`,
+                    },
+                  }
+                : {}),
+              http: { port },
+            },
+      ...(options.role === undefined ? {} : { role: options.role }),
+      dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [driver],
+      filesystem,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
+      optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    return { daemon, logs };
+  };
+  const { port, started } =
+    options.port === undefined
+      ? await startOnFreePort(start)
+      : { port: options.port, started: await start(options.port) };
+  const { daemon, logs } = started;
   runningDaemons.push(daemon);
   return {
     daemon,

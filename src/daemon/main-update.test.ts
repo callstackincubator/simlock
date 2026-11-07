@@ -27,7 +27,7 @@ import {
   stopDaemons,
   temporaryDirectories,
 } from "./test-main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -44,22 +44,24 @@ describe("startDaemon version check", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const sink = new MemoryLogSink();
-    const daemon = await startDaemon({
-      clock,
-      // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
-      configOverrides:
-        overrides.role === "gateway"
-          ? { http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() } }
-          : STANDALONE_OFF,
-      dataDirectory: directory,
-      drivers: [],
-      filesystem: new MemoryFilesystem(),
-      hostLoadProbe: null,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
-      npm,
-      version: "0.3.0",
-      ...overrides,
-    } as StartDaemonOptions);
+    const { started: daemon } = await startOnFreePort((port) =>
+      startDaemon({
+        clock,
+        // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+        configOverrides:
+          overrides.role === "gateway"
+            ? { http: { enabled: true, host: "127.0.0.1", port } }
+            : STANDALONE_OFF,
+        dataDirectory: directory,
+        drivers: [],
+        filesystem: new MemoryFilesystem(),
+        hostLoadProbe: null,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+        npm,
+        version: "0.3.0",
+        ...overrides,
+      } as StartDaemonOptions),
+    );
     runningDaemons.push(daemon);
     return { clock, daemon, sink };
   }
@@ -395,24 +397,24 @@ describe("startDaemon gateway update", () => {
     const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-update-")));
     if (given === undefined) temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
-    const daemon = await startDaemon({
-      clock,
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-      },
-      dataDirectory: directory,
-      drivers: [],
-      filesystem,
-      hostLoadProbe: null,
-      logger: new NoopLogger(),
-      npm: new FakeNpmCli({
-        globalRoot: [{ ok: true, output: "/opt" }],
-        view: [{ ok: true, output: "0.4.0" }],
-      }),
-      role: "gateway",
-      updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
-      version: "0.3.0",
-    } as StartDaemonOptions);
+    const { started: daemon } = await startOnFreePort((port) =>
+      startDaemon({
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [],
+        filesystem,
+        hostLoadProbe: null,
+        logger: new NoopLogger(),
+        npm: new FakeNpmCli({
+          globalRoot: [{ ok: true, output: "/opt" }],
+          view: [{ ok: true, output: "0.4.0" }],
+        }),
+        role: "gateway",
+        updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+        version: "0.3.0",
+      } as StartDaemonOptions),
+    );
     runningDaemons.push(daemon);
     return { daemon, directory, filesystem };
   }
