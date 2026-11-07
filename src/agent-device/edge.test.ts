@@ -523,7 +523,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
       expect(answer.result).toMatchObject({
         data: {
           lease: {
-            device: { model: phone.model, osVersion: phone.osVersion, physical: true },
+            device: { ...address, model: phone.model, osVersion: phone.osVersion, physical: true },
           },
         },
         ok: true,
