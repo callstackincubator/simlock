@@ -16,8 +16,10 @@ import type { AgentDeviceUpstream } from "./upstream.js";
 const MAX_ENDED_IDS = 4096;
 // why: the session names come from the wire, so a lease remembers a bounded number of them.
 const MAX_SESSION_NAMES = 64;
-// why: a name becomes part of a folder name, so only a plain one is trusted; anything with a separator is left alone.
+// why: the lease id comes from the wire and is a folder name as it is, so only a plain one is trusted; a separator would make a path.
 const FOLDER_PART = /^[A-Za-z0-9._-]+$/;
+// why: agent-device writes each character of a tenant or `--session` name outside this set as `_` in its folder name, so the folder is found by the same rewrite, and no separator survives it.
+const UNSAFE_FOLDER_CHARACTER = /[^A-Za-z0-9._-]/g;
 
 interface Served {
   readonly tenantId: string;
@@ -46,9 +48,11 @@ export class ReleaseScopeRecord {
     const served = this.#served.get(leaseId);
     if (served === undefined) return [];
     return [
-      leaseId,
-      ...[leaseId, ...served.sessions].map((name) => `${served.tenantId}_${name}`),
-    ].filter((name) => FOLDER_PART.test(name));
+      ...(FOLDER_PART.test(leaseId) ? [leaseId] : []),
+      ...[leaseId, ...served.sessions].map((name) =>
+        `${served.tenantId}_${name}`.replace(UNSAFE_FOLDER_CHARACTER, "_"),
+      ),
+    ];
   }
 
   get(leaseId: string): ReleaseScope | undefined {

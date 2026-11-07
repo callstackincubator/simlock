@@ -17,13 +17,20 @@ describe("agent-device session folders on a worker", () => {
     await granted(rig, 1);
     await granted(rig, 2, {}, { token: secrets.two });
     await command(rig, "snapshot", 1, {}, { session: "my-session" });
+    await command(rig, "snapshot", 1, {}, { session: "qa/ios" });
+    await command(rig, "snapshot", 1, {}, { session: "x/../../../victim" });
     const own = [
       join(sessions, hex(1)),
       join(sessions, `${principals.one}_${hex(1)}`),
       join(sessions, `${principals.one}_my-session`),
+      join(sessions, `${principals.one}_qa_ios`),
+      join(sessions, `${principals.one}_x_.._.._.._victim`),
     ];
     const other = join(sessions, `${principals.two}_${hex(2)}`);
-    for (const path of [...own, other]) await sessionFolder(rig, path);
+    // why: the wire-supplied name `x/../../../victim` must not reach a folder outside `sessions/`.
+    const victim = join(dirname(sessions), "victim");
+    await sessionFolder(rig, join(sessions, `${principals.one}_x`));
+    for (const path of [...own, other, victim]) await sessionFolder(rig, path);
 
     await release(rig, 1);
     await expect
@@ -31,11 +38,15 @@ describe("agent-device session folders on a worker", () => {
       .toBe(false);
 
     const left = await Promise.all(
-      [...own, other].map(async (path) => ({ exists: await rig.filesystem.exists(path), path })),
+      [...own, other, victim].map(async (path) => ({
+        exists: await rig.filesystem.exists(path),
+        path,
+      })),
     );
     expect(left).toEqual([
       ...own.map((path) => ({ exists: false, path })),
       { exists: true, path: other },
+      { exists: true, path: victim },
     ]);
   });
 });
