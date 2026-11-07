@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
-import { FakeClock, NodeSqliteOpener } from "../ports/index.js";
-import { FakeAgentDevice } from "./testing.js";
+import {
+  FakeClock,
+  FakeProcessSupervisor,
+  FakeTcpProbe,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NodeSqliteOpener,
+  ScriptedProcessRunner,
+} from "../ports/index.js";
+import { FakeAgentDevice, FakeAgentDeviceHealth } from "./testing.js";
+import { AgentDeviceSupervisor } from "./host/agent-device-supervisor.js";
+import { SupervisorAgentDeviceUpstream } from "./host/upstream.js";
 import {
   phoneSerial,
   setUpWithPhone,
@@ -61,6 +72,52 @@ import {
 // why: Fallow reads a `rig` binding's type only from an annotation in this file, not from an imported
 // setUp's return type, so a `rig` whose test calls a FakeAgentDevice member only these tests use is
 // annotated `Rig`; without it Fallow reports the member as never referenced.
+
+async function unavailableSupervisor(version: string, reason: "wrong-version" | "start-failed") {
+  const clock = new FakeClock(1_000_000);
+  const filesystem = new MemoryFilesystem();
+  const home = "/home/simlock/.simlock";
+  const root = "/opt/ad/node_modules/agent-device";
+  const cli = `${root}/bin/agent-device.mjs`;
+  const entry = `${root}/dist/src/internal/daemon.js`;
+  await filesystem.mkdirp(home);
+  await filesystem.mkdirp("/usr/local/bin");
+  await filesystem.mkdirp(`${root}/bin`);
+  await filesystem.mkdirp(`${root}/dist/src/internal`);
+  await filesystem.writeFileAtomic(cli, "#!/usr/bin/env node\n");
+  filesystem.defineAttributes(cli, { mode: 0o755 });
+  await filesystem.writeFileAtomic(`${root}/package.json`, '{"name":"agent-device"}');
+  await filesystem.writeFileAtomic(entry, "");
+  filesystem.defineSymlink("/usr/local/bin/agent-device", cli);
+  const runner = new ScriptedProcessRunner([
+    {
+      match: { args: [cli, "--version"], command: "/opt/node/bin/node" },
+      result: { code: 0, stderr: "", stdout: `${version}\n` },
+    },
+  ]);
+  const supervisor = new AgentDeviceSupervisor({
+    baseEnvironment: { HOME: "/home/operator", PATH: "/usr/local/bin:/usr/bin" },
+    clock,
+    config: { command: "agent-device" },
+    driverEnvironment: {},
+    filesystem,
+    healthProbe: new FakeAgentDeviceHealth(),
+    home,
+    hostPlatform: "linux",
+    leaseMaxTtlMs: 1_800_000,
+    logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+    nodePath: "/opt/node/bin/node",
+    nodeVersion: "22.14.0",
+    platforms: ["ios", "android"],
+    processRunner: runner,
+    processSupervisor: new FakeProcessSupervisor([]),
+    role: "simulators",
+    tcpProbe: new FakeTcpProbe(),
+  });
+  await supervisor.start();
+  expect(supervisor.availability()).toMatchObject({ state: "unavailable", reason });
+  return new SupervisorAgentDeviceUpstream(supervisor);
+}
 
 const phoneModels = {
   defaultModels: { phone: ["iPhone 16"] },
@@ -182,11 +239,19 @@ describe("the agent-device front, through the whole worker daemon", () => {
       details: { reason: "SIMLOCK_UNAVAILABLE" },
       retriable: false,
     });
-    rig.fake.setUnavailable("start failed", true);
-    expect((await envelopeOf(await allocate(rig, 2))).error?.data).toMatchObject({
-      details: { reason: "SIMLOCK_UNAVAILABLE" },
-      retriable: true,
-    });
+    for (const [version, reason, retriable] of [
+      ["0.20.3", "wrong-version", false],
+      ["0.21.28", "start-failed", true],
+    ] as const) {
+      const supervisorUpstream = await unavailableSupervisor(version, reason);
+      const supervised = await setUp({ supervisorUpstream });
+      const answer = await allocate(supervised, 2);
+      expect(answer.status).toBe(503);
+      expect((await envelopeOf(answer)).error?.data).toMatchObject({
+        details: { reason: "SIMLOCK_UNAVAILABLE" },
+        retriable,
+      });
+    }
     expect(await upload.text()).toContain(`${notAvailable}${reason}`);
     expect(await leases(rig)).toEqual([]);
     expect(rig.fake.requests).toEqual([]);
