@@ -1,6 +1,7 @@
 import "./foundation.css";
 
 export { Button, ButtonLink } from "./button";
+export { AgentChip, type AgentKind } from "./chip";
 export { CommandPalette, type PaletteGroup } from "./command-palette";
 export { ConfirmHost, createConfirmer, type ConfirmSpec } from "./confirm-dialog";
 export { Drawer, DrawerTabs } from "./drawer";
@@ -23,7 +24,7 @@ export { SearchField } from "./search-field";
 export { ShareBar, SlotLegend, Slots } from "./slots";
 export { StatRow, StatTile } from "./stat";
 export { Status, StatusDot } from "./status";
-export { type Column, DataTable } from "./table";
+export { type Column, type Group, DataTable } from "./table";
 export { createToaster, ToastHost, type ToastSpec } from "./toast";
 export { Toolbar } from "./toolbar";
 export { focusAfterClosing } from "./focus-after-drawer";

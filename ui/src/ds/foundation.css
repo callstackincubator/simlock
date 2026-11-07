@@ -44,6 +44,18 @@
   --selection: #fed7aa;
   --row-selected: #f2e4d9;
 
+  /* An agent chip's own tints, as a tool's mark, never a status. */
+  --agent-claude-code: #f3e3cf;
+  --agent-claude-code-text: #8a5013;
+  --agent-codex: #dbe9f6;
+  --agent-codex-text: #1d4a72;
+  --agent-cursor: #e6e0f5;
+  --agent-cursor-text: #4a3a80;
+  --agent-pi: #d9efdd;
+  --agent-pi-text: #1e6b34;
+  --agent-unknown: #e4e4e8;
+  --agent-unknown-text: #55555f;
+
   --status-ok: #15803d;
   --status-warn: #92570a;
   --status-error: #b91c1c;
@@ -68,6 +80,18 @@
     --accent-text: #ffa061;
     --selection: #7c2d12;
     --row-selected: #221913;
+
+    /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
+    --agent-claude-code: #3a2a18;
+    --agent-claude-code-text: #f5c08a;
+    --agent-codex: #1d2d3b;
+    --agent-codex-text: #9cc4e6;
+    --agent-cursor: #2a2440;
+    --agent-cursor-text: #bdb1ea;
+    --agent-pi: #1c3022;
+    --agent-pi-text: #9ad6ae;
+    --agent-unknown: #24242a;
+    --agent-unknown-text: #b9b9c2;
 
     --status-ok: #4ade80;
     --status-warn: #facc15;

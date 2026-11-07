@@ -15,6 +15,31 @@
   letter-spacing: 0;
 }
 
+.chip-agent-claude-code {
+  background: var(--agent-claude-code);
+  color: var(--agent-claude-code-text);
+}
+
+.chip-agent-codex {
+  background: var(--agent-codex);
+  color: var(--agent-codex-text);
+}
+
+.chip-agent-cursor {
+  background: var(--agent-cursor);
+  color: var(--agent-cursor-text);
+}
+
+.chip-agent-pi {
+  background: var(--agent-pi);
+  color: var(--agent-pi-text);
+}
+
+.chip-agent-unknown {
+  background: var(--agent-unknown);
+  color: var(--agent-unknown-text);
+}
+
 .chip-dot {
   width: 5px;
   height: 5px;
