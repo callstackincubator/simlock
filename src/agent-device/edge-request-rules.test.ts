@@ -1078,6 +1078,9 @@ describe("the agent-device front's request rules", () => {
           ...(scenario.runtime && { runtime: scenario.runtime }),
         }),
       );
+      if ("omitTarget" in scenario) {
+        expect(answer.result?.["data"]).toMatchObject({ target: "mobile" });
+      }
       expect(answer.result).toMatchObject({
         ok: true,
         data: {
@@ -1089,9 +1092,6 @@ describe("the agent-device front's request rules", () => {
           booted: true,
         },
       });
-      if ("omitTarget" in scenario) {
-        expect(answer.result?.["data"]).toMatchObject({ target: "mobile" });
-      }
       expect(
         commandsReceived(rig).filter((request) => request.params?.["command"] === "boot"),
       ).toEqual([]);
