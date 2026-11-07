@@ -117,6 +117,7 @@ describe("test-lint.mjs", () => {
         "e2e/slow-android.test.ts": file(
           "describe.skipIf(!hasAndroidSdk)('on an emulator', () => {});",
         ),
+        "src/a/grant.pin.test.ts": file('it.skip("records a grant", () => {});'),
       },
     },
     {
