@@ -63,7 +63,7 @@ export async function compareCaptures(
 }> {
   const stateMatches = JSON.stringify(firstState) === JSON.stringify(secondState);
   const pixels = await page.evaluate(
-    async ([a, b]: [string, string]) => {
+    async ({ a, b }) => {
       const decode = async (encoded: string) => {
         const binary = atob(encoded);
         const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
@@ -102,7 +102,7 @@ export async function compareCaptures(
       }
       return { dimensionsMatch, changedPixels, maxRgbDelta, alphaChanged };
     },
-    [first.toString("base64"), second.toString("base64")],
+    { a: first.toString("base64"), b: second.toString("base64") },
   );
   return {
     ...pixels,
