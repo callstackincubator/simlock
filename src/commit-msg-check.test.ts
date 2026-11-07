@@ -39,6 +39,7 @@ describe("commit-msg-check.mjs", () => {
     ["task/968", "wip", "(#968)"],
     ["task/968", "feat: keep simulators in the device set", "(#968)"],
     ["task/968", "feature(ios): x (#968)", "<type> is feat"],
+    ["refactor/12", "refactor(daemon): split main.ts", "(#12)"],
     [
       "bug/79-repro",
       "test: a released lease keeps its hold (#79)",
