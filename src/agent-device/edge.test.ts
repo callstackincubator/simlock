@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
+import { DispatchError } from "../daemon/dispatch.js";
 import {
   FakeClock,
   FakeProcessSupervisor,
@@ -260,6 +261,17 @@ describe("the agent-device front, through the whole worker daemon", () => {
         retriable,
       });
     }
+    const off = await setUp({
+      supervisorUpstream: new SupervisorAgentDeviceUpstream({
+        availability: () => ({ state: "off" }),
+      }),
+    });
+    const offAnswer = await allocate(off, 4);
+    expect(offAnswer.status).toBe(503);
+    expect((await envelopeOf(offAnswer)).error).toMatchObject({
+      message: `${notAvailable}off`,
+      data: { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: false },
+    });
     expect(await upload.text()).toContain(`${notAvailable}${reason}`);
     expect(await leases(rig)).toEqual([]);
     expect(rig.fake.requests).toEqual([]);
@@ -592,16 +604,20 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("allocate with `physical: true` while the phone daemon is not running answers `agent-device is not available on this simlock: phone daemon: <message>` and releases the lease; a virtual allocate is granted, a command on a live phone lease answers the same, and with the simulator daemon down a physical allocate answers the simulator daemon's reason", async () => {
     const down = [
-      ["starting", "phone daemon: starting"],
-      ["adb not found", "phone daemon: adb not found"],
+      ["starting", "phone daemon: starting", true],
+      ["adb not found", "phone daemon: adb not found", false],
     ] as const;
-    for (const [reason, message] of down) {
+    for (const [reason, message, retriable] of down) {
       const rig = await setUpWithPhone({ maxRunning: 4 });
-      rig.phone.setUnavailable(reason);
+      rig.phone.setUnavailable(reason, retriable);
 
       const answer = await envelopeOf(await allocatePhone(rig, 1));
 
       expect(answer.error).toMatchObject(refusal(`${notAvailable}${message}`, "COMMAND_FAILED"));
+      expect(answer.error?.data).toMatchObject({
+        details: { reason: "SIMLOCK_UNAVAILABLE" },
+        retriable,
+      });
       await expect.poll(() => listed(rig)).toEqual([]);
       await granted(rig, 2, { platform: "android" });
       expect(await listed(rig)).toEqual([hex(2)]);
@@ -1193,7 +1209,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("an allocate still waiting 330 s after the front admitted it answers `timed out waiting for a device; nothing was leased`, and simlock's queue is empty", async () => {
+  it("an allocate still waiting 330 s answers `timed out waiting for a device; nothing was leased`, and lease request failures carry their retry classification", async () => {
     const rig = await setUp({ maxRunning: 1 });
     await granted(rig, 1, { ttlMs: maxTtlMs }, { token: secrets.two });
     const second = track(allocate(rig, 2));
@@ -1212,6 +1228,23 @@ describe("the agent-device front, through the whole worker daemon", () => {
     });
     expect(await waiting(rig)).toEqual([]);
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+
+    const tap = tapDispatch(rig);
+    for (const [code, reason] of [
+      ["NO_CAPACITY", "SIMLOCK_UNAVAILABLE"],
+      ["DAEMON_STOPPING", "SIMLOCK_UNAVAILABLE"],
+      ["DAEMON_CONNECTION_LOST", "SIMLOCK_UNAVAILABLE"],
+      ["WORKER_UNREACHABLE", "WORKER_UNREACHABLE"],
+      ["INVALID_ARGS", "REFUSED_BY_SIMLOCK"],
+    ] as const) {
+      tap.rejectNext("lease.request", new DispatchError(code, `failure ${code}`));
+      const response = await allocate(rig, 3);
+      expect(response.status).toBe(400);
+      expect((await envelopeOf(response)).error).toMatchObject({
+        message: `refused by simlock: failure ${code}`,
+        data: { code: "INVALID_ARGS", details: { reason }, retriable: code !== "INVALID_ARGS" },
+      });
+    }
   });
 
   it("an agent-device allocate that answers an error, and a grant that names no device address, release the simlock lease, and the CLI gets the error", async () => {
