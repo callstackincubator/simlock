@@ -16,6 +16,18 @@ import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../
 import { seedTokensDatabase } from "../auth/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
+// why: temporary (#1381), reverted once the CI hang is found.
+const debugStart = Date.now();
+function debug(message: string): void {
+  process.stderr.write(`[dbg1381 +${String(Date.now() - debugStart)}ms] ${message}\n`);
+}
+class DebugLogSink extends MemoryLogSink {
+  override write(line: string): void {
+    debug(`log ${line}`);
+    super.write(line);
+  }
+}
+
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -94,7 +106,8 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   }
   // why: each attempt logs into its own sink, so a start that lost its port leaves no line in the rig's logs.
   const start = async (port: number) => {
-    const logs = new MemoryLogSink();
+    const logs = new DebugLogSink();
+    debug(`launch: start attempt on port ${String(port)}`);
     const starting = startDaemon({
       clock,
       configOverrides:
@@ -124,7 +137,9 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
       optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
       version: "1.2.3",
     } as StartDaemonOptions);
-    return { daemon: await startUnlessPortLost(logs, starting), logs };
+    const daemon = await startUnlessPortLost(logs, starting);
+    debug(`launch: started on port ${String(port)}`);
+    return { daemon, logs };
   };
   const { port, started } =
     options.port === undefined
@@ -139,7 +154,9 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
     port,
     profilePath: join(directory, "agent-device-profile.json"),
     restart: async (restartOptions = {}) => {
+      debug("restart: stop begins");
       await daemon.stop("test");
+      debug("restart: stop done");
       return launch({
         host,
         ...restartOptions,
@@ -317,6 +334,8 @@ describe("the local agent-device profile", () => {
     const labelledIds = async (rig: Rig) =>
       (await tokens(rig)).filter((token) => token.label === LABEL).map((token) => token.id);
 
+    const timer = setTimeout(() => debug("TIMEOUT NEAR: 18s elapsed in restart test"), 18_000);
+    debug("test: begin");
     const first = await launch();
     const before = await readProfile(first);
     const [tokenId] = await labelledIds(first);
@@ -324,11 +343,13 @@ describe("the local agent-device profile", () => {
     expect(await labelledIds(first)).toHaveLength(2);
 
     const identity = (await first.filesystem.stat(first.profilePath)).identity;
+    debug("test: first restart");
     const same = await first.restart();
     expect((await readProfile(same)).text).toBe(before.text);
     expect((await same.filesystem.stat(same.profilePath)).identity).toBe(identity);
     expect(await labelledIds(same)).toEqual([tokenId]);
 
+    debug("test: restart on another port");
     const moved = await same.restart({ anotherPort: true });
     const after = await readProfile(moved);
     expect(after.profile.daemonBaseUrl).toBe(`http://127.0.0.1:${moved.port}/v1/agent-device`);
@@ -360,6 +381,7 @@ describe("the local agent-device profile", () => {
       const lastToken = (await readProfile(current)).profile.daemonAuthToken;
       await current.daemon.dispatch("token.create", { label: LABEL, role: "agent" }, adminSession);
       await breakIt(current);
+      debug(`test: restart after ${name}`);
       current = await current.restart();
       const replaced = await readProfile(current);
       const ids = await labelledIds(current);
@@ -370,7 +392,9 @@ describe("the local agent-device profile", () => {
         (await allocateWith(current, replaced.profile.daemonAuthToken, 2 + index)).status,
         name,
       ).toBe(200);
+      debug(`test: ${name} done`);
     }
+    clearTimeout(timer);
   });
 
   it("is withdrawn where it does not apply: HTTP off, agent-device off, a gateway", async () => {
