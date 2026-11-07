@@ -26,6 +26,7 @@ import {
   type Filesystem,
   type Logger,
   type ProcessResult,
+  type ProcessRunner,
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
@@ -5681,6 +5682,66 @@ describe("IosSimctlDriver device set", () => {
         PassthroughRefusedError,
       );
     }
+  });
+
+  it("under deviceSet default the driver turns DeviceHub's pasteboard sync off for a simulator before every boot and removes that entry when it destroys it", async () => {
+    const library = "/Users/u/Library";
+    const deviceHubPlist = `${library}/Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist`;
+    const udid = driverData.udid;
+    const calls: string[][] = [];
+    const answersEveryCall: ProcessRunner = {
+      run: () => Promise.reject(new Error("the driver runs commands through spawn")),
+      spawn(command, args, options) {
+        calls.push([command, ...args]);
+        return new ScriptedProcessRunner([{ match: { args: [...args], command } }]).spawn(
+          command,
+          args,
+          options,
+        );
+      },
+      spawnStreaming: () => {
+        throw new Error("the driver streams nothing here");
+      },
+    };
+    const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
+      clock: new FakeClock(),
+      coreSimulatorRoot: `${library}/Developer/CoreSimulator`,
+      driverConfig: { deviceSet: "default" },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: answersEveryCall,
+      simlockHome: "/home/.simlock",
+    });
+    const device = { address: udid, deviceId: udid, driverData };
+
+    const syncOffThenBoot = [
+      [
+        "defaults",
+        "write",
+        deviceHubPlist,
+        "DevicePreferences",
+        "-dict-add",
+        udid,
+        "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
+      ],
+      ["xcrun", "simctl", "boot", udid],
+      ["xcrun", "simctl", "bootstatus", udid, "-b"],
+      ["xcrun", "simctl", "listapps", udid],
+    ];
+
+    await driver.makeReady(device, prepareFull);
+    await driver.makeReady(device, { mode: "full", purpose: "recover" });
+    await driver.destroy(device);
+
+    expect(calls).toEqual([
+      ...syncOffThenBoot,
+      ...syncOffThenBoot,
+      ["xcrun", "simctl", "shutdown", udid],
+      ["xcrun", "simctl", "delete", udid],
+      ["/usr/libexec/PlistBuddy", "-c", `Delete :DevicePreferences:${udid}`, deviceHubPlist],
+    ]);
   });
 });
 
