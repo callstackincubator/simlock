@@ -40,6 +40,7 @@ Front:
 - A release goes to agent-device first, then `lease.release`.
 - A command on a lease renews the simlock lease until its body ends (`Renewals`), never past `lease.maxTtlMs`.
 - A reply naming `endedLeases` ends each simlock lease this token holds, as a release does: agent-device sends no release of its own for a lease it ended.
+- `boot` on a leased device is answered from the front map; agent-device never receives it.
 - `orientation` on an iOS phone or tablet simulator lease is Simlock's `device.rotate`, answered with agent-device's unconfirmed reply. Every other lease, and a batch step, forwards it.
 
 Lease end and stop:

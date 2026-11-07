@@ -1072,6 +1072,7 @@ describe("the agent-device front's request rules", () => {
       );
     }
     await rig.daemon.dispatch("lease.release", { leaseId: hex(1) }, adminSession);
+    await runCommand(rig, "devices", undefined);
     expect((await envelopeOf(await runCommand(rig, "boot", 1))).error).toMatchObject(
       refusal("lease ended by simlock; run disconnect, then open", "UNAUTHORIZED"),
     );

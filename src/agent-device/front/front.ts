@@ -144,8 +144,7 @@ async function routeCall(
     return untilHangUp(request.signal, work);
   }
   if (kind === "command" && commandName(asRecord(read.params)?.["command"]) === "boot") {
-    const answer = answerBoot(context, identity, read, leaseOf(kind, read));
-    if (answer !== undefined) return answer;
+    return answerBoot(context, identity, read, leaseOf(kind, read));
   }
   const forwarded = carry(request, read.text);
   if (kind === "heartbeat") {

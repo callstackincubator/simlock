@@ -324,7 +324,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "after an accepted upload install and snapshot, install from a remote: path, boot, shutdown and snapshot --ios-simulator-device-set <dir> (on Android also --android-device-allowlist <serial>) are refused, and the device is still leased and answers snapshot",
+    "after an accepted upload install and snapshot, install from a remote: path, shutdown and snapshot --ios-simulator-device-set <dir> (on Android also --android-device-allowlist <serial>) are refused, boot is answered, and the device is still leased and answers snapshot",
     { timeout: 600_000 },
     async () => {
       const a = await agent("a");
@@ -340,7 +340,10 @@ function defineSuite(target: Target): void {
       onTestFinished(() => rm(dir, { force: true, recursive: true }));
 
       refused(await a.run(["install", "Appduct", "remote:/data/local/tmp/Appduct"]));
-      for (const command of ["boot", "shutdown"]) {
+      const boot = await a.run(["boot"]);
+      ok(boot);
+      expect((boot.data as { id?: string }).id).toBe(address);
+      for (const command of ["shutdown"]) {
         const denied = await a.run([command]);
         expect(denied.code, `${command} was accepted`).not.toBe(0);
         expect(denied.error?.code).toBe("UNAUTHORIZED");
