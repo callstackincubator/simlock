@@ -54,6 +54,9 @@ const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 /** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
+/** why: `devices.deletedRetentionMs`'s default: how long a `deleted` device record is kept, counted from its deletion. */
+export const DEFAULT_DEVICES_DELETED_RETENTION_MS = 60 * 60_000;
+
 /** `lease.requestRetentionMs`'s default: how long a settled lease request still answers a replay. */
 export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 

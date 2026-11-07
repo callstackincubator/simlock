@@ -323,6 +323,8 @@ interface DeviceRecordFields {
   /** why: a record written before this field existed has none and counts as ready since `createdAt`. */
   readonly readyAt?: number;
   readonly shutdownAt?: number;
+  /** why: `devices.deletedRetentionMs` counts from here; the registry stamps it when a record is first written `deleted`. */
+  readonly deletedAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
   readonly recoveringSince?: number;
