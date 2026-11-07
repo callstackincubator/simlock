@@ -241,6 +241,12 @@ describe("the agent-device front, through the whole worker daemon", () => {
       details: { reason: "SIMLOCK_UNAVAILABLE" },
       retriable: false,
     });
+    const transient = await setUp();
+    transient.fake.setUnavailable("starting", true);
+    expect((await envelopeOf(await allocate(transient, 3))).error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: true,
+    });
     for (const [version, reason, retriable] of [
       ["0.20.3", "wrong-version", false],
       ["0.21.28", "start-failed", true],
