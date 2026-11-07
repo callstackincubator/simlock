@@ -27,6 +27,11 @@ const features = tableFeatures({
   rowPaginationFeature,
 });
 
+export interface Group {
+  readonly id: string;
+  readonly label: string;
+}
+
 export function DataTable<T extends RowData>(props: {
   readonly label: string;
   readonly rows: readonly T[];
@@ -34,16 +39,21 @@ export function DataTable<T extends RowData>(props: {
   readonly rowId: (row: T) => string;
   readonly empty: string;
   // why: a table given no `paging` shows every row and no pager.
-  readonly paging?: Paging;
-  readonly wide?: boolean;
-  readonly className?: string;
+  readonly paging?: Paging | undefined;
+  readonly wide?: boolean | undefined;
+  readonly className?: string | undefined;
   // why: a row that opens something is clicked anywhere; its first link stays the keyboard's way in.
-  readonly rowTo?: (row: T) => string;
+  readonly rowTo?: ((row: T) => string) | undefined;
   // why: the row's ⋯ menu, in a last column of its own that has no header text to show.
-  readonly menu?: {
-    readonly label: (row: T) => string;
-    readonly entries: (row: T) => readonly MenuEntry[];
-  };
+  readonly menu?:
+    | {
+        readonly label: (row: T) => string;
+        readonly entries: (row: T) => readonly MenuEntry[];
+      }
+    | undefined;
+  readonly groupBy?: ((row: T) => Group) | undefined;
+  readonly footer?: "count" | "pager" | undefined;
+  readonly selectedId?: string | undefined;
 }) {
   const {
     className,
