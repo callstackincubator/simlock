@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,6 +96,31 @@ describe("device.rotate", () => {
     );
     return { daemon, drivers, leaseId: (granted as { lease: { id: string } }).lease.id };
   }
+
+  it(
+    "starts a worker that asks for no HTTP port while another listener holds the standalone worker's default HTTP port 4701",
+    { timeout: 60_000 },
+    async () => {
+      const holderOf4701 = createServer();
+      // why: a bind refused with EADDRINUSE means another process already holds 4701, which is the case under test too.
+      await new Promise<void>((resolve, reject) => {
+        holderOf4701.once("error", (error: NodeJS.ErrnoException) =>
+          error.code === "EADDRINUSE" ? resolve() : reject(error),
+        );
+        holderOf4701.listen(4701, "127.0.0.1", resolve);
+      });
+      try {
+        const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
+        await expect(
+          worker({ input, inputModule: false }).then(({ leaseId }) => typeof leaseId),
+        ).resolves.toBe("string");
+      } finally {
+        if (holderOf4701.listening) {
+          await new Promise<void>((resolve) => holderOf4701.close(() => resolve()));
+        }
+      }
+    },
+  );
 
   it(
     "answers a holder's rotate of its iOS-simulator lease to each of the four orientation names and sends the helper that orientation",
