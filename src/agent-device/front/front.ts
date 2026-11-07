@@ -95,7 +95,7 @@ async function notRunning(
       (await anyUnreachable(context, identity, context.map.liveOf(identity.principal)))
     )
   ) {
-    return frontReply(notAvailable(status.reason), read);
+    return frontReply(notAvailable(status.reason, status.retriable), read);
   }
   return frontReply(workerUnreachable(), read);
 }
@@ -330,7 +330,8 @@ async function routeByHeader(
   const { leaseId } = read;
   if (leaseId === undefined) return passThrough(context, request, identity, undefined);
   const status = await context.link.status(leaseId, identity);
-  if (status.state === "unavailable") return frontReply(notAvailable(status.reason), undefined);
+  if (status.state === "unavailable")
+    return frontReply(notAvailable(status.reason, status.retriable), undefined);
   if (status.state === "unreachable") return frontReply(workerUnreachable(), undefined);
   const response = await passThrough(context, request, identity, undefined, leaseId);
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
@@ -354,7 +355,7 @@ async function handlePlain(
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
   const probe = request.method === "GET" && path === "/health";
   if (status.state === "unavailable" && !namesLease(context, request, probe)) {
-    const reply = notAvailable(status.reason);
+    const reply = notAvailable(status.reason, status.retriable);
     return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, undefined);
   }
   if (!isKnownRoute(request.method, path)) {

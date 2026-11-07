@@ -20,7 +20,7 @@ export type HostStatus =
       readonly leaseMaxTtlMs: number;
       readonly platforms: readonly AgentDevicePlatform[];
     }
-  | { readonly state: "unavailable"; readonly reason: string };
+  | { readonly state: "unavailable"; readonly reason: string; readonly retriable: boolean };
 
 function stripBodyHeaders(headers: Headers): Headers {
   const copy = new Headers(headers);
@@ -105,7 +105,8 @@ export class AgentDeviceHost {
     const current = this.upstream.current();
     if (current.state === "unavailable") return current;
     await this.#load();
-    if (this.#loadError !== undefined) return { reason: this.#loadError, state: "unavailable" };
+    if (this.#loadError !== undefined)
+      return { reason: this.#loadError, retriable: false, state: "unavailable" };
     return {
       leaseMaxTtlMs: current.leaseMaxTtlMs,
       platforms: this.platforms,

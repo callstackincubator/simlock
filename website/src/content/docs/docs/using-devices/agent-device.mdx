@@ -207,6 +207,21 @@ Run `agent-device disconnect`, then `open` again. You get a new, clean device; a
 Restarting a worker's daemon ends every agent-device lease on that worker, even though ordinary Simlock leases survive a restart.
 </Aside>
 
+## Error reasons
+
+Errors made by the Simlock agent-device front carry a reason and a `retriable` boolean. JSON-RPC replies put these at `error.data.details.reason` and `error.data.retriable`; flat upload, artifact and health errors put `reason` and `retriable` beside `code`.
+
+| Reason | When to retry |
+| --- | --- |
+| `REFUSED_BY_SIMLOCK` | Never: the request was refused. |
+| `SIMLOCK_UNAVAILABLE` | Retry when a daemon is starting or failed to start, a worker cannot currently serve the call, a forward failed, or capacity is unavailable. A disabled module, incompatible or missing agent-device, unusable state directory, proxy load failure or missing lease ceiling needs operator action. |
+| `WORKER_UNREACHABLE` | Retry when the lease's worker reconnects. |
+| `NO_DEVICE_IN_TIME` | Retry after the queue timed out. |
+| `SIMLOCK_FAILED` | Retry only when Simlock could not check your leases; other failures are not retriable. |
+| `LEASE_ENDED_BY_HOST` | Do not retry the lease; open a new one. |
+
+Simlock's sign-in errors (`UNAUTHENTICATED`, `FORBIDDEN`) and errors outside Simlock, such as a proxy error or a refused connection, carry no Simlock reason or retry flag. Errors from agent-device pass through unchanged and may carry their own fields.
+
 ## Messages you may see
 
 | Message | Meaning |

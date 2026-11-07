@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
-import { FakeClock, NodeSqliteOpener } from "../ports/index.js";
-import { FakeAgentDevice } from "./testing.js";
+import {
+  FakeClock,
+  FakeProcessSupervisor,
+  FakeTcpProbe,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NodeSqliteOpener,
+  ScriptedProcessRunner,
+} from "../ports/index.js";
+import { FakeAgentDevice, FakeAgentDeviceHealth } from "./testing.js";
+import { AgentDeviceSupervisor } from "./host/agent-device-supervisor.js";
+import { SupervisorAgentDeviceUpstream } from "./host/upstream.js";
 import {
   phoneSerial,
   setUpWithPhone,
@@ -62,6 +73,52 @@ import {
 // setUp's return type, so a `rig` whose test calls a FakeAgentDevice member only these tests use is
 // annotated `Rig`; without it Fallow reports the member as never referenced.
 
+async function unavailableSupervisor(version: string, reason: "wrong-version" | "start-failed") {
+  const clock = new FakeClock(1_000_000);
+  const filesystem = new MemoryFilesystem();
+  const home = "/home/simlock/.simlock";
+  const root = "/opt/ad/node_modules/agent-device";
+  const cli = `${root}/bin/agent-device.mjs`;
+  const entry = `${root}/dist/src/internal/daemon.js`;
+  await filesystem.mkdirp(home);
+  await filesystem.mkdirp("/usr/local/bin");
+  await filesystem.mkdirp(`${root}/bin`);
+  await filesystem.mkdirp(`${root}/dist/src/internal`);
+  await filesystem.writeFileAtomic(cli, "#!/usr/bin/env node\n");
+  filesystem.defineAttributes(cli, { mode: 0o755 });
+  await filesystem.writeFileAtomic(`${root}/package.json`, '{"name":"agent-device"}');
+  await filesystem.writeFileAtomic(entry, "");
+  filesystem.defineSymlink("/usr/local/bin/agent-device", cli);
+  const runner = new ScriptedProcessRunner([
+    {
+      match: { args: [cli, "--version"], command: "/opt/node/bin/node" },
+      result: { code: 0, stderr: "", stdout: `${version}\n` },
+    },
+  ]);
+  const supervisor = new AgentDeviceSupervisor({
+    baseEnvironment: { HOME: "/home/operator", PATH: "/usr/local/bin:/usr/bin" },
+    clock,
+    config: { command: "agent-device" },
+    driverEnvironment: {},
+    filesystem,
+    healthProbe: new FakeAgentDeviceHealth(),
+    home,
+    hostPlatform: "linux",
+    leaseMaxTtlMs: 1_800_000,
+    logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+    nodePath: "/opt/node/bin/node",
+    nodeVersion: "22.14.0",
+    platforms: ["ios", "android"],
+    processRunner: runner,
+    processSupervisor: new FakeProcessSupervisor([]),
+    role: "simulators",
+    tcpProbe: new FakeTcpProbe(),
+  });
+  await supervisor.start();
+  expect(supervisor.availability()).toMatchObject({ state: "unavailable", reason });
+  return new SupervisorAgentDeviceUpstream(supervisor);
+}
+
 const phoneModels = {
   defaultModels: { phone: ["iPhone 16"] },
   modelClasses: { "iPhone 16": "phone" },
@@ -99,6 +156,7 @@ function expectEndedBySimlock(answer: Envelope): void {
       code: "UNAUTHORIZED",
       details: { reason: "LEASE_ENDED_BY_HOST" },
       message: endedMessage,
+      retriable: false,
     },
   });
 }
@@ -177,7 +235,25 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rpcAnswer.status).toBe(503);
     expect(upload.status).toBe(503);
     expect(await health.text()).toContain(`${notAvailable}${reason}`);
-    expect((await envelopeOf(rpcAnswer)).error?.message).toBe(`${notAvailable}${reason}`);
+    const rpcError = (await envelopeOf(rpcAnswer)).error;
+    expect(rpcError?.message).toBe(`${notAvailable}${reason}`);
+    expect(rpcError?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: false,
+    });
+    for (const [version, reason, retriable] of [
+      ["0.20.3", "wrong-version", false],
+      ["0.21.28", "start-failed", true],
+    ] as const) {
+      const supervisorUpstream = await unavailableSupervisor(version, reason);
+      const supervised = await setUp({ supervisorUpstream });
+      const answer = await allocate(supervised, 2);
+      expect(answer.status).toBe(503);
+      expect((await envelopeOf(answer)).error?.data).toMatchObject({
+        details: { reason: "SIMLOCK_UNAVAILABLE" },
+        retriable,
+      });
+    }
     expect(await upload.text()).toContain(`${notAvailable}${reason}`);
     expect(await leases(rig)).toEqual([]);
     expect(rig.fake.requests).toEqual([]);
@@ -772,6 +848,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const answer = await envelopeOf(await allocate(rig, 2, { device: "My test phone" }));
 
     expect(answer.error).toMatchObject(refusal(`refused by simlock: ${expected}`));
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "REFUSED_BY_SIMLOCK" },
+      retriable: false,
+    });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
 
@@ -1118,18 +1198,31 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const answer = await envelopeOf(await second.promise);
 
     expect(answer.error).toMatchObject(refusal(queueTimeoutMessage, "COMMAND_FAILED"));
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "NO_DEVICE_IN_TIME" },
+      retriable: true,
+    });
     expect(await waiting(rig)).toEqual([]);
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
 
   it("an agent-device allocate that answers an error, and a grant that names no device address, release the simlock lease, and the CLI gets the error", async () => {
     const rig: Rig = await setUp();
-    rig.fake.failNextAllocate({ code: "NO_DEVICE", message: "no such device" });
+    rig.fake.failNextAllocate({
+      code: "NO_DEVICE",
+      message: "no such device",
+      details: { reason: "AGENT_DEVICE_REASON" },
+    });
 
     const answer = await envelopeOf(await allocate(rig, 1));
 
-    expect(answer.error).toMatchObject({
-      data: { code: "NO_DEVICE", message: "no such device" },
+    expect(answer.error).toEqual({
+      code: -32000,
+      data: {
+        code: "NO_DEVICE",
+        message: "no such device",
+        details: { reason: "AGENT_DEVICE_REASON" },
+      },
       message: "no such device",
     });
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
@@ -1154,7 +1247,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     const noAddress = await envelopeOf(await allocate(bare, 2));
 
-    expect(noAddress.error?.data?.code).toBe("COMMAND_FAILED");
+    expect(noAddress.error?.data).toMatchObject({
+      code: "COMMAND_FAILED",
+      details: { reason: "SIMLOCK_FAILED" },
+      retriable: false,
+    });
     await expect.poll(async () => (await leases(bare)).length).toBe(0);
     expect(allocatesReceived(bare, 2)).toEqual([]);
   });
@@ -2369,6 +2466,8 @@ const tooLargeReply = (size: number) => ({
   code: "INVALID_ARGS",
   error: `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (2147483648 bytes)`,
   ok: false,
+  reason: "REFUSED_BY_SIMLOCK",
+  retriable: false,
 });
 
 describe(

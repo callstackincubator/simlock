@@ -594,6 +594,7 @@ function expectEndedBySimlock(answer: Envelope): void {
       code: "UNAUTHORIZED",
       details: { reason: "LEASE_ENDED_BY_HOST" },
       message: endedMessage,
+      retriable: false,
     },
   });
 }
@@ -752,9 +753,14 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const refused = await allocate(rig, 2);
 
     expect(refused.status).toBe(400);
-    expect((await envelopeOf(refused)).error?.message).toBe(
+    const refusalAnswer = await envelopeOf(refused);
+    expect(refusalAnswer.error?.message).toBe(
       "refused by simlock: No worker in the fleet can currently serve this request",
     );
+    expect(refusalAnswer.error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: true,
+    });
     const before = member.fake.rpcRequests("agent_device.command").length;
     const held = await envelopeOf(await command(rig, "snapshot", 1));
     expect(held.result).toMatchObject({ command: "snapshot", ok: true });
@@ -1840,6 +1846,10 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
     const answer = await envelopeOf(await command(rig, "devices", undefined));
 
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_FAILED" },
+      retriable: true,
+    });
     expect(answer.error?.message).toBe("could not check your leases; try again");
     expect(
       rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),
@@ -1919,7 +1929,11 @@ const hourMs = 3_600_000;
 function expectUnreachable(answer: Envelope): void {
   expect(answer.result).toBeUndefined();
   expect(answer.error).toMatchObject({
-    data: { details: { reason: "WORKER_UNREACHABLE" }, message: unreachableMessage },
+    data: {
+      details: { reason: "WORKER_UNREACHABLE" },
+      message: unreachableMessage,
+      retriable: true,
+    },
     message: unreachableMessage,
   });
 }
@@ -1928,7 +1942,7 @@ async function expectUnreachablePlain(response: Response): Promise<void> {
   expect(response.status).toBe(503);
   const body = (await response.json()) as Record<string, unknown>;
   expect(body["error"]).toBe(unreachableMessage);
-  expect(body).not.toHaveProperty("details");
+  expect(body).toMatchObject({ reason: "WORKER_UNREACHABLE", retriable: true });
 }
 
 async function expectUnreachableEverywhere(rig: Rig, n: number): Promise<void> {
@@ -1999,7 +2013,7 @@ describe(
       expect(member.fake.requests.length).toBe(received);
     });
 
-    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message and no `details`, and `devices` answers the RPC reply with `details`", async () => {
+    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message, reason and retry flag, and `devices` answers the RPC reply", async () => {
       const rig = await setUp();
       const member = first(rig);
       await granted(rig, 1);

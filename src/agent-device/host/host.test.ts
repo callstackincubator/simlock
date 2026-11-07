@@ -25,18 +25,24 @@ describe("the agent-device host", () => {
 
     expect(await host.status()).toEqual({
       reason: expect.stringMatching(/^could not load @agent-device\/proxy: ./),
+      retriable: false,
       state: "unavailable",
     });
   });
 
   it("passes the upstream's own reason through while the daemon is unavailable", async () => {
     const upstream = {
-      current: () => ({ reason: "agent-device is stopped", state: "unavailable" }),
+      current: () => ({
+        reason: "agent-device is stopped",
+        retriable: false,
+        state: "unavailable",
+      }),
       fetch: async () => new Response(),
     } as unknown as AgentDeviceUpstream;
 
     expect(await new AgentDeviceHost(upstream, ["ios"]).status()).toEqual({
       reason: "agent-device is stopped",
+      retriable: false,
       state: "unavailable",
     });
   });
