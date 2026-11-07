@@ -147,7 +147,7 @@ describe("a table drawn through its public props", () => {
     const bare = draw({ menu: false, paging: PAGE_1, rowTo: false });
     expect(bare).not.toContain("table-row-link");
     expect(bare).not.toContain("table-menu");
-    expect(groupHeadings(bare)).toEqual([]);
+    expect(groupHeadings(bare)).toEqual(["iOS · 3 baselines"]);
     expect(dataRows(bare)).toHaveLength(2);
 
     const ungrouped = draw({ group: false, menu: false, paging: PAGE_1, rowTo: false });

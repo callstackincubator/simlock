@@ -9,6 +9,7 @@ import {
   useTable,
 } from "@tanstack/react-table";
 import type { MouseEvent, ReactNode } from "react";
+import { Fragment } from "react";
 
 import { useNavigateTo } from "./link";
 import { type MenuEntry, MenuRow, RowMenu } from "./menu";
@@ -30,6 +31,16 @@ const features = tableFeatures({
 export interface Group {
   readonly id: string;
   readonly label: string;
+}
+
+const COUNT = new Intl.NumberFormat("en-US");
+
+// why: the count line is a table's own footer; `paging.range` is the caller's text for the rows it
+// cut out, and without paging the table shows every row, so its range is the whole list.
+function countText(paging: Paging | undefined, total: number): string {
+  if (paging !== undefined) return paging.range;
+  const all = COUNT.format(total);
+  return `1–${all} of ${all}`;
 }
 
 export function DataTable<T extends RowData>(props: {
@@ -59,12 +70,15 @@ export function DataTable<T extends RowData>(props: {
     className,
     columns,
     empty,
+    footer = "pager",
+    groupBy,
     label,
     menu,
     paging,
     rowId,
     rowTo,
     rows,
+    selectedId,
     wide = false,
   } = props;
   const navigate = useNavigateTo();
@@ -116,58 +130,84 @@ export function DataTable<T extends RowData>(props: {
           </tr>
         </thead>
         <tbody>
-          {table.getRowModel().rows.map((row) => {
-            const className = rowTo === undefined ? undefined : "table-row-link";
-            const onClick =
-              rowTo === undefined
-                ? undefined
-                : (event: MouseEvent<HTMLTableRowElement>) => {
-                    if ((event.target as HTMLElement).closest("a, button") === null) {
-                      navigate?.(rowTo(row.original));
-                    }
-                  };
-            const cells = (
-              <>
-                {row.getAllCells().map((cell) => {
-                  const column = columns[Number(cell.column.id)];
-                  return (
-                    <td
-                      key={cell.id}
-                      data-label={column?.header}
-                      className={cellClass(column?.numeric, column?.mono)}
-                    >
-                      {column?.cell(row.original)}
+          {(() => {
+            let drawn: string | undefined;
+            const span = columns.length + (menu === undefined ? 0 : 1);
+            return table.getRowModel().rows.map((row) => {
+              const group = groupBy?.(row.original);
+              const heading = group !== undefined && group.id !== drawn;
+              if (group !== undefined) drawn = group.id;
+              const className = rowTo === undefined ? undefined : "table-row-link";
+              const selected = selectedId !== undefined && selectedId === row.id;
+              const onClick =
+                rowTo === undefined
+                  ? undefined
+                  : (event: MouseEvent<HTMLTableRowElement>) => {
+                      if ((event.target as HTMLElement).closest("a, button") === null) {
+                        navigate?.(rowTo(row.original));
+                      }
+                    };
+              const cells = (
+                <>
+                  {row.getAllCells().map((cell) => {
+                    const column = columns[Number(cell.column.id)];
+                    return (
+                      <td
+                        key={cell.id}
+                        data-label={column?.header}
+                        className={cellClass(column?.numeric, column?.mono)}
+                      >
+                        {column?.cell(row.original)}
+                      </td>
+                    );
+                  })}
+                  {menu === undefined ? null : (
+                    <td className="table-menu">
+                      <RowMenu
+                        label={menu.label(row.original)}
+                        entries={menu.entries(row.original)}
+                      />
                     </td>
-                  );
-                })}
-                {menu === undefined ? null : (
-                  <td className="table-menu">
-                    <RowMenu
-                      label={menu.label(row.original)}
-                      entries={menu.entries(row.original)}
-                    />
-                  </td>
-                )}
-              </>
-            );
-            return menu === undefined ? (
-              <tr key={row.id} className={className} onClick={onClick}>
-                {cells}
-              </tr>
-            ) : (
-              <MenuRow
-                key={row.id}
-                className={className}
-                onClick={onClick}
-                entries={menu.entries(row.original)}
-              >
-                {cells}
-              </MenuRow>
-            );
-          })}
+                  )}
+                </>
+              );
+              const dataRow =
+                menu === undefined ? (
+                  <tr
+                    aria-selected={selected || undefined}
+                    className={rowClass(className, selected)}
+                    onClick={onClick}
+                  >
+                    {cells}
+                  </tr>
+                ) : (
+                  <MenuRow
+                    className={rowClass(className, selected)}
+                    onClick={onClick}
+                    entries={menu.entries(row.original)}
+                    selected={selected}
+                  >
+                    {cells}
+                  </MenuRow>
+                );
+              if (!heading) return <Fragment key={row.id}>{dataRow}</Fragment>;
+              return (
+                <Fragment key={row.id}>
+                  <tr className="table-group">
+                    <td colSpan={span}>{group?.label}</td>
+                  </tr>
+                  {dataRow}
+                </Fragment>
+              );
+            });
+          })()}
         </tbody>
       </table>
-      {paging === undefined ? null : <Pager label={label} paging={paging} />}
+      {footer === "count" ? (
+        <p className="muted table-count mono">{countText(paging, rows.length)}</p>
+      ) : paging === undefined ? null : (
+        <Pager label={label} paging={paging} />
+      )}
     </div>
   );
 }
@@ -175,4 +215,8 @@ export function DataTable<T extends RowData>(props: {
 function cellClass(numeric = false, mono = false): string | undefined {
   if (numeric) return "num";
   return mono ? "mono" : undefined;
+}
+
+function rowClass(link: string | undefined, selected: boolean): string | undefined {
+  return [link, selected ? "table-row-selected" : undefined].filter(Boolean).join(" ") || undefined;
 }

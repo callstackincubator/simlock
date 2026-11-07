@@ -135,6 +135,10 @@
     color: var(--text-muted);
     font-family: var(--font-sans);
   }
+
+  .table-wide .table-group td {
+    display: block;
+  }
 }
 
 @media (max-width: 767.98px) {
@@ -194,6 +198,10 @@
     color: var(--text-muted);
     font-family: var(--font-sans);
   }
+
+  .table .table-group td {
+    display: block;
+  }
 }
 
 .table th {
@@ -209,6 +217,35 @@
 
 .table-row-link:hover {
   background: var(--surface);
+}
+
+/* The selected row is its own fill with the accent bar inset at its left, so a page that shows one
+ * row at a time reads which one without relying on colour alone. */
+.table .table-row-selected,
+.table .table-row-selected:hover {
+  background: var(--row-selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A group's heading runs across the table and is not a row of data: the caller's label, on the
+ * header's fill, at the size a label is. */
+.table .table-group td {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+/* The count line a table shows in place of its pager: the rows on screen, and nothing else. */
+.table-count {
+  margin: 0;
+  padding: var(--space-3) var(--space-6);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .table .table-menu {

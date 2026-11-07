@@ -36,21 +36,18 @@ export function MenuRow(props: {
   readonly entries: readonly MenuEntry[];
   readonly className?: string | undefined;
   readonly onClick?: MouseEventHandler<HTMLTableRowElement> | undefined;
+  // why: the table's own markup moves to the trigger row, so a selected row keeps its cells intact.
+  readonly selected?: boolean | undefined;
   readonly children: ReactNode;
 }) {
-  const { children, className, entries, onClick } = props;
+  const { children, className, entries, onClick, selected = false } = props;
+  const attrs = { "aria-selected": selected || undefined, className, onClick };
   if (entries.length === 0) {
-    return (
-      <tr className={className} onClick={onClick}>
-        {children}
-      </tr>
-    );
+    return <tr {...attrs}>{children}</tr>;
   }
   return (
     <ContextMenu.Root>
-      <ContextMenu.Trigger render={<tr className={className} onClick={onClick} />}>
-        {children}
-      </ContextMenu.Trigger>
+      <ContextMenu.Trigger render={<tr {...attrs} />}>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="menu-positioner">
           <ContextMenu.Popup className="menu">

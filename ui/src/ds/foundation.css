@@ -42,6 +42,7 @@
   --on-accent: #111110;
   --accent-text: #b93d0b;
   --selection: #fed7aa;
+  --row-selected: #f2e4d9;
 
   --status-ok: #15803d;
   --status-warn: #92570a;
@@ -66,6 +67,7 @@
     --on-accent: #0e0e0f;
     --accent-text: #ffa061;
     --selection: #7c2d12;
+    --row-selected: #221913;
 
     --status-ok: #4ade80;
     --status-warn: #facc15;
