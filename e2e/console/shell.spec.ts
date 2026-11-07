@@ -22,6 +22,75 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("the shell", () => {
+  test("an operator opens the console and sees the floating shell, page header and card with keyboard navigation", async ({
+    daemon,
+    page,
+    proxied,
+  }) => {
+    const cases = [
+      { theme: "dark", session: "token", count: 0 },
+      { theme: "light", session: "token", count: 1 },
+      { theme: "dark", session: "proxy", count: 1 },
+      { theme: "light", session: "proxy", count: 0 },
+    ] as const;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const entry of cases) {
+      await page.unrouteAll({ behavior: "wait" });
+      await page.emulateMedia({ colorScheme: entry.theme, reducedMotion: "reduce" });
+      await addInboxItems(page, () => (entry.count ? [waitingItem("req_shell", 125_000)] : []));
+      const host = entry.session === "proxy" ? proxied.daemon : daemon;
+      await page.goto(entry.session === "proxy" ? proxied.url : daemon.url);
+      if (entry.session === "token") await signIn(page, daemon.tokens.operator);
+      const nav = page.getByRole("navigation", { name: "Console" });
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+      await expect(page.locator(".connection")).toHaveText("Connected");
+      await settled(page);
+      expect(await nav.boundingBox(), entry.theme).toEqual({
+        x: 12,
+        y: 12,
+        width: 200,
+        height: 876,
+      });
+      const geometry = await page.evaluate(() => {
+        const style = (selector: string) => getComputedStyle(document.querySelector(selector)!);
+        return {
+          cardRadius: style(".panel").borderRadius,
+          cardHeader: style(".panel-header").height,
+          titleSize: style("h1").fontSize,
+          navHeight: style(".nav-item").height,
+          navRadius: style(".nav-item").borderRadius,
+        };
+      });
+      expect(geometry).toEqual({
+        cardRadius: "10px",
+        cardHeader: "38px",
+        titleSize: "21px",
+        navHeight: "32px",
+        navRadius: "8px",
+      });
+      const inbox = nav.getByRole("link", { name: /^Inbox/ });
+      await expect(inbox.locator(".nav-count")).toHaveCount(entry.count);
+      if (entry.count) await expect(inbox.locator(".nav-count")).toHaveText("1 item");
+      if (entry.session === "proxy")
+        await expect(page.getByText("Signed in as Alice")).toBeVisible();
+      await nav.getByRole("link", { name: "Fleet", exact: true }).focus();
+      await page.keyboard.press("Enter");
+      await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
+      await host.stop();
+      try {
+        await expect(page.locator(".connection")).toHaveText(/^Reconnecting/);
+        await expect(nav.getByRole("button", { name: "Sign out" })).toBeVisible();
+      } finally {
+        await host.start();
+      }
+      await expect(page.locator(".connection")).toHaveText("Connected", { timeout: 30_000 });
+      if (entry.session === "token") {
+        await nav.getByRole("button", { name: "Sign out" }).click();
+        await expect(page.getByLabel("Operator token")).toBeVisible();
+      }
+    }
+  });
+
   test("the shell has no horizontal scroll at 360px wide, its sidebar folded into a menu", async ({
     daemon,
     page,
