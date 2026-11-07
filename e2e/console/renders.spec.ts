@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 
-import { compareCaptures } from "./capture-comparison.js";
+import { compareCaptures, visibleState } from "./capture-comparison.js";
 import { expect, mintJoinToken, settled, signIn, startDaemon, test } from "./fixtures.js";
 import { renderCases, renderFixture } from "./render-fixtures.js";
 
@@ -50,6 +50,30 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
     (await compareCaptures(page, base!, base!, "visible", "changed")).matches,
     "visible state",
   ).toBe(false);
+  await page.setContent(
+    '<main><h1>Overview</h1><p style="color: black; width: 100px">8 workers</p></main>',
+  );
+  const original = await visibleState(page);
+  for (const [label, change] of [
+    ["visible heading", "heading"],
+    ["visible data", "data"],
+    ["computed presentation", "style"],
+    ["geometry", "geometry"],
+  ] as const) {
+    await page.evaluate((kind) => {
+      const heading = document.querySelector("h1")!;
+      const paragraph = document.querySelector("p")!;
+      heading.textContent = kind === "heading" ? "Different" : "Overview";
+      paragraph.textContent = kind === "data" ? "9 workers" : "8 workers";
+      paragraph.style.color = kind === "style" ? "red" : "black";
+      paragraph.style.width = kind === "geometry" ? "101px" : "100px";
+    }, change);
+    const changed = await visibleState(page);
+    const result = await compareCaptures(page, base!, base!, original, changed);
+    expect(result.changedPixels, `${label} uses identical pixels`).toBe(0);
+    expect(result.stateMatches, `${label} exact state`).toBe(false);
+    expect(result.matches, `${label} cannot use raster allowance`).toBe(false);
+  }
 });
 
 async function connectedEvent(
@@ -96,7 +120,7 @@ for (const entry of cases) {
         "usage",
         "not-found",
       ]);
-      const captures = new Map<string, Buffer>();
+      const captures = new Map<string, { image: Buffer; state: unknown }>();
       for (const run of ["first", "fresh"] as const) {
         const gateway = await startDaemon("gateway");
         try {
@@ -114,23 +138,41 @@ for (const entry of cases) {
               await expect(
                 page.locator("input:focus, textarea:focus, [contenteditable]:focus"),
               ).toHaveCount(0);
+              const state = await visibleState(page);
               const image = await page.screenshot({
                 ...(run === "first" ? { path } : {}),
                 animations: "disabled",
                 caret: "initial",
               });
-              if (run === "first") captures.set(name, image);
+              if (run === "first") captures.set(name, { image, state });
               else {
-                if (!image.equals(captures.get(name) ?? Buffer.alloc(0))) {
+                const previous = captures.get(name);
+                expect(previous, `${name} first capture exists`).toBeDefined();
+                const comparison = await compareCaptures(
+                  page,
+                  previous!.image,
+                  image,
+                  previous!.state,
+                  state,
+                );
+                if (!comparison.matches) {
                   await testInfo.attach(`${name}-first`, {
-                    body: captures.get(name) ?? Buffer.alloc(0),
+                    body: previous!.image,
                     contentType: "image/png",
                   });
                   await testInfo.attach(`${name}-fresh`, { body: image, contentType: "image/png" });
+                  await testInfo.attach(`${name}-comparison`, {
+                    body: JSON.stringify(comparison, null, 2),
+                    contentType: "application/json",
+                  });
+                  await testInfo.attach(`${name}-visible-state`, {
+                    body: JSON.stringify({ first: previous!.state, fresh: state }),
+                    contentType: "application/json",
+                  });
                 }
                 expect(
-                  image.equals(captures.get(name) ?? Buffer.alloc(0)),
-                  `${name} fresh daemon and browser capture`,
+                  comparison.matches,
+                  `${name} fresh daemon and browser capture: ${JSON.stringify(comparison)}`,
                 ).toBe(true);
               }
               return image;
@@ -326,6 +368,21 @@ for (const entry of cases) {
             ).toHaveCount(0);
             // why: Playwright's caret hiding repaints unfocused input borders differently on alternating captures.
             const first = await capture(`${entry.name}${suffix}`);
+            if (entry.name === "1-overview" && viewport.width === 1440 && run === "first") {
+              const original = await visibleState(page);
+              const heading = page.locator("main h1");
+              await heading.evaluate((element) => {
+                element.textContent = "Changed overview";
+              });
+              const changed = await visibleState(page);
+              await heading.evaluate((element) => {
+                element.textContent = "Overview";
+              });
+              const proof = await compareCaptures(page, first, first, original, changed);
+              expect(proof.changedPixels, "visible mutation uses identical capture pixels").toBe(0);
+              expect(proof.stateMatches, "visible overview heading mutation").toBe(false);
+              expect(proof.matches, "visible mutation cannot use raster allowance").toBe(false);
+            }
             const second = await page.screenshot({ animations: "disabled", caret: "initial" });
             expect(second, `${entry.name} repeated capture`).toEqual(first);
             if (run === "first")
