@@ -14,10 +14,11 @@
 //   surface   no path surface-paths.mjs lists changed (a surface file, the protocol version, an
 //             ADR), and module-surface.mjs prints the same lines at both ends: every module's
 //             index.ts exports the same names with the same declarations.
-//   pins      the pins (`*.pin.test.ts`) are the first commit and nothing else is in it, none
-//             is left at the head, they pass on the base with the pins added, and they pass on
-//             the head with the pins put back (the final code, not only the commit before their
-//             deletion).
+//   pins      the pins (`*.pin.test.ts`) are the first commit and nothing else is in it, no later
+//             commit adds or edits one (it may delete one), none is left at the head, and the
+//             first commit's pins pass on the current merge base and on the head with the pins
+//             put back (the final code, not only the commit before their deletion). Changes the
+//             base branch brought in by a merge are the merge base's, never the refactor's.
 //   mutants   `pnpm mutate <base> --touched-by <head>` on the base with the pins added leaves
 //             no mutant alive; it prints `Mutation: <its last line>`.
 //
@@ -158,7 +159,16 @@ function unmoved(side, other) {
 function pinFiles() {
   return [
     ...new Set(
-      git("log", "--format=", "--name-only", "--diff-filter=A", `${base}..${head}`)
+      git(
+        "log",
+        "--first-parent",
+        "--no-merges",
+        "--no-renames",
+        "--format=",
+        "--name-only",
+        "--diff-filter=A",
+        `${base}..${head}`,
+      )
         .split("\n")
         .filter((p) => PIN.test(p)),
     ),
@@ -179,6 +189,36 @@ function checkPinPlace(pins) {
   }
   const late = pins.filter((p) => !first.includes(p));
   if (late.length > 0) failures.push(`pins added after the first commit: ${late.join(", ")}`);
+  const edited = editedPins();
+  if (edited.length > 0) {
+    failures.push(
+      `pins edited after the first commit: ${edited.join(", ")}; later commits only delete one`,
+    );
+  }
+}
+
+// why: the pins run on the base and on the head from the first commit's text, so a later edit
+// would let the head pass a pin the base never ran; only a deletion may follow.
+function editedPins() {
+  if (commits.length < 2) return [];
+  const rows = git(
+    "log",
+    "--first-parent",
+    "--no-merges",
+    "--no-renames",
+    "--format=",
+    "--name-status",
+    `${commits[0]}..${head}`,
+  );
+  return [
+    ...new Set(
+      rows
+        .split("\n")
+        .map((r) => r.split("\t"))
+        .filter(([status, path]) => status === "M" && PIN.test(path ?? ""))
+        .map(([, path]) => path),
+    ),
+  ];
 }
 
 function filesOf(commit) {
@@ -187,14 +227,10 @@ function filesOf(commit) {
     .filter(Boolean);
 }
 
-// why: the pins' text is read from the last commit that still holds them, since the head has
-// deleted them by design.
+// why: one text per pin, the first commit's, runs on both ends; the head has deleted them.
 function pinText(path) {
-  for (const commit of [...commits].reverse()) {
-    const r = spawnSync("git", ["show", `${commit}:${path}`], { encoding: "utf8" });
-    if (r.status === 0) return r.stdout;
-  }
-  return null;
+  const r = spawnSync("git", ["show", `${commits[0]}:${path}`], { encoding: "utf8" });
+  return r.status === 0 ? r.stdout : null;
 }
 
 function prepare(commit) {
@@ -209,13 +245,15 @@ function prepare(commit) {
   return dir;
 }
 
-// why: the branch's own pin commit is used when it is one, so the implementer's mutation cache
-// (keyed by that commit) serves the gate's run; otherwise the pins are committed onto the base
-// in the scratch worktree.
+// why: the branch's own pin commit is used when it is one and still sits on the merge base, so
+// the implementer's mutation cache (keyed by that commit) serves the gate's run. After the base
+// branch was merged in, the merge base moved past it: the pins are committed onto the current
+// merge base in the scratch worktree, so the base's own changes are never read as the refactor's.
 function pinBaseDir(pins) {
   if (pins.length === 0) return prepare(base);
   const first = filesOf(commits[0]);
-  if (first.length > 0 && first.every((p) => PIN.test(p))) return prepare(commits[0]);
+  const onBase = git("rev-parse", `${commits[0]}^`).trim() === base;
+  if (onBase && first.length > 0 && first.every((p) => PIN.test(p))) return prepare(commits[0]);
   const dir = prepare(base);
   for (const p of pins) put(dir, p);
   const run = (...a) => execFileSync("git", ["-C", dir, ...a], { stdio: "ignore" });
