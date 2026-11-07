@@ -33,7 +33,6 @@ import {
   type Envelope,
   type Rig,
   androidDriver,
-  iosDriver,
   taggedAndroidDriver,
   sleep,
   setUp,
@@ -306,21 +305,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("a runner reads the device address from the allocate reply", async () => {
-    const rig: Rig = await setUp({ drivers: (clock) => [iosDriver(clock), androidDriver(clock)] });
-    for (const [n, platform, field] of [
-      [1, "ios", "udid"],
-      [2, "android", "serial"],
-    ] as const) {
-      const answer = await envelopeOf(await allocate(rig, n, { platform }));
-      expect(answer.result).toMatchObject({
-        ok: true,
-        data: { lease: { device: { [field]: idOf(rig, n) } } },
-      });
-      expect(idOf(rig, n)).not.toBe("undefined");
-    }
-  });
-
   it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false, udid or serial }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig: Rig = await setUp({
       drivers: (clock) => [
@@ -372,6 +356,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
         ...device,
         ["platform" in extra && extra.platform === "android" ? "serial" : "udid"]: idOf(rig, n),
       });
+      expect(idOf(rig, n)).not.toBe("undefined");
       expect(result.data.lease["deviceKey"]).toBe(`key-${n}`);
       expect(result.data.device).toMatchObject({ id: expect.any(String) });
     }

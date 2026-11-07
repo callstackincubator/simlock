@@ -703,7 +703,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, { command, ok: true });
   }
 
-  // why: agent-device ends the lease a `close`, or a `batch` with a close step, closes with, and names it in the reply's `endedLeases` instead of waiting for a release.
+  // why: agent-device names a plain lease ended by close in `endedLeases` instead of waiting for a release.
   #endOnClose(
     command: string,
     params: Record<string, unknown>,
