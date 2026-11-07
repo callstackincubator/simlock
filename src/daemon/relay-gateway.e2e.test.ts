@@ -520,7 +520,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     };
   }
 
-  // why: a loaded machine can hand a request to the worker after one sent later; holding a connection's bytes back makes that order certain.
+  // why: a loaded machine can hand a request to the worker late; holding a connection's bytes back makes the upload reach the worker late, so the test must wait for it before it probes the name.
   async function lateProxy(port: number, holdMs: number) {
     const sockets = new Set<{ destroy: () => void }>();
     const server = createServer((client) => {
@@ -619,7 +619,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(channelsOpened()).toBe(opened);
   }, 120_000);
 
-  it("through a gateway, a PUT of a name whose upload is still arriving gets 409 FILE_BUSY, even when that upload reaches the worker after the PUT was sent", async () => {
+  it("through a gateway, a PUT of a name whose upload is still arriving gets 409 FILE_BUSY, once that upload has reached the worker late and is still arriving", async () => {
     const rig = await fileRig({ fileBytes: 32 * MIB, leaseBytes: 512 * MIB, silenceMs: 330_000 });
     const late = await lateProxy(rig.port, 500);
     const busy = new TransformStream<Uint8Array>();
