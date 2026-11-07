@@ -41,6 +41,7 @@ export class ReleaseScopeRecord {
     }
   }
 
+  // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
   folderNames(leaseId: string): readonly string[] {
     const served = this.#served.get(leaseId);
     if (served === undefined) return [];
