@@ -3,6 +3,7 @@
 How the web console looks. The reference is the set of renders in
 [console-redesign/renders/](console-redesign/renders/) and the prototype that
 draws them, [console-redesign/prototype/d.mjs](console-redesign/prototype/d.mjs):
+apart from the explicit Baselines reference amendment below,
 when this guide and a render disagree, the render wins and this guide gets
 fixed. The tokens live in `ui/src/ds/foundation.css`; change this guide and
 that file together. The website and every other brand visual follow
@@ -240,3 +241,20 @@ none under `prefers-reduced-motion`; charts never animate. Voice: short plain
 sentences, the CLI's names, verbs on buttons, no exclamation marks, no
 subtitles that explain, no key-hint decoration, an empty page says so in one
 line.
+
+
+## Baselines reference amendment
+
+Use All / Stale / Ready and an equally styled **Prepare baseline** link to
+[baseline preparation instructions](https://callstackincubator.github.io/simlock/docs/worker/baselines)
+in place of the reference's Building filter and Build baseline action.
+Only ready/stale list data is supported (`src/contract/device-schemas.ts:119-135`);
+the harness replaces the fictitious building row with a ready row as a DATA
+difference, preserving row/pill geometry. The existing save operation ends a
+held lease (`src/http/admin-declarations.ts:158-174`); this presentation adds
+no save workflow or progress field. Keep original render files unchanged.
+The stage-5 PR records the DATA substitution and filter/link amendment with
+paired images; every other reference geometry requirement still applies.
+`e2e/console/baselines.spec.ts` covers All/Stale/Ready, search/paging and the
+keyboard-accessible preparation link without a save request; the render
+harness covers ready/stale rows. (decided in delivery, pending the maintainer)

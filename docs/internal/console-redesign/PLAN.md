@@ -2,7 +2,8 @@
 
 Rebuild the console to the look in [DESIGN.md](../DESIGN.md). The reference
 is the renders here, not the words: an agent compares its page with its
-render and stops only when the two differ in data alone.
+render and stops only when the two differ in data alone, apart from the
+explicit Baselines filter/link amendment under stage 5.
 
 | Render                                                   | Page                                  |
 | -------------------------------------------------------- | ------------------------------------- |
@@ -36,7 +37,8 @@ maintainer accepts or adjusts them from a screenshot.
    each page with the fixture data, and writes `current/<page>.png` beside
    this file.
 2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
-   list every difference that is not data: a missing element, a wrong
+   record the explicit stage-5 Baselines filter/link amendment, then
+   list every other difference that is not data: a missing element, a wrong
    size, radius, colour, weight, spacing, alignment, a line that wraps or
    is cut where the render's is not. Fix, rerun, repeat. The fixture data
    differs from the mock data; shape, colour and size do not.
@@ -62,7 +64,11 @@ One agent; everything else waits for it.
 
 - `ui/src/ds/foundation.css`: the tokens, scale, radii and control heights
   of DESIGN.md. Rename or add tokens; delete `--chip` and `--field` (an
-  input's fill is `--bg`).
+  input's fill is `--bg`). Foundation also owns mechanical substitutions in
+  `ui/src/screens/sign-in.css`, `inbox/inbox.css`,
+  `overview/overview.css` and `fleet/screen-panel.css`; no other changes to
+  those screens before their page stages. Verify no retired-token consumers
+  remain and existing pages render in both themes. (decided in delivery, pending the maintainer)
 - Restyle the `ds` primitives every page shares, to the renders' sidebar,
   page header and cards: `sidebar` (floating card, search box, group
   labels, account box, red Inbox badge), the page header (title with
@@ -73,6 +79,13 @@ One agent; everything else waits for it.
   `facts`, `stat` (KPI tile, no sparkline), `status` (pill, dot), `meter`,
   `slots` (cap at ten), `menu`, `drawer`, `confirm-dialog`, `toast`,
   `command-palette` (radii and tokens only).
+- Verify public `DataTable` props in new `ui/src/ds/table.test.tsx`, using
+  the static component seam in `ui/src/ds/menu.test.tsx`: `groupBy` repeats
+  headings across page boundaries without counting them as data rows;
+  `selectedId` marks only its row; `footer="count"` hides pager controls
+  while retaining supplied paging/range/count. Omitted props retain existing
+  paging and row/menu behavior. Extend `e2e/console/long-lists.spec.ts` for
+  existing pager controls and URL state. (decided in delivery, pending the maintainer)
 - New primitives: `pill`, `chip` (agent chip with the known-prefix rule),
   `ring`, `log-row`, `list-row`, `feed-row`, `group-header`, `banner`.
 - `ui/src/model/holder.ts`: `shortHolder(id)` middle ellipsis above 34
@@ -82,7 +95,8 @@ One agent; everything else waits for it.
 - The render harness `e2e/console/renders.spec.ts` with fixture data close
   to the mock data's shape: 8 workers (one with 20 slots, one with a
   `.local` hostname, one disconnected, one drained, one at 91% disk), 14
-  leases with holders of every form, 9 baselines (one stale, one building),
+  leases with holders of every form, 9 baselines (ready and stale only; a ready row substitutes for the
+  reference building row as a DATA difference with identical row/pill geometry),
   an hour of events. Screenshots to `docs/internal/console-redesign/current/`
   (gitignored).
 - Verify: the shell (sidebar, header, one card) against the top-left of
@@ -134,11 +148,27 @@ stays unused.
 
 ### 5. Baselines — `7-baselines.png`
 
-Filter group and search; a grouped table (iOS, Android group rows with count
+All / Stale / Ready filter group and search; a grouped table (iOS, Android group rows with count
 and size) of Baseline (name, model · runtime), Size as text, Worker, Built,
 State (pill, and a stale reason as a muted second line), `⋯`; under it one
 "Disk used by baselines" card, two columns of worker meters relative to each
 disk. No builds chart, no "runtimes without a baseline".
+
+Explicit reference amendment: replace Building with Ready, and the toolbar's
+Build baseline with an equally styled **Prepare baseline** link to the existing
+[baseline preparation instructions](https://callstackincubator.github.io/simlock/docs/worker/baselines).
+The URL follows `website/astro.config.mjs` (base, file paths, sidebar) and
+`website/src/site/content.ts` (site origin and `/simlock` base). Use only
+supported ready/stale statuses; substitute the harness's ready row as DATA
+with unchanged row/pill geometry. `baseline.save` requires a held lease and
+ends it (`src/contract/operations.ts:711-725`,
+`src/http/admin-declarations.ts:158-174`); this stage adds no saving workflow
+or progress wire field. Preserve original render files. Stage 5's PR records
+the DATA substitution and explicit filter/link differences alongside paired
+images; all other reference geometry remains required. Tests in
+`e2e/console/baselines.spec.ts` cover All/Stale/Ready with search and paging,
+the real keyboard-accessible documentation link and absence of a save request;
+the render harness covers the ready/stale substitution. (decided in delivery, pending the maintainer)
 
 ### 6. Activity and the pages without a render — `8-activity.png`
 
@@ -191,3 +221,25 @@ review, stage 7 after their reviews and integration. Delivery rule 15 keeps
 all PRs open and merges the complete stack together. The orchestrator orders
 parallel branches into that stack as reviews pass. All delivery agents use
 GPT 6.1 Sol as the maintainer requested.
+
+
+Foundation runs first on the current committed baseline. Redesign owns the
+WorkerPageBody/DevicesTab/action hunks overlapping #1133 and Warm pool hunks
+overlapping #1145 in stage 2, and DeviceDrawer hunks overlapping #1133 in
+stage 4, throughout this feature. Those product tasks stay drafts and adapt
+afterward through normal merge-forward resolution. #1135/#1146/#1156 are
+future hunk conflicts, not consumed dependencies or prerequisites; their specs
+and claims are unchanged. Existing worker/action and streaming Tests pin the
+retained behavior. (decided in delivery, pending the maintainer)
+
+PR #1256 is not imported into the redesign. Inspected head:
+`54a1dc3b9262fc5f984421d66dac4d7fe008c514`; its streaming/docs overlap does
+not change foundation DS/paths ownership. Foundation edits only its owned
+shared-shell docs. Stage 4 rechecks current merge-base/head at its start and
+resolves actual merged changes: preserve ScreenPanel callable props, current
+four-argument useDeviceScreen callers and any merged optional
+capture-acquisition argument and cancellation ownership. Reconcile an
+extracted renderer rather than discard it; never overwrite that branch.
+Its independent `/screens` route is no functional prerequisite. Stage 4's
+`e2e/console/screen.spec.ts` and `ui/src/state/screen.test.ts` cover retained
+callers, acquisition and cleanup compatibility. (decided in delivery, pending the maintainer)
