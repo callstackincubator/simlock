@@ -1000,7 +1000,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const answer = await allocate(rig, 1);
 
     expect(answer.status).toBe(503);
-    expect((await envelopeOf(answer)).error?.message).toBe(`${notAvailable}${noWorker}`);
+    expect((await envelopeOf(answer)).error).toMatchObject({
+      message: `${notAvailable}${noWorker}`,
+      data: { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true },
+    });
     expect(await fleetLeases(rig)).toEqual([]);
     expect(await workerLeases(member)).toEqual([]);
     expect(member.fake.requests).toEqual([]);
@@ -1043,7 +1046,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const answer = await envelopeOf(await allocate(rig, 1));
 
-    expect(answer.error?.message).toBe(`${notAvailable}${holderCannot}`);
+    expect(answer.error).toMatchObject({
+      message: `${notAvailable}${holderCannot}`,
+      data: { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true },
+    });
     await expect.poll(async () => (await workerLeases(member)).length).toBe(0);
     expect(await fleetLeases(rig)).toEqual([]);
     expect(allocatesReceived(member)).toEqual([]);
