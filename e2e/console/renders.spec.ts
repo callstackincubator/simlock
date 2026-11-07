@@ -13,7 +13,7 @@ const viewports = [
   { width: 390, height: 844 },
 ];
 
-test("fresh captures allow only bounded RGB raster differences and exact visible state", async ({
+test("same-source captures use fixed perceptual matching and exact visible state", async ({
   page,
 }) => {
   const images = await page.evaluate(() => {
@@ -29,21 +29,51 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
       context.putImageData(image, 0, 0);
       return canvas.toDataURL("image/png").split(",")[1]!;
     };
-    return [make(0, 0), make(32, 1), make(33, 1), make(1, 2), make(0, 0, 254), make(0, 0, 255, 39)];
+    return [make(0, 0), make(33, 1), make(1, 100), make(0, 0, 254), make(0, 0, 255, 39)];
   });
-  const [base, within, tooMany, tooLarge, alpha, dimensions] = images.map((image) =>
+  const [base, below, above, alpha, dimensions] = images.map((image) =>
     Buffer.from(image, "base64"),
   );
   for (const [label, image, expected] of [
     ["identical", base, true],
-    ["32 pixels at one level", within, true],
-    ["33 pixels", tooMany, false],
-    ["two RGB levels", tooLarge, false],
+    ["33 below-threshold flat pixels", below, true],
+    ["one above-threshold flat pixel", above, false],
     ["alpha change", alpha, false],
     ["dimensions", dimensions, false],
   ] as const) {
     expect(compareCaptures(base!, image!, "visible", "visible").matches, label).toBe(expected);
   }
+  expect(
+    compareCaptures(base!, above!, "visible", "visible").matcherPixels,
+    "one flagged pixel",
+  ).toBe(1);
+  const edges = await page.evaluate(() => {
+    const make = (center: number) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 7;
+      const context = canvas.getContext("2d")!;
+      const image = context.createImageData(7, 7);
+      for (let y = 0; y < 7; y += 1) {
+        for (let x = 0; x < 7; x += 1) {
+          const value = x < 3 ? 0 : x > 3 ? 255 : y === 3 ? center : 60 + y * 10;
+          image.data.set([value, value, value, 255], (y * 7 + x) * 4);
+        }
+      }
+      context.putImageData(image, 0, 0);
+      return canvas.toDataURL("image/png").split(",")[1]!;
+    };
+    return [make(100), make(180)];
+  });
+  const edge = compareCaptures(
+    Buffer.from(edges[0]!, "base64"),
+    Buffer.from(edges[1]!, "base64"),
+    "visible",
+    "visible",
+  );
+  expect(edge.changedPixels, "AA raw changed pixels").toBe(1);
+  expect(edge.recognizedEdgePixels, "recognized AA edge").toBe(1);
+  expect(edge.matcherPixels, "AA is not matcher-flagged").toBe(0);
+  expect(edge.matches, "AA edge accepted").toBe(true);
   for (const [label, left, right, changedPixels, maxRgbDelta, matches] of [
     [
       "half-transparent one-level RGB",
@@ -59,7 +89,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWMQSTnBCAADEgFCNWn++AAAAABJRU5ErkJggg==",
       1,
       10,
-      false,
+      true,
     ],
     [
       "transparent RGB",
@@ -67,7 +97,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWPQsAlgAAAB+QC1yr0tZgAAAABJRU5ErkJggg==",
       1,
       20,
-      false,
+      true,
     ],
   ] as const) {
     const result = compareCaptures(
@@ -79,7 +109,7 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
     expect(result.changedPixels, `${label} changed pixels`).toBe(changedPixels);
     expect(result.maxRgbDelta, `${label} raw RGB delta`).toBe(maxRgbDelta);
     expect(result.alphaChanged, `${label} alpha`).toBe(false);
-    expect(result.matches, `${label} raster budget`).toBe(matches);
+    expect(result.matches, `${label} fixed matcher`).toBe(matches);
   }
   expect(compareCaptures(base!, base!, "visible", "changed").matches, "visible state").toBe(false);
   await page.setContent(
@@ -449,6 +479,8 @@ for (const entry of cases) {
               ).toEqual({
                 dimensionsMatch: true,
                 changedPixels: 0,
+                recognizedEdgePixels: 0,
+                matcherPixels: 0,
                 maxRgbDelta: 0,
                 alphaChanged: false,
                 matches: true,

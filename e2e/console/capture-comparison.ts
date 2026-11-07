@@ -56,6 +56,8 @@ export function compareCaptures(
 ): {
   matches: boolean;
   changedPixels: number;
+  recognizedEdgePixels: number;
+  matcherPixels: number;
   maxRgbDelta: number;
   alphaChanged: boolean;
   dimensionsMatch: boolean;
@@ -86,6 +88,8 @@ export function compareCaptures(
   return {
     dimensionsMatch,
     changedPixels,
+    recognizedEdgePixels: 0,
+    matcherPixels: 0,
     maxRgbDelta,
     alphaChanged,
     matches:
