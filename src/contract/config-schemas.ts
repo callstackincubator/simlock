@@ -96,6 +96,7 @@ export const configSchema = z.object({
       maxRetryBackoffMs: z.number(),
     }),
   }),
+  devices: z.object({ deletedRetentionMs: z.number() }),
   lease: z.object({
     defaultTtlMs: z.number(),
     maxTtlMs: z.number(),

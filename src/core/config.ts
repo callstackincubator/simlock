@@ -308,6 +308,13 @@ export interface Config {
       readonly maxRetryBackoffMs: number;
     };
   };
+  readonly devices: {
+    /**
+     * why: how long a `deleted` device record stays in `state.db` and in `status.get`, counted
+     * from its deletion. At least `lease.requestRetentionMs`: a granted request names its device.
+     */
+    readonly deletedRetentionMs: number;
+  };
   readonly lease: {
     /**
      * ADR 0004 §4: the TTL applied to a lease whose `lease.request` carried no `ttlMs` -- that
@@ -1000,6 +1007,7 @@ function defaultConfig(
         maxRetryBackoffMs: 5 * 60_000,
       },
     },
+    devices: { deletedRetentionMs: DEFAULT_DEVICES_DELETED_RETENTION_MS },
     lease: {
       defaultTtlMs: DEFAULT_LEASE_TTL_MS,
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
