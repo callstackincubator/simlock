@@ -63,7 +63,7 @@ export async function compareCaptures(
 }> {
   const stateMatches = JSON.stringify(firstState) === JSON.stringify(secondState);
   const pixels = await page.evaluate(
-    async ([a, b]) => {
+    async ([a, b]: [string, string]) => {
       const decode = async (encoded: string) => {
         const binary = atob(encoded);
         const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
