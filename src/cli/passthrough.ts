@@ -19,9 +19,25 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
     env: { ...process.env, ...command.env },
     stdio: "inherit",
   });
+  // why: inherited stdio does not carry a signal sent only to this process; without a
+  // forward the CLI dies on SIGINT/SIGTERM and leaves the tool (a recordVideo that still has to
+  // flush) running unattended. The CLI stays until the tool's own close decides the exit code.
+  const signals = ["SIGINT", "SIGTERM"] as const;
+  const handlers = signals.map((signal) => {
+    const handler = () => child.kill(signal);
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  const detach = () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  };
   return new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
+    child.once("error", (error) => {
+      detach();
+      reject(error);
+    });
     child.once("close", (code, signal) => {
+      detach();
       // A child killed by a signal has no exit code; report it the way a shell does, so a
       // passthrough interrupted with ^C is distinguishable from one that simply failed.
       if (code !== null) resolve(code);
