@@ -518,20 +518,20 @@ for (const entry of cases) {
                 await expect(target, label).toHaveCount(1);
                 const before = await visibleState(page);
                 const previous = await target.evaluate(
-                  (element, [name, value]) => {
+                  (element, { name, value }) => {
                     const old = element.getAttribute(name);
                     element.setAttribute(name, value);
                     return old;
                   },
-                  [attribute, replacement],
+                  { name: attribute, value: replacement },
                 );
                 const after = await visibleState(page);
                 await target.evaluate(
-                  (element, [name, value]) => {
-                    if (value === null) element.removeAttribute(name!);
-                    else element.setAttribute(name!, value);
+                  (element, { name, value }) => {
+                    if (value === null) element.removeAttribute(name);
+                    else element.setAttribute(name, value);
                   },
-                  [attribute, previous],
+                  { name: attribute, value: previous },
                 );
                 const mutated = compareCaptures(first.image, first.image, before, after);
                 expect(mutated.changedPixels, `${label} uses identical capture pixels`).toBe(0);
