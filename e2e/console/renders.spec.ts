@@ -46,6 +46,44 @@ test("fresh captures allow only bounded RGB raster differences and exact visible
       expected,
     );
   }
+  for (const [label, left, right, changedPixels, maxRgbDelta, matches] of [
+    [
+      "half-transparent one-level RGB",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNIEfnQAAAEMQHp56QzagAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNIFfnQAAAENQHqJEibAAAAAABJRU5ErkJggg==",
+      1,
+      1,
+      true,
+    ],
+    [
+      "nearly transparent ten-level RGB",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWPgSjnBCAAC6gE4rxOTiwAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWMQSTnBCAADEgFCNWn++AAAAABJRU5ErkJggg==",
+      1,
+      10,
+      false,
+    ],
+    [
+      "transparent RGB",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWMQ0bBhAAABRQB5yEL59wAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWPQsAlgAAAB+QC1yr0tZgAAAABJRU5ErkJggg==",
+      1,
+      20,
+      false,
+    ],
+  ] as const) {
+    const result = await compareCaptures(
+      page,
+      Buffer.from(left, "base64"),
+      Buffer.from(right, "base64"),
+      "visible",
+      "visible",
+    );
+    expect(result.changedPixels, `${label} changed pixels`).toBe(changedPixels);
+    expect(result.maxRgbDelta, `${label} raw RGB delta`).toBe(maxRgbDelta);
+    expect(result.alphaChanged, `${label} alpha`).toBe(false);
+    expect(result.matches, `${label} raster budget`).toBe(matches);
+  }
   expect(
     (await compareCaptures(page, base!, base!, "visible", "changed")).matches,
     "visible state",
