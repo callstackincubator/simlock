@@ -85,7 +85,7 @@ describe("tool-guard.mjs", () => {
     "pnpm test:changed",
     "pnpm exec vitest run --project unit src/a.test.ts",
     "pnpm test:e2e e2e/http-api.test.ts",
-    "pnpm test:console --project=chromium e2e/console/leases.spec.ts",
+    "pnpm test:console --project=chromium e2e/console/sign-in.spec.ts",
     'git commit -qm "run pnpm check in CI"',
     'git commit -m "chore(fallow): remove four stale suppressions"',
     'gh pr edit 5 --title "chore(fallow): x"',

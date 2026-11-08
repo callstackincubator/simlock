@@ -28,8 +28,8 @@ not component code: copy its values, not its markup.
 Foundation captures the existing pages, not the later redesigned states.
 `current/1-overview.png`, `2-fleet.png`, `3-worker.png`, `5-leases.png`
 and `8-activity.png` map to their numbered references. The baseline for
-`4-streaming.png` is `current/4-device-screen-drawer.png`, with the existing
-Screen tab; `6-leases-selected.png` maps to `current/6-lease-drawer.png`;
+`4-streaming.png` is `current/4-streaming.png`
+(`e2e/console/render-cases/screen.ts:1`), with the existing Screen tab; `6-leases-selected.png` maps to `current/6-lease-drawer.png`;
 `7-baselines.png` maps to the existing ready/stale table in
 `current/7-baselines.png`. These drawer and table images are baseline evidence,
 not approval of the later page geometry. Stages 3, 4 and 5 replace their own
@@ -105,8 +105,8 @@ One agent; everything else waits for it.
   headings across page boundaries without counting them as data rows;
   `selectedId` marks only its row; `footer="count"` hides pager controls
   while retaining supplied paging/range/count. Omitted props retain existing
-  paging and row/menu behavior. Extend `e2e/console/long-lists.spec.ts` for
-  existing pager controls and URL state. (decided in delivery, pending the maintainer)
+  paging and row/menu behavior. Existing pager controls and URL state are
+  proved in `ui/src/screens/leases/leases-paging.dom.test.tsx` (`:73`, `:106`). (decided in delivery, pending the maintainer)
 - New primitives: `pill`, `chip` (agent chip with the known-prefix rule),
   `ring`, `log-row`, `list-row`, `feed-row`, `group-header`, `banner`.
 - `ui/src/model/holder.ts`: `shortHolder(id)` middle ellipsis above 34
@@ -129,8 +129,9 @@ One agent; everything else waits for it.
   labels, `#6f6f79` on `#141416` is 3.702:1; `#8e8e97` is 5.665:1.
   Record every other necessary foreground or stroke change with selector,
   before/after colours, ratios and paired images. Never change original PNGs.
-  Stage 7 removes the temporary `ui/src/state/navigation.ts` Fallow entry
-  after real page imports reach the facade. (decided in delivery, pending the maintainer)
+  The temporary `ui/src/state/navigation.ts` Fallow entry is gone: real page
+  imports reach the facade (`ui/src/screens/fleet/device-drawer.tsx:5`), and
+  `.fallowrc.json:30` lists no such entry. (decided in delivery, pending the maintainer)
 
 ### 1. Overview — `1-overview.png`
 

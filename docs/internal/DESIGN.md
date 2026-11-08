@@ -352,6 +352,6 @@ held lease (`src/http/admin-declarations.ts:158-174`); this presentation adds
 no save workflow or progress field. Keep original render files unchanged.
 The stage-5 PR records the DATA substitution and filter/link amendment with
 paired images; every other reference geometry requirement still applies.
-`e2e/console/baselines.spec.ts` covers All/Stale/Ready, search/paging and the
-keyboard-accessible preparation link without a save request; the render
-harness covers ready/stale rows. (decided in delivery, pending the maintainer)
+`ui/src/screens/baselines/baselines.dom.test.tsx` covers All/Stale/Ready,
+search/paging (`:143`) and the preparation link without a save request
+(`:185`); the render harness covers ready/stale rows. (decided in delivery, pending the maintainer)
