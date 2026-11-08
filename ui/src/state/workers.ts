@@ -41,13 +41,10 @@ import { useApi } from "./services";
 
 export type { LogEventRow } from "../model/event-list";
 export type {
-  CapabilityRow,
   FleetRow,
   DeviceDrawerTab,
   DeviceRow,
-  FigureCard,
   InstallRow,
-  PlatformCard,
   WarmRow,
   WorkerFilter,
   WorkerPage,
@@ -56,7 +53,7 @@ export type {
 } from "../model/worker-page";
 // why: a screen's test builds the view model the same way the hook does, and a screen may import
 // no model, so the builders pass through here.
-export { fleetRow, WORKER_FILTERS, workerPageOf, workerRow } from "../model/worker-page";
+export { fleetRow, WORKER_FILTERS, workerPageOf } from "../model/worker-page";
 export type { WorkerView } from "../model/workers";
 
 // why: the row's ⋯ menu reads the one list of actions a worker offers (ADR 0037 §3); on a single host

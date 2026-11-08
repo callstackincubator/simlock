@@ -38,27 +38,6 @@ export function Slots(props: {
   );
 }
 
-const LEGEND: readonly { readonly kind: SlotKind; readonly word: string }[] = [
-  { kind: "leased", word: "leased" },
-  { kind: "ready", word: "ready" },
-  { kind: "busy", word: "booting" },
-  { kind: "broken", word: "quarantined" },
-  { kind: "free", word: "free" },
-];
-
-export function SlotLegend() {
-  return (
-    <ul className="slot-legend" aria-hidden="true">
-      {LEGEND.map((entry) => (
-        <li key={entry.kind}>
-          <span className={`slot slot-${entry.kind}`} />
-          {entry.word}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 export type ShareKind = SlotKind | "drained" | "shutdown" | "offline";
 
 export interface Share {

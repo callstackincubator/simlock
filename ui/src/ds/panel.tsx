@@ -28,28 +28,6 @@ export function Panel(props: {
   );
 }
 
-export function Card(props: { readonly className?: string; readonly children: ReactNode }) {
-  const { children, className } = props;
-  return <div className={className === undefined ? "card" : `card ${className}`}>{children}</div>;
-}
-
-export function Grid(props: {
-  readonly min?: "sm" | "md" | "lg";
-  readonly children: ReactNode;
-  readonly label?: string;
-}) {
-  const { children, label, min = "md" } = props;
-  return (
-    <div
-      className={`grid grid-${min}`}
-      role={label === undefined ? undefined : "group"}
-      aria-label={label}
-    >
-      {children}
-    </div>
-  );
-}
-
 // why: the main panel takes two shares and its neighbour one, and they stack on a phone; a row
 // laid out here keeps every page's proportions the same.
 export function Row(props: { readonly children: ReactNode; readonly even?: boolean }) {
