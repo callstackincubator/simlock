@@ -111,7 +111,7 @@ export async function startHostWithLease(
   }
 }
 
-export function every(pages: Pages): readonly string[] {
+function every(pages: Pages): readonly string[] {
   return [
     ...pages.views.map((view) => view.path),
     pages.worker,
@@ -123,12 +123,12 @@ export function every(pages: Pages): readonly string[] {
 }
 
 // why: a lease opens in a pane beside the table, a drawer below 1280px wide, and every other item in a drawer.
-export function inspector(page: Page): Locator {
+function inspector(page: Page): Locator {
   return page.getByRole("region", { exact: true, name: "Lease" }).or(page.getByRole("dialog"));
 }
 
 // why: an open drawer hides the page behind it from assistive technology.
-export function opensDrawer(path: string): boolean {
+function opensDrawer(path: string): boolean {
   return /^\/(leases|queue|activity|inbox)\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
 }
 

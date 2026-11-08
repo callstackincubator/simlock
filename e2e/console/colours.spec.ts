@@ -18,9 +18,11 @@ async function openFleet(page: Page, url: string, token: string): Promise<void> 
   await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 }
 
-// why: a worker is a card or a tile on the Fleet page, found by the link that carries its name.
+// why: a worker is a row of the Fleet table, found by the link that carries its name.
 function row(page: Page, name: string): Locator {
-  return page.locator(".fleet-card").filter({ has: page.getByRole("link", { exact: true, name }) });
+  return page
+    .locator(".fleet-table tbody tr:not(.table-group)")
+    .filter({ has: page.getByRole("link", { exact: true, name }) });
 }
 
 function figures(page: Page): Locator {
@@ -145,7 +147,7 @@ async function expectStatusIndicatorColours(
 }
 
 test.describe("colours and sizes the style engine decides", () => {
-  test("slot squares are 16px tall with a 4px gap, and the meter above ten slots is 4px tall", async ({
+  test("slot squares are 12px tall with a 3px gap, and the meter above ten slots is 4px tall", async ({
     gateway,
     page,
   }) => {
@@ -158,8 +160,8 @@ test.describe("colours and sizes the style engine decides", () => {
     await openFleet(page, gateway.url, gateway.tokens.operator);
 
     const ten = row(page, "ten").getByRole("img");
-    await expect(ten).toHaveCSS("gap", "4px");
-    await expect(ten.locator(".slot").first()).toHaveCSS("height", "16px");
+    await expect(ten).toHaveCSS("gap", "3px");
+    await expect(ten.locator(".slot").first()).toHaveCSS("height", "12px");
     await expect(row(page, "twenty").locator(".load-bar")).toHaveCSS("height", "4px");
   });
 
@@ -317,7 +319,7 @@ test.describe("colours and sizes the style engine decides", () => {
         );
         await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
         await visit(page, host, "/fleet");
-        await expect(page.locator(".fleet-card").first()).toHaveCSS("border-radius", "10px");
+        await expect(page.locator(".table-card").first()).toHaveCSS("border-radius", "10px");
         await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
         await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
         await expect(page.locator(".search-field-wrap .icon")).toBeVisible();

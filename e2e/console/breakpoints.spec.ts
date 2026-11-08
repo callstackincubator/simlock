@@ -483,22 +483,24 @@ test("a worker page has no breadcrumb, and its Warm pool tab draws a 1px --borde
   }
 });
 
-test("a fleet tile's ⋯ lies inside the tile with its 14px padding to the right edge, and an Inbox row's button has 8px above and below", async ({
+test("a Fleet row's ⋯ lies inside the row with its 10px padding to the right edge, and an Inbox row's button has 8px above and below", async ({
   page,
 }) => {
   const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
   try {
     const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
     const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
-    // why: this machine's own disk or CPU may already be over a threshold, which would turn the
-    // tile into a card with no ⋯; the worker is listed with no load reading instead.
+    // why: this machine's own disk or CPU may already be over a threshold, which would put the row
+    // under Needs attention; the worker is listed with no load reading instead.
     await stubJson(page, "/v1/workers", () => ({
       workers: [staticWorker({ id, label: "layout-a", load: false })],
     }));
     await openPage(page, fleet.gateway, "/fleet", "Fleet", false);
-    const menu = page.locator(".fleet-tile").getByRole("button", { name: /^Actions for/ });
+    const menu = page
+      .locator(".fleet-table tbody tr")
+      .getByRole("button", { name: /^Actions for/ });
     const box = await menu.evaluate((button) => {
-      const tile = button.closest(".fleet-tile")?.getBoundingClientRect();
+      const tile = button.closest("tr")?.getBoundingClientRect();
       const own = button.getBoundingClientRect();
       return {
         left: own.left,
@@ -508,7 +510,7 @@ test("a fleet tile's ⋯ lies inside the tile with its 14px padding to the right
       };
     });
     expect(box.left).toBeGreaterThanOrEqual(box.tileLeft);
-    expect(box.tileRight - box.right).toBe(15);
+    expect(box.tileRight - box.right).toBe(10);
 
     expect((await fleet.gateway.cli(["worker", "drain", id])).code).toBe(0);
     await page.unrouteAll({ behavior: "wait" });
@@ -817,7 +819,7 @@ test("every page and open surface fits 360px wide with the sidebar folded into a
     expect(await hasHorizontalScroll(page)).toBe(false);
 
     await page.goto(new URL(pages.worker, host.url).href);
-    await expect(page.locator(".worker-device").first()).toBeVisible();
+    await expect(page.getByRole("tabpanel").locator("table tbody tr").first()).toBeVisible();
     for (const tab of ["Warm pool", "Devices"]) {
       await page.getByRole("tab", { name: tab }).click();
       expect(await hasHorizontalScroll(page), tab).toBe(false);

@@ -500,7 +500,7 @@ export async function disposeFleet(
   await fleet.gateway.dispose(options);
 }
 
-export const OLD_PROTOCOL = { max: 3, min: 1 } as const;
+const OLD_PROTOCOL = { max: 3, min: 1 } as const;
 
 export async function joinOldWorker(
   gateway: RunningDaemon,
@@ -706,6 +706,7 @@ export const NAV = [
   { label: "Baselines", path: "/baselines" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
+  { label: "Settings", path: "/settings" },
 ] as const;
 
 export const NAV_LABELS = NAV.map((entry) => entry.label);

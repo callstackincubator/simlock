@@ -388,7 +388,7 @@ test.describe("keyboard and focus in a real browser", () => {
         await follow(
           page,
           page
-            .locator(".fleet-card")
+            .locator(".fleet-table tbody tr:not(.table-group)")
             .filter({ has: page.getByRole("link", { exact: true, name: workerId }) })
             .getByRole("link")
             .first(),
