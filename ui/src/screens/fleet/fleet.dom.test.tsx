@@ -22,8 +22,24 @@ function load(cpu: number, memory: number, disk: number): NonNullable<WorkerView
   };
 }
 
-function cardOf(name: string): HTMLElement {
-  return screen.getByRole("link", { name }).closest("article") as HTMLElement;
+function withoutLeases(view: WorkerView): WorkerView {
+  const { leases, ...rest } = view;
+  void leases;
+  return rest;
+}
+
+// why: a worker is a row of the Fleet table, found by the link that carries its name.
+function rowOf(name: string): HTMLElement {
+  return screen.getByRole("link", { name }).closest("tr") as HTMLElement;
+}
+
+// why: the table's rows in order, each read as its text, group headings among them.
+function rowTexts(): readonly string[] {
+  const table = screen.getByRole("table");
+  return within(table)
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.textContent ?? "");
 }
 
 function ofWorkers(workers: readonly WorkerView[], path = "/fleet") {
@@ -61,11 +77,11 @@ describe("the Fleet page", () => {
     );
     await screen.findByRole("link", { name: "zero" });
 
-    expect(within(cardOf("zero")).queryByRole("img")).not.toBeInTheDocument();
-    expect(within(cardOf("zero")).getAllByText("—")).toHaveLength(3);
+    expect(within(rowOf("zero")).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(rowOf("zero")).getAllByText("—")).toHaveLength(3);
 
-    const ten = within(cardOf("ten")).getByRole("img", {
-      name: "iOS: 2 leased, 1 absent, 1 quarantined, 6 free",
+    const ten = within(rowOf("ten")).getByRole("img", {
+      name: "2 leased, 1 absent, 1 quarantined, 6 free",
     });
     expect(ten).toBeVisible();
     expect(ten).toHaveTextContent("");
@@ -73,9 +89,9 @@ describe("the Fleet page", () => {
     expect(within(ten).getAllByTitle("iPhone 16 18.4, absent")).toHaveLength(1);
     expect(within(ten).getAllByTitle("iPhone 16 18.4, quarantined")).toHaveLength(1);
     expect(ten.querySelector("[style*='--load-bar']")).toBeNull();
-    expect(within(cardOf("ten")).getAllByText("—")).toHaveLength(3);
+    expect(within(rowOf("ten")).getAllByText("—")).toHaveLength(3);
 
-    const twenty = within(cardOf("twenty")).getByRole("img", {
+    const twenty = within(rowOf("twenty")).getByRole("img", {
       name: "2 leased, 1 absent, 1 quarantined, 16 free",
     });
     expect(twenty).toBeVisible();
@@ -83,10 +99,10 @@ describe("the Fleet page", () => {
     expect(within(twenty).queryAllByTitle(/./)).toHaveLength(0);
     expect(twenty.querySelectorAll("[style*='--load-bar']")).toHaveLength(1);
     expect(twenty.querySelector("[style*='--load-bar']")).toHaveStyle("--load-bar: 10%");
-    expect(within(cardOf("twenty")).getAllByText("—")).toHaveLength(3);
+    expect(within(rowOf("twenty")).getAllByText("—")).toHaveLength(3);
   });
 
-  it("shows every worker as a card or a tile with its name, state word, slots and leases, and the amended Add worker link", async () => {
+  it("shows every worker as a row of one grouped table with its name, state word, slots and leases, and the amended Add worker link", async () => {
     ofWorkers([
       worker({
         devices: [device({ id: "dev_a", state: "leased" })],
@@ -104,35 +120,43 @@ describe("the Fleet page", () => {
         leases: [],
         load: load(12, 50, 40),
       }),
-      worker({
-        connection: "incompatible",
-        id: "wrk_old",
-        label: "old-worker",
-        lastSeenAt: NOW,
-        protocol: { gateway: { max: 77, min: 77 }, worker: { max: 1, min: 1 } },
-      }),
+      // why: the gateway cannot read an incompatible worker's leases, so its answer has none.
+      withoutLeases(
+        worker({
+          connection: "incompatible",
+          id: "wrk_old",
+          label: "old-worker",
+          lastSeenAt: NOW,
+          protocol: { gateway: { max: 77, min: 77 }, worker: { max: 1, min: 1 } },
+        }),
+      ),
     ]);
     await screen.findByRole("link", { name: "worker-a" });
 
-    expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(rowTexts()).toHaveLength(5);
     expect(screen.getByRole("link", { name: "Add worker" })).toHaveAttribute(
       "href",
       "https://callstackincubator.github.io/simlock/docs/gateway/joining-workers",
     );
-    expect(screen.getByRole("region", { name: "Needs attention" })).toHaveTextContent("old-worker");
-    const a = cardOf("worker-a");
-    for (const text of ["worker-a", "macOS 26.0", "1 lease", "1 / 6"]) {
+    const order = rowTexts();
+    expect(order[0]).toBe("Needs attention 2");
+    expect(order.slice(1, 3).join(" ")).toMatch(/old-worker.*worker-b|worker-b.*old-worker/);
+    expect(order[3]).toBe("Healthy 1");
+    expect(order[4]).toContain("worker-a");
+    const a = rowOf("worker-a");
+    for (const text of ["worker-a", "macOS 26.0", "12%", "50%", "40%"]) {
       expect(a).toHaveTextContent(text);
     }
-    for (const text of ["12%", "50%", "40%"]) expect(a).toHaveTextContent(text);
-    const b = cardOf("worker-b");
-    for (const text of ["worker-b", "macOS 26.0", "0 leases", "drained"]) {
-      expect(b).toHaveTextContent(text);
-    }
-    const old = cardOf("old-worker");
+    expect(a).not.toHaveTextContent("drained");
+    expect(within(a).getByRole("cell", { name: "1" })).toBeVisible();
+    const b = rowOf("worker-b");
+    for (const text of ["worker-b", "macOS 26.0", "drained"]) expect(b).toHaveTextContent(text);
+    expect(within(b).getByRole("cell", { name: "0" })).toBeVisible();
+    const old = rowOf("old-worker");
     expect(old).toHaveTextContent("incompatible");
-    expect(within(old).getAllByText("—")).toHaveLength(3);
-    for (const card of [a, b]) expect(within(card).getAllByRole("img").length).toBeGreaterThan(0);
+    expect(within(old).getAllByText("—")).toHaveLength(4);
+    expect(within(old).queryByRole("img")).not.toBeInTheDocument();
+    for (const row of [a, b]) expect(within(row).getAllByRole("img").length).toBeGreaterThan(0);
   });
 
   it("the Issues and Busy filters keep the workers they name", async () => {
@@ -213,7 +237,7 @@ describe("Fleet worker actions", () => {
       routes: { "/v1/workers": { body: { workers: [solo] } } },
     });
     await screen.findByRole("link", { name: "solo" });
-    const card = cardOf("solo");
+    const card = rowOf("solo");
 
     await view.user.pointer({ keys: "[MouseRight]", target: card });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -246,7 +270,7 @@ describe("Fleet worker actions", () => {
       },
     });
     await screen.findByRole("link", { name: "drain-a" });
-    expect(cardOf("drain-a")).not.toHaveTextContent("drained");
+    expect(rowOf("drain-a")).not.toHaveTextContent("drained");
 
     await view.user.click(screen.getByRole("button", { name: "Actions for drain-a" }));
     await view.user.click(screen.getByRole("menuitem", { name: "Drain" }));
@@ -256,12 +280,12 @@ describe("Fleet worker actions", () => {
     ).toBeVisible();
     expect(screen.queryByRole("alertdialog", { name: /\?$/ })).not.toBeInTheDocument();
     announce(view, "worker.drain-started");
-    await waitFor(() => expect(cardOf("drain-a")).toHaveTextContent("drained"));
+    await waitFor(() => expect(rowOf("drain-a")).toHaveTextContent("drained"));
 
     await view.user.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByText("drain-a takes leases again")).toBeVisible();
     announce(view, "worker.drain-ended");
-    await waitFor(() => expect(cardOf("drain-a")).not.toHaveTextContent("drained"));
+    await waitFor(() => expect(rowOf("drain-a")).not.toHaveTextContent("drained"));
   });
 
   it("a stopped worker is removed from its page once its name is typed exactly, and a connected worker offers no Remove", async () => {
@@ -286,8 +310,7 @@ describe("Fleet worker actions", () => {
     expect(screen.queryByRole("menuitem", { name: "Remove worker" })).not.toBeInTheDocument();
     await view.user.keyboard("{Escape}");
 
-    expect(within(cardOf("gone-a")).queryByRole("button")).not.toBeInTheDocument();
-    await view.user.click(within(cardOf("gone-a")).getByRole("link", { name: "Details" }));
+    await view.user.click(within(rowOf("gone-a")).getByRole("link", { name: "gone-a" }));
     await view.user.click(await screen.findByRole("button", { name: "Actions for gone-a" }));
     await view.user.click(screen.getByRole("menuitem", { name: "Remove worker" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Remove gone-a?" });
@@ -373,11 +396,11 @@ describe("Fleet worker actions", () => {
     expect(await screen.findByText("busy-a drained")).toBeVisible();
     announce(view, "worker.drain-started");
     await waitFor(() =>
-      expect(within(cardOf("busy-a")).getByRole("button", { name: "Undrain" })).toBeEnabled(),
+      expect(within(rowOf("busy-a")).getByRole("button", { name: "Undrain" })).toBeEnabled(),
     );
     expect(view.callsTo("POST", "/v1/workers/wrk_b/drain")).toHaveLength(1);
 
-    await view.user.click(within(cardOf("busy-a")).getByRole("link", { name: "Details" }));
+    await view.user.click(within(rowOf("busy-a")).getByRole("link", { name: "busy-a" }));
     const pageButton = await screen.findByRole("button", { name: "Undrain" });
     await view.user.click(pageButton);
     await waitFor(() => expect(view.callsTo("DELETE", "/v1/workers/wrk_b/drain")).toHaveLength(1));

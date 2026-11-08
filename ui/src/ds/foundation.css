@@ -42,6 +42,8 @@
   --accent-text: #b93d0b;
   --selection: #fed7aa;
   --row-selected: #f2e4d9;
+  --row-warn: #fbf3dc;
+  --row-error: #fbe9e6;
 
   /* An agent chip's own tints, as a tool's mark, never a status. */
   --agent-claude-code: #f3e3cf;
@@ -69,8 +71,13 @@
   --pill-error-bg: #f0d7d6;
 }
 
+/* The operator's own theme (Settings) sets data-theme on <html>; with none, the system decides. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0c0c0e;
     --surface: #141416;
     --surface-2: #1b1b1f;
@@ -86,6 +93,8 @@
     --accent-text: #ffa061;
     --selection: #7c2d12;
     --row-selected: #221913;
+    --row-warn: #17140c;
+    --row-error: #19100f;
 
     /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
     --agent-claude-code: #3a2a18;
@@ -112,6 +121,52 @@
     --pill-error-text: #fca5a5;
     --pill-error-bg: #362224;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0c0c0e;
+  --surface: #141416;
+  --surface-2: #1b1b1f;
+  --nav-current: #2a2016;
+  --track: #26262b;
+  --border: #232327;
+  --border-strong: #75757d;
+  --text: #ececea;
+  --text-muted: #8e8e97;
+  --accent: #ff7a1a;
+  --accent-hover: #ff9442;
+  --on-accent: #0e0e0f;
+  --accent-text: #ffa061;
+  --selection: #7c2d12;
+  --row-selected: #221913;
+  --row-warn: #17140c;
+  --row-error: #19100f;
+
+  /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
+  --agent-claude-code: #3a2a18;
+  --agent-claude-code-text: #f5c08a;
+  --agent-codex: #1d2d3b;
+  --agent-codex-text: #9cc4e6;
+  --agent-cursor: #2a2440;
+  --agent-cursor-text: #bdb1ea;
+  --agent-pi: #1c3022;
+  --agent-pi-text: #9ad6ae;
+  --agent-unknown: #24242a;
+  --agent-unknown-text: #b9b9c2;
+
+  --status-ok: #4ade80;
+  --status-warn: #facc15;
+  --status-error: #f87171;
+  --status-idle: #a8a29e;
+  --pill-plain-text: #b9b9c2;
+  --pill-plain-bg: #24242a;
+  --pill-ok-text: #86efac;
+  --pill-ok-bg: #1b2e24;
+  --pill-warn-text: #fde047;
+  --pill-warn-bg: #322c16;
+  --pill-error-text: #fca5a5;
+  --pill-error-bg: #362224;
 }
 
 *,

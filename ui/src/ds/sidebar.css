@@ -272,6 +272,13 @@
   padding: 0;
 }
 
+/* The toggle sits under the wordmark, both centred, so neither crosses the rail's edge. */
+.sidebar-collapsed .sidebar-top {
+  flex-direction: column;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
 .sidebar-toggle {
   flex: none;
   width: 24px;
@@ -286,8 +293,17 @@
 
 .sidebar-collapsed .sidebar-account {
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 4px;
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.sidebar-collapsed .account-detail {
+  display: flex;
+  flex: none;
+  justify-content: center;
 }
 
 .sidebar-collapsed .nav-item {
@@ -304,12 +320,14 @@
 
 .sidebar-collapsed .nav-count {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: 2px;
+  right: 6px;
+  min-width: 14px;
+  height: 14px;
+  margin: 0;
   padding: 0 3px;
-  background: var(--bg);
-  font-size: 10px;
-  line-height: 13px;
+  font-size: 9px;
+  line-height: 14px;
 }
 
 .sidebar-collapsed .nav-count:not(.nav-count-alert) {
@@ -464,11 +482,6 @@
   color: var(--text-muted);
   font-weight: 500;
   text-decoration: none;
-}
-
-.page-note {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
 }
 
 .page-actions {

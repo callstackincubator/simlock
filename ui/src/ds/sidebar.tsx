@@ -167,8 +167,6 @@ function NavGroup(props: NavListProps & { readonly label: string }) {
 
 export function Page(props: {
   readonly title: string;
-  // why: a muted line of plain text that sits beside the title, as a worker's version does.
-  readonly note?: string;
   // why: a page one level down names its parent before its own title, as a link back.
   readonly crumb?: { readonly label: string; readonly to: string };
   // why: the state of what the page is about, drawn beside the title.
@@ -176,7 +174,7 @@ export function Page(props: {
   readonly actions?: ReactNode;
   readonly children: ReactNode;
 }) {
-  const { actions, children, crumb, note, status, title } = props;
+  const { actions, children, crumb, status, title } = props;
   const heading = (
     <h1 tabIndex={-1}>
       {crumb === undefined ? null : (
@@ -193,7 +191,7 @@ export function Page(props: {
   return (
     <div className="page">
       <header className="page-head">
-        {note === undefined && status === undefined ? (
+        {status === undefined ? (
           heading
         ) : (
           <div className="page-title">
@@ -201,7 +199,6 @@ export function Page(props: {
               {heading}
               {status}
             </div>
-            {note === undefined ? null : <span className="page-note">{note}</span>}
           </div>
         )}
         {actions === undefined ? null : <div className="page-actions">{actions}</div>}

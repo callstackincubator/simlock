@@ -13,6 +13,7 @@
 /* A table and its pager sit on a card. Outside a panel the card is drawn; as a page's last part it
  * fills the page's height, so one row still reads as a list. In a panel the panel is the card. */
 .table-card {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -41,6 +42,48 @@
   text-align: left;
   vertical-align: middle;
   overflow-wrap: break-word;
+}
+
+/* A header is a label, never broken inside a word: one line, cut with an ellipsis when its column is
+ * too narrow. */
+.table th {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A table of one-line rows (Fleet, devices, warm pool): a cell is one line, cut with an ellipsis,
+ * and a cell's own text lines (a name and its muted second line) are blocks that do the same. */
+.table-lines td {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-lines td > .cell-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-lines td > .cell-line + .cell-line {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.table-lines .mono {
+  overflow-wrap: normal;
+}
+
+.table .row-warn {
+  background: var(--row-warn);
+}
+
+.table .row-error {
+  background: var(--row-error);
 }
 
 .table th:first-child,
@@ -146,6 +189,11 @@
   .table-wide .table-group td {
     display: block;
   }
+
+  .table-wide.table-lines td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 @media (max-width: 767.98px) {
@@ -209,6 +257,11 @@
 
   .table .table-group td {
     display: block;
+  }
+
+  .table.table-lines td {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 

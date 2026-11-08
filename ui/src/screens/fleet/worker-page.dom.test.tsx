@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { WorkerView } from "../../model/workers";
 import { renderConsole, type Routes } from "../../test/console";
@@ -31,6 +31,15 @@ function fact(label: string): HTMLElement {
   return screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement;
 }
 
+// why: a row of a table, found by the link that carries its name.
+function rowOf(name: string): HTMLElement {
+  return screen.getAllByRole("link", { name })[0]!.closest("tr") as HTMLElement;
+}
+
+function devicesTable(): Promise<HTMLElement> {
+  return screen.findByRole("table");
+}
+
 function ofWorkers(workers: readonly WorkerView[], path: string, extra: Routes = {}) {
   return renderConsole({ path, routes: { "/v1/workers": { body: { workers } }, ...extra } });
 }
@@ -49,7 +58,7 @@ const HOST = worker({
 });
 
 describe("the worker page", () => {
-  it("opens from clicking a worker's name at /fleet/<id> with Fleet / name as the page heading, its state word beside it, the system beneath, and the Devices tab selected", async () => {
+  it("opens from clicking a worker's name at /fleet/<id> with Fleet / name as the page heading, its state word beside it, its system among the host facts, and the Devices tab selected", async () => {
     const view = ofWorkers([worker({ host: MAC, id: "wrk_a b", label: "worker-a" })], "/fleet");
 
     await view.user.click(await screen.findByRole("link", { name: "worker-a" }));
@@ -59,7 +68,8 @@ describe("the worker page", () => {
       await screen.findByRole("heading", { level: 1, name: "Fleet / worker-a" }),
     ).toBeVisible();
     expect(screen.getByText("connected")).toBeVisible();
-    expect(screen.getByText(/macOS 26\.0/)).toBeVisible();
+    expect(fact("macOS")).toHaveTextContent("26.0");
+    expect(screen.queryByText(/macOS 26\.0/)).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Devices" })).toHaveAttribute("aria-selected", "true");
   });
 
@@ -76,9 +86,8 @@ describe("the worker page", () => {
       "/fleet",
     );
     expect(await screen.findByRole("link", { name: "old-worker" })).toBeVisible();
-    expect(screen.getByRole("region", { name: "Needs attention" })).toHaveTextContent(
-      "incompatible",
-    );
+    expect(screen.getByRole("cell", { name: "Needs attention 1" })).toBeVisible();
+    expect(rowOf("old-worker")).toHaveTextContent("incompatible");
 
     await view.user.click(screen.getByRole("link", { name: "old-worker" }));
 
@@ -147,7 +156,7 @@ describe("the worker page", () => {
     expect(screen.queryByText(absent, { selector: "p" })).not.toBeInTheDocument();
   });
 
-  it("a worker's devices are tiles, each with its state, and for a leased one its holder, time left and when it was granted", async () => {
+  it("a worker's devices are rows of a table, each with its state, and for a leased one its holder, time left and when it was granted", async () => {
     const held = lease({ deviceId: "dev_leased", id: "lse_1", requesterId: "console-e2e-3" });
     ofWorkers(
       [
@@ -164,9 +173,10 @@ describe("the worker page", () => {
       "/fleet/wrk_host",
     );
 
-    const tiles = within(await screen.findByRole("list", { name: "Devices" })).getAllByRole(
-      "listitem",
-    );
+    const tiles = within(await devicesTable())
+      .getAllByRole("row")
+      .slice(1)
+      .filter((row) => within(row).queryByRole("link", { name: "iPhone 16" }) !== null);
     expect(tiles).toHaveLength(2);
     const [idle, leased] = tiles.map((tile) => within(tile));
     for (const [tile, state] of [
@@ -177,7 +187,7 @@ describe("the worker page", () => {
       expect(tile!.getByText("iPhone 16")).toBeVisible();
       expect(tile!.getByText("iOS 18.4")).toBeVisible();
     }
-    expect(idle!.getByText("warm, waiting for a lease")).toBeVisible();
+    expect(idle!.queryByRole("link", { name: "console-e2e-3" })).not.toBeInTheDocument();
     expect(idle!.queryByTitle(/^expires in/)).not.toBeInTheDocument();
     expect(leased!.getByRole("link", { name: "console-e2e-3" })).toHaveAttribute(
       "href",
@@ -226,7 +236,7 @@ describe("the worker page", () => {
       },
     );
     const tile = async (model: string) =>
-      within(await screen.findByRole("list", { name: "Devices" }))
+      within(await devicesTable())
         .getAllByRole("link", { name: model })
         .at(0)!;
 
@@ -259,7 +269,7 @@ describe("the worker page", () => {
       "/fleet/wrk_host",
     );
     const row = async () =>
-      within(await screen.findByRole("list", { name: "Devices" })).getByRole("link", {
+      within(await devicesTable()).getByRole("link", {
         name: "iPhone 16",
       });
     const closers = [
@@ -444,7 +454,7 @@ describe("the worker page", () => {
     }
   });
 
-  it("a granted lease eventually appears on the worker's page and Fleet tile without a reload", async () => {
+  it("a granted lease eventually appears on the worker's page and its Fleet row without a reload", async () => {
     let leased = false;
     const view = renderConsole({
       path: "/fleet",
@@ -464,9 +474,7 @@ describe("the worker page", () => {
       },
     });
     await screen.findByRole("link", { name: "worker-a" });
-    expect(
-      within(screen.getByRole("link", { name: "worker-a" }).closest("article")!).getByText("0 / 6"),
-    ).toBeVisible();
+    expect(within(rowOf("worker-a")).getByRole("cell", { name: "0" })).toBeVisible();
     await view.user.click(screen.getByRole("link", { name: "worker-a" }));
     const slots = within(await screen.findByRole("group", { name: "Load and leases" }));
     expect(slots.getByText("0 of 6 leased")).toBeVisible();
@@ -477,9 +485,7 @@ describe("the worker page", () => {
     expect(await slots.findByText("1 of 6 leased")).toBeVisible();
     window.history.back();
     await waitFor(() =>
-      expect(screen.getByRole("link", { name: "worker-a" }).closest("article")).toHaveTextContent(
-        "1 / 6",
-      ),
+      expect(within(rowOf("worker-a")).getByRole("cell", { name: "1" })).toBeVisible(),
     );
   });
 
@@ -520,7 +526,7 @@ describe("the worker page", () => {
     await waitFor(() => expect(fact("xcode")).toHaveTextContent("26.0"));
   });
 
-  it("shows four ring gauges, with the reading's age ticking in the note", async () => {
+  it("shows four ring gauges and no note of the reading's age under the title", async () => {
     ofWorkers(
       [worker({ ...HOST, load: { ...load(12, 50, 40), readAt: NOW - 3_000 } })],
       "/fleet/wrk_host",
@@ -533,15 +539,11 @@ describe("the worker page", () => {
     expect(group.getByText(/leased/)).toBeVisible();
     expect(group.getAllByText(/^(\d+%|—)$/)).toHaveLength(4);
     expect(
-      within(screen.getByRole("complementary", { name: "Slots, host and baselines" })).getAllByRole(
-        "img",
-      )[0],
+      within(
+        screen.getByRole("complementary", { name: "Slots, host, capabilities and baselines" }),
+      ).getAllByRole("img")[0],
     ).toBeVisible();
-    const read = screen.getByText(/read 3 s ago/);
-    expect(read).toBeVisible();
-
-    vi.setSystemTime(NOW + 5_000);
-    expect(await screen.findByText(/read 8 s ago/, {}, { timeout: 3_000 })).toBeVisible();
+    expect(screen.queryByText(/read \d+ s ago/)).not.toBeInTheDocument();
   });
 
   it("fills each ring to its figure's own percent", async () => {
@@ -583,14 +585,8 @@ describe("the worker page", () => {
     expect(await screen.findByText("No reading while disconnected")).toBeVisible();
     expect(screen.getByText("disconnected", { selector: ".pill" })).toBeVisible();
     window.history.back();
-    await waitFor(() =>
-      expect(screen.getByRole("link", { name: "worker-b" }).closest("article")).toHaveTextContent(
-        "disconnected",
-      ),
-    );
-    expect(screen.getByRole("link", { name: "worker-a" }).closest("article")).not.toHaveTextContent(
-      "disconnected",
-    );
+    await waitFor(() => expect(rowOf("worker-b")).toHaveTextContent("disconnected"));
+    expect(rowOf("worker-a")).not.toHaveTextContent("disconnected");
   });
 });
 

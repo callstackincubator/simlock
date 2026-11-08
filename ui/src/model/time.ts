@@ -24,6 +24,20 @@ export function formatDuration(ms: number): string {
   return parts.join(" ");
 }
 
+// why: "how long ago" reads in its largest unit only ("52 min ago"), so it fits one table line.
+export function formatAgo(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / SECOND)) * SECOND;
+  const units: readonly [number, string][] = [
+    [DAY, "d"],
+    [HOUR, "h"],
+    [MINUTE, "min"],
+  ];
+  const unit = units.find(([size]) => total >= size);
+  return unit === undefined
+    ? `${total / SECOND} s ago`
+    : `${Math.floor(total / unit[0])} ${unit[1]} ago`;
+}
+
 // why: a lease's clock, as a countdown reads: minutes and seconds, with hours in front once there are
 // any, and never below zero.
 export function formatCountdown(ms: number): string {

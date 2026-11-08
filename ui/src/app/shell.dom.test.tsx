@@ -12,11 +12,13 @@ const PAGES = [
   { label: "Baselines", path: "/baselines" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
+  { label: "Settings", path: "/settings" },
 ] as const;
 
 const GROUPS = [
   { label: "Operate", links: ["Fleet", "Leases", "Queue", "Baselines"] },
   { label: "Observe", links: ["Activity", "Usage"] },
+  { label: "Settings", links: ["Settings"] },
 ] as const;
 
 async function sidebar() {
@@ -41,7 +43,7 @@ afterEach(() => {
 });
 
 describe("the sidebar", () => {
-  it("shows Overview and Inbox, then the Operate group, then the Observe group, each with its label", async () => {
+  it("shows Overview and Inbox, then the Operate group, then the Observe group, then Settings, each with its label", async () => {
     renderConsole();
     const nav = await sidebar();
 
@@ -60,7 +62,7 @@ describe("the sidebar", () => {
     expect(within(nav).getAllByRole("group")).toHaveLength(GROUPS.length);
     for (const group of GROUPS) {
       const section = within(nav).getByRole("group", { name: group.label });
-      expect(within(nav).getByText(group.label, { exact: true })).toBeVisible();
+      expect(within(nav).getByText(group.label, { selector: "p" })).toBeVisible();
       expect(
         within(section)
           .getAllByRole("link")

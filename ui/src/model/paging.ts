@@ -20,13 +20,18 @@ export interface PageAt {
 
 // why: the query is editable by hand, so a size the list does not offer, or a page that is not a
 // whole number from 1 up, falls back to the default.
-export function readPage(search: string, keys: PageKeys, sizes: PageSizes): PageAt {
+export function readPage(
+  search: string,
+  keys: PageKeys,
+  sizes: PageSizes,
+  base: number = sizes[0],
+): PageAt {
   const query = new URLSearchParams(search);
   const size = Number(query.get(keys.size));
   const page = Number(query.get(keys.page));
   return {
     page: Number.isSafeInteger(page) && page >= 1 ? page : 1,
-    size: sizes.includes(size) ? size : sizes[0],
+    size: sizes.includes(size) ? size : base,
   };
 }
 
@@ -36,11 +41,17 @@ export function lastPage(total: number, size: number): number {
 
 // why: the first page and the default size are left out, so a list that was never paged adds
 // nothing to its URL.
-export function writePage(search: string, keys: PageKeys, sizes: PageSizes, at: PageAt): string {
+export function writePage(
+  search: string,
+  keys: PageKeys,
+  sizes: PageSizes,
+  at: PageAt,
+  base: number = sizes[0],
+): string {
   const query = new URLSearchParams(search);
   if (at.page === 1) query.delete(keys.page);
   else query.set(keys.page, String(at.page));
-  if (at.size === sizes[0]) query.delete(keys.size);
+  if (at.size === base) query.delete(keys.size);
   else query.set(keys.size, String(at.size));
   const written = query.toString();
   return written === "" ? "" : `?${written}`;

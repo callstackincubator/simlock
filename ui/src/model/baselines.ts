@@ -1,7 +1,7 @@
 import type { BaselineEntry } from "../../../src/contract/index";
 import { platformName } from "../../../src/contract/inbox";
 import { formatBytes } from "./load";
-import { formatDuration } from "./time";
+import { formatAgo } from "./time";
 import { type WorkerView, workerName } from "./workers";
 
 export interface BaselineList {
@@ -46,7 +46,7 @@ export function baselineRows(
     const model = entry.imageTag === undefined ? entry.model : `${entry.model} / ${entry.imageTag}`;
     const named = platformName(entry.platform);
     return {
-      built: `${formatDuration(now - Date.parse(entry.savedAt))} ago`,
+      built: `${formatAgo(now - Date.parse(entry.savedAt))}`,
       detail: `${model} · ${named} ${entry.osVersion}`,
       key: `${entry.workerId ?? ""}/${entry.name}`,
       name: entry.name,
@@ -100,15 +100,13 @@ export function searchBaselineRows(
   );
 }
 
-// why: a size the daemon did not report is unknown, not zero, so a total says "known" when it is a floor.
-function sizeTotal(rows: readonly BaselineRow[]): string {
-  const sized = rows.filter((row) => row.sizeBytes !== undefined);
-  if (sized.length === 0) return "size unknown";
-  const total = formatBytes(sized.reduce((sum, row) => sum + (row.sizeBytes ?? 0), 0));
-  return sized.length === rows.length ? total : `${total} known`;
+// why: a size the daemon did not report is unknown, not zero, so a total is shown only when every size is known.
+function sizeTotal(rows: readonly BaselineRow[]): string | undefined {
+  if (rows.length === 0 || rows.some((row) => row.sizeBytes === undefined)) return undefined;
+  return formatBytes(rows.reduce((sum, row) => sum + (row.sizeBytes ?? 0), 0));
 }
 
-// why: a group's count and size are those of the rows that match, not of the page on screen.
+// why: a group's count is that of the rows that match, not of the page on screen.
 export function groupLabels(rows: readonly BaselineRow[]): ReadonlyMap<string, string> {
   const byPlatform = new Map<string, BaselineRow[]>();
   for (const row of rows)
@@ -118,7 +116,7 @@ export function groupLabels(rows: readonly BaselineRow[]): ReadonlyMap<string, s
       platform,
       `${members[0]?.platformName ?? platform} · ${members.length} ${
         members.length === 1 ? "baseline" : "baselines"
-      } · ${sizeTotal(members)}`,
+      }`,
     ]),
   );
 }
@@ -152,7 +150,9 @@ export function diskUse(rows: readonly BaselineRow[], workers: readonly WorkerVi
     const used =
       sized.length === 0
         ? "size unknown"
-        : `${formatBytes(known)}${sized.length === members.length ? "" : " known"}`;
+        : sized.length === members.length
+          ? formatBytes(known)
+          : "size unknown";
     if (total === undefined || !(total > 0)) {
       return { key: id, name, text: `${used} · disk unknown` };
     }
@@ -160,8 +160,12 @@ export function diskUse(rows: readonly BaselineRow[], workers: readonly WorkerVi
     return { key: id, name, percent, text: `${used} of ${formatBytes(total)}` };
   });
   shares.sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  const total = sizeTotal(rows);
   return {
     shares,
-    summary: `${sizeTotal(rows)} on ${shares.length} ${shares.length === 1 ? "worker" : "workers"}`,
+    summary:
+      total === undefined
+        ? ""
+        : `${total} on ${shares.length} ${shares.length === 1 ? "worker" : "workers"}`,
   };
 }

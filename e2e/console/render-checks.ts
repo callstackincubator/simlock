@@ -67,20 +67,22 @@ async function checkOverview(page: Page): Promise<void> {
 
 async function checkWorker(page: Page): Promise<void> {
   await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("main .worker-device")).toHaveCount(2);
+  await expect(page.locator("main table tbody tr")).toHaveCount(2);
 }
 
 async function checkFleet(page: Page): Promise<void> {
   await expect(page.getByText("Szymons-MacBook-Pro.local")).toBeVisible();
   await expect(page.getByText("91%", { exact: true })).toBeVisible();
-  await expect(page.locator("main .fleet-card")).toHaveCount(8);
+  await expect(page.locator("main .fleet-table tbody tr:not(.table-group)")).toHaveCount(8);
   for (const [worker, state] of [
     ["mac-studio-02", "/ 20"],
     ["mac-mini-ci-02", "disk 91%"],
     ["mbp-lab-03", "drained"],
     ["Szymons-MacBook-Pro.local", "disconnected"],
   ] as const) {
-    await expect(page.locator("main .fleet-card").filter({ hasText: worker })).toContainText(state);
+    await expect(
+      page.locator("main .fleet-table tbody tr:not(.table-group)").filter({ hasText: worker }),
+    ).toContainText(state);
   }
 }
 

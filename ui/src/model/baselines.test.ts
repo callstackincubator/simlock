@@ -87,7 +87,7 @@ describe("baselineRows", () => {
     expect(searchBaselineRows(rows, "nothing")).toHaveLength(0);
   });
 
-  it("counts a group's matching rows and reports a partial size as a known subtotal", () => {
+  it("counts a group's matching rows and names the platform and the count, with no size", () => {
     const rows = baselineRows(
       [
         entry({ name: "a", sizeBytes: 2 ** 30 }),
@@ -98,10 +98,10 @@ describe("baselineRows", () => {
       [],
       NOW,
     );
-    expect(groupLabels(rows).get("android")).toBe("Android · 2 baselines · 1.0 GiB known");
-    expect(groupLabels(rows).get("ios")).toBe("iOS · 2 baselines · 2.0 GiB");
+    expect(groupLabels(rows).get("android")).toBe("Android · 2 baselines");
+    expect(groupLabels(rows).get("ios")).toBe("iOS · 2 baselines");
     expect(groupLabels(rows.filter((row) => row.name === "b")).get("android")).toBe(
-      "Android · 1 baseline · size unknown",
+      "Android · 1 baseline",
     );
   });
 

@@ -30,6 +30,17 @@ export const inboxRoute = declareRoute({
   reply: OPERATIONS["inbox.get"].output,
 });
 
+export const configRoute = declareRoute({
+  method: "get",
+  path: "/v1/config",
+  tag: "Workers",
+  summary: "The daemon's live configuration, secrets masked",
+  role: "admin",
+  notes:
+    "Answers for the daemon that serves it: a gateway's own configuration, never its workers'. A secret is shown as [redacted]. Change a value with `simlock config set` on the daemon's machine.",
+  reply: OPERATIONS["config.get"].output,
+});
+
 export const workerDrainRoute = declareRoute({
   method: "post",
   path: "/v1/workers/{id}/drain",
@@ -283,6 +294,7 @@ export const ADMIN_ROUTES = [
   updateRoute,
   workerListRoute,
   inboxRoute,
+  configRoute,
   workerDrainRoute,
   workerUndrainRoute,
   workerUpdateRoute,

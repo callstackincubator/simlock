@@ -12,7 +12,7 @@ import { defined } from "./defined";
 import { type ConsoleEvent, textField, workerIdOf } from "./events";
 import { agentKind, shortHolder, type AgentKind } from "./holder";
 import { streamOffer, streamsDevice } from "./screen";
-import { formatCountdown, formatDuration } from "./time";
+import { formatCountdown, formatAgo, formatDuration } from "./time";
 import { devicePath, streamPath } from "./paths";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
@@ -163,7 +163,7 @@ export function leaseRows(input: {
       percent: percentLeft(lease.ttlDeadline, now, lease.ttlMs),
       remaining: formatCountdown(lease.ttlDeadline - now),
       remainingMs: lease.ttlDeadline - now,
-      renewedAgo: `${formatDuration(now - lease.lastRenewedAt)} ago`,
+      renewedAgo: `${formatAgo(now - lease.lastRenewedAt)}`,
       sub,
       to: leasePath(lease.id),
       ...(worker === undefined ? {} : { worker }),
@@ -313,7 +313,7 @@ function recordFacts(
     percent: percentLeft(deadline, now, record.ttlMs),
     token: record.ownerId,
     ttl: formatDuration(record.ttlMs),
-    renewed: `${formatDuration(now - record.lastRenewedAt)} ago`,
+    renewed: `${formatAgo(now - record.lastRenewedAt)}`,
     title: holderName(record.requesterId, tokens),
     ...(record.ownerId === record.requesterId ? {} : { ownerId: record.ownerId }),
   };

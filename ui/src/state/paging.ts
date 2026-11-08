@@ -12,6 +12,7 @@ import {
   writePage,
 } from "../model/paging";
 import { setSearch, useSearch } from "./router";
+import { useSettings } from "./settings";
 
 export function usePaging(options: {
   readonly name?: string;
@@ -20,7 +21,10 @@ export function usePaging(options: {
 }): Paging {
   const { name, sizes } = options;
   const keys = pageKeys(name);
-  const asked = readPage(useSearch(), keys, sizes);
+  // why: the operator's rows per page stands in for the first size when this list offers it.
+  const { rows } = useSettings();
+  const base = sizes.includes(rows) ? rows : sizes[0];
+  const asked = readPage(useSearch(), keys, sizes, base);
   // why: before its data arrives a list has no length; correcting the page against zero rows would
   // throw away the page a reload or a shared link asked for.
   const total = options.total ?? 0;
@@ -30,11 +34,11 @@ export function usePaging(options: {
   useEffect(() => {
     if (!moved) return;
     const corrected = { page: last, size: asked.size };
-    setSearch(writePage(window.location.search, pageKeys(name), sizes, corrected), {
+    setSearch(writePage(window.location.search, pageKeys(name), sizes, corrected, base), {
       replace: true,
     });
-  }, [moved, last, asked.size, name, sizes]);
-  const go = (to: PageAt) => setSearch(writePage(window.location.search, keys, sizes, to));
+  }, [moved, last, asked.size, name, sizes, base]);
+  const go = (to: PageAt) => setSearch(writePage(window.location.search, keys, sizes, to, base));
   return {
     go: (page) => go({ ...at, page }),
     last,

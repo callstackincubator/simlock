@@ -49,11 +49,9 @@ const SHORT_RANGES = RANGE_CHOICES.map((choice) => ({
 export function OverviewScreen() {
   const [range, setRange] = useRange();
   const view = useOverview(range);
-  const updated = view.kind === "ready" ? view.data.updated : undefined;
   return (
     <Page
       title="Overview"
-      {...(updated === undefined ? {} : { note: `updated ${updated}` })}
       actions={
         <ChoiceChips legend="Range" choices={SHORT_RANGES} value={range} onChange={setRange} />
       }
@@ -95,7 +93,7 @@ export function OverviewBody(props: {
       )}
       {ready?.refusal === undefined ? null : <Refusal message={ready.refusal} />}
       {figures.kind === "refused" ? <Refusal message={figures.message} /> : null}
-      {ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
+      {ready?.data.note === undefined ? null : <p className="visually-hidden">{ready.data.note}</p>}
       <StatRow label="Fleet at a glance">
         {overview.tiles.map((tile) => (
           <StatTile key={tile.label} {...tile} />

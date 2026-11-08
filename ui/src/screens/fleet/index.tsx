@@ -4,7 +4,8 @@ import {
   Button,
   ButtonLink,
   ChoiceChips,
-  GroupHeader,
+  type Column,
+  DataTable,
   Link,
   Loaded,
   type LoadView,
@@ -13,7 +14,6 @@ import {
   Meter,
   Page,
   Pill,
-  RowMenu,
   SearchField,
   Slots,
   StatusDot,
@@ -73,6 +73,8 @@ export function FleetBody({
 }) {
   const entries = useWorkerMenu();
   const none = page.attention.length === 0 && page.healthy.length === 0;
+  const rows = [...page.attention, ...page.healthy];
+  const attention = new Set(page.attention.map((row) => row.id));
   return (
     <>
       <div className="fleet-controls">
@@ -92,34 +94,35 @@ export function FleetBody({
       {none ? (
         <p className="muted">{page.empty ? "No workers have connected." : "No worker matches."}</p>
       ) : null}
-      {page.attention.length === 0 ? null : (
-        <section className="fleet-group" aria-label="Needs attention">
-          <GroupHeader count={page.attention.length}>Needs attention</GroupHeader>
-          <div className="fleet-cards fleet-cards-attention">
-            {page.attention.map((row) => (
-              <AttentionCard key={row.id} row={row} entries={entries(row)} />
-            ))}
-          </div>
-        </section>
-      )}
-      {page.healthy.length === 0 ? null : (
-        <section className="fleet-group" aria-label="Healthy">
-          <GroupHeader count={page.healthy.length}>Healthy</GroupHeader>
-          <div className="fleet-cards fleet-cards-healthy">
-            {page.healthy.map((row) => (
-              <HealthyTile key={row.id} row={row} entries={entries(row)} />
-            ))}
-          </div>
-        </section>
+      {none ? null : (
+        <DataTable
+          label="Workers"
+          rows={rows}
+          columns={columnsOf(entries)}
+          rowId={(row) => row.id}
+          empty="No workers."
+          menu={{
+            entries: (row) => entries(row),
+            label: (row) => `Actions for ${row.name}`,
+          }}
+          groupBy={(row) =>
+            attention.has(row.id)
+              ? { id: "attention", label: `Needs attention ${page.attention.length}` }
+              : { id: "healthy", label: `Healthy ${page.healthy.length}` }
+          }
+          rowClassName={(row) =>
+            attention.has(row.id)
+              ? `row-${row.health.tone === "error" ? "error" : "warn"}`
+              : undefined
+          }
+          className="fleet-table table-lines"
+          footer="count"
+          wide
+        />
       )}
       <Loaded view={log}>{(shown) => <FleetLog rows={shown.rows} />}</Loaded>
     </>
   );
-}
-
-function leasesWord(row: FleetRow): string | undefined {
-  if (row.leaseCount === undefined) return undefined;
-  return `${row.leaseCount} ${row.leaseCount === 1 ? "lease" : "leases"}`;
 }
 
 function osLine(row: FleetRow): string {
@@ -130,12 +133,11 @@ function meterOf(row: FleetRow, label: string) {
   return row.meters.find((candidate) => candidate.label === label);
 }
 
-function Metric(props: { readonly row: FleetRow; readonly label: string; readonly short: string }) {
+function Metric(props: { readonly row: FleetRow; readonly label: string }) {
   const meter = meterOf(props.row, props.label);
   const percent = meter?.percent;
   return (
     <span className="fleet-metric">
-      <span className="fleet-label">{props.short}</span>
       {percent === undefined ? (
         <span className="fleet-metric-empty" />
       ) : (
@@ -146,7 +148,16 @@ function Metric(props: { readonly row: FleetRow; readonly label: string; readonl
   );
 }
 
-function AttentionCard({
+function metricColumn(header: string, label: string, drop: number): Column<FleetRow> {
+  return {
+    cell: (row) => <Metric row={row} label={label} />,
+    drop,
+    header,
+    width: "96px",
+  };
+}
+
+function RowActions({
   entries,
   row,
 }: {
@@ -154,100 +165,81 @@ function AttentionCard({
   readonly entries: readonly MenuEntry[];
 }) {
   const undrain = entries.find((entry) => entry.key === "undrain");
-  const leases = leasesWord(row);
+  if (row.connection === "disconnected") {
+    return (
+      <ButtonLink small to="/leases">
+        View leases
+      </ButtonLink>
+    );
+  }
+  if (undrain === undefined) return null;
   return (
-    <article className={`fleet-card fleet-card-${row.health.tone}`}>
-      <div className="fleet-card-head">
-        <div className="fleet-card-title">
-          <Link className="fleet-name" to={row.to} title={row.name}>
-            {row.name}
-          </Link>
-          <span className="fleet-os">{osLine(row)}</span>
-        </div>
-        <Pill tone={row.health.tone}>{row.health.word}</Pill>
-      </div>
-      <p className="fleet-reason">{row.reason}</p>
-      <div className="fleet-platforms">
-        <span className="fleet-label fleet-platform">iOS</span>
-        <Slots size="md" slots={row.ios} label={`iOS: ${row.iosLabel}`} />
-        <span className="fleet-label fleet-platform fleet-platform-android">Android</span>
-        <Slots size="md" slots={row.android} label={`Android: ${row.androidLabel}`} />
-      </div>
-      <div className="fleet-metrics">
-        <Metric row={row} label="CPU" short="CPU" />
-        <Metric row={row} label="Memory" short="MEM" />
-        <Metric row={row} label="Disk" short="DISK" />
-      </div>
-      <div className="fleet-actions">
-        {row.connection === "disconnected" ? (
-          <ButtonLink small to="/leases">
-            View leases
-          </ButtonLink>
-        ) : undrain === undefined ? (
-          <ButtonLink small to={row.to}>
-            Open
-          </ButtonLink>
-        ) : (
-          <Button small disabled={undrain.disabled} onClick={undrain.onSelect}>
-            {undrain.label}
-          </Button>
-        )}
-        <ButtonLink small to={row.to}>
-          Details
-        </ButtonLink>
-        {leases === undefined ? null : <span className="fleet-leases">{leases}</span>}
-      </div>
-    </article>
+    <Button small disabled={undrain.disabled} onClick={undrain.onSelect}>
+      {undrain.label}
+    </Button>
   );
 }
 
-function HealthyTile({
-  entries,
-  row,
-}: {
-  readonly row: FleetRow;
-  readonly entries: readonly MenuEntry[];
-}) {
-  const leases = leasesWord(row);
-  const combined = row.slots.length > 10;
-  return (
-    <article className="fleet-card fleet-tile">
-      <div className="fleet-tile-head">
-        <Link className="fleet-name" to={row.to} title={row.name}>
-          {row.name}
-        </Link>
-        <span className="fleet-fraction">
-          {row.slotsLeased} / {row.slots.length}
-        </span>
-      </div>
-      <div className="fleet-tile-slots">
-        {combined ? (
-          <Slots size="md" slots={row.slots} label={row.slotsLabel} />
-        ) : (
-          <>
-            {row.ios.length === 0 ? null : (
-              <Slots size="md" slots={row.ios} label={`iOS: ${row.iosLabel}`} />
-            )}
-            {row.ios.length === 0 || row.android.length === 0 ? null : (
-              <span className="fleet-divider" aria-hidden="true" />
-            )}
-            {row.android.length === 0 ? null : (
-              <Slots size="md" slots={row.android} label={`Android: ${row.androidLabel}`} />
-            )}
-          </>
-        )}
-      </div>
-      <div className="fleet-tile-metrics">
-        <Metric row={row} label="CPU" short="CPU" />
-        <Metric row={row} label="Memory" short="MEM" />
-        <Metric row={row} label="Disk" short="DISK" />
-      </div>
-      <div className="fleet-tile-foot">
-        {[leases, row.system].filter((part) => part !== undefined).join(" · ")}
-        <RowMenu label={`Actions for ${row.name}`} entries={entries} />
-      </div>
-    </article>
-  );
+function columnsOf(
+  entriesOf: (row: FleetRow) => readonly MenuEntry[],
+): readonly Column<FleetRow>[] {
+  return [
+    {
+      cell: (row) => (
+        <>
+          <Link className="fleet-name cell-line" to={row.to} title={row.name}>
+            {row.name}
+          </Link>
+          <span className="cell-line" title={osLine(row)}>
+            {osLine(row)}
+          </span>
+        </>
+      ),
+      header: "Worker",
+    },
+    {
+      cell: (row) => (
+        <>
+          <span className="cell-line">
+            <Pill tone={row.health.tone}>{row.health.word}</Pill>
+          </span>
+          {row.health.tone === "ok" ? null : (
+            <span className="cell-line" title={row.reason}>
+              {row.reason}
+            </span>
+          )}
+        </>
+      ),
+      header: "State",
+      width: "200px",
+    },
+    {
+      cell: (row) =>
+        row.slots.length === 0 ? null : (
+          <Slots size="sm" slots={row.slots} label={row.slotsLabel} />
+        ),
+      drop: 5,
+      header: "Slots",
+      width: "120px",
+    },
+    metricColumn("CPU", "CPU", 4),
+    metricColumn("Mem", "Memory", 2),
+    metricColumn("Disk", "Disk", 3),
+    {
+      cell: (row) => (row.leaseCount === undefined ? "—" : String(row.leaseCount)),
+      drop: 1,
+      header: "Leases",
+      numeric: true,
+      width: "64px",
+    },
+    {
+      cell: (row) => <RowActions row={row} entries={entriesOf(row)} />,
+      className: "fleet-actions",
+      header: "Quick actions",
+      hideHeader: true,
+      width: "104px",
+    },
+  ];
 }
 
 function FleetLog({ rows }: { readonly rows: readonly LogEventRow[] }) {

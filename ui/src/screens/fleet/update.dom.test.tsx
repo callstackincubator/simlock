@@ -73,8 +73,8 @@ describe("the console updates a worker", () => {
       ],
     );
 
-    // why: an updating worker is a card with no menu of its own; its page offers the actions.
-    await user.click(await screen.findByRole("link", { name: "Details" }));
+    // why: the update's actions live on the worker's page, reached by the row's name.
+    await user.click(await screen.findByRole("link", { name: "upd-a" }));
     for (const toast of ["upd-a already runs 0.4.0", "Another update is running."]) {
       await user.click(await screen.findByRole("button", { name: "Actions for upd-a" }));
       await user.click(screen.getByRole("menuitem", { name: "Update now" }));

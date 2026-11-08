@@ -119,7 +119,8 @@ Rules that keep text from overflowing:
   ellipsis above 34 characters (`claude-code:3f2a9c…7f91c4`), since its
   tail tells sessions apart. One helper in `ui/src/model/` does it.
 - A status pill never shares a line with a name that can grow: it goes
-  under the name (worker tiles) or beside the runtime (device tiles).
+  under the name (worker tiles) or in its own State column (Fleet and
+  device tables).
 - Slot squares stop at ten; above that a meter and the fraction (`10 / 20`).
 - A page title ellipsises; its action buttons never shrink.
 - A free-text reason clamps to two lines. A long id in facts wraps.
@@ -136,7 +137,8 @@ own that one of them draws. Named sizes and colours are above.
   then the links (icon 16px, label 500, muted; current one `--accent-text`
   on `--nav-current`, `aria-current="page"`) in a fixed order: Overview,
   Inbox, then **Operate**: Fleet, Leases, Queue, Baselines; then
-  **Observe**: Activity, Usage, each group under a label. Inbox carries its
+  **Observe**: Activity, Usage; then **Settings**: Settings (a gear icon), each
+  group under a label. Inbox carries its
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the
   connection as `● connected` in `--status-ok`, and a sign-out icon.
@@ -180,15 +182,32 @@ own that one of them draws. Named sizes and colours are above.
   for ids, hostnames, durations. The selected row is `--row-selected` with a
   2px `--accent` bar inset at its left. Group rows (`iOS · 4 baselines ·
   25.4 GB`) are 28px labels on `--surface-2`. A footer line holds the row
-  count only (`1–14 of 19`). Every row ends in a `⋯` menu button.
+  count only (`1–14 of 19`). Every row ends in a `⋯` menu button. A header
+  never breaks inside a word: one line, an ellipsis when it is too narrow.
+  A table of one-line rows (`table-lines`: Fleet, a worker's devices and
+  warm pool) also keeps each cell to one line, cut with an ellipsis and the
+  whole value in `title`; its second line is muted.
+- **Fleet table.** The Fleet page is one table grouped by Needs attention
+  N, then Healthy N (an empty group is left out), one row per worker:
+  Worker (mono name linking to the worker page, muted `macOS <v> · simlock
+  <v>`), State (pill, and for an attention row the reason as a muted second
+  line), Slots (capped `Slots`), CPU / Mem / Disk (thin meter and a mono
+  figure), Leases, small buttons (Undrain, View leases) and `⋯`. An attention
+  row is tinted `--row-warn` (`#17140c`) or `--row-error` (`#19100f`).
+  Tables stack into blocks below 1100px, as every six-column table does.
+- **Worker devices table.** A worker page's Devices tab is a table: Device
+  (model, mono runtime beneath), State, Held by (agent chip, shortened
+  holder), Expires in (clock and meter), Since (`granted 18:10`), a small
+  Watch button and `⋯`. Its warm pool tab's columns have fixed widths.
+- **Capabilities.** The worker page's left card lists them under their own
+  label after Host: one row each, the name and a pill (`on` ok, `off` idle,
+  `unavailable` warn with its reason beneath).
 - **Worker tile.** In the Overview's wall (a 4-column grid with 1px
-  `--border` gaps) and the Fleet's Healthy row: mono name, its pill under it
+  `--border` gaps): mono name, its pill under it
   when not healthy, the slot squares (iOS, a 1px divider, Android) or the
   capped meter, then three meters CPU / MEM / DISK with 10px mono labels
-  and the figure in muted mono at the right. Fleet's attention cards are
-  bigger: name and OS line, pill at the right, a two-line reason, labelled
-  slot rows, meters, then action buttons and the lease count.
-- **Slots.** 12px squares (16px in attention cards), 3px apart: leased
+  and the figure in muted mono at the right.
+- **Slots.** 12px squares, 3px apart: leased
   `--slot-leased`, ready `--status-ok`, booting `--status-idle`, quarantined
   `--status-error`, absent `--status-warn`, free a dashed `--border-strong`
   outline. The group's counts are its accessible name.
@@ -252,6 +271,26 @@ subtitles that explain, no key-hint decoration, an empty page says so in one
 line.
 
 
+## Settings page
+
+`/settings`, last in the sidebar under its own **Settings** group. Two
+cards under a title with no actions or subtitle:
+
+- **Console**: each preference is a label and a filter group (theme System,
+  Light, Dark; sidebar Expanded, Collapsed; default range 1 h, 6 h, 24 h,
+  7 d; rows per page 25, 50, 100; holder ids Short, Full). They live in the
+  browser's `localStorage`, apply at once, and the sidebar choice is the
+  same stored choice as the sidebar's own toggle. The theme sets
+  `data-theme` on `<html>`, which `foundation.css` honours beside the
+  system preference. A default range and rows per page only fill in what
+  the URL leaves out.
+- **Daemon**: read-only. The daemon's live `config.get` answer (`GET
+  /v1/config`, admin), grouped by top-level section, each key as Facts with
+  the key path and the value in mono and a small Copy button for
+  `simlock config set <key> <value>`; a masked secret has no button. A token
+  that may not read it gets one muted line. A gateway shows its own config,
+  not its workers'.
+
 ## Sidebar and contrast reference amendments
 
 The desktop collapse/expand button in the wordmark row preserves the existing
@@ -267,6 +306,9 @@ evaluate `color-contrast`, not suppress it. The original renders stay intact.
 (decided in delivery, pending the maintainer)
 
 ## Fleet reference amendment
+
+The Fleet page is a grouped table, not the reference's cards and tiles (see
+Fleet table above); the Worker page's devices are a table too.
 
 The reference's **Add worker** is a link to the existing
 [joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).

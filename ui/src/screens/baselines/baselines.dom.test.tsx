@@ -42,7 +42,7 @@ describe("the Baselines page", () => {
     expect(checkout).toHaveTextContent("1 MiB");
     expect(checkout).toHaveTextContent("ago");
     expect(checkout).toHaveTextContent("ready");
-    expect(screen.getByRole("cell", { name: /^iOS · 1 baseline · 1 MiB$/ })).toBeVisible();
+    expect(screen.getByRole("cell", { name: /^iOS · 1 baseline$/ })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Disk used by baselines" })).toBeVisible();
   });
 
@@ -165,13 +165,13 @@ describe("the Baselines page", () => {
     expect(within(stale).getByText("stale")).toBeVisible();
     expect(stale).toHaveTextContent(REASON);
     expect(stale).toHaveTextContent("—");
-    expect(screen.getByRole("cell", { name: /^iOS · 26 baselines · 25 MiB known$/ })).toBeVisible();
+    expect(screen.getByRole("cell", { name: /^iOS · 26 baselines$/ })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByText("base-25")).toBeVisible();
 
     await user.click(screen.getByLabelText("Stale", { exact: true }));
     await waitFor(() => expect(rows()).toHaveLength(2));
-    expect(screen.getByRole("cell", { name: /^iOS · 1 baseline · size unknown$/ })).toBeVisible();
+    expect(screen.getByRole("cell", { name: /^iOS · 1 baseline$/ })).toBeVisible();
     await user.click(screen.getByLabelText("Ready", { exact: true }));
     await user.type(screen.getByRole("searchbox", { name: "Search baselines" }), "base-07");
     await waitFor(() => expect(rows()).toHaveLength(2));

@@ -31,12 +31,24 @@ const COLUMNS: readonly Column<BaselineRow>[] = [
           <small className="baseline-detail" title={row.detail}>
             {row.detail}
           </small>
+          {row.staleReason === undefined ? null : (
+            <small className="baseline-reason baseline-reason-under" title={row.staleReason}>
+              {row.staleReason}
+            </small>
+          )}
         </span>
       </span>
     ),
     header: "Baseline",
   },
-  { cell: (row) => row.size, className: "baseline-size", header: "Size", mono: true },
+  {
+    cell: (row) => row.size,
+    className: "baseline-size",
+    drop: 3,
+    fit: 90,
+    header: "Size",
+    mono: true,
+  },
   {
     cell: (row) => (
       <span className="baseline-worker" title={row.worker}>
@@ -44,10 +56,12 @@ const COLUMNS: readonly Column<BaselineRow>[] = [
       </span>
     ),
     className: "baseline-worker-col",
+    drop: 2,
+    fit: 160,
     header: "Worker",
     mono: true,
   },
-  { cell: (row) => row.built, className: "baseline-built", header: "Built" },
+  { cell: (row) => row.built, className: "baseline-built", drop: 1, fit: 110, header: "Built" },
   {
     cell: (row) => (
       <span className="baseline-state">
@@ -60,9 +74,10 @@ const COLUMNS: readonly Column<BaselineRow>[] = [
       </span>
     ),
     className: "baseline-state-col",
+    fit: 110,
     header: "State",
   },
-  { cell: () => null, className: "baseline-menu", header: "Actions", hideHeader: true },
+  { cell: () => null, className: "baseline-menu", fit: 48, header: "Actions", hideHeader: true },
 ];
 
 export function BaselinesScreen() {
@@ -70,7 +85,6 @@ export function BaselinesScreen() {
   return (
     <Page
       title="Baselines"
-      {...(view.kind === "ready" && view.data.summary !== "" ? { note: view.data.summary } : {})}
       actions={
         <ButtonLink to={PREPARE} variant="primary">
           Prepare baseline
@@ -109,7 +123,9 @@ export function BaselinesScreen() {
                 title="Disk used by baselines"
                 actions={
                   <span className="baseline-disk-note">
-                    {page.disk.summary} · share of each disk
+                    {page.disk.summary === ""
+                      ? "share of each disk"
+                      : `${page.disk.summary} · share of each disk`}
                   </span>
                 }
                 className="baselines-disk"

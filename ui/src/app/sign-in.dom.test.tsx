@@ -13,6 +13,7 @@ const NAV_LABELS = [
   "Baselines",
   "Activity",
   "Usage",
+  "Settings",
 ];
 
 // why: a daemon knows tokens by role: an operator's reads work and name it, an agent's or a worker's
