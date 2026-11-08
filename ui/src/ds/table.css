@@ -68,7 +68,9 @@
   font-size: var(--text-2xs);
 }
 
-.table td { height: 40px; }
+.table td {
+  height: 40px;
+}
 
 .table .num {
   font-family: var(--font-mono);
@@ -262,6 +264,21 @@
 .table .table-menu {
   width: 5rem;
   text-align: right;
+}
+
+/* The row's ⋯ is quiet at rest: a muted icon with no edge or fill, and a surface behind it only
+ * under the pointer. The focus ring is the global one. */
+.table .table-menu .icon-button {
+  width: 26px;
+  min-height: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.table .table-menu .icon-button:hover {
+  background: var(--surface-2);
 }
 
 .table-empty {

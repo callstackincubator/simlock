@@ -483,10 +483,18 @@
   line-height: inherit;
 }
 
-.sidebar-account .status-ok { color: var(--status-ok); }
-.sidebar-account .status-warn { color: var(--status-warn); }
-.sidebar-account .status-error { color: var(--status-error); }
-.sidebar-account .status-dot { border-radius: 50%; }
+.sidebar-account .status-ok {
+  color: var(--status-ok);
+}
+.sidebar-account .status-warn {
+  color: var(--status-warn);
+}
+.sidebar-account .status-error {
+  color: var(--status-error);
+}
+.sidebar-account .status-dot {
+  border-radius: 50%;
+}
 
 .sidebar-collapsed .connection {
   justify-content: center;

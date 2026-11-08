@@ -37,6 +37,26 @@ export interface Group {
   readonly label: string;
 }
 
+interface MenuSpec<T> {
+  readonly label: (row: T) => string;
+  readonly entries: (row: T) => readonly MenuEntry[];
+}
+
+interface DrawnRow<T> {
+  readonly id: string;
+  readonly original: T;
+  readonly cells: readonly { readonly id: string; readonly column: string }[];
+}
+
+interface BodyContext<T> {
+  readonly columns: readonly Column<T>[];
+  readonly groupBy: ((row: T) => Group) | undefined;
+  readonly menu: MenuSpec<T> | undefined;
+  readonly navigate: ((to: string) => void) | undefined;
+  readonly rowTo: ((row: T) => string) | undefined;
+  readonly selectedId: string | undefined;
+}
+
 const COUNT = new Intl.NumberFormat("en-US");
 
 // why: the count line is a table's own footer; `paging.range` is the caller's text for the rows it
@@ -60,12 +80,7 @@ export function DataTable<T extends RowData>(props: {
   // why: a row that opens something is clicked anywhere; its first link stays the keyboard's way in.
   readonly rowTo?: ((row: T) => string) | undefined;
   // why: the row's ⋯ menu, in a last column of its own that has no header text to show.
-  readonly menu?:
-    | {
-        readonly label: (row: T) => string;
-        readonly entries: (row: T) => readonly MenuEntry[];
-      }
-    | undefined;
+  readonly menu?: MenuSpec<T> | undefined;
   readonly groupBy?: ((row: T) => Group) | undefined;
   readonly footer?: "count" | "pager" | undefined;
   readonly selectedId?: string | undefined;
@@ -142,77 +157,14 @@ export function DataTable<T extends RowData>(props: {
           </tr>
         </thead>
         <tbody>
-          {(() => {
-            let drawn: string | undefined;
-            const span = columns.length + (menu === undefined ? 0 : 1);
-            return table.getRowModel().rows.map((row) => {
-              const group = groupBy?.(row.original);
-              const heading = group !== undefined && group.id !== drawn;
-              if (group !== undefined) drawn = group.id;
-              const className = rowTo === undefined ? undefined : "table-row-link";
-              const selected = selectedId !== undefined && selectedId === row.id;
-              const onClick =
-                rowTo === undefined
-                  ? undefined
-                  : (event: MouseEvent<HTMLTableRowElement>) => {
-                      if ((event.target as HTMLElement).closest("a, button") === null) {
-                        navigate?.(rowTo(row.original));
-                      }
-                    };
-              const cells = (
-                <>
-                  {row.getAllCells().map((cell) => {
-                    const column = columns[Number(cell.column.id)];
-                    return (
-                      <td
-                        key={cell.id}
-                        data-label={column?.header}
-                        className={cellClass(column?.numeric, column?.mono, column?.className)}
-                      >
-                        {column?.cell(row.original)}
-                      </td>
-                    );
-                  })}
-                  {menu === undefined ? null : (
-                    <td className="table-menu">
-                      <RowMenu
-                        label={menu.label(row.original)}
-                        entries={menu.entries(row.original)}
-                      />
-                    </td>
-                  )}
-                </>
-              );
-              const dataRow =
-                menu === undefined ? (
-                  <tr
-                    aria-selected={selected || undefined}
-                    className={rowClass(className, selected)}
-                    onClick={onClick}
-                  >
-                    {cells}
-                  </tr>
-                ) : (
-                  <MenuRow
-                    className={rowClass(className, selected)}
-                    onClick={onClick}
-                    entries={menu.entries(row.original)}
-                    selected={selected}
-                  >
-                    {cells}
-                  </MenuRow>
-                );
-              if (!heading) return <Fragment key={row.id}>{dataRow}</Fragment>;
-              return (
-                <Fragment key={row.id}>
-                  <tr className="table-group">
-                    <td colSpan={span}>{group?.label}</td>
-                  </tr>
-                  {dataRow}
-                </Fragment>
-              );
-            });
-          })()}
+          {bodyRows(
+            table.getRowModel().rows.map((row) => ({
+              id: row.id,
+              original: row.original,
+              cells: row.getAllCells().map((cell) => ({ id: cell.id, column: cell.column.id })),
+            })),
+            { columns, groupBy, menu, navigate, rowTo, selectedId },
+          )}
         </tbody>
       </table>
       {footer === "count" ? (
@@ -231,4 +183,88 @@ function cellClass(numeric = false, mono = false, extra?: string): string | unde
 
 function rowClass(link: string | undefined, selected: boolean): string | undefined {
   return [link, selected ? "table-row-selected" : undefined].filter(Boolean).join(" ") || undefined;
+}
+
+function rowCells<T>(
+  row: DrawnRow<T>,
+  columns: readonly Column<T>[],
+  menu: MenuSpec<T> | undefined,
+) {
+  return (
+    <>
+      {row.cells.map((cell) => {
+        const column = columns[Number(cell.column)];
+        return (
+          <td
+            key={cell.id}
+            data-label={column?.header}
+            className={cellClass(column?.numeric, column?.mono, column?.className)}
+          >
+            {column?.cell(row.original)}
+          </td>
+        );
+      })}
+      {menu === undefined ? null : (
+        <td className="table-menu">
+          <RowMenu label={menu.label(row.original)} entries={menu.entries(row.original)} />
+        </td>
+      )}
+    </>
+  );
+}
+
+function dataRowOf<T>(row: DrawnRow<T>, context: BodyContext<T>) {
+  const { columns, menu, navigate, rowTo, selectedId } = context;
+  const link = rowTo === undefined ? undefined : "table-row-link";
+  const selected = selectedId !== undefined && selectedId === row.id;
+  const onClick =
+    rowTo === undefined
+      ? undefined
+      : (event: MouseEvent<HTMLTableRowElement>) => {
+          if ((event.target as HTMLElement).closest("a, button") === null) {
+            navigate?.(rowTo(row.original));
+          }
+        };
+  const cells = rowCells(row, columns, menu);
+  if (menu === undefined) {
+    return (
+      <tr
+        aria-selected={selected || undefined}
+        className={rowClass(link, selected)}
+        onClick={onClick}
+      >
+        {cells}
+      </tr>
+    );
+  }
+  return (
+    <MenuRow
+      className={rowClass(link, selected)}
+      onClick={onClick}
+      entries={menu.entries(row.original)}
+      selected={selected}
+    >
+      {cells}
+    </MenuRow>
+  );
+}
+
+function bodyRows<T>(rows: readonly DrawnRow<T>[], context: BodyContext<T>) {
+  let drawn: string | undefined;
+  const span = context.columns.length + (context.menu === undefined ? 0 : 1);
+  return rows.map((row) => {
+    const group = context.groupBy?.(row.original);
+    const heading = group !== undefined && group.id !== drawn;
+    if (group !== undefined) drawn = group.id;
+    const dataRow = dataRowOf(row, context);
+    if (!heading) return <Fragment key={row.id}>{dataRow}</Fragment>;
+    return (
+      <Fragment key={row.id}>
+        <tr className="table-group">
+          <td colSpan={span}>{group?.label}</td>
+        </tr>
+        {dataRow}
+      </Fragment>
+    );
+  });
 }

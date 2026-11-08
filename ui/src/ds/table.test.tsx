@@ -64,7 +64,7 @@ function dataRows(markup: string): readonly { readonly attrs: string; readonly n
 
 function groupHeadings(markup: string): readonly string[] {
   return [...tableRows(markup).matchAll(/<tr\b[^>]*table-group[^>]*>([\s\S]*?)<\/tr>/g)].map(
-    ([, body = ""]) => body.replace(/<[^>]+>/g, "").trim(),
+    ([, body = ""]) => (/<td[^>]*>([^<]*)<\/td>/.exec(body)?.[1] ?? "").trim(),
   );
 }
 
