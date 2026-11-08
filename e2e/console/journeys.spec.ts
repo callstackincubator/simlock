@@ -9,7 +9,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
-import { IOS, LEASE } from "./pages.js";
+import { IOS, labelledToken, LEASE, leaseOverHttp } from "./pages.js";
 
 // why: each journey here is an operator's act on a console page that ends in the real daemon's
 // state, or a claim about what the real daemon sends the page; none can be had from answers written
@@ -153,33 +153,10 @@ test.describe("what an operator does in the console against a real daemon", () =
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
     try {
-      const minted = await fleet.gateway.cli([
-        "token",
-        "create",
-        "--role",
-        "agent",
-        "--label",
-        "ci-runner-3",
-      ]);
-      expect(minted.code, minted.stderr).toBe(0);
-      const { secret } = minted.json as { secret: string };
-      const headers = { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" };
-      const created = await fetch(new URL("/v1/lease-requests", fleet.gateway.url), {
-        body: JSON.stringify({ device: "iPhone 16", os: "18.4", platform: "ios" }),
-        headers,
-        method: "POST",
-      });
-      expect(created.status).toBe(201);
-      let request = ((await created.json()) as { request: { id: string; state: string } }).request;
-      for (let attempt = 0; request.state !== "granted" && attempt < 6; attempt += 1) {
-        const polled = await fetch(
-          new URL(`/v1/lease-requests/${request.id}?wait=10`, fleet.gateway.url),
-          { headers },
-        );
-        request = ((await polled.json()) as { request: typeof request }).request;
-      }
-      expect(request.state).toBe("granted");
-      const id = (request as unknown as { lease: { id: string } }).lease.id;
+      const id = await leaseOverHttp(
+        fleet.gateway,
+        await labelledToken(fleet.gateway, "ci-runner-3"),
+      );
       // why: a lease the gateway issued names its worker in its id.
       expect(id).toContain(".");
       await openConsole(page, fleet.gateway, "/leases");

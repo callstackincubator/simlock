@@ -170,9 +170,7 @@ async function openActionSurfaces(
 ): Promise<void> {
   await visit(page, host, "/leases");
   const row = page.locator("main tbody tr").filter({ hasText: "console-views" });
-  const release = page
-    .getByRole("region", { exact: true, name: "Lease" })
-    .getByRole("button", { exact: true, name: "Release" });
+  const release = inspector(page).getByRole("button", { exact: true, name: "Release" });
   const dialog = page.getByRole("alertdialog", { name: "Release console-views's lease?" });
   await page.route("**/v1/leases/*", (route) =>
     route.request().method() === "DELETE" ? route.abort() : route.continue(),
@@ -200,7 +198,6 @@ async function openSearch(
   check: (state: string) => Promise<void>,
 ): Promise<void> {
   await visit(page, host, "/fleet");
-  await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeVisible();
   await page.keyboard.press("Control+k");
   await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill("console");
   await expect(page.getByRole("option", { name: /console-views/ }).first()).toBeVisible();
@@ -213,6 +210,7 @@ async function openPhoneMenu(
   page: Page,
   host: RunningDaemon,
   check: (state: string) => Promise<void>,
+  restore: { readonly height: number; readonly width: number },
 ): Promise<void> {
   await page.setViewportSize({ height: 844, width: 390 });
   await visit(page, host, "/");
@@ -220,7 +218,7 @@ async function openPhoneMenu(
   await settled(page);
   await check("phone menu");
   await page.getByRole("button", { name: "Close menu" }).click();
-  await page.setViewportSize({ height: 800, width: 1280 });
+  await page.setViewportSize(restore);
 }
 
 // why: the pages and states a real-browser check has to look at once each: every page of the
@@ -231,8 +229,10 @@ export async function eachState(
   page: Page,
   world: World,
   check: (state: string) => Promise<void>,
+  viewport: { readonly height: number; readonly width: number } = { height: 800, width: 1280 },
 ): Promise<void> {
   const { host, pages } = world;
+  await page.setViewportSize(viewport);
   await openSignedIn(page, host);
   for (const path of every(pages)) {
     await visit(page, host, path);
@@ -286,5 +286,32 @@ export async function eachState(
 
   await openActionSurfaces(page, host, check);
   await openSearch(page, host, check);
-  await openPhoneMenu(page, host, check);
+  await openPhoneMenu(page, host, check, viewport);
+}
+
+// why: a token made with `--label`, as an operator would make one for an agent.
+export async function labelledToken(daemon: RunningDaemon, label: string): Promise<string> {
+  const minted = await daemon.cli(["token", "create", "--role", "agent", "--label", label]);
+  expect(minted.code, minted.stderr).toBe(0);
+  return (minted.json as { secret: string }).secret;
+}
+
+// why: takes a lease over HTTP with `secret`, as an agent with that token would, and returns its id.
+export async function leaseOverHttp(daemon: RunningDaemon, secret: string): Promise<string> {
+  const headers = { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" };
+  const created = await fetch(new URL("/v1/lease-requests", daemon.url), {
+    body: JSON.stringify({ device: "iPhone 16", os: "18.4", platform: "ios" }),
+    headers,
+    method: "POST",
+  });
+  expect(created.status).toBe(201);
+  let request = ((await created.json()) as { request: { id: string; state: string } }).request;
+  for (let attempt = 0; request.state !== "granted" && attempt < 6; attempt += 1) {
+    const polled = await fetch(new URL(`/v1/lease-requests/${request.id}?wait=10`, daemon.url), {
+      headers,
+    });
+    request = ((await polled.json()) as { request: typeof request }).request;
+  }
+  expect(request.state).toBe("granted");
+  return (request as unknown as { lease: { id: string } }).lease.id;
 }

@@ -769,11 +769,6 @@ export const NAV = [
   { label: "Usage", path: "/usage" },
 ] as const;
 
-export const NAV_GROUPS = [
-  { label: "Operate", links: ["Fleet", "Leases", "Queue", "Baselines"] },
-  { label: "Observe", links: ["Activity", "Usage"] },
-] as const;
-
 export const NAV_LABELS = NAV.map((entry) => entry.label);
 
 // why: pages slide and fade in; an audit or a measurement taken mid-way reads a half-faded colour.
@@ -792,60 +787,4 @@ export async function openFromNav(page: Page, label: string): Promise<void> {
     await nav.getByRole("button", { name: "Open menu" }).click();
   }
   await nav.getByRole("link", { name: label, exact: true }).click();
-}
-
-// why: a host with one lease held by `surface-agent`, for checks that need the console's menu,
-// dialog and toast open.
-export async function startHostWithLease(): Promise<RunningDaemon> {
-  const host = await startDaemon("worker", {
-    driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-  });
-  const granted = await host.cli([
-    "lease",
-    "--platform",
-    "ios",
-    "--device",
-    "iPhone 16",
-    "--os",
-    "18.4",
-    "--agent-id",
-    "surface-agent",
-    "--detach",
-  ]);
-  expect(granted.code, granted.stderr).toBe(0);
-  return host;
-}
-
-// why: signs in on Leases and opens, in turn, an error toast (a release the daemon never answers)
-// and the release dialog over it, calling `check` with each open. A lease's Release lives in its
-// inspector, so no row menu is left on this page to open.
-export async function withActionSurfaces(
-  page: Page,
-  host: RunningDaemon,
-  check: (surface: "toast" | "dialog") => Promise<void>,
-): Promise<void> {
-  await page.goto(new URL("/leases", host.url).toString());
-  await signIn(page, host.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-  const row = page.locator("main tbody tr").filter({ hasText: "surface-agent" });
-  const release = page
-    .getByRole("region", { exact: true, name: "Lease" })
-    .getByRole("button", { exact: true, name: "Release" });
-  const dialog = page.getByRole("alertdialog", { name: "Release surface-agent's lease?" });
-  await page.route("**/v1/leases/*", (route) =>
-    route.request().method() === "DELETE" ? route.abort() : route.continue(),
-  );
-  await row.click();
-  await release.click();
-  await dialog.getByRole("button", { name: "Release lease" }).click();
-  await expect(
-    page.getByRole("region", { name: "Notifications" }).getByText("The daemon did not answer."),
-  ).toBeVisible();
-  await settled(page);
-  await check("toast");
-
-  await release.click();
-  await expect(dialog).toBeVisible();
-  await settled(page);
-  await check("dialog");
 }
