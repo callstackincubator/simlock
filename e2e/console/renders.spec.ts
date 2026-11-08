@@ -554,6 +554,42 @@ for (const entry of cases) {
               });
             }
             if (entry.name === "1-overview" && viewport.width === 1440 && run === "first") {
+              await page.evaluate(() => {
+                const svg = document.querySelector(".recharts-surface:has(.recharts-area-area)")!;
+                const path = svg.querySelector(".recharts-area-area")!;
+                const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+                use.id = "capture-generated-id-reference";
+                use.style.display = "none";
+                use.setAttribute("href", `#${path.id}`);
+                svg.append(use);
+              });
+              const identityBefore = await visibleState(page);
+              const oldId = await page.evaluate(() => {
+                const path = document.querySelector(".recharts-area-area")!;
+                const old = path.id;
+                path.id = "recharts-area-_r_capture_";
+                document
+                  .querySelector("#capture-generated-id-reference")!
+                  .setAttribute("href", `#${path.id}`);
+                return old;
+              });
+              const identityRenamed = await visibleState(page);
+              await page.locator("#capture-generated-id-reference").evaluate((element) => {
+                element.setAttribute("href", "#different-paint-target");
+              });
+              const identityRewired = await visibleState(page);
+              await page.evaluate((id) => {
+                document.querySelector(".recharts-area-area")!.id = id;
+                document.querySelector("#capture-generated-id-reference")!.remove();
+              }, oldId);
+              expect(
+                compareCaptures(first.image, first.image, identityBefore, identityRenamed).matches,
+                "generated SVG id and reference renamed consistently",
+              ).toBe(true);
+              expect(
+                compareCaptures(first.image, first.image, identityRenamed, identityRewired).matches,
+                "generated SVG reference rewiring remains visible",
+              ).toBe(false);
               const original = await visibleState(page);
               const heading = page.locator("main h1");
               await heading.evaluate((element) => {
