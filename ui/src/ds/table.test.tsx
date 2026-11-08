@@ -111,6 +111,7 @@ describe("a table drawn through its public props", () => {
 
     expect(dataRows(first).map((row) => row.name)).toEqual(["ios-18", "ios-17"]);
     expect(groupHeadings(first)).toEqual(["iOS · 3 baselines"]);
+    expect(first).toContain('<td colSpan="3">iOS · 3 baselines</td>');
     expect(dataRows(second).map((row) => row.name)).toEqual(["ios-16", "android-35"]);
     expect(groupHeadings(second)).toEqual(["iOS · 3 baselines", "Android · 2 baselines"]);
 
@@ -146,6 +147,7 @@ describe("a table drawn through its public props", () => {
     expect(bare).not.toContain("table-row-link");
     expect(bare).not.toContain("table-menu");
     expect(groupHeadings(bare)).toEqual(["iOS · 3 baselines"]);
+    expect(bare).toContain('<td colSpan="2">iOS · 3 baselines</td>');
     expect(dataRows(bare)).toHaveLength(2);
 
     const ungrouped = draw({ group: false, menu: false, paging: PAGE_1, rowTo: false });
