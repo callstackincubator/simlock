@@ -1,6 +1,6 @@
 # 0070. Test runners drive a lease through the agent-device front: boot is answered, a close may keep the lease, and each lease is its own tenant
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-07
 - **Issue:** [#1419](https://github.com/callstackincubator/simlock/issues/1419) (request [#1292](https://github.com/callstackincubator/simlock/issues/1292))
 - **Narrows:** [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)

@@ -31,6 +31,9 @@ export const secrets = {
   worker: "slk_test_worker_join",
 } as const;
 export const principals = { one: "tok_one", two: "tok_two" } as const;
+// why: a principal long enough that its lease's worker tenant passes 128 characters and must be cut with a hash.
+export const longPrincipal = `tok_${"x".repeat(150)}`;
+export const longSecret = "slk_test_agent_long";
 
 export const notAvailable = "agent-device is not available on this simlock: ";
 export const agentTokenOnly = "refused: agent-device through simlock needs an agent token";
@@ -149,6 +152,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   await seedTokensDatabase(directory, [
     [principals.one, secrets.one, "agent"],
     [principals.two, secrets.two, "agent"],
+    [longPrincipal, longSecret, "agent"],
     ["tok_operator", secrets.operator, "operator"],
     ["tok_worker", secrets.worker, "worker"],
   ]);
@@ -305,6 +309,10 @@ export async function envelopeOf(response: Response): Promise<Envelope> {
 }
 
 export const hex = (n: number): string => n.toString(16).padStart(32, "0");
+
+// why: the tenant a worker gives a lease's calls: the principal with `_` written `_5f_`, a dot, the lease id.
+export const leaseTenant = (principal: string, n: number): string =>
+  `${principal.replace(/_/gu, "_5f_")}.${hex(n)}`;
 
 export function allocateParams(
   n: number,

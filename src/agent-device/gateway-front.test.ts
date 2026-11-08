@@ -542,12 +542,12 @@ async function deadlineOf(member: Member, n: number): Promise<number | undefined
     ?.ttlDeadline;
 }
 
-// why: the worker's lease requester is `gw:<gateway instance id>:<CLI lease id>`, which is where the gateway's instance id is read from; the tenant spells it with dots and writes each `_` of the principal as `_5f_`.
+// why: the worker's lease requester is `gw:<gateway instance id>:<CLI lease id>`, which is where the gateway's instance id is read from; the tenant spells it with dots and writes each `_` of the principal as `_5f_`, then the lease id.
 async function tenantOf(member: Member, n: number, principal: string = principals.one) {
   const lease = await workerLeaseFor(member, n);
   const prefix = lease.requesterId.slice(0, -(hex(n).length + 1));
   expect(prefix).toMatch(/^gw:[^:]+$/);
-  return `gw.${prefix.slice("gw:".length)}.${principal.replaceAll("_", "_5f_")}`;
+  return `gw.${prefix.slice("gw:".length)}.${principal.replaceAll("_", "_5f_")}.${hex(n)}`;
 }
 
 async function grantedDevice(member: Member) {
@@ -986,7 +986,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(labels).toEqual(Array.from({ length: 5 }, () => "capable"));
   });
 
-  it("the allocate the worker's agent-device daemon receives names the granted device, carries `ttlMs` equal to that worker's ceiling, and has tenant `gw.<gateway instance id>.<principal>`", async () => {
+  it("the allocate the worker's agent-device daemon receives names the granted device, carries `ttlMs` equal to that worker's ceiling, and has tenant `gw.<gateway instance id>.<principal>.<lease id>`", async () => {
     const rig = await setUp();
     const member = first(rig);
 
@@ -1412,7 +1412,11 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     await granted(rig, 1);
     const held = member.fake.leases.get(hex(1));
     expect(held).toBeDefined();
-    member.fake.leases.set(hex(2), { ...(held as NonNullable<typeof held>), leaseId: hex(2) });
+    member.fake.leases.set(hex(2), {
+      ...(held as NonNullable<typeof held>),
+      leaseId: hex(2),
+      tenant: (held?.tenant ?? "").replace(hex(1), hex(2)),
+    });
     // why: a lease whose requester is not its own id is never adopted, so the front's memory lacks it however soon the worker's catalog arrives.
     await rig.gateway.dispatch(
       "lease.request",
@@ -1585,6 +1589,9 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
     expect(preflight.status).toBe(200);
     expect(pathsReceived(target)).toContain("/upload/preflight");
+    expect(target.fake.requests.find((seen) => seen.path === "/upload/preflight")?.tenant).toBe(
+      await tenantOf(target, 2),
+    );
     expect(pathsReceived(other)).toEqual(before);
   });
 
