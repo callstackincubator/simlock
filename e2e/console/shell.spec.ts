@@ -47,6 +47,30 @@ test.describe("the shell", () => {
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
       await expect(page.locator(".connection")).toHaveText("Connected");
       await settled(page);
+      for (const [selector, path, size] of [
+        [".sidebar-search", "M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5L14 14", "14px"],
+        [
+          "a[href='/leases']",
+          "M5 8.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM7 9l6-6M11 5l2 2",
+          "16px",
+        ],
+        ["a[href='/baselines']", "M8 2l6 3-6 3-6-3zM2 8l6 3 6-3M2 11l6 3 6-3", "16px"],
+      ] as const) {
+        const icon = nav.locator(`${selector} .icon`);
+        await expect(icon.locator("path")).toHaveAttribute("d", path);
+        expect(
+          await icon.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return [
+              style.width,
+              style.height,
+              style.strokeWidth,
+              style.strokeLinecap,
+              style.strokeLinejoin,
+            ];
+          }),
+        ).toEqual([size, size, "1.4px", "round", "round"]);
+      }
       await expect(nav.locator(".account-avatar")).toBeVisible();
       if (entry.session === "proxy") {
         await expect(nav.locator(".signed-in-as")).toHaveAttribute("title", "Alice");
