@@ -506,6 +506,13 @@
   gap: 8px;
 }
 
+.device-holder {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .device-held a {
   min-width: 0;
   overflow: hidden;

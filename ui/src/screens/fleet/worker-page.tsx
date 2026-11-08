@@ -301,7 +301,7 @@ function holderOf(device: DeviceRow) {
   return (
     <span className="device-held">
       <AgentChip kind={holder.kind} title={holder.name} />
-      <span className="mono" title={holder.name}>
+      <span className="mono device-holder" title={holder.name}>
         {holder.display}
       </span>
     </span>

@@ -16,12 +16,18 @@ export function ScreenPanel(props: {
 }) {
   const { deviceId, offer, state, workerId } = props;
   const shown = useDeviceScreen(workerId, deviceId, state, offer);
-  if (shown.kind !== "picture") return <p className="muted screen-sentence">{shown.text}</p>;
+  if (shown.kind !== "picture") {
+    return (
+      <div className="screen-panel">
+        <p className="muted screen-sentence">{shown.text}</p>
+      </div>
+    );
+  }
   const { screen } = shown;
   const { live, note, readout, waiting } = screen;
   const landscape = screen.width > screen.height && screen.height > 0;
   return (
-    <>
+    <div className="screen-panel">
       {readout.overlay === undefined ? null : (
         <div className="screen-pills">
           <span className="screen-pill">
@@ -52,7 +58,11 @@ export function ScreenPanel(props: {
         )}
         {waiting === undefined ? null : <p className="phone-wait">{waiting}</p>}
       </div>
-      {note === undefined ? null : <Refusal message={note} />}
-    </>
+      {note === undefined ? null : (
+        <div className="screen-notice">
+          <Refusal message={note} />
+        </div>
+      )}
+    </div>
   );
 }

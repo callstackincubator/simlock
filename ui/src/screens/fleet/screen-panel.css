@@ -80,3 +80,25 @@
   border-radius: 99px;
   background: #4ade80;
 }
+
+/* The frame and the notice are one centred column in the card, so a notice wraps inside the card
+ * under the frame and never pushes the frame off centre. */
+.screen-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.screen-notice {
+  max-width: 100%;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.screen-notice .refusal {
+  margin: 0;
+}
