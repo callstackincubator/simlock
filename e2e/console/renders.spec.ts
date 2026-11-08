@@ -378,6 +378,10 @@ for (const entry of cases) {
             }
             if (entry.name === "5-leases") {
               await expect(page.locator("main tbody tr")).toHaveCount(14);
+              await expect(page.locator("main .chip-mark").first()).toHaveCSS(
+                "font-family",
+                /Geist Mono/,
+              );
               for (const holder of [
                 "claude-code:checkout-flow",
                 "codex:8c1e2f4a-0b7d-4e21-9c3a-5f6d7e8a9b0c",

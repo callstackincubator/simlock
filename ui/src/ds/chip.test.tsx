@@ -7,7 +7,7 @@ import { AgentChip } from "./index";
 type AgentKind = ComponentProps<typeof AgentChip>["kind"];
 
 describe("a holder's chip", () => {
-  it("prints two mono capitals for a known tool, a dot for any other holder, and the whole id in its title", () => {
+  it("prints two capitals for a known tool, a dot for any other holder, and the whole id in its title", () => {
     const known: readonly [AgentKind, string][] = [
       ["claude-code", "CC"],
       ["codex", "CX"],
