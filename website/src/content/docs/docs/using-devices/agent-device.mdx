@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 [agent-device](https://github.com/callstack/agent-device) is Callstack's command-line tool for driving mobile apps: it opens an app, reads the screen as a tree of elements, taps, types and takes screenshots.
 
-With Simlock, `agent-device open` leases a device from Simlock, and every later command goes to that device. Each agent gets its own device, and a normal close deletes it.
+With Simlock, `agent-device open` leases a device from Simlock. Later commands use that lease; Simlock answers standalone `boot` itself. Each agent gets its own device, and a normal close deletes it.
 
 ```sh
 agent-device open --platform ios --device "iPhone 16"
@@ -133,12 +133,12 @@ The reply to `open` names the model, OS and image tag you got, and the baseline 
 
 A test runner can allocate with `retainOnClose: true` to keep its device through a bare `close`, `close <app>`, or a batch containing a close. Release the lease when the run finishes; otherwise it expires after its TTL.
 
-In the allocate reply JSON, `data.lease.device.udid` names an iOS device and `data.lease.device.serial` names an Android device. agent-device's client drops these fields when it rebuilds the reply. The agent-device `leaseId` is the Simlock lease id, usable with `/v1/leases/<id>/…`.
+In the allocate reply JSON, `data.lease.device.udid` names an iOS device and `data.lease.device.serial` names an Android device. agent-device's client drops these fields when it rebuilds the reply. Simlock answers `boot` on a leased device; its `id` is the device's udid on iOS or serial on Android, including when using agent-device's client. The agent-device `leaseId` is the Simlock lease id, usable with `/v1/leases/<id>/…`.
 
 ### What to expect
 
 - **The lease is an ordinary Simlock lease.** `simlock status` and the console show it, held by your token. Its id is the one agent-device chose.
-- **Commands keep the lease alive.** An agent that stops sending commands loses the device one TTL later. The TTL is the one agent-device asks for, or the worker's default (15 minutes). An admin can cap it with `capabilities.agent-device.leaseTtlCapMs`.
+- **Commands and heartbeats keep the lease alive.** Standalone `boot` checks the lease but does not renew it, so sending only `boot` will not keep the device. The TTL is the one agent-device asks for, or the worker's default (15 minutes). An admin can cap it with `capabilities.agent-device.leaseTtlCapMs`.
 - **`close` gives the device back** unless the allocate set `retainOnClose: true`. Simlock ends a plain lease and deletes the device. The next agent gets a new one.
 - **`install` sends the app from your machine.** The path is on the agent's machine, and agent-device uploads the app. A path on the worker is refused with `refused: send the app from your machine as an upload`.
 - **`devices` lists only your devices**, and nothing before `open`.
@@ -189,13 +189,13 @@ If phone support can't start, `simlock doctor` prints a line starting `phone dae
 
 ## Through a gateway
 
-Point `connect proxy` at the gateway, and use a token created on the gateway. `open` lands on a worker where agent-device works, and every later command for that device goes to the same worker. You never name a worker.
+Point `connect proxy` at the gateway, and use a token created on the gateway. `open` lands on a worker where agent-device works. Forwarded calls for that lease go to the same worker; the gateway answers standalone `boot` itself. You never name a worker.
 
 If that worker disconnects, requests for your device answer `agent-device is not available on this simlock: the worker holding this device is not connected to the gateway; try again`. Nothing is released. Once the worker is back, and before the lease runs out, the next request works on the same device.
 
 ## When Simlock ends the lease
 
-If the lease ends for any reason other than your `close` (it expired, an admin released it, the device was lost, or the worker's daemon or agent-device restarted), the next command answers:
+If the lease ends for any reason other than your `close` (it expired, an admin released it, the device was lost, or the worker's daemon or agent-device restarted), Simlock can answer a heartbeat or standalone `boot` with:
 
 ```text
 lease ended by simlock; run disconnect, then open
@@ -228,6 +228,8 @@ Simlock's sign-in errors (`UNAUTHENTICATED`, `FORBIDDEN`) and errors outside Sim
 | --- | --- |
 | `refused: agent-device through simlock needs an agent token` | You used an operator token. Create an agent token. |
 | `refused: name --platform ios or android` | `open` needs `--platform`. |
+| `refused: boot names no lease; open a device first` | Open a device before sending `boot`. |
+| `refused: this lease has ended; open a device` | The agent ended the lease; open a device again. |
 | `refused: simlock picks the device` | A `--udid`, `--serial` or `--device` names a device that isn't the one Simlock leased to you. |
 | `refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set` | Simlock decides which devices agent-device sees. |
 | `No active proxy device lease for this session; run open first.` | The session has no lease, often because parallel agents on one machine share a session. Set `AGENT_DEVICE_SESSION` (or pass `--session`) per agent, then `open`. |

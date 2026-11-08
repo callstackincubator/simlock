@@ -38,6 +38,7 @@ export interface FleetLeaseFacts {
     readonly address: string;
     readonly platform: "ios" | "android";
     readonly model: string;
+    readonly physical?: boolean;
     readonly deviceClass?: string;
     readonly ttlMs: number;
     readonly ttlDeadline: number;
@@ -172,6 +173,7 @@ export class RelayHostLink implements HostLink {
           leaseId: facts.leaseId,
           model: listed.model,
           platform: listed.platform,
+          ...(listed.physical === undefined ? {} : { physical: listed.physical }),
           target: TARGET_OF_CLASS[listed.deviceClass ?? ""] ?? "mobile",
           ttlDeadline: listed.ttlDeadline,
           ttlMs: listed.ttlMs,

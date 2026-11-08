@@ -897,6 +897,12 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["the phone"]);
 
     await restarted(rig, member, 1);
+    const beforeBoot = reached();
+    expect((await envelopeOf(await command(rig, "boot", 1))).result).toMatchObject({
+      ok: true,
+      data: { id: phoneSerial, kind: "device" },
+    });
+    expect(reached()).toBe(beforeBoot);
     expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
     expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
     expect(reached()).toBe(3);
@@ -1216,7 +1222,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
 
-  it("after `simlock release --all` on the gateway, the worker's agent-device lease is released before the wipe, and the next heartbeat reaches that worker and answers `LEASE_ENDED_BY_HOST`", async () => {
+  it("after gateway release or expiry, boot is refused locally; release reaches agent-device before the wipe and heartbeat answers `LEASE_ENDED_BY_HOST`", async () => {
     const rig = await setUp();
     const member = first(rig);
     const wipesAtRelease: number[] = [];
@@ -1235,6 +1241,32 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
 
     expect(heartbeatsReceived(member)).toBe(received + 1);
+
+    const bootRig = await setUp();
+    const bootMember = first(bootRig);
+    await granted(bootRig, 1);
+    await listedByGateway(bootRig, 1);
+    expect((await envelopeOf(await command(bootRig, "boot", 1))).result).toMatchObject({
+      ok: true,
+    });
+    await bootRig.gateway.dispatch("lease.release-all", {}, adminSession);
+    const commands = bootMember.fake.rpcRequests("agent_device.command").length;
+    expectEndedBySimlock(await envelopeOf(await command(bootRig, "boot", 1)));
+    expect(bootMember.fake.rpcRequests("agent_device.command")).toHaveLength(commands);
+
+    await granted(bootRig, 2, { ttlMs: 5_000 });
+    await listedByGateway(bootRig, 1);
+    const address = (await grantedDevice(bootMember)).address;
+    expect((await envelopeOf(await command(bootRig, "boot", 2))).result).toMatchObject({
+      ok: true,
+    });
+    await advance(bootRig, 6_000, 1_000);
+    await expect.poll(() => fleetLeases(bootRig)).toEqual([]);
+    const afterExpiry = bootMember.fake.rpcRequests("agent_device.command").length;
+    expectEndedBySimlock(
+      await envelopeOf(await command(bootRig, "boot", 2, {}, { flags: { udid: address } })),
+    );
+    expect(bootMember.fake.rpcRequests("agent_device.command")).toHaveLength(afterExpiry);
   });
 
   it("a command with no device selector naming a lease id another token holds, and one the gateway does not know, answer `refused: lease <id> is not one of yours on this gateway` with status 403, and no worker receives it; with `--udid`, the same command answers `refused: simlock picks the device`, as on a worker", async () => {
@@ -1403,7 +1435,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await fleetLeases(rig)).map((lease) => lease.id)).toContain(hex(2));
   });
 
-  it("a lease the gateway's `lease.list` leaves out of one answer, read by a `devices` call, an allocate, a renewal while a command runs, or a heartbeat, is not ended: the next heartbeat succeeds and renews the simlock lease", async () => {
+  it("a lease the gateway's `lease.list` leaves out during devices, allocate, boot, renewal or heartbeat is not ended, and the next heartbeat renews it", async () => {
     const during: Record<string, unknown> = {};
     const triggers: Record<string, (rig: Rig, member: Member) => Promise<void>> = {
       allocate: async (rig) => {
@@ -1415,6 +1447,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       heartbeat: async (rig) => {
         const beat = await envelopeOf(await heartbeat(rig, 1));
         during.heartbeat = beat.result ?? beat.error?.data;
+      },
+      boot: async (rig) => {
+        const answer = await envelopeOf(await command(rig, "boot", 1));
+        during.boot = answer.error?.data;
       },
       renewal: async (rig, member) => {
         const running = await runningCommand(rig, member, 1);
@@ -1439,7 +1475,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       const listing = leaveOutOfNextListing(rig.gateway, hex(1));
 
       await trigger(rig, member);
-      await expect.poll(() => listing.cut()).toBe(1);
+      expect(listing.cut()).toBe(1);
       await advance(rig, 1_000, 1_000);
       const answer = await envelopeOf(await heartbeat(rig, 1, { ttlMs: 60_000 }));
 
@@ -1452,9 +1488,21 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     }
 
     const live = { answer: expect.objectContaining({ ok: true }), cut: 1, leftMs: 60_000 };
-    expect(outcomes).toEqual({ allocate: live, devices: live, heartbeat: live, renewal: live });
+    expect(outcomes).toEqual({
+      allocate: live,
+      boot: live,
+      devices: live,
+      heartbeat: live,
+      renewal: live,
+    });
     // why: the command already ran on the worker, so the heartbeat that met the omission still answers its reply.
-    expect(during).toEqual({ heartbeat: expect.objectContaining({ ok: true }) });
+    expect(during).toEqual({
+      boot: expect.objectContaining({
+        message: "could not check your leases; try again",
+        retriable: true,
+      }),
+      heartbeat: expect.objectContaining({ ok: true }),
+    });
   });
 });
 

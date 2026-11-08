@@ -48,6 +48,7 @@ const present = (value: unknown): boolean => value !== undefined && value !== nu
 interface Plan {
   readonly leaseId: string;
   readonly platform: "ios" | "android";
+  readonly bootTarget: string;
   readonly model?: string;
   readonly baseline?: string;
   readonly class?: "phone" | "tv" | "desktop";
@@ -145,6 +146,7 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
+    bootTarget: typeof fields.target === "string" ? fields.target : "mobile",
     ...chosenDevice(fields),
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
@@ -190,7 +192,7 @@ function requiresOf(context: FrontContext): { readonly requires?: string[] } {
 }
 
 function leaseInput(context: FrontContext, plan: Plan) {
-  const { leaseId, platform, ...constraints } = plan;
+  const { leaseId, platform, bootTarget: _bootTarget, ...constraints } = plan;
   return {
     ...constraints,
     leaseId,
@@ -376,6 +378,7 @@ async function keepOrRelease(
   if (!request.signal.aborted) {
     context.map.add(plan.leaseId, {
       address,
+      bootTarget: plan.bootTarget,
       deadline: grant.lease.ttlDeadline,
       identity,
       model: grant.device.spec.model,

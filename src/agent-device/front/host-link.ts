@@ -23,6 +23,7 @@ export interface AdoptableLease {
   readonly address: string;
   readonly platform: "ios" | "android";
   readonly model: string;
+  readonly physical?: boolean;
   readonly target: string;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
