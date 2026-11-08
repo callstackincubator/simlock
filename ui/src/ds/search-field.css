@@ -23,3 +23,15 @@
   border-radius: 8px;
   font-family: var(--font-sans);
 }
+
+/* The reference's search is a quiet field: the page's own fill, the hairline edge, a muted
+ * placeholder. */
+.search-field {
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.search-field::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}

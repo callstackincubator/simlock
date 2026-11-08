@@ -150,6 +150,22 @@ test.describe("every view", () => {
         await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
         await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
         await expect(page.locator(".search-field-wrap .icon")).toBeVisible();
+        const dark = theme === "dark";
+        const search = page.getByRole("searchbox").first();
+        await expect(search).toHaveCSS(
+          "border-top-color",
+          dark ? "rgb(35, 35, 39)" : "rgb(222, 222, 219)",
+        );
+        await expect(search).toHaveCSS("background-color", background);
+        await expect(search).toHaveCSS("border-top-left-radius", "8px");
+        const more = page.getByRole("button", { name: /^Actions for/ }).first();
+        await expect(more).toHaveCSS("border-top-width", "0px");
+        await expect(more).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+        await expect(more).toHaveCSS("color", dark ? "rgb(142, 142, 151)" : "rgb(90, 90, 85)");
+        await expect(more).toHaveCSS("width", "26px");
+        await expect(more).toHaveCSS("height", "26px");
+        await more.hover();
+        await expect(more).toHaveCSS("background-color", surface);
         const status = page.locator("#main .status").first();
         await expect(status).toHaveCSS("height", "20px");
         await expect(status.locator(".status-dot")).toHaveCSS("width", "6px");
