@@ -116,6 +116,8 @@ function DaemonCard(props: {
       </p>
       {daemon.kind === "forbidden" ? (
         <p className="muted">Your token cannot read this daemon&apos;s settings.</p>
+      ) : daemon.kind === "older" ? (
+        <p className="muted">This daemon is too old to report its settings.</p>
       ) : (
         <Loaded view={daemon.view}>
           {(sections) =>

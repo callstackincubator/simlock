@@ -72,7 +72,7 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar floats beside the page in its own card. Use the button beside the Simlock name to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
+The sidebar floats beside the page in its own card. Use the button beside the Simlock name to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**, and **Settings** at the bottom. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
 
 <picture>
   <source srcSet="/simlock/console-shell-dark.png" media="(prefers-color-scheme: dark)" />
@@ -81,7 +81,7 @@ The sidebar floats beside the page in its own card. Use the button beside the Si
 
 On **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Leases**, it opens in a pane beside the table. On **Fleet**, a worker opens as its own page, and a device opens its streaming page. Lists show 25 rows at a time, with a pager for 50 or 100.
 
-The console follows your system's light or dark setting and fits the window it is in. It is laid out for a 1440 pixel wide window, where each page fits without scrolling. In a narrower window the Overview's tiles take fewer columns and its right-hand cards move under its chart. Below 1280 pixels a lease opens as a panel over the list, and below 768 the sidebar becomes a bar at the top with a menu button and tables stack into blocks (Fleet and the worker's tables already below 1100). No page scrolls sideways, down to a 360 pixel wide phone.
+The console follows your system's light or dark setting, unless you pick one in [Settings](#settings), and fits the window it is in. It is laid out for a 1440 pixel wide window, where each page fits without scrolling. In a narrower window the Overview's tiles take fewer columns and its right-hand cards move under its chart. Below 1280 pixels a lease opens as a panel over the list, and below 768 the sidebar becomes a bar at the top with a menu button and tables stack into blocks (Fleet and the worker's tables already below 1100). No page scrolls sideways, down to a 360 pixel wide phone.
 
 Pages update by themselves: a new lease or a booting device shows within about a second, and readings such as CPU load within 15 seconds. The bottom of the sidebar shows the connection:
 
@@ -236,3 +236,9 @@ Select an event to see its whole payload and a link to the lease, worker, reques
 ## Usage
 
 **Usage** shows the figures for a range, the same numbers `simlock stats` gives: requests, grants, rejections, the wait and hold times, grants by source (warm, booted or provisioned), rejections by reason, device incidents, and the figures per platform and per requester. Pick **1 hour**, **6 hours**, **24 hours** or **7 days**. See [Monitoring](/simlock/docs/worker/monitoring).
+
+## Settings
+
+**Settings** has two cards. **Console** holds your preferences for this browser: the theme (**System**, **Light** or **Dark**), the sidebar (**Expanded** or **Collapsed**, the same choice as the button beside the Simlock name), the default range for **Overview** and **Activity** when the address has none, the rows per page for tables, and whether holder ids are **Short** (cut in the middle) or **Full**. A change applies at once and stays in this browser.
+
+**Daemon** shows the daemon's live configuration, grouped by section, with secrets masked. It is read-only: change a value with `simlock config set <key> <value>` on the daemon's machine. The **Copy** button next to a key copies that command. It needs an admin token; with another token, the card says your token cannot read this daemon's settings. On a gateway it shows the gateway's own configuration, not its workers'.

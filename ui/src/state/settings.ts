@@ -59,12 +59,17 @@ export function useConsoleSettings(sidebar: {
 
 export type DaemonSettings =
   | { readonly kind: "forbidden" }
+  // why: a daemon older than this console has no such route.
+  | { readonly kind: "older" }
   | { readonly kind: "view"; readonly view: LoadView<readonly ConfigSection[]> };
 
 export function useDaemonSettings(): DaemonSettings {
   const state = useRouteQuery<Record<string, unknown>>("/v1/config");
   if (state.data === undefined && state.error instanceof ApiError && state.error.status === 403) {
     return { kind: "forbidden" };
+  }
+  if (state.data === undefined && state.error instanceof ApiError && state.error.status === 404) {
+    return { kind: "older" };
   }
   return { kind: "view", view: mapView(loadView(state), configSections) };
 }

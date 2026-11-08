@@ -137,7 +137,8 @@ own that one of them draws. Named sizes and colours are above.
   then the links (icon 16px, label 500, muted; current one `--accent-text`
   on `--nav-current`, `aria-current="page"`) in a fixed order: Overview,
   Inbox, then **Operate**: Fleet, Leases, Queue, Baselines; then
-  **Observe**: Activity, Usage, each group under a label. Inbox carries its
+  **Observe**: Activity, Usage; then **Settings**: Settings (a gear icon), each
+  group under a label. Inbox carries its
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the
   connection as `● connected` in `--status-ok`, and a sign-out icon.
@@ -269,6 +270,26 @@ sentences, the CLI's names, verbs on buttons, no exclamation marks, no
 subtitles that explain, no key-hint decoration, an empty page says so in one
 line.
 
+
+## Settings page
+
+`/settings`, last in the sidebar under its own **Settings** group. Two
+cards under a title with no actions or subtitle:
+
+- **Console**: each preference is a label and a filter group (theme System,
+  Light, Dark; sidebar Expanded, Collapsed; default range 1 h, 6 h, 24 h,
+  7 d; rows per page 25, 50, 100; holder ids Short, Full). They live in the
+  browser's `localStorage`, apply at once, and the sidebar choice is the
+  same stored choice as the sidebar's own toggle. The theme sets
+  `data-theme` on `<html>`, which `foundation.css` honours beside the
+  system preference. A default range and rows per page only fill in what
+  the URL leaves out.
+- **Daemon**: read-only. The daemon's live `config.get` answer (`GET
+  /v1/config`, admin), grouped by top-level section, each key as Facts with
+  the key path and the value in mono and a small Copy button for
+  `simlock config set <key> <value>`; a masked secret has no button. A token
+  that may not read it gets one muted line. A gateway shows its own config,
+  not its workers'.
 
 ## Sidebar and contrast reference amendments
 
