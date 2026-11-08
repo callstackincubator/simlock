@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { release } from "./test-edge.js";
 import {
+  adminSession,
   command,
   granted,
   hex,
@@ -20,7 +21,7 @@ async function sessionFolder(rig: Rig, path: string): Promise<void> {
 }
 
 describe("agent-device session folders on a worker", () => {
-  it("a lease end removes the session folders of that lease, including one a --session name made, and keeps another live lease's folder", async () => {
+  it("a lease end, by release or by simlock, removes the session folders of that lease under its tenant, including one a --session name made, and keeps another live lease's folder", async () => {
     const rig = await setUp();
     const sessions = join(dirname(rig.stateDbPath), "agent-device", "sessions");
     await granted(rig, 1);
@@ -59,5 +60,12 @@ describe("agent-device session folders on a worker", () => {
       { exists: true, path: other },
       { exists: true, path: victim },
     ]);
+
+    const ended = join(sessions, `${leaseTenant(principals.two, 2)}_e2e-ios-0`);
+    await command(rig, "snapshot", 2, { token: secrets.two }, { session: "e2e-ios-0" });
+    await sessionFolder(rig, ended);
+    await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+    await expect.poll(() => rig.filesystem.exists(ended), { timeout: 5_000 }).toBe(false);
+    expect(await rig.filesystem.exists(other)).toBe(false);
   });
 });
