@@ -11,14 +11,12 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
-  readDrawerTab,
   readFilter,
   searchWorkers,
   upMeta,
   type WorkerFilter,
   writeDrawerTab,
   writeFilter,
-  type DeviceDrawerTab,
   type DeviceRow,
   type WorkerPage,
   type WorkerRow,
@@ -27,7 +25,6 @@ import {
   workerRow,
   writeWorkerTab,
 } from "../model/worker-page";
-import { type StreamOffer, streamOffer } from "../model/screen";
 import { type WorkerList, workerPath } from "../model/workers";
 import { type EventRow, eventRows } from "../model/event-list";
 import { eventsOfWorker, type HistoryEnd, historyEnd } from "../model/events";
@@ -176,22 +173,14 @@ export function useDeviceDrawer(
 ): {
   readonly view: LoadView<DeviceRow | undefined>;
   readonly close: () => void;
-  readonly tab: DeviceDrawerTab;
-  readonly chooseTab: (tab: DeviceDrawerTab) => void;
-  readonly stream: StreamOffer;
 } {
   const page = useWorkerPage(workerId);
   const search = useSearch();
-  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers;
   return {
-    // why: each choice replaces the entry rather than adding one, as the worker page's tabs do.
-    chooseTab: (tab) => setSearch(writeDrawerTab(search, tab), { replace: true }),
     // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept; the
     // drawer's own tab belongs to one open drawer, so it goes.
     close: () =>
       navigate(`${workerPath(workerId)}${writeDrawerTab(search, "details")}`, { replace: true }),
-    stream: streamOffer(workers?.find((worker) => worker.id === workerId)),
-    tab: readDrawerTab(search),
     view: mapView(page, (shown) => shown?.overview.devices?.find((row) => row.id === deviceId)),
   };
 }

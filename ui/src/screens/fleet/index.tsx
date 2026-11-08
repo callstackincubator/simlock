@@ -22,14 +22,20 @@ import {
   WORKER_FILTERS,
   type WorkerRow,
 } from "../../state/workers";
+import { StreamingPage, LegacyWatchRedirect } from "./streaming-page";
 import { WorkerPageScreen } from "./worker-page";
 
 export function FleetScreen() {
-  const { deviceId, workerId } = useFleetAddress();
-  return workerId === undefined ? (
-    <FleetTable />
-  ) : (
-    <WorkerPageScreen id={workerId} deviceId={deviceId} />
+  const { deviceId, streaming, workerId } = useFleetAddress();
+  if (workerId === undefined) return <FleetTable />;
+  if (streaming === true && deviceId !== undefined) {
+    return <StreamingPage workerId={workerId} deviceId={deviceId} />;
+  }
+  return (
+    <>
+      <LegacyWatchRedirect workerId={workerId} deviceId={deviceId} />
+      <WorkerPageScreen id={workerId} deviceId={deviceId} />
+    </>
   );
 }
 

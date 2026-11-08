@@ -1,12 +1,13 @@
 import "./screen-panel.css";
 
-import { useId } from "react";
+import type { CSSProperties } from "react";
 
-import { Facts, InfoPopover, Refusal, Status } from "../../ds";
-import { type Screen, type StreamOffer, useDeviceScreen } from "../../state/screen";
+import { Refusal } from "../../ds";
+import { type StreamOffer, useDeviceScreen } from "../../state/screen";
 
-// why: the hook lives in the panel's own component so that leaving the tab, closing the drawer and
-// leaving the device all end the same capture, and a panel that is not drawn never starts one.
+// why: the hook lives in the panel's own component so that leaving the page ends the capture, and a
+// panel that is not drawn never starts one. The picture sits in a phone-shaped frame with two pills
+// over it that say what the stream is doing, from the decoder's own figures.
 export function ScreenPanel(props: {
   readonly workerId: string;
   readonly deviceId: string;
@@ -15,39 +16,29 @@ export function ScreenPanel(props: {
 }) {
   const { deviceId, offer, state, workerId } = props;
   const shown = useDeviceScreen(workerId, deviceId, state, offer);
-  return shown.kind === "picture" ? (
-    <ScreenView screen={shown.screen} />
-  ) : (
-    <p className="muted device-drawer-body">{shown.text}</p>
-  );
-}
-
-function ScreenView(props: { readonly screen: Screen }) {
-  const { screen } = props;
+  if (shown.kind !== "picture") return <p className="muted screen-sentence">{shown.text}</p>;
+  const { screen } = shown;
   const { live, note, readout, waiting } = screen;
-  const title = useId();
+  const landscape = screen.width > screen.height && screen.height > 0;
   return (
-    <section className="screen-panel" aria-labelledby={title}>
-      <header className="screen-head">
-        <h3 id={title} className="lease-card-title">
-          Screen
-        </h3>
-        <InfoPopover label="Stream details">
-          <Facts
-            facts={[
-              {
-                label: "State",
-                value: <Status tone={readout.state.tone}>{readout.state.word}</Status>,
-              },
-              ...readout.facts.map((fact) => ({
-                label: fact.label,
-                value: <span className="mono">{fact.value}</span>,
-              })),
-            ]}
-          />
-        </InfoPopover>
-      </header>
-      <div className="phone">
+    <>
+      {readout.overlay === undefined ? null : (
+        <div className="screen-pills">
+          <span className="screen-pill">
+            <i aria-hidden="true" />
+            LIVE · {readout.overlay.rate}
+          </span>
+          <span className="screen-pill">{readout.overlay.summary}</span>
+        </div>
+      )}
+      <div
+        className={landscape ? "phone phone-landscape" : "phone"}
+        style={
+          screen.height > 0
+            ? ({ "--picture-ratio": `${screen.width} / ${screen.height}` } as CSSProperties)
+            : undefined
+        }
+      >
         {live ? (
           <canvas
             aria-label="The device's screen"
@@ -62,6 +53,6 @@ function ScreenView(props: { readonly screen: Screen }) {
         {waiting === undefined ? null : <p className="phone-wait">{waiting}</p>}
       </div>
       {note === undefined ? null : <Refusal message={note} />}
-    </section>
+    </>
   );
 }
