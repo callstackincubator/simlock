@@ -41,12 +41,7 @@ export function InboxScreen() {
       <ActionBar label={`Actions for ${row.subject}`} entries={actionsOf(row).menu} />
     );
   return (
-    <Page
-      title="Inbox"
-      actions={
-        view.kind === "ready" ? <span className="muted">{view.data.problems} open</span> : null
-      }
-    >
+    <Page title="Inbox">
       <Toolbar
         start={
           <ChoiceChips

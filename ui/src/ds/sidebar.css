@@ -102,7 +102,7 @@
 .sidebar-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -425,6 +425,15 @@
   .sidebar-open .sidebar-nav,
   .sidebar-open .sidebar-foot {
     display: flex;
+  }
+
+  .sidebar-open .sidebar-foot {
+    margin-top: var(--space-3);
+    padding: var(--space-3) 0 var(--space-1);
+  }
+
+  .sidebar-open .sidebar-account {
+    padding: var(--space-3);
   }
 
   .sidebar-toggle {

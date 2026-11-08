@@ -10,6 +10,7 @@ import {
   Page,
   Pill,
   SearchField,
+  Hint,
 } from "../../ds";
 import { BASELINE_FILTERS, type BaselineRow, useBaselines } from "../../state/baselines";
 
@@ -29,11 +30,6 @@ const COLUMNS: readonly Column<BaselineRow>[] = [
           <small className="baseline-detail" title={row.detail}>
             {row.detail}
           </small>
-          {row.staleReason === undefined ? null : (
-            <small className="baseline-reason baseline-reason-under" title={row.staleReason}>
-              {row.staleReason}
-            </small>
-          )}
         </span>
       </span>
     ),
@@ -63,12 +59,9 @@ const COLUMNS: readonly Column<BaselineRow>[] = [
   {
     cell: (row) => (
       <span className="baseline-state">
-        <Pill tone={row.state === "ready" ? "ok" : "warn"}>{row.state}</Pill>
-        {row.staleReason === undefined ? null : (
-          <span className="baseline-reason" title={row.staleReason}>
-            {row.staleReason}
-          </span>
-        )}
+        <Hint text={row.staleReason ?? ""}>
+          <Pill tone={row.state === "ready" ? "ok" : "warn"}>{row.state}</Pill>
+        </Hint>
       </span>
     ),
     className: "baseline-state-col",
