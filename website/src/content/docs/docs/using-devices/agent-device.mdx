@@ -28,7 +28,7 @@ On each agent's machine:
 - Its own Simlock agent token, unless the agent runs on the worker's Mac (see [On the same Mac](#on-the-same-mac)).
 
 <Aside type="caution">
-Simlock tells agents apart by token. Two agents that share a token share one agent-device session and see each other's devices.
+Simlock tells agents apart by token, and each lease apart within a token. Every lease has its own agent-device sessions, uploads and artifacts, so two runs on one token never share a session, even when both use the same session name. A call that names no lease, such as `session list`, still sees the token's.
 </Aside>
 
 ## Turn it on
@@ -158,7 +158,7 @@ agent-device snapshot --session s1
 agent-device close --session s1
 ```
 
-Pass `--session` on every command. All local agents share the file's one token, so give each agent its own `--session` name, or they will see each other's devices.
+Pass `--session` on every command. All local agents share the file's one token, so a call that names no lease, such as `devices` before `open`, sees every local agent's devices. Give each agent its own `--session` name.
 
 What to know about the file:
 

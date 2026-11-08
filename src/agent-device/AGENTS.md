@@ -34,7 +34,7 @@ Front:
 - `checkRequest` (`front/request-rules.ts`) runs before anything is forwarded: no platform but iOS and Android, no device selector but the leased one, no device set or allowlist, `install` only from an upload, `devices` alone and not streamed.
 - `deviceExcept` becomes the lease's `except` in `stringFields` and is not forwarded to agent-device (`front/allocate.ts`).
 - A `devices` answer is cut to the token's leases before the CLI gets it.
-- The host sets the tenant to the requester's id and overwrites the client's.
+- The host sets the tenant and overwrites the client's. A call that names a lease gets a tenant made from the principal and the lease id (`shared/tenant.ts`), so each lease's sessions, uploads and artifacts are its own; a call that names none keeps the principal. A relayed call keeps the gateway's tenant, which names the lease already. On a worker, a non-RPC call whose lease header names a lease the token does not hold is refused 403.
 - A heartbeat is forwarded with `ttlMs` raised to the ceiling (`agentDeviceLeaseMaxTtlMs`), then renews the simlock lease, with `lease.renew` only when it moves the deadline. When agent-device says the lease is gone, the simlock lease is released and the reply is "ended by simlock".
 - On a gateway, a lease its `lease.list` omits is ended only when the index lost it (`HostLink.stillHeld`); a worker's list is final.
 - A release goes to agent-device first, then `lease.release`.
@@ -67,7 +67,7 @@ Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serve
 
 1. The gateway's front runs the same rules; its link is `RelayHostLink`.
 2. The allocate's `lease.request` requires the `agent-device` capability, so the gateway places it on a worker whose capability is available.
-3. Calls forwarded to the lease's worker carry a tenant made from the gateway's instance id and the principal (`relayTenant`); standalone `boot` is answered by the gateway front instead. A relayed lease that is not the token's is refused with 403. Without a lease only `GET /health` is relayed, to the first undrained capable worker.
+3. Calls forwarded to the lease's worker carry a tenant made from the gateway's instance id, the principal and the lease id (`relayTenant`); standalone `boot` is answered by the gateway front instead. A relayed lease that is not the token's is refused with 403. Without a lease only `GET /health` is relayed, to the first undrained capable worker.
 4. Relayed calls drop the client's `x-agent-device-instance` and `x-agent-device-upstream-instance` pins: they name the daemon `/health` was read from, not the lease's.
 5. On the worker, `agentDeviceRelayTarget` hands the call to `RoutedHostLink` and the host, with the tenant as the requester. No front rules run on the worker.
 6. Worker unreachable: the call answers "try again". A command so answered ends its renewal reference without releasing the lease or ending the worker's work; the last reference ends with one final renewal attempt.
@@ -77,4 +77,4 @@ Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serve
 ## Known gaps
 
 - **A daemon restart loses agent-device leases.** The next heartbeat answers ended by simlock and the simlock lease is released. A call on a phone lease drops the client's instance pins too (`front/host-link.ts`), since they name the simulator daemon; so this holds for the phone daemon as well.
-- **Agents sharing a token share a tenant**, and see each other's sessions.
+- **Calls that name no lease share the token's tenant**: `session list` and an upload with no lease header see what every run of the token left under it.
