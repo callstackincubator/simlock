@@ -396,6 +396,94 @@ test.describe("the shell", () => {
     expect(await text()).toBe("rgb(17, 17, 16)");
   });
 
+  test("Overview keeps cards and header contained and passes axe at the required viewports and themes", async ({
+    daemon,
+    page,
+  }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await signIn(page, daemon.tokens.operator);
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+    const directory = "docs/internal/console-redesign/current";
+    await mkdir(directory, { recursive: true });
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      for (const theme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await settled(page);
+        const layout = await page.evaluate(() => {
+          const head = document.querySelector(".page-head")!;
+          const title = head.querySelector("h1")!.getBoundingClientRect();
+          const actions = head.querySelector(".page-actions")?.getBoundingClientRect();
+          const cards = Array.from(document.querySelectorAll(".panel"), (element) => {
+            const rect = element.getBoundingClientRect();
+            return { left: rect.left, right: rect.right };
+          });
+          return {
+            scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            cards,
+            collision:
+              actions !== undefined &&
+              title.left < actions.right &&
+              title.right > actions.left &&
+              title.top < actions.bottom &&
+              title.bottom > actions.top,
+          };
+        });
+        expect(layout.scroll, `${theme} ${viewport.width} page scroll`).toBe(false);
+        expect(layout.cards.length).toBeGreaterThan(0);
+        for (const card of layout.cards) {
+          expect(card.left).toBeGreaterThanOrEqual(0);
+          expect(card.right).toBeLessThanOrEqual(viewport.width);
+        }
+        expect(layout.collision, `${theme} ${viewport.width} title/actions`).toBe(false);
+        const results = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
+        expect(
+          results.violations.map((violation) => ({
+            id: violation.id,
+            targets: violation.nodes.map((node) => node.target.join(" ")),
+          })),
+          `${theme} ${viewport.width}`,
+        ).toEqual([]);
+        const capturePath = `${directory}/overview-shell-${theme}-${viewport.width}x${viewport.height}.png`;
+        await page.screenshot({ path: capturePath, animations: "disabled" });
+        await testInfo.attach(`overview-shell-${theme}-${viewport.width}`, {
+          path: capturePath,
+          contentType: "image/png",
+        });
+        if (viewport.width === 390) {
+          await page.getByRole("button", { name: "Open menu" }).click();
+          expect(await hasHorizontalScroll(page)).toBe(false);
+          const menuAudit = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          expect(menuAudit.passes.map((rule) => rule.id)).toContain("color-contrast");
+          expect(
+            menuAudit.violations.map((violation) => ({
+              id: violation.id,
+              targets: violation.nodes.map((node) => node.target.join(" ")),
+            })),
+            `${theme} open mobile menu`,
+          ).toEqual([]);
+          const menuPath = `${directory}/overview-shell-${theme}-390x844-menu.png`;
+          await page.screenshot({ path: menuPath, animations: "disabled" });
+          await testInfo.attach(`overview-shell-${theme}-390-menu`, {
+            path: menuPath,
+            contentType: "image/png",
+          });
+          await page.getByRole("button", { name: "Close menu" }).click();
+        }
+      }
+    }
+  });
+
   for (const colorScheme of ["light", "dark"] as const) {
     test(`the shell, and Overview and Inbox empty and busy, pass an automated WCAG AA contrast check (${colorScheme})`, async ({
       daemon,

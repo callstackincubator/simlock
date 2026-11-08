@@ -255,8 +255,8 @@ The stages' “merge” above means merge-forward integration into the retained
 feature stack, not an early merge to `main`: stages 1–6 start after foundation
 review, stage 7 after their reviews and integration. Delivery rule 15 keeps
 all PRs open and merges the complete stack together. The orchestrator orders
-parallel branches into that stack as reviews pass. All delivery agents use
-GPT 6.1 Sol as the maintainer requested.
+parallel branches into that stack as reviews pass. Subsequent delivery agents
+use GPT 6.1 Terra; completed Sol spec checks remain valid.
 
 
 Foundation runs first on the current committed baseline. Redesign owns the
