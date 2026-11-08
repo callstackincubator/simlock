@@ -159,7 +159,7 @@ describe("the Overview's live figures", () => {
 });
 
 describe("the Overview on a single host", () => {
-  it("shows all six numbers, the worker wall and both charts, and no table but the charts' own", async () => {
+  it("shows all six numbers, the worker table and both charts", async () => {
     renderConsole({
       mode: "worker",
       routes: { ...STATS, "/v1/workers": { body: { workers: [ONE_HOST] } } },
@@ -176,9 +176,10 @@ describe("the Overview on a single host", () => {
     expect(screen.getByRole("heading", { name: /^Requests waiting/ })).toBeVisible();
     const wall = screen.getByRole("region", { name: "Fleet" });
     expect(within(wall).getAllByRole("link", { name: "mac-studio-01" })).toHaveLength(1);
+    expect(within(wall).getAllByRole("table")).toHaveLength(1);
     expect(
       screen.getAllByRole("table").map((table) => table.querySelector("caption")?.textContent),
-    ).toEqual(["Leases held", "Requests in the queue"]);
+    ).toEqual([undefined, "Leases held", "Requests in the queue"]);
     expect(screen.queryByRole("region", { name: "Activity" })).toBeNull();
   });
 });
@@ -407,8 +408,8 @@ describe("the Overview's six numbers", () => {
   });
 });
 
-describe("the Overview's worker wall", () => {
-  it("draws a tile for every worker, with no table or pager, and Open fleet goes to /fleet", async () => {
+describe("the Overview's Fleet card", () => {
+  it("draws a row for every worker in the Fleet table, with no pager, and Open fleet goes to /fleet", async () => {
     const { user } = renderConsole({
       routes: {
         ...STATS,
@@ -424,10 +425,10 @@ describe("the Overview's worker wall", () => {
     });
 
     const wall = await screen.findByRole("region", { name: "Fleet" });
-    expect(within(wall).getAllByRole("listitem")).toHaveLength(2);
-    expect(within(wall).getByRole("link", { name: "worker-a" })).toBeVisible();
-    expect(within(wall).getByRole("link", { name: "worker-b" })).toBeVisible();
-    expect(within(wall).queryByRole("table")).toBeNull();
+    const table = within(within(wall).getByRole("table"));
+    for (const name of ["worker-a", "worker-b"]) {
+      expect(table.getByRole("link", { name }).closest("tr")).toBeVisible();
+    }
     expect(screen.queryByRole("navigation", { name: /pages$/ })).toBeNull();
 
     await user.click(within(wall).getByRole("link", { name: "worker-a" }));

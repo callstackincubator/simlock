@@ -2,8 +2,6 @@ import "./visuals.css";
 
 import type { CSSProperties, ReactNode } from "react";
 
-import { Link } from "./link";
-import { Meter } from "./meter";
 import type { Tone } from "./status";
 
 export function Pill({
@@ -169,89 +167,6 @@ export function Banner({
         <span>{detail}</span>
       </span>
       {action}
-    </div>
-  );
-}
-
-export function WorkerTile({
-  name,
-  title,
-  to,
-  pill,
-  ios,
-  android,
-  leased,
-  tone,
-  cpu,
-  memory,
-  disk,
-  cpuTone = "neutral",
-  memoryTone = "neutral",
-  diskTone = "neutral",
-}: {
-  readonly name: string;
-  readonly title: string;
-  readonly to: string;
-  readonly pill?: ReactNode;
-  readonly ios: ReactNode;
-  readonly android?: ReactNode;
-  readonly leased?: ReactNode;
-  readonly tone?: Tone | "neutral";
-  readonly cpu?: number | undefined;
-  readonly memory?: number | undefined;
-  readonly disk?: number | undefined;
-  readonly cpuTone?: Tone | "neutral";
-  readonly memoryTone?: Tone | "neutral";
-  readonly diskTone?: Tone | "neutral";
-}) {
-  return (
-    <div
-      className={
-        tone === "warn" || tone === "error" ? `worker-tile worker-tile-${tone}` : "worker-tile"
-      }
-    >
-      <Link className="worker-tile-name" to={to} title={title}>
-        {name}
-      </Link>
-      {pill === undefined ? null : <div>{pill}</div>}
-      <div className="worker-tile-slots">
-        <span className="worker-tile-group">{ios}</span>
-        {android === undefined ? null : (
-          <>
-            <span className="worker-tile-divider" aria-hidden="true" />
-            <span className="worker-tile-group">{android}</span>
-          </>
-        )}
-        {leased === undefined ? null : <span className="worker-tile-fraction">{leased}</span>}
-      </div>
-      <div className="worker-tile-metrics">
-        <WorkerMetric label="CPU" percent={cpu} tone={cpuTone} />
-        <WorkerMetric label="MEM" percent={memory} tone={memoryTone} />
-        <WorkerMetric label="DISK" percent={disk} tone={diskTone} />
-      </div>
-    </div>
-  );
-}
-
-function WorkerMetric({
-  label,
-  percent,
-  tone,
-}: {
-  readonly label: string;
-  readonly percent: number | undefined;
-  readonly tone: Tone | "neutral";
-}) {
-  const known = percent !== undefined && Number.isFinite(percent);
-  return (
-    <div className="worker-metric">
-      <span>{label}</span>
-      {known ? (
-        <Meter percent={percent} tone={tone} size="thin" />
-      ) : (
-        <span className="worker-metric-empty" />
-      )}
-      <span>{known ? `${percent}%` : "—"}</span>
     </div>
   );
 }

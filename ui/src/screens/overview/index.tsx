@@ -16,11 +16,10 @@ import {
   Pill,
   Refusal,
   Ring,
-  SlotLegend,
-  Slots,
   StatRow,
   StatTile,
-  WorkerTile,
+  WorkerTable,
+  type WorkerTableGroup,
 } from "../../ds";
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import type { FiguresState } from "../../state/figures";
@@ -28,10 +27,11 @@ import {
   type EndingCard,
   type Overview,
   type PlatformCapacity,
+  type OverviewFleet,
   type QueueCard,
-  type WallWorker,
   useOverview,
 } from "../../state/overview";
+import { useWorkerMenu } from "../../state/workers";
 
 type Unavailable = { readonly unavailable: string };
 type FigureChart = Extract<FiguresState, { kind: "ready" }>["data"]["charts"][number];
@@ -107,8 +107,7 @@ export function OverviewBody(props: {
             actions={
               <>
                 <span className="overview-meta overview-fleet-meta">
-                  {overview.workers.length} workers ·
-                  <SlotLegend kinds={["leased", "ready", "free"]} />
+                  {overview.fleet.total} workers
                 </span>
                 <ButtonLink to="/fleet" small>
                   Open fleet
@@ -116,17 +115,7 @@ export function OverviewBody(props: {
               </>
             }
           >
-            {overview.workers.length === 0 ? (
-              <p className="empty">No workers have connected.</p>
-            ) : (
-              <ul className="overview-wall">
-                {overview.workers.map((worker) => (
-                  <li key={worker.key}>
-                    <Tile worker={worker} />
-                  </li>
-                ))}
-              </ul>
-            )}
+            <FleetCard fleet={overview.fleet} />
           </Panel>
           <LeasesHeld chart={leases} figures={figures} />
         </div>
@@ -181,45 +170,25 @@ export function OverviewBody(props: {
   );
 }
 
-function meterOf(worker: WallWorker, label: string) {
-  const found = worker.meters.find((meter) => meter.label === label);
-  return { percent: found?.percent, tone: found?.tone ?? "neutral" } as const;
-}
-
-// why: past ten slots the wall shows one capped meter for the worker, not a row of squares per platform.
-function slotsOf(worker: WallWorker) {
-  if (worker.ios.length + worker.android.length > 10) {
-    return {
-      android: undefined,
-      ios: <Slots slots={[...worker.ios, ...worker.android]} label={worker.slotsLabel} />,
-    };
-  }
-  return {
-    android: <Slots squares slots={worker.android} label={`Android: ${worker.slotsLabel}`} />,
-    ios: <Slots squares slots={worker.ios} label={`iOS: ${worker.slotsLabel}`} />,
-  };
-}
-
-function Tile({ worker }: { readonly worker: WallWorker }) {
-  const cpu = meterOf(worker, "CPU");
-  const memory = meterOf(worker, "Memory");
-  const disk = meterOf(worker, "Disk");
-  const { tone, word } = worker.health;
-  const issue = tone === "ok" ? undefined : <Pill tone={tone}>{word}</Pill>;
+// why: the same table as the Fleet page; a card that cuts the list says so in its footer, and the
+// Open fleet button opens the rest.
+function FleetCard({ fleet }: { readonly fleet: OverviewFleet }) {
+  const entries = useWorkerMenu();
+  const shown = fleet.attention.length + fleet.healthy.length;
+  if (shown === 0) return <p className="empty">No workers have connected.</p>;
+  const groups: readonly WorkerTableGroup<OverviewFleet["attention"][number]>[] = [
+    {
+      id: "attention" as const,
+      label: `Needs attention ${fleet.attention.length}`,
+      rows: fleet.attention,
+    },
+    { id: "healthy" as const, label: `Healthy ${fleet.healthy.length}`, rows: fleet.healthy },
+  ].filter((group) => group.rows.length > 0);
   return (
-    <WorkerTile
-      name={worker.name}
-      title={worker.name}
-      to={worker.to}
-      tone={tone === "ok" ? "neutral" : tone}
-      pill={issue}
-      {...slotsOf(worker)}
-      cpu={cpu.percent}
-      memory={memory.percent}
-      disk={disk.percent}
-      cpuTone={cpu.tone}
-      memoryTone={memory.tone}
-      diskTone={disk.tone}
+    <WorkerTable
+      groups={groups}
+      entries={entries}
+      count={shown < fleet.total ? `${shown} of ${fleet.total}` : undefined}
     />
   );
 }

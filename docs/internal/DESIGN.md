@@ -106,7 +106,7 @@ edges); the browser lane checks it with axe.
 Designed at 1440×900, where every page fits with no page scroll: a page is a
 column of cards, and the last row takes the rest (`flex: 1`). Only lists and
 feeds scroll, inside their card. Below 1440px the grids give first: six KPI
-tiles become three by two, five healthy tiles four then three columns, the
+tiles become three by two, the
 Overview's right column drops under the charts, and the Leases inspector
 becomes a drawer strictly below 1280px (1279 is a drawer, 1280 a pane). Under
 768px the sidebar is a top bar with a menu and tables stack into blocks, as
@@ -120,11 +120,11 @@ Rules that keep text from overflowing:
   ellipsis above 34 characters (`claude-code:3f2a9c…7f91c4`), since its
   tail tells sessions apart. One helper in `ui/src/model/` does it.
 - A status pill never shares a line with a name that can grow: it goes
-  under the name (worker tiles) or in its own State column (Fleet and
+  next to the name (the list row under 1100px) or in its own State column (Fleet and
   device tables).
 - Slots are a meter and the fraction (`10 / 20`) in every table and tile. Squares
-  are drawn only where a caller asks for them (a worker page's Slots card, and the
-  Overview's wall tile) and only up to ten slots; 100 slots never draw 100 squares.
+  are drawn only where a caller asks for them (a worker page's Slots card) and
+  only up to ten slots; 100 slots never draw 100 squares.
 - A page title ellipsises; its action buttons never shrink.
 - A free-text reason clamps to two lines. A long id in facts wraps.
 - Counts live in one place: the page header or a group header, never on a
@@ -216,11 +216,13 @@ own that one of them draws. Named sizes and colours are above.
 - **Capabilities.** The worker page's left card lists them under their own
   label after Host: one row each, the name and a pill (`on` ok, `off` idle,
   `unavailable` warn with its reason beneath).
-- **Worker tile.** In the Overview's wall (a 4-column grid with 1px
-  `--border` gaps): mono name, its pill under it
-  when not healthy, the slot squares (iOS, a 1px divider, Android) or the
-  capped meter, then three meters CPU / MEM / DISK with 10px mono labels
-  and the figure in muted mono at the right.
+- **Worker table.** One `ds` component, `WorkerTable`, draws workers on the Fleet
+  page and in the Overview's Fleet card: grouped rows (Needs attention, Healthy), the
+  State pill with its reason on hover, a Slots meter and fraction, CPU / Mem / Disk
+  meters, Leases and `⋯`; under 1100px a two-line list row. The Overview card shows
+  the first eight rows of the Fleet page's grouping (a worker with an issue first); a
+  longer list ends in "8 of N", the card's Open fleet button opens the rest. There is
+  no tile wall and no slot legend.
 - **Slots.** 12px squares, 3px apart: leased
   `--slot-leased`, ready `--status-ok`, booting `--status-idle`, quarantined
   `--status-error`, absent `--status-warn`, free a dashed `--border-strong`

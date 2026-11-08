@@ -11,7 +11,7 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
-  fleetRow,
+  fleetGroups,
   type FleetRow,
   readFilter,
   searchWorkers,
@@ -129,12 +129,12 @@ export function useFleet(): LoadView<FleetPage> {
   const keep = listSearch(search);
 
   return mapView(workers, (list) => {
-    const rows = shown.map((worker) => fleetRow(worker, keep, now.server));
+    const { attention, healthy } = fleetGroups(shown, keep, now.server);
     return {
-      attention: rows.filter((row) => row.health.tone !== "ok"),
+      attention,
       empty: list.workers.length === 0,
       filter,
-      healthy: rows.filter((row) => row.health.tone === "ok"),
+      healthy,
       query,
       // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
       // letter of the search.

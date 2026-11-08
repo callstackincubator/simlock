@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { figuresOf } from "../../model/figures";
 import { overviewOf } from "../../model/overview";
 import { statsOf } from "../../model/test-support";
-import type { Overview, WallWorker } from "../../state/overview";
+import type { WorkerView } from "../../model/workers";
+import type { Overview } from "../../state/overview";
 import { OverviewBody } from "./index";
 
 function text(html: string): string {
@@ -22,20 +23,26 @@ const quiet: Overview = {
   figures: { kind: "loading" },
   queue: { meta: "0 waiting", rows: [] },
   tiles: [],
-  workers: [],
+  fleet: { attention: [], healthy: [], total: 0 },
 };
 
-function tile(name: string, slots: number, tone: "ok" | "warn" = "ok"): WallWorker {
+function host(id: string, over: Partial<WorkerView> = {}): WorkerView {
   return {
-    android: [],
-    health: { tone, word: tone === "ok" ? "connected" : "drained" },
-    ios: Array.from({ length: slots }, () => ({ kind: "leased" as const, label: "leased" })),
-    key: name,
-    meters: [{ label: "CPU", percent: 40, tone: "ok" }],
-    name,
-    slotsLabel: `${slots} leased`,
-    to: `/fleet/${name}`,
-  };
+    capacity: {
+      android: { limit: 2, running: 0 },
+      global: { limit: 6, running: 0, warm: 0 },
+      ios: { limit: 4, running: 0 },
+    },
+    catalog: [],
+    connection: "connected",
+    devices: [],
+    drained: false,
+    id,
+    label: id,
+    lastSeenAt: NOW,
+    leases: [],
+    ...over,
+  } as unknown as WorkerView;
 }
 
 function withFigures(shape: { coversFrom?: number; partial?: boolean }): Overview {
@@ -54,6 +61,10 @@ function withFigures(shape: { coversFrom?: number; partial?: boolean }): Overvie
     requests: [],
     workers: [],
   });
+}
+
+function fleetOfWorkers(workers: readonly WorkerView[]): Overview["fleet"] {
+  return overviewOf({ now: NOW, requests: [], workers }).fleet;
 }
 
 describe("the overview screen", () => {
@@ -103,22 +114,39 @@ describe("the overview screen", () => {
     expect(html).toContain('href="/usage?range=6h"');
   });
 
-  it("draws one wall tile per worker with its link, a pill only for a worker with an issue, and a capped slot meter past ten slots", () => {
+  it("draws the Fleet card as the Fleet page's table: groups, a row link each, the state pill, and the Open fleet button", () => {
     const html = inConsole(
       <OverviewBody
         overview={{
           ...quiet,
-          workers: [tile("mac-1", 2), tile("mac-2", 20, "warn")],
+          fleet: fleetOfWorkers([host("mac-1"), host("mac-2", { drained: true })]),
         }}
       />,
     );
+    const shown = text(html);
 
     expect(html).toContain('href="/fleet/mac-1"');
     expect(html).toContain('href="/fleet/mac-2"');
-    expect(html.match(/class="pill /g)).toHaveLength(1);
-    expect(text(html)).toContain("drained");
-    expect(text(html)).toContain("20 / 20");
+    expect(shown).toContain("Needs attention 1");
+    expect(shown).toContain("Healthy 1");
+    expect(shown).toContain("Worker State Slots CPU Mem Disk Leases");
+    expect(shown).toContain("drained");
+    expect(shown).toContain("2 workers");
+    expect(html).toContain('<tr class="row-warn"');
+    expect(html).not.toContain("overview-wall");
+    expect(shown).toContain("1–2 of 2");
     expect(html).toContain('href="/fleet">Open fleet</a>');
+  });
+
+  it("says how many of the workers the card shows when it cuts the list", () => {
+    const workers = Array.from({ length: 10 }, (_, index) => host(`w-${index}`));
+    const html = inConsole(
+      <OverviewBody overview={{ ...quiet, fleet: fleetOfWorkers(workers) }} />,
+    );
+
+    expect(text(html)).toContain("10 workers");
+    expect(text(html)).toContain("8 of 10");
+    expect(html.match(/href="\/fleet\/w-\d"/g)).toHaveLength(16);
   });
 
   it("lists the queue and the ending leases as links, and says a refused queue is unavailable, not empty", () => {
