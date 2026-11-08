@@ -497,7 +497,7 @@
   border-radius: 8px;
   background: var(--bg);
   color: var(--text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -526,6 +526,12 @@
 
 .sidebar-search kbd::before {
   content: "⌘K";
+}
+
+@media (prefers-color-scheme: dark) {
+  .sidebar-search kbd {
+    border-color: #3a3a41;
+  }
 }
 
 .sidebar-collapsed .sidebar-search kbd {
