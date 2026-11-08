@@ -27,10 +27,7 @@ async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
 }
 
 function workerRows(page: Page): Locator {
-  return page
-    .getByRole("table")
-    .getByRole("row")
-    .filter({ has: page.getByRole("cell") });
+  return page.locator("main .fleet-card");
 }
 
 async function askForWorkerList(page: Page, daemon: RunningDaemon): Promise<number> {

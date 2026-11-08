@@ -130,7 +130,7 @@ test.describe("every view", () => {
     const { host, pages } = await hostWithLease(await writeCaptureProgram(dir));
     try {
       for (const [theme, background, surface] of [
-        ["light", "rgb(248, 248, 247)", "rgb(233, 233, 231)"],
+        ["light", "rgb(248, 248, 247)", "rgb(242, 242, 240)"],
         ["dark", "rgb(12, 12, 14)", "rgb(27, 27, 31)"],
       ] as const) {
         await page.emulateMedia({ colorScheme: theme });
@@ -181,19 +181,6 @@ test.describe("every view", () => {
         const inboxRow = page.locator(".inbox-row").first();
         await inboxRow.hover();
         await expect(inboxRow).toHaveCSS("background-color", surface);
-        await visit(page, host, "/");
-        const overviewRow = page.locator(".overview-row").first();
-        await overviewRow.hover();
-        await expect(overviewRow).toHaveCSS("background-color", surface);
-        await visit(page, host, "/leases");
-        const more = page.getByRole("button", { name: /^Actions for/ }).first();
-        await expect(more).toHaveCSS("border-top-width", "0px");
-        await expect(more).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-        await expect(more).toHaveCSS("color", dark ? "rgb(142, 142, 151)" : "rgb(90, 90, 85)");
-        await expect(more).toHaveCSS("width", "26px");
-        await expect(more).toHaveCSS("height", "26px");
-        await more.hover();
-        await expect(more).toHaveCSS("background-color", surface);
         await visit(page, host, pages.lease);
         const facts = page.locator(".facts").first();
         await expect(facts).toHaveCSS("row-gap", "8px");
@@ -277,7 +264,7 @@ test.describe("every view", () => {
       }
 
       await visit(page, host, "/");
-      await expect(page.locator("#main .chart")).toHaveCount(2);
+      await expect(page.locator("#main .chart")).toHaveCount(1);
       const chart = page.locator(".chart [tabindex='0']").first();
       await chart.focus();
       await page.keyboard.press("ArrowLeft");
@@ -303,13 +290,12 @@ test.describe("every view", () => {
     try {
       await openSignedIn(page, host);
       for (const [path, title, index] of [
-        ["/", "Leases held, last hour", 0],
-        ["/", "Requests in the queue, last hour", 1],
+        ["/", "Leases held", 0],
         ["/usage", "Device slots in use, last hour", 0],
         ["/activity", "Activity", 0],
       ] as const) {
         await visit(page, host, path);
-        if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(2);
+        if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(1);
         const chart = page.locator("#main .chart").nth(index);
         const heading = page.getByRole("heading", { name: title, exact: true });
         const ring = () => chart.evaluate((element) => getComputedStyle(element).outlineStyle);

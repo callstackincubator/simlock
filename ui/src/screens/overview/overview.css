@@ -5,7 +5,7 @@
   min-width: 0;
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1440px) {
   .overview-grid {
     flex: 1;
     min-height: 0;

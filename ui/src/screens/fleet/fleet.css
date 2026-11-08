@@ -189,6 +189,19 @@
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
 }
 
+/* Below the designed 1440 the healthy tiles give first: four columns, then three. */
+@media (min-width: 768px) and (max-width: 1439.98px) {
+  .fleet-cards-healthy {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1099.98px) {
+  .fleet-cards-healthy {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 .fleet-card {
   display: flex;
   min-width: 0;

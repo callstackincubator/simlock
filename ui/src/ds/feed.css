@@ -45,6 +45,13 @@
   outline-offset: -2px;
 }
 
+/* A list of rows. */
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* One row is as tall as the feed says, whatever it holds, so the rows can be placed by arithmetic. */
 .feed-list .list-item {
   height: var(--feed-row);

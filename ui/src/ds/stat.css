@@ -9,6 +9,19 @@
   list-style: none;
 }
 
+/* Below the designed 1440 the six tiles of the Overview give first: three by two, then two by three. */
+@media (max-width: 1439.98px) {
+  .stats:has(> :nth-child(6)) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 599.98px) {
+  .stats:has(> :nth-child(6)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .stat {
   min-width: 0;
 }

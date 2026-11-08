@@ -58,23 +58,6 @@
   padding: 0;
 }
 
-.grid {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.grid-sm {
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.grid-md {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-}
-
-.grid-lg {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-}
-
 .empty {
   margin: 0;
   padding: var(--space-4);

@@ -596,7 +596,7 @@ test.describe("the shell", () => {
       expect(await audit()).toEqual([]);
 
       await page.goto("/");
-      await expect(page.getByRole("region", { name: "Needs you" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Ending soon" })).toBeVisible();
       expect(await audit()).toEqual([]);
     });
   }

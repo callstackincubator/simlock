@@ -34,8 +34,6 @@
     "src/core/usage/read-thread.ts",
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
-    // why: the stream route facade is the agreed screen entry until page stages consume it; stage 7 removes this entry.
-    "ui/src/state/navigation.ts",
     "e2e/console/*.spec.ts",
     "e2e/real-proxy/*.spec.ts",
     "e2e/real-proxy/global-setup.ts",
