@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { renderConsole } from "../test/console";
+import { renderConsole, resizeWindow } from "../test/console";
 
 const PAGES = [
   { label: "Overview", path: "/" },
@@ -27,14 +27,6 @@ async function sidebar() {
 
 function title() {
   return screen.getByRole("heading", { level: 1 });
-}
-
-// why: happy-dom sizes its window through this one call, and its type is not on `window`.
-function resizeWindow(width: number, height: number): void {
-  const { happyDOM } = window as unknown as {
-    happyDOM: { setViewport(size: { height: number; width: number }): void };
-  };
-  happyDOM.setViewport({ height, width });
 }
 
 afterEach(() => {

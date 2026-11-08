@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { type Routes, renderConsole } from "../../test/console";
+import { type Routes, renderConsole, resizeWindow } from "../../test/console";
 import { lease, leaseDetails, NOW } from "../../test/fixtures";
 import { returnToTab } from "../../test/tab";
 
@@ -213,13 +213,6 @@ describe("a long list of leases", () => {
   });
 });
 
-// why: the window's width decides whether a lease opens beside the table or as a drawer.
-function setViewport(size: { readonly height: number; readonly width: number }) {
-  (window as unknown as { happyDOM: { setViewport: (size: object) => void } }).happyDOM.setViewport(
-    size,
-  );
-}
-
 // why: a pointer press on the dim layer, which is no focus target: user-event would move focus to
 // the nearest focusable ancestor, where a browser leaves it in the page.
 function clickOutside(target: HTMLElement) {
@@ -230,14 +223,14 @@ function clickOutside(target: HTMLElement) {
 
 describe("a lease's drawer on a narrower window", () => {
   afterEach(() => {
-    setViewport({ height: 720, width: 1280 });
+    resizeWindow(1280, 720);
   });
 
   it.each(["Escape", "the close button", "the dim layer"] as const)(
     "%s closes a lease's drawer and returns to /leases keeping ?page=2&size=25, with focus on the row that opened it and Back not reopening it",
     async (how) => {
       // why: below 1280px wide a lease opens as a drawer, which Escape, its close button and its dim layer close.
-      setViewport({ height: 800, width: 1100 });
+      resizeWindow(1100, 800);
       const { user } = renderConsole({
         path: "/leases?page=2&size=25",
         routes: listing(60),

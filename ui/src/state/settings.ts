@@ -14,6 +14,7 @@ import {
 import { useRouteQuery } from "./live";
 import { loadView, mapView } from "./resource";
 import { useNotify, usePreferences } from "./services";
+import { useSidebarChoice } from "./sidebar";
 
 export { HOLDER_CHOICES, ROWS_CHOICES, SETTINGS_RANGE_CHOICES, THEME_CHOICES };
 export type { ConfigSection, Settings };
@@ -38,20 +39,16 @@ export interface ConsoleSettings {
   readonly setSidebarCollapsed: (collapsed: boolean) => void;
 }
 
-export function useConsoleSettings(sidebar: {
-  readonly collapsed: boolean;
-  readonly toggle: () => void;
-}): ConsoleSettings {
+export function useConsoleSettings(): ConsoleSettings {
   const preferences = usePreferences();
   const settings = useSettings();
+  const sidebar = useSidebarChoice();
   return {
     change: (patch) => {
       preferences.change(patch);
       applySettings(preferences.settings());
     },
-    setSidebarCollapsed: (collapsed) => {
-      if (collapsed !== sidebar.collapsed) sidebar.toggle();
-    },
+    setSidebarCollapsed: sidebar.setCollapsed,
     settings,
     sidebarCollapsed: sidebar.collapsed,
   };

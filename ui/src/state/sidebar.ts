@@ -24,18 +24,29 @@ function watchPhone(change: () => void): () => void {
 // why: the operator decides the sidebar's width and every page keeps it; with no choice made, a
 // window too narrow for the sidebar, a list and a drawer side by side starts it collapsed. The
 // choice is read from the preferences, so the toggle and the Settings page always agree.
-export function useSidebar(): { readonly collapsed: boolean; readonly toggle: () => void } {
+export function useSidebarChoice(): {
+  readonly collapsed: boolean;
+  readonly setCollapsed: (collapsed: boolean) => void;
+} {
   const preferences = usePreferences();
   const saved = useSyncExternalStore(
     preferences.subscribe,
     preferences.sidebar,
     preferences.sidebar,
   );
-  // why: on a phone the sidebar is a menu that opens full width, so the desktop width choice does not apply.
-  const phone = useSyncExternalStore(watchPhone, onPhone, () => false);
-  const chosen = saved === undefined ? !wideByDefault() : saved === "narrow";
   return {
-    collapsed: chosen && !phone,
-    toggle: () => preferences.setSidebar(chosen ? "wide" : "narrow"),
+    collapsed: saved === undefined ? !wideByDefault() : saved === "narrow",
+    setCollapsed: (collapsed) => preferences.setSidebar(collapsed ? "narrow" : "wide"),
+  };
+}
+
+// why: on a phone the sidebar is a menu that opens full width, so the shell draws it expanded
+// whatever the desktop choice is; the choice itself, which Settings shows, stays as it was.
+export function useSidebar(): { readonly collapsed: boolean; readonly toggle: () => void } {
+  const choice = useSidebarChoice();
+  const phone = useSyncExternalStore(watchPhone, onPhone, () => false);
+  return {
+    collapsed: choice.collapsed && !phone,
+    toggle: () => choice.setCollapsed(!choice.collapsed),
   };
 }

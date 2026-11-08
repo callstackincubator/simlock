@@ -193,3 +193,11 @@ export function renderConsole(options: ConsoleOptions = {}) {
     user,
   };
 }
+
+// why: happy-dom sizes its window through this one call, and its type is not on `window`.
+export function resizeWindow(width: number, height: number): void {
+  const { happyDOM } = window as unknown as {
+    happyDOM: { setViewport(size: { height: number; width: number }): void };
+  };
+  happyDOM.setViewport({ height, width });
+}

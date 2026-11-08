@@ -15,7 +15,6 @@ import {
   useCopySetCommand,
   useDaemonSettings,
 } from "../../state/settings";
-import { useSidebar } from "../../state/sidebar";
 
 const SIDEBAR_CHOICES = [
   { label: "Expanded", value: "expanded" },
@@ -23,7 +22,7 @@ const SIDEBAR_CHOICES = [
 ] as const;
 
 export function SettingsScreen() {
-  const console = useConsoleSettings(useSidebar());
+  const console = useConsoleSettings();
   const daemon = useDaemonSettings();
   const copy = useCopySetCommand();
   return <SettingsBody console={console} daemon={daemon} copy={copy} />;
