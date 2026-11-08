@@ -15,7 +15,7 @@ export interface Slot {
 export function Slots(props: {
   readonly slots: readonly Slot[];
   readonly label: string;
-  readonly size?: "sm" | "lg";
+  readonly size?: "sm" | "md" | "lg";
 }) {
   const { label, size = "sm", slots } = props;
   if (slots.length > 10) {

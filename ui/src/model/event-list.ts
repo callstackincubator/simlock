@@ -1,4 +1,4 @@
-import { eventSummary, eventTone } from "./activity";
+import { eventSummary, eventTone, squareTone, summaryParts } from "./activity";
 import { inboxItems } from "../../../src/contract/inbox";
 import {
   type ConsoleEvent,
@@ -108,6 +108,29 @@ export function eventRows(
         (row) =>
           row.name.toLowerCase().includes(wanted) || row.summary.toLowerCase().includes(wanted),
       );
+}
+
+export interface LogEventRow extends EventRow {
+  // why: a log row shows who or what the event is about apart from the rest of its line, and a square
+  // for every event, where the name takes a colour only for trouble.
+  readonly subject: string;
+  readonly detail: string;
+  readonly squareTone: Tone;
+}
+
+export function logRows(
+  events: readonly ConsoleEvent[],
+  workers: readonly WorkerView[],
+  subject: SubjectFilter,
+): readonly LogEventRow[] {
+  return shownEvents(events, subject).flatMap((event) => {
+    const [row] = eventRows([event], workers, "all");
+    if (row === undefined) return [];
+    const [first = "", ...rest] = summaryParts(event, workers);
+    return [
+      { ...row, detail: rest.join(" · "), squareTone: squareTone(event.event), subject: first },
+    ];
+  });
 }
 
 export interface EventAction {

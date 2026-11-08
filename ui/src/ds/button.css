@@ -20,6 +20,12 @@
     color var(--duration);
 }
 
+.button-sm {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .button:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);

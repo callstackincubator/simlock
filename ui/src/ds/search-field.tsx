@@ -7,8 +7,9 @@ export function SearchField(props: {
   readonly label: string;
   readonly value: string;
   readonly onChange: (value: string) => void;
+  readonly placeholder?: string;
 }) {
-  const { label, onChange, value } = props;
+  const { label, onChange, placeholder = "Search", value } = props;
   return (
     <span className="search-field-wrap">
       <Icon name="search" />
@@ -16,7 +17,7 @@ export function SearchField(props: {
         type="search"
         className="search-field"
         aria-label={label}
-        placeholder="Search"
+        placeholder={placeholder}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
       />

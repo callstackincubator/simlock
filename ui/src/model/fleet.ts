@@ -1,4 +1,5 @@
-import { loadGauges } from "./load";
+import { formatBytes, loadGauges } from "./load";
+import { formatDuration } from "./time";
 import { levelOf } from "./load-thresholds";
 import type { Tone, Toned } from "./tones";
 import type { WorkerDevice, WorkerView } from "./workers";
@@ -125,4 +126,59 @@ export function slotsLabel(slots: readonly DeviceSlot[]): string {
   };
   const parts = [...counts].map(([kind, count]) => `${count} ${words[kind]}`);
   return parts.length === 0 ? "No devices" : parts.join(", ");
+}
+
+function leaseCountWord(count: number): string {
+  return `${count} ${count === 1 ? "lease" : "leases"}`;
+}
+
+// why: an attention card says in a line or two what is wrong, from the daemon's own facts: how long a
+// lost worker has been gone, what a drained one still holds, how full the disk is. `now` is left out
+// where the caller has no clock, and the age with it.
+export function workerReason(worker: WorkerView, now?: number): string {
+  const held = worker.leases?.length;
+  const parts: string[] = [];
+  if (worker.connection === "disconnected") {
+    parts.push(
+      now === undefined
+        ? "disconnected"
+        : `last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
+    );
+    if (held !== undefined && held > 0) parts.push(`${leaseCountWord(held)} held`);
+  } else if (worker.connection === "incompatible") {
+    parts.push("speaks a protocol this gateway does not");
+  } else {
+    if (worker.update !== undefined && worker.update !== null) {
+      parts.push(`updating to ${worker.update.to}, ${stageLine(worker.update)}`);
+    }
+    if (worker.drained) {
+      parts.push(
+        held === undefined || held === 0
+          ? "accepts no new requests"
+          : `${leaseCountWord(held)} left · accepts no new requests`,
+      );
+    }
+    if (worker.health === "failed") parts.push("the daemon failed");
+    if (worker.health === "starting") parts.push("still starting");
+    if (worker.capacity?.ramBudget?.overLimit === true) parts.push("over its RAM budget");
+    for (const finding of loadFindings(worker)) parts.push(loadReason(worker, finding.word));
+  }
+  return parts.join(" · ");
+}
+
+// why: the pill already says "disk 91%"; the card's line says what that is made of.
+function loadReason(worker: WorkerView, word: string): string {
+  const { load } = worker;
+  if (load === undefined) return word;
+  const gauges = loadGauges(load);
+  if (word.startsWith("CPU")) return `CPU ${gauges.cpu}% busy`;
+  if (word.startsWith("disk") && load.disk !== undefined) {
+    const { freeBytes, totalBytes } = load.disk;
+    return `${formatBytes(totalBytes - freeBytes)} used of ${formatBytes(totalBytes)}`;
+  }
+  if (word.startsWith("memory pressure")) {
+    const used = gauges.memory === undefined ? "" : `, ${gauges.memory}% used`;
+    return `${word}${used}`;
+  }
+  return word.startsWith("memory") ? `memory ${gauges.memory}% used` : word;
 }

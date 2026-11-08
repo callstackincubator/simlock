@@ -28,11 +28,14 @@ export function Ring({
   label,
   size = 54,
   tone = "neutral",
+  bare = false,
 }: {
   readonly percent?: number;
   readonly label: string;
   readonly size?: number;
   readonly tone?: Tone | "neutral";
+  // why: a card that prints the figure's name beside the ring needs no second one under it.
+  readonly bare?: boolean;
 }) {
   const known = percent !== undefined && Number.isFinite(percent);
   const value = known ? `${percent}%` : "—";
@@ -56,7 +59,11 @@ export function Ring({
         </svg>
         <span className="ring-number">{value}</span>
       </span>
-      <span className="ring-label">{label}</span>
+      {bare ? (
+        <span className="visually-hidden">{label}</span>
+      ) : (
+        <span className="ring-label">{label}</span>
+      )}
     </span>
   );
 }

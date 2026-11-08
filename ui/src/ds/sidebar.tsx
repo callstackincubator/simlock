@@ -169,20 +169,41 @@ export function Page(props: {
   readonly title: string;
   // why: a muted line of plain text that sits beside the title, as a worker's version does.
   readonly note?: string;
+  // why: a page one level down names its parent before its own title, as a link back.
+  readonly crumb?: { readonly label: string; readonly to: string };
+  // why: the state of what the page is about, drawn beside the title.
+  readonly status?: ReactNode;
   readonly actions?: ReactNode;
   readonly children: ReactNode;
 }) {
-  const { actions, children, note, title } = props;
-  const heading = <h1 tabIndex={-1}>{title}</h1>;
+  const { actions, children, crumb, note, status, title } = props;
+  const heading = (
+    <h1 tabIndex={-1}>
+      {crumb === undefined ? null : (
+        <>
+          <Link className="page-crumb" to={crumb.to}>
+            {crumb.label}
+          </Link>
+          <span className="page-crumb" aria-hidden="true">
+            {" / "}
+          </span>
+        </>
+      )}
+      {title}
+    </h1>
+  );
   return (
     <div className="page">
       <header className="page-head">
-        {note === undefined ? (
+        {note === undefined && status === undefined ? (
           heading
         ) : (
           <div className="page-title">
-            {heading}
-            <span className="page-note">{note}</span>
+            <div className="page-title-row">
+              {heading}
+              {status}
+            </div>
+            {note === undefined ? null : <span className="page-note">{note}</span>}
           </div>
         )}
         {actions === undefined ? null : <div className="page-actions">{actions}</div>}

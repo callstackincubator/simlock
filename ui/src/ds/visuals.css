@@ -33,7 +33,7 @@
 
 .visual-log { display: grid; grid-template-columns: 70px 14px minmax(0, 180px) minmax(0, 240px) minmax(0, 1fr); align-items: center; height: 30px; padding: 0 14px; border-bottom: 1px solid var(--border); font: 12px/1 var(--font-mono); white-space: nowrap; }
 .visual-log > * { overflow: hidden; text-overflow: ellipsis; }
-.visual-log > :last-child { color: var(--text-muted); }
+.visual-log > :first-child, .visual-log > :last-child { color: var(--text-muted); }
 .visual-log-warn { background: color-mix(in srgb, var(--status-warn) 6%, var(--surface)); }
 .visual-log-error { background: color-mix(in srgb, var(--status-error) 6%, var(--surface)); }
 .visual-feed { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 38px; padding: 0 14px; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
@@ -42,7 +42,7 @@
 .visual-feed-event, .visual-feed-worker, .visual-feed-time { font-family: var(--font-mono); }
 .visual-feed-worker, .visual-feed-time { color: var(--text-muted); }
 .visual-group { display: flex; align-items: center; gap: 8px; font-size: var(--text-md); font-weight: 600; }
-.visual-group-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--surface-2); color: var(--text-muted); font: 500 var(--text-2xs) var(--font-mono); }
+.visual-group-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 6px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface-2); color: var(--text-muted); font: 500 11px var(--font-mono); }
 .visual-banner { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--status-error) 20%, var(--border)); border-radius: var(--radius); background: linear-gradient(90deg, var(--surface), color-mix(in srgb, var(--status-error) 5%, var(--surface))); }
 .visual-banner-count { display: flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: color-mix(in srgb, var(--status-error) 15%, var(--surface)); color: var(--status-error); font: 700 14px var(--font-mono); }
 .visual-banner-content { display: flex; flex: 1; min-width: 0; flex-direction: column; }

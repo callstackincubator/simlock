@@ -26,6 +26,17 @@
   height: 12px;
 }
 
+.slots-md {
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+}
+
+.slots-md .slot {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
 .slots-lg {
   display: grid;
   grid-template-columns: repeat(8, 16px);
