@@ -36,6 +36,20 @@ class FakeDeviceHubDomain {
     };
   }
 
+  warm = false;
+  sawDelete: (() => void) | undefined;
+
+  answer(
+    command: string,
+    args: readonly string[],
+  ): { code: number; stderr: string; stdout: string } {
+    const warmBoot = this.warm && command === "xcrun" && args[1] === "boot";
+    if (warmBoot) this.warm = false;
+    if (command === "xcrun" && args[1] === "delete") this.sawDelete?.();
+    const stderr = warmBoot ? "Unable to boot device in current state: Booted" : "failed";
+    return { code: warmBoot || !this.succeeds(command, args) ? 1 : 0, stderr, stdout: "" };
+  }
+
   succeeds(command: string, args: readonly string[]): boolean {
     if (command === this.failing || (this.failing === "delete" && args[1] === "delete")) {
       return false;
@@ -88,27 +102,14 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
       [udid]: { pasteboardSyncEnabled: true, windowScale: 75 },
       other: { pasteboardSyncEnabled: true, windowScale: 50 },
     };
-    let warm = false;
-    let sawDelete: (() => void) | undefined;
     const warnings: string[] = [];
     const answersEveryCall: ProcessRunner = {
       run: () => Promise.reject(new Error("the driver runs commands through spawn")),
       spawn(command, args, options) {
         calls.push([command, ...args]);
-        const isWarmBoot = warm && command === "xcrun" && args[1] === "boot";
-        if (isWarmBoot) warm = false;
-        const failed = !hub.succeeds(command, args) || isWarmBoot;
         const handle = new ScriptedProcessRunner([
-          {
-            match: { args: [...args], command },
-            result: {
-              code: failed ? 1 : 0,
-              stderr: isWarmBoot ? "Unable to boot device in current state: Booted" : "failed",
-              stdout: "",
-            },
-          },
+          { match: { args: [...args], command }, result: hub.answer(command, args) },
         ]).spawn(command, args, options);
-        if (command === "xcrun" && args[1] === "delete") sawDelete?.();
         if (command === "defaults" && args[0] === "import") hub.holdFirstImport(handle);
         return handle;
       },
@@ -179,7 +180,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
       releaseWrite = resolve;
     });
     const deleted = new Promise<void>((resolve) => {
-      sawDelete = resolve;
+      hub.sawDelete = resolve;
     });
     calls.length = 0;
     const preparing = driver.makeReady(device, prepareFull);
@@ -191,7 +192,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     releaseWrite();
     await Promise.all([preparing, destroying]);
     expect(hub.domain[udid]).toBeUndefined();
-    sawDelete = undefined;
+    hub.sawDelete = undefined;
 
     hub.domain = { [udid]: { pasteboardSyncEnabled: true, windowScale: 75 } };
     calls.length = 0;
@@ -204,7 +205,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
 
     calls.length = 0;
     hub.failing = "";
-    warm = true;
+    hub.warm = true;
     await driver.makeReady(device, prepareFull);
     expect(calls.slice(0, 6)).toEqual([
       ...syncOffThenBoot.slice(0, 4),
