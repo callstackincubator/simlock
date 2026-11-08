@@ -154,10 +154,21 @@ const events = Array.from({ length: 60 }, (_, index) => ({
 
 type Scenario = "populated" | "empty" | "long" | "refused";
 
-function bodyFor(path: string, scenario: Scenario): unknown | undefined {
+// why: only the Overview shows the queue, the problems and the leases about to end; every other page's
+// case keeps its empty queue and Inbox and its leases as they were.
+function bodyFor(path: string, scenario: Scenario, onOverview = false): unknown | undefined {
   if (path === "/v1/workers") return { workers: names.map((_, index) => worker(index)) };
   if (path === "/v1/leases") {
     const records = scenario === "empty" ? [] : holders.map((_, index) => lease(index));
+    if (onOverview) {
+      for (const [index, left] of [
+        [4, 252_000],
+        [6, 156_000],
+      ] as const) {
+        const record = records[index];
+        if (record !== undefined) records[index] = { ...record, ttlDeadline: NOW + left };
+      }
+    }
     return { leases: scenario === "long" ? [lease(0, "x".repeat(256))] : records };
   }
   if (path === "/v1/leases/lse_1") {
@@ -175,8 +186,40 @@ function bodyFor(path: string, scenario: Scenario): unknown | undefined {
   }
   if (path === "/v1/baselines") return { baselines };
   if (path === "/v1/events") return { events };
-  if (path === "/v1/inbox") return { items: [] };
-  if (path === "/v1/lease-requests") return { requests: [] };
+  if (path === "/v1/inbox" && !onOverview) return { items: [] };
+  if (path === "/v1/lease-requests" && !onOverview) return { requests: [] };
+  if (path === "/v1/inbox") {
+    const [first, second, third] = [6, 5, 3].map(worker);
+    return {
+      items: [
+        { condition: "disconnected", group: "Broken", key: "wrk_7/disconnected", worker: first },
+        { condition: "drained", group: "Needs a look", key: "wrk_6/drained", worker: second },
+        {
+          condition: "over RAM budget",
+          group: "Needs a look",
+          key: "wrk_4/ram",
+          worker: third,
+        },
+      ],
+    };
+  }
+  if (path === "/v1/lease-requests" && onOverview) {
+    const asked = (id: number, requesterId: string, waitedMs: number, platform: string) => ({
+      createdAt: NOW - waitedMs,
+      id: `req_${id}`,
+      queuePosition: id,
+      requesterId,
+      spec: { model: platform === "ios" ? "iPhone 16" : "Pixel 9", osVersion: "18.4", platform },
+      stage: "queued",
+    });
+    return {
+      requests: [
+        asked(1, "codex:pr-1447-forms", 41_000, "ios"),
+        asked(2, "ci/ui-shard-4", 22_000, "ios"),
+        asked(3, "claude-code:widget-fix", 6_000, "android"),
+      ],
+    };
+  }
   return undefined;
 }
 
@@ -188,7 +231,8 @@ async function respond(route: Route, scenario: Scenario): Promise<void> {
     date: new Date(NOW).toUTCString(),
   };
   delete headers.etag;
-  const body = bodyFor(pathname, scenario);
+  const frame = route.request().frame().url();
+  const body = bodyFor(pathname, scenario, new URL(frame, "http://localhost").pathname === "/");
   if (pathname === "/v1/leases" && scenario === "refused" && response.ok()) {
     await route.fulfill({
       response,

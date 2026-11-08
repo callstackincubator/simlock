@@ -346,10 +346,9 @@ for (const entry of cases) {
               }),
             ).toBeAttached();
             if (entry.name === "1-overview") {
-              await expect(page.getByRole("link", { name: "Open Fleet" })).toBeVisible();
-              await expect(
-                page.locator("main table").filter({ hasText: "mac-studio-01" }).locator("tbody tr"),
-              ).toHaveCount(8);
+              await expect(page.getByRole("link", { name: "Open fleet" })).toBeVisible();
+              await expect(page.locator("main .worker-tile")).toHaveCount(8);
+              await expect(page.locator("main table:not(.chart-data)")).toHaveCount(0);
             }
             if (entry.name === "3-worker") {
               await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
