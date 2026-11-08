@@ -23,10 +23,13 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
   // forward the CLI dies on SIGINT/SIGTERM and leaves the tool (a recordVideo that still has to
   // flush) running unattended. The CLI stays until the tool's own close decides the exit code.
   // why: with a terminal on stdin the tool shares our foreground process group, so Ctrl-C already
-  // reaches it; a forwarded copy would be a second SIGINT, which makes recordVideo abandon its file.
-  const signals = process.stdin.isTTY ? (["SIGTERM"] as const) : (["SIGINT", "SIGTERM"] as const);
-  const handlers = signals.map((signal) => {
-    const handler = () => child.kill(signal);
+  // reaches it and a forwarded copy would be a second SIGINT, which makes recordVideo abandon its
+  // file. The listener stays so Node's default does not kill the CLI before the tool has flushed.
+  const forwardSigint = !process.stdin.isTTY;
+  const handlers = (["SIGINT", "SIGTERM"] as const).map((signal) => {
+    const handler = () => {
+      if (signal === "SIGTERM" || forwardSigint) child.kill(signal);
+    };
     process.on(signal, handler);
     return [signal, handler] as const;
   });

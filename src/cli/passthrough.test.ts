@@ -65,7 +65,7 @@ describe("spawnPassthrough", () => {
     expect(counts(), "after a repeated command").toEqual(before);
   });
 
-  it("forwards SIGINT to its tool only when stdin is not a terminal, SIGTERM always", async () => {
+  it("forwards SIGINT to its tool only when stdin is not a terminal, and keeps a SIGINT listener either way, SIGTERM always forwarded", async () => {
     const tool = `process.on("SIGINT",()=>process.exit(40));process.on("SIGTERM",()=>process.exit(41));setTimeout(()=>process.exit(0),1500)`;
     const original = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     // why: a signal is delivered to our own handler only, so other listeners of the test process never run.
@@ -76,6 +76,10 @@ describe("spawnPassthrough", () => {
       // why: the handlers are installed after the spawn's dynamic imports, and the tool needs time to install its own.
       await new Promise((resolve) => setTimeout(resolve, 600));
       const ours = process.listeners(signal).filter((listener) => !known.has(listener));
+      // why: without our listener Node's default ends the CLI on the signal, orphaning a tool that still has to flush.
+      expect(ours, `${signal} listener installed (stdin terminal: ${String(isTTY)})`).toHaveLength(
+        1,
+      );
       for (const listener of ours) listener(signal);
       return done;
     };

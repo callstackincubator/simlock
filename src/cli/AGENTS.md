@@ -32,7 +32,7 @@ Holding a lease:
 Passthrough and tunnel:
 
 - `simctl` and `adb`: on a worker the scoped command runs here (`spawnPassthrough`). Through a gateway it is `device.exec`: the worker's driver fills the lease's device in and refuses another (ADR 0047).
-- A local passthrough forwards SIGINT and SIGTERM to its tool and exits only on the tool's close, with its code. With a terminal on stdin SIGINT is not forwarded: the tool shares the foreground process group and already got the tty's Ctrl-C, and a second SIGINT makes `recordVideo` lose its file.
+- A local passthrough forwards SIGINT and SIGTERM to its tool and exits only on the tool's close, with its code. With a terminal on stdin SIGINT is not forwarded but still caught, so the CLI stays until the tool closes: the tool shares the foreground process group and already got the tty's Ctrl-C, and a second SIGINT makes `recordVideo` lose its file. A `kill -INT <cli pid>` to a terminal-attached CLI therefore does not reach the tool; SIGTERM does.
 - Without `--stdin`, stdin is never read and `stdin: ""` is sent (ADR 0058). A worker ignores `--stdin`.
 - `tunnel` talks to a worker or gateway over HTTP and a WebSocket, never the local daemon. `ws` loads on the first connect, for this command only.
 - A forward tunnel binds its caller port before anything else, and holds accepted connections until `READY`.
