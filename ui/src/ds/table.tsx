@@ -131,11 +131,14 @@ export function DataTable<T extends RowData>(props: {
   // why: a page tints or marks a row (a worker needing attention) in its own sheet.
   readonly rowClassName?: ((row: T) => string | undefined) | undefined;
   readonly footer?: "count" | "pager" | undefined;
+  // why: a page that shows only the first rows of a list says so in the count line's own words.
+  readonly count?: string | undefined;
   readonly selectedId?: string | undefined;
 }) {
   const {
     className,
     columns,
+    count,
     empty,
     footer = "pager",
     groupBy,
@@ -250,7 +253,7 @@ export function DataTable<T extends RowData>(props: {
         </tbody>
       </table>
       {footer === "count" ? (
-        <p className="muted table-count">{countText(paging, rows.length)}</p>
+        <p className="muted table-count">{count ?? countText(paging, rows.length)}</p>
       ) : paging === undefined ? null : (
         <Pager label={label} paging={paging} />
       )}

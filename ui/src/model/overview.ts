@@ -1,5 +1,5 @@
 import { type InboxItem, inGroupOrder, inboxSubject, minutesAndSeconds } from "./inbox";
-import { type DeviceSlot, platformSlots } from "./fleet";
+import { platformSlots } from "./fleet";
 import { agentKind, shortHolder, type AgentKind } from "./holder";
 import { isExpiring } from "../../../src/contract/inbox";
 import { type LeaseRecord, type LeaseRowView, leaseRows } from "./leases";
@@ -8,9 +8,8 @@ import { formatCount } from "./paging";
 import { inboxPath } from "./paths";
 import { type ConsoleRange, usagePath } from "./range";
 import { formatDuration } from "./time";
-import type { Toned } from "./tones";
 import { type WaitingRequest, waitingTable } from "./waiting";
-import { type RowMeter, workerRow } from "./worker-page";
+import { type FleetRow, fleetGroups } from "./worker-page";
 import { isUnread, leasesHeld, type WorkerDevice, type WorkerView } from "./workers";
 
 export interface OverviewTile {
@@ -27,16 +26,15 @@ export interface OverviewBanner {
   readonly more: number;
 }
 
-export interface WallWorker {
-  readonly key: string;
-  readonly name: string;
-  readonly to: string;
-  readonly health: Toned;
-  readonly ios: readonly DeviceSlot[];
-  readonly android: readonly DeviceSlot[];
-  readonly slotsLabel: string;
-  readonly meters: readonly RowMeter[];
+// why: the card shows the first rows of the Fleet page's own grouping, a worker with anything wrong
+// first; `total` is every worker, so the card can say how many it leaves to the page.
+export interface OverviewFleet {
+  readonly attention: readonly FleetRow[];
+  readonly healthy: readonly FleetRow[];
+  readonly total: number;
 }
+
+const FLEET_CARD_ROWS = 8;
 
 export interface QueueRow {
   readonly key: string;
@@ -87,7 +85,7 @@ export interface PlatformCapacity {
 export interface Overview {
   readonly banner?: OverviewBanner;
   readonly tiles: readonly OverviewTile[];
-  readonly workers: readonly WallWorker[];
+  readonly fleet: OverviewFleet;
   readonly capacity: readonly PlatformCapacity[];
   // why: a refused read of the requests is "not known", never an empty queue.
   readonly queue: QueueCard | { readonly unavailable: string };
@@ -288,17 +286,13 @@ function endingOf(
   return { meta: `${formatCount(soon.length)} under 5 min`, rows };
 }
 
-function wallOf(worker: WorkerView): WallWorker {
-  const row = workerRow(worker);
+function fleetOf(workers: readonly WorkerView[], now: number): OverviewFleet {
+  const groups = fleetGroups(workers, "", now);
+  const attention = groups.attention.slice(0, FLEET_CARD_ROWS);
   return {
-    android: platformSlots(worker, "android"),
-    health: row.health,
-    ios: platformSlots(worker, "ios"),
-    key: worker.id,
-    meters: row.meters,
-    name: row.name,
-    slotsLabel: row.slotsLabel,
-    to: row.to,
+    attention,
+    healthy: groups.healthy.slice(0, FLEET_CARD_ROWS - attention.length),
+    total: workers.length,
   };
 }
 
@@ -332,9 +326,9 @@ export function overviewOf(input: {
         ? { unavailable: "The leases could not be read." }
         : endingOf(leases, workers, now),
     figures,
+    fleet: fleetOf(workers, now),
     queue: requests === undefined ? { unavailable: queueRefusal } : queueOf(requests, workers, now),
     tiles: tiles({ figures, leases, now, range, requests, workers }),
-    workers: workers.map(wallOf),
     ...(banner === undefined ? {} : { banner }),
     ...(input.updatedAt === undefined ? {} : { updated: clockOf(input.updatedAt) }),
   };

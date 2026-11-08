@@ -9,13 +9,8 @@ import { useFigures } from "./figures";
 import { useNow, useRouteQuery } from "./live";
 import { bothViews, loadView, mapView } from "./resource";
 
-export type {
-  EndingCard,
-  Overview,
-  PlatformCapacity,
-  QueueCard,
-  WallWorker,
-} from "../model/overview";
+export type { EndingCard, Overview, PlatformCapacity, QueueCard } from "../model/overview";
+export type { OverviewFleet } from "../model/overview";
 
 export function useOverview(range: ConsoleRange): LoadView<Overview> {
   const workers = loadView(useRouteQuery<WorkerList>("/v1/workers"));

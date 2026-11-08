@@ -223,7 +223,7 @@ test.describe("the Overview's figures", () => {
     }
   });
 
-  test("on a single host, Overview shows all six numbers, the worker wall and both charts, and no table but the charts' own", async ({
+  test("on a single host, Overview shows all six numbers, the worker table and both charts", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -240,8 +240,8 @@ test.describe("the Overview's figures", () => {
       await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 0 | < 5 min");
       await expect(page.getByRole("region", { name: "Leases held" })).toBeVisible();
       await expect(page.getByRole("heading", { name: /^Requests waiting/ })).toBeVisible();
-      await expect(page.locator("#main .worker-tile")).toHaveCount(1);
-      await expect(page.locator("#main table")).toHaveCount(2);
+      await expect(page.locator("#main .fleet-table tbody tr:not(.table-group)")).toHaveCount(1);
+      await expect(page.locator("#main table")).toHaveCount(3);
       await expect(page.locator("#main table.chart-data")).toHaveCount(2);
       await expect(page.getByRole("region", { name: "Activity" })).toHaveCount(0);
     } finally {
@@ -291,7 +291,8 @@ test.describe("the Overview's figures", () => {
         { follow: () => tile(page, "Workers").getByRole("link").click(), path: "/fleet" },
         { follow: () => page.getByRole("link", { name: "Open fleet" }).click(), path: "/fleet" },
         {
-          follow: () => page.locator("#main .worker-tile a").first().click(),
+          follow: () =>
+            page.locator("#main .fleet-table tbody tr:not(.table-group) a").first().click(),
           path: "/fleet/[^/]+",
         },
       ];
@@ -447,7 +448,7 @@ test.describe("the Overview when the workers cannot be read", () => {
 
       await expect(page.getByText("The fleet is down.")).toBeVisible();
       await expect(page.getByRole("region", { name: "Capacity" })).toHaveCount(0);
-      await expect(page.locator("#main .worker-tile")).toHaveCount(0);
+      await expect(page.locator("#main .fleet-table tbody tr:not(.table-group)")).toHaveCount(0);
     } finally {
       await host.dispose();
     }
@@ -563,8 +564,8 @@ test.describe("the Overview's six numbers", () => {
   });
 });
 
-test.describe("the Overview's worker wall", () => {
-  test("draws a tile for every worker, with no table or pager, and Open fleet goes to /fleet", async ({
+test.describe("the Overview's Fleet card", () => {
+  test("draws a row for every worker in the Fleet table, and Open fleet goes to /fleet", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -575,10 +576,10 @@ test.describe("the Overview's worker wall", () => {
       await openOverview(page, fleet.gateway);
 
       const wall = page.getByRole("region", { name: "Fleet" });
-      await expect(wall.locator(".worker-tile")).toHaveCount(2);
+      await expect(wall.locator(".fleet-table tbody tr:not(.table-group)")).toHaveCount(2);
       await expect(wall.getByRole("link", { name: "worker-a" })).toBeVisible();
       await expect(wall.getByRole("link", { name: "worker-b" })).toBeVisible();
-      await expect(wall.locator("table")).toHaveCount(0);
+      await expect(wall.locator("table")).toHaveCount(1);
       await expect(page.getByRole("navigation", { name: /pages$/ })).toHaveCount(0);
 
       await wall.getByRole("link", { name: "worker-a" }).click();

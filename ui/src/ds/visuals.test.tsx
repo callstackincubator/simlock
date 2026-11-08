@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 
-import { Banner, FeedRow, GroupHeader, LogRow, Pill, Ring, WorkerTile } from "./index";
+import { Banner, FeedRow, GroupHeader, LogRow, Pill, Ring } from "./index";
 
 it("shows supplied labels, values and unavailable states in shared visual primitives", () => {
   const status = renderToStaticMarkup(<Pill tone="warn">drained</Pill>);
@@ -82,34 +82,4 @@ it("shows supplied labels, values and unavailable states in shared visual primit
   );
   expect(nodeBanner).toContain("<strong>Node title</strong>");
   expect(nodeBanner).toContain("<em>Node detail</em>");
-
-  const tile = renderToStaticMarkup(
-    <WorkerTile
-      name="mac-01"
-      title="mac-01.local"
-      to="/fleet/mac-01"
-      pill={<Pill tone="warn">drained</Pill>}
-      ios={<span>iOS slots</span>}
-      android={<span>Android slots</span>}
-      leased="2 / 20"
-      cpu={0}
-      memory={42}
-    />,
-  );
-  for (const value of [
-    'title="mac-01.local"',
-    'href="/fleet/mac-01"',
-    ">mac-01</a>",
-    "drained",
-    "iOS slots",
-    "Android slots",
-    "2 / 20",
-    "CPU",
-    "0%",
-    "MEM",
-    "42%",
-    "DISK",
-    "—",
-  ])
-    expect(tile).toContain(value);
 });

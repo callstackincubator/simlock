@@ -61,8 +61,8 @@ type PageCheck = (page: Page, gateway: RunningDaemon) => Promise<void>;
 
 async function checkOverview(page: Page): Promise<void> {
   await expect(page.getByRole("link", { name: "Open fleet" })).toBeVisible();
-  await expect(page.locator("main .worker-tile")).toHaveCount(8);
-  await expect(page.locator("main table:not(.chart-data)")).toHaveCount(0);
+  await expect(page.locator("main .fleet-table tbody tr:not(.table-group)")).toHaveCount(8);
+  await expect(page.locator("main table:not(.chart-data)")).toHaveCount(1);
 }
 
 async function checkWorker(page: Page): Promise<void> {

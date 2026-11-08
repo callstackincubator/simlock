@@ -195,20 +195,29 @@ describe("the overview", () => {
     ]);
   });
 
-  it("gives each wall tile its worker's health, link, slots by platform and meters, and a lost worker no meters", () => {
-    const { workers } = overviewOf({ now: NOW, requests: [], workers: fleet });
+  it("lists the Fleet page's own rows for the card, a worker with an issue first, and cuts them at eight", () => {
+    const { fleet: card } = overviewOf({ now: NOW, requests: [], workers: fleet });
 
-    expect(workers.map((tile) => [tile.name, tile.health.tone, tile.health.word, tile.to])).toEqual(
-      [
-        ["mini-1", "ok", "connected", "/fleet/mini-1"],
-        ["mini-2", "warn", "drained", "/fleet/mini-2"],
-        ["down-1", "error", "disconnected", "/fleet/down-1"],
-      ],
-    );
-    expect(workers[0]?.slotsLabel).toBe("2 leased, 1 ready, 3 free");
-    expect(workers[0]?.ios.map((slot) => slot.kind)).toEqual(["leased", "ready", "free", "free"]);
-    expect(workers[0]?.android.map((slot) => slot.kind)).toEqual(["leased", "free"]);
-    expect(workers[2]?.meters).toEqual([]);
+    expect(card.total).toBe(3);
+    expect(
+      card.attention.map((row) => [row.name, row.health.tone, row.health.word, row.to]),
+    ).toEqual([
+      ["mini-2", "warn", "drained", "/fleet/mini-2"],
+      ["down-1", "error", "disconnected", "/fleet/down-1"],
+    ]);
+    expect(card.healthy.map((row) => row.name)).toEqual(["mini-1"]);
+    expect(card.healthy[0]?.slotsLabel).toBe("2 leased, 1 ready, 3 free");
+    expect(card.attention[1]?.meters).toEqual([]);
+
+    const many = Array.from({ length: 12 }, (_, index) => worker(`w-${index}`, []));
+    const cut = overviewOf({
+      now: NOW,
+      requests: [],
+      workers: [...many, worker("down-9", [], { connection: "disconnected" })],
+    }).fleet;
+    expect(cut.total).toBe(13);
+    expect(cut.attention.map((row) => row.name)).toEqual(["down-9"]);
+    expect(cut.healthy).toHaveLength(7);
   });
 
   it("leaves the fleet's lease figure unknown, not zero, while a connected worker is starting", () => {

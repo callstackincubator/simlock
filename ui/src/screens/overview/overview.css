@@ -22,7 +22,7 @@
 }
 
 .overview-main {
-  grid-template-rows: auto minmax(240px, 1fr);
+  grid-template-rows: auto minmax(160px, 1fr);
 }
 
 .overview-side {
@@ -42,43 +42,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.overview-meta .slot-legend {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  gap: 10px;
-}
-
-.overview-wall {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  background: var(--border);
-}
-
-.overview-wall > li {
-  display: flex;
-  min-width: 0;
-}
-
-.overview-wall > li > * {
-  flex: 1;
-}
-
-@media (max-width: 1023px) {
-  .overview-wall {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .overview-wall {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .overview-chart {
@@ -251,7 +214,7 @@
   text-decoration: none;
 }
 
-/* A phone's header has room for the button only; the count and legend are on the wall below it. */
+/* A phone's header has room for the button only; the count is in the table below it. */
 @media (max-width: 700px) {
   .overview-fleet-meta {
     display: none;

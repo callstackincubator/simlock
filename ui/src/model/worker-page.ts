@@ -176,6 +176,25 @@ export function fleetRow(worker: WorkerView, search: string, now: number): Fleet
   };
 }
 
+// why: the Fleet page and the Overview's Fleet card both group their rows this way: a worker with
+// anything wrong first, the rest after it, each in the order given.
+export interface FleetGroups {
+  readonly attention: readonly FleetRow[];
+  readonly healthy: readonly FleetRow[];
+}
+
+export function fleetGroups(
+  workers: readonly WorkerView[],
+  search: string,
+  now: number,
+): FleetGroups {
+  const rows = workers.map((worker) => fleetRow(worker, search, now));
+  return {
+    attention: rows.filter((row) => row.health.tone !== "ok"),
+    healthy: rows.filter((row) => row.health.tone === "ok"),
+  };
+}
+
 // why: the filter lives in the address beside the page, so opening a worker and coming back shows
 // the same list the page number was counted in; an unknown value is All.
 export function readFilter(search: string): WorkerFilter {
