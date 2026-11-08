@@ -21,6 +21,8 @@ export interface Column<T> {
   readonly cell: (row: T) => ReactNode;
   readonly numeric?: boolean;
   readonly mono?: boolean;
+  // why: a fixed column keeps its width, so the first column takes the rest and a row never moves.
+  readonly width?: string;
 }
 
 const features = tableFeatures({
@@ -133,7 +135,12 @@ export function DataTable<T extends RowData>(props: {
         <thead>
           <tr>
             {columns.map((column) => (
-              <th key={column.header} scope="col" className={column.numeric ? "num" : undefined}>
+              <th
+                key={column.header}
+                scope="col"
+                className={column.numeric ? "num" : undefined}
+                style={column.width === undefined ? undefined : { width: column.width }}
+              >
                 {column.header}
               </th>
             ))}
@@ -156,7 +163,7 @@ export function DataTable<T extends RowData>(props: {
         </tbody>
       </table>
       {footer === "count" ? (
-        <p className="muted table-count mono">{countText(paging, rows.length)}</p>
+        <p className="muted table-count">{countText(paging, rows.length)}</p>
       ) : paging === undefined ? null : (
         <Pager label={label} paging={paging} />
       )}

@@ -223,8 +223,11 @@ test.describe("signing in through a proxy", () => {
       await page.goto(new URL("/leases", leasing.url).toString());
       await expect(page.getByText("Signed in as Alice")).toBeVisible();
       const row = page.locator("main tbody tr").filter({ hasText: "proxy-agent" });
-      await row.getByRole("button", { name: "Actions for proxy-agent" }).click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await row.click();
+      await page
+        .getByRole("region", { exact: true, name: "Lease" })
+        .getByRole("button", { exact: true, name: "Release" })
+        .click();
       await page
         .getByRole("alertdialog", { name: "Release proxy-agent's lease?" })
         .getByRole("button", { name: "Release lease" })

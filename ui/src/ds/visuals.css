@@ -46,7 +46,7 @@
 }
 .ring-box circle {
   fill: none;
-  stroke-width: 5px;
+  stroke-width: var(--ring-stroke, 5px);
 }
 .ring-track {
   stroke: var(--track);
@@ -123,6 +123,18 @@
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text-muted);
+}
+.visual-feed-icon-ok {
+  background: var(--pill-ok-bg);
+  color: var(--pill-ok-text);
+}
+.visual-feed-icon-warn {
+  background: var(--pill-warn-bg);
+  color: var(--pill-warn-text);
+}
+.visual-feed-icon-error {
+  background: var(--pill-error-bg);
+  color: var(--pill-error-text);
 }
 .visual-feed-content {
   overflow: hidden;

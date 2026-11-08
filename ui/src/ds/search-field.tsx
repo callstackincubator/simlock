@@ -8,10 +8,13 @@ export function SearchField(props: {
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly placeholder?: string;
+  readonly className?: string;
 }) {
-  const { label, onChange, placeholder = "Search", value } = props;
+  const { className, label, onChange, placeholder = "Search", value } = props;
   return (
-    <span className="search-field-wrap">
+    <span
+      className={className === undefined ? "search-field-wrap" : `search-field-wrap ${className}`}
+    >
       <Icon name="search" />
       <input
         type="search"

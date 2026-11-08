@@ -23,3 +23,14 @@ export function formatDuration(ms: number): string {
   }
   return parts.join(" ");
 }
+
+// why: a lease's clock, as a countdown reads: minutes and seconds, with hours in front once there are
+// any, and never below zero.
+export function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / SECOND));
+  const hours = Math.floor(total / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  const seconds = total % 60;
+  const two = (value: number) => String(value).padStart(2, "0");
+  return hours > 0 ? `${hours}:${two(minutes)}:${two(seconds)}` : `${two(minutes)}:${two(seconds)}`;
+}

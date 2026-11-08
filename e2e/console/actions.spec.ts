@@ -54,6 +54,15 @@ function rowOf(page: Page, name: string): Locator {
   return page.locator("main tbody tr").filter({ hasText: name });
 }
 
+// why: Release lives in the lease inspector beside the Leases table, not in a row menu.
+function leasePane(page: Page): Locator {
+  return page.getByRole("region", { exact: true, name: "Lease" });
+}
+
+function releaseButton(page: Page): Locator {
+  return leasePane(page).getByRole("button", { exact: true, name: "Release" });
+}
+
 test.describe("the console acts", () => {
   test("a lease is released from its row's menu after a dialog, and a toast follows", async ({
     page,
@@ -63,14 +72,14 @@ test.describe("the console acts", () => {
       await leaseOverSocket(daemon, "release-agent");
       await openPage(page, daemon, "/leases", "Leases");
       const row = rowOf(page, "release-agent");
-      await expect(row).toContainText(/iPhone 16 · \S+/);
-      const worker = /iPhone 16 · (\S+)/.exec(await row.innerText())?.[1] ?? "";
+      await row.click();
+      await expect(releaseButton(page)).toBeVisible();
+      const worker = await leasePane(page)
+        .locator("dt", { hasText: /^Worker$/ })
+        .locator("xpath=following-sibling::dd[1]")
+        .innerText();
       expect(worker).not.toBe("");
-
-      const menuButton = row.getByRole("button", { name: "Actions for release-agent" });
-      await expect(menuButton).toBeVisible();
-      await menuButton.click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await releaseButton(page).click();
       const dialog = page.getByRole("alertdialog", { name: "Release release-agent's lease?" });
       await expect(dialog).toContainText(
         `iPhone 16 on ${worker} goes back to the pool now, and release-agent's next command on it fails.`,
@@ -81,8 +90,7 @@ test.describe("the console acts", () => {
       expect(await heldBy(daemon)).toContain("release-agent");
       await expect(row).toBeVisible();
 
-      await menuButton.click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await releaseButton(page).click();
       await dialog.getByRole("button", { name: "Release lease" }).click();
       const toast = page.getByText("Released release-agent's lease");
       await expect(toast).toBeVisible();
@@ -181,10 +189,9 @@ test.describe("the console acts", () => {
       });
       await openPage(page, daemon, "/leases", "Leases");
       const row = rowOf(page, "refused-agent");
-      const menuButton = row.getByRole("button", { name: "Actions for refused-agent" });
-      await expect(menuButton).toBeVisible();
-      await menuButton.click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await row.click();
+      await expect(releaseButton(page)).toBeVisible();
+      await releaseButton(page).click();
       const dialog = page.getByRole("alertdialog", { name: "Release refused-agent's lease?" });
       await expect(dialog).toBeVisible();
 
@@ -224,10 +231,9 @@ test.describe("the console acts", () => {
         route.request().method() === "DELETE" ? route.abort() : route.continue(),
       );
       const row = rowOf(page, "silent-agent");
-      const menuButton = row.getByRole("button", { name: "Actions for silent-agent" });
-      await expect(menuButton).toBeVisible();
-      await menuButton.click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await row.click();
+      await expect(releaseButton(page)).toBeVisible();
+      await releaseButton(page).click();
       await page
         .getByRole("alertdialog", { name: "Release silent-agent's lease?" })
         .getByRole("button", { name: "Release lease" })
@@ -260,10 +266,9 @@ test.describe("the console acts", () => {
           : route.continue(),
       );
       const row = rowOf(page, "expired-agent");
-      const menuButton = row.getByRole("button", { name: "Actions for expired-agent" });
-      await expect(menuButton).toBeVisible();
-      await menuButton.click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await row.click();
+      await expect(releaseButton(page)).toBeVisible();
+      await releaseButton(page).click();
       await page
         .getByRole("alertdialog", { name: "Release expired-agent's lease?" })
         .getByRole("button", { name: "Release lease" })
@@ -293,10 +298,9 @@ test.describe("the console acts", () => {
         return undefined;
       });
       const row = rowOf(page, "slow-agent");
-      const menuButton = row.getByRole("button", { name: "Actions for slow-agent" });
-      await expect(menuButton).toBeVisible();
-      await menuButton.click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await row.click();
+      await expect(releaseButton(page)).toBeVisible();
+      await releaseButton(page).click();
       const dialog = page.getByRole("alertdialog", { name: "Release slow-agent's lease?" });
       await dialog.getByRole("button", { name: "Release lease" }).click();
 
@@ -316,17 +320,17 @@ test.describe("the console acts", () => {
     }
   });
 
-  test("release from a lease drawer's ⋯ works as from the row", async ({ page }) => {
+  test("Release in the lease inspector works as the row's menu did, on a gateway", async ({
+    page,
+  }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "bar-a" }]);
     try {
       await leaseOverSocket(fleet.gateway, "drawer-agent");
       await openPage(page, fleet.gateway, "/leases", "Leases");
       await rowOf(page, "drawer-agent").getByRole("link").first().click();
-      const drawer = page.getByRole("dialog", { name: "drawer-agent" });
-      await expect(drawer).toBeVisible();
-      await expect(drawer.getByRole("button", { name: "Release lease" })).toHaveCount(0);
-      await drawer.getByRole("button", { name: "Actions for drawer-agent" }).click();
-      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await expect(leasePane(page)).toContainText("drawer-agent");
+      await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+      await releaseButton(page).click();
       await page
         .getByRole("alertdialog", { name: "Release drawer-agent's lease?" })
         .getByRole("button", { name: "Release lease" })
@@ -338,7 +342,9 @@ test.describe("the console acts", () => {
     }
   });
 
-  test("on a single host the lease drawer and Inbox offer no worker actions", async ({ page }) => {
+  test("on a single host the lease inspector and Inbox offer no worker actions", async ({
+    page,
+  }) => {
     const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await leaseOverSocket(daemon, "solo-agent");
@@ -346,10 +352,9 @@ test.describe("the console acts", () => {
 
       await openPage(page, daemon, "/leases", "Leases");
       await rowOf(page, "solo-agent").getByRole("link").first().click();
-      const drawer = page.getByRole("dialog", { name: "solo-agent" });
-      await drawer.getByRole("button", { name: "Actions for solo-agent" }).click();
-      await expect(page.getByRole("menuitem")).toHaveText(["Release lease"]);
-      await page.keyboard.press("Escape");
+      await expect(leasePane(page)).toContainText("solo-agent");
+      await expect(releaseButton(page)).toBeVisible();
+      await expect(leasePane(page).getByRole("button", { name: workerAction })).toHaveCount(0);
 
       // why: a single host has no drained worker, so the Inbox is given a drained worker's item, to
       // give it a row that offers Undrain on a gateway.

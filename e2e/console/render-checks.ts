@@ -117,9 +117,13 @@ async function checkLeases(page: Page): Promise<void> {
 }
 
 async function checkLeaseDrawer(page: Page): Promise<void> {
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("dialog")).toContainText("lse_1");
-  await expect(page.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
+  const width = page.viewportSize()?.width ?? 0;
+  const inspector =
+    width >= 1280 ? page.locator("aside .lease-inspector") : page.getByRole("dialog");
+  await expect(inspector).toBeVisible();
+  await expect(inspector).toContainText("lse_1");
+  await expect(inspector.getByRole("button", { name: "Copy id" })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
 }
 
 async function checkBaselines(page: Page, gateway: RunningDaemon): Promise<void> {
@@ -679,7 +683,8 @@ async function proveLeaseScenarios(page: Page, job: RunJob, capturer: Capturer):
   ] as const) {
     await renderScenario(page, scenario);
     await page.goto(new URL("/leases", gateway.url).href);
-    if (scenario === "long") await expect(page.locator(`[title="${expected}"]`)).toBeVisible();
+    if (scenario === "long")
+      await expect(page.locator(`main tbody a[title="${expected}"]`)).toBeVisible();
     else await expect(page.getByText(expected, { exact: true })).toBeVisible();
     await expect(page.locator(".connection [role=status]")).toHaveText("Connected");
     await page.evaluate(() => document.fonts.ready);

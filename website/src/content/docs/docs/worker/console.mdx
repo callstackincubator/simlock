@@ -79,7 +79,7 @@ The sidebar floats beside the page in its own card. Use the button beside the Si
   <img src="/simlock/console-shell-light.png" alt="The Overview page with navigation and the signed-in account in the sidebar" />
 </picture>
 
-On **Leases**, **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Fleet**, a worker opens as its own page. Lists show 25 rows at a time, with a pager for 50 or 100.
+On **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Leases**, it opens in a pane beside the table. On **Fleet**, a worker opens as its own page. Lists show 25 rows at a time, with a pager for 50 or 100.
 
 Pages update by themselves: a new lease or a booting device shows within about a second, and readings such as CPU load within 15 seconds. The bottom of the sidebar shows the connection:
 
@@ -152,7 +152,7 @@ While the daemon is still starting, devices, capacity and the warm pool are left
 
 ## Leases
 
-**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder, the time left, the device, and a bar of the time left. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list.
+**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder (**Held by**), the device and its runtime, the worker, and the time left (**Expires in**) as a countdown with a bar. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list, and the box beside them searches by holder, device and worker. Under the table, a line counts the rows shown; a list longer than one page gets a pager.
 
 The holder is the identity that took the lease. A lease taken over the HTTP API shows the label of the token that took it, so give each agent's token a label:
 
@@ -163,16 +163,18 @@ simlock token create --role agent --label ci-runner-3
 A lease taken with the CLI or MCP server on this machine shows the agent identity it was taken with.
 Long holder names are shortened in the middle; hover over the holder link to see the complete requester identity. A chip identifies a known agent tool, or shows a dot when the tool is unknown.
 
-Select a lease to see:
+Beside the table, a pane of fixed width summarises every lease, whatever the filter or search leaves in the table:
 
-- **Expires in**: the time left, how long it has been held, when it was last renewed, and when it was granted.
-- **Device**: the model, runtime, mode, the baseline and version the device was copied from (a lease made from a baseline only), image tag, physical or virtual, the worker, the device id and the UDID.
-- **Lease**: the lease id, the request it came from, and the holder.
-- **Events** (its own tab): the events of the last hour about the lease.
+- **By holder**: how many leases each holder has.
+- **By platform**: how many of the iOS and Android slots are leased.
+- **Ending in 5 min**: the leases that end soonest, with their countdowns.
+- **Longest held**: the leases held the longest.
 
-To watch the device's screen, open the device from its worker's page; see [Open a device](#open-a-device).
+Select a lease and the pane shows that lease instead, and the table does not move. It has the holder, a ring and countdown with the lease's original time, **Watch**, **Copy id** and **Release**, the device, worker, when it was granted, the token, the lease id, the device id and the baseline (only for a lease made from a baseline), and the **Recent events** about the lease from the last hour. **Watch** opens the device's streaming page and is offered only while the worker streams the device. **Copy id** copies the complete lease id; if the browser cannot copy, a message says so and the id stays on screen to select. **Release** asks for confirmation before it releases the lease. Close the pane to see the summary again.
 
-A lease that was released or has expired says "Lease not found."
+In a window narrower than 1280 pixels the lease opens as a panel over the page instead, and the summary sits under the table.
+
+A lease that was released or has expired says "This lease is not held."
 
 ## Queue
 
