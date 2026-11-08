@@ -69,7 +69,7 @@ function json(status: number, body: unknown, etag?: string): Response {
     headers: {
       ...(etag === undefined ? {} : { ETag: etag }),
       "Content-Type": "application/json",
-      Date: new Date(NOW).toUTCString(),
+      Date: new Date(Date.now()).toUTCString(),
     },
     status,
   });

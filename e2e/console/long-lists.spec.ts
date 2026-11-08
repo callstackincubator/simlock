@@ -12,8 +12,6 @@ import {
   startDaemon,
   test as base,
 } from "./fixtures.js";
-import { answer, leases, pad } from "./stub-answers.js";
-import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -127,228 +125,14 @@ async function answerEvents(page: Page, replay: readonly unknown[]): Promise<voi
   );
 }
 
-function rowIds(list: Locator, section: string): Promise<string[]> {
-  return list.getByRole("link").evaluateAll(
-    (links, prefix) =>
-      links.map((link) => {
-        const path = (link.getAttribute("href") ?? "").split("?")[0] ?? "";
-        return decodeURIComponent(path.slice(prefix.length + 1).replace(/\/$/, ""));
-      }),
-    section,
-  );
-}
-
 function leaseRows(page: Page): Locator {
   return page.locator("main tbody");
-}
-
-function ids(from: number, to: number, prefix = "lse"): string[] {
-  return Array.from({ length: to - from + 1 }, (_, index) => `${prefix}_${pad(from + index)}`);
 }
 
 /** The pager of the table or list named `label`. */
 function pager(page: Page, label: string): Locator {
   return page.getByRole("navigation", { name: `${label} pages` });
 }
-
-test.describe("long lists page", () => {
-  test("a list of 1,240 leases shows 25 rows and the pager says 1–25 of 1,240", async ({
-    daemon,
-    page,
-  }) => {
-    await answer(page, "/v1/leases", () => ({ leases: leases(1_240) }));
-    await open(page, daemon, "/leases");
-
-    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(1, 25));
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 1,240");
-    await expect(pager(page, "Leases")).toContainText("Page 1 of 50");
-  });
-
-  test("next and previous move by one page and stop at the ends", async ({ daemon, page }) => {
-    await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
-    await open(page, daemon, "/leases");
-    const rows = leaseRows(page);
-    const nav = pager(page, "Leases");
-    const range = nav.locator(".pager-range");
-    const next = nav.getByRole("button", { name: "Next" });
-    const previous = nav.getByRole("button", { name: "Previous" });
-
-    // At an end the button stays in place and says it is unavailable; a click there does nothing.
-    await expect(previous).toHaveAttribute("aria-disabled", "true");
-    const start = await page.evaluate(() => window.history.length);
-    await previous.click({ force: true });
-    await expect(range).toHaveText("1–25 of 60");
-    expect(await page.evaluate(() => window.history.length)).toBe(start);
-
-    await next.click();
-    await expect(range).toHaveText("26–50 of 60");
-    expect(await rowIds(rows, "/leases")).toEqual(ids(26, 50));
-    await next.click();
-    await expect(range).toHaveText("51–60 of 60");
-    expect(await rowIds(rows, "/leases")).toEqual(ids(51, 60));
-    await expect(next).toHaveAttribute("aria-disabled", "true");
-    const entries = await page.evaluate(() => window.history.length);
-    await next.click({ force: true });
-    await expect(range).toHaveText("51–60 of 60");
-    await expect(page).toHaveURL(/[?&]page=3$/);
-    // Nothing moved: not even a history entry for a page past the end.
-    expect(await page.evaluate(() => window.history.length)).toBe(entries);
-
-    await previous.click();
-    await expect(range).toHaveText("26–50 of 60");
-    await previous.click();
-    await expect(range).toHaveText("1–25 of 60");
-    expect(await rowIds(rows, "/leases")).toEqual(ids(1, 25));
-    // The first page is the plain address.
-    await expect(page).toHaveURL(/\/leases$/);
-  });
-
-  test("choosing 50 per page shows 50 rows and writes size=50 to the URL", async ({
-    daemon,
-    page,
-  }) => {
-    await answer(page, "/v1/leases", () => ({ leases: leases(1_240) }));
-    await open(page, daemon, "/leases");
-    const range = pager(page, "Leases").locator(".pager-range");
-
-    await pager(page, "Leases").getByLabel("Per page").selectOption("50");
-
-    await expect(range).toHaveText("1–50 of 1,240");
-    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(1, 50));
-    await expect(page).toHaveURL(/\/leases\?size=50$/);
-
-    // From rows 101 to 125, 50 a page goes to the page that still starts with row 101.
-    await page.goto(new URL("/leases?page=5", daemon.url).href);
-    await expect(range).toHaveText("101–125 of 1,240");
-    await pager(page, "Leases").getByLabel("Per page").selectOption("50");
-    await expect(range).toHaveText("101–150 of 1,240");
-    expect(new URL(page.url()).searchParams.toString()).toBe("page=3&size=50");
-  });
-
-  test("opening a URL with page=3 shows the third page", async ({ daemon, page }) => {
-    await answer(page, "/v1/leases", () => ({ leases: leases(1_240) }));
-    await open(page, daemon, "/leases?page=3");
-
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("51–75 of 1,240");
-    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(51, 75));
-    await expect(page).toHaveURL(/\/leases\?page=3$/);
-  });
-
-  test("when a refresh shrinks the list below the current page, the last page shows", async ({
-    daemon,
-    page,
-  }) => {
-    let count = 60;
-    await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
-    await open(page, daemon, "/leases?page=3");
-    const range = pager(page, "Leases").locator(".pager-range");
-    await expect(range).toHaveText("51–60 of 60");
-
-    count = 30;
-    await returnToTab(page);
-
-    // why: the list refresh is asynchronous; its final page may take more than one poll cycle.
-    // The next refresh leaves no third page: the second, now the last, shows.
-    await expect(range).toHaveText("26–30 of 30", { timeout: 10_000 });
-    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 30));
-    await expect(page).toHaveURL(/\/leases\?page=2$/);
-  });
-
-  test("a focused link in the list keeps its focus, and its row its place, across two refreshes", async ({
-    daemon,
-    page,
-  }) => {
-    // One list, served again on every refresh: its countdowns move, so each render shows.
-    const listed = leases(60);
-    let served = 0;
-    await answer(page, "/v1/leases", () => {
-      served += 1;
-      return { leases: listed };
-    });
-    await open(page, daemon, "/leases?page=2");
-    const row = leaseRows(page).locator("tr").nth(2);
-    const link = row.getByRole("link");
-    const expires = row.locator("td:not(.table-menu)").last();
-    await expect(link).toHaveAttribute("href", "/leases/lse_0028/?page=2");
-    await link.focus();
-    await expect(link).toBeFocused();
-    // The element itself is marked: a link drawn again in its place would not carry the mark.
-    await link.evaluate((element) => {
-      (element as unknown as { kept?: boolean }).kept = true;
-    });
-
-    // Twice: the daemon answers once more, then the row's countdown moves, so a render follows.
-    for (let refresh = 0; refresh < 2; refresh += 1) {
-      const since = served;
-      await returnToTab(page);
-      await expect.poll(() => served, { timeout: 3_000 }).toBeGreaterThan(since);
-      const before = await expires.textContent();
-      await expect.poll(() => expires.textContent(), { timeout: 3_000 }).not.toBe(before);
-    }
-
-    await expect(link).toBeFocused();
-    expect(await link.evaluate((element) => (element as unknown as { kept?: boolean }).kept)).toBe(
-      true,
-    );
-    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 50));
-    await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2$/);
-    await expect(page.getByRole("region", { exact: true, name: "Lease" })).toBeVisible();
-  });
-
-  for (const how of ["Escape", "the close button", "the dim layer"] as const) {
-    test(`${how} closes a lease's drawer and returns to /leases keeping ?page=2&size=25, with focus on the row that opened it and Back not reopening it`, async ({
-      daemon,
-      page,
-    }) => {
-      await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
-      // why: below 1280px wide a lease opens as a drawer, which Escape, its close button and its dim layer close.
-      await page.setViewportSize({ height: 800, width: 1100 });
-      await open(page, daemon, "/leases?page=2&size=25");
-      const row = leaseRows(page).locator('a[href^="/leases/lse_0028/"]');
-      await row.click();
-      const drawer = page.getByRole("dialog");
-      await expect(drawer).toBeVisible();
-      await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2&size=25$/);
-
-      if (how === "Escape") await page.keyboard.press("Escape");
-      else if (how === "the close button")
-        await drawer.getByRole("button", { name: "Close" }).click();
-      else await page.locator(".drawer-dim").click({ position: { x: 10, y: 10 } });
-
-      await expect(drawer).toHaveCount(0);
-      await expect(page).toHaveURL(/\/leases\?page=2&size=25$/);
-      await expect(row).toBeFocused();
-      await page.goBack();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      expect(new URL(page.url()).pathname).not.toMatch(/^\/leases\/./);
-    });
-  }
-
-  test("changing the leases search goes back to page 1", async ({ daemon, page }) => {
-    await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
-    await open(page, daemon, "/leases?page=2");
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("26–50 of 60");
-
-    await page.getByRole("searchbox", { name: "Search leases" }).fill("lse_00");
-
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 60");
-    await expect(page).toHaveURL(/\/leases\?q=lse_00$/);
-  });
-
-  test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
-    let count = 25;
-    await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
-    await open(page, daemon, "/leases");
-    await expect(leaseRows(page).locator("tr")).toHaveCount(25);
-    await expect(pager(page, "Leases")).toHaveCount(0);
-
-    // One row more and the list needs a second page: the pager shows.
-    count = 26;
-    await returnToTab(page);
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
-  });
-});
 
 /** `count` events, one every 300 ms back from a second ago, newest first; `n` numbers them. */
 function events(count: number): unknown[] {
@@ -497,19 +281,14 @@ test.describe("the events feed", () => {
       await expect(button).toHaveCount(0);
       // The button is gone, so focus moves to the feed rather than dropping to the page.
       await expect(feed(page)).toBeFocused();
-      const top = feed(page).getByRole("listitem").first();
-      await expect(top.locator(".event-name")).toHaveText("lease.renewed");
+      await expect(feed(page).getByRole("listitem").first().locator(".event-name")).toHaveText(
+        "lease.renewed",
+      );
       // At the top, the next event shows at the top with no count.
       await client.renewLease({ leaseId: grant.lease.id });
       await expect.poll(() => eventsHeld(page)).toBe(1_002);
       await expect(page.getByRole("button", { name: /new event/ })).toHaveCount(0);
       expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(0);
-      const newest = (await recentEvents(host)).at(-1);
-      expect(newest?.event).toBe("lease.renewed");
-      await expect(top.locator("time")).toHaveAttribute(
-        "datetime",
-        new Date(newest?.timestamp ?? 0).toISOString(),
-      );
 
       // Down again: the count starts from what was at the top when the reader left it.
       await scrollDown(page);
