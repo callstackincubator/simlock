@@ -6,10 +6,70 @@ export type VisibleState = unknown;
 
 export async function visibleState(page: Page): Promise<VisibleState> {
   return page.evaluate(() => {
+    const generatedIds = new Map<string, string>();
+    for (const path of document.querySelectorAll("svg path.recharts-area-area[id]")) {
+      const id = path.id;
+      if (/^recharts-area-_r_[a-z0-9]+_$/.test(id) && !generatedIds.has(id)) {
+        generatedIds.set(id, `capture-generated-area-${generatedIds.size}`);
+      }
+    }
+    const reference = (value: string) => {
+      let url: URL;
+      try {
+        url = new URL(value, document.baseURI);
+      } catch {
+        return value;
+      }
+      const current = new URL(location.href);
+      if (
+        !url.hash ||
+        url.origin !== current.origin ||
+        url.pathname !== current.pathname ||
+        url.search !== current.search
+      )
+        return value;
+      let id = url.hash.slice(1);
+      try {
+        id = decodeURIComponent(id);
+      } catch {
+        // why: malformed escapes still name a literal DOM id.
+      }
+      const canonical = generatedIds.get(id);
+      return canonical === undefined
+        ? value
+        : `${value.slice(0, value.lastIndexOf("#") + 1)}${canonical}`;
+    };
+    const cssReferences = (value: string) =>
+      value.replace(
+        /url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s)]+))\s*\)/gi,
+        (
+          whole,
+          double: string | undefined,
+          single: string | undefined,
+          bare: string | undefined,
+        ) => {
+          const url = double ?? single ?? bare!;
+          return whole.replace(url, reference(url));
+        },
+      );
+    const markup = (element: Element) => {
+      const clone = element.cloneNode(true) as Element;
+      for (const node of [clone, ...clone.querySelectorAll("*")]) {
+        for (const attribute of Array.from(node.attributes)) {
+          let value = attribute.value;
+          if (attribute.name === "id") value = generatedIds.get(value) ?? value;
+          else if (attribute.localName === "href") value = reference(value);
+          else value = cssReferences(value);
+          if (value !== attribute.value)
+            node.setAttributeNS(attribute.namespaceURI, attribute.name, value);
+        }
+      }
+      return clone.outerHTML;
+    };
     const styles = (style: CSSStyleDeclaration) =>
       Array.from(style)
         .sort()
-        .map((name) => [name, style.getPropertyValue(name)]);
+        .map((name) => [name, cssReferences(style.getPropertyValue(name))]);
     const visible = (element: Element) => {
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
@@ -35,10 +95,11 @@ export async function visibleState(page: Page): Promise<VisibleState> {
           const members = [root, ...root.querySelectorAll("*")].filter((node) => !seen.has(node));
           for (const node of members) {
             seen.add(node);
-            const style = styles(getComputedStyle(node));
+            const computed = getComputedStyle(node);
+            const style = styles(computed);
             const matrix = node instanceof SVGGraphicsElement ? node.getScreenCTM() : null;
             nodes.push({
-              markup: node.outerHTML,
+              markup: markup(node),
               style,
               matrix:
                 matrix === null
@@ -47,7 +108,7 @@ export async function visibleState(page: Page): Promise<VisibleState> {
             });
             const values = [
               ...Array.from(node.attributes, (attribute) => attribute.value),
-              ...style.map(([, value]) => value!),
+              ...Array.from(computed, (name) => computed.getPropertyValue(name)),
             ];
             const href =
               node.getAttribute("href") ??
