@@ -79,6 +79,17 @@ describe("IosSimctlDriver simulator window", () => {
   const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
   const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
   const open = (...args: string[]) => ({ command: "open", args: ["-g", ...args] });
+  const clipboard = {
+    command: "defaults",
+    args: [
+      "write",
+      "Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist",
+      "DevicePreferences",
+      "-dict-add",
+      udid,
+      "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
+    ],
+  };
   const bootCalls = [xcrun("boot", udid), xcrun("bootstatus", udid, "-b"), xcrun("listapps", udid)];
   const deviceHub = open(
     "-b",
@@ -130,7 +141,7 @@ describe("IosSimctlDriver simulator window", () => {
     "shows a simulator in a window without taking focus when ios.simulator.headless is false: $name",
     async (c) => {
       const runner = new ScriptedProcessRunner(
-        c.expected.map((match) => ({
+        [clipboard, ...c.expected].map((match) => ({
           match,
           ...(match === deviceHub && c.deviceHubResult !== undefined
             ? { result: c.deviceHubResult }
@@ -159,7 +170,10 @@ describe("IosSimctlDriver simulator window", () => {
       );
 
       expect(device.address).toBe(udid);
-      expect(runner.calls.map(({ command, args }) => ({ command, args }))).toEqual(c.expected);
+      expect(runner.calls.map(({ command, args }) => ({ command, args }))).toEqual([
+        clipboard,
+        ...c.expected,
+      ]);
     },
   );
 
@@ -204,7 +218,7 @@ describe("IosSimctlDriver simulator window", () => {
     "makes the simulator ready and reports the failure when opening its window fails: $name",
     async (c) => {
       const runner = new ScriptedProcessRunner([
-        ...bootCalls.map((match) => ({ match })),
+        ...[clipboard, ...bootCalls].map((match) => ({ match })),
         ...c.script,
       ]);
       const clock = new FakeClock();
@@ -229,7 +243,7 @@ describe("IosSimctlDriver simulator window", () => {
       );
       if (c.script.some((step) => "hangs" in step)) {
         const state = promiseState(ready);
-        await waitForCalls(runner, bootCalls.length + c.script.length);
+        await waitForCalls(runner, 1 + bootCalls.length + c.script.length);
         clock.advance(29_999);
         await flushMicrotasks();
         expect(state.state).toBe("pending");
