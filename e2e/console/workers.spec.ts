@@ -354,6 +354,19 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
+function systemOf(view: WorkerView): string {
+  return [
+    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
+    view.version === undefined ? "" : `simlock ${view.version}`,
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
+function slotsText(leased: number, limit: number): string {
+  return leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`;
+}
+
 // why: taken from the gateway's own view of the worker and the figures the page was answered with,
 // so the page cannot agree with itself.
 function expectedRow(view: WorkerView): {
@@ -361,27 +374,21 @@ function expectedRow(view: WorkerView): {
   readonly slots: string;
   readonly bars: number;
 } {
-  const name = view.label ?? view.id;
-  const system = [
-    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
-    view.version === undefined ? "" : `simlock ${view.version}`,
-  ]
-    .filter((part) => part !== "")
-    .join(" · ");
+  const name = `${view.label ?? view.id}${systemOf(view)}`;
   if (view.connection === "incompatible") {
     return {
       bars: 0,
       slots: "No devices",
-      text: [`${name}${system}`, "incompatible", "", "—", "—", "—", "—", ""],
+      text: [name, "incompatible", "", "—", "—", "—", "—", ""],
     };
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
   return {
     bars: 3,
-    slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,
+    slots: slotsText(leased, limit),
     text: [
-      `${name}${system}`,
+      name,
       view.drained ? "drained" : "connected",
       limit > 10 ? `${leased} / ${limit}` : "",
       runningOverLimit(view),
