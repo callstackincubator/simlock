@@ -11,7 +11,7 @@ import {
 import { defined } from "./defined";
 import { type ConsoleEvent, textField, workerIdOf } from "./events";
 import { agentKind, shortHolder, type AgentKind } from "./holder";
-import { formatDuration } from "./time";
+import { formatCountdown, formatDuration } from "./time";
 import { devicePath } from "./paths";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
@@ -192,6 +192,9 @@ export interface LeaseInspection {
   readonly runtime?: string;
   readonly worker?: { readonly name: string; readonly to?: string };
   readonly remaining: string;
+  readonly countdown: string;
+  // why: the lease's whole time to live, when its record says; "of 15 min" under the countdown.
+  readonly ttl?: string;
   readonly percent?: number;
   readonly heldFor: string;
   readonly renewed: string;
@@ -232,6 +235,7 @@ export function leaseInspection(input: {
     id: lease.id,
     model: lease.device,
     remaining: formatDuration(deadline - now),
+    countdown: formatCountdown(deadline - now),
     ...recordFacts(record, tokens, deadline, now, lease.id),
     ...defined({
       requestId: lease.requestId,
@@ -268,12 +272,13 @@ function recordFacts(
   deadline: number,
   now: number,
   id: string,
-): Pick<LeaseInspection, "renewed" | "title" | "percent" | "holder" | "ownerId"> {
+): Pick<LeaseInspection, "renewed" | "title" | "percent" | "ttl" | "holder" | "ownerId"> {
   if (record === undefined) return { renewed: "—", title: id };
   const holder = holderOf(record.requesterId, tokens);
   return {
     holder,
     percent: percentLeft(deadline, now, record.ttlMs),
+    ttl: formatDuration(record.ttlMs),
     renewed: `${formatDuration(now - record.lastRenewedAt)} ago`,
     title: holderName(record.requesterId, tokens),
     ...(record.ownerId === record.requesterId ? {} : { ownerId: record.ownerId }),

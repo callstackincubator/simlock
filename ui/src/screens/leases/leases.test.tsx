@@ -42,6 +42,7 @@ function inspection(overrides: Partial<LeaseInspection> = {}): LeaseInspection {
       mode: "slim",
       udid: "ABCD-1234",
     },
+    countdown: "02:05",
     expiring: false,
     granted: "11:58",
     heldFor: "1 min 30 s",

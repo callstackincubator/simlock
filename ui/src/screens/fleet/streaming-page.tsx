@@ -168,9 +168,11 @@ function Countdown({ lease }: { readonly lease: LeaseInspection }) {
       />
       <div>
         <p className="stream-remaining mono" role="timer">
-          {lease.remaining}
+          {lease.countdown}
         </p>
-        <p className="stream-renewed">renewed {lease.renewed}</p>
+        <p className="stream-renewed">
+          {lease.ttl === undefined ? "" : `of ${lease.ttl} · `}renewed {lease.renewed}
+        </p>
       </div>
     </div>
   );

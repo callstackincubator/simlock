@@ -23,3 +23,13 @@ export function formatDuration(ms: number): string {
   }
   return parts.join(" ");
 }
+
+// why: a countdown reads as a clock, `14:56`, and `1:02:03` past the hour, so it ticks in place.
+export function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / SECOND));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const seconds = total % 60;
+  const minutes = Math.floor(total / 60) % 60;
+  const hours = Math.floor(total / 3600);
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+}
