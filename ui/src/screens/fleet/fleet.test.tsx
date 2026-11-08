@@ -326,7 +326,6 @@ describe("a worker's page", () => {
 
     expect(markup).toContain('href="/fleet/wrk_1/devices/dev_1"');
     expect(markup).toContain(">Watch</a>");
-    expect(markup).toContain('href="/leases/l_1/"');
     expect(shown).toContain("iPhone 17 iOS 26.0 leased");
     expect(shown).toContain("agent");
     expect(shown).toContain("01:00");

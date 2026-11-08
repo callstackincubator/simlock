@@ -301,9 +301,9 @@ function holderOf(device: DeviceRow) {
   return (
     <span className="device-held">
       <AgentChip kind={holder.kind} title={holder.name} />
-      <Link className="mono" to={holder.to} title={holder.name}>
+      <span className="mono" title={holder.name}>
         {holder.display}
-      </Link>
+      </span>
     </span>
   );
 }
@@ -370,7 +370,7 @@ function DeviceTable(props: {
     },
     {
       cell: (device) => {
-        const watch = props.watchTo(device.id);
+        const watch = device.watchable ? props.watchTo(device.id) : "";
         return watch === "" ? null : (
           <Link className="button button-secondary button-sm" to={watch}>
             Watch

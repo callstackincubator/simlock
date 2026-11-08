@@ -334,6 +334,8 @@ function platformCards(worker: WorkerView): readonly PlatformCard[] {
 
 export interface DeviceRow {
   readonly id: string;
+  // why: only a booted device has a screen to stream.
+  readonly watchable: boolean;
   readonly to: string;
   readonly lease?: { readonly id: string; readonly to: string };
   readonly udid?: string;
@@ -386,6 +388,7 @@ function deviceRow(
   const virtual = !device.physical;
   return {
     id: device.id,
+    watchable: device.state === "ready" || device.state === "leased",
     model: device.spec.model,
     physical: device.physical,
     platform: platformName(device.spec.platform),
@@ -853,9 +856,10 @@ export function workerPageOf(input: {
       ...(starting
         ? {}
         : {
-            devices: (worker.devices ?? []).map((d) =>
-              deviceRow(d, worker, now, tokens, leaseIds, input.search ?? ""),
-            ),
+            // why: a deleted device is a record of one that is gone; the worker page lists what it runs.
+            devices: (worker.devices ?? [])
+              .filter((d) => d.state !== "deleted")
+              .map((d) => deviceRow(d, worker, now, tokens, leaseIds, input.search ?? "")),
           }),
     },
     tabs,
