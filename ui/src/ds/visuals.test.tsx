@@ -1,0 +1,98 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { expect, it } from "vitest";
+
+import { Banner, FeedRow, GroupHeader, LogRow, Pill, Ring, WorkerTile } from "./index";
+
+it("shows supplied labels, values and unavailable states in shared visual primitives", () => {
+  const status = renderToStaticMarkup(<Pill tone="warn">drained</Pill>);
+  expect(status).toContain("drained");
+  expect(status).toContain("pill-warn");
+  expect(status).toContain("pill-dot");
+  const plain = renderToStaticMarkup(
+    <Pill tone="idle" plain>
+      now 19
+    </Pill>,
+  );
+  expect(plain).toContain("now 19");
+  expect(plain).not.toContain("pill-dot");
+
+  for (const [percent, value] of [
+    [0, "0%"],
+    [42, "42%"],
+    [undefined, "—"],
+  ] as const) {
+    const ring = renderToStaticMarkup(
+      <Ring label="CPU" {...(percent === undefined ? {} : { percent })} />,
+    );
+    expect(ring).toContain("CPU");
+    expect(ring).toContain(value);
+  }
+
+  const log = renderToStaticMarkup(
+    <LogRow
+      time="18:20"
+      status={<b>failed</b>}
+      event="device.failed"
+      subject="phone"
+      detail="offline"
+      tone="error"
+    />,
+  );
+  for (const value of ["18:20", "<b>failed</b>", "device.failed", "phone", "offline"])
+    expect(log).toContain(value);
+  const feed = renderToStaticMarkup(
+    <FeedRow
+      icon={<b>!</b>}
+      event="lease.granted"
+      subject="phone"
+      detail="held"
+      worker="mac-01"
+      time="18:21"
+    />,
+  );
+  for (const value of ["<b>!</b>", "lease.granted", "phone", "held", "mac-01", "18:21"])
+    expect(feed).toContain(value);
+  const group = renderToStaticMarkup(<GroupHeader count={3}>Healthy</GroupHeader>);
+  expect(group).toContain("Healthy");
+  expect(group).toContain("3");
+  const banner = renderToStaticMarkup(
+    <Banner
+      count={2}
+      title="Needs you"
+      detail="first issue"
+      action={<a href="/inbox">Open Inbox</a>}
+    />,
+  );
+  for (const value of ["2", "Needs you", "first issue", 'href="/inbox"', "Open Inbox"])
+    expect(banner).toContain(value);
+
+  const tile = renderToStaticMarkup(
+    <WorkerTile
+      name="mac-01"
+      title="mac-01.local"
+      to="/fleet/mac-01"
+      pill={<Pill tone="warn">drained</Pill>}
+      ios={<span>iOS slots</span>}
+      android={<span>Android slots</span>}
+      leased="2 / 20"
+      cpu={0}
+      memory={42}
+    />,
+  );
+  for (const value of [
+    'title="mac-01.local"',
+    'href="/fleet/mac-01"',
+    "mac-01",
+    "drained",
+    "iOS slots",
+    "Android slots",
+    "2 / 20",
+    "CPU",
+    "0%",
+    "MEM",
+    "42%",
+    "DISK",
+    "—",
+  ])
+    expect(tile).toContain(value);
+});

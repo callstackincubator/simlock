@@ -28,3 +28,4 @@ export { type Column, type Group, DataTable } from "./table";
 export { createToaster, ToastHost, type ToastSpec } from "./toast";
 export { Toolbar } from "./toolbar";
 export { focusAfterClosing } from "./focus-after-drawer";
+export { Banner, FeedRow, GroupHeader, LogRow, Pill, Ring, WorkerTile } from "./visuals";
