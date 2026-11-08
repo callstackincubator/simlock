@@ -62,10 +62,9 @@ export function expectCaseList(cases: readonly RenderCase[]): void {
 type PageCheck = (page: Page, gateway: RunningDaemon) => Promise<void>;
 
 async function checkOverview(page: Page): Promise<void> {
-  await expect(page.getByRole("link", { name: "Open Fleet" })).toBeVisible();
-  await expect(
-    page.locator("main table").filter({ hasText: "mac-studio-01" }).locator("tbody tr"),
-  ).toHaveCount(8);
+  await expect(page.getByRole("link", { name: "Open fleet" })).toBeVisible();
+  await expect(page.locator("main .worker-tile")).toHaveCount(8);
+  await expect(page.locator("main table:not(.chart-data)")).toHaveCount(0);
 }
 
 async function checkWorker(page: Page): Promise<void> {

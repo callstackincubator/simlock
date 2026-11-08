@@ -1,14 +1,16 @@
-import { type InboxItem, inGroupOrder, inboxSubject, inboxTone } from "./inbox";
-import { platformSlots } from "./fleet";
+import { type InboxItem, inGroupOrder, inboxSubject, minutesAndSeconds } from "./inbox";
+import { type DeviceSlot, platformSlots } from "./fleet";
+import { agentKind, shortHolder, type AgentKind } from "./holder";
 import { isExpiring } from "../../../src/contract/inbox";
-import type { LeaseRecord } from "./leases";
+import { type LeaseRecord, type LeaseRowView, leaseRows } from "./leases";
 import type { FiguresState } from "./figures";
 import { formatCount } from "./paging";
 import { inboxPath } from "./paths";
+import { type ConsoleRange, usagePath } from "./range";
 import { formatDuration } from "./time";
-import type { Tone } from "./tones";
-import type { WaitingRequest } from "./waiting";
-import { type WorkerRow, workerRow } from "./worker-page";
+import type { Toned } from "./tones";
+import { type WaitingRequest, waitingTable } from "./waiting";
+import { type RowMeter, workerRow } from "./worker-page";
 import { isUnread, leasesHeld, type WorkerDevice, type WorkerView } from "./workers";
 
 export interface OverviewTile {
@@ -18,17 +20,53 @@ export interface OverviewTile {
   readonly to?: string;
 }
 
-export interface OverviewItem {
-  readonly key: string;
-  readonly word: string;
-  readonly tone: Tone;
-  readonly subject: string;
-  readonly to: string;
+export interface OverviewBanner {
+  readonly count: number;
+  readonly title: string;
+  readonly first: { readonly text: string; readonly to: string };
+  readonly more: number;
 }
 
-export interface OverviewInbox {
-  readonly problems: number;
-  readonly needsYou: readonly OverviewItem[];
+export interface WallWorker {
+  readonly key: string;
+  readonly name: string;
+  readonly to: string;
+  readonly health: Toned;
+  readonly ios: readonly DeviceSlot[];
+  readonly android: readonly DeviceSlot[];
+  readonly slotsLabel: string;
+  readonly meters: readonly RowMeter[];
+}
+
+export interface QueueRow {
+  readonly key: string;
+  readonly place: string;
+  readonly to: string;
+  readonly holder: string;
+  readonly holderTitle: string;
+  readonly kind: AgentKind;
+  readonly waited: string;
+}
+
+export interface QueueCard {
+  readonly meta: string;
+  readonly rows: readonly QueueRow[];
+}
+
+export interface EndingRow {
+  readonly key: string;
+  readonly to: string;
+  readonly holder: string;
+  readonly holderTitle: string;
+  readonly kind: AgentKind;
+  readonly sub: string;
+  readonly remaining: string;
+  readonly percent: number;
+}
+
+export interface EndingCard {
+  readonly meta: string;
+  readonly rows: readonly EndingRow[];
 }
 
 export interface CapacityPart {
@@ -40,21 +78,26 @@ export interface CapacityPart {
 
 export interface PlatformCapacity {
   readonly name: string;
+  readonly leased: number;
+  readonly total: number;
   readonly parts: readonly CapacityPart[];
   readonly notRead: number;
 }
 
 export interface Overview {
-  readonly capacity: readonly PlatformCapacity[];
+  readonly banner?: OverviewBanner;
   readonly tiles: readonly OverviewTile[];
-  readonly wait?: OverviewTile;
-  readonly ending: OverviewTile;
+  readonly workers: readonly WallWorker[];
+  readonly capacity: readonly PlatformCapacity[];
+  // why: a refused read of the requests is "not known", never an empty queue.
+  readonly queue: QueueCard | { readonly unavailable: string };
+  readonly ending: EndingCard | { readonly unavailable: string };
   readonly figures: FiguresState;
-  readonly workers: readonly WorkerRow[];
-  readonly inbox: OverviewInbox;
+  readonly updated?: string;
 }
 
-const NEEDS_YOU_ROWS = 4;
+const QUEUE_ROWS = 3;
+const ENDING_ROWS = 2;
 
 function percentOf(part: number, whole: number): number {
   return whole === 0 ? 0 : (part / whole) * 100;
@@ -114,6 +157,8 @@ function platformCapacity(
   }
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
   return {
+    leased: counts.get("leased") ?? 0,
+    total,
     name: platform === "ios" ? "iOS" : "Android",
     notRead: workers.filter(isUnread).length,
     parts: PARTS.flatMap(({ kind, word }) => {
@@ -123,85 +168,174 @@ function platformCapacity(
   };
 }
 
-function tiles(
-  workers: readonly WorkerView[],
-  requests: readonly WaitingRequest[],
-  now: number,
-): readonly OverviewTile[] {
+function tiles(input: {
+  readonly workers: readonly WorkerView[];
+  readonly requests: readonly WaitingRequest[] | undefined;
+  readonly leases: readonly LeaseRecord[] | undefined;
+  readonly figures: FiguresState;
+  readonly range: ConsoleRange;
+  readonly now: number;
+}): readonly OverviewTile[] {
+  const { figures, leases, now, range, requests, workers } = input;
   const held = leasesHeld(workers);
   const connected = workers.filter((worker) => worker.connection === "connected").length;
-  const oldest = Math.min(...requests.map((request) => request.createdAt));
   const devices = workers.flatMap((worker) =>
     (worker.devices ?? []).filter((entry) => entry.state !== "deleted"),
   );
   const ready = devices.filter((entry) => entry.state === "ready").length;
+  const oldest = requests === undefined ? 0 : Math.min(...requests.map((r) => r.createdAt));
+  const ending = leases?.filter((lease) => isExpiring(lease.ttlDeadline, now)).length;
+  const wait = figures.kind === "ready" ? figures.data.wait : undefined;
   return [
     {
       label: "Leased",
       to: "/leases",
-      ...(held === undefined ? {} : { unit: `of ${formatCount(devices.length)} · ${ready} ready` }),
+      ...(held === undefined ? {} : { unit: `/ ${formatCount(devices.length)}` }),
       value: held === undefined ? "—" : formatCount(held),
     },
+    { label: "Ready", to: "/fleet", unit: "warm", value: formatCount(ready) },
     {
       label: "Waiting",
       to: "/queue",
-      unit: requests.length === 0 ? "none" : `longest ${formatDuration(now - oldest)}`,
-      value: formatCount(requests.length),
+      ...(requests === undefined
+        ? {}
+        : { unit: requests.length === 0 ? "none" : `max ${formatDuration(now - oldest)}` }),
+      value: requests === undefined ? "—" : formatCount(requests.length),
+    },
+    {
+      label: "Wait p95",
+      to: usagePath(range),
+      ...(wait === undefined ? {} : { unit: wait.unit }),
+      value: wait === undefined ? "—" : wait.value,
+    },
+    {
+      label: "Ending soon",
+      to: "/leases",
+      ...(ending === undefined ? {} : { unit: "< 5 min" }),
+      value: ending === undefined ? "—" : formatCount(ending),
     },
     {
       label: "Workers",
       to: "/fleet",
-      unit: `of ${formatCount(workers.length)}`,
+      unit: `/ ${formatCount(workers.length)}`,
       value: formatCount(connected),
     },
   ];
 }
 
-// why: the same rule the Leases filter and the Inbox use, against the daemon's clock; a failed read
-// of the leases is "not known", not none.
-function endingSoon(leases: readonly LeaseRecord[] | undefined, now: number): OverviewTile {
-  const count = leases?.filter((lease) => isExpiring(lease.ttlDeadline, now)).length;
+// why: the same list and order the Inbox shows, problems only, so the first one is the Inbox's.
+function bannerOf(items: readonly InboxItem[], now: number): OverviewBanner | undefined {
+  const problems = inGroupOrder(items).filter((item) => item.group !== "Heads-up");
+  const first = problems[0];
+  if (first === undefined) return undefined;
   return {
-    label: "Ending soon",
-    to: "/leases",
-    ...(count === undefined ? {} : { unit: "under 5 min" }),
-    value: count === undefined ? "—" : formatCount(count),
+    count: problems.length,
+    first: {
+      text: `${inboxSubject(first, now)} · ${first.condition}`,
+      to: inboxPath(first.key),
+    },
+    more: problems.length - 1,
+    title:
+      problems.length === 1
+        ? "1 thing needs you"
+        : `${formatCount(problems.length)} things need you`,
   };
 }
 
-// why: Needs you lists problems only, in the Inbox's own order, so its first rows are the Inbox's.
-function inboxOf(items: readonly InboxItem[], now: number): OverviewInbox {
-  const problems = inGroupOrder(items).filter((item) => item.group !== "Heads-up");
+function queueOf(
+  requests: readonly WaitingRequest[],
+  workers: readonly WorkerView[],
+  now: number,
+): QueueCard {
+  const table = waitingTable(requests, workers, now);
   return {
-    needsYou: problems.slice(0, NEEDS_YOU_ROWS).map((item) => ({
-      key: item.key,
-      subject: inboxSubject(item, now),
-      to: inboxPath(item.key),
-      tone: inboxTone(item.group),
-      word: item.condition,
+    meta: table.meta,
+    rows: table.rows.slice(0, QUEUE_ROWS).map((row, index) => ({
+      holder: shortHolder(row.requester),
+      holderTitle: row.requester,
+      key: row.key,
+      kind: agentKind(row.requester),
+      place: row.place === "—" ? `#${index + 1}` : row.place,
+      to: row.to,
+      waited: row.waited,
     })),
-    problems: problems.length,
   };
+}
+
+// why: the same rule the Leases filter and the Inbox use, against the daemon's clock, soonest first.
+function endingOf(
+  leases: readonly LeaseRecord[],
+  workers: readonly WorkerView[],
+  now: number,
+): EndingCard {
+  const soon = leases
+    .filter((lease) => isExpiring(lease.ttlDeadline, now))
+    .toSorted((a, b) => a.ttlDeadline - b.ttlDeadline);
+  const rows = soon.slice(0, ENDING_ROWS).flatMap((lease) =>
+    leaseRows({ leases: [lease], now, tokens: [], workers }).map(
+      (row: LeaseRowView): EndingRow => ({
+        holder: row.holderDisplay,
+        holderTitle: row.holderTitle,
+        key: row.key,
+        kind: row.holderKind,
+        percent: row.percent,
+        remaining: lease.ttlDeadline <= now ? "now" : minutesAndSeconds(lease.ttlDeadline - now),
+        sub: row.sub,
+        to: row.to,
+      }),
+    ),
+  );
+  return { meta: `${formatCount(soon.length)} under 5 min`, rows };
+}
+
+function wallOf(worker: WorkerView): WallWorker {
+  const row = workerRow(worker);
+  return {
+    android: platformSlots(worker, "android"),
+    health: row.health,
+    ios: platformSlots(worker, "ios"),
+    key: worker.id,
+    meters: row.meters,
+    name: row.name,
+    slotsLabel: row.slotsLabel,
+    to: row.to,
+  };
+}
+
+function clockOf(at: number): string {
+  return [new Date(at).getHours(), new Date(at).getMinutes(), new Date(at).getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }
 
 // why: the overview reads routes the other pages read too, and every figure on it is worked
 // out here from those, so a figure on the overview and the same figure on its page always agree.
 export function overviewOf(input: {
   readonly workers: readonly WorkerView[];
-  readonly requests: readonly WaitingRequest[];
+  // why: undefined is a refused read of the requests; a daemon with no queue of its own sends [].
+  readonly requests: readonly WaitingRequest[] | undefined;
+  readonly queueRefusal?: string;
   readonly items?: readonly InboxItem[];
   readonly leases?: readonly LeaseRecord[] | undefined;
   readonly figures?: FiguresState;
+  readonly range?: ConsoleRange;
+  readonly updatedAt?: number | undefined;
   readonly now: number;
 }): Overview {
   const { figures = { kind: "loading" }, items = [], leases, now, requests, workers } = input;
+  const { queueRefusal = "The queue could not be read.", range = "1h" } = input;
+  const banner = bannerOf(items, now);
   return {
     capacity: [platformCapacity(workers, "ios"), platformCapacity(workers, "android")],
-    ending: endingSoon(leases, now),
-    inbox: inboxOf(items, now),
+    ending:
+      leases === undefined
+        ? { unavailable: "The leases could not be read." }
+        : endingOf(leases, workers, now),
     figures,
-    tiles: tiles(workers, requests, now),
-    ...(figures.kind === "ready" ? { wait: figures.data.wait } : {}),
-    workers: workers.map((worker) => workerRow(worker)),
+    queue: requests === undefined ? { unavailable: queueRefusal } : queueOf(requests, workers, now),
+    tiles: tiles({ figures, leases, now, range, requests, workers }),
+    workers: workers.map(wallOf),
+    ...(banner === undefined ? {} : { banner }),
+    ...(input.updatedAt === undefined ? {} : { updated: clockOf(input.updatedAt) }),
   };
 }

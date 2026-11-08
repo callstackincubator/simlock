@@ -1,7 +1,5 @@
 import "./slots.css";
 
-import type { CSSProperties } from "react";
-
 import { Meter } from "./meter";
 
 export type SlotKind = "leased" | "ready" | "busy" | "broken" | "absent" | "free";
@@ -46,38 +44,15 @@ const LEGEND: readonly { readonly kind: SlotKind; readonly word: string }[] = [
   { kind: "free", word: "free" },
 ];
 
-export function SlotLegend() {
+export function SlotLegend({ kinds }: { readonly kinds?: readonly SlotKind[] }) {
   return (
     <ul className="slot-legend" aria-hidden="true">
-      {LEGEND.map((entry) => (
+      {LEGEND.filter((entry) => kinds === undefined || kinds.includes(entry.kind)).map((entry) => (
         <li key={entry.kind}>
           <span className={`slot slot-${entry.kind}`} />
           {entry.word}
         </li>
       ))}
     </ul>
-  );
-}
-
-export type ShareKind = SlotKind | "drained" | "shutdown" | "offline";
-
-export interface Share {
-  readonly kind: ShareKind;
-  readonly percent: number;
-}
-
-// why: the bar repeats figures printed beside it, so it is hidden from a screen reader; each share's
-// width arrives as a custom property, which the CSP allows where a style attribute is not.
-export function ShareBar({ shares }: { readonly shares: readonly Share[] }) {
-  return (
-    <span className="share-bar" aria-hidden="true">
-      {shares.map((share) => (
-        <span
-          key={share.kind}
-          className={`share slot-${share.kind}`}
-          style={{ "--share": `${Math.max(0, Math.min(100, share.percent))}%` } as CSSProperties}
-        />
-      ))}
-    </span>
   );
 }

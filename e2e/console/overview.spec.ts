@@ -19,10 +19,10 @@ const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
 
 const RANGES = [
-  { label: "1 hour", since: "1h", unit: "last hour" },
-  { label: "6 hours", since: "6h", unit: "last 6 hours" },
-  { label: "24 hours", since: "24h", unit: "last 24 hours" },
-  { label: "7 days", since: "7d", unit: "last 7 days" },
+  { label: "1 h", since: "1h", unit: "last hour" },
+  { label: "6 h", since: "6h", unit: "last 6 hours" },
+  { label: "24 h", since: "24h", unit: "last 24 hours" },
+  { label: "7 d", since: "7d", unit: "last 7 days" },
 ] as const;
 
 const CHARTS = ["leasesHeld", "queueDepth", "slotsUsed"] as const;
@@ -90,6 +90,11 @@ async function tileText(page: Page, label: string): Promise<string> {
   return parts.join(" | ");
 }
 
+// why: the Wait p95 tile is drawn at once, with a dash until the stats answer; the chart tables are not.
+async function figuresShown(page: Page): Promise<void> {
+  await expect(page.locator("#main table.chart-data")).toHaveCount(2);
+}
+
 async function tablesOf(page: Page): Promise<readonly (readonly string[])[]> {
   const tables = page.locator("#main table.chart-data");
   const count = await tables.count();
@@ -107,7 +112,7 @@ function expectedTables(stats: Stats): readonly (readonly string[])[] {
 }
 
 test.describe("the Overview's figures", () => {
-  test("picking each of 1 hour, 6 hours, 24 hours and 7 days writes its ?range=, and the Wait p95 tile and the two chart tables equal GET /v1/stats", async ({
+  test("picking each of 1 h, 6 h, 24 h and 7 d writes its ?range=, and the Wait p95 tile and the two chart tables equal GET /v1/stats", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -122,7 +127,7 @@ test.describe("the Overview's figures", () => {
         if (range.since === "1h") expect(new URL(page.url()).search).toBe("");
         else expect(new URL(page.url()).search).toBe(`?range=${range.since}`);
         await expect(
-          page.getByRole("heading", { name: `Leases held, ${range.unit}`, exact: true }),
+          page.getByRole("heading", { name: `Requests waiting · ${range.label}`, exact: true }),
         ).toBeVisible();
 
         const stats = await statsOf(host, range.since);
@@ -138,22 +143,20 @@ test.describe("the Overview's figures", () => {
     }
   });
 
-  test("a reload of /?range=6h keeps 6 hours checked and the same tile numbers", async ({
-    page,
-  }) => {
+  test("a reload of /?range=6h keeps 6 h checked and the same tile numbers", async ({ page }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       await scriptedRun(host);
       await host.prepareHistoricalUsage();
       await openOverview(page, host, "/?range=6h");
-      await expect(page.getByRole("radio", { name: "6 hours" })).toBeChecked();
-      await expect(tile(page, "Wait p95")).toBeVisible();
+      await expect(page.getByRole("radio", { name: "6 h" })).toBeChecked();
+      await figuresShown(page);
       const before = [await tileText(page, "Wait p95")];
 
       await page.reload();
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
-      await expect(page.getByRole("radio", { name: "6 hours" })).toBeChecked();
+      await expect(page.getByRole("radio", { name: "6 h" })).toBeChecked();
       await expect.poll(() => tileText(page, "Wait p95")).toBe(before[0]);
     } finally {
       await host.dispose();
@@ -171,7 +174,7 @@ test.describe("the Overview's figures", () => {
       await scriptedRun(host);
       await host.prepareHistoricalUsage();
       await openOverview(page, host, "/?range=24h");
-      await expect(tile(page, "Wait p95")).toBeVisible();
+      await figuresShown(page);
       const before = {
         rows: (await tablesOf(page)).map((rows) => rows.filter((row) => row !== "—")),
         wait: await tileText(page, "Wait p95"),
@@ -220,26 +223,61 @@ test.describe("the Overview's figures", () => {
     }
   });
 
-  test("on a single host, Overview shows all five numbers and both charts, and no Activity panel", async ({
+  test("on a single host, Overview shows all six numbers, the worker wall and both charts, and no table but the charts' own", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await openOverview(page, host);
 
-      for (const label of ["Leased", "Waiting", "Workers", "Wait p95", "Ending soon"]) {
+      for (const label of ["Leased", "Ready", "Waiting", "Wait p95", "Ending soon", "Workers"]) {
         await expect(tile(page, label), label).toBeVisible();
       }
-      await expect
-        .poll(() => tileText(page, "Leased"))
-        .toMatch(/^Leased \| 0 \| of \d+ · \d+ ready$/);
-      await expect.poll(() => tileText(page, "Workers")).toBe("Workers | 1 | of 1");
+      await expect.poll(() => tileText(page, "Leased")).toMatch(/^Leased \| 0 \| \/ \d+$/);
+      await expect.poll(() => tileText(page, "Ready")).toMatch(/^Ready \| \d+ \| warm$/);
+      await expect.poll(() => tileText(page, "Workers")).toBe("Workers | 1 | / 1");
       await expect.poll(() => tileText(page, "Waiting")).toMatch(/^Waiting \| 0 \|/);
-      await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 0 | under 5 min");
+      await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 0 | < 5 min");
       await expect(page.getByRole("region", { name: "Leases held" })).toBeVisible();
-      await expect(page.getByRole("region", { name: "Requests in the queue" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: /^Requests waiting/ })).toBeVisible();
+      await expect(page.locator("#main .worker-tile")).toHaveCount(1);
+      await expect(page.locator("#main table")).toHaveCount(2);
       await expect(page.locator("#main table.chart-data")).toHaveCount(2);
       await expect(page.getByRole("region", { name: "Activity" })).toHaveCount(0);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("each KPI tile opens its page, and Wait p95 keeps the chosen range, at 1 h and at 6 h, 24 h and 7 d", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const destinations = [
+        ["Leased", "/leases"],
+        ["Ready", "/fleet"],
+        ["Waiting", "/queue"],
+        ["Wait p95", "/usage"],
+        ["Ending soon", "/leases"],
+        ["Workers", "/fleet"],
+      ] as const;
+      await openOverview(page, host);
+      for (const range of ["", "?range=6h", "?range=24h", "?range=7d"]) {
+        await page.goto(new URL(`/${range}`, host.url).toString());
+        await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+        for (const [label, path] of destinations) {
+          // why: only Wait p95 carries the range; the other pages have no range of their own.
+          const href = label === "Wait p95" ? `${path}${range}` : path;
+          await expect(tile(page, label).getByRole("link"), `${label} ${range}`).toHaveAttribute(
+            "href",
+            href,
+          );
+        }
+      }
+      await page.getByRole("radio", { name: "6 h" }).check();
+      await tile(page, "Wait p95").getByRole("link").click();
+      await expect(page).toHaveURL(/\/usage\?range=6h$/);
     } finally {
       await host.dispose();
     }
@@ -251,7 +289,11 @@ test.describe("the Overview's figures", () => {
       const links = [
         { follow: () => tile(page, "Waiting").getByRole("link").click(), path: "/queue" },
         { follow: () => tile(page, "Workers").getByRole("link").click(), path: "/fleet" },
-        { follow: () => page.getByRole("link", { name: "Open Fleet" }).click(), path: "/fleet" },
+        { follow: () => page.getByRole("link", { name: "Open fleet" }).click(), path: "/fleet" },
+        {
+          follow: () => page.locator("#main .worker-tile a").first().click(),
+          path: "/fleet/[^/]+",
+        },
       ];
       await openOverview(page, host);
       for (const { follow, path } of links) {
@@ -297,8 +339,8 @@ async function workerConnection(host: RunningDaemon, label: string): Promise<str
   return workers.find((worker) => worker.label === label)?.connection;
 }
 
-test.describe("the Overview's Inbox lines", () => {
-  test("an empty Inbox shows Nothing needs you in the Needs you panel; a disconnected worker shows the panel with that item first, and All in Inbox (1)", async ({
+test.describe("the Overview's banner", () => {
+  test("an empty Inbox draws no banner; a disconnected worker draws one naming it, with the Open Inbox button", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -307,9 +349,8 @@ test.describe("the Overview's Inbox lines", () => {
     ]);
     try {
       await openOverview(page, fleet.gateway);
-      await expect(
-        page.getByRole("region", { name: "Needs you" }).getByText("Nothing needs you"),
-      ).toBeVisible();
+      const banner = page.locator("#main .visual-banner");
+      await expect(banner).toHaveCount(0);
 
       await (fleet.workers[1] as RunningDaemon).stop();
       await waitFor(
@@ -319,17 +360,18 @@ test.describe("the Overview's Inbox lines", () => {
         },
       );
 
-      const panel = page.getByRole("region", { name: "Needs you" });
-      await expect(panel).toBeVisible();
-      await expect(page.getByText("Nothing needs you")).toHaveCount(0);
-      await expect(panel.getByRole("link").first()).toContainText("worker-b");
-      await expect(panel.getByRole("link", { name: "All in Inbox (1)" })).toBeVisible();
+      await expect(banner).toBeVisible();
+      await expect(banner).toContainText("1 thing needs you");
+      await expect(banner.getByRole("link").first()).toContainText("worker-b");
+      await expect(banner).not.toContainText("more");
+      await banner.getByRole("link", { name: "Open Inbox" }).click();
+      await expect(page).toHaveURL(/\/inbox$/);
     } finally {
       await disposeFleet(fleet);
     }
   });
 
-  test("with five problem items the panel shows four, and a row opens /inbox/<key>", async ({
+  test("with five problem items the banner counts five, links the first and says four more, and the link opens /inbox/<key>", async ({
     page,
   }) => {
     const gateway = await startDaemon("gateway");
@@ -351,10 +393,10 @@ test.describe("the Overview's Inbox lines", () => {
       );
       await openOverview(page, gateway);
 
-      const panel = page.getByRole("region", { name: "Needs you" });
-      await expect(panel.getByRole("listitem")).toHaveCount(4);
-      await expect(panel.getByRole("link", { name: "All in Inbox (5)" })).toBeVisible();
-      await panel.getByRole("listitem").first().getByRole("link").click();
+      const banner = page.locator("#main .visual-banner");
+      await expect(banner).toContainText("5 things need you");
+      await expect(banner).toContainText("and 4 more");
+      await banner.getByRole("link").first().click();
       await expect(page).toHaveURL(/\/inbox\/wrk_old_\d%2Fincompatible$/);
     } finally {
       for (const hangUp of hangUps) hangUp();
@@ -362,7 +404,7 @@ test.describe("the Overview's Inbox lines", () => {
     }
   });
 
-  test("with /v1/inbox stubbed to fail, Overview shows the daemon's refusal and not Nothing needs you", async ({
+  test("with /v1/inbox stubbed to fail, Overview shows the daemon's refusal and no banner", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -378,7 +420,7 @@ test.describe("the Overview's Inbox lines", () => {
       await openOverview(page, host);
 
       await expect(page.getByText("The inbox is down.")).toBeVisible();
-      await expect(page.getByText("Nothing needs you")).toHaveCount(0);
+      await expect(page.locator("#main .visual-banner")).toHaveCount(0);
     } finally {
       await host.dispose();
     }
@@ -404,16 +446,16 @@ test.describe("the Overview when the workers cannot be read", () => {
       await page.reload();
 
       await expect(page.getByText("The fleet is down.")).toBeVisible();
-      await expect(page.getByRole("region", { name: "Capacity · all workers" })).toHaveCount(0);
-      await expect(page.getByText("Nothing needs you")).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Capacity" })).toHaveCount(0);
+      await expect(page.locator("#main .worker-tile")).toHaveCount(0);
     } finally {
       await host.dispose();
     }
   });
 });
 
-test.describe("the Overview's five numbers", () => {
-  test("show the daemon's values: one lease held of four devices with three ready, one request waiting with its longest wait, two of two workers, Wait p95, and Ending soon counting a lease with 4 minutes left and not one with 10", async ({
+test.describe("the Overview's six numbers", () => {
+  test("show the daemon's values: one lease held of four devices with three ready, one request waiting with its longest wait, two of two workers, Wait p95, and Ending soon counting a lease with 4 minutes left and not one with 10, and the Queue and Ending soon rows open their pages", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -456,9 +498,9 @@ test.describe("the Overview's five numbers", () => {
                 {
                   createdAt: now - 125_000,
                   id: "req_stub",
-                  platform: "ios",
                   queuePosition: 1,
                   requesterId: "stub",
+                  spec: { platform: "ios" },
                   stage: "queued",
                 },
               ],
@@ -492,15 +534,27 @@ test.describe("the Overview's five numbers", () => {
       await openOverview(page, fleet.gateway);
 
       const stats = await statsOf(fleet.gateway, "1h");
-      await expect.poll(() => tileText(page, "Leased")).toBe("Leased | 1 | of 4 · 3 ready");
+      await expect.poll(() => tileText(page, "Leased")).toBe("Leased | 1 | / 4");
+      await expect.poll(() => tileText(page, "Ready")).toBe("Ready | 3 | warm");
       await expect
         .poll(() => tileText(page, "Waiting"))
-        .toMatch(/^Waiting \| 1 \| longest 2 min \d+ s$/);
-      await expect.poll(() => tileText(page, "Workers")).toBe("Workers | 2 | of 2");
+        .toMatch(/^Waiting \| 1 \| max 2 min \d+ s$/);
+      await expect.poll(() => tileText(page, "Workers")).toBe("Workers | 2 | / 2");
       await expect
         .poll(() => tileText(page, "Wait p95"))
         .toBe(`Wait p95 | ${waitText(stats.totals.wait.p95)} | last hour`);
-      await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 1 | under 5 min");
+      await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 1 | < 5 min");
+
+      const queue = page.getByRole("region", { name: "Queue" });
+      await expect(queue.getByRole("link", { name: /stub/ })).toHaveAttribute(
+        "href",
+        "/queue/req_stub",
+      );
+      await expect(queue.locator(".overview-time")).toHaveText(/^2 min \d+ s$/);
+      const ending = queue.locator(".overview-ttl").locator("xpath=ancestor::a");
+      await expect(ending).toHaveCount(1);
+      await expect(ending).toContainText(/^[\s\S]*3:\d\d$|[\s\S]*4:00/);
+      await expect(ending).toHaveAttribute("href", /^\/leases\//);
     } finally {
       // why: a console request still in flight when the gateway stops would make a handler's route.fetch() throw ECONNREFUSED.
       await page.unrouteAll({ behavior: "ignoreErrors" });
@@ -509,8 +563,10 @@ test.describe("the Overview's five numbers", () => {
   });
 });
 
-test.describe("the Overview's workers table", () => {
-  test("lists all workers with no pager, and Open Fleet goes to /fleet", async ({ page }) => {
+test.describe("the Overview's worker wall", () => {
+  test("draws a tile for every worker, with no table or pager, and Open fleet goes to /fleet", async ({
+    page,
+  }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
@@ -518,13 +574,17 @@ test.describe("the Overview's workers table", () => {
     try {
       await openOverview(page, fleet.gateway);
 
-      const workersPanel = page.getByRole("region", { name: "Workers" });
-      await expect(workersPanel.locator("tbody tr")).toHaveCount(2);
-      await expect(workersPanel.getByRole("link", { name: "worker-a" })).toBeVisible();
-      await expect(workersPanel.getByRole("link", { name: "worker-b" })).toBeVisible();
+      const wall = page.getByRole("region", { name: "Fleet" });
+      await expect(wall.locator(".worker-tile")).toHaveCount(2);
+      await expect(wall.getByRole("link", { name: "worker-a" })).toBeVisible();
+      await expect(wall.getByRole("link", { name: "worker-b" })).toBeVisible();
+      await expect(wall.locator("table")).toHaveCount(0);
       await expect(page.getByRole("navigation", { name: /pages$/ })).toHaveCount(0);
 
-      await page.getByRole("link", { name: "Open Fleet" }).click();
+      await wall.getByRole("link", { name: "worker-a" }).click();
+      await expect(page).toHaveURL(/\/fleet\/[^/]+$/);
+      await page.goBack();
+      await page.getByRole("link", { name: "Open fleet" }).click();
       await expect(page).toHaveURL(/\/fleet$/);
     } finally {
       await disposeFleet(fleet);
@@ -533,16 +593,17 @@ test.describe("the Overview's workers table", () => {
 });
 
 test.describe("the range chips", () => {
-  test("sit in the shared toolbar on Overview and on Usage", async ({ page }) => {
+  test("sit in the page header on Overview and in the toolbar on Usage", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      for (const path of ["/", "/usage"]) {
+      for (const [path, area] of [
+        ["/", "#main .page-head .page-actions"],
+        ["/usage", "#main .toolbar .toolbar-start"],
+      ] as const) {
         await page.goto(new URL(path, host.url).toString());
         if (path === "/") await signIn(page, host.tokens.operator);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-        const chips = page.locator("#main .toolbar .toolbar-start").getByRole("group", {
-          name: "Range",
-        });
+        const chips = page.locator(area).getByRole("group", { name: "Range" });
         await expect(chips, path).toBeVisible();
         await expect(chips.getByRole("radio")).toHaveCount(4);
       }

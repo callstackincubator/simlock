@@ -161,12 +161,12 @@
   align-items: center;
   gap: 14px;
   padding: 11px 14px;
-  border: 1px solid color-mix(in srgb, var(--status-error) 20%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--accent) 11%, var(--border));
   border-radius: var(--radius);
   background: linear-gradient(
     90deg,
     var(--surface),
-    color-mix(in srgb, var(--status-error) 5%, var(--surface))
+    color-mix(in srgb, var(--accent) 4%, var(--surface))
   );
 }
 .visual-banner-count {
@@ -198,7 +198,12 @@
   padding: 11px 14px;
   background: var(--surface);
 }
+.worker-tile-name:hover {
+  color: var(--text);
+  text-decoration: none;
+}
 .worker-tile-name {
+  text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -225,6 +230,7 @@
 .worker-tile-metrics {
   display: grid;
   gap: 4px;
+  margin-top: auto;
 }
 .worker-metric {
   display: grid;
@@ -240,4 +246,23 @@
 .worker-metric-empty {
   height: 4px;
   background: var(--track);
+}
+.worker-tile-warn {
+  background: color-mix(in srgb, var(--status-warn) 6%, var(--surface));
+}
+.worker-tile-error {
+  background: color-mix(in srgb, var(--status-error) 6%, var(--surface));
+}
+.worker-tile-group {
+  display: inline-flex;
+  min-width: 0;
+}
+.worker-tile-group:only-child,
+.worker-tile-group:first-child:has(+ .worker-tile-fraction) {
+  flex: 1;
+}
+.worker-tile-group > .slots-meter {
+  flex: 1;
+  color: var(--text-muted);
+  font: 500 12px var(--font-mono);
 }

@@ -154,8 +154,19 @@ const events = Array.from({ length: 60 }, (_, index) => ({
 
 type Scenario = "populated" | "empty" | "long" | "refused";
 
-function leasesBody(scenario: Scenario): unknown {
+// why: only the Overview shows the queue, the problems and the leases about to end; every other page's
+// case keeps its empty queue and Inbox and its leases as they were.
+function leasesBody(scenario: Scenario, onOverview: boolean): unknown {
   const records = scenario === "empty" ? [] : holders.map((_, index) => lease(index));
+  if (onOverview) {
+    for (const [index, left] of [
+      [4, 252_000],
+      [6, 156_000],
+    ] as const) {
+      const record = records[index];
+      if (record !== undefined) records[index] = { ...record, ttlDeadline: NOW + left };
+    }
+  }
   return { leases: scenario === "long" ? [lease(0, "x".repeat(256))] : records };
 }
 
@@ -173,18 +184,49 @@ function leaseBody(): unknown {
   };
 }
 
-const BODIES: Readonly<Record<string, (scenario: Scenario) => unknown>> = {
+function inboxBody(onOverview: boolean): unknown {
+  if (!onOverview) return { items: [] };
+  const [first, second, third] = [6, 5, 3].map(worker);
+  return {
+    items: [
+      { condition: "disconnected", group: "Broken", key: "wrk_7/disconnected", worker: first },
+      { condition: "drained", group: "Needs a look", key: "wrk_6/drained", worker: second },
+      { condition: "over RAM budget", group: "Needs a look", key: "wrk_4/ram", worker: third },
+    ],
+  };
+}
+
+function requestsBody(onOverview: boolean): unknown {
+  if (!onOverview) return { requests: [] };
+  const asked = (id: number, requesterId: string, waitedMs: number, platform: string) => ({
+    createdAt: NOW - waitedMs,
+    id: `req_${id}`,
+    queuePosition: id,
+    requesterId,
+    spec: { model: platform === "ios" ? "iPhone 16" : "Pixel 9", osVersion: "18.4", platform },
+    stage: "queued",
+  });
+  return {
+    requests: [
+      asked(1, "codex:pr-1447-forms", 41_000, "ios"),
+      asked(2, "ci/ui-shard-4", 22_000, "ios"),
+      asked(3, "claude-code:widget-fix", 6_000, "android"),
+    ],
+  };
+}
+
+const BODIES: Readonly<Record<string, (scenario: Scenario, onOverview: boolean) => unknown>> = {
   "/v1/workers": () => ({ workers: names.map((_, index) => worker(index)) }),
   "/v1/leases": leasesBody,
   "/v1/leases/lse_1": leaseBody,
   "/v1/baselines": () => ({ baselines }),
   "/v1/events": () => ({ events }),
-  "/v1/inbox": () => ({ items: [] }),
-  "/v1/lease-requests": () => ({ requests: [] }),
+  "/v1/inbox": (_, onOverview) => inboxBody(onOverview),
+  "/v1/lease-requests": (_, onOverview) => requestsBody(onOverview),
 };
 
-function bodyFor(path: string, scenario: Scenario): unknown | undefined {
-  return BODIES[path]?.(scenario);
+function bodyFor(path: string, scenario: Scenario, onOverview: boolean): unknown | undefined {
+  return BODIES[path]?.(scenario, onOverview);
 }
 
 function statsBody(stats: Record<string, unknown>): unknown {
@@ -212,6 +254,7 @@ async function overrideFor(
   pathname: string,
   scenario: Scenario,
   response: APIResponse,
+  onOverview: boolean,
 ): Promise<{ status?: number; json: unknown } | undefined> {
   if (pathname === "/v1/leases" && scenario === "refused" && response.ok()) {
     return {
@@ -226,7 +269,7 @@ async function overrideFor(
   if (pathname === "/v1/stats" && response.ok()) {
     return { json: statsBody((await response.json()) as Record<string, unknown>) };
   }
-  const body = bodyFor(pathname, scenario);
+  const body = bodyFor(pathname, scenario, onOverview);
   if (body !== undefined && servesBody(pathname, response)) return { status: 200, json: body };
   return undefined;
 }
@@ -239,7 +282,9 @@ async function respond(route: Route, scenario: Scenario): Promise<void> {
     date: new Date(NOW).toUTCString(),
   };
   delete headers.etag;
-  const override = await overrideFor(pathname, scenario, response);
+  const frame = route.request().frame().url();
+  const onOverview = new URL(frame, "http://localhost").pathname === "/";
+  const override = await overrideFor(pathname, scenario, response, onOverview);
   await route.fulfill({ response, headers, ...override });
 }
 

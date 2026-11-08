@@ -28,7 +28,7 @@ export function inGroupOrder(items: readonly InboxItem[]): readonly InboxItem[] 
 
 // why: a broken item is the error tone; everything else on the list needs a look soon, which is the
 // warning tone, the same split the status words use.
-export function inboxTone(group: InboxGroup): Tone {
+function inboxTone(group: InboxGroup): Tone {
   return group === "Broken" ? "error" : "warn";
 }
 
@@ -105,7 +105,7 @@ function protocolText(versions: { readonly min: number; readonly max: number }):
     : `${versions.min}\u2013${versions.max}`;
 }
 
-function minutesAndSeconds(ms: number): string {
+export function minutesAndSeconds(ms: number): string {
   const seconds = Math.floor(ms / 1_000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }

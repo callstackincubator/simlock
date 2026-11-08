@@ -91,14 +91,16 @@ Pages update by themselves: a new lease or a booting device shows within about a
 
 ## Overview
 
-The console opens on **Overview**, the worker on one page.
+The console opens on **Overview**, the worker on one page. Under the title it says when it last updated. It has no tables.
 
-- **Range**: **1 hour**, **6 hours**, **24 hours** or **7 days**. It sets the figures and charts below.
-- **Tiles**: **Leased** (leases held, of the devices running, and how many are ready), **Waiting** (with the longest wait), **Workers** connected, **Wait p95** for the range (how long the slowest 1 in 20 requests waited), and **Ending soon** (leases with under 5 minutes left).
-- **Needs you**: the problems from **Inbox**, or "Nothing needs you".
-- **Capacity · all workers**: per platform, the devices split into leased, ready, booting and the rest.
-- **Charts**: **Leases held** and **Requests in the queue** over the range, each with a table of the numbers under it. **Device slots in use** is on **Usage**.
-- **Workers**: a short version of **Fleet**, with **Open Fleet** to see all of it.
+- **Range**: **1 h**, **6 h**, **24 h** or **7 d**, at the top right. It sets the figures and charts below.
+- **Banner**: when something needs you, a line counts the problems from **Inbox**, links the first one and says how many more there are. **Open Inbox** goes to the list. With nothing to do, there is no banner.
+- **Tiles**: each one opens its page. **Leased** (leases held, of the devices running) and **Ready** (devices ready to lease) open **Leases** and **Fleet**; **Waiting** (with the longest wait) opens **Queue**; **Wait p95** for the range (how long the slowest 1 in 20 requests waited) opens **Usage** on the same range; **Ending soon** (leases with under 5 minutes left) opens **Leases**; **Workers** connected opens **Fleet**. A figure the daemon could not read shows a dash, never zero.
+- **Fleet**: one tile per worker, with its status in a pill when something is wrong, its slots for iOS and Android, and its CPU, memory and disk. A worker with more than ten slots shows a meter and the leased/total fraction. **Open fleet** shows all of it.
+- **Leases held**: a chart over the range, with the current and the highest figure. A table of the numbers is there for screen readers.
+- **Capacity**: per platform, how much of the room your workers may run is leased.
+- **Queue**: the three longest waiting requests, and **Ending soon**: the two leases that end first. Each row opens its request or lease. If the queue cannot be read, the card says so instead of showing it empty.
+- **Requests waiting**: a bar for each period of the range. **Device slots in use** is on **Usage**.
 
 ## Fleet
 
