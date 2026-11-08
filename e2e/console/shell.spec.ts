@@ -116,6 +116,11 @@ test.describe("the shell", () => {
         navHeight: "32px",
         navRadius: "8px",
       });
+      await expect(page.locator(".stat-body").first()).toHaveCSS("border-radius", "10px");
+      await expect(page.locator(".stat-label").first()).toHaveCSS("font-size", "10.5px");
+      await expect(page.locator(".stat-value").first()).toHaveCSS("font-size", "28px");
+      await expect(page.locator(".stat-value").first()).toHaveCSS("font-family", /Geist Mono/);
+      await expect(page.locator(".stat-unit").first()).toHaveCSS("font-size", "12px");
       const captureDir = "docs/internal/console-redesign/current";
       await mkdir(captureDir, { recursive: true });
       const capturePath = `${captureDir}/shell-${entry.theme}-${entry.session}.png`;
