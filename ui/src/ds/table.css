@@ -245,6 +245,11 @@
   text-transform: uppercase;
 }
 
+/* A group heading is a slim band, shorter than a row of data. */
+.table .table-group td {
+  height: 28px;
+}
+
 /* The count line a table shows in place of its pager: the rows on screen, and nothing else. */
 .table-count {
   margin: 0;
