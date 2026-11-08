@@ -45,6 +45,8 @@
   --row-hover: rgba(17, 17, 16, 0.04);
   --row-warn: #fbf3dc;
   --row-error: #fbe9e6;
+  --slot-leased: #3f3f3b;
+  --kbd-border: #85857f;
 
   /* An agent chip's own tints, as a tool's mark, never a status. */
   --agent-claude-code: #f3e3cf;
@@ -97,6 +99,8 @@
     --row-hover: rgba(255, 255, 255, 0.035);
     --row-warn: #17140c;
     --row-error: #19100f;
+    --slot-leased: #d6d6d0;
+    --kbd-border: #3a3a41;
 
     /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
     --agent-claude-code: #3a2a18;
@@ -145,6 +149,8 @@
   --row-hover: rgba(255, 255, 255, 0.035);
   --row-warn: #17140c;
   --row-error: #19100f;
+  --slot-leased: #d6d6d0;
+  --kbd-border: #3a3a41;
 
   /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
   --agent-claude-code: #3a2a18;
@@ -336,13 +342,6 @@ input[aria-invalid="true"] {
 :root {
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --duration-move: 220ms;
-  --slot-leased: #3f3f3b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --slot-leased: #d6d6d0;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

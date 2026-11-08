@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // why: the ratios of every chip, pill and button pairing in both themes are plain arithmetic over
@@ -18,6 +18,7 @@ function between(start: string, end: string): string {
 
 const light = tokens(between("  /* Light theme. */", "/* The operator's own theme"));
 const dark = tokens(between("@media (prefers-color-scheme: dark)", ':root[data-theme="dark"]'));
+const chosenDark = tokens(between(':root[data-theme="dark"] {', "*,"));
 
 function channel(hex: string, at: number): number {
   const value = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
@@ -68,4 +69,22 @@ describe("contrast", () => {
       expect(table.filter(([, value]) => (value as number) < 4.5)).toEqual([]);
     });
   }
+});
+
+describe("the Settings theme", () => {
+  it("themes every rule the system's dark mode changes through the palette, which data-theme overrides both ways", () => {
+    const root = new URL("../", import.meta.url);
+    const sheets = readdirSync(root, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".css"))
+      .map((file) => [file, readFileSync(new URL(file, root), "utf8")] as const);
+    const schemeBlocks = sheets.flatMap(([file, text]) =>
+      [...text.matchAll(/@media\s*\(prefers-color-scheme:\s*(\w+)\)\s*\{\s*([^{]+?)\s*\{/g)].map(
+        (m) => `${file}: ${m[1]} ${m[2]}`,
+      ),
+    );
+
+    expect(schemeBlocks).toEqual([`ds/foundation.css: dark :root:not([data-theme="light"])`]);
+    expect([...dark.keys()].filter((token) => !light.has(token))).toEqual([]);
+    expect(Object.fromEntries(chosenDark)).toEqual(Object.fromEntries(dark));
+  });
 });

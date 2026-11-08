@@ -619,19 +619,13 @@
   align-items: center;
   height: 18px;
   padding: 0 5px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--kbd-border);
   border-radius: 4px;
   font: 500 var(--text-2xs)/1 var(--font-mono);
 }
 
 .sidebar-search kbd::before {
   content: "⌘K";
-}
-
-@media (prefers-color-scheme: dark) {
-  .sidebar-search kbd {
-    border-color: #3a3a41;
-  }
 }
 
 .sidebar-collapsed .sidebar-search kbd {
