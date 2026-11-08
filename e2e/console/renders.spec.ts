@@ -418,7 +418,7 @@ for (const entry of cases) {
               );
             }
             if (entry.name === "7-baselines") {
-              await expect(page.locator("main tbody tr")).toHaveCount(9);
+              await expect(page.locator("main tbody tr")).toHaveCount(11);
               for (const name of [
                 "ios-18.4-iphone16",
                 "ios-18.4-iphone16pro",

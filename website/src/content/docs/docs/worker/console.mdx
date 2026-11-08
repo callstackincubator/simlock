@@ -186,7 +186,11 @@ A request leaves the list as soon as it gets its device, fails or is cancelled. 
 
 ## Baselines
 
-**Baselines** lists every baseline the worker holds: its name, version, platform, model, OS version, mode, note, size, when it was saved, and whether it is stale. A stale baseline shows its reason, for example `stale · runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed`.
+**Baselines** lists every baseline the worker holds, grouped by platform. A group's heading gives its baseline count and their size together; when some sizes are not known, the size says `known`. Each row shows the baseline's name, the model and runtime it was saved on, its size, when it was built, and a `ready` or `stale` state. A stale baseline shows its reason under the state, word for word. Use **All**, **Stale** and **Ready** to narrow the list, and the search box to find a baseline by name, model, runtime or worker. The group counts follow the filter and the search.
+
+Under the table, **Disk used by baselines** shows, for each worker, how much of its own disk its baselines take. A bar is that worker's baseline size against that worker's disk, and its figure is printed beside it. A size or a disk total the worker has not reported is shown as unknown, never as zero.
+
+**Prepare baseline**, above the page, opens the guide to preparing one. The console does not save baselines itself.
 
 To save or remove a baseline, use `simlock baseline save` and `simlock baseline remove` on the command line; see [Baselines](/simlock/docs/worker/baselines).
 
