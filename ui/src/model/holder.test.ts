@@ -37,6 +37,7 @@ describe("a holder's identity", () => {
       ["mcp:48213", "unknown"],
       ["ci-runner-3", "unknown"],
       ["codex/free-label", "unknown"],
+      ["runner:codex:session-0123456789", "unknown"],
       ["Claude-Code:3f2a9c8b7d6e5", "unknown"],
       ["claude-code", "unknown"],
       ["pi", "unknown"],
