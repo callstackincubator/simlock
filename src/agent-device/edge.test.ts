@@ -313,7 +313,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await command(rig, "snapshot", 2, {}, named);
     await command(rig, "snapshot", undefined, {}, named);
     await release(rig, 1);
+    const named1 = { "x-agent-device-lease-id": hex(1) };
+    await send(rig, "/upload/preflight", { body: "{}", headers: named1 });
+    await send(rig, "/artifacts/a1", { headers: { "x-agent-device-lease-id": hex(2) } });
+    await send(rig, "/upload/preflight", { body: "{}" });
+    const byPath = (path: string) =>
+      rig.fake.requests.filter((request) => request.path === path).map((request) => request.tenant);
 
+    expect(byPath("/upload/preflight")).toEqual([tenantOf(1), principals.one]);
+    expect(byPath("/artifacts/a1")).toEqual([tenantOf(2)]);
     expect(tenants("agent_device.lease.allocate")).toEqual([tenantOf(1), tenantOf(2)]);
     expect(tenants("agent_device.lease.heartbeat")).toEqual([tenantOf(1)]);
     expect(tenants("agent_device.command")).toEqual([tenantOf(1), tenantOf(2), principals.one]);
@@ -1617,7 +1625,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
   });
 
-  it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header, and a header naming a lease routes by the lease id whichever token sends it, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
+  it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header, and a header naming another token's lease is refused 403 `refused: lease <id> is not one of yours`, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
     const rig = await setUpWithPhone();
     await granted(rig, 1, { physical: true, platform: "android" });
     await granted(rig, 2, { platform: "android" });
@@ -1633,7 +1641,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
       [named(1), secrets.one, "phone"],
       [named(2), secrets.one, "simulators"],
       [{}, secrets.one, "simulators"],
-      [named(1), secrets.two, "phone"],
+      [named(1), secrets.two, "forbidden"],
       [malformed, secrets.one, "refused"],
     ] as const;
 
@@ -1650,6 +1658,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
           reaching(rig.phone, path) - phoneBefore,
           reaching(rig.fake, path) - simulatorsBefore,
         ]).toEqual([reaches === "phone" ? 1 : 0, reaches === "simulators" ? 1 : 0]);
+        if (reaches === "forbidden") {
+          expect(answer.status).toBe(403);
+          expect(await answer.text()).toContain(`refused: lease ${hex(1)} is not one of yours`);
+        }
         if (reaches === "refused") {
           expect(answer.status).toBe(400);
           expect(await answer.text()).toContain(
