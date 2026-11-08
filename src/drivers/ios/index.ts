@@ -304,6 +304,7 @@ export class IosSimctlDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions | undefined;
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
+  readonly #deviceHubPlist: string;
   readonly #slim: SlimOptions | undefined;
   readonly #fullBootTimeoutMs: number;
   readonly #afterBoot: AfterBoot;
@@ -341,6 +342,10 @@ export class IosSimctlDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
+    this.#deviceHubPlist = join(
+      dirname(dirname(options.coreSimulatorRoot ?? ".")),
+      "Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist",
+    );
     this.#slim = options.config?.slim;
     this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
     this.#afterBoot = {
@@ -1155,6 +1160,7 @@ export class IosSimctlDriver implements Driver {
     },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
+    if (this.#rootOptions === undefined) await this.#disablePasteboardSync(data.udid);
     const { plan, bootstatusTimeoutMs } = planSlimBoot(
       data,
       this.#slim,
@@ -1386,7 +1392,40 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
+    if (this.#rootOptions === undefined) await this.#removePasteboardPreference(data.udid);
     await this.#removeOverrides(data.udid);
+  }
+
+  async #disablePasteboardSync(udid: string): Promise<void> {
+    const args = [
+      "write",
+      this.#deviceHubPlist,
+      "DevicePreferences",
+      "-dict-add",
+      udid,
+      "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
+    ];
+    const outcome = await this.#invokeCommand("defaults", args, COMMAND_TIMEOUT_MS);
+    if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
+      throw new DriverCrashError(`Could not disable DeviceHub clipboard sync for ${udid}`);
+    }
+  }
+
+  async #removePasteboardPreference(udid: string): Promise<void> {
+    try {
+      const outcome = await this.#invokeCommand(
+        "/usr/libexec/PlistBuddy",
+        ["-c", `Delete :DevicePreferences:${udid}`, this.#deviceHubPlist],
+        COMMAND_TIMEOUT_MS,
+      );
+      if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
+        throw new Error("preference deletion failed");
+      }
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not remove DeviceHub preference for ${udid}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   // why: simctl delete leaves the folder behind; a failed removal must not fail a destroy that

@@ -5169,13 +5169,44 @@ describe("IosSimctlDriver device set", () => {
           : step.scoped && scoped
             ? simctlArgs(...step.args)
             : ["simctl", ...step.args];
+      const plist =
+        "/Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist";
       const runner = new ScriptedProcessRunner(
-        steps.map((step) => ({
-          match: { args: argvOf(step), command: "xcrun" },
-          ...(step.stdout === undefined
-            ? {}
-            : { result: { code: 0, stderr: "", stdout: step.stdout } }),
-        })),
+        steps.flatMap((step) => [
+          ...(!scoped && step.args[0] === "boot" && step.sources !== true
+            ? [
+                {
+                  match: {
+                    command: "defaults",
+                    args: [
+                      "write",
+                      plist,
+                      "DevicePreferences",
+                      "-dict-add",
+                      driverData.udid,
+                      "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
+                    ],
+                  },
+                },
+              ]
+            : []),
+          {
+            match: { args: argvOf(step), command: "xcrun" },
+            ...(step.stdout === undefined
+              ? {}
+              : { result: { code: 0, stderr: "", stdout: step.stdout } }),
+          },
+          ...(!scoped && step.args[0] === "delete"
+            ? [
+                {
+                  match: {
+                    command: "/usr/libexec/PlistBuddy",
+                    args: ["-c", `Delete :DevicePreferences:${driverData.udid}`, plist],
+                  },
+                },
+              ]
+            : []),
+        ]),
       );
       const filesystem = new MemoryFilesystem();
       await plantDevice(filesystem, devicesDir);
@@ -5206,7 +5237,9 @@ describe("IosSimctlDriver device set", () => {
         { signal: new AbortController().signal },
       );
 
-      expect(runner.calls.map((call) => call.args)).toEqual(steps.map(argvOf));
+      expect(
+        runner.calls.filter((call) => call.command === "xcrun").map((call) => call.args),
+      ).toEqual(steps.map(argvOf));
     },
   );
 
