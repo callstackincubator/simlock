@@ -17,8 +17,6 @@ import { useNotify, usePreferences } from "./services";
 
 export { HOLDER_CHOICES, ROWS_CHOICES, SETTINGS_RANGE_CHOICES, THEME_CHOICES };
 export type { ConfigSection, Settings };
-export type { ConfigEntry } from "../model/config-view";
-export type { HolderStyle, RowsPerPage, Theme } from "../model/settings";
 
 export function useSettings(): Settings {
   const preferences = usePreferences();
