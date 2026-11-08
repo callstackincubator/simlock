@@ -26,6 +26,8 @@ function commit(branch: string, message: string) {
 describe("commit-msg-check.mjs", () => {
   it.each([
     ["task/968", "test: a new simulator's marks name this instance (#968)"],
+    ["refactor/12", "test(pin): pin the grant before the refactor (#12)"],
+    ["refactor/12", "refactor(leasing): grant moves to leases.ts (#12)"],
     ["task/968", "feat(ios): keep simulators in Xcode's device set (#968)\n\nBody.\n"],
     ["bug/79", "# Please enter the commit message\nfix(leasing): release the hold (#79)"],
     ["bug/79-repro", "test: reproduce #79 — a released lease keeps its hold"],
@@ -39,6 +41,7 @@ describe("commit-msg-check.mjs", () => {
     ["task/968", "wip", "(#968)"],
     ["task/968", "feat: keep simulators in the device set", "(#968)"],
     ["task/968", "feature(ios): x (#968)", "<type> is feat"],
+    ["refactor/12", "refactor(daemon): split main.ts", "(#12)"],
     [
       "bug/79-repro",
       "test: a released lease keeps its hold (#79)",

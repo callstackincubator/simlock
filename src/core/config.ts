@@ -52,34 +52,30 @@ const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
 const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 
-/** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
 /** why: `devices.deletedRetentionMs`'s default: how long a `deleted` device record is kept, counted from its deletion. */
 export const DEFAULT_DEVICES_DELETED_RETENTION_MS = 60 * 60_000;
 
-/** `lease.requestRetentionMs`'s default: how long a settled lease request still answers a replay. */
 export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 
 const DEFAULT_LEASE_MAX_PER_REQUESTER = 1;
 
-/** `lease.maxRequestRecords`'s default: the most lease-request records the daemon keeps. */
 export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
 
-/** `gateway.disconnectedRetentionMs`'s default (ADR 0005 §6): 24 hours. */
 const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
 
-/** `gateway.execTimeoutMs`'s default (ADR 0005 §19e): eleven minutes, one more than the
+/** why: `gateway.execTimeoutMs`'s default (ADR 0005 §19e): eleven minutes, one more than the
  * worker's authoritative ten, so the worker's timeout is the one that fires. */
 const DEFAULT_GATEWAY_EXEC_TIMEOUT_MS = 11 * 60_000;
 
-/** `gateway.leaseRequestTimeoutMs`'s default (P2, round 2 review): five minutes -- generous
+/** why: `gateway.leaseRequestTimeoutMs`'s default (P2, round 2 review): five minutes -- generous
  * against a cold device provision-plus-boot, and well short of `execTimeoutMs`, since granting a
  * lease should never take as long as a command a caller runs against the device afterward. */
 const DEFAULT_LEASE_REQUEST_TIMEOUT_MS = 5 * 60_000;
 
 /**
- * `gateway.routing`'s valid names (ADR 0005 §13/Decision 7) and its default. Declared here
+ * why: `gateway.routing`'s valid names (ADR 0005 §13/Decision 7) and its default. Declared here
  * rather than imported from `src/gateway/routing.ts`'s own registry: `core` stays
  * platform-agnostic and gateway-unaware (`AGENTS.md`/`architecture.md`), so this list is
  * re-declared the same way `src/contract/schemas.ts` re-declares it independently rather than
@@ -91,7 +87,7 @@ const DEFAULT_LEASE_REQUEST_TIMEOUT_MS = 5 * 60_000;
 const ROUTING_POLICIES = ["warm-then-free"] as const;
 const DEFAULT_ROUTING_POLICY = "warm-then-free";
 
-/** The literal union `ROUTING_POLICIES` names -- `Config["gateway"]["routing"]`'s type, so it
+/** why: The literal union `ROUTING_POLICIES` names -- `Config["gateway"]["routing"]`'s type, so it
  * agrees with the contract's own `z.enum(["warm-then-free"])` (also re-declared, never
  * imported) instead of widening to a bare `string` the boundary between the two would otherwise
  * force. */
@@ -106,7 +102,7 @@ export {
 } from "./config-alerts.js";
 
 /**
- * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
+ * why: `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
  * on this worker before it is killed and the operation fails with `EXEC_TIMEOUT`. Ten minutes,
  * because the commands this wraps are installs and boots-worth of `adb wait-for-device`, not
  * sub-second reads -- and because a stuck command holds no lease of its own, so the cost of a
@@ -114,12 +110,6 @@ export {
  */
 const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
 
-/**
- * `never` forbids installs even when a request passes `--allow-download` (locked-down
- * machines/CI). `on-request` (default) preserves today's contract: install only when the
- * request itself carries the flag. `always` lets the daemon install missing components for
- * any explicit lease request without the per-request flag.
- */
 export type DownloadPolicy = "never" | "on-request" | "always";
 
 /**
@@ -145,12 +135,10 @@ export interface Config {
   readonly capabilities: Readonly<
     Record<string, { readonly enabled: boolean } & Readonly<Record<string, unknown>>>
   >;
-  /** See `DaemonMode`. Reported on `status.get`'s daemon block, which is how a client tells
-   * the two apart. Default `"worker"`. */
   readonly mode: DaemonMode;
   readonly capacity: CapacityConfig;
   /**
-   * Per-driver settings, opaque to the core: stored, merged, and handed to the driver
+   * why: Per-driver settings, opaque to the core: stored, merged, and handed to the driver
    * that owns the key without a single key being interpreted here. What
    * `drivers.ios.deviceRoot` means is the iOS driver's business, and knowing it here
    * would be exactly the leak architecture rule 2 forbids.
@@ -158,10 +146,10 @@ export interface Config {
   readonly drivers: Readonly<Record<string, Readonly<Record<string, string | number | boolean>>>>;
   readonly downloads: {
     readonly policy: DownloadPolicy;
-    /** Explicit legal consent for Android SDK licenses, independent of `policy`. */
+    /** why: Explicit legal consent for Android SDK licenses, independent of `policy`. */
     readonly acceptAndroidLicenses: boolean;
     /**
-     * One budget per install request, from its arrival, covering the wait behind another
+     * why: One budget per install request, from its arrival, covering the wait behind another
      * download and the download itself (ADR 0010 §3); downloads run minutes, not seconds.
      */
     readonly timeoutMs: number;
@@ -175,10 +163,8 @@ export interface Config {
   };
   readonly warmPool: WarmPoolConfig & {
     readonly quarantine: {
-      /** Failed retries allowed after the release-time purge that triggers quarantine. */
       readonly maxRetries: number;
       readonly retryBackoffMs: number;
-      /** Growth factor applied to the backoff after each failed retry. */
       readonly retryBackoffMultiplier: number;
       readonly maxRetryBackoffMs: number;
     };
@@ -192,13 +178,13 @@ export interface Config {
   };
   readonly lease: {
     /**
-     * ADR 0004 §4: the TTL applied to a lease whose `lease.request` carried no `ttlMs` -- that
+     * why: ADR 0004 §4: the TTL applied to a lease whose `lease.request` carried no `ttlMs` -- that
      * request only. It is deliberately *not* the renew fallback: a `lease.renew` given no
      * explicit TTL re-applies the lease's own stored width, so a lease granted for longer
      * keeps it.
      */
     readonly defaultTtlMs: number;
-    /** The largest TTL a request or a renew may ask for; more is `BAD_REQUEST`, never a
+    /** why: The largest TTL a request or a renew may ask for; more is `BAD_REQUEST`, never a
      * silent clamp, so a caller is never left believing it has more time than it does. */
     readonly maxTtlMs: number;
     /**
@@ -210,22 +196,13 @@ export interface Config {
       readonly ios: LeaseIdentity;
       readonly android: LeaseIdentity;
     };
-    /**
-     * How long a settled lease request stays stored, counted from when it settled. Within this
-     * window a repeat of the request returns the stored result; after it, the record is pruned
-     * and the same key starts a new request.
-     */
     readonly requestRetentionMs: number;
-    /**
-     * The most lease-request records kept at once. Reaching it evicts the oldest settled record;
-     * an open record is never evicted.
-     */
     readonly maxRequestRecords: number;
     readonly maxPerRequester: MaxPerRequester;
     readonly endWaitMs: number;
   };
   /**
-   * ADR 0005 §19e. Platform-agnostic on purpose: it bounds the *daemon's* willingness to wait
+   * why: ADR 0005 §19e. Platform-agnostic on purpose: it bounds the *daemon's* willingness to wait
    * on a child, not anything either driver knows about, so it sits at the top level rather
    * than under `drivers.*`.
    */
@@ -266,20 +243,14 @@ export interface Config {
     readonly maxConcurrentRecoveries: number;
   };
   readonly ios: {
-    /**
-     * The device mode a lease request that names none gets on this worker (ADR 0007 §1).
-     * Default `"full"`. Every worker makes both kinds of device whatever this says.
-     */
     readonly defaultMode: DeviceMode;
-    /** The operator's own preference list per class, ahead of the driver's built-in one. */
     readonly defaultModels: DefaultModels;
   } & DriverConfigSection;
   readonly android: {
-    /** The operator's own preference list per class, ahead of the driver's built-in one. */
     readonly defaultModels: DefaultModels;
   } & DriverConfigSection;
   /**
-   * ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
+   * why: ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
    * on `mode`:
    *
    * - a **worker** reads `url`, `token`, and `label` -- the two keys that join a fleet, plus a
@@ -293,7 +264,6 @@ export interface Config {
    * the thing it configures.
    */
   readonly gateway: {
-    /** The gateway's uplink endpoint, `ws://host:port/v1/uplink` or `wss://...`. Worker-side. */
     readonly url?: string;
     /** why: A join token minted on the gateway with `simlock token create --role worker`.
      * Worker-side. It is a secret, and it sits in the daemon's config file, which `simlock
@@ -302,10 +272,9 @@ export interface Config {
      * config is written out -- the startup log line, `daemon.started`, and `config.get`
      * unless it is asked with `showSecrets: true` -- it goes through `redactConfig`. */
     readonly token?: string;
-    /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
     readonly label?: string;
     /**
-     * How long a gateway keeps a disconnected worker's view before forgetting it (§6).
+     * why: How long a gateway keeps a disconnected worker's view before forgetting it (§6).
      * Gateway-side. Default 24 hours: long enough that a machine rebooting overnight is still
      * the same machine in the morning, short enough that a decommissioned one does not haunt
      * `simlock status` forever. A view whose leases have not all expired is never dropped on
@@ -313,7 +282,7 @@ export interface Config {
      */
     readonly disconnectedRetentionMs: number;
     /**
-     * Gateway-side backstop on a proxied `device.exec` (ADR 0005 §19e). Deliberately longer
+     * why: Gateway-side backstop on a proxied `device.exec` (ADR 0005 §19e). Deliberately longer
      * than the worker's own `exec.timeoutMs` (ten minutes): the worker's is authoritative and
      * should be what kills a runaway command, so a gateway that timed out first would report
      * a failure for a command still running on the machine that owns the device. Read by #118,
@@ -321,7 +290,7 @@ export interface Config {
      */
     readonly execTimeoutMs: number;
     /**
-     * P2 (round 2 review): bounds a forwarded `lease.request` -- the one uplink call that used
+     * why: P2 (round 2 review): bounds a forwarded `lease.request` -- the one uplink call that used
      * to have no timeout of its own, parking a waiter `processing` where neither `timeoutMs`'s
      * deadline check nor `lease.cancel` could reach it (`WaitQueue#armTimeout` declines to
      * reject a `processing` waiter, and `cancelPending` answers `not-cancellable`) if the
@@ -332,30 +301,23 @@ export interface Config {
      * to a state `enqueue`'s deadline check and `cancelPending` can both act on again.
      */
     readonly leaseRequestTimeoutMs: number;
-    /**
-     * ADR 0005 §13/Decision 7: which routing policy dispatch uses. Gateway-side, read once at
-     * daemon start -- routing is "a pure function over worker views, a module with one entry
-     * point selected by `gateway.routing`, the same shape as `CapacityStrategy`", never a
-     * per-request choice. `"warm-then-free"` is the only value in v1 (`ROUTING_POLICIES` above).
-     */
     readonly routing: RoutingPolicyName;
     readonly alerts: { readonly destinations: readonly AlertDestination[] };
   };
   readonly stalledTransition: {
     /**
-     * Applied to the driver's own estimate (`provision + boot` for `provisioning`,
+     * why: Applied to the driver's own estimate (`provision + boot` for `provisioning`,
      * `reclaim` for `reclaiming`) to get the stall threshold. Deliberately generous:
      * the estimate itself is already tuned for a routine run, so the threshold has to
      * clear real-world variance on top of it, not just match it -- a cold Android
      * provision-plus-boot can legitimately run well past the raw estimate.
      */
     readonly thresholdMultiplier: number;
-    /** Floor under the multiplied estimate, for a driver whose estimate is near zero. */
+    /** why: Floor under the multiplied estimate, for a driver whose estimate is near zero. */
     readonly minimumThresholdMs: number;
   };
 }
 
-/** What `redactConfig` puts in place of a secret's value. */
 export const REDACTED_VALUE = "[redacted]";
 
 // why: masked rather than deleted, so the copy keeps `Config`'s keys and a reader can tell "set" from "unset"; a copy, because the live config is what `config.get` answers and the uplink presents.
@@ -392,7 +354,7 @@ export function redactConfig<
 }
 
 /**
- * The pre-`capacity` spelling of the resource strategy's options. Still accepted
+ * why: The pre-`capacity` spelling of the resource strategy's options. Still accepted
  * everywhere the new shape is, and folded into `capacity.config` before anything
  * downstream sees it, so existing config files keep working untouched.
  */
@@ -481,7 +443,7 @@ export function configFromLayers(
 ): LoadedConfig {
   const fromOverrides = overrides ?? {};
 
-  // The strategy has to be known before anything else can be validated or
+  // why: The strategy has to be known before anything else can be validated or
   // defaulted: it decides which options block `capacity.config` is, and which
   // defaults the merge starts from.
   const strategy = resolveStrategyName([fromFile, fromOverrides]);
@@ -553,7 +515,7 @@ export function configFromLayers(
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
   } else {
-    // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
+    // why: Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
     // them there would fail a start over a value nothing reads.
     validateGatewayMembership(merged);
     // why: only a worker keeps device records, so only it reads `devices.deletedRetentionMs`.
@@ -563,7 +525,7 @@ export function configFromLayers(
 }
 
 /**
- * The one consent function (ADR 0010 §4): reduces `downloads.policy` and what the caller asked
+ * why: The one consent function (ADR 0010 §4): reduces `downloads.policy` and what the caller asked
  * for to whether a download may start. A lease request passes its own `--allow-download` /
  * `allowDownload` flag; `component.install` passes `true`, because the command itself is the
  * consent. `never` overrides an explicit `true` -- the whole point of the policy is that no
@@ -577,7 +539,7 @@ export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolea
 }
 
 /**
- * Cross-field check (ADR 0004's Consequences): the default TTL a request falls back to cannot
+ * why: Cross-field check (ADR 0004's Consequences): the default TTL a request falls back to cannot
  * exceed the cap every request is measured against, or every defaulted request would be born
  * asking for more than the daemon will grant. A violating config fails the daemon start naming
  * the offending key rather than being clamped to a value the operator never wrote -- the
@@ -613,7 +575,7 @@ function validateMetricsRetention(config: Config): void {
 }
 
 /**
- * The config keys a gateway reads (ADR 0005 §2). Everything else in a gateway's config is a
+ * why: The config keys a gateway reads (ADR 0005 §2). Everything else in a gateway's config is a
  * worker-only key: it configures drivers, devices, capacity, or cleanup, none of which a
  * gateway has. Listed here rather than derived from `Config`'s shape because the *set* is the
  * decision -- adding a key to `Config` should not silently make it gateway-relevant.
@@ -630,13 +592,10 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "update",
 ];
 
-/** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
- * `disconnectedRetentionMs`, `execTimeoutMs`, and `leaseRequestTimeoutMs` are the ones the
- * gateway itself reads. */
 const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
 
 /**
- * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
+ * why: ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
  * keys are today". Warned per key the operator actually wrote (the file and override layers),
  * never per defaulted key -- a gateway's own defaults contain the whole worker-side `Config`
  * shape, and warning about those would fire on every start with nothing to fix.
@@ -711,7 +670,7 @@ function warnWorkerOnlySubKeys(
 }
 
 /**
- * ADR 0005 §2: "a gateway always listens on HTTP (it is the fleet's contact point) and on its
+ * why: ADR 0005 §2: "a gateway always listens on HTTP (it is the fleet's contact point) and on its
  * unix socket". HTTP is not optional for a gateway in a way it is for a worker: it is how
  * every agent reaches the fleet *and* the transport the worker uplink upgrades from
  * (`/v1/uplink`), so a gateway with `http.enabled: false` is a process nothing can reach and
@@ -729,7 +688,7 @@ function requireGatewayHttp(config: Config): void {
 }
 
 /**
- * A worker's fleet membership, checked at load rather than at dial time so a typo fails the
+ * why: A worker's fleet membership, checked at load rather than at dial time so a typo fails the
  * daemon start naming the key instead of surfacing as an endless reconnect loop hours later.
  *
  * `gateway.url` is the gateway's **base** URL (`ws://host:port`); the worker derives the
@@ -776,7 +735,6 @@ function requireJoinedWorkerHttpOff(config: Config): void {
   }
 }
 
-/** Last layer that names a strategy wins; absent everywhere means the default. */
 function resolveStrategyName(layers: readonly unknown[]): CapacityStrategyName {
   let resolved: CapacityStrategyName = DEFAULT_CAPACITY_STRATEGY;
 
@@ -800,11 +758,10 @@ function resolveStrategyName(layers: readonly unknown[]): CapacityStrategyName {
   return resolved;
 }
 
-/** The pre-`capacity` spelling of the resource strategy's options. */
 const LEGACY_RESOURCE_KEYS = ["limits", "ramBudget"] as const;
 
 /**
- * Folds the legacy top-level keys into `capacity.config`. Runs per layer, before
+ * why: Folds the legacy top-level keys into `capacity.config`. Runs per layer, before
  * merging, so precedence between layers is unaffected by which spelling each one
  * happens to use. Within a layer `capacity.config` wins.
  */
@@ -996,7 +953,7 @@ const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "al
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
 /**
- * The `capacity.config` validator is the selected strategy's own, so a strategy
+ * why: The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
  */
 export function configValidators(
@@ -1021,7 +978,7 @@ export function configValidators(
       strategy: stringUnion(capacityStrategyNames),
       config: capacityStrategyValidator(strategy),
     }),
-    // Legacy spelling of the resource options; still type-checked here so a typo
+    // why: Legacy spelling of the resource options; still type-checked here so a typo
     // inside them is still reported rather than silently dropped.
     ...resourceOptionValidators,
     drivers: driversValidator,
@@ -1173,10 +1130,6 @@ function capabilitiesValidator(modules: readonly ModuleConfigEntry[]): Validator
   };
 }
 
-/**
- * An operator's model preference per device class (ADR 0015 §4): for each class, the model
- * names to try first, most preferred first. A class with no key has none.
- */
 export type DefaultModels = Partial<Record<DeviceClass, readonly string[]>>;
 
 /** why: `setTimeout` fires after about 1 ms above this delay, which would end the wait at once. */
@@ -1191,7 +1144,7 @@ const endWaitValidator: Validator = (value, path) => {
 };
 
 /**
- * Each key is a device class and each value one non-empty model name or a non-empty list of
+ * why: Each key is a device class and each value one non-empty model name or a non-empty list of
  * them, stored as a list. Any other key is refused rather than warned about: a misspelled class
  * would otherwise leave the operator's preference silently unused.
  */
@@ -1219,7 +1172,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 /**
- * Checks the shape of `drivers` and nothing else. Every leaf is type-checked, because a
+ * why: Checks the shape of `drivers` and nothing else. Every leaf is type-checked, because a
  * config file is hand-edited and a nested object or array there is a mistake worth
  * naming -- but an unrecognised key inside a driver block is deliberately *not* a
  * warning. The core does not know which keys a driver has, and warning about the ones it
