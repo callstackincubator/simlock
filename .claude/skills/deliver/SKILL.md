@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Deliver a ready task, a bug (new or ready) or planned feature end to end, unattended — claim, delegate triage, implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
+description: Deliver a ready task, a bug (new or ready), a ready refactor or planned feature end to end, unattended — claim, delegate triage, implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
 model: opus
 effort: medium
 ---
@@ -10,7 +10,7 @@ effort: medium
 You are the orchestrator. Never write code, run tests or review a diff
 yourself. Read issues, decide the next step, delegate it, and reason over
 the report block that comes back. Rules: `docs/internal/agent-rules/delivery.md`
-rules 1, 2, 3, 9, 14, 15, 16 and 17.
+rules 1, 2, 3, 9, 14, 15, 16, 17 and 18.
 
 **Delegating.** Start each stage with the Agent tool, in the background:
 `subagent_type` `implementer`, `reviewer` or `hardware-verifier`; a short
@@ -129,8 +129,8 @@ origin/main`.
 gh issue view <N> --json number,title,labels,assignees,body
 ```
 
-- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`: one
-  issue; go to step 2.
+- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`,
+  `refactor:ready`: one issue; go to step 2.
 - `feature:planned`: walk its open sub-issues (step 3).
 - `bug:new`, unassigned: triage, then the fast track (delivery rules 8
   and 17). With no triage report on the thread, or a person's reply newer
@@ -160,7 +160,8 @@ section and the latest `## Handoff` comment, and go on from the next stage
 they name; never build again or restart review at round 1.
 
 1. **Implement**, one fresh `implementer` per mode, in the **Order**
-   `implementer.md` gives. An audit run takes no `fixes`, so a CI failure
+   `implementer.md` gives; a refactor runs `mode: refactor` alone, and its
+   `## Review` counts line starts `Spec review: skipped.` (rule 18). An audit run takes no `fixes`, so a CI failure
    waits for the fix run after the audit (item 2). `spec needs` under
    `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number; it picks the lenses

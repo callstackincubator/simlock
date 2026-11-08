@@ -28,7 +28,8 @@
 //              rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force`, `--delete`).
 //   gh         a sub-agent opens a PR without `--draft` (or a REST create without
 //              `draft=true`), opens one from a `-repro` branch, runs `gh pr ready`, or adds
-//              `bug:ready`, `task:ready` or `feature:planned`, or removes `fast-track`; a
+//              `bug:ready`, `task:ready`, `refactor:ready` or `feature:planned`, or removes
+//              `fast-track`; a
 //              `bug-triager` or an `implementer` runs `fast-track.mjs` (delivery rule 17); any
 //              session assigns an issue by hand instead of through `claim.mjs`.
 //   body       any session posts a body or comment (`gh issue|pr comment|create|edit|close`,
@@ -80,7 +81,7 @@ const STRICT_AREAS = [
   /^src\/core\/cleanup\//,
   /^src\/core\/(?:registry|serialized-decision|device-operation-claims|reclaim-coordinator|quarantine-coordinator|reaper|cleanup-executor|nuke|nuke-service|managed-device-lifecycle|device-root|physical-enrollment|startup-converger)\.ts$/,
 ];
-const WORK_LABELS = new Set(["bug:ready", "task:ready", "feature:planned"]);
+const WORK_LABELS = new Set(["bug:ready", "task:ready", "refactor:ready", "feature:planned"]);
 const SLOW_LANE_AGENTS = new Set(["hardware-verifier", "implementer"]);
 // why: the fast track checks their report and their fix, so they never run it on themselves.
 const FAST_TRACK_AUTHORS = new Set(["bug-triager", "implementer"]);
@@ -671,6 +672,8 @@ function isForbiddenPnpm(args) {
   // why: the whole lane is CI's; a stage runs only the spec files its diff touched.
   if (sub === "test:console")
     return !args.includes("--project=chromium") || !after.some((w) => w.endsWith(".spec.ts"));
+  // why: a refactor's implementer mutates the lines its draft touches (delivery rule 18).
+  if (sub === "mutate") return !args.includes("--touched-by");
   return SCRIPTS.has(sub);
 }
 

@@ -16,7 +16,7 @@
 //
 // Exit has nothing to check, and exits 0, unless issue <n> carries `fast-track`. Then PR <m>
 // passes when it changes at most MAX_LINES lines in at most MAX_FILES files, touches no path in
-// HOLD_PATHS (a surface file, the protocol version, an ADR), and has no `## Decision taken`
+// surface-paths.mjs (a surface file, the protocol version, an ADR), and has no `## Decision taken`
 // comment; otherwise the same `held:` line and exit
 // 1. `merge-pr.sh` runs it on every PR from a `bug/<n>` branch. The maintainer lets a held PR
 // through by removing the `fast-track` label, or merges it by hand.
@@ -27,22 +27,10 @@ import { execFileSync } from "node:child_process";
 
 import { FAST_TRACK, fastTrackFacts, writtenByAgent } from "./body-rules.mjs";
 import { option, repository } from "./cli-args.mjs";
+import { surfaceHits } from "./surface-paths.mjs";
 
 const MAX_LINES = 250;
 const MAX_FILES = 8;
-// why: the surface files docs-surface-check.mjs lists (the command tree, the config, the error
-// table, the MCP tools, the HTTP sources, the client exports, the event map), the wire
-// protocol's version and the ADRs. A fix that touches one may add to or break what a user
-// meets, so it is the maintainer's to read before it merges.
-const HOLD_PATHS = [
-  [
-    "a surface file",
-    /^src\/(?:cli\/tree|core\/config|contract\/errors|mcp\/(?:server|contracts)|(?:client|admin)\/index|bus\/index)\.ts$/,
-  ],
-  ["a surface file", /^src\/http\/(?!.*\.test\.ts$)[^/]+\.ts$/],
-  ["the protocol version", /^src\/contract\/protocol\.ts$/],
-  ["an ADR", /^docs\/internal\/adr\//],
-];
 // why: a comment counts as an agent's, and a report as real, only from an account that can
 // write to the repo; anyone can type the footer or a report's headings into a comment, and
 // `author_association` tells an organization's member from an outsider, not what either may
@@ -123,10 +111,10 @@ function exitCheck() {
     holds.push(`PR #${pr} changes ${pull.changed_files} files, over ${MAX_FILES}`);
   }
   const files = paged(`pulls/${pr}/files`).map((f) => f.filename);
-  for (const [what, pattern] of HOLD_PATHS) {
-    const hit = files.find((f) => pattern.test(f));
-    if (hit !== undefined) holds.push(`PR #${pr} touches ${what} (${hit})`);
-  }
+  // why: a fix that touches one may add to or break what a user meets, so it is the
+  // maintainer's to read before it merges.
+  for (const { what, path } of surfaceHits(files))
+    holds.push(`PR #${pr} touches ${what} (${path})`);
   if (paged(`issues/${pr}/comments`).some((c) => /^## Decision taken\s*$/m.test(c.body ?? ""))) {
     holds.push(`PR #${pr} has a "Decision taken" comment`);
   }
