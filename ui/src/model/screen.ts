@@ -11,6 +11,13 @@ export interface ScreenFact {
 export interface Readout {
   readonly state: Toned;
   readonly facts: readonly ScreenFact[];
+  // why: the two pills over the picture say what the stream is doing now, from the decoder's own
+  // counts; until a frame is painted they are missing rather than a made-up rate.
+  readonly overlay: { readonly rate: string; readonly summary: string } | undefined;
+}
+
+function bitrate(kilobits: number): string {
+  return kilobits >= 1000 ? `${(kilobits / 1000).toFixed(1)} Mb/s` : `${Math.round(kilobits)} kb/s`;
 }
 
 function stateOf(phase: ScreenPhase, failed: boolean): Toned {
@@ -58,6 +65,13 @@ export function readout(input: {
       { label: "Bandwidth", value: counted(`${Math.round(stats.kilobitsPerSecond)} kbit/s`) },
       { label: "Dropped", value: counted(String(stats.dropped)) },
     ],
+    overlay:
+      meta === undefined || stats.painted === 0
+        ? undefined
+        : {
+            rate: `${Math.round(stats.framesPerSecond)} fps`,
+            summary: `${meta.codec} · ${meta.width}×${meta.height} · ${bitrate(stats.kilobitsPerSecond)}`,
+          },
     state: stateOf(phase, failed),
   };
 }

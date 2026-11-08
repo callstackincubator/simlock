@@ -28,11 +28,14 @@ export function Ring({
   label,
   size = 54,
   tone = "neutral",
+  bare = false,
 }: {
   readonly percent?: number;
   readonly label: string;
   readonly size?: number;
   readonly tone?: Tone | "neutral";
+  // why: a ring beside a printed countdown draws only the arc; its label is its accessible name.
+  readonly bare?: boolean;
 }) {
   const known = percent !== undefined && Number.isFinite(percent);
   const value = known ? `${percent}%` : "—";
@@ -40,6 +43,23 @@ export function Ring({
   const radius = (width - 5) / 2;
   const circumference = 2 * Math.PI * radius;
   const fraction = known ? Math.max(0, Math.min(100, percent)) / 100 : 0;
+  if (bare) {
+    return (
+      <span className={`ring-box ring-${tone}`} role="img" aria-label={`${label}: ${value}`}>
+        <svg width={width} height={width} aria-hidden="true">
+          <circle className="ring-track" cx={width / 2} cy={width / 2} r={radius} />
+          <circle
+            className="ring-value"
+            cx={width / 2}
+            cy={width / 2}
+            r={radius}
+            strokeDasharray={`${circumference * fraction} ${circumference}`}
+            transform={`rotate(-90 ${width / 2} ${width / 2})`}
+          />
+        </svg>
+      </span>
+    );
+  }
   return (
     <span className="ring-figure">
       <span className={`ring-box ring-${tone}`}>
