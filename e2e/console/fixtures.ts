@@ -562,7 +562,8 @@ export interface ProxiedDaemon {
 }
 
 // why: a sign-in proxy in front of a worker daemon: it signs "Alice" in on every request, the way
-// Cloudflare Access does, and the daemon checks the proxy's token against the proxy's keys.
+// Cloudflare Access does, and the daemon checks the proxy's token against the proxy's keys. The
+// daemon names the proxy's sign-out page, so the console draws its Sign out button.
 export async function startProxiedDaemon(
   options: { readonly driverScript?: FakeDriverScript } = {},
 ): Promise<ProxiedDaemon> {
@@ -609,6 +610,11 @@ export async function startProxiedDaemon(
       res.end(JSON.stringify({ keys: [jwk] }));
       return;
     }
+    if (req.url === "/.test/signed-out") {
+      res.setHeader("content-type", "text/html");
+      res.end("<h1>Signed out of the proxy</h1>");
+      return;
+    }
     void forward(req, res);
   });
   const proxyPort = await freeLoopbackPort();
@@ -624,6 +630,7 @@ export async function startProxiedDaemon(
             header: PROXY_HEADER,
             issuer: PROXY_ISSUER,
             jwksUrl: `http://127.0.0.1:${proxyPort}/.test/jwks`,
+            signOutUrl: `http://127.0.0.1:${proxyPort}/.test/signed-out`,
           },
         },
       },

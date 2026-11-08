@@ -414,7 +414,17 @@ test("the shell keeps its reference geometry and scrolls the Overview, Fleet and
 }) => {
   await page.setViewportSize({ width: 1440, height: 500 });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const single = [staticWorker({ id: "wrk_layout_a", label: "layout-a", load: false })];
+  // why: a worker page with a dozen devices is taller than the window, so it has to scroll.
+  const one = staticWorker({ id: "wrk_layout_a", label: "layout-a", load: false });
+  const single = [
+    {
+      ...one,
+      devices: Array.from({ length: 12 }, (_, index) => ({
+        ...(one.devices as Record<string, unknown>[])[0],
+        id: `dev_layout_${pad(index + 1)}`,
+      })),
+    },
+  ];
   let workers: Record<string, unknown>[] = single;
   await stubJson(page, "/v1/workers", () => ({ workers }));
   const pages = [
