@@ -71,7 +71,7 @@ function agentDeviceRelayTarget(
   return async (request, tenant, leaseId) => {
     const status = await parts.link.status(leaseId);
     if (status.state === "unavailable") {
-      return frontReplyFor(request, notAvailable(status.reason));
+      return frontReplyFor(request, notAvailable(status.reason, status.retriable));
     }
     return parts.link.forward(
       request,

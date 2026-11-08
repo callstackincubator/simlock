@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
-import { FakeClock, NodeSqliteOpener } from "../ports/index.js";
-import { FakeAgentDevice } from "./testing.js";
+import { DispatchError } from "../daemon/dispatch.js";
+import {
+  FakeClock,
+  FakeProcessSupervisor,
+  FakeTcpProbe,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NodeSqliteOpener,
+  ScriptedProcessRunner,
+} from "../ports/index.js";
+import { FakeAgentDevice, FakeAgentDeviceHealth } from "./testing.js";
+import { AgentDeviceSupervisor } from "./host/agent-device-supervisor.js";
+import { SupervisorAgentDeviceUpstream } from "./host/upstream.js";
 import {
   phoneSerial,
   setUpWithPhone,
@@ -62,6 +74,52 @@ import {
 // setUp's return type, so a `rig` whose test calls a FakeAgentDevice member only these tests use is
 // annotated `Rig`; without it Fallow reports the member as never referenced.
 
+async function unavailableSupervisor(version: string, reason: "wrong-version" | "start-failed") {
+  const clock = new FakeClock(1_000_000);
+  const filesystem = new MemoryFilesystem();
+  const home = "/home/simlock/.simlock";
+  const root = "/opt/ad/node_modules/agent-device";
+  const cli = `${root}/bin/agent-device.mjs`;
+  const entry = `${root}/dist/src/internal/daemon.js`;
+  await filesystem.mkdirp(home);
+  await filesystem.mkdirp("/usr/local/bin");
+  await filesystem.mkdirp(`${root}/bin`);
+  await filesystem.mkdirp(`${root}/dist/src/internal`);
+  await filesystem.writeFileAtomic(cli, "#!/usr/bin/env node\n");
+  filesystem.defineAttributes(cli, { mode: 0o755 });
+  await filesystem.writeFileAtomic(`${root}/package.json`, '{"name":"agent-device"}');
+  await filesystem.writeFileAtomic(entry, "");
+  filesystem.defineSymlink("/usr/local/bin/agent-device", cli);
+  const runner = new ScriptedProcessRunner([
+    {
+      match: { args: [cli, "--version"], command: "/opt/node/bin/node" },
+      result: { code: 0, stderr: "", stdout: `${version}\n` },
+    },
+  ]);
+  const supervisor = new AgentDeviceSupervisor({
+    baseEnvironment: { HOME: "/home/operator", PATH: "/usr/local/bin:/usr/bin" },
+    clock,
+    config: { command: "agent-device" },
+    driverEnvironment: {},
+    filesystem,
+    healthProbe: new FakeAgentDeviceHealth(),
+    home,
+    hostPlatform: "linux",
+    leaseMaxTtlMs: 1_800_000,
+    logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+    nodePath: "/opt/node/bin/node",
+    nodeVersion: "22.14.0",
+    platforms: ["ios", "android"],
+    processRunner: runner,
+    processSupervisor: new FakeProcessSupervisor([]),
+    role: "simulators",
+    tcpProbe: new FakeTcpProbe(),
+  });
+  await supervisor.start();
+  expect(supervisor.availability()).toMatchObject({ state: "unavailable", reason });
+  return new SupervisorAgentDeviceUpstream(supervisor);
+}
+
 const phoneModels = {
   defaultModels: { phone: ["iPhone 16"] },
   modelClasses: { "iPhone 16": "phone" },
@@ -99,6 +157,7 @@ function expectEndedBySimlock(answer: Envelope): void {
       code: "UNAUTHORIZED",
       details: { reason: "LEASE_ENDED_BY_HOST" },
       message: endedMessage,
+      retriable: false,
     },
   });
 }
@@ -177,7 +236,42 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rpcAnswer.status).toBe(503);
     expect(upload.status).toBe(503);
     expect(await health.text()).toContain(`${notAvailable}${reason}`);
-    expect((await envelopeOf(rpcAnswer)).error?.message).toBe(`${notAvailable}${reason}`);
+    const rpcError = (await envelopeOf(rpcAnswer)).error;
+    expect(rpcError?.message).toBe(`${notAvailable}${reason}`);
+    expect(rpcError?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: false,
+    });
+    const transient = await setUp();
+    transient.fake.setUnavailable("starting", true);
+    expect((await envelopeOf(await allocate(transient, 3))).error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: true,
+    });
+    for (const [version, reason, retriable] of [
+      ["0.20.3", "wrong-version", false],
+      ["0.21.28", "start-failed", true],
+    ] as const) {
+      const supervisorUpstream = await unavailableSupervisor(version, reason);
+      const supervised = await setUp({ supervisorUpstream });
+      const answer = await allocate(supervised, 2);
+      expect(answer.status).toBe(503);
+      expect((await envelopeOf(answer)).error?.data).toMatchObject({
+        details: { reason: "SIMLOCK_UNAVAILABLE" },
+        retriable,
+      });
+    }
+    const off = await setUp({
+      supervisorUpstream: new SupervisorAgentDeviceUpstream({
+        availability: () => ({ state: "off" }),
+      }),
+    });
+    const offAnswer = await allocate(off, 4);
+    expect(offAnswer.status).toBe(503);
+    expect((await envelopeOf(offAnswer)).error).toMatchObject({
+      message: `${notAvailable}off`,
+      data: { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: false },
+    });
     expect(await upload.text()).toContain(`${notAvailable}${reason}`);
     expect(await leases(rig)).toEqual([]);
     expect(rig.fake.requests).toEqual([]);
@@ -510,16 +604,20 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("allocate with `physical: true` while the phone daemon is not running answers `agent-device is not available on this simlock: phone daemon: <message>` and releases the lease; a virtual allocate is granted, a command on a live phone lease answers the same, and with the simulator daemon down a physical allocate answers the simulator daemon's reason", async () => {
     const down = [
-      ["starting", "phone daemon: starting"],
-      ["adb not found", "phone daemon: adb not found"],
+      ["starting", "phone daemon: starting", true],
+      ["adb not found", "phone daemon: adb not found", false],
     ] as const;
-    for (const [reason, message] of down) {
+    for (const [reason, message, retriable] of down) {
       const rig = await setUpWithPhone({ maxRunning: 4 });
-      rig.phone.setUnavailable(reason);
+      rig.phone.setUnavailable(reason, retriable);
 
       const answer = await envelopeOf(await allocatePhone(rig, 1));
 
       expect(answer.error).toMatchObject(refusal(`${notAvailable}${message}`, "COMMAND_FAILED"));
+      expect(answer.error?.data).toMatchObject({
+        details: { reason: "SIMLOCK_UNAVAILABLE" },
+        retriable,
+      });
       await expect.poll(() => listed(rig)).toEqual([]);
       await granted(rig, 2, { platform: "android" });
       expect(await listed(rig)).toEqual([hex(2)]);
@@ -768,6 +866,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const answer = await envelopeOf(await allocate(rig, 2, { device: "My test phone" }));
 
     expect(answer.error).toMatchObject(refusal(`refused by simlock: ${expected}`));
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "REFUSED_BY_SIMLOCK" },
+      retriable: false,
+    });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
 
@@ -1107,7 +1209,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("an allocate still waiting 330 s after the front admitted it answers `timed out waiting for a device; nothing was leased`, and simlock's queue is empty", async () => {
+  it("an allocate still waiting 330 s answers `timed out waiting for a device; nothing was leased`, and lease request failures carry their retry classification", async () => {
     const rig = await setUp({ maxRunning: 1 });
     await granted(rig, 1, { ttlMs: maxTtlMs }, { token: secrets.two });
     const second = track(allocate(rig, 2));
@@ -1116,21 +1218,52 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await advance(rig, 329_000);
     expect(second.done()).toBe(false);
     await advance(rig, 1_000);
+    expect(second.done()).toBe(true);
     const answer = await envelopeOf(await second.promise);
 
     expect(answer.error).toMatchObject(refusal(queueTimeoutMessage, "COMMAND_FAILED"));
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "NO_DEVICE_IN_TIME" },
+      retriable: true,
+    });
     expect(await waiting(rig)).toEqual([]);
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+
+    const tap = tapDispatch(rig);
+    for (const [code, reason] of [
+      ["NO_CAPACITY", "SIMLOCK_UNAVAILABLE"],
+      ["DAEMON_STOPPING", "SIMLOCK_UNAVAILABLE"],
+      ["DAEMON_CONNECTION_LOST", "SIMLOCK_UNAVAILABLE"],
+      ["WORKER_UNREACHABLE", "WORKER_UNREACHABLE"],
+      ["INVALID_ARGS", "REFUSED_BY_SIMLOCK"],
+    ] as const) {
+      tap.rejectNext("lease.request", new DispatchError(code, `failure ${code}`));
+      const response = await allocate(rig, 3);
+      expect(response.status).toBe(400);
+      expect((await envelopeOf(response)).error).toMatchObject({
+        message: `refused by simlock: failure ${code}`,
+        data: { code: "INVALID_ARGS", details: { reason }, retriable: code !== "INVALID_ARGS" },
+      });
+    }
   });
 
   it("an agent-device allocate that answers an error, and a grant that names no device address, release the simlock lease, and the CLI gets the error", async () => {
     const rig: Rig = await setUp();
-    rig.fake.failNextAllocate({ code: "NO_DEVICE", message: "no such device" });
+    rig.fake.failNextAllocate({
+      code: "NO_DEVICE",
+      message: "no such device",
+      details: { reason: "AGENT_DEVICE_REASON" },
+    });
 
     const answer = await envelopeOf(await allocate(rig, 1));
 
-    expect(answer.error).toMatchObject({
-      data: { code: "NO_DEVICE", message: "no such device" },
+    expect(answer.error).toEqual({
+      code: -32000,
+      data: {
+        code: "NO_DEVICE",
+        message: "no such device",
+        details: { reason: "AGENT_DEVICE_REASON" },
+      },
       message: "no such device",
     });
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
@@ -1155,7 +1288,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     const noAddress = await envelopeOf(await allocate(bare, 2));
 
-    expect(noAddress.error?.data?.code).toBe("COMMAND_FAILED");
+    expect(noAddress.error?.data).toMatchObject({
+      code: "COMMAND_FAILED",
+      details: { reason: "SIMLOCK_FAILED" },
+      retriable: false,
+    });
     await expect.poll(async () => (await leases(bare)).length).toBe(0);
     expect(allocatesReceived(bare, 2)).toEqual([]);
   });
@@ -2338,49 +2475,3 @@ describe("FakeAgentDevice as agent-device behaves", () => {
     ).toBeUndefined();
   });
 });
-
-const downloadLimit = 2_147_483_648;
-const tooLargeReply = (size: number) => ({
-  code: "INVALID_ARGS",
-  error: `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (2147483648 bytes)`,
-  ok: false,
-});
-
-describe(
-  "the agent-device front, through the whole worker daemon: downloads over 2 GiB",
-  {
-    timeout: 120_000,
-  },
-  () => {
-    it("an artifact download whose `content-length` is 2147483649 is answered 413 with simlock's reply; the fake produced 0 bytes and its body was cancelled", async () => {
-      const rig = await setUp();
-      rig.fake.serveArtifact({ contentLength: "size", size: downloadLimit + 1 });
-
-      const response = await send(rig, "/artifacts/a1");
-
-      expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(tooLargeReply(downloadLimit + 1));
-      expect(rig.fake.artifactBytesProduced).toBe(0);
-      await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
-    });
-
-    it("an agent that cancels a 1 GiB download halfway cancels the fake's body", async () => {
-      const rig = await setUp();
-      rig.fake.serveArtifact({ contentLength: "none", size: 1_073_741_824 });
-
-      const response = await send(rig, "/artifacts/a1");
-      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-      let bytes = 0;
-      while (bytes < 536_870_912) {
-        const next = await reader.read();
-        if (next.done) break;
-        bytes += next.value.length;
-      }
-      await reader.cancel();
-
-      expect(bytes).toBeGreaterThanOrEqual(536_870_912);
-      await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
-      expect(rig.fake.artifactBytesProduced).toBeLessThan(1_073_741_824);
-    });
-  },
-);

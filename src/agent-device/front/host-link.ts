@@ -13,7 +13,7 @@ export type LinkStatus =
       readonly leaseMaxTtlMs?: number;
       readonly platforms: readonly AgentDevicePlatform[];
     }
-  | { readonly state: "unavailable"; readonly reason: string }
+  | { readonly state: "unavailable"; readonly reason: string; readonly retriable: boolean }
   // why: the lease may still exist, but only its worker can say, and the worker is not connected or not yet read.
   | { readonly state: "unreachable" };
 
@@ -78,7 +78,7 @@ export class RoutedHostLink implements HostLink {
     if (role === "phones") {
       const status = await this.#phoneStatus();
       if (status.state === "unavailable") {
-        return frontReplyFor(request, notAvailable(status.reason));
+        return frontReplyFor(request, notAvailable(status.reason, status.retriable));
       }
       dropInstancePins(request);
     }
@@ -94,7 +94,11 @@ export class RoutedHostLink implements HostLink {
   async #phoneStatus(): Promise<LinkStatus> {
     const status = await this.hosts.phones.status();
     return status.state === "unavailable"
-      ? { reason: `phone daemon: ${status.reason}`, state: "unavailable" }
+      ? {
+          reason: `phone daemon: ${status.reason}`,
+          retriable: status.retriable,
+          state: "unavailable",
+        }
       : status;
   }
 

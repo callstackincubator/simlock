@@ -11,6 +11,7 @@ import { seedTokensDatabase } from "../auth/testing.js";
 import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
 import { sleep } from "../daemon/test-relay-support.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
+import type { AgentDeviceUpstream } from "./host/upstream.js";
 
 // why: the edge tests and the baseline tests share one daemon rig; its daemons and data directories are cleaned after each test of whichever file imports it.
 afterEach(async () => {
@@ -77,6 +78,7 @@ export interface SetUpOptions {
   readonly maxRunning?: number;
   readonly slowStart?: boolean;
   readonly upstream?: FakeAgentDevice;
+  readonly supervisorUpstream?: AgentDeviceUpstream;
   readonly phoneUpstream?: FakeAgentDevice;
 }
 
@@ -186,7 +188,12 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       drivers,
       filesystem,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
-      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
+      optionalModules: [
+        agentDeviceModuleWith({
+          phoneUpstream: phone,
+          upstream: options.supervisorUpstream ?? fake,
+        }),
+      ],
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);

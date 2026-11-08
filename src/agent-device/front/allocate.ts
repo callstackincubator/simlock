@@ -115,7 +115,10 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
 
 function holderReply(holder: Awaited<ReturnType<FrontContext["link"]["status"]>>): FrontReply {
   if (holder.state === "unreachable") return workerUnreachable();
-  return notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING);
+  return notAvailable(
+    holder.state === "unavailable" ? holder.reason : NO_CEILING,
+    holder.state === "unavailable" && holder.retriable,
+  );
 }
 
 function stringFields(fields: ReturnType<typeof leaseCallFields>) {
@@ -261,7 +264,14 @@ async function requestLease(
       reply:
         mapped.code === "QUEUE_TIMEOUT"
           ? failure("timed out waiting for a device; nothing was leased", 504)
-          : refusal(`refused by simlock: ${mapped.message}`),
+          : {
+              ...refusal(`refused by simlock: ${mapped.message}`),
+              ...(mapped.code === "WORKER_UNREACHABLE"
+                ? { details: { reason: "WORKER_UNREACHABLE" }, retriable: true }
+                : ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_CONNECTION_LOST"].includes(mapped.code)
+                  ? { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true }
+                  : {}),
+            },
     };
   } finally {
     settled = true;

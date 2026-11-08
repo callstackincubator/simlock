@@ -125,6 +125,8 @@ describe("RelayHostLink", () => {
       code: "INVALID_ARGS",
       error: "refused: this agent-device is too old to use through a gateway; update it",
       ok: false,
+      reason: "REFUSED_BY_SIMLOCK",
+      retriable: false,
     });
   });
 

@@ -104,6 +104,8 @@ describe("the agent-device front's request rules", () => {
         code: "INVALID_ARGS",
         error: `refused: unknown route ${method} ${path}`,
         ok: false,
+        reason: "REFUSED_BY_SIMLOCK",
+        retriable: false,
       });
       expect(rig.fake.requests.length).toBe(before);
     });
@@ -892,7 +894,12 @@ describe("the agent-device front's request rules", () => {
       const answer = await envelopeOf(await sharded());
 
       expect(answer.error).toMatchObject({
-        data: { code: "COMMAND_FAILED", message: "could not check your leases; try again" },
+        data: {
+          code: "COMMAND_FAILED",
+          message: "could not check your leases; try again",
+          details: { reason: "SIMLOCK_FAILED" },
+          retriable: true,
+        },
       });
       expect(rig.fake.requests.length).toBe(before);
     });
