@@ -297,14 +297,28 @@ test.describe("the shell", () => {
     const nav = page.getByRole("navigation", { name: "Console" });
     const label = nav.getByText("Fleet", { exact: true });
     await expect(label).toBeVisible();
+    const headerToggle = nav
+      .locator(".sidebar-top")
+      .getByRole("button", { name: "Collapse sidebar" });
+    expect(await headerToggle.count()).toBe(1);
+    const accountBottomGap = () =>
+      nav.evaluate((element) => {
+        const account = element.querySelector(".sidebar-account")!.getBoundingClientRect();
+        return element.getBoundingClientRect().bottom - account.bottom;
+      });
+    expect(await accountBottomGap()).toBe(11);
 
-    await nav.getByRole("button", { name: "Collapse sidebar" }).click();
+    await headerToggle.click();
     await expect(label).toBeHidden();
     await expect(nav.getByRole("link", { name: "Fleet" })).toBeVisible();
     await expect(nav.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
+    expect(
+      await nav.locator(".sidebar-top").getByRole("button", { name: "Expand sidebar" }).count(),
+    ).toBe(1);
+    expect(await accountBottomGap()).toBe(11);
 
     await nav.getByRole("link", { name: "Leases" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
