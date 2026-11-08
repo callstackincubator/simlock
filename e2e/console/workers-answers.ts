@@ -76,28 +76,3 @@ export async function answerWithoutLoad(page: Page): Promise<void> {
     delete worker.load;
   });
 }
-
-/**
- * why: a table test that states exact CPU, memory and disk figures cannot use the machine's own
- * reading, so every connected worker is answered with this one, in the shape the daemon sends it.
- */
-export async function answerWithLoad(
-  page: Page,
-  load: { readonly cpu: number; readonly memory: number; readonly disk: number },
-): Promise<void> {
-  const GIB = 1024 ** 3;
-  await editWorkers(page, (worker) => {
-    if (worker.connection !== "connected") return;
-    worker.load = {
-      cpu: { busyPercent: load.cpu, cores: 8, limited: false },
-      disk: { freeBytes: ((100 - load.disk) / 100) * 500 * GIB, totalBytes: 500 * GIB },
-      memory: {
-        availableBytes: ((100 - load.memory) / 100) * 32 * GIB,
-        limited: false,
-        swapUsedBytes: 0,
-        totalBytes: 32 * GIB,
-      },
-      readAt: Date.now(),
-    };
-  });
-}

@@ -155,6 +155,11 @@ export function renderConsole(options: ConsoleOptions = {}) {
         const frame = `event: ${name}\ndata: ${JSON.stringify(envelope)}\n\n`;
         for (const stream of streams) stream.enqueue(encoder.encode(frame));
       },
+      // why: the daemon going away: the stream ends, and the console opens a new one once the daemon
+      // answers `/v1/healthz` again.
+      drop() {
+        for (const stream of streams.splice(0)) stream.close();
+      },
     },
     session,
     unanswered,

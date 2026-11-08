@@ -8,7 +8,7 @@ const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 type WorkerFields = Record<string, unknown>;
 
 // why: the real fleet never has a newer release to offer, so the list says what the update fields
-// would, as actions.spec.ts does for `drained`.
+// would.
 async function showWorkerFields(page: Page, fields: () => WorkerFields): Promise<void> {
   await page.route(
     (url) => url.pathname === "/v1/workers",
