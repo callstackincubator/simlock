@@ -112,6 +112,8 @@
     "require-suppression-reason": "error"
   },
   "health": {
+    // why: the redesign prototype is frozen reference code that the stages copy values from; it is never refactored.
+    "ignore": ["docs/internal/console-redesign/prototype/**"],
     "thresholdOverrides": [
       {
         "files": [".agents/scripts/*.mjs"],
