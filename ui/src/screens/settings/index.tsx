@@ -2,7 +2,7 @@ import "./settings.css";
 
 import type { ReactNode } from "react";
 
-import { Button, ChoiceChips, Facts, Loaded, Page, Panel } from "../../ds";
+import { Button, ChoiceChips, type Column, DataTable, Loaded, Page, Panel } from "../../ds";
 import {
   type ConfigSection,
   type DaemonSettings,
@@ -120,50 +120,69 @@ function DaemonCard(props: {
         <p className="muted">This daemon is too old to report its settings.</p>
       ) : (
         <Loaded view={daemon.view}>
-          {(sections) =>
-            sections.length === 0 ? (
-              <p className="muted">The daemon reports no settings.</p>
-            ) : (
-              sections.map((section) => (
-                <Section key={section.name} section={section} copy={copy} />
-              ))
-            )
-          }
+          {(sections) => <ConfigTable sections={sections} copy={copy} />}
         </Loaded>
       )}
     </Panel>
   );
 }
 
-function Section(props: {
-  readonly section: ConfigSection;
+interface ConfigRow {
+  readonly id: string;
+  readonly section: string;
+  readonly key: string;
+  readonly value: string;
+  readonly masked: boolean;
+}
+
+function ConfigTable(props: {
+  readonly sections: readonly ConfigSection[];
   readonly copy: (key: string, value: string) => void;
 }) {
-  const { copy, section } = props;
+  const { copy, sections } = props;
+  const rows: ConfigRow[] = sections.flatMap((section) =>
+    section.entries.map((entry) => ({ id: entry.key, section: section.name, ...entry })),
+  );
+  const columns: readonly Column<ConfigRow>[] = [
+    {
+      header: "Key",
+      mono: true,
+      cell: (row) => <span title={row.key}>{row.key}</span>,
+    },
+    {
+      header: "Value",
+      mono: true,
+      width: "40%",
+      drop: 2,
+      cell: (row) => <span title={row.value}>{row.value}</span>,
+    },
+    {
+      header: "Command",
+      hideHeader: true,
+      width: "88px",
+      cell: (row) =>
+        row.masked ? null : (
+          <Button
+            small
+            variant="quiet"
+            aria-label={`Copy the command to set ${row.key}`}
+            onClick={() => copy(row.key, row.value)}
+          >
+            Copy
+          </Button>
+        ),
+    },
+  ];
   return (
-    <section className="settings-section" aria-label={section.name}>
-      <h3 className="settings-section-title">{section.name}</h3>
-      <Facts
-        raw
-        facts={section.entries.map((entry) => ({
-          label: entry.key,
-          value: (
-            <span className="settings-value">
-              <span className="settings-text">{entry.value}</span>
-              {entry.masked ? null : (
-                <Button
-                  small
-                  variant="quiet"
-                  aria-label={`Copy the command to set ${entry.key}`}
-                  onClick={() => copy(entry.key, entry.value)}
-                >
-                  Copy
-                </Button>
-              )}
-            </span>
-          ),
-        }))}
-      />
-    </section>
+    <DataTable
+      label="Daemon settings"
+      rows={rows}
+      columns={columns}
+      rowId={(row) => row.id}
+      groupBy={(row) => ({ id: row.section, label: row.section })}
+      empty="The daemon reports no settings."
+      footer="count"
+      className="settings-config"
+    />
   );
 }

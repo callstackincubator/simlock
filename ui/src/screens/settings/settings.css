@@ -28,42 +28,6 @@
   font-size: var(--text-sm);
 }
 
-.settings-section + .settings-section {
-  margin-top: var(--space-4);
-}
-
-.settings-section-title {
-  margin: 0 0 var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  font-weight: 500;
-  letter-spacing: var(--label-tracking);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.settings-section .facts > div {
-  grid-template-columns: minmax(10rem, 20rem) minmax(0, 1fr);
-}
-
-.settings-section .facts dt {
-  font-family: var(--font-mono);
-  overflow-wrap: anywhere;
-}
-
-.settings-value {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.settings-text {
-  min-width: 0;
-  flex: 1;
-}
-
 @media (max-width: 480px) {
-  .settings-section .facts > div {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  
 }
