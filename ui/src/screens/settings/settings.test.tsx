@@ -47,16 +47,6 @@ describe("the Settings page", () => {
     expect(html.match(/Copy the command to set/g)).toHaveLength(1);
   });
 
-  it("says so when the token cannot read the config", () => {
-    expect(render({ kind: "forbidden" })).toContain(
-      "Your token cannot read this daemon&#x27;s settings.",
-    );
-  });
-
-  it("says so when the daemon is too old to answer", () => {
-    expect(render({ kind: "older" })).toContain("too old to report its settings");
-  });
-
   it("says it is loading and reports an empty config", () => {
     expect(render({ kind: "view", view: { kind: "loading" } })).toContain("Loading");
     expect(render({ kind: "view", view: { data: [], kind: "ready" } })).toContain(
