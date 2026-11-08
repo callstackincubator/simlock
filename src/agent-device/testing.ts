@@ -45,6 +45,7 @@ interface FakeAgentDeviceLease {
     readonly deviceKey: unknown;
   };
   readonly ttlMs: unknown;
+  readonly retainOnClose: boolean;
 }
 
 interface FakeFailure {
@@ -531,6 +532,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.leases.set(leaseId, {
       address,
       leaseId,
+      retainOnClose: params["retainOnClose"] === true,
       scope,
       tenant,
       ttlMs: params["ttlMs"],
@@ -538,7 +540,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, {
       data: {
         ...replyDevice(picked, address),
-        lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
+        lease: {
+          ...scope,
+          ...edit,
+          leaseId,
+          tenantId: tenant,
+          ttlMs: params["ttlMs"],
+          ...(params["retainOnClose"] === true ? { retainOnClose: true } : {}),
+        },
       },
       ok: true,
     });
@@ -700,21 +709,31 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, { command, ok: true });
   }
 
-  // why: agent-device ends the lease a `close`, or a `batch` with a close step, closes with, and names it in the reply's `endedLeases` instead of waiting for a release.
+  // why: agent-device names a plain lease ended by close in `endedLeases` instead of waiting for a release.
   #endOnClose(
     command: string,
     params: Record<string, unknown>,
     leaseId: unknown,
   ): readonly { readonly leaseId: string; readonly outcome: "released" }[] {
-    const flags = (params["flags"] ?? {}) as Record<string, unknown>;
-    const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
-    const closes =
-      command === "close" ||
-      (command === "batch" &&
-        steps.some((step) => (step as { readonly command?: unknown }).command === "close"));
-    if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
+    if (
+      !closesLease(command, params) ||
+      typeof leaseId !== "string" ||
+      this.leases.get(leaseId)?.retainOnClose ||
+      !this.leases.delete(leaseId)
+    )
+      return [];
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+function closesLease(command: string, params: Record<string, unknown>): boolean {
+  const flags = (params["flags"] ?? {}) as Record<string, unknown>;
+  const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
+  return (
+    command === "close" ||
+    (command === "batch" &&
+      steps.some((step) => (step as { readonly command?: unknown }).command === "close"))
+  );
 }
 
 // why: agent-device's allocate reply names no device; only a test that asks for one gets one.

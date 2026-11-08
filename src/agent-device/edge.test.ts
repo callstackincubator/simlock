@@ -399,7 +399,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false, udid or serial }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig: Rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({
@@ -439,14 +439,17 @@ describe("the agent-device front, through the whole worker daemon", () => {
         { deviceMode: "full", model: "Pixel 8", osVersion: "35", physical: false },
       ],
     ] as const;
-
     for (const [n, extra, device] of cases) {
       rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
       rig.fake.nameDeviceInNextReply({});
       const result = (await envelopeOf(await allocate(rig, n, extra, {}))).result as {
         data: { device: unknown; lease: Record<string, unknown> };
       };
-      expect(result.data.lease["device"]).toEqual(device);
+      expect(result.data.lease["device"]).toEqual({
+        ...device,
+        ["platform" in extra && extra.platform === "android" ? "serial" : "udid"]: idOf(rig, n),
+      });
+      expect(idOf(rig, n)).not.toBe("undefined");
       expect(result.data.lease["deviceKey"]).toBe(`key-${n}`);
       expect(result.data.device).toMatchObject({ id: expect.any(String) });
     }
@@ -529,15 +532,13 @@ describe("the agent-device front, through the whole worker daemon", () => {
       });
       await rig.daemon.dispatch("device.add", { id, platform }, adminSession);
       rig.driver.setPhysicalPresence(id, true);
-
       const answer = await envelopeOf(
         await allocate(rig, 1, { platform, ...extra, physical: true }),
       );
-
       expect(answer.result).toMatchObject({
         data: {
           lease: {
-            device: { model: phone.model, osVersion: phone.osVersion, physical: true },
+            device: { ...address, model: phone.model, osVersion: phone.osVersion, physical: true },
           },
         },
         ok: true,
@@ -938,11 +939,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
         message: plainOnly,
         params: (n) => allocateParams(n, { backend: "android-instance" }),
         title: "the Android backend on an iOS allocate",
-      },
-      {
-        message: plainOnly,
-        params: (n) => allocateParams(n, { retainOnClose: true }),
-        title: "retainOnClose: true",
       },
       {
         message: plainOnly,
@@ -1435,6 +1431,32 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(heldAtDaemonRelease).toEqual([]);
     expect(await leases(rig)).toEqual([]);
     await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
+  });
+
+  it("a runner allocates with retainOnClose, closes, and its lease stays until release", async () => {
+    const cases = [
+      (rig: Rig) => command(rig, "close", 1),
+      (rig: Rig) => command(rig, "close", 1, {}, { positionals: ["com.example.app"] }),
+      (rig: Rig) => batch(rig, 1, [{ command: "snapshot" }, { command: "close" }]),
+    ];
+    for (const close of cases) {
+      const rig: Rig = await setUp();
+      expect(
+        (await envelopeOf(await allocate(rig, 1, { retainOnClose: true }))).result,
+      ).toMatchObject({ ok: true, data: { lease: { retainOnClose: true } } });
+      expect((await envelopeOf(await close(rig))).result).toMatchObject({ ok: true });
+      expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+      expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
+      expect((await envelopeOf(await command(rig, "snapshot", 1))).result).toMatchObject({
+        ok: true,
+      });
+      expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({
+        ok: true,
+        released: true,
+      });
+      expect(await leases(rig)).toEqual([]);
+      await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
+    }
   });
 
   const ended = [{ leaseId: hex(1), outcome: "released" }];
