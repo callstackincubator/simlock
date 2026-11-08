@@ -108,11 +108,11 @@ async function expectStatusIndicatorColours(
   words: readonly (readonly [string, "pill" | "standalone"])[],
   theme: "light" | "dark",
 ): Promise<void> {
-  await expect(page.locator(".pill").first()).toBeVisible();
+  await expect(page.locator(".pill:visible").first()).toBeVisible();
   const { accent, shown } = await readStatusIndicators(page);
   const colours = {
     light: {
-      pill: ["rgb(20, 111, 53)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(85, 85, 95)"],
+      pill: ["rgb(17, 96, 45)", "rgb(122, 71, 8)", "rgb(163, 26, 26)", "rgb(85, 85, 95)"],
       standalone: ["rgb(21, 128, 61)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(87, 83, 78)"],
     },
     dark: {

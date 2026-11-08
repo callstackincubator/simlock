@@ -152,17 +152,18 @@ async function shellIsUsable(page: Page, host: RunningDaemon, keys: Keys): Promi
   const visited = await tabThrough(page, keys.tab, controls.length);
   expect(controls).toEqual([
     "Skip to content",
-    "Collapse sidebar",
     "Search or jump to…",
     ...NAV_LABELS,
+    "Collapse sidebar",
     "Sign out",
   ]);
   expect(visited).toEqual(controls);
 
-  // why: focus is on Sign out; walk back to the last page link, then open each page on the way up.
-  await page.keyboard.press(keys.back);
+  // why: focus is on Sign out; walk back past the sidebar toggle to the last page link, then open
+  // each page on the way up.
+  for (let step = 0; step < 2; step += 1) await page.keyboard.press(keys.back);
   await openPagesBackwards(page, keys.back);
-  for (let step = 0; step < 3; step += 1) await page.keyboard.press(keys.back);
+  for (let step = 0; step < 2; step += 1) await page.keyboard.press(keys.back);
   await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator("#main")).toBeFocused();
@@ -170,7 +171,7 @@ async function shellIsUsable(page: Page, host: RunningDaemon, keys: Keys): Promi
 
 // why: each stop in the page's main, numbered in the order the page writes it, must be reached by
 // Tab in that order after the skip link; a radio group is one stop, at its checked radio, nothing
-// inside a closed disclosure is a stop, and neither is a disabled control.
+// inside a closed disclosure is a stop, and neither is a disabled or a hidden control.
 async function mainStopsAreInOrder(page: Page, path: string, keys: Keys): Promise<void> {
   const stops = await page.evaluate(() => {
     const candidates = document.querySelectorAll<HTMLElement>(
@@ -178,6 +179,8 @@ async function mainStopsAreInOrder(page: Page, path: string, keys: Keys): Promis
     );
     const kept = [...candidates].filter((element) => {
       if (element.matches(":disabled")) return false;
+      // why: a page may draw a list twice, one per window width, and hide the other one.
+      if (!element.checkVisibility()) return false;
       if (element instanceof HTMLInputElement && element.type === "radio") return element.checked;
       const closed = element.closest("details:not([open])");
       return closed === null || element.tagName === "SUMMARY";
