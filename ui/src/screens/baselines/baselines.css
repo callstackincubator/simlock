@@ -40,7 +40,6 @@
 
 .baseline-name,
 .baseline-detail,
-.baseline-reason,
 .baseline-worker {
   display: block;
   overflow: hidden;
@@ -77,12 +76,6 @@
   vertical-align: middle;
 }
 
-.baseline-reason {
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-
 .table .baseline-size {
   width: 90px;
 }
@@ -96,27 +89,7 @@
 }
 
 .table .baseline-state-col {
-  width: 300px;
-}
-
-/* The reason sits in the State column while it is wide; narrower, it moves under the name. */
-.baseline-reason-under {
-  display: none;
-  margin-top: 0;
-}
-
-@container (max-width: 1060px) {
-  .baseline-reason-under {
-    display: block;
-  }
-
-  .baseline-state .baseline-reason {
-    display: none;
-  }
-
-  .table .baseline-state-col {
-    width: 110px;
-  }
+  width: 110px;
 }
 
 .table .baseline-menu {

@@ -1,6 +1,7 @@
 .hint-subject {
   display: inline-flex;
   border-radius: 99px;
+  cursor: pointer;
 }
 
 .hint-subject:focus-visible {
