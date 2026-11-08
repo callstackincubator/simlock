@@ -90,7 +90,8 @@ describe("LeaseAcquisitionCoordinator", () => {
     await settle();
     expect(state.state, "grant waits for preparation").toBe("pending");
     release();
-    expect((await grant).device.id).toBe(device.id);
+    expect((await grant).device.id).toBe("dev_0");
+    expect(device.id).toBe("dev_0");
     expect(ready).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: device.driverDeviceId }),
       expect.objectContaining({ purpose: "prepare" }),
