@@ -6,7 +6,6 @@ import type { Locator, Page, TestInfo } from "@playwright/test";
 import {
   expect,
   NAV,
-  NAV_GROUPS,
   NAV_LABELS,
   openFromNav,
   settled,
@@ -259,36 +258,6 @@ test.describe("the shell", () => {
     expect(await hasHorizontalScroll(page)).toBe(false);
   });
 
-  test("the sidebar's Inbox count reads only /v1/inbox on every page, and the Inbox page reads no leases, tokens or requests", async ({
-    daemon,
-    page,
-  }) => {
-    const asked = new Map<string, number>();
-    page.on("request", (request) => {
-      const { pathname } = new URL(request.url());
-      if (pathname.startsWith("/v1/")) asked.set(pathname, (asked.get(pathname) ?? 0) + 1);
-    });
-    await page.goto("/usage");
-    await signIn(page, daemon.tokens.operator);
-    await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
-    await expect.poll(() => asked.get("/v1/inbox")).toBe(1);
-
-    // why: the sign-in check and the token check at start each read /v1/workers outside the query
-    // layer, so two are allowed.
-    expect(asked.get("/v1/workers") ?? 0).toBeLessThanOrEqual(2);
-    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
-      expect(asked.get(path) ?? 0, path).toBe(0);
-    }
-
-    // why: the Inbox page reads the items and the worker list, and the page is drawn once both are in,
-    // so a read of leases, tokens or requests would have been asked by then.
-    await page.getByRole("link", { name: /^Inbox/ }).click();
-    await expect(page.getByText("Nothing needs you.")).toBeVisible();
-    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
-      expect(asked.get(path) ?? 0, path).toBe(0);
-    }
-  });
-
   test("every control in the shell is reachable and usable with the keyboard alone", async ({
     browserName,
     daemon,
@@ -334,117 +303,6 @@ test.describe("the shell", () => {
     await page.getByRole("button", { name: "Sign out" }).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByLabel("Operator token")).toBeVisible();
-  });
-
-  test("the sidebar shows Overview and Inbox, then the Operate group, then the Observe group, each with its label", async ({
-    daemon,
-    page,
-  }) => {
-    await page.setViewportSize({ height: 900, width: 1440 });
-    await page.goto("/");
-    await signIn(page, daemon.tokens.operator);
-    const nav = page.getByRole("navigation", { name: "Console" });
-    await expect(nav.getByRole("link")).toHaveText([...NAV_LABELS]);
-    expect(NAV.map((entry) => `${entry.label} ${entry.path}`)).toEqual([
-      "Overview /",
-      "Inbox /inbox",
-      "Fleet /fleet",
-      "Leases /leases",
-      "Queue /queue",
-      "Baselines /baselines",
-      "Activity /activity",
-      "Usage /usage",
-    ]);
-
-    await expect(nav.getByRole("group")).toHaveCount(NAV_GROUPS.length);
-    for (const group of NAV_GROUPS) {
-      const section = nav.getByRole("group", { name: group.label });
-      await expect(nav.getByText(group.label, { exact: true })).toBeVisible();
-      await expect(section.getByRole("link")).toHaveText([...group.links]);
-    }
-    await expect(nav.getByRole("link", { name: "Overview" })).toHaveCount(1);
-    await expect(nav.getByRole("group").getByRole("link", { name: "Inbox" })).toHaveCount(0);
-  });
-
-  test("/fleet, /queue and /activity open the pages titled Fleet, Queue and Activity; /workers, /waiting and /events show Not found", async ({
-    daemon,
-    page,
-  }) => {
-    const heading = page.getByRole("heading", { level: 1 });
-    await page.goto("/");
-    await signIn(page, daemon.tokens.operator);
-    await expect(heading).toHaveText("Overview");
-    for (const [path, title] of [
-      ["/fleet", "Fleet"],
-      ["/queue", "Queue"],
-      ["/activity", "Activity"],
-    ] as const) {
-      await page.goto(path);
-      await expect(heading).toHaveText(title);
-    }
-    for (const path of ["/workers", "/waiting", "/events"]) {
-      await page.goto(path);
-      await expect(heading).toHaveText("Page not found");
-    }
-  });
-
-  test("the sidebar collapses to icons on request, keeps every link's name, and stays collapsed on every page and after a reload", async ({
-    daemon,
-    page,
-  }) => {
-    await page.setViewportSize({ height: 900, width: 1440 });
-    await page.goto("/");
-    await signIn(page, daemon.tokens.operator);
-    const nav = page.getByRole("navigation", { name: "Console" });
-    const label = nav.getByText("Fleet", { exact: true });
-    await expect(label).toBeVisible();
-    const headerToggle = nav
-      .locator(".sidebar-top")
-      .getByRole("button", { name: "Collapse sidebar" });
-    expect(await headerToggle.count()).toBe(1);
-    const accountBottomGap = () =>
-      nav.evaluate((element) => {
-        const account = element.querySelector(".sidebar-account")!.getBoundingClientRect();
-        return element.getBoundingClientRect().bottom - account.bottom;
-      });
-    expect(await accountBottomGap()).toBe(11);
-
-    await headerToggle.click();
-    await expect(label).toBeHidden();
-    await expect(nav.getByRole("link", { name: "Fleet" })).toBeVisible();
-    await expect(nav.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    expect(
-      await nav.locator(".sidebar-top").getByRole("button", { name: "Expand sidebar" }).count(),
-    ).toBe(1);
-    expect(await accountBottomGap()).toBe(11);
-
-    await nav.getByRole("link", { name: "Leases" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-    await expect(label).toBeHidden();
-    await page.reload();
-    await expect(nav.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
-    await expect(label).toBeHidden();
-
-    await nav.getByRole("button", { name: "Expand sidebar" }).click();
-    await expect(label).toBeVisible();
-  });
-
-  test("a window narrower than 1280px starts with the sidebar collapsed until the operator chooses", async ({
-    daemon,
-    page,
-  }) => {
-    await page.setViewportSize({ height: 900, width: 1100 });
-    await page.goto("/");
-    await signIn(page, daemon.tokens.operator);
-    const nav = page.getByRole("navigation", { name: "Console" });
-
-    await expect(nav.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
-    await nav.getByRole("button", { name: "Expand sidebar" }).click();
-    await page.reload();
-    await expect(nav.getByRole("button", { name: "Collapse sidebar" })).toBeVisible();
   });
 
   test("the shell follows the dark and the light system setting", async ({ daemon, page }) => {

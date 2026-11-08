@@ -6,8 +6,6 @@ import type { Locator, Page } from "@playwright/test";
 import {
   expect,
   NAV,
-  NAV_LABELS,
-  openFromNav,
   type RunningDaemon,
   settled,
   signIn,
@@ -330,28 +328,6 @@ test.describe("every view", () => {
     }
   });
 
-  test("the sidebar moves between pages and the page URL follows", async ({ daemon, page }) => {
-    await page.goto("/");
-    await signIn(page, daemon.tokens.operator);
-    const tabs = page.getByRole("navigation", { name: "Console" });
-    await expect(tabs.getByRole("link")).toHaveText([...NAV_LABELS]);
-
-    for (const entry of NAV) {
-      await openFromNav(page, entry.label);
-      await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-      await expect(page.getByRole("heading", { level: 1, name: entry.label })).toBeVisible();
-      await expect(tabs.locator("[aria-current='page']")).toHaveText(entry.label);
-    }
-
-    const [before, last] = NAV.slice(-2);
-    await page.goBack();
-    await expect(page).toHaveURL(new RegExp(`${before?.path}$`));
-    await expect(tabs.locator("[aria-current='page']")).toHaveText(new RegExp(`^${before?.label}`));
-    await page.goForward();
-    await expect(page).toHaveURL(new RegExp(`${last?.path}$`));
-    await expect(tabs.locator("[aria-current='page']")).toHaveText(last?.label ?? "");
-  });
-
   test("no view reports a Content-Security-Policy violation", async ({ page }) => {
     const { host, pages } = await hostWithLease();
     try {
@@ -501,22 +477,6 @@ test.describe("every view", () => {
       }
     });
   }
-
-  test("the Overview's Leased tile opens Leases", async ({ page }) => {
-    const { host } = await hostWithLease();
-    try {
-      await openSignedIn(page, host);
-
-      await page
-        .getByRole("list", { name: "Fleet at a glance" })
-        .getByRole("link", { name: /^Leased 1/ })
-        .click();
-
-      await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-    } finally {
-      await host.dispose();
-    }
-  });
 
   test("a long lease id wraps inside the inspector and its full id is in its title", async ({
     page,

@@ -50,7 +50,12 @@ export interface ConsoleOptions {
   readonly token?: string | null;
   readonly mode?: "gateway" | "worker";
   readonly daemon?: Readonly<Record<string, unknown>>;
+  // why: a test that lets minutes pass (a poll, an idle window) fakes the timers too; every other
+  // test keeps real ones and a fixed `Date`.
+  readonly fakeTimers?: boolean;
 }
+
+const TIMERS = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] as const;
 
 function matches(pattern: string, path: string): boolean {
   const want = pattern.split("/");
@@ -79,7 +84,10 @@ function json(status: number, body: unknown, etag?: string): Response {
 }
 
 export function renderConsole(options: ConsoleOptions = {}) {
-  vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+  vi.useFakeTimers({
+    now: NOW,
+    toFake: options.fakeTimers === true ? ["Date", ...TIMERS] : ["Date"],
+  });
   const routes: Routes = {
     ...EMPTY,
     "/v1/identity":
@@ -145,7 +153,9 @@ export function renderConsole(options: ConsoleOptions = {}) {
   const preferences = createPreferences(() => window.localStorage);
   session.start();
   window.history.pushState(null, "", options.path ?? "/");
-  const user = userEvent.setup();
+  const user = userEvent.setup(
+    options.fakeTimers === true ? { advanceTimers: vi.advanceTimersByTime.bind(vi) } : {},
+  );
   const view = render(<App api={api} fetch={fetch} preferences={preferences} session={session} />);
 
   return {
