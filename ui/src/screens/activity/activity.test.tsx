@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { LoadView } from "../../ds";
-import type { EventDetail, EventRow, EventsPage } from "../../state/events";
+import type { ActivityRow, EventDetail, EventsPage } from "../../state/events";
 import { ActivityContent, EventDrawerBody } from ".";
 
 function text(html: string): string {
@@ -13,14 +13,19 @@ function text(html: string): string {
     .trim();
 }
 
-function row(index: number, over: Partial<EventRow> = {}): EventRow {
+function row(index: number, over: Partial<ActivityRow> = {}): ActivityRow {
   return {
+    detail: "mac-1",
     id: `evt_${index}`,
     iso: "2026-10-02T11:30:00.000Z",
+    kind: "lease",
     name: "lease.granted",
+    subject: "claude-1",
     summary: "claude-1 · mac-1",
     time: "11:30:00",
     to: `/activity/evt_${index}`,
+    worker: "mac-studio-01",
+    workerTitle: "wrk_1",
     ...over,
   };
 }
@@ -43,16 +48,30 @@ function page(over: Partial<EventsPage> = {}): EventsPage {
         { at: 1, count: 0, label: "11:29" },
         { at: 2, count: 3, label: "11:30" },
       ],
+      short: "3 in the last hour · peak 3 at 11:30",
       summary: "3 events in the last hour; the busiest minute was 11:30, with 3.",
     },
     chosen: { detail: DETAIL, kind: "event" },
     chosenIndex: 0,
+    coverage: undefined,
     end: undefined,
+    facets: {
+      kinds: [
+        { checked: true, count: 3, label: "Leases", value: "lease" },
+        { checked: false, count: 0, label: "Queue", value: "queue" },
+      ],
+      problems: { checked: false, count: 1, label: "Problems only", value: "problems" },
+      workers: [
+        { checked: false, count: 2, label: "mac-studio-01", value: "wrk_1" },
+        { checked: false, count: 1, label: "Other", value: "" },
+      ],
+    },
+    filter: { kinds: ["lease"], problems: false, workers: [] },
     held: 1,
     loadOlder: () => {},
     query: "",
+    range: "1h",
     rows: [row(1)],
-    subject: "all",
     urlId: "evt_1",
     ...over,
   };
@@ -62,7 +81,8 @@ function render(view: LoadView<EventsPage>): string {
   return renderToStaticMarkup(
     <ActivityContent
       view={view}
-      onSubject={() => {}}
+      range="1h"
+      onRange={() => {}}
       onSearch={() => {}}
       onClose={() => {}}
       finalFocus={() => null}
@@ -79,12 +99,14 @@ function ready(over: Partial<EventsPage> = {}): string {
 }
 
 describe("the events page", () => {
-  it("lists each event as its time, its name and its summary, linking to its page", () => {
-    const html = ready({ rows: [row(2), row(1, { name: "lease.expired", summary: "claude-2" })] });
+  it("lists each event as its icon, name, subject, worker and time, linking to its page", () => {
+    const html = ready({
+      rows: [row(2), row(1, { detail: "", name: "lease.expired", subject: "claude-2" })],
+    });
 
     expect(html).toContain('<time class="event-time mono" dateTime="2026-10-02T11:30:00.000Z">');
     expect(text(html)).toContain(
-      "11:30:00 lease.granted claude-1 · mac-1 11:30:00 lease.expired claude-2",
+      "lease.granted claude-1 · mac-1 mac-studio-01 11:30:00 lease.expired claude-2 mac-studio-01 11:30:00",
     );
     expect(html).toContain('href="/activity/evt_2"');
     expect(html).toContain('href="/activity/evt_1"');
@@ -99,14 +121,15 @@ describe("the events page", () => {
     );
   });
 
-  it("colours an event's name only where the row says it reports trouble", () => {
+  it("tints an event's icon by what the row says: good, warning or trouble, and none when quiet", () => {
     const html = ready({
-      rows: [row(3, { tone: "error" }), row(2, { tone: "warn" }), row(1)],
+      rows: [row(4, { mark: "error" }), row(3, { mark: "warn" }), row(2, { mark: "ok" }), row(1)],
     });
 
-    expect(html).toContain('<span class="mono event-error">lease.granted</span>');
-    expect(html).toContain('<span class="mono event-warn">lease.granted</span>');
-    expect(html).toContain('<span class="mono">lease.granted</span>');
+    expect(html).toContain('class="event-icon event-icon-error"');
+    expect(html).toContain('class="event-icon event-icon-warn"');
+    expect(html).toContain('class="event-icon event-icon-ok"');
+    expect(html.match(/class="event-icon"/g)).toHaveLength(1);
   });
 
   it("draws only the rows in view of ten thousand, in a box a keyboard can scroll", () => {
@@ -129,15 +152,24 @@ describe("the events page", () => {
     expect(html).toContain('<div class="visually-hidden"><table class="chart-data">');
   });
 
-  it("offers the subjects as a radio group with the chosen one checked", () => {
-    const html = ready({ subject: "device" });
+  it("offers Kind, State and Worker as checkboxes with their counts, the ticked ones checked", () => {
+    const html = ready();
 
+    expect(text(html)).toContain("Kind Leases 3 Queue 0 State Problems only 1 Worker");
+    expect(text(html)).toContain("mac-studio-01 2 Other 1");
+    expect(html.match(/<input type="checkbox"[^>]*checked=""/g)).toHaveLength(1);
+  });
+
+  it("puts the search and the range in the header, the range as a radio group", () => {
+    const html = ready();
+
+    expect(html).toContain('placeholder="Filter events"');
+    expect(html).toContain("newest first");
     const labels = [...html.matchAll(/<input type="radio"[^>]*\/><span>([^<]*)<\/span>/g)].map(
       (match) => match[1],
     );
-    expect(labels).toEqual(["All", "Leases", "Devices", "Workers", "Components", "Other"]);
-    expect(html.match(/checked=""/g)).toHaveLength(1);
-    expect(html).toMatch(/value="device" checked=""|checked="" value="device"/);
+    expect(labels).toEqual(["1 h", "6 h", "24 h", "7 d"]);
+    expect(html).toMatch(/value="1h" checked=""|checked="" value="1h"/);
   });
 
   it("says why an empty list is empty", () => {
@@ -152,9 +184,16 @@ describe("the events page", () => {
         }),
       ),
     ).toContain("No events yet.");
-    expect(
-      text(ready({ chosen: { kind: "none" }, held: 5, rows: [], subject: "device" })),
-    ).toContain("No device events among those loaded.");
+    expect(text(ready({ chosen: { kind: "none" }, held: 5, rows: [] }))).toContain(
+      "No events match these filters among those loaded.",
+    );
+  });
+
+  it("says when history has not reached the range, with a way to load more", () => {
+    const html = ready({ coverage: "The events loaded do not reach back 6 hours yet." });
+
+    expect(text(html)).toContain("The events loaded do not reach back 6 hours yet.");
+    expect(text(html)).toContain("Load older events");
   });
 
   it("says it is loading, or why it could not load", () => {

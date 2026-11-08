@@ -7,6 +7,11 @@
   margin-bottom: var(--space-4);
 }
 
+/* A page already spaces its parts, so a toolbar at its top adds no margin of its own. */
+.page > .toolbar {
+  margin-bottom: 0;
+}
+
 .toolbar-end {
   margin-left: auto;
 }

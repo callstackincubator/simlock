@@ -285,9 +285,9 @@ test.describe("every view", () => {
       // why: the chart's numbers are a table only a screen reader reads; it holds no stop for the keyboard.
       await expect(page.getByRole("table", { name: "Leases held" })).toBeAttached();
       await visit(page, host, "/activity");
-      await page.getByRole("radio", { name: "All" }).focus();
+      await page.getByRole("radio", { name: "1 h" }).focus();
       await page.keyboard.press("ArrowRight");
-      await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
+      await expect(page.getByRole("radio", { name: "6 h" })).toBeChecked();
       await visit(page, host, pages.lease);
       await page.getByRole("button", { name: "Close lease" }).click();
       await expect(page).toHaveURL(/\/leases$/);

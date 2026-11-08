@@ -66,6 +66,10 @@ function rows(page: Page): Locator {
   return feed(page).getByRole("listitem");
 }
 
+function kind(page: Page, name: string): Locator {
+  return page.getByRole("group", { name: "Kind" }).getByRole("checkbox", { name });
+}
+
 function title(page: Page): Locator {
   return page.getByRole("heading", { level: 2 }).first();
 }
@@ -79,7 +83,7 @@ async function shownEvents(page: Page): Promise<string[]> {
       await frame();
       for (const item of box.querySelectorAll("li")) {
         const link = item.querySelector("a");
-        const name = item.querySelector("time + span");
+        const name = item.querySelector(".event-name");
         seen.set(
           Math.round(item.getBoundingClientRect().top + box.scrollTop),
           [
@@ -116,7 +120,7 @@ interface Stubbed {
   readonly seq: number;
   readonly timestamp: number;
   readonly event: string;
-  readonly payload: Record<string, never>;
+  readonly payload: Record<string, unknown>;
 }
 
 function stubbed(n: number, now: number): Stubbed {
@@ -201,7 +205,7 @@ function older(queries: readonly string[]): string[] {
 
 // why: the feed draws only the rows in view and prints no count, so its scroll height, one row
 // tall per event, is the only measure of how many events it holds.
-const ROW_PX = 60;
+const ROW_PX = 38;
 
 async function eventsHeld(page: Page): Promise<number> {
   return Math.round((await feed(page).evaluate((box) => box.scrollHeight)) / ROW_PX);
@@ -345,26 +349,85 @@ test.describe("the Activity page", () => {
       await lease(host, "console-e2e-filter");
       await openEvents(page, host);
 
-      await page.getByRole("radio", { name: "Leases" }).check({ force: true });
+      await kind(page, "Leases").check();
 
-      await expect(page).toHaveURL(/\?subject=lease$/);
-      const names = await rows(page).locator("time + span").allTextContents();
+      await expect(page).toHaveURL(/\?kind=lease$/);
+      const names = await rows(page).locator(".event-name").allTextContents();
       expect(names.length).toBeGreaterThan(0);
       expect(names.every((name) => name.startsWith("lease."))).toBe(true);
       await page.reload();
-      await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
+      await expect(kind(page, "Leases")).toBeChecked();
 
       await page.getByRole("searchbox", { name: "Search events" }).fill("GRANTED");
 
-      await expect(page).toHaveURL(/\?subject=lease&q=GRANTED$/);
+      await expect(page).toHaveURL(/\?kind=lease&q=GRANTED$/);
       await expect(rows(page)).not.toHaveCount(0);
       expect(
-        (await rows(page).locator("time + span").allTextContents()).every(
+        (await rows(page).locator(".event-name").allTextContents()).every(
           (name) => name === "lease.granted",
         ),
       ).toBe(true);
       await page.reload();
       await expect(page.getByRole("searchbox", { name: "Search events" })).toHaveValue("GRANTED");
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the facets count the events by kind, state and worker, and Problems only, workers and the range narrow the feed", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const at = (minutes: number) => BASE - minutes * 60_000;
+      const event = (n: number, name: string, minutes: number, payload = {}): Stubbed => ({
+        event: name,
+        id: `evt_f${n}`,
+        payload,
+        seq: 1_000 - n,
+        timestamp: at(minutes),
+      });
+      await stubEvents(page, () => ({
+        events: [
+          event(1, "lease.granted", 1, { workerId: "wrk_a" }),
+          event(2, "queue.changed", 2),
+          event(3, "device.quarantined", 3, { workerId: "wrk_a" }),
+          event(4, "baseline.built", 4, { workerId: "wrk_b" }),
+          event(5, "lease.renewed", 180, { workerId: "wrk_b" }),
+        ],
+      }));
+      await openEvents(page, host);
+      const count = (group: string, name: string) =>
+        page.getByRole("group", { name: group }).locator("label", { hasText: name });
+
+      await expect(rows(page)).toHaveCount(4);
+      await expect(count("Kind", "Leases")).toContainText("1");
+      await expect(count("Kind", "Queue")).toContainText("1");
+      await expect(count("State", "Problems only")).toContainText("1");
+      await expect(count("Worker", "Other")).toContainText("1");
+
+      await page.getByRole("group", { name: "State" }).getByRole("checkbox").check();
+      await expect(page).toHaveURL(/\?state=problems$/);
+      await expect(rows(page)).toHaveCount(1);
+      await expect(rows(page).first()).toContainText("device.quarantined");
+      await expect(count("Kind", "Leases")).toContainText("0");
+
+      await page.getByRole("group", { name: "State" }).getByRole("checkbox").uncheck();
+      await page
+        .getByRole("group", { name: "Worker" })
+        .getByRole("checkbox", { name: "Other" })
+        .check();
+      await expect(page).toHaveURL(/\?worker=$/);
+      await expect(rows(page)).toHaveCount(1);
+      await expect(rows(page).first()).toContainText("queue.changed");
+
+      await page.getByRole("radio", { name: "6 h" }).check({ force: true });
+      await expect(page).toHaveURL(/\?worker=&range=6h$/);
+      await page
+        .getByRole("group", { name: "Worker" })
+        .getByRole("checkbox", { name: "Other" })
+        .uncheck();
+      await expect(rows(page)).toHaveCount(5);
     } finally {
       await host.dispose();
     }
@@ -463,7 +526,7 @@ test.describe("the Activity page", () => {
         if (before === "evt_0130") return gate.then(() => ({ events: stubbedRange(131, 180) }));
         return {};
       });
-      await openEvents(page, host);
+      await openEvents(page, host, "/activity?range=24h");
 
       await expect.poll(() => eventsHeld(page)).toBe(130);
       expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
@@ -502,7 +565,7 @@ test.describe("the Activity page", () => {
         if (query.get("before") === null) return { events: stubbedRange(1, 30) };
         return query.get("before") === "evt_0030" ? { events: stubbedRange(31, 70) } : {};
       });
-      await openEvents(page, host);
+      await openEvents(page, host, "/activity?range=24h");
       await expect(
         page.getByText(`Start of the history (${localMinute(BASE - 70 * 60_000)})`),
       ).toBeVisible();
@@ -619,7 +682,10 @@ test.describe("the Activity page", () => {
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      for (const [turn, address] of ["/activity?subject=lease", "/activity?q=RENEWED"].entries()) {
+      for (const [turn, address] of [
+        "/activity?subject=lease&range=24h",
+        "/activity?q=RENEWED&range=24h",
+      ].entries()) {
         const queries = await stubEvents(page, (query) => {
           if (query.get("before") === null) return { events: stubbedRange(1, 30) };
           if (query.get("before") === "evt_0030") return { events: stubbedRange(31, 130) };
@@ -658,7 +724,7 @@ test.describe("the Activity page", () => {
           : { events: stubbedRange(31, 70) },
       );
       const cases = [
-        ["/activity?subject=worker", "No worker events among those loaded."],
+        ["/activity?kind=worker", "No events match these filters among those loaded."],
         ["/activity?q=zzz", "No events match zzz among those loaded."],
       ] as const;
       for (const [turn, [address, said]] of cases.entries()) {
@@ -770,16 +836,16 @@ async function keyboardOnly(page: Page, host: RunningDaemon, tab: string): Promi
   await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await expect(rows(page).filter({ hasText: "lease.granted" })).not.toHaveCount(0);
 
-  const all = page.getByRole("radio", { name: "All" });
-  for (let step = 0; step < 30 && !(await isFocused(all)); step += 1) {
+  const leases = kind(page, "Leases");
+  for (let step = 0; step < 30 && !(await isFocused(leases)); step += 1) {
     await page.keyboard.press(tab);
   }
-  await expect(all).toBeFocused();
-  await expect(all).toBeChecked();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
+  await expect(leases).toBeFocused();
+  await expect(leases).not.toBeChecked();
+  await page.keyboard.press("Space");
+  await expect(leases).toBeChecked();
 
-  const names = await rows(page).locator("time + span").allTextContents();
+  const names = await rows(page).locator(".event-name").allTextContents();
   expect(names.length).toBeGreaterThan(0);
   expect(names.every((name) => name.startsWith("lease."))).toBe(true);
 
@@ -789,7 +855,7 @@ async function keyboardOnly(page: Page, host: RunningDaemon, tab: string): Promi
   await expect(feed(page)).toBeFocused();
   await page.keyboard.press(tab);
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/activity\/[^/?]+\?subject=lease$/);
+  await expect(page).toHaveURL(/\/activity\/[^/?]+\?kind=lease$/);
 }
 
 async function isFocused(locator: Locator): Promise<boolean> {

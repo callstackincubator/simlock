@@ -369,7 +369,7 @@ function feed(page: Page): Locator {
 
 // why: the feed draws only the rows in view and prints no count, so its scroll height, one row
 // tall per event, is the only measure of how many events it holds.
-const ROW_PX = 60;
+const ROW_PX = 38;
 
 async function eventsHeld(page: Page): Promise<number> {
   return Math.round((await feed(page).evaluate((box) => box.scrollHeight)) / ROW_PX);
@@ -498,7 +498,7 @@ test.describe("the events feed", () => {
       // The button is gone, so focus moves to the feed rather than dropping to the page.
       await expect(feed(page)).toBeFocused();
       const top = feed(page).getByRole("listitem").first();
-      await expect(top.locator("time + span")).toHaveText("lease.renewed");
+      await expect(top.locator(".event-name")).toHaveText("lease.renewed");
       // At the top, the next event shows at the top with no count.
       await client.renewLease({ leaseId: grant.lease.id });
       await expect.poll(() => eventsHeld(page)).toBe(1_002);
@@ -529,7 +529,10 @@ test.describe("the events feed", () => {
     await scrollDown(page);
 
     // Every generated event is under Other: the same list, shown again from its top.
-    await page.getByRole("radio", { name: "Other" }).check();
+    await page
+      .getByRole("group", { name: "Kind" })
+      .getByRole("checkbox", { name: "Other" })
+      .check();
 
     await expect.poll(() => feed(page).evaluate((box) => box.scrollTop)).toBe(0);
     expect((await firstInView(page)).n).toBe("1000");
@@ -708,7 +711,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
       "datetime",
       new Date(newest.timestamp).toISOString(),
     );
-    await expect(first.locator("time + span")).toHaveText(newest.event);
+    await expect(first.locator(".event-name")).toHaveText(newest.event);
   });
 
   /** Every page, with a pager in view where the page has one, and the feed scrolled. */

@@ -19,15 +19,14 @@ import { type WorkerView, workerPath } from "./workers";
 
 export type SubjectFilter = Subject | "all";
 
-export const SUBJECT_CHOICES: readonly { readonly value: SubjectFilter; readonly label: string }[] =
-  [
-    { label: "All", value: "all" },
-    { label: "Leases", value: "lease" },
-    { label: "Devices", value: "device" },
-    { label: "Workers", value: "worker" },
-    { label: "Components", value: "component" },
-    { label: "Other", value: "other" },
-  ];
+const SUBJECT_CHOICES: readonly { readonly value: SubjectFilter; readonly label: string }[] = [
+  { label: "All", value: "all" },
+  { label: "Leases", value: "lease" },
+  { label: "Devices", value: "device" },
+  { label: "Workers", value: "worker" },
+  { label: "Components", value: "component" },
+  { label: "Other", value: "other" },
+];
 
 // why: the filter lives in the URL as `?subject=`, so a reload or a shared link shows the same
 // events; a value this console does not know is the whole feed, not an empty one.
@@ -79,6 +78,34 @@ export interface EventRow {
   readonly summary: string;
 }
 
+export function eventRow(
+  event: ConsoleEvent,
+  workers: readonly WorkerView[],
+  query: string,
+): EventRow {
+  const tone = eventTone(event.event);
+  return {
+    id: event.id,
+    iso: new Date(event.timestamp).toISOString(),
+    name: event.event,
+    summary: eventSummary(event, workers),
+    time: timeOfDay(event.timestamp),
+    to: `${itemPath("/activity", event.id)}${query}`,
+    ...(tone === undefined ? {} : { tone }),
+  };
+}
+
+// why: the match is over what a row shows, its name and its summary line, and over no other part
+// of the payload.
+export function rowMatches(row: EventRow, search: string): boolean {
+  const wanted = search.toLowerCase();
+  return (
+    wanted === "" ||
+    row.name.toLowerCase().includes(wanted) ||
+    row.summary.toLowerCase().includes(wanted)
+  );
+}
+
 // why: a row keeps the filter and the search in its link, so choosing an event does not undo them.
 export function eventRows(
   events: readonly ConsoleEvent[],
@@ -87,27 +114,9 @@ export function eventRows(
   search = "",
 ): readonly EventRow[] {
   const query = writeQuery(writeSubject("", subject), search);
-  const wanted = search.toLowerCase();
-  const rows = shownEvents(events, subject).map((event) => {
-    const tone = eventTone(event.event);
-    return {
-      id: event.id,
-      iso: new Date(event.timestamp).toISOString(),
-      name: event.event,
-      summary: eventSummary(event, workers),
-      time: timeOfDay(event.timestamp),
-      to: `${itemPath("/activity", event.id)}${query}`,
-      ...(tone === undefined ? {} : { tone }),
-    };
-  });
-  // why: the match is over what a row shows, its name and its summary line, and over no other
-  // part of the payload.
-  return wanted === ""
-    ? rows
-    : rows.filter(
-        (row) =>
-          row.name.toLowerCase().includes(wanted) || row.summary.toLowerCase().includes(wanted),
-      );
+  return shownEvents(events, subject)
+    .map((event) => eventRow(event, workers, query))
+    .filter((row) => rowMatches(row, search));
 }
 
 export interface LogEventRow extends EventRow {
@@ -209,6 +218,8 @@ export function eventDetail(event: ConsoleEvent, places: EventPlaces, now: numbe
 export interface EventsChart {
   readonly minutes: readonly MinuteCount[];
   readonly summary: string;
+  // why: the figures as a short line beside the chart's title; the sentence is for a screen reader.
+  readonly short: string;
 }
 
 // why: the chart counts every event held, whatever the filter shows, so its numbers stay put when
@@ -222,7 +233,15 @@ export function eventsChart(events: readonly ConsoleEvent[], now: number): Event
     busiest === undefined || busiest.count === 0
       ? ""
       : `; the busiest minute was ${busiest.label}, with ${formatCount(busiest.count)}`;
-  return { minutes, summary: `${count}${peak}.` };
+  const shortPeak =
+    busiest === undefined || busiest.count === 0
+      ? ""
+      : ` · peak ${formatCount(busiest.count)} at ${busiest.label}`;
+  return {
+    minutes,
+    short: `${formatCount(total)} in the last hour${shortPeak}`,
+    summary: `${count}${peak}.`,
+  };
 }
 
 export type Chosen =
