@@ -152,9 +152,11 @@
 }
 
 .overview-time {
-  width: 36px;
+  flex: none;
+  min-width: 36px;
   font-family: var(--font-mono);
   text-align: right;
+  white-space: nowrap;
 }
 
 .overview-ttl {
