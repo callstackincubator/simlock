@@ -215,6 +215,27 @@ describe("tracked files", () => {
     expect(trackedFiles.filter(isCommittedBinary)).toEqual([]);
     expect(isWebsiteAsset("website/src/fonts/Switzer-Regular.woff2")).toBe(true);
     expect(isWebsiteAsset("website/src/site/content.ts")).toBe(false);
+    for (const name of [
+      "1-overview.png",
+      "2-fleet.png",
+      "3-worker.png",
+      "4-streaming.png",
+      "5-leases-empty.png",
+      "6-leases-selected.png",
+      "7-baselines.png",
+      "8-activity.png",
+      "mosaic.png",
+    ]) {
+      expect(isCommittedBinary(`docs/internal/console-redesign/renders/${name}`), name).toBe(true);
+    }
+    for (const name of [
+      "docs/internal/console-redesign/renders/9-other.png",
+      "docs/internal/console-redesign/renders/1-overview.md",
+      "docs/internal/console-redesign/PLAN.md",
+      "src/unexpected.png",
+    ]) {
+      expect(isCommittedBinary(name), name).toBe(false);
+    }
     expect(trackedFiles).toContain("e2e/appduct-fixtures.test.ts");
   });
 
