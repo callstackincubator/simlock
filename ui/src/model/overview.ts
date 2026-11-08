@@ -175,43 +175,17 @@ function tiles(input: {
   readonly now: number;
 }): readonly OverviewTile[] {
   const { figures, leases, now, range, requests, workers } = input;
-  const held = leasesHeld(workers);
-  const connected = workers.filter((worker) => worker.connection === "connected").length;
   const devices = workers.flatMap((worker) =>
     (worker.devices ?? []).filter((entry) => entry.state !== "deleted"),
   );
   const ready = devices.filter((entry) => entry.state === "ready").length;
-  const oldest = requests === undefined ? 0 : Math.min(...requests.map((r) => r.createdAt));
-  const ending = leases?.filter((lease) => isExpiring(lease.ttlDeadline, now)).length;
-  const wait = figures.kind === "ready" ? figures.data.wait : undefined;
+  const connected = workers.filter((worker) => worker.connection === "connected").length;
   return [
-    {
-      label: "Leased",
-      to: "/leases",
-      ...(held === undefined ? {} : { unit: `/ ${formatCount(devices.length)}` }),
-      value: held === undefined ? "—" : formatCount(held),
-    },
+    leasedTile(leasesHeld(workers), devices.length),
     { label: "Ready", to: "/fleet", unit: "warm", value: formatCount(ready) },
-    {
-      label: "Waiting",
-      to: "/queue",
-      ...(requests === undefined
-        ? {}
-        : { unit: requests.length === 0 ? "none" : `max ${formatDuration(now - oldest)}` }),
-      value: requests === undefined ? "—" : formatCount(requests.length),
-    },
-    {
-      label: "Wait p95",
-      to: usagePath(range),
-      ...(wait === undefined ? {} : { unit: wait.unit }),
-      value: wait === undefined ? "—" : wait.value,
-    },
-    {
-      label: "Ending soon",
-      to: "/leases",
-      ...(ending === undefined ? {} : { unit: "< 5 min" }),
-      value: ending === undefined ? "—" : formatCount(ending),
-    },
+    waitingTile(requests, now),
+    waitP95Tile(figures, range),
+    endingTile(leases, now),
     {
       label: "Workers",
       to: "/fleet",
@@ -219,6 +193,50 @@ function tiles(input: {
       value: formatCount(connected),
     },
   ];
+}
+
+function leasedTile(held: number | undefined, deviceCount: number): OverviewTile {
+  return {
+    label: "Leased",
+    to: "/leases",
+    ...(held === undefined ? {} : { unit: `/ ${formatCount(deviceCount)}` }),
+    value: held === undefined ? "—" : formatCount(held),
+  };
+}
+
+function waitingUnit(requests: readonly WaitingRequest[], now: number): string {
+  if (requests.length === 0) return "none";
+  const oldest = Math.min(...requests.map((r) => r.createdAt));
+  return `max ${formatDuration(now - oldest)}`;
+}
+
+function waitingTile(requests: readonly WaitingRequest[] | undefined, now: number): OverviewTile {
+  return {
+    label: "Waiting",
+    to: "/queue",
+    ...(requests === undefined ? {} : { unit: waitingUnit(requests, now) }),
+    value: requests === undefined ? "—" : formatCount(requests.length),
+  };
+}
+
+function waitP95Tile(figures: FiguresState, range: ConsoleRange): OverviewTile {
+  const wait = figures.kind === "ready" ? figures.data.wait : undefined;
+  return {
+    label: "Wait p95",
+    to: usagePath(range),
+    ...(wait === undefined ? {} : { unit: wait.unit }),
+    value: wait === undefined ? "—" : wait.value,
+  };
+}
+
+function endingTile(leases: readonly LeaseRecord[] | undefined, now: number): OverviewTile {
+  const ending = leases?.filter((lease) => isExpiring(lease.ttlDeadline, now)).length;
+  return {
+    label: "Ending soon",
+    to: "/leases",
+    ...(ending === undefined ? {} : { unit: "< 5 min" }),
+    value: ending === undefined ? "—" : formatCount(ending),
+  };
 }
 
 // why: the same list and order the Inbox shows, problems only, so the first one is the Inbox's.

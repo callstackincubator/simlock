@@ -146,6 +146,103 @@ async function expectStatusIndicatorColours(
   }
 }
 
+type Started = Awaited<ReturnType<typeof startHostWithLease>>;
+
+async function expectSignInStyles(
+  page: Page,
+  host: Started["host"],
+  background: string,
+  surface: string,
+): Promise<void> {
+  await page.goto(host.url);
+  await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
+  await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
+  const signInButton = page.getByRole("button", { name: "Sign in" });
+  await expect(signInButton).toHaveCSS("min-height", "30px");
+  await expect(signInButton).toHaveCSS("border-radius", "8px");
+  await expect(signInButton).toHaveCSS("text-transform", "none");
+  await expect(signInButton).toHaveCSS("font-family", /Geist Variable/);
+}
+
+async function expectOverviewStyles(page: Page, background: string, text: string): Promise<void> {
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.locator("body")).toHaveCSS("background-color", background);
+  await expect(page.locator("body")).toHaveCSS("color", text);
+  await expect(page.locator(".chart .recharts-cartesian-axis-tick-value").first()).toHaveCSS(
+    "font-size",
+    "10px",
+  );
+  await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
+}
+
+// why: the dark pill colours follow the tone class the first pill carries.
+const DARK_PILL_COLOURS: readonly (readonly [string, string, string])[] = [
+  ["pill-ok", "rgb(134, 239, 172)", "rgb(27, 46, 36)"],
+  ["pill-warn", "rgb(253, 224, 71)", "rgb(50, 44, 22)"],
+  ["pill-error", "rgb(252, 165, 165)", "rgb(54, 34, 36)"],
+];
+
+async function expectDarkPillColours(status: Locator): Promise<void> {
+  const tone = await status.getAttribute("class");
+  const match = DARK_PILL_COLOURS.find(([name]) => tone?.includes(name));
+  const colors = match ? [match[1], match[2]] : ["rgb(185, 185, 194)", "rgb(36, 36, 42)"];
+  await expect(status).toHaveCSS("color", colors[0]!);
+  await expect(status).toHaveCSS("background-color", colors[1]!);
+}
+
+async function expectFleetStyles(
+  page: Page,
+  host: Started["host"],
+  theme: "light" | "dark",
+  background: string,
+): Promise<void> {
+  await visit(page, host, "/fleet");
+  await expect(page.locator(".table-card").first()).toHaveCSS("border-radius", "10px");
+  await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
+  await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
+  await expect(page.locator(".search-field-wrap .icon")).toBeVisible();
+  const search = page.getByRole("searchbox").first();
+  await expect(search).toHaveCSS(
+    "border-top-color",
+    theme === "dark" ? "rgb(35, 35, 39)" : "rgb(222, 222, 219)",
+  );
+  await expect(search).toHaveCSS("background-color", background);
+  await expect(search).toHaveCSS("border-top-left-radius", "8px");
+  const status = page.locator("#main .pill").first();
+  await expect(status).toHaveCSS("height", "20px");
+  if (theme === "dark") await expectDarkPillColours(status);
+}
+
+async function expectInboxHover(page: Page, host: Started["host"], surface: string): Promise<void> {
+  await stubJson(page, "/v1/inbox", () => ({ items: [waitingItem("req_tokens", 125_000)] }));
+  await visit(page, host, "/inbox");
+  const inboxRow = page.locator(".inbox-row").first();
+  await inboxRow.hover();
+  await expect(inboxRow).toHaveCSS("background-color", surface);
+  await page.unrouteAll({ behavior: "wait" });
+}
+
+async function expectLeaseFacts(page: Page, host: Started["host"], lease: string): Promise<void> {
+  await visit(page, host, lease);
+  const facts = page.locator(".facts").first();
+  await expect(facts).toHaveCSS("row-gap", "8px");
+  await expect(facts.locator("dt").first()).toHaveCSS("text-transform", "none");
+  expect(
+    await facts
+      .locator(":scope > div")
+      .first()
+      .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ")[0]),
+  ).toBe("92px");
+  await page.keyboard.press("Escape");
+}
+
+async function expectWatchStyles(page: Page, host: Started["host"], device: string): Promise<void> {
+  await visit(page, host, device);
+  await page.getByRole("link", { name: "Watch" }).click();
+  await expect(page.locator(".phone")).toHaveCSS("background-color", "rgb(0, 0, 0)");
+  await page.getByRole("button", { name: "Stop watching" }).click();
+}
+
 test.describe("colours and sizes the style engine decides", () => {
   test("a worker page's slot squares are 12px tall with a 3px gap, and the meter above ten slots is 4px tall", async ({
     gateway,
@@ -305,71 +402,13 @@ test.describe("colours and sizes the style engine decides", () => {
         ["dark", "rgb(12, 12, 14)", "rgb(27, 27, 31)", "rgb(236, 236, 234)"],
       ] as const) {
         await page.emulateMedia({ colorScheme: theme });
-        await page.goto(host.url);
-        await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
-        await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
-        const signInButton = page.getByRole("button", { name: "Sign in" });
-        await expect(signInButton).toHaveCSS("min-height", "30px");
-        await expect(signInButton).toHaveCSS("border-radius", "8px");
-        await expect(signInButton).toHaveCSS("text-transform", "none");
-        await expect(signInButton).toHaveCSS("font-family", /Geist Variable/);
+        await expectSignInStyles(page, host, background, surface);
         await signIn(page, host.tokens.operator);
-        await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-        await expect(page.locator("body")).toHaveCSS("background-color", background);
-        await expect(page.locator("body")).toHaveCSS("color", text);
-        await expect(page.locator(".chart .recharts-cartesian-axis-tick-value").first()).toHaveCSS(
-          "font-size",
-          "10px",
-        );
-        await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
-        await visit(page, host, "/fleet");
-        await expect(page.locator(".table-card").first()).toHaveCSS("border-radius", "10px");
-        await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
-        await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
-        await expect(page.locator(".search-field-wrap .icon")).toBeVisible();
-        const dark = theme === "dark";
-        const search = page.getByRole("searchbox").first();
-        await expect(search).toHaveCSS(
-          "border-top-color",
-          dark ? "rgb(35, 35, 39)" : "rgb(222, 222, 219)",
-        );
-        await expect(search).toHaveCSS("background-color", background);
-        await expect(search).toHaveCSS("border-top-left-radius", "8px");
-        const status = page.locator("#main .pill").first();
-        await expect(status).toHaveCSS("height", "20px");
-        if (theme === "dark") {
-          const tone = await status.getAttribute("class");
-          const colors = tone?.includes("pill-ok")
-            ? ["rgb(134, 239, 172)", "rgb(27, 46, 36)"]
-            : tone?.includes("pill-warn")
-              ? ["rgb(253, 224, 71)", "rgb(50, 44, 22)"]
-              : tone?.includes("pill-error")
-                ? ["rgb(252, 165, 165)", "rgb(54, 34, 36)"]
-                : ["rgb(185, 185, 194)", "rgb(36, 36, 42)"];
-          await expect(status).toHaveCSS("color", colors[0]!);
-          await expect(status).toHaveCSS("background-color", colors[1]!);
-        }
-        await stubJson(page, "/v1/inbox", () => ({ items: [waitingItem("req_tokens", 125_000)] }));
-        await visit(page, host, "/inbox");
-        const inboxRow = page.locator(".inbox-row").first();
-        await inboxRow.hover();
-        await expect(inboxRow).toHaveCSS("background-color", surface);
-        await page.unrouteAll({ behavior: "wait" });
-        await visit(page, host, pages.lease);
-        const facts = page.locator(".facts").first();
-        await expect(facts).toHaveCSS("row-gap", "8px");
-        await expect(facts.locator("dt").first()).toHaveCSS("text-transform", "none");
-        expect(
-          await facts
-            .locator(":scope > div")
-            .first()
-            .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ")[0]),
-        ).toBe("92px");
-        await page.keyboard.press("Escape");
-        await visit(page, host, pages.device);
-        await page.getByRole("link", { name: "Watch" }).click();
-        await expect(page.locator(".phone")).toHaveCSS("background-color", "rgb(0, 0, 0)");
-        await page.getByRole("button", { name: "Stop watching" }).click();
+        await expectOverviewStyles(page, background, text);
+        await expectFleetStyles(page, host, theme, background);
+        await expectInboxHover(page, host, surface);
+        await expectLeaseFacts(page, host, pages.lease);
+        await expectWatchStyles(page, host, pages.device);
         await page.getByRole("button", { name: "Sign out" }).click();
         await expect(page.getByLabel("Operator token")).toBeVisible();
       }

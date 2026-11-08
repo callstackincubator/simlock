@@ -197,35 +197,44 @@ function FacetGroup(props: {
   );
 }
 
+function isNarrowed(page: EventsPage): boolean {
+  return (
+    page.filter.kinds.length > 0 ||
+    page.filter.problems ||
+    page.filter.workers.length > 0 ||
+    page.query !== ""
+  );
+}
+
+function NothingHeld({ page }: { readonly page: EventsPage }) {
+  return page.end === undefined ? (
+    <p className="muted activity-note">Loading…</p>
+  ) : (
+    <EndRow end={page.end} onRetry={page.loadOlder} />
+  );
+}
+
+function NoMatches({ page }: { readonly page: EventsPage }) {
+  return (
+    <>
+      <Empty>
+        {page.query === ""
+          ? "No events match these filters among those loaded."
+          : `No events match ${page.query} among those loaded.`}
+      </Empty>
+      <Footer page={page} narrowed />
+    </>
+  );
+}
+
 function EventList({ page }: { readonly page: EventsPage }) {
   const { rows } = page;
   const chosenId = page.chosen.kind === "event" ? page.chosen.detail.id : undefined;
   // why: a facet, a search or a range shows few of the events held, so scrolling would not tell how
   // many more are worth loading; the reader asks for each page.
-  const narrowed =
-    page.filter.kinds.length > 0 ||
-    page.filter.problems ||
-    page.filter.workers.length > 0 ||
-    page.query !== "";
-  if (page.held === 0) {
-    return page.end === undefined ? (
-      <p className="muted activity-note">Loading…</p>
-    ) : (
-      <EndRow end={page.end} onRetry={page.loadOlder} />
-    );
-  }
-  if (rows.length === 0) {
-    return (
-      <>
-        <Empty>
-          {page.query === ""
-            ? "No events match these filters among those loaded."
-            : `No events match ${page.query} among those loaded.`}
-        </Empty>
-        <Footer page={page} narrowed />
-      </>
-    );
-  }
+  const narrowed = isNarrowed(page);
+  if (page.held === 0) return <NothingHeld page={page} />;
+  if (rows.length === 0) return <NoMatches page={page} />;
   return (
     <Feed
       key={`${page.query}/${page.range}/${page.filter.kinds.join()}/${page.filter.problems}/${page.filter.workers.join()}`}

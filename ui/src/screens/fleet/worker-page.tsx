@@ -162,10 +162,10 @@ function Gauges({ page }: { readonly page: WorkerPageView }) {
   );
 }
 
-function SideCard({ page }: { readonly page: WorkerPageView }) {
-  const { host, overview } = page;
-  const mono = (text: string) => <span className="mono">{text}</span>;
-  const facts = [
+const mono = (text: string) => <span className="mono">{text}</span>;
+
+function hostFacts(host: WorkerPageView["host"]) {
+  return [
     ...(host.host === undefined
       ? []
       : [
@@ -197,60 +197,79 @@ function SideCard({ page }: { readonly page: WorkerPageView }) {
       value: <span className="mono worker-id">{host.id}</span>,
     },
   ];
+}
+
+function SideSlots({ platforms }: { readonly platforms: WorkerPageView["overview"]["platforms"] }) {
+  if (platforms.length === 0) return null;
+  return (
+    <section>
+      <h2 className="fleet-label">Slots</h2>
+      <div className="worker-side-slots">
+        {platforms.map((platform) => (
+          <div key={platform.name} className="worker-side-row">
+            <span className="worker-side-name">{platform.name}</span>
+            <Slots squares fraction slots={platform.slots} label={platform.label} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SideCapabilities({ host }: { readonly host: WorkerPageView["host"] }) {
+  const { capabilities } = host;
+  if (!Array.isArray(capabilities) || capabilities.length === 0) return null;
+  return (
+    <section>
+      <h2 className="fleet-label">Capabilities</h2>
+      <ul className="worker-caps">
+        {capabilities.map((row) => (
+          <li key={row.name} title={row.reason}>
+            <span>{row.name}</span>
+            <Pill tone={row.tone}>{row.state === "available" ? "on" : row.state}</Pill>
+            {row.reason === undefined ? null : (
+              <span className="muted worker-cap-reason">{row.reason}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function SideBaselines({ host }: { readonly host: WorkerPageView["host"] }) {
+  return (
+    <section>
+      <h2 className="fleet-label">Baselines here</h2>
+      {host.baselines.length === 0 ? (
+        <p className="muted worker-side-none">None.</p>
+      ) : (
+        <ul className="worker-baselines">
+          {host.baselines.map((baseline) => (
+            <li key={baseline.key}>
+              <span className="mono" title={baseline.name}>
+                {baseline.name}
+              </span>
+              <span className="mono">{baseline.stale === undefined ? baseline.size : "stale"}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function SideCard({ page }: { readonly page: WorkerPageView }) {
+  const { host, overview } = page;
   return (
     <aside className="worker-side" aria-label="Slots, host, capabilities and baselines">
-      {overview.platforms.length === 0 ? null : (
-        <section>
-          <h2 className="fleet-label">Slots</h2>
-          <div className="worker-side-slots">
-            {overview.platforms.map((platform) => (
-              <div key={platform.name} className="worker-side-row">
-                <span className="worker-side-name">{platform.name}</span>
-                <Slots squares fraction slots={platform.slots} label={platform.label} />
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <SideSlots platforms={overview.platforms} />
       <section>
         <h2 className="fleet-label">Host</h2>
-        <Facts facts={facts} />
+        <Facts facts={hostFacts(host)} />
       </section>
-      {Array.isArray(host.capabilities) && host.capabilities.length > 0 ? (
-        <section>
-          <h2 className="fleet-label">Capabilities</h2>
-          <ul className="worker-caps">
-            {host.capabilities.map((row) => (
-              <li key={row.name} title={row.reason}>
-                <span>{row.name}</span>
-                <Pill tone={row.tone}>{row.state === "available" ? "on" : row.state}</Pill>
-                {row.reason === undefined ? null : (
-                  <span className="muted worker-cap-reason">{row.reason}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <section>
-        <h2 className="fleet-label">Baselines here</h2>
-        {host.baselines.length === 0 ? (
-          <p className="muted worker-side-none">None.</p>
-        ) : (
-          <ul className="worker-baselines">
-            {host.baselines.map((baseline) => (
-              <li key={baseline.key}>
-                <span className="mono" title={baseline.name}>
-                  {baseline.name}
-                </span>
-                <span className="mono">
-                  {baseline.stale === undefined ? baseline.size : "stale"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <SideCapabilities host={host} />
+      <SideBaselines host={host} />
     </aside>
   );
 }
