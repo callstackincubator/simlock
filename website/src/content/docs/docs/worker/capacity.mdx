@@ -50,7 +50,7 @@ When a lease needs a device, Simlock tries these in order:
 5. At the running limit, shut down an idle device to make room.
 6. Otherwise, wait in the queue until a device frees up. With `--no-wait`, the request fails at once with `NO_CAPACITY`.
 
-When the host is short of memory enough to pause new devices, steps 2 and 3 are skipped and so is rebooting a ready device for an `--except` lease: the request waits, and is served when the pressure lifts. A ready device that fits is still handed over, and nothing is shut down for the wait.
+When the host is short of memory enough to pause new devices, steps 2 and 3 are skipped and so is rebooting a ready device for an `--except` lease or a default-set iOS simulator: the request waits for pressure to lift, or returns `NO_CAPACITY` when it cannot wait. Other fitting ready devices can still be handed over, and nothing is shut down for the wait.
 
 A leased device is never shut down or deleted to make room. When RAM is the only thing in the way, Simlock shuts nothing down for it; the request waits until RAM frees up, for example when an idle device shuts down on its own.
 

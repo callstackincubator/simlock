@@ -80,7 +80,7 @@ when `mayBeGranted`, same pool mode, and `fits(requirement, spec, classOf)` (`co
 same platform, same image tag, model equal or `classOf(model)` equal to the class, OS satisfied.
 `classOf` reads the catalog entry read during resolution; a device record stores no class.
 
-1. A `ready`, unclaimed device that serves → grant.
+1. A `ready`, unclaimed device that serves → grant, unless `except` or the driver requires a reboot before grant. That reboot waits under memory pressure, or returns `NO_CAPACITY` if the request cannot wait.
 2. Unless `noWait`: one the warm pool is booting or creating under an ownerless claim (for a target or learned kind, a released device or a request queued behind) → wait.
 3. A `shutdown` device that serves → boot it.
 4. Else provision the spec, evict an idle device, wait, or `NO_CAPACITY`.
