@@ -155,7 +155,8 @@
   flex: none;
 }
 
-.sidebar-nav .icon {
+.sidebar-nav .icon,
+.sidebar-account .sign-out .icon {
   stroke-width: 1.4px;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -241,6 +242,11 @@
 
 .sidebar-account .sign-out .nav-label {
   display: none;
+}
+
+.sidebar-account .sign-out .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .sign-out {
