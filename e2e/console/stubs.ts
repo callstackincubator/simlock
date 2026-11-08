@@ -110,3 +110,101 @@ export async function stubReplay(page: Page, replay: readonly unknown[]): Promis
     },
   );
 }
+
+const GIB = 2 ** 30;
+
+function capacityOf(limit: number, running: number) {
+  return {
+    atRamBudget: false,
+    limit,
+    maxRunning: limit,
+    overLimit: false,
+    reserved: 0,
+    running,
+    used: running,
+    warm: 0,
+  };
+}
+
+export interface StaticWorker {
+  readonly id: string;
+  readonly label: string;
+  readonly connection?: string;
+  readonly drained?: boolean;
+  // why: how many iOS slots the worker has, which sets whether the page draws squares or a meter.
+  readonly limit?: number;
+  // why: a worker holding one lease on one device.
+  readonly leased?: boolean;
+  // why: no load reading at all, as a worker that has not been read yet; otherwise how full memory
+  // is and the pressure word macOS reports, if any.
+  readonly load?: false | { readonly usedPercent: number; readonly pressure?: string };
+}
+
+// why: a worker as the gateway lists it, written out by hand, so a page's colours and sizes are
+// those of the real component over a reading the test chose, on any machine.
+export function staticWorker(options: StaticWorker): Record<string, unknown> {
+  const now = Date.now();
+  const limit = options.limit ?? 6;
+  const device = {
+    id: `dev_${options.id}`,
+    physical: false,
+    servesDefaultMode: true,
+    spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+    state: options.leased === true ? "leased" : "ready",
+  };
+  const loaded = options.load === false ? undefined : (options.load ?? { usedPercent: 40 });
+  return {
+    capabilities: [],
+    capacity: {
+      android: capacityOf(0, 0),
+      global: {
+        maxRunning: limit,
+        overLimit: false,
+        reserved: 0,
+        running: options.leased === true ? 1 : 0,
+        warm: 0,
+      },
+      ios: capacityOf(limit, options.leased === true ? 1 : 0),
+    },
+    connection: options.connection ?? "connected",
+    devices: [device],
+    drained: options.drained ?? false,
+    health: "running",
+    id: options.id,
+    label: options.label,
+    lastSeenAt: now - 2_000,
+    leases:
+      options.leased === true
+        ? [
+            {
+              deviceId: device.id,
+              grantedAt: now - 3_600_000,
+              id: `lse_${options.id}`,
+              idChosenByRequester: false,
+              lastRenewedAt: now - 60_000,
+              ownerId: "tok_agent",
+              requesterId: "console-e2e",
+              ttlDeadline: now + 600_000,
+              ttlMs: 900_000,
+            },
+          ]
+        : [],
+    ...(loaded === undefined
+      ? {}
+      : {
+          load: {
+            cpu: { busyPercent: 38, cores: 8, limited: false },
+            disk: { freeBytes: 52 * GIB, totalBytes: 100 * GIB },
+            memory: {
+              availableBytes: Math.round(32 * GIB * ((100 - loaded.usedPercent) / 100)),
+              limited: false,
+              swapUsedBytes: 0,
+              totalBytes: 32 * GIB,
+              ...(loaded.pressure === undefined ? {} : { pressure: loaded.pressure }),
+            },
+            readAt: now,
+          },
+        }),
+    version: "0.6.0",
+  };
+}

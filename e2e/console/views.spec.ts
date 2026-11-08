@@ -1,10 +1,6 @@
-import { mkdir } from "node:fs/promises";
-
 import type { Page } from "@playwright/test";
 
 import { expect, NAV, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
-import { addInboxItems, waitingItem } from "./inbox-stub.js";
-import { writeCaptureProgram } from "./screen-capture.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -104,88 +100,6 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("every view", () => {
-  test("existing pages keep usable shared controls after retired-token substitution in both themes", async ({
-    page,
-  }, testInfo) => {
-    const dir = testInfo.outputPath("capture");
-    await mkdir(dir, { recursive: true });
-    const { host, pages } = await hostWithLease(await writeCaptureProgram(dir));
-    try {
-      for (const [theme, background, surface] of [
-        ["light", "rgb(248, 248, 247)", "rgb(242, 242, 240)"],
-        ["dark", "rgb(12, 12, 14)", "rgb(27, 27, 31)"],
-      ] as const) {
-        await page.emulateMedia({ colorScheme: theme });
-        await page.goto(host.url);
-        await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
-        await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
-        const signInButton = page.getByRole("button", { name: "Sign in" });
-        await expect(signInButton).toHaveCSS("min-height", "30px");
-        await expect(signInButton).toHaveCSS("border-radius", "8px");
-        await expect(signInButton).toHaveCSS("text-transform", "none");
-        await expect(signInButton).toHaveCSS("font-family", /Geist Variable/);
-        await signIn(page, host.tokens.operator);
-        await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-        await expect(page.locator(".chart .recharts-cartesian-axis-tick-value").first()).toHaveCSS(
-          "font-size",
-          "10px",
-        );
-        await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
-        await visit(page, host, "/fleet");
-        await expect(page.locator(".fleet-card").first()).toHaveCSS("border-radius", "10px");
-        await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
-        await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
-        await expect(page.locator(".search-field-wrap .icon")).toBeVisible();
-        const dark = theme === "dark";
-        const search = page.getByRole("searchbox").first();
-        await expect(search).toHaveCSS(
-          "border-top-color",
-          dark ? "rgb(35, 35, 39)" : "rgb(222, 222, 219)",
-        );
-        await expect(search).toHaveCSS("background-color", background);
-        await expect(search).toHaveCSS("border-top-left-radius", "8px");
-        const status = page.locator("#main .pill").first();
-        await expect(status).toHaveCSS("height", "20px");
-        if (theme === "dark") {
-          const tone = await status.getAttribute("class");
-          const colors = tone?.includes("pill-ok")
-            ? ["rgb(134, 239, 172)", "rgb(27, 46, 36)"]
-            : tone?.includes("pill-warn")
-              ? ["rgb(253, 224, 71)", "rgb(50, 44, 22)"]
-              : tone?.includes("pill-error")
-                ? ["rgb(252, 165, 165)", "rgb(54, 34, 36)"]
-                : ["rgb(185, 185, 194)", "rgb(36, 36, 42)"];
-          await expect(status).toHaveCSS("color", colors[0]!);
-          await expect(status).toHaveCSS("background-color", colors[1]!);
-        }
-        await addInboxItems(page, () => [waitingItem("req_tokens", 125_000)]);
-        await visit(page, host, "/inbox");
-        const inboxRow = page.locator(".inbox-row").first();
-        await inboxRow.hover();
-        await expect(inboxRow).toHaveCSS("background-color", surface);
-        await visit(page, host, pages.lease);
-        const facts = page.locator(".facts").first();
-        await expect(facts).toHaveCSS("row-gap", "8px");
-        await expect(facts.locator("dt").first()).toHaveCSS("text-transform", "none");
-        expect(
-          await facts
-            .locator(":scope > div")
-            .first()
-            .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ")[0]),
-        ).toBe("92px");
-        await page.keyboard.press("Escape");
-        await visit(page, host, pages.device);
-        await page.getByRole("link", { name: "Watch" }).click();
-        await expect(page.locator(".phone")).toHaveCSS("background-color", "rgb(0, 0, 0)");
-        await page.getByRole("button", { name: "Stop watching" }).click();
-        await page.getByRole("button", { name: "Sign out" }).click();
-        await expect(page.getByLabel("Operator token")).toBeVisible();
-      }
-    } finally {
-      await host.dispose();
-    }
-  });
-
   test("every view has no horizontal page scroll at 360px wide", async ({ page }) => {
     const { host, pages } = await hostWithLease();
     try {

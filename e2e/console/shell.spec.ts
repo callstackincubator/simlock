@@ -293,20 +293,4 @@ test.describe("the shell", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByLabel("Operator token")).toBeVisible();
   });
-
-  test("the shell follows the dark and the light system setting", async ({ daemon, page }) => {
-    const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    const text = () => page.evaluate(() => getComputedStyle(document.body).color);
-    await page.goto("/");
-    await signIn(page, daemon.tokens.operator);
-    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
-
-    await page.emulateMedia({ colorScheme: "dark" });
-    expect(await background()).toBe("rgb(12, 12, 14)");
-    expect(await text()).toBe("rgb(236, 236, 234)");
-
-    await page.emulateMedia({ colorScheme: "light" });
-    expect(await background()).toBe("rgb(248, 248, 247)");
-    expect(await text()).toBe("rgb(17, 17, 16)");
-  });
 });

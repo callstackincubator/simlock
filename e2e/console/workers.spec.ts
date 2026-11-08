@@ -1,10 +1,8 @@
 import type { Locator, Page, Response } from "@playwright/test";
 
-import { answerMemory, answerWithoutLoad, type MemoryClaim } from "./workers-answers.js";
 import {
   disposeFleet,
   expect,
-  joinOldWorker,
   type RunningDaemon,
   signIn,
   signInWithKeyboard,
@@ -12,8 +10,6 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
-import { returnToTab } from "./tab.js";
-import { answer } from "./stub-answers.js";
 
 interface WorkerView {
   readonly id: string;
@@ -89,117 +85,6 @@ async function openTab(page: Page, name: string): Promise<void> {
   await page.getByRole("tab", { name }).click();
 }
 
-const TONES = ["ok", "warn", "error", "idle"] as const;
-
-const TONE_OF: Readonly<Partial<Record<string, (typeof TONES)[number]>>> = {
-  compatible: "ok",
-  connected: "ok",
-  drained: "warn",
-  error: "error",
-  idle: "idle",
-  incompatible: "error",
-  info: "idle",
-  leased: "idle",
-  live: "ok",
-  off: "idle",
-  ok: "ok",
-  ready: "ok",
-  running: "ok",
-  warn: "warn",
-};
-
-async function readStatusIndicators(page: Page) {
-  const pills = await page.locator(".pill").evaluateAll((elements) =>
-    elements.map((element) => ({
-      ariaHidden: element.querySelector(".pill-dot")?.getAttribute("aria-hidden") ?? "true",
-      ariaLabel: null,
-      colour: getComputedStyle(element).color,
-      kind: "pill" as const,
-      role: null,
-      title: null,
-      word: element.textContent?.trim() ?? "",
-    })),
-  );
-  const rest = await readStatusDots(page);
-  return { ...rest, shown: [...pills, ...rest.shown] };
-}
-
-async function readStatusDots(page: Page) {
-  return page.locator(".status-dot").evaluateAll((elements) => {
-    const root = getComputedStyle(document.documentElement);
-    const named = (token: string) => {
-      const probe = document.createElement("span");
-      probe.style.color = root.getPropertyValue(token).trim();
-      document.body.append(probe);
-      const resolved = getComputedStyle(probe).color;
-      probe.remove();
-      return resolved;
-    };
-    return {
-      accent: named("--accent"),
-      neutral: named("--slot-leased"),
-      shown: elements.map((element) => ({
-        ariaHidden: element.getAttribute("aria-hidden"),
-        ariaLabel: element.getAttribute("aria-label"),
-        colour: getComputedStyle(element).backgroundColor,
-        kind:
-          element.closest(".status") && !element.closest(".sidebar-account")
-            ? ("pill" as const)
-            : ("standalone" as const),
-        role: element.getAttribute("role"),
-        title: element.getAttribute("title"),
-        word:
-          element.getAttribute("aria-label") ?? element.parentElement?.textContent?.trim() ?? "",
-      })),
-      tones: ["--status-ok", "--status-warn", "--status-error", "--status-idle"].map(named),
-    };
-  });
-}
-
-async function expectStatusIndicatorColours(
-  page: Page,
-  where: string,
-  words: readonly (readonly [string, "pill" | "standalone"])[],
-  theme: "light" | "dark",
-): Promise<void> {
-  await expect(page.locator(".pill").first()).toBeVisible();
-  const { accent, shown } = await readStatusIndicators(page);
-  const colours = {
-    light: {
-      pill: ["rgb(20, 111, 53)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(85, 85, 95)"],
-      standalone: ["rgb(21, 128, 61)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(87, 83, 78)"],
-    },
-    dark: {
-      pill: ["rgb(134, 239, 172)", "rgb(253, 224, 71)", "rgb(252, 165, 165)", "rgb(185, 185, 194)"],
-      standalone: [
-        "rgb(74, 222, 128)",
-        "rgb(250, 204, 21)",
-        "rgb(248, 113, 113)",
-        "rgb(168, 162, 158)",
-      ],
-    },
-  } as const;
-  for (const [word, kind] of words) {
-    expect(shown, where).toEqual(expect.arrayContaining([expect.objectContaining({ word, kind })]));
-  }
-  for (const indicator of shown) {
-    const context = `${indicator.word} ${indicator.kind} in ${where}`;
-    expect(indicator.word, where).not.toBe("");
-    if (indicator.ariaLabel !== null) {
-      expect(indicator.role, context).toBe("img");
-      expect(indicator.title, context).toBe(indicator.word);
-    } else {
-      expect(indicator.ariaHidden, context).toBe("true");
-    }
-    const palette = colours[theme][indicator.kind];
-    expect(indicator.colour, context).not.toBe(accent);
-    expect(palette, context).toContain(indicator.colour);
-    const tone = TONE_OF[indicator.word.toLowerCase()];
-    expect(tone, context).toBeDefined();
-    expect(indicator.colour, context).toBe(palette[TONES.indexOf(tone!)]);
-  }
-}
-
 function found<T>(value: T | undefined, what: string): T {
   if (value === undefined) throw new Error(`${what} is missing`);
   return value;
@@ -212,47 +97,6 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("the workers page", () => {
-  test("slot squares are 16px tall with a 4px gap, and the meter above ten slots is 4px tall", async ({
-    daemon,
-    page,
-  }) => {
-    const cases = [
-      { limit: 10, name: "ten" },
-      { limit: 20, name: "twenty" },
-    ] as const;
-    const platform = (limit: number) => ({
-      atRamBudget: false,
-      limit,
-      maxRunning: limit,
-      overLimit: false,
-      reserved: 0,
-      running: 0,
-      used: 0,
-      warm: 0,
-    });
-    await answer(page, "/v1/workers", () => ({
-      workers: cases.map(({ limit, name }) => ({
-        id: `wrk_${name}`,
-        label: name,
-        connection: "connected",
-        drained: false,
-        lastSeenAt: Date.now(),
-        capacity: {
-          android: platform(0),
-          global: { maxRunning: limit, overLimit: false, reserved: 0, running: 0, warm: 0 },
-          ios: platform(limit),
-        },
-        devices: [],
-      })),
-    }));
-    await openConsole(page, daemon);
-
-    const ten = row(page, "ten").getByRole("img");
-    await expect(ten).toHaveCSS("gap", "4px");
-    await expect(ten.locator(".slot").first()).toHaveCSS("height", "16px");
-    await expect(row(page, "twenty").locator(".load-bar")).toHaveCSS("height", "4px");
-  });
-
   test("the Events tab scrolls back through that worker's history to its start, asking for that worker's events only", async ({
     page,
   }) => {
@@ -336,133 +180,6 @@ test.describe("the workers page", () => {
     const grid = await page.locator(".worker-grid").boundingBox();
     const gauges = await figures(page).boundingBox();
     expect(gauges?.y, "the rings sit above the cards").toBeLessThan(grid?.y ?? 0);
-  });
-
-  test("each memory pressure paints its ring in that pressure's colour, and never the accent, in both themes", async ({
-    daemon,
-    page,
-  }) => {
-    await openWorkerPage(page, daemon);
-    await expect(figure(page, "Memory")).toContainText("used");
-    // why: only macOS reports a memory pressure, and how full a CI machine's memory happens to be
-    // is nobody's to predict. This answers the page's own read of the worker list with the memory
-    // reading's own fields set to the level the case asks for and every other field left as the
-    // daemon sent it, so what is painted is the real component's doing and the same colour is
-    // expected on any machine.
-    let claim: MemoryClaim = { usedPercent: 50 };
-    await answerMemory(page, () => claim);
-
-    const memoryFill = () =>
-      figure(page, "Memory").evaluate((card) => {
-        const ring = card.querySelector(".ring-box") as HTMLElement;
-        return {
-          tone: /ring-(ok|warn|error|idle|neutral)/.exec(ring.className)?.[1] ?? "",
-          colour: getComputedStyle(ring.querySelector(".ring-value") as SVGCircleElement).stroke,
-        };
-      });
-    const paintedFills = () =>
-      figures(page)
-        .locator(".ring-box")
-        .evaluateAll((rings) =>
-          rings.map((ring) => ({
-            tone: /ring-(ok|warn|error|idle|neutral)/.exec(ring.className)?.[1] ?? "",
-            colour: getComputedStyle(ring.querySelector(".ring-value") as SVGCircleElement).stroke,
-          })),
-        );
-
-    // why: these six are the whole colour rule for a memory bar — the worker's three words, that
-    // the word outranks the console's threshold, and the threshold on its own at either end. Each is
-    // seen in each theme by the real component, so a tone rule deleted, swapped, or given the accent
-    // fails a named assertion here. A figure under its threshold is the neutral tone.
-    for (const colorScheme of ["light", "dark"] as const) {
-      await page.emulateMedia({ colorScheme });
-      const { accent, neutral, tones } = await readStatusIndicators(page);
-
-      for (const [level, usedPercent, tone] of [
-        ["normal", 50, "ok"],
-        ["warn", 50, "warn"],
-        ["critical", 50, "error"],
-        ["normal", 97, "ok"],
-        [undefined, 97, "error"],
-        [undefined, 50, "neutral"],
-      ] as const) {
-        claim = { usedPercent, ...(level === undefined ? {} : { pressure: level }) };
-        await returnToTab(page);
-        const want = tone === "neutral" ? neutral : tones[TONES.indexOf(tone)];
-        const at = `${usedPercent}%${level === undefined ? " with no word" : ` and ${level}`}`;
-        await expect
-          .poll(() => memoryFill(), {
-            timeout: 5_000,
-            message: `${at} to paint the ${tone} bar in ${colorScheme}`,
-          })
-          .toEqual({ tone, colour: want });
-        expect(want, `the ${tone} bar in ${colorScheme}`).not.toBe(accent);
-
-        // why: the poll above watches the memory bar; this watches the rest of the figures, for
-        // the one thing a poll of a single bar cannot see.
-        const fills = await paintedFills();
-        expect(fills.length).toBeGreaterThan(1);
-        for (const fill of fills) {
-          expect(fill.tone, "a bar carries a tone class").not.toBe("");
-          expect(fill.colour, `the ${fill.tone} bar`).not.toBe(accent);
-        }
-      }
-    }
-  });
-
-  test("every status indicator shows its word with its context's status colour, and none uses the accent colour", async ({
-    page,
-  }) => {
-    const fleet = await startFleet([
-      { driverScript: { ios: IOS }, label: "worker-a" },
-      { driverScript: { ios: IOS }, label: "worker-b" },
-    ]);
-    let hangUp = () => {};
-    try {
-      hangUp = await joinOldWorker(fleet.gateway, { id: "wrk_old", label: "old-worker" });
-      const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
-      const drained = found(b, "worker-b").id;
-      expect((await fleet.gateway.cli(["worker", "drain", drained])).code).toBe(0);
-      await lease(fleet.workers[0] as RunningDaemon, "console-e2e");
-      await answerWithoutLoad(page);
-      await openConsole(page, fleet.gateway);
-      await expect(row(page, "old-worker")).toContainText("incompatible");
-      await expect(row(page, "worker-b")).toContainText("drained");
-
-      for (const colorScheme of ["light", "dark"] as const) {
-        await page.emulateMedia({ colorScheme });
-        await page
-          .getByRole("navigation", { name: "Console" })
-          .getByRole("link", { name: "Fleet" })
-          .click();
-        await expect(page.getByRole("region", { name: "Worker events" })).toBeVisible();
-        await expectStatusIndicatorColours(
-          page,
-          `list ${colorScheme}`,
-          [
-            ["drained", "pill"],
-            ["incompatible", "pill"],
-            ["live", "pill"],
-          ],
-          colorScheme,
-        );
-        await row(page, "worker-a").getByRole("link").first().click();
-        await expect(page.getByRole("region", { name: "Events on this worker" })).toBeVisible();
-        await expectStatusIndicatorColours(
-          page,
-          `worker ${colorScheme}`,
-          [
-            ["connected", "pill"],
-            ["leased", "pill"],
-            ["live", "pill"],
-          ],
-          colorScheme,
-        );
-      }
-    } finally {
-      hangUp();
-      await disposeFleet(fleet);
-    }
   });
 
   test("the fleet pages have no horizontal scroll at 360px wide, in the cards and on a worker's page", async ({

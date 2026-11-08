@@ -8,6 +8,7 @@ import {
   type RunningDaemon,
   settled,
   signIn,
+  startDaemon,
   startFleet,
 } from "./fixtures.js";
 import { endingItem, events, leases, stubJson, stubReplay, waitingItem } from "./stubs.js";
@@ -39,6 +40,34 @@ export interface World {
   dispose(): Promise<void>;
 }
 
+// why: the addresses of every kind of page a daemon holding one lease for `console-views` has.
+async function pagesOf(host: RunningDaemon, lease: string): Promise<Pages> {
+  const listed = await host.cli(["worker", "list", "--json"]);
+  const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
+    .workers;
+  const workerPath = `/fleet/${encodeURIComponent(worker?.id ?? "")}`;
+  const replay = await fetch(new URL("/v1/events?since=1h", host.url), {
+    headers: { Authorization: `Bearer ${host.tokens.operator}` },
+  });
+  const first = ((await replay.json()) as { events: { event: string; id: string }[] }).events.find(
+    (entry) => entry.event === "lease.granted",
+  );
+  return {
+    device: `${workerPath}/${encodeURIComponent(worker?.leases[0]?.deviceId ?? "")}?tab=devices`,
+    event: `/activity/${encodeURIComponent(first?.id ?? "")}`,
+    lease: `/leases/${encodeURIComponent(lease)}/`,
+    request: "/queue/req_none",
+    views: NAV.map((entry) => ({ label: entry.label, path: entry.path })),
+    worker: workerPath,
+  };
+}
+
+async function holdLease(host: RunningDaemon): Promise<string> {
+  const granted = await host.cli([...LEASE, "--agent-id", "console-views", "--detach"]);
+  expect(granted.code, granted.stderr).toBe(0);
+  return (granted.json as { lease: { id: string } }).lease.id;
+}
+
 // why: a gateway with one worker, `worker-a`, holding one lease for `console-views`: every kind of
 // page the console has has something to show, and the worker's actions are offered because the
 // daemon is a gateway.
@@ -46,34 +75,38 @@ export async function startWorld(): Promise<World> {
   const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
   try {
     const host = fleet.gateway;
-    const granted = await host.cli([...LEASE, "--agent-id", "console-views", "--detach"]);
-    expect(granted.code, granted.stderr).toBe(0);
-    const lease = (granted.json as { lease: { id: string } }).lease.id;
-    const listed = await host.cli(["worker", "list", "--json"]);
-    const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
-      .workers;
-    const workerPath = `/fleet/${encodeURIComponent(worker?.id ?? "")}`;
-    const replay = await fetch(new URL("/v1/events?since=1h", host.url), {
-      headers: { Authorization: `Bearer ${host.tokens.operator}` },
-    });
-    const first = (
-      (await replay.json()) as { events: { event: string; id: string }[] }
-    ).events.find((entry) => entry.event === "lease.granted");
     return {
       dispose: () => disposeFleet(fleet),
       fleet,
       host,
-      pages: {
-        device: `${workerPath}/${encodeURIComponent(worker?.leases[0]?.deviceId ?? "")}?tab=devices`,
-        event: `/activity/${encodeURIComponent(first?.id ?? "")}`,
-        lease: `/leases/${encodeURIComponent(lease)}/`,
-        request: "/queue/req_none",
-        views: NAV.map((entry) => ({ label: entry.label, path: entry.path })),
-        worker: workerPath,
-      },
+      pages: await pagesOf(host, await holdLease(host)),
     };
   } catch (error: unknown) {
     await disposeFleet(fleet);
+    throw error;
+  }
+}
+
+// why: one worker host holding the same lease, optionally with a screen capture program so its
+// device can be watched.
+export async function startHostWithLease(
+  captureCommand?: string,
+): Promise<{ readonly host: RunningDaemon; readonly pages: Pages }> {
+  const host = await startDaemon("worker", {
+    driverScript: {
+      ios: {
+        ...IOS,
+        ...(captureCommand === undefined ? {} : { screenCaptureCommand: captureCommand }),
+      },
+    },
+    ...(captureCommand === undefined
+      ? {}
+      : { config: { capabilities: { stream: { enabled: true } } } }),
+  });
+  try {
+    return { host, pages: await pagesOf(host, await holdLease(host)) };
+  } catch (error: unknown) {
+    await host.dispose();
     throw error;
   }
 }
