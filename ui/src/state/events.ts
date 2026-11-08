@@ -19,6 +19,7 @@ import {
   writeFilter,
 } from "../model/activity-view";
 import { type ConsoleRange, readRange } from "../model/range";
+import { useSettings } from "./settings";
 import { type ConsoleEvent, type HistoryEnd, type HistoryState, historyEnd } from "../model/events";
 import { readQuery, writeQuery } from "../model/paging";
 import type { LeaseList, LeaseRecord } from "../model/leases";
@@ -105,15 +106,24 @@ export function useEvents(): LoadView<EventsPage> {
   const now = useNow().server;
   const address = useSearch();
   const filter = useMemo(() => readFilter(address), [address]);
-  const range = readRange(address);
+  const defaultRange = useSettings().range;
+  const range = readRange(address, defaultRange);
   const query = readQuery(address);
   const id = itemIdFrom("/activity", usePath());
   // why: the view moves once a minute, not with the clock's every tick.
   const minute = Math.floor(now / MINUTE) * MINUTE;
   const view = useMemo(
     () =>
-      activityView({ events: events ?? [], filter, now: minute, range, search: query, workers }),
-    [events, filter, minute, query, range, workers],
+      activityView({
+        defaultRange,
+        events: events ?? [],
+        filter,
+        now: minute,
+        range,
+        search: query,
+        workers,
+      }),
+    [defaultRange, events, filter, minute, query, range, workers],
   );
   return mapView(loadView(feed), (held) => {
     const chosen = chosenEvent(held, id, { leases, requests, workers }, now);

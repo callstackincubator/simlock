@@ -169,11 +169,13 @@ export function activityView(input: {
   readonly filter: ActivityFilter;
   readonly search: string;
   readonly range: ConsoleRange;
+  // why: the range a link may leave out of its query, because the page reads it back as its default.
+  readonly defaultRange?: ConsoleRange;
   readonly now: number;
 }): ActivityView {
-  const { events, filter, now, range, search, workers } = input;
+  const { defaultRange, events, filter, now, range, search, workers } = input;
   const start = rangeStart(range, now);
-  const query = writeRange(writeFilter(writeQuery("", search), filter), range);
+  const query = writeRange(writeFilter(writeQuery("", search), filter), range, defaultRange);
   const dated = range === "24h" || range === "7d";
   const entries: Entry[] = [];
   let oldest = Number.POSITIVE_INFINITY;

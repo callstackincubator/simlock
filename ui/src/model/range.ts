@@ -9,16 +9,20 @@ export const RANGE_CHOICES: readonly { readonly value: ConsoleRange; readonly la
 
 // why: the range lives in the URL as `?range=`, so a reload or a shared link shows the same figures;
 // a value this console does not know is the default hour.
-export function readRange(search: string): ConsoleRange {
+export function readRange(search: string, fallback: ConsoleRange = "1h"): ConsoleRange {
   const asked = new URLSearchParams(search).get("range");
-  return RANGE_CHOICES.find((choice) => choice.value === asked)?.value ?? "1h";
+  return RANGE_CHOICES.find((choice) => choice.value === asked)?.value ?? fallback;
 }
 
 // why: any other key of the query (paging) is not the range's to touch, so only `range` is set or
 // dropped.
-export function writeRange(search: string, range: ConsoleRange): string {
+export function writeRange(
+  search: string,
+  range: ConsoleRange,
+  fallback: ConsoleRange = "1h",
+): string {
   const params = new URLSearchParams(search);
-  if (range === "1h") params.delete("range");
+  if (range === fallback) params.delete("range");
   else params.set("range", range);
   const text = params.toString();
   return text === "" ? "" : `?${text}`;

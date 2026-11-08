@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import { usePreferences } from "./services";
 
@@ -9,19 +9,18 @@ function wideByDefault(): boolean {
 }
 
 // why: the operator decides the sidebar's width and every page keeps it; with no choice made, a
-// window too narrow for the sidebar, a list and a drawer side by side starts it collapsed.
+// window too narrow for the sidebar, a list and a drawer side by side starts it collapsed. The
+// choice is read from the preferences, so the toggle and the Settings page always agree.
 export function useSidebar(): { readonly collapsed: boolean; readonly toggle: () => void } {
   const preferences = usePreferences();
-  const [collapsed, setCollapsed] = useState(() => {
-    const saved = preferences.sidebar();
-    return saved === undefined ? !wideByDefault() : saved === "narrow";
-  });
+  const saved = useSyncExternalStore(
+    preferences.subscribe,
+    preferences.sidebar,
+    preferences.sidebar,
+  );
+  const collapsed = saved === undefined ? !wideByDefault() : saved === "narrow";
   return {
     collapsed,
-    toggle: () => {
-      const next = !collapsed;
-      preferences.setSidebar(next ? "narrow" : "wide");
-      setCollapsed(next);
-    },
+    toggle: () => preferences.setSidebar(collapsed ? "wide" : "narrow"),
   };
 }
