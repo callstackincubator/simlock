@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 
-import type { Page, Route } from "@playwright/test";
+import type { APIResponse, Page, Route } from "@playwright/test";
 
 import { fetchFull } from "./full-fetch.js";
 
@@ -154,29 +154,80 @@ const events = Array.from({ length: 60 }, (_, index) => ({
 
 type Scenario = "populated" | "empty" | "long" | "refused";
 
+function leasesBody(scenario: Scenario): unknown {
+  const records = scenario === "empty" ? [] : holders.map((_, index) => lease(index));
+  return { leases: scenario === "long" ? [lease(0, "x".repeat(256))] : records };
+}
+
+function leaseBody(): unknown {
+  return {
+    lease: {
+      id: "lse_1",
+      deviceId: "dev_1",
+      udid: "fixture-device",
+      device: "iPhone 16",
+      workerId: "wrk_1",
+      createdAt: new Date(NOW - 120_000).toISOString(),
+      expiresAt: new Date(NOW + 600_000).toISOString(),
+    },
+  };
+}
+
+const BODIES: Readonly<Record<string, (scenario: Scenario) => unknown>> = {
+  "/v1/workers": () => ({ workers: names.map((_, index) => worker(index)) }),
+  "/v1/leases": leasesBody,
+  "/v1/leases/lse_1": leaseBody,
+  "/v1/baselines": () => ({ baselines }),
+  "/v1/events": () => ({ events }),
+  "/v1/inbox": () => ({ items: [] }),
+  "/v1/lease-requests": () => ({ requests: [] }),
+};
+
 function bodyFor(path: string, scenario: Scenario): unknown | undefined {
-  if (path === "/v1/workers") return { workers: names.map((_, index) => worker(index)) };
-  if (path === "/v1/leases") {
-    const records = scenario === "empty" ? [] : holders.map((_, index) => lease(index));
-    return { leases: scenario === "long" ? [lease(0, "x".repeat(256))] : records };
-  }
-  if (path === "/v1/leases/lse_1") {
+  return BODIES[path]?.(scenario);
+}
+
+function statsBody(stats: Record<string, unknown>): unknown {
+  return {
+    ...stats,
+    coversFrom: NOW - 3_600_000,
+    partial: false,
+    window: { from: NOW - 3_600_000, to: NOW },
+    series: Array.from({ length: 60 }, (_, index) => ({
+      at: NOW - (59 - index) * 60_000,
+      leasesHeld: 8 + (index % 7),
+      queueDepth: index % 3,
+      slotsUsed: 10 + (index % 7),
+      slotsMax: 20,
+      waiting: index % 3,
+    })),
+  };
+}
+
+function servesBody(pathname: string, response: APIResponse): boolean {
+  return response.ok() || (pathname === "/v1/leases/lse_1" && response.status() === 404);
+}
+
+async function overrideFor(
+  pathname: string,
+  scenario: Scenario,
+  response: APIResponse,
+): Promise<{ status?: number; json: unknown } | undefined> {
+  if (pathname === "/v1/leases" && scenario === "refused" && response.ok()) {
     return {
-      lease: {
-        id: "lse_1",
-        deviceId: "dev_1",
-        udid: "fixture-device",
-        device: "iPhone 16",
-        workerId: "wrk_1",
-        createdAt: new Date(NOW - 120_000).toISOString(),
-        expiresAt: new Date(NOW + 600_000).toISOString(),
-      },
+      status: 403,
+      json: { error: { code: "FIXTURE_REFUSED", message: "Fixture route refused" } },
     };
   }
-  if (path === "/v1/baselines") return { baselines };
-  if (path === "/v1/events") return { events };
-  if (path === "/v1/inbox") return { items: [] };
-  if (path === "/v1/lease-requests") return { requests: [] };
+  if (pathname === "/v1/identity" && response.ok()) {
+    const identity = (await response.json()) as Record<string, unknown>;
+    return { json: { ...identity, name: "Render operator" } };
+  }
+  if (pathname === "/v1/stats" && response.ok()) {
+    return { json: statsBody((await response.json()) as Record<string, unknown>) };
+  }
+  const body = bodyFor(pathname, scenario);
+  if (body !== undefined && servesBody(pathname, response)) return { status: 200, json: body };
   return undefined;
 }
 
@@ -188,45 +239,8 @@ async function respond(route: Route, scenario: Scenario): Promise<void> {
     date: new Date(NOW).toUTCString(),
   };
   delete headers.etag;
-  const body = bodyFor(pathname, scenario);
-  if (pathname === "/v1/leases" && scenario === "refused" && response.ok()) {
-    await route.fulfill({
-      response,
-      headers,
-      status: 403,
-      json: { error: { code: "FIXTURE_REFUSED", message: "Fixture route refused" } },
-    });
-  } else if (pathname === "/v1/identity" && response.ok()) {
-    const identity = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({ response, headers, json: { ...identity, name: "Render operator" } });
-  } else if (pathname === "/v1/stats" && response.ok()) {
-    const stats = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({
-      response,
-      headers,
-      json: {
-        ...stats,
-        coversFrom: NOW - 3_600_000,
-        partial: false,
-        window: { from: NOW - 3_600_000, to: NOW },
-        series: Array.from({ length: 60 }, (_, index) => ({
-          at: NOW - (59 - index) * 60_000,
-          leasesHeld: 8 + (index % 7),
-          queueDepth: index % 3,
-          slotsUsed: 10 + (index % 7),
-          slotsMax: 20,
-          waiting: index % 3,
-        })),
-      },
-    });
-  } else if (
-    body !== undefined &&
-    (response.ok() || (pathname === "/v1/leases/lse_1" && response.status() === 404))
-  ) {
-    await route.fulfill({ response, headers, status: 200, json: body });
-  } else {
-    await route.fulfill({ response, headers });
-  }
+  const override = await overrideFor(pathname, scenario, response);
+  await route.fulfill({ response, headers, ...override });
 }
 
 export async function renderFixture(page: Page, scenario: Scenario = "populated"): Promise<void> {
