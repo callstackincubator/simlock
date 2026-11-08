@@ -4,67 +4,85 @@ import {
   AgentChip,
   ChoiceChips,
   type Column,
-  focusAfterClosing,
   DataTable,
+  focusAfterClosing,
   Link,
   Loaded,
   Meter,
   Page,
   type Paging,
   SearchField,
-  Toolbar,
 } from "../../ds";
 import {
   LEASE_FILTERS,
   type LeaseRowView,
   useLeaseDrawer,
-  useLeaseMenu,
   useLeases,
+  useWideLayout,
 } from "../../state/leases";
-import { LeaseDrawer } from "./drawer";
+import { LeaseInspector } from "./inspector";
+import { LeaseSummaryPane } from "./summary";
 
 export function LeasesScreen() {
-  const { choose, filter, paging, query, search: setQuery, urlId, view } = useLeases();
+  const { choose, filter, paging, query, search, selectedKey, summary, urlId, view } = useLeases();
   const { close, fromList } = useLeaseDrawer(urlId);
+  const wide = useWideLayout();
+  const finalFocus = () =>
+    focusAfterClosing({
+      fromList,
+      links: "main tbody a",
+      path: `/leases/${encodeURIComponent(urlId ?? "")}`,
+    });
+  const closePane = () => {
+    close();
+    // why: the pane stays mounted beside the table, so focus is sent back to the lease's row here.
+    window.setTimeout(() => finalFocus()?.focus(), 0);
+  };
+  const open = urlId !== undefined;
+  const summaryPane = summary === undefined ? null : <LeaseSummaryPane summary={summary} />;
   return (
-    <Page
-      title="Leases"
-      actions={view.kind === "ready" ? <span className="muted">{view.data.held} held</span> : null}
-    >
-      <Toolbar
-        start={
-          <ChoiceChips
-            legend="Filter leases"
-            choices={LEASE_FILTERS}
-            value={filter}
-            onChange={choose}
-          />
-        }
-        end={<SearchField label="Search leases" value={query} onChange={setQuery} />}
-      />
-      <Loaded view={view}>
-        {(page) => (
-          <LeaseTable
-            rows={page.rows}
-            narrowed={filter !== "all" || query !== ""}
-            paging={paging}
-          />
-        )}
-      </Loaded>
-      {urlId === undefined ? null : (
-        <LeaseDrawer
-          key={urlId}
-          id={urlId}
-          onClose={close}
-          finalFocus={() =>
-            focusAfterClosing({
-              fromList,
-              links: "main tbody a",
-              path: `/leases/${encodeURIComponent(urlId)}`,
-            })
-          }
+    <Page title="Leases">
+      <div className="lease-tools">
+        <ChoiceChips
+          legend="Filter leases"
+          choices={LEASE_FILTERS}
+          value={filter}
+          onChange={choose}
         />
-      )}
+        <SearchField
+          label="Search leases"
+          placeholder="Filter by holder, device, worker"
+          className="lease-search"
+          value={query}
+          onChange={search}
+        />
+      </div>
+      <div className="lease-layout">
+        <div className="lease-main">
+          <Loaded view={view}>
+            {(page) => (
+              <LeaseTable
+                rows={page.rows}
+                narrowed={filter !== "all" || query !== ""}
+                paging={paging}
+                selectedId={selectedKey}
+              />
+            )}
+          </Loaded>
+        </div>
+        {wide ? (
+          <aside className="lease-aside">
+            {open ? <LeaseInspector key={urlId} id={urlId} onClose={closePane} /> : summaryPane}
+          </aside>
+        ) : (
+          <>
+            {open ? null : <aside className="lease-aside">{summaryPane}</aside>}
+            {open ? (
+              <LeaseInspector key={urlId} id={urlId} onClose={close} drawer={{ finalFocus }} />
+            ) : null}
+          </>
+        )}
+      </div>
     </Page>
   );
 }
@@ -79,23 +97,41 @@ const COLUMNS: readonly Column<LeaseRowView>[] = [
         </Link>
       </span>
     ),
-    header: "Holder",
+    header: "Held by",
     mono: true,
   },
-  { cell: (row) => row.sub, header: "Device" },
   {
     cell: (row) => (
-      <>
-        <span className={row.expiring ? "lease-warn" : undefined}>
+      <span className="lease-device" title={row.sub}>
+        <b>{row.model}</b>
+        {row.runtime === undefined ? null : <small className="mono">{row.runtime}</small>}
+      </span>
+    ),
+    header: "Device",
+    width: "170px",
+  },
+  {
+    cell: (row) => (
+      <span className="lease-worker" title={row.worker}>
+        {row.worker ?? "—"}
+      </span>
+    ),
+    header: "Worker",
+    mono: true,
+    width: "150px",
+  },
+  {
+    cell: (row) => (
+      <span className="lease-ttl">
+        <span className={row.expiring ? "mono lease-warn" : "mono"}>
           {row.expiring ? <span className="visually-hidden">expiring, </span> : null}
           {row.remaining}
         </span>
-        <span className="lease-meter">
-          <Meter percent={row.percent} tone={row.expiring ? "warn" : "neutral"} size="thin" />
-        </span>
-      </>
+        <Meter percent={row.percent} tone={row.expiring ? "warn" : "neutral"} size="thin" />
+      </span>
     ),
     header: "Expires in",
+    width: "132px",
   },
 ];
 
@@ -103,9 +139,9 @@ export function LeaseTable(props: {
   readonly rows: readonly LeaseRowView[];
   readonly narrowed: boolean;
   readonly paging: Paging;
+  readonly selectedId?: string | undefined;
 }) {
-  const { narrowed, paging, rows } = props;
-  const entries = useLeaseMenu();
+  const { narrowed, paging, rows, selectedId } = props;
   return (
     <DataTable
       label="Leases"
@@ -113,7 +149,9 @@ export function LeaseTable(props: {
       columns={COLUMNS}
       rowId={(row) => row.key}
       rowTo={(row) => row.to}
-      menu={{ entries, label: (row) => `Actions for ${row.holder}` }}
+      selectedId={selectedId}
+      // why: the footer is the count alone while every lease fits on a page; a longer list needs its pager.
+      footer={paging.total > paging.size ? "pager" : "count"}
       empty={narrowed ? "No leases match this filter or search." : "No leases."}
       paging={paging}
     />

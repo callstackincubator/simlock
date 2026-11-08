@@ -5,7 +5,7 @@ import type { LeaseInspection, LeaseRowView } from "../../state/leases";
 import { leaseRows } from "../../state/leases";
 import type { Paging } from "../../ds";
 import { inConsole } from "../../state/test-support";
-import { LeaseDetail, LeaseEventList, LeaseTitle } from "./drawer";
+import { LeaseEventList, LeaseFacts } from "./inspector";
 import { LeaseTable } from "./index";
 
 function text(html: string): string {
@@ -26,7 +26,13 @@ function row(overrides: Partial<LeaseRowView> = {}): LeaseRowView {
     key: " lse_1",
     model: "iPhone 16",
     percent: 50,
-    remaining: "2 min 5 s",
+    remaining: "02:05",
+    remainingMs: 125_000,
+    held: "1 min",
+    heldMs: 60_000,
+    renewedAgo: "30 s ago",
+    runtime: "iOS 18.4",
+    worker: "mac-mini-1",
     sub: "iPhone 16 · mac-mini-1",
     to: "/leases/lse_1/",
     ...overrides,
@@ -49,8 +55,9 @@ function inspection(overrides: Partial<LeaseInspection> = {}): LeaseInspection {
     id: "lse_1",
     model: "iPhone 16",
     percent: 50,
-    remaining: "2 min 5 s",
+    remaining: "02:05",
     renewed: "30 s ago",
+    kind: "unknown",
     requestId: "req_7d1a",
     runtime: "18.4",
     title: "ci-runner-3",
@@ -79,8 +86,9 @@ describe("the lease list", () => {
     const html = table([row()]);
 
     expect(text(html)).toBe(
-      "Holder Device Expires in Actions ci-runner-3 iPhone 16 · mac-mini-1 2 min 5 s",
+      "Held by Device Worker Expires in ci-runner-3 iPhone 16 iOS 18.4 mac-mini-1 02:05 1–1 of 1",
     );
+    expect(html).not.toContain("Granted");
     expect(html).toContain('href="/leases/lse_1/"');
   });
 
@@ -136,15 +144,14 @@ describe("the lease list", () => {
       expect(html, id).toContain(`chip-agent-${kind}`);
       expect(html, id).toContain(`>${display}</a>`);
       expect(html, id).toContain('href="/leases/lse_1/"');
-      expect(html, id).toContain(`Actions for ${label ?? id}`);
     }
   });
 
   it("says in words that a lease is expiring, not only in colour", () => {
-    const expiring = text(table([row({ expiring: true, remaining: "4 min" })]));
+    const expiring = text(table([row({ expiring: true, remaining: "04:00" })]));
     const fine = text(table([row()]));
 
-    expect(expiring).toContain("expiring, 4 min");
+    expect(expiring).toContain("expiring, 04:00");
     expect(fine).not.toContain("expiring");
   });
 
@@ -154,15 +161,16 @@ describe("the lease list", () => {
   });
 });
 
-describe("a lease's drawer", () => {
-  it("shows the holder as its title with no expiring word while the lease has time", () => {
-    const html = inConsole(<LeaseTitle lease={inspection()} />);
+describe("a lease's inspector", () => {
+  it("lists the device with its runtime, the worker, when it was granted and the ids", () => {
+    const html = text(inConsole(<LeaseFacts lease={inspection()} />));
 
-    expect(html).toContain('<span class="lease-title">ci-runner-3</span>');
-    expect(text(inConsole(<LeaseDetail lease={inspection()} />))).toContain(
-      "iPhone 16 18.4 on mac-mini-1",
-    );
-    expect(text(html)).not.toContain("expiring");
+    expect(html).toContain("Device iPhone 16 · 18.4");
+    expect(html).toContain("Worker mac-mini-1");
+    expect(html).toContain("Granted 1 min 30 s ago · 11:58");
+    expect(html).toContain("Holder tok_1");
+    expect(html).toContain("Lease id lse_1");
+    expect(html).toContain("Device id dev_1");
   });
 
   it("shows a Baseline fact only when the lease was made from a baseline", () => {
@@ -170,47 +178,12 @@ describe("a lease's drawer", () => {
       device: { ...inspection().device, baseline: "e2e-login v1" },
     });
 
-    expect(text(inConsole(<LeaseDetail lease={withBaseline} />))).toContain(
-      "Baseline e2e-login v1",
-    );
-    expect(text(inConsole(<LeaseDetail lease={inspection()} />))).not.toContain("Baseline");
-  });
-
-  it("shows an expiring status next to the title once the lease is under 5 minutes from its end", () => {
-    const html = inConsole(<LeaseTitle lease={inspection({ expiring: true })} />);
-
-    expect(html).toMatch(/ci-runner-3.*status-warn.*expiring/);
-  });
-
-  it("shows every fact the old details panel showed, in its cards", () => {
-    const html = text(inConsole(<LeaseDetail lease={inspection()} />));
-
-    expect(html).toContain("Expires in 2 min 5 s");
-    expect(html).toContain("Held for 1 min 30 s");
-    expect(html).toContain("Renewed 30 s ago");
-    expect(html).toContain("Granted 11:58");
-    expect(html).toContain("Mode slim");
-    expect(html).toContain("Image tag base");
-    expect(html).toContain("Worker mac-mini-1");
-    expect(html).toContain("UDID ABCD-1234");
-    expect(html).toContain("Request req_7d1a");
-    expect(html).toContain("Holder ci-runner-3 tok_1");
-  });
-
-  it("leaves out the request when there is none, and shows a physical device's mode as missing", () => {
-    const { requestId: _dropped, ...bare } = inspection();
-    const { mode: _mode, imageTag: _tag, ...device } = inspection().device;
-
-    const html = text(
-      inConsole(<LeaseDetail lease={{ ...bare, device: { ...device, kind: "Physical" } }} />),
-    );
-
-    expect(html).not.toContain("Request");
-    expect(html).toContain("Mode — Image tag — Kind Physical");
+    expect(text(inConsole(<LeaseFacts lease={withBaseline} />))).toContain("Baseline e2e-login v1");
+    expect(text(inConsole(<LeaseFacts lease={inspection()} />))).not.toContain("Baseline");
   });
 });
 
-describe("a lease's Events tab", () => {
+describe("a lease's recent events", () => {
   it("says there are no events for the lease in the last hour, or lists them", () => {
     expect(text(renderToStaticMarkup(<LeaseEventList rows={[]} />))).toBe(
       "No events for this lease in the last hour.",
@@ -229,6 +202,6 @@ describe("a lease's Events tab", () => {
         ]}
       />,
     );
-    expect(text(listed)).toBe("12:00:00 lease.granted dev_1");
+    expect(text(listed)).toBe("lease.granted · dev_1 12:00:00");
   });
 });

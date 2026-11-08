@@ -1,115 +1,430 @@
-.lease-holder {
-  display: inline-flex;
+/* The Leases page: the table and, beside it, a 420px pane that holds the summary or the inspector.
+ * The pane's width never changes, so selecting a row moves nothing in the table. */
+
+.lease-tools {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: 8px;
+}
+
+.lease-search {
+  width: 290px;
+}
+
+.lease-search .search-field {
+  border-color: var(--border);
+  background: var(--bg);
+  font-size: 12.5px;
+}
+
+.lease-layout {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 12px;
+  min-height: 0;
+}
+
+.lease-main {
+  display: flex;
   min-width: 0;
-  max-width: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.lease-main > .table-card {
+  flex: 1;
+  min-height: 0;
+}
+
+.lease-aside {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.lease-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 0;
+}
+
+/* From 1280px the pane is as tall as the table's row and scrolls inside, so a long list of events
+ * never grows the page or moves the table. */
+@media (min-width: 1280px) {
+  .lease-aside {
+    position: relative;
+  }
+
+  .lease-pane {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 1279.98px) {
+  .lease-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lease-search {
+    width: 100%;
+    max-width: 290px;
+  }
+}
+
+/* The table */
+
+.lease-holder {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
 }
 
 .lease-holder a {
   overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lease-device {
+  display: block;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.lease-device b,
+.lease-device small,
+.lease-worker {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lease-device b {
+  font-weight: 500;
+}
+
+.lease-device small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.lease-worker {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.lease-ttl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lease-ttl > .mono {
+  width: 40px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lease-ttl .load-bar {
+  flex: 1;
+  min-width: 0;
 }
 
 .lease-warn {
   color: var(--status-warn);
 }
 
-.lease-meter {
-  display: block;
-  margin-top: var(--space-1);
-  width: 4rem;
-}
+/* The pane's section heads and lists */
 
-.lease-title {
-  display: inline-flex;
-  flex-wrap: wrap;
+.lease-section-head {
+  display: flex;
   align-items: center;
-  gap: var(--space-3);
-}
-
-.lease-title .status {
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  font-weight: 400;
-}
-
-.lease-cards {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.lease-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.lease-card-title {
+  gap: 8px;
+  height: 38px;
   margin: 0;
+  padding: 0 14px;
+  flex: none;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
 }
 
-.lease-countdown {
+.lease-section-head:first-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.lease-section-rule {
+  border-top: 1px solid var(--border);
+}
+
+.lease-section-end {
+  margin-left: auto;
+  font-size: 11.5px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.lease-note {
   margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xl);
-  font-weight: 500;
-  line-height: 1.2;
+  padding: 12px 14px;
+  font-size: 12.5px;
 }
 
-.lease-figures {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
-  gap: var(--space-3);
-  margin: 0;
-}
-
-.lease-figures dt {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-}
-
-.lease-figures dd {
-  margin: 0;
-  font-size: var(--text-sm);
-}
-
-.lease-line {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.drawer-note {
-  padding: var(--space-4) var(--space-6);
-}
-
-.lease-events {
-  display: flex;
-  flex-direction: column;
+.lease-holders,
+.lease-platforms,
+.lease-list,
+.lease-event-list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.lease-events li {
+.lease-holders {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-1) var(--space-3);
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--text-sm);
+  gap: 9px;
+  padding: 12px 14px;
 }
 
-.lease-events li > :last-child {
-  grid-column: 2;
+.lease-holders li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lease-holders .lease-ellipsis {
+  flex: 1;
+  min-width: 96px;
+  font-size: 12px;
+}
+
+.lease-holders .load-bar {
+  flex: none;
+  width: 96px;
+}
+
+.lease-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lease-holder-count {
+  width: 20px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.lease-platforms {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.lease-platforms li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lease-platform-name {
+  font-weight: 600;
+}
+
+.lease-platform-note {
+  font-size: 11.5px;
+}
+
+.lease-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.lease-list-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.lease-list-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.lease-list-grow {
+  flex: 1;
+}
+
+.lease-list .lease-ttl {
+  width: 104px;
+}
+
+.lease-held {
+  width: 76px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lease-help {
+  margin: auto 0 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+/* The inspector */
+
+.lease-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 14px 0;
+}
+
+.lease-head .chip-agent {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.lease-head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.lease-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.lease-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.lease-close {
+  width: 26px;
+  min-height: 26px;
+}
+
+.lease-close .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.lease-top {
+  padding: 0 14px 14px;
+}
+
+.lease-clock {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 14px 0 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.lease-count {
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.lease-clock-note {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.lease-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lease-release {
+  margin-left: auto;
+}
+
+.lease-facts {
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.lease-facts .facts {
+  font-size: 12.5px;
+  row-gap: 8px;
+}
+
+.lease-id {
+  font-size: 11.5px;
+}
+
+.lease-facts a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.lease-facts a:hover {
+  text-decoration: underline;
+}
+
+.lease-events {
+  border-top: 1px solid var(--border);
+}
+
+.lease-events-title {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+}
+
+.lease-event-list .visual-feed {
+  height: 38px;
+  border-bottom-color: var(--border);
+}
+
+.lease-event-list .visual-feed-time {
+  font-size: 11.5px;
+}
+
+.lease-event-list .visual-feed-event {
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+.lease-note {
+  overflow-wrap: anywhere;
 }

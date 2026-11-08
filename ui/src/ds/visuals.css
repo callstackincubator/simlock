@@ -21,7 +21,7 @@
 
 .ring-figure { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
 .ring-box { position: relative; display: inline-flex; flex: none; }
-.ring-box circle { fill: none; stroke-width: 5px; }
+.ring-box circle { fill: none; stroke-width: var(--ring-stroke, 5px); }
 .ring-track { stroke: var(--track); }
 .ring-value { stroke: var(--slot-leased); stroke-linecap: round; }
 .ring-ok .ring-value { stroke: var(--status-ok); }
@@ -38,6 +38,9 @@
 .visual-log-error { background: color-mix(in srgb, var(--status-error) 6%, var(--surface)); }
 .visual-feed { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 38px; padding: 0 14px; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
 .visual-feed-icon { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; background: var(--surface-2); color: var(--text-muted); }
+.visual-feed-icon-ok { background: var(--pill-ok-bg); color: var(--pill-ok-text); }
+.visual-feed-icon-warn { background: var(--pill-warn-bg); color: var(--pill-warn-text); }
+.visual-feed-icon-error { background: var(--pill-error-bg); color: var(--pill-error-text); }
 .visual-feed-content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .visual-feed-event, .visual-feed-worker, .visual-feed-time { font-family: var(--font-mono); }
 .visual-feed-worker, .visual-feed-time { color: var(--text-muted); }

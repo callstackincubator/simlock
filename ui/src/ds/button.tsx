@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import { Link } from "./link";
 
-export type ButtonVariant = "primary" | "secondary" | "quiet";
+export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
 
 function classOf(variant: ButtonVariant): string {
   return variant === "primary" ? "button" : `button button-${variant}`;
@@ -40,11 +40,15 @@ export function IconButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
 export function ButtonLink(props: {
   readonly to: string;
   readonly variant?: ButtonVariant;
+  readonly className?: string;
   readonly children: ReactNode;
 }) {
-  const { children, to, variant = "secondary" } = props;
+  const { children, className, to, variant = "secondary" } = props;
   return (
-    <Link to={to} className={classOf(variant)}>
+    <Link
+      to={to}
+      className={className === undefined ? classOf(variant) : `${classOf(variant)} ${className}`}
+    >
       {children}
     </Link>
   );

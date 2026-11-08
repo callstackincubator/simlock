@@ -9,6 +9,7 @@ import {
   leaseInspection,
   leasePath,
   leaseRows,
+  leaseSummary,
   leasesOnWorker,
   searchLeaseRows,
   type TokenRecord,
@@ -111,7 +112,7 @@ describe("the lease list rows", () => {
 
     expect(row).toMatchObject({
       id: "lse_1",
-      remaining: "2 min 5 s",
+      remaining: "02:05",
       sub: "iPhone 16 · mac-mini-1",
       to: "/leases/lse_1/",
     });
@@ -240,10 +241,10 @@ describe("a lease's inspection", () => {
       holder: { id: "tok_1", label: "ci-runner-3" },
       id: "lse_1",
       model: "iPhone 16",
-      remaining: "2 min 5 s",
+      remaining: "02:05",
       renewed: "30 s ago",
       requestId: "req_7d1a",
-      runtime: "18.4",
+      runtime: "iOS 18.4",
       title: "ci-runner-3",
       worker: { name: "mac-mini-1", to: "/fleet/wrk_host" },
     });
@@ -403,5 +404,84 @@ describe("the lease search", () => {
     expect(found("SE_BE")).toEqual(["lse_beta"]);
     expect(found("")).toEqual(["lse_alpha", "lse_beta"]);
     expect(found("nothing like it")).toEqual([]);
+  });
+});
+
+describe("the lease summary", () => {
+  it("counts every lease by complete holder identity, so alike shortened names stay apart", () => {
+    const first = "claude-code:3f2a9c8b7d6e5f4a3b2c1d0-1-aaaaaa-same-tail";
+    const second = "claude-code:3f2a9c8b7d6e5f4a3b2c1d0-2-bbbbbb-same-tail";
+    const leases = [
+      lease({ id: "a", requesterId: first }),
+      lease({ id: "b", requesterId: second }),
+      lease({ id: "c", requesterId: second }),
+    ];
+    const rows = leaseRows({ leases, now: NOW, tokens: [], workers: [host()] });
+
+    const summary = leaseSummary(rows, [host()]);
+
+    expect(summary.total).toBe(3);
+    expect(summary.holders.map(({ count, id }) => [id, count])).toEqual([
+      [second, 2],
+      [first, 1],
+    ]);
+    expect(summary.holders[0]?.display).toBe(summary.holders[1]?.display);
+  });
+
+  it("leaves a lease whose device is unknown out of the platform figures", () => {
+    const rows = leaseRows({
+      leases: [lease(), lease({ deviceId: "gone", id: "lse_2" })],
+      now: NOW,
+      tokens: [],
+      workers: [host()],
+    });
+
+    expect(
+      leaseSummary(rows, [host()]).platforms.map(({ held, platform }) => [platform, held]),
+    ).toEqual([["ios", 1]]);
+  });
+
+  it("lists the leases ending within 5 minutes soonest first, and the longest held", () => {
+    const rows = leaseRows({
+      leases: [
+        lease({ id: "late", ttlDeadline: NOW + 200_000 }),
+        lease({ id: "soon", ttlDeadline: NOW + 100_000 }),
+        lease({ id: "fine", ttlDeadline: NOW + 900_000, grantedAt: NOW - 3_600_000 }),
+      ],
+      now: NOW,
+      tokens: [],
+      workers: [host()],
+    });
+
+    const summary = leaseSummary(rows, [host()]);
+
+    expect(summary.ending.map((row) => row.id)).toEqual(["soon", "late"]);
+    expect(summary.endingCount).toBe(2);
+    expect(summary.longest[0]).toMatchObject({ held: "1 h", id: "fine" });
+  });
+});
+
+describe("a lease's countdown and Watch link", () => {
+  it("counts down as minutes and seconds, with hours once there are any", () => {
+    const rows = leaseRows({
+      leases: [lease({ ttlDeadline: NOW + 3_725_000 })],
+      now: NOW,
+      tokens: [],
+      workers: [host()],
+    });
+
+    expect(rows[0]?.remaining).toBe("1:02:05");
+  });
+
+  it("offers Watch at the streaming page of the lease's own worker and device, where it streams", () => {
+    const input = { lease: details(), now: NOW, record: lease(), tokens: [] };
+
+    expect(leaseInspection({ ...input, workers: [host({ id: "wrk/1" })] }).watchTo).toBe(
+      "/fleet/wrk%2F1/devices/dev_1/",
+    );
+    expect(leaseInspection({ ...input, workers: [] }).watchTo).toBeUndefined();
+    expect(
+      leaseInspection({ ...input, workers: [host({ capabilities: [] })] }).watchTo,
+    ).toBeUndefined();
   });
 });

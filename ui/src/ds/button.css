@@ -58,6 +58,26 @@
   color: var(--text);
 }
 
+/* Danger is the error colour on an outline, as the reference's Release is: never filled. */
+.button-danger {
+  border-color: color-mix(in srgb, var(--status-error) 45%, var(--surface));
+  background: var(--surface);
+  color: var(--status-error);
+}
+
+.button-danger:hover {
+  border-color: var(--status-error);
+  background: var(--surface);
+  color: var(--status-error);
+}
+
+/* The small button of a panel's own actions: 26px tall. */
+.button-sm {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 /* A button that does nothing here, such as Next on the last page. It keeps its place and its
  * focus; its text and edge go quiet. */
 .button[aria-disabled="true"],

@@ -1,6 +1,6 @@
 import "./visuals.css";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { Link } from "./link";
 import { Meter } from "./meter";
@@ -28,21 +28,29 @@ export function Ring({
   label,
   size = 54,
   tone = "neutral",
+  stroke = 5,
+  showNumber = true,
 }: {
-  readonly percent?: number;
-  readonly label: string;
+  readonly percent?: number | undefined;
+  readonly label?: string;
   readonly size?: number;
   readonly tone?: Tone | "neutral";
+  // why: a ring beside its own figure (a countdown) draws a thicker line and leaves the number out.
+  readonly stroke?: number;
+  readonly showNumber?: boolean;
 }) {
   const known = percent !== undefined && Number.isFinite(percent);
   const value = known ? `${percent}%` : "—";
   const width = Math.max(46, size);
-  const radius = (width - 5) / 2;
+  const radius = (width - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const fraction = known ? Math.max(0, Math.min(100, percent)) / 100 : 0;
   return (
     <span className="ring-figure">
-      <span className={`ring-box ring-${tone}`}>
+      <span
+        className={`ring-box ring-${tone}`}
+        style={{ "--ring-stroke": `${stroke}px` } as CSSProperties}
+      >
         <svg width={width} height={width} aria-hidden="true">
           <circle className="ring-track" cx={width / 2} cy={width / 2} r={radius} />
           <circle
@@ -54,9 +62,9 @@ export function Ring({
             transform={`rotate(-90 ${width / 2} ${width / 2})`}
           />
         </svg>
-        <span className="ring-number">{value}</span>
+        {showNumber ? <span className="ring-number">{value}</span> : null}
       </span>
-      <span className="ring-label">{label}</span>
+      {label === undefined ? null : <span className="ring-label">{label}</span>}
     </span>
   );
 }
@@ -94,7 +102,9 @@ export function FeedRow({
   detail,
   worker,
   time,
+  tone,
 }: {
+  readonly tone?: Tone | undefined;
   readonly icon: ReactNode;
   readonly event: ReactNode;
   readonly subject: ReactNode;
@@ -104,7 +114,13 @@ export function FeedRow({
 }) {
   return (
     <div className="visual-feed">
-      <span className="visual-feed-icon">{icon}</span>
+      <span
+        className={
+          tone === undefined ? "visual-feed-icon" : `visual-feed-icon visual-feed-icon-${tone}`
+        }
+      >
+        {icon}
+      </span>
       <span className="visual-feed-content">
         <span className="visual-feed-event">{event}</span> <span>{subject}</span>{" "}
         <span>{detail}</span> <span className="visual-feed-worker">{worker}</span>
