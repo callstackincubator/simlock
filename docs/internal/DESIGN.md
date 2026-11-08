@@ -21,7 +21,7 @@ it shows with numbers, statuses and shape, not with sentences about them.
   what people copy or compare: ids, holders, hostnames, versions, timestamps,
   durations, counts, chart axes. Both bundled (`@fontsource-variable/*`).
 - A **label** is Geist Mono 500 in capitals, tracked `0.08em`: card headers,
-  table headers, tab names, group labels in the sidebar, facts' keys. The
+  table headers, tab names and group labels in the sidebar. The
   capitals are CSS (`text-transform`); the text stays as written.
 - Scale, in `rem` from a 16px base:
 
@@ -35,7 +35,7 @@ it shows with numbers, statuses and shape, not with sentences about them.
   | `--text-xl`   | 21px   | a page title                                          |
   | `--text-2xl`  | 28px   | a KPI's number, a countdown (mono)                    |
 
-- Weights: 400 text, 500 labels, mono names and buttons, 600 titles and big
+- Weights: 400 text, 500 labels, names and buttons, 600 titles and big
   numbers, 700 the wordmark. Titles and big numbers track `-0.02em`
   (`-0.03em` at 28px). Line height 1.45 for text, 1 for anything in a
   fixed-height box (pill, button, badge).

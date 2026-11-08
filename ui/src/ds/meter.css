@@ -13,7 +13,7 @@
  * band would outweigh the one line of text it shades. */
 .load-bar {
   display: block;
-  height: 8px;
+  height: 4px;
   max-width: 20rem;
   background: var(--track);
 }

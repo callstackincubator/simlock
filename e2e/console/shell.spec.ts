@@ -251,6 +251,21 @@ test.describe("the shell", () => {
             "",
         ),
       );
+      if (visited.at(-1) === "Collapse sidebar") {
+        await page.keyboard.press("Enter");
+        await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+        await page.keyboard.press("Space");
+        await expect(page.getByRole("button", { name: "Collapse sidebar" })).toBeFocused();
+      }
+      if (visited.at(-1) === "Search or jump to…") {
+        for (const key of ["Enter", "Space"]) {
+          await page.keyboard.press(key);
+          await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
+          await expect(page.locator(".palette")).toHaveCSS("border-radius", "10px");
+          await page.keyboard.press("Escape");
+          await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeFocused();
+        }
+      }
     }
     expect(controls).toEqual([
       "Skip to content",

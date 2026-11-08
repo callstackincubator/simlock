@@ -143,6 +143,14 @@ test("same-source captures use fixed perceptual matching and exact visible state
     expect(result.stateMatches, `${label} exact state`).toBe(false);
     expect(result.matches, `${label} cannot use raster allowance`).toBe(false);
   }
+  await page.setContent('<main style="height: 2000px"><p>Visible geometry</p></main>');
+  const beforeScroll = await visibleState(page);
+  await page.evaluate(() => window.scrollBy(0, 1));
+  const afterScroll = await visibleState(page);
+  const moved = compareCaptures(base!, base!, beforeScroll, afterScroll);
+  expect(moved.changedPixels, "scroll-only geometry uses identical pixels").toBe(0);
+  expect(moved.stateMatches, "scroll-only HTML geometry exact state").toBe(false);
+  expect(moved.matches, "scroll-only geometry cannot use raster allowance").toBe(false);
 });
 
 async function connectedEvent(

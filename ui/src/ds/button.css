@@ -1,17 +1,13 @@
-/* Buttons. Primary is filled orange with dark text, secondary is outlined, quiet is text only. */
-
 .button {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-weight: 500;
-  letter-spacing: var(--label-tracking);
-  text-transform: uppercase;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 0 var(--space-4);
+  min-height: 30px;
+  padding: 0 12px;
   border: 1px solid var(--accent);
-  border-radius: var(--radius);
+  border-radius: 8px;
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--text-sm);
@@ -40,7 +36,7 @@
 
 .button-secondary {
   border-color: var(--border-strong);
-  background: transparent;
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -72,17 +68,16 @@
   cursor: default;
 }
 
-/* A square button that holds an icon alone. It has a button's edge and its 40px height. */
 .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  min-height: 40px;
+  width: 30px;
+  min-height: 30px;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
+  border-radius: 8px;
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
 }

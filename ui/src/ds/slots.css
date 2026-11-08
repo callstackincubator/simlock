@@ -1,5 +1,3 @@
-/* Slots: one square per device a worker can run, shaded by what the device is doing. */
-
 .slots {
   display: flex;
   min-width: 0;
@@ -19,24 +17,24 @@
 }
 
 .slots-sm {
-  gap: 2px;
+  gap: 3px;
 }
 
 .slots-sm .slot {
-  flex: 1 1 0;
-  min-width: 4px;
-  max-width: 9px;
-  height: 9px;
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
 .slots-lg {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(8, 16px);
   gap: var(--space-1);
 }
 
 .slots-lg .slot {
-  height: 22px;
+  width: 16px;
+  height: 16px;
 }
 
 .slot {

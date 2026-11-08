@@ -1,4 +1,25 @@
-.search-field {
+.search-field-wrap {
+  position: relative;
+  display: inline-flex;
   width: 16rem;
   max-width: 100%;
+}
+
+.search-field-wrap .icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.search-field {
+  min-height: 30px;
+  height: 30px;
+  padding-left: 32px;
+  border-radius: 8px;
+  font-family: var(--font-sans);
 }

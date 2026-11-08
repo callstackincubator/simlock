@@ -21,6 +21,7 @@ import {
 } from "./fixtures.js";
 import { returnToTab } from "./tab.js";
 import { answer } from "./stub-answers.js";
+import { fetchFull } from "./full-fetch.js";
 
 interface WorkerView {
   readonly id: string;
@@ -420,11 +421,15 @@ test.describe("the workers page", () => {
       await expect(slots.locator(".load-bar"), name).toHaveCount(limit > 10 ? 1 : 0);
       await expect(slots, name).toHaveText(fraction);
       if (name === "ten") {
+        await expect(slots).toHaveCSS("gap", "3px");
+        await expect(slots.locator(".slot").first()).toHaveCSS("height", "12px");
         await expect(slots.locator('[title="iPhone 16 18.4, absent"]')).toHaveCount(1);
         await expect(slots.locator('[title="iPhone 16 18.4, quarantined"]')).toHaveCount(1);
       }
-      if (name === "twenty")
+      if (name === "twenty") {
         await expect(slots.locator(".load-bar")).toHaveCSS("--load-bar", "10%");
+        await expect(slots.locator(".load-bar")).toHaveCSS("height", "4px");
+      }
       for (const index of [4, 5, 6]) {
         await expect(shown.getByRole("cell").nth(index), name).toHaveText("—");
       }
@@ -1479,11 +1484,34 @@ test.describe("Fleet worker actions", () => {
   test("a worker drawer's button is its first safe action", async ({ page }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "bar-a" }]);
     try {
+      const workersUrl = (url: URL) => url.pathname === "/v1/workers";
+      await page.route(workersUrl, async (route) => {
+        const response = await fetchFull(route);
+        const body = (await response.json()) as { workers: Record<string, unknown>[] };
+        await route.fulfill({
+          response,
+          json: {
+            ...body,
+            workers: body.workers.map((worker) => ({
+              ...worker,
+              version: "0.3.0",
+              latestVersion: "0.4.0",
+              update: null,
+              lastUpdateFailure: null,
+            })),
+          },
+        });
+      });
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
       const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
       await page.goto(new URL(`/fleet/${id}`, fleet.gateway.url).toString());
       await expect(page.getByRole("heading", { level: 1, name: "bar-a" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Drain", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Actions for bar-a" }).click();
+      await expect(page.getByRole("menuitem", { name: "Update…" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.unroute(workersUrl);
       await page.getByRole("button", { name: "Drain", exact: true }).click();
       await expect(page.getByText("bar-a drained", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();

@@ -11,8 +11,7 @@ export interface Slot {
   readonly label: string;
 }
 
-// why: every slot carries its word as a tooltip and in the group's text, so the colours are never
-// the only way to read a worker's devices.
+// why: the group name carries the state counts even when the meter replaces individual tooltips.
 export function Slots(props: {
   readonly slots: readonly Slot[];
   readonly label: string;

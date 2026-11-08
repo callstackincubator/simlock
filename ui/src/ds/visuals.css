@@ -10,15 +10,14 @@
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  color: var(--text-muted);
-  background: var(--surface-2);
+  color: var(--pill-plain-text);
+  background: var(--pill-plain-bg);
 }
 
 .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.pill-ok { color: var(--status-ok); background: color-mix(in srgb, var(--status-ok) 13%, var(--surface)); }
-.pill-warn { color: var(--status-warn); background: color-mix(in srgb, var(--status-warn) 13%, var(--surface)); }
-.pill-error { color: var(--status-error); background: color-mix(in srgb, var(--status-error) 15%, var(--surface)); }
-.pill-idle { color: var(--text-muted); }
+.pill-ok { color: var(--pill-ok-text); background: var(--pill-ok-bg); }
+.pill-warn { color: var(--pill-warn-text); background: var(--pill-warn-bg); }
+.pill-error { color: var(--pill-error-text); background: var(--pill-error-bg); }
 
 .ring-figure { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
 .ring-box { position: relative; display: inline-flex; flex: none; }

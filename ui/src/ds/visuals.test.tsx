@@ -55,6 +55,13 @@ it("shows supplied labels, values and unavailable states in shared visual primit
   const group = renderToStaticMarkup(<GroupHeader count={3}>Healthy</GroupHeader>);
   expect(group).toContain("Healthy");
   expect(group).toContain("3");
+  const nodeGroup = renderToStaticMarkup(
+    <GroupHeader count={<strong>4</strong>}>
+      <em>Node group</em>
+    </GroupHeader>,
+  );
+  expect(nodeGroup).toContain("<em>Node group</em>");
+  expect(nodeGroup).toContain("<strong>4</strong>");
   const banner = renderToStaticMarkup(
     <Banner
       count={2}
@@ -65,6 +72,16 @@ it("shows supplied labels, values and unavailable states in shared visual primit
   );
   for (const value of ["2", "Needs you", "first issue", 'href="/inbox"', "Open Inbox"])
     expect(banner).toContain(value);
+  const nodeBanner = renderToStaticMarkup(
+    <Banner
+      count={1}
+      title={<strong>Node title</strong>}
+      detail={<em>Node detail</em>}
+      action={null}
+    />,
+  );
+  expect(nodeBanner).toContain("<strong>Node title</strong>");
+  expect(nodeBanner).toContain("<em>Node detail</em>");
 
   const tile = renderToStaticMarkup(
     <WorkerTile

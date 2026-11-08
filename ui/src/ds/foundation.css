@@ -59,6 +59,14 @@
   --status-warn: #92570a;
   --status-error: #b91c1c;
   --status-idle: #57534e;
+  --pill-plain-text: #55555f;
+  --pill-plain-bg: #e4e4e8;
+  --pill-ok-text: #146f35;
+  --pill-ok-bg: #d7ecdc;
+  --pill-warn-text: #92570a;
+  --pill-warn-bg: #eee3d2;
+  --pill-error-text: #b91c1c;
+  --pill-error-bg: #f0d7d6;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -95,6 +103,14 @@
     --status-warn: #facc15;
     --status-error: #f87171;
     --status-idle: #a8a29e;
+    --pill-plain-text: #b9b9c2;
+    --pill-plain-bg: #24242a;
+    --pill-ok-text: #86efac;
+    --pill-ok-bg: #1b2e24;
+    --pill-warn-text: #fde047;
+    --pill-warn-bg: #322c16;
+    --pill-error-text: #fca5a5;
+    --pill-error-bg: #362224;
   }
 }
 

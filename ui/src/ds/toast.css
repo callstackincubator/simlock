@@ -15,6 +15,7 @@
   position: relative;
   width: 100%;
   border: 1px solid var(--border-strong);
+  border-radius: 10px;
   background: var(--bg);
   animation: toast-in var(--duration-move) var(--ease);
 }
@@ -75,7 +76,7 @@
   display: none;
 }
 
-/* why: the close keeps its 40px hit area but not its border, so it reads as part of the toast. */
+/* why: the close has no visible edge, so it reads as part of the toast. */
 .toast .toast-close {
   grid-column: 2;
   grid-row: 1;

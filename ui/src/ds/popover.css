@@ -6,6 +6,7 @@
   min-width: 14rem;
   padding: var(--space-3);
   border: 1px solid var(--border-strong);
+  border-radius: 10px;
   background: var(--bg);
   font-size: var(--text-sm);
 }

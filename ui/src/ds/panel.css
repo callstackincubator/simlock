@@ -18,7 +18,7 @@
 .panel-header {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   height: 38px;
   padding: 0 14px;
   border-bottom: 1px solid var(--border);
@@ -38,7 +38,7 @@
 .panel-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   font-size: var(--text-sm);
 }
 

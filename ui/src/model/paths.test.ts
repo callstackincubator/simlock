@@ -84,8 +84,13 @@ describe("a device's streaming page", () => {
       },
       {
         address: streamPath("wrk 1", "dev/1"),
-        case: "a slash in either id",
+        case: "a slash in the device id",
         wants: { deviceId: "dev/1", streaming: true, workerId: "wrk 1" },
+      },
+      {
+        address: streamPath("wrk/1", "dev 1"),
+        case: "a slash in the worker id",
+        wants: { deviceId: "dev 1", streaming: true, workerId: "wrk/1" },
       },
       {
         address: streamPath("a%b", "100%"),

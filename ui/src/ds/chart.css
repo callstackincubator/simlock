@@ -20,7 +20,7 @@
 .chart .recharts-cartesian-axis-tick-value {
   fill: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .chart-area .recharts-area-curve {

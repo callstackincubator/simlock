@@ -67,7 +67,7 @@ test.describe("the console's layout", () => {
     }
   });
 
-  test("a fleet row's ⋯ lies inside its cell with 24px to the table's right edge, and an Inbox row's button has 8px above and below", async ({
+  test("a fleet row's ⋯ lies inside its cell with 10px to the table's right edge, and an Inbox row's button has 8px above and below", async ({
     page,
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
@@ -90,7 +90,7 @@ test.describe("the console's layout", () => {
       });
       expect(box.left).toBeGreaterThanOrEqual(box.cellLeft);
       expect(box.right).toBeLessThanOrEqual(box.cellRight);
-      expect(box.tableRight - box.right).toBe(24);
+      expect(box.tableRight - box.right).toBe(10);
 
       expect((await fleet.gateway.cli(["worker", "drain", id])).code).toBe(0);
       await openPage(page, fleet.gateway, "/inbox", "Inbox", true);
