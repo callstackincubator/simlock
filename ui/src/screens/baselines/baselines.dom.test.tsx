@@ -140,7 +140,7 @@ describe("the Baselines page", () => {
     expect(rows()).toHaveLength(3);
   });
 
-  it("a stale baseline shows its reason word for word, an entry with no size shows a dash, filters and search narrow the groups, and 26 entries page at 25", async () => {
+  it("a stale baseline shows its reason word for word on hover, an entry with no size shows a dash, filters and search narrow the groups, and 26 entries page at 25", async () => {
     const entries = Array.from({ length: 26 }, (_, index) => {
       const name = `base-${String(index).padStart(2, "0")}`;
       if (index > 0) return baseline({ name, sizeBytes: MIB });
@@ -160,7 +160,10 @@ describe("the Baselines page", () => {
     expect(screen.queryByText("base-25")).toBeNull();
     const stale = rowOf("base-00");
     expect(within(stale).getByText("stale")).toBeVisible();
-    expect(stale).toHaveTextContent(REASON);
+    expect(stale).not.toHaveTextContent(REASON);
+    await user.hover(within(stale).getByText("stale"));
+    expect(await screen.findByText(REASON)).toBeVisible();
+    await user.unhover(within(stale).getByText("stale"));
     expect(stale).toHaveTextContent("—");
     expect(screen.getByRole("cell", { name: /^iOS · 26 baselines$/ })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Next" }));
