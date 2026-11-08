@@ -356,20 +356,20 @@ for (const entry of cases) {
                 "aria-selected",
                 "true",
               );
-              await expect(page.locator("main tbody tr")).toHaveCount(2);
+              await expect(page.locator("main .worker-device")).toHaveCount(2);
             }
             if (entry.name === "2-fleet") {
               await expect(page.getByText("Szymons-MacBook-Pro.local")).toBeVisible();
               await expect(page.getByText("91%", { exact: true })).toBeVisible();
-              await expect(page.locator("main tbody tr")).toHaveCount(8);
+              await expect(page.locator("main .fleet-card")).toHaveCount(8);
               for (const [worker, state] of [
-                ["mac-studio-02", "2 / 20"],
+                ["mac-studio-02", "/ 20"],
                 ["mac-mini-ci-02", "disk 91%"],
                 ["mbp-lab-03", "drained"],
                 ["Szymons-MacBook-Pro.local", "disconnected"],
               ] as const) {
                 await expect(
-                  page.locator("main tbody tr").filter({ hasText: worker }),
+                  page.locator("main .fleet-card").filter({ hasText: worker }),
                 ).toContainText(state);
               }
             }

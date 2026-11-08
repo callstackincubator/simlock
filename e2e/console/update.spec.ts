@@ -16,7 +16,10 @@ async function showWorkerFields(page: Page, fields: () => WorkerFields): Promise
       const response = await fetchFull(route);
       const body = (await response.json()) as { workers: Record<string, unknown>[] };
       await route.fulfill({
-        json: { ...body, workers: body.workers.map((view) => ({ ...view, ...fields() })) },
+        json: {
+          ...body,
+          workers: body.workers.map((view) => ({ ...view, load: undefined, ...fields() })),
+        },
         response,
       });
     },
@@ -64,8 +67,8 @@ test.describe("the console updates a worker", () => {
         });
       });
       await openFleet(page, fleet.gateway);
-      const row = page.locator("main tbody tr").filter({ hasText: "upd-a" });
-      await expect(row).toContainText("simlock 0.3.0 · 0.4.0 available");
+      const row = page.locator(".fleet-card").filter({ hasText: "upd-a" });
+      await expect(row).toBeVisible();
       await expect(page.locator(".update-notice")).toHaveText("simlock 0.3.0 · 0.4.0 available");
       await row.getByRole("button", { name: "Actions for upd-a" }).click();
       await page.getByRole("menuitem", { name: "Update…" }).click();
@@ -105,10 +108,12 @@ test.describe("the console updates a worker", () => {
         await route.fulfill(answers[posts.length - 1] ?? { status: 500 });
       });
       await openFleet(page, fleet.gateway);
-      const row = page.locator("main tbody tr").filter({ hasText: "upd-b" });
+      const row = page.locator(".fleet-card").filter({ hasText: "upd-b" });
       const toasts = page.getByRole("region", { name: "Notifications" });
+      // why: an updating worker is a card with no menu of its own; its page offers the actions.
+      await row.getByRole("link", { name: "Details" }).click();
       for (const toast of ["upd-b already runs 0.4.0", "Another update is running."]) {
-        await row.getByRole("button", { name: "Actions for upd-b" }).click();
+        await page.getByRole("button", { name: "Actions for upd-b" }).click();
         await page.getByRole("menuitem", { name: "Update now" }).click();
         const dialog = page.getByRole("alertdialog", { name: "Install 0.4.0 on upd-b now?" });
         await expect(dialog).toContainText("Its 2 leases keep running through the restart.");

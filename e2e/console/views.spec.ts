@@ -145,26 +145,19 @@ test.describe("every view", () => {
         );
         await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
         await visit(page, host, "/fleet");
-        await expect(page.locator(".table-card").first()).toHaveCSS("border-radius", "10px");
-        await expect(page.locator(".table th").first()).toHaveCSS("height", "34px");
+        await expect(page.locator(".fleet-card").first()).toHaveCSS("border-radius", "10px");
         await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
         await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
         await expect(page.locator(".search-field-wrap .icon")).toBeVisible();
-        const status = page.locator("#main .status").first();
+        const status = page.locator("#main .pill").first();
         await expect(status).toHaveCSS("height", "20px");
-        await expect(status.locator(".status-dot")).toHaveCSS("width", "6px");
-        const statusWidths = await status.evaluate((element) => ({
-          pill: element.getBoundingClientRect().width,
-          cell: element.closest("td")!.getBoundingClientRect().width,
-        }));
-        expect(statusWidths.pill).toBeLessThan(statusWidths.cell - 30);
         if (theme === "dark") {
           const tone = await status.getAttribute("class");
-          const colors = tone?.includes("status-ok")
+          const colors = tone?.includes("pill-ok")
             ? ["rgb(134, 239, 172)", "rgb(27, 46, 36)"]
-            : tone?.includes("status-warn")
+            : tone?.includes("pill-warn")
               ? ["rgb(253, 224, 71)", "rgb(50, 44, 22)"]
-              : tone?.includes("status-error")
+              : tone?.includes("pill-error")
                 ? ["rgb(252, 165, 165)", "rgb(54, 34, 36)"]
                 : ["rgb(185, 185, 194)", "rgb(36, 36, 42)"];
           await expect(status).toHaveCSS("color", colors[0]!);

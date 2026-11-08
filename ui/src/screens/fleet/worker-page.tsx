@@ -375,7 +375,7 @@ function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
   if (warm === undefined) return null;
   return (
     <div className="worker-warm">
-      <section>
+      <section aria-label="Warm pool facts">
         <h2 className="fleet-label">Warm pool</h2>
         {warm.pool === undefined ? (
           <p className="muted">Not reported.</p>
@@ -399,7 +399,7 @@ function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
           </>
         )}
       </section>
-      <section>
+      <section aria-label="Installs in progress">
         <h2 className="fleet-label">Installs in progress</h2>
         <Installs rows={warm.installs} />
       </section>

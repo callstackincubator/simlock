@@ -146,7 +146,7 @@
   font-weight: 400;
 }
 
-.panel .facts + .table-card {
+.worker-warm .facts + .table-card {
   margin-top: var(--space-4);
   border-top: 1px solid var(--border);
 }

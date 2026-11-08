@@ -266,11 +266,10 @@ test.describe("the device drawer's Screen tab", () => {
         const other = (await deviceIds(host)).find((id) => id !== watched) ?? "";
         expect(other).not.toBe("");
         await page
-          .getByRole("region", { name: "Devices", exact: true })
-          .getByRole("row")
-          .filter({ hasText: other })
-          .getByRole("link")
-          .first()
+          .getByRole("list", { name: "Devices", exact: true })
+          .locator(".worker-device")
+          .filter({ has: page.locator(`a[href*="/${encodeURIComponent(other)}?"]`) })
+          .locator(".worker-device-name")
           .click();
         await expect(drawer(page).getByRole("tab", { name: "Details" })).toHaveAttribute(
           "aria-selected",

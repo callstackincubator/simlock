@@ -184,9 +184,7 @@ export function Page(props: {
           <Link className="page-crumb" to={crumb.to}>
             {crumb.label}
           </Link>
-          <span className="page-crumb" aria-hidden="true">
-            {" / "}
-          </span>
+          <span className="page-crumb">{" / "}</span>
         </>
       )}
       {title}

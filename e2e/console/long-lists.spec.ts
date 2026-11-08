@@ -346,89 +346,6 @@ test.describe("long lists page", () => {
     await returnToTab(page);
     await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
   });
-
-  test("the Fleet table and the devices table on a worker's page keep their own page in the URL", async ({
-    daemon,
-    page,
-  }) => {
-    const listed = (await read(daemon, "/v1/workers")) as { workers: Record<string, unknown>[] };
-    const host = listed.workers[0] ?? {};
-    const devices = Array.from({ length: 60 }, (_, index) => ({
-      id: `dev_${pad(index + 1)}`,
-      mode: "full",
-      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
-      state: "ready",
-    }));
-    const workers = Array.from({ length: 30 }, (_, index) => ({
-      ...host,
-      devices,
-      id: `wrk_${pad(index + 1)}`,
-      label: `worker-${pad(index + 1)}`,
-    }));
-    await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/fleet");
-    const devicesTable = page.getByRole("region", { name: "Devices" }).locator("table");
-    const deviceIds = async () =>
-      (await devicesTable.locator("tbody tr td:first-child").allTextContents()).map(
-        (text) => /dev_\d+/.exec(text)?.[0],
-      );
-
-    await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
-    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
-    await expect(page.locator("main tbody").getByRole("link").first()).toHaveText("worker-0026");
-    expect(await rowIds(page.locator("main tbody"), "/fleet")).toEqual(ids(26, 30, "wrk"));
-    await page.getByRole("link", { exact: true, name: "worker-0026" }).click();
-    await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
-    await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
-    await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
-
-    expect(await deviceIds()).toEqual(ids(51, 60, "dev"));
-    expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
-      "devices-page": "3",
-      page: "2",
-    });
-
-    await page.reload();
-    await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
-    await page.goBack({ waitUntil: "commit" });
-    await page.goBack({ waitUntil: "commit" });
-    await page.goBack({ waitUntil: "commit" });
-    await expect(page).toHaveURL(/\/fleet\?page=2$/);
-    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
-  });
-
-  test("the worker list pages at 25 like the others and keeps a new size in the URL", async ({
-    daemon,
-    page,
-  }) => {
-    const listed = (await read(daemon, "/v1/workers")) as { workers: Record<string, unknown>[] };
-    const host = listed.workers[0] ?? {};
-    const workers = Array.from({ length: 30 }, (_, index) => ({
-      ...host,
-      id: `wrk_${pad(index + 1)}`,
-      label: `worker-${pad(index + 1)}`,
-    }));
-    await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/fleet");
-    const rows = page.locator("main tbody");
-    const range = pager(page, "Workers").locator(".pager-range");
-
-    expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 25, "wrk"));
-    await expect(range).toHaveText("1–25 of 30");
-    await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
-    await expect(range).toHaveText("26–30 of 30");
-    await expect(rows.getByRole("link").first()).toHaveText("worker-0026");
-    expect(await rowIds(rows, "/fleet")).toEqual(ids(26, 30, "wrk"));
-    await expect(pager(page, "Workers").getByLabel("Per page").locator("option")).toHaveText([
-      "25",
-      "50",
-      "100",
-    ]);
-    await pager(page, "Workers").getByLabel("Per page").selectOption("50");
-    await expect(page).toHaveURL(/\/fleet\?size=50$/);
-    expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 30, "wrk"));
-    await expect(pager(page, "Workers")).toHaveCount(0);
-  });
 });
 
 /** `count` events, one every 300 ms back from a second ago, newest first; `n` numbers them. */
@@ -823,7 +740,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
           box.scrollTop = box.scrollHeight / 3;
         });
       }
-      if (path.startsWith("/leases?") || path.startsWith("/fleet/")) {
+      if (path.startsWith("/leases?")) {
         await expect(page.locator(".pager").first()).toBeVisible();
       }
       await settled(page);

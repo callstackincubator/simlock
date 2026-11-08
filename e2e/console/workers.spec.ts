@@ -132,12 +132,14 @@ async function openWorkerPage(page: Page, daemon: RunningDaemon): Promise<void> 
   const view = found((await workerList(daemon))[0], "the host's worker");
   await row(page, view.label ?? view.id)
     .getByRole("link")
+    .first()
     .click();
   await expect(title(page, view.label ?? view.id)).toBeVisible();
 }
 
+// why: a worker is a card or a tile on the Fleet page, found by the link that carries its name.
 function row(page: Page, name: string): Locator {
-  return page.getByRole("row").filter({ has: page.getByRole("link", { exact: true, name }) });
+  return page.locator(".fleet-card").filter({ has: page.getByRole("link", { exact: true, name }) });
 }
 
 async function openPage(page: Page, daemon: RunningDaemon, path: string, title: string) {
@@ -147,7 +149,7 @@ async function openPage(page: Page, daemon: RunningDaemon, path: string, title: 
 }
 
 function rowOf(page: Page, name: string): Locator {
-  return page.locator("main tbody tr").filter({ hasText: name });
+  return page.locator(".fleet-card").filter({ hasText: name });
 }
 
 async function waitForDisconnected(gateway: RunningDaemon): Promise<void> {
@@ -162,16 +164,8 @@ async function waitForDisconnected(gateway: RunningDaemon): Promise<void> {
   );
 }
 
-async function startWithStoppedWorker(label: string) {
-  const fleet = await startFleet([{ driverScript: { ios: IOS }, label }]);
-  const [stopped] = fleet.workers as [RunningDaemon];
-  await stopped.stop();
-  await waitForDisconnected(fleet.gateway);
-  return fleet;
-}
-
 function title(page: Page, name: string): Locator {
-  return page.getByRole("heading", { level: 1, name, exact: true });
+  return page.getByRole("heading", { level: 1, name: `Fleet / ${name}`, exact: true });
 }
 
 function figures(page: Page): Locator {
@@ -180,8 +174,8 @@ function figures(page: Page): Locator {
 
 function figure(page: Page, label: string): Locator {
   return figures(page)
-    .locator(".card")
-    .filter({ has: page.getByText(label, { exact: true }) });
+    .locator(".worker-gauge")
+    .filter({ has: page.locator(".fleet-label", { hasText: label }) });
 }
 
 function fact(scope: Locator, label: string): Locator {
@@ -190,12 +184,6 @@ function fact(scope: Locator, label: string): Locator {
 
 async function openTab(page: Page, name: string): Promise<void> {
   await page.getByRole("tab", { name }).click();
-}
-
-interface PaintedGauge {
-  readonly track: number;
-  readonly fill: number;
-  readonly sliding: boolean;
 }
 
 // why: taken from the worker's own reading rather than from the page, so the console cannot agree
@@ -211,45 +199,42 @@ function gaugePercents(load: NonNullable<WorkerView["load"]>): readonly number[]
   ];
 }
 
-function paintedGauges(scope: Locator): Promise<readonly PaintedGauge[]> {
-  return scope.locator(".load-bar").evaluateAll((bars) =>
-    bars.map((bar) => {
-      const fill = bar.firstElementChild as HTMLElement;
-      // why: the fill's own ease means a width read mid-slide sits between two levels, so this asks
-      // the browser whether a transition is still running and reports it with the width.
-      return {
-        track: bar.getBoundingClientRect().width,
-        fill: fill.getBoundingClientRect().width,
-        sliding: fill.getAnimations().some((animation) => animation.playState === "running"),
-      };
-    }),
-  );
-}
-
-function fillsMatch(painted: readonly PaintedGauge[], percents: readonly number[]): boolean {
-  return (
-    painted.length === percents.length &&
-    painted.every((bar, index) => {
-      const percent = percents[index] ?? -1;
-      return Math.abs(bar.fill - (bar.track * percent) / 100) <= 1;
-    })
-  );
-}
-
 const TONES = ["ok", "warn", "error", "idle"] as const;
 
 const TONE_OF: Readonly<Partial<Record<string, (typeof TONES)[number]>>> = {
   compatible: "ok",
   connected: "ok",
   drained: "warn",
+  error: "error",
+  idle: "idle",
   incompatible: "error",
-  leased: "ok",
+  info: "idle",
+  leased: "idle",
+  live: "ok",
   off: "idle",
+  ok: "ok",
   ready: "ok",
   running: "ok",
+  warn: "warn",
 };
 
 async function readStatusIndicators(page: Page) {
+  const pills = await page.locator(".pill").evaluateAll((elements) =>
+    elements.map((element) => ({
+      ariaHidden: element.querySelector(".pill-dot")?.getAttribute("aria-hidden") ?? "true",
+      ariaLabel: null,
+      colour: getComputedStyle(element).color,
+      kind: "pill" as const,
+      role: null,
+      title: null,
+      word: element.textContent?.trim() ?? "",
+    })),
+  );
+  const rest = await readStatusDots(page);
+  return { ...rest, shown: [...pills, ...rest.shown] };
+}
+
+async function readStatusDots(page: Page) {
   return page.locator(".status-dot").evaluateAll((elements) => {
     const root = getComputedStyle(document.documentElement);
     const named = (token: string) => {
@@ -287,7 +272,7 @@ async function expectStatusIndicatorColours(
   words: readonly (readonly [string, "pill" | "standalone"])[],
   theme: "light" | "dark",
 ): Promise<void> {
-  await expect(page.locator(".status-dot").first()).toBeVisible();
+  await expect(page.locator(".pill").first()).toBeVisible();
   const { accent, shown } = await readStatusIndicators(page);
   const colours = {
     light: {
@@ -330,12 +315,6 @@ function found<T>(value: T | undefined, what: string): T {
   return value;
 }
 
-function runningOverLimit(view: WorkerView): string {
-  const ios = view.capacity?.ios ?? { limit: 0, running: 0 };
-  const android = view.capacity?.android ?? { limit: 0, running: 0 };
-  return `${ios.running + android.running} / ${ios.limit + android.limit}`;
-}
-
 async function incompatibleWorker(gateway: RunningDaemon, id: string): Promise<WorkerView> {
   let view: WorkerView | undefined;
   await waitFor(
@@ -362,34 +341,17 @@ function expectedRow(view: WorkerView): {
   readonly bars: number;
 } {
   const name = view.label ?? view.id;
-  const system = [
-    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
-    view.version === undefined ? "" : `simlock ${view.version}`,
-  ]
-    .filter((part) => part !== "")
-    .join(" · ");
+  const system = view.host === undefined ? [] : [`${view.host.os} ${view.host.osVersion}`];
   if (view.connection === "incompatible") {
-    return {
-      bars: 0,
-      slots: "No devices",
-      text: [`${name}${system}`, "incompatible", "", "—", "—", "—", "—", ""],
-    };
+    return { bars: 0, slots: "", text: [name, "incompatible"] };
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
+  const lease = `${leased} ${leased === 1 ? "lease" : "leases"}`;
   return {
     bars: 3,
     slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,
-    text: [
-      `${name}${system}`,
-      view.drained ? "drained" : "connected",
-      limit > 10 ? `${leased} / ${limit}` : "",
-      runningOverLimit(view),
-      "12%",
-      "50%",
-      "40%",
-      "",
-    ],
+    text: [name, ...system, lease, view.drained ? "drained" : `${leased} / ${limit}`],
   };
 }
 
@@ -399,12 +361,12 @@ test.describe("the workers page", () => {
     page,
   }) => {
     const cases = [
-      { name: "zero", limit: 0, states: [], label: "No devices", fraction: "" },
+      { name: "zero", limit: 0, states: [], label: "", fraction: "" },
       {
         name: "ten",
         limit: 10,
         states: ["leased", "leased", "absent", "quarantined"],
-        label: "2 leased, 1 absent, 1 quarantined, 6 free",
+        label: "iOS: 2 leased, 1 absent, 1 quarantined, 6 free",
         fraction: "",
       },
       {
@@ -449,6 +411,10 @@ test.describe("the workers page", () => {
     await openConsole(page, daemon);
     for (const { name, limit, label, fraction } of cases) {
       const shown = row(page, name);
+      if (limit === 0) {
+        await expect(shown.locator(".slots"), name).toHaveCount(0);
+        continue;
+      }
       const slots = shown.getByRole("img", { name: label, exact: true });
       await expect(slots, name).toHaveCount(1);
       if (limit > 0) await expect(slots, name).toBeVisible();
@@ -456,8 +422,8 @@ test.describe("the workers page", () => {
       await expect(slots.locator(".load-bar"), name).toHaveCount(limit > 10 ? 1 : 0);
       await expect(slots, name).toHaveText(fraction);
       if (name === "ten") {
-        await expect(slots).toHaveCSS("gap", "3px");
-        await expect(slots.locator(".slot").first()).toHaveCSS("height", "12px");
+        await expect(slots).toHaveCSS("gap", "4px");
+        await expect(slots.locator(".slot").first()).toHaveCSS("height", "16px");
         await expect(slots.locator('[title="iPhone 16 18.4, absent"]')).toHaveCount(1);
         await expect(slots.locator('[title="iPhone 16 18.4, quarantined"]')).toHaveCount(1);
       }
@@ -465,13 +431,11 @@ test.describe("the workers page", () => {
         await expect(slots.locator(".load-bar")).toHaveCSS("--load-bar", "10%");
         await expect(slots.locator(".load-bar")).toHaveCSS("height", "4px");
       }
-      for (const index of [4, 5, 6]) {
-        await expect(shown.getByRole("cell").nth(index), name).toHaveText("—");
-      }
+      await expect(shown.locator(".fleet-metric b"), name).toHaveText(["—", "—", "—"]);
     }
   });
 
-  test("the Fleet table lists every worker with its name, system, state word, slots group and its label, running of limit, and CPU, memory and disk", async ({
+  test("Fleet shows every worker as a card or a tile with its name, state word, slots and leases, and the amended Add worker link", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -494,18 +458,21 @@ test.describe("the workers page", () => {
       await answerWithLoad(page, { cpu: 12, disk: 40, memory: 50 });
       await openConsole(page, fleet.gateway);
 
-      await expect(page.getByRole("row")).toHaveCount(listed.length + 1);
-      await expect(page.getByText(`${listed.length - 1} / ${listed.length} up`)).toBeVisible();
+      await expect(page.locator(".fleet-card")).toHaveCount(listed.length);
+      await expect(page.getByRole("link", { name: "Add worker" })).toHaveAttribute(
+        "href",
+        "https://callstackincubator.github.io/simlock/docs/gateway/joining-workers",
+      );
+      await expect(page.getByRole("region", { name: "Needs attention" })).toContainText(
+        "old-worker",
+      );
       for (const view of listed) {
         const name = view.label ?? view.id;
         const want = expectedRow(view);
         const shown = row(page, name);
-        await expect(shown.getByRole("cell"), name).toHaveText(want.text);
-        await expect(shown.getByRole("cell").nth(2).getByRole("img"), name).toHaveAttribute(
-          "aria-label",
-          want.slots,
-        );
-        await expect(shown.locator(".worker-meter .load-bar"), name).toHaveCount(want.bars);
+        for (const text of want.text) await expect(shown, name).toContainText(text);
+        await expect(shown.locator(".fleet-metric .load-bar"), name).toHaveCount(want.bars);
+        if (want.slots !== "") await expect(shown.getByRole("img").first(), name).toBeVisible();
       }
     } finally {
       hangUp();
@@ -513,7 +480,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("clicking a row opens /fleet/<id> with the worker's name as the page heading, its state word and system beside it, and the Devices tab selected", async ({
+  test("clicking a worker's name opens /fleet/<id> with Fleet / name as the page heading, its state word beside it, the system beneath, and the Devices tab selected", async ({
     daemon,
     page,
   }) => {
@@ -522,23 +489,20 @@ test.describe("the workers page", () => {
 
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
-    for (const index of [4, 5, 6]) {
-      await expect(
-        row(page, host.label ?? host.id)
-          .getByRole("cell")
-          .nth(index),
-      ).toHaveText("—");
-    }
+    await expect(row(page, host.label ?? host.id).locator(".fleet-metric b")).toHaveText([
+      "—",
+      "—",
+      "—",
+    ]);
     await row(page, host.label ?? host.id)
-      .getByRole("cell")
-      .nth(3)
+      .getByRole("link")
+      .first()
       .click();
 
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
-    await expect(
-      page.getByRole("heading", { level: 1, name: host.label ?? host.id, exact: true }),
-    ).toBeVisible();
-    await expect(page.locator(".worker-line")).toHaveText(`connected · ${os} ${osVersion}`);
+    await expect(title(page, host.label ?? host.id)).toBeVisible();
+    await expect(page.locator(".page-title-row .pill")).toHaveText("connected");
+    await expect(page.locator(".page-note")).toContainText(`${os} ${osVersion}`);
     await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -558,7 +522,7 @@ test.describe("the workers page", () => {
 
       await openConsole(page, gateway);
       await expect(row(page, "old-worker")).toContainText("incompatible");
-      await row(page, "old-worker").getByRole("link").click();
+      await row(page, "old-worker").getByRole("link").first().click();
 
       const expected =
         `incompatible gateway ${gatewayRange.min}–${gatewayRange.max}, ` +
@@ -566,16 +530,15 @@ test.describe("the workers page", () => {
       await expect(page.getByRole("tabpanel")).toHaveText(
         "No devices: the gateway cannot read this worker.",
       );
-      await openTab(page, "Host");
       await expect(fact(page.locator("#main"), "Protocol")).toHaveText(expected);
-      await expect(fact(page.locator("#main"), "Connection")).toHaveText("incompatible");
+      await expect(page.locator(".page-title-row .pill")).toHaveText("incompatible");
     } finally {
       hangUp();
       await gateway.dispose();
     }
   });
 
-  test("on a single host Fleet shows one row, the host, and its page works", async ({
+  test("on a single host Fleet shows one worker, the host, and its page works", async ({
     daemon,
     page,
   }) => {
@@ -584,19 +547,17 @@ test.describe("the workers page", () => {
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
 
-    await expect(page.getByRole("row")).toHaveCount(2);
+    await expect(page.locator(".fleet-card")).toHaveCount(1);
     await expect(page).toHaveURL(/\/fleet$/);
-    await expect(page.getByText("1 / 1 up")).toBeVisible();
-    await row(page, host.id).getByRole("link").click();
+    await row(page, host.id).getByRole("link").first().click();
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
     await expect(title(page, host.id)).toBeVisible();
-    await expect(page.locator(".worker-line")).toContainText("connected");
+    await expect(page.locator(".page-title-row .pill")).toContainText("connected");
     await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    await openTab(page, "Host");
-    await expect(fact(page.locator("#main"), "Version")).toHaveText(host.version ?? "");
+    await expect(fact(page.locator("#main"), "simlock")).toHaveText(host.version ?? "");
   });
 
   test("an unknown worker id shows This worker is not in the fleet. and a link to Fleet, and an unknown device id shows This device is gone.", async ({
@@ -755,7 +716,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("a worker's devices list every device it has, with state and, where the data has one, time in that state", async ({
+  test("a worker's devices are tiles, each with its state, and for a leased one its holder, time left and when it was granted", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -776,41 +737,46 @@ test.describe("the workers page", () => {
       expect(devices.map((device) => device.state).sort()).toEqual(
         expect.arrayContaining(["leased", "ready"]),
       );
-      await page.clock.setSystemTime(Date.now() + 3 * 60 * 60 * 1000);
 
       await openConsole(page, host);
       await row(page, view?.id ?? "")
         .getByRole("link")
+        .first()
         .click();
 
-      const table = page.getByRole("region", { name: "Devices", exact: true });
-      await expect(table.locator("tbody tr")).toHaveCount(devices.length);
+      const tiles = page.getByRole("list", { name: "Devices", exact: true });
+      await expect(tiles.locator(".worker-device")).toHaveCount(devices.length);
       for (const device of devices) {
-        const shown = table.getByRole("row").filter({ hasText: device.id });
-        const cells = shown.getByRole("cell");
-        await expect(shown.getByRole("img", { name: device.state })).toBeVisible();
-        await expect(cells.nth(0)).toContainText(device.spec.model);
-        await expect(cells.nth(0)).toContainText(device.spec.osVersion);
-        await expect(cells.nth(0)).toContainText(
-          device.spec.platform === "ios" ? "iOS" : "Android",
+        const shown = tiles
+          .locator(".worker-device")
+          .filter({ has: page.locator(`a[href*="/${encodeURIComponent(device.id)}?"]`) });
+        await expect(shown.locator(".pill"), device.id).toHaveText(device.state);
+        await expect(shown, device.id).toContainText(device.spec.model);
+        await expect(shown, device.id).toContainText(
+          `${device.spec.platform === "ios" ? "iOS" : "Android"} ${device.spec.osVersion}`,
         );
-        await expect(cells.nth(3)).toContainText(device.physical ? "Physical" : "Virtual");
         const held = view?.leases.find((candidate) => candidate.deviceId === device.id);
         if (held === undefined) {
-          await expect(cells.nth(1), device.id).toHaveText(device.state);
-          await expect(cells.nth(2), device.id).toHaveText("—");
+          if (device.state === "ready") {
+            await expect(shown, device.id).toContainText("warm, waiting for a lease");
+          }
+          await expect(shown.locator(".worker-device-ttl"), device.id).toHaveCount(0);
           continue;
         }
-        await expect(cells.nth(1).getByRole("link")).toHaveAttribute(
+        await expect(shown.locator(".worker-device-holder a"), device.id).toHaveAttribute(
           "href",
           new RegExp(`/leases/${encodeURIComponent(held.id)}/?$`),
         );
-        await expect(cells.nth(2), device.id).toHaveText(/^\d+ s.*expires in /);
-        const shownSeconds = Number.parseInt((await cells.nth(2).textContent()) ?? "", 10);
-        expect(Math.abs(shownSeconds - (Date.now() - held.grantedAt) / 1000)).toBeLessThanOrEqual(
-          3,
+        await expect(shown.locator(".worker-device-ttl b"), device.id).toHaveText(
+          /^\d+:\d\d(:\d\d)?$/,
         );
-        await expect(cells.nth(2)).not.toContainText(`${shownSeconds} s expires`);
+        await expect(shown, device.id).toContainText(/granted \d\d:\d\d/);
+        await expect(shown.getByRole("link", { name: "Watch" }), device.id).toHaveAttribute(
+          "href",
+          new RegExp(
+            `/fleet/${encodeURIComponent(view?.id ?? "")}/devices/${encodeURIComponent(device.id)}/?$`,
+          ),
+        );
       }
     } finally {
       await host.dispose();
@@ -855,15 +821,14 @@ test.describe("the workers page", () => {
       expect(udid).not.toBe("");
 
       await openWorkerPage(page, host);
-      const devicesTable = page.getByRole("region", { name: "Devices", exact: true });
+      const devicesTable = page.getByRole("list", { name: "Devices", exact: true });
+      const tileOf = (id: string) =>
+        devicesTable
+          .locator(".worker-device")
+          .filter({ has: page.locator(`a[href*="/${encodeURIComponent(id)}?"]`) });
       const drawer = page.getByRole("dialog");
 
-      await devicesTable
-        .getByRole("row")
-        .filter({ hasText: idle.id })
-        .getByRole("cell")
-        .nth(3)
-        .click();
+      await tileOf(idle.id).locator(".worker-device-name").click();
       await expect(page).toHaveURL(
         new RegExp(
           `/fleet/${encodeURIComponent(workerId)}/${encodeURIComponent(idle.id)}\\?tab=devices$`,
@@ -877,12 +842,7 @@ test.describe("the workers page", () => {
       await page.keyboard.press("Escape");
       await expect(drawer).toBeHidden();
 
-      await devicesTable
-        .getByRole("row")
-        .filter({ hasText: leased.id })
-        .getByRole("cell")
-        .nth(3)
-        .click();
+      await tileOf(leased.id).locator(".worker-device-name").click();
       await expect(fact(drawer, "Model")).toHaveText(leased.spec.model);
       await expect(fact(drawer, "State")).toHaveText("leased");
       await expect(fact(drawer, "Holder")).toHaveText(held.requesterId);
@@ -909,10 +869,10 @@ test.describe("the workers page", () => {
       await openWorkerPage(page, host);
       await openTab(page, "Devices");
       const link = page
-        .getByRole("region", { name: "Devices", exact: true })
-        .getByRole("row")
-        .filter({ hasText: device.id })
-        .getByRole("link", { name: device.spec.model });
+        .getByRole("list", { name: "Devices", exact: true })
+        .locator(".worker-device")
+        .filter({ has: page.locator(`a[href*="/${encodeURIComponent(device.id)}?"]`) })
+        .locator(".worker-device-name");
       const drawer = page.getByRole("dialog");
 
       for (const close of [
@@ -1057,7 +1017,9 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("each tab shows its content, sets ?tab=, and survives a reload", async ({ page }) => {
+  test("the worker page shows its host facts and the two tabs, sets ?tab=, survives a reload, and lands ?tab=host on Devices", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", {
       driverScript: {
         ios: {
@@ -1088,50 +1050,46 @@ test.describe("the workers page", () => {
       const id = found(listed, "the host's worker").id;
 
       await openConsole(page, host);
-      await row(page, id).getByRole("link").click();
+      await row(page, id).getByRole("link").first().click();
 
-      await openTab(page, "Host");
       const main = page.locator("#main");
-      await expect(fact(main, "Operating system")).toHaveText(`${facts.os} ${facts.osVersion}`);
-      await expect(fact(main, "CPU architecture")).toHaveText(facts.arch);
-      await expect(fact(main, "Tools")).toHaveText("xcode 16.4 (16F6) for iOS");
+      await expect(fact(main, facts.os)).toHaveText(facts.osVersion);
+      await expect(fact(main, "xcode")).toHaveText("16.4 (16F6)");
       await expect(fact(main, "Worker id")).toHaveText(id);
-      await expect(fact(main, "iOS")).toContainText("Models: iPhone 16, iPad Air");
-      await expect(fact(main, "iOS")).toContainText(/Runtimes: 18\.4.*, 26\.0/);
-      await expect(fact(main, "agent-device")).toContainText(/available|off|unavailable/);
-
-      await expect(page).toHaveURL(/\?tab=host$/);
+      await expect(page.getByRole("tab")).toHaveText(["Devices", "Warm pool"]);
 
       await openTab(page, "Warm pool");
       await expect(page).toHaveURL(/\?tab=warm-pool$/);
       const installs = page.getByRole("region", { name: "Installs in progress", exact: true });
       await expect(installs).toContainText(/iOS 19\.0\s*downloading for \d+ s, 1 waiter/);
+      await expect(page.getByRole("region", { name: "Events on this worker" })).toBeVisible();
 
       await openTab(page, "Devices");
       await expect(page).toHaveURL(/\?tab=devices$/);
-      await expect(page.getByRole("region", { name: "Devices", exact: true })).toBeVisible();
+      await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
 
-      await openTab(page, "Events");
-      await expect(page).toHaveURL(/\?tab=events$/);
-      await expect(
-        page
-          .getByRole("list", { name: "Events for this worker" })
-          .or(page.getByText("No events for this worker yet.")),
-      ).toBeVisible();
-
-      for (const tab of ["Events", "Host", "Warm pool", "Devices"]) {
+      for (const tab of ["Warm pool", "Devices"]) {
         await openTab(page, tab);
         await page.reload();
         await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
       }
-      await page.goto(new URL(`/fleet/${encodeURIComponent(id)}?tab=host`, host.url).href);
-      await expect(fact(main, "Worker id")).toHaveText(id);
+      for (const asked of ["host", "events"]) {
+        await page.goto(new URL(`/fleet/${encodeURIComponent(id)}?tab=${asked}`, host.url).href);
+        await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
+          "aria-selected",
+          "true",
+        );
+        await expect(fact(main, "Worker id")).toHaveText(id);
+      }
     } finally {
       await host.dispose();
     }
   });
 
-  test("a granted lease eventually appears on the worker's page and Fleet row without a reload", async ({
+  test("a granted lease eventually appears on the worker's page and Fleet tile without a reload", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -1139,11 +1097,12 @@ test.describe("the workers page", () => {
       { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
     ]);
     try {
-      const running = () => row(page, "worker-a").getByRole("cell").nth(3);
+      const running = () => row(page, "worker-a").locator(".fleet-fraction");
+      await answerWithoutLoad(page);
       await openConsole(page, fleet.gateway);
       await expect(running()).toHaveText(/^0 \/ \d+$/);
-      await row(page, "worker-a").getByRole("link").click();
-      await expect(figure(page, "Leases").locator(".figure-count")).toHaveText("0");
+      await row(page, "worker-a").getByRole("link").first().click();
+      await expect(figure(page, "Slots")).toContainText(/^.*0 of \d+ leased/);
 
       await lease(fleet.gateway, "console-e2e");
       await untilTheGatewaySays(
@@ -1151,9 +1110,7 @@ test.describe("the workers page", () => {
         (views) => views.find((view) => view.label === "worker-a")?.leases.length === 1,
       );
 
-      await expect(figure(page, "Leases").locator(".figure-count")).toHaveText("1", {
-        timeout: 10_000,
-      });
+      await expect(figure(page, "Slots")).toContainText(/1 of \d+ leased/, { timeout: 10_000 });
       await page.goBack();
       await expect(running()).toHaveText(/^1 \/ \d+$/, { timeout: 10_000 });
     } finally {
@@ -1161,75 +1118,70 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("the worker page shows load meters with the reading's age ticking, capacity cards with the slot legend, and the leases card, all above the tabs", async ({
+  test("the worker page shows four ring gauges above its cards, with the reading's age ticking in the note", async ({
     daemon,
     page,
   }) => {
     await openWorkerPage(page, daemon);
 
-    await expect(figure(page, "CPU")).toContainText(/\d+% busy, /, { timeout: 20_000 });
-    await expect(figure(page, "Memory")).toContainText("available");
+    await expect(figure(page, "CPU")).toContainText(/\d+% busy/, { timeout: 20_000 });
+    await expect(figure(page, "Memory")).toContainText("used");
     await expect(figure(page, "Disk")).toContainText("free");
-    await expect(figure(page, "Leases")).toContainText("0");
-    const capacity = page.getByRole("group", { name: "Capacity" });
-    await expect(capacity.locator(".card").filter({ hasText: "iOS" })).toContainText("running");
-    await expect(page.locator(".slot-legend")).toContainText("leased");
-    const tabs = await page.getByRole("tablist").boundingBox();
-    for (const above of [figures(page), capacity, page.locator(".slot-legend")]) {
-      const box = await above.boundingBox();
-      expect(box?.y, "a card sits above the tab list").toBeLessThan(tabs?.y ?? 0);
-    }
-    const read = page.getByText(/^Read \d+ s ago$/);
+    await expect(figure(page, "Slots")).toContainText("leased");
+    await expect(figures(page).locator(".ring-box")).toHaveCount(4);
+    await expect(page.locator(".worker-side").getByRole("img").first()).toBeVisible();
+    const grid = await page.locator(".worker-grid").boundingBox();
+    const gauges = await figures(page).boundingBox();
+    expect(gauges?.y, "the rings sit above the cards").toBeLessThan(grid?.y ?? 0);
+    const read = page.locator(".page-note").getByText(/read \d+ s ago/);
     await expect(read).toBeVisible();
     const first = await read.textContent();
     await expect(read).not.toHaveText(first ?? "", { timeout: 10_000 });
   });
 
-  test("a bar sits under each figure, filled to that figure's own percent", async ({
-    daemon,
-    page,
-  }) => {
+  test("each ring is filled to its figure's own percent", async ({ daemon, page }) => {
     await openWorkerPage(page, daemon);
     await expect(figure(page, "CPU")).toContainText("busy", { timeout: 20_000 });
 
-    // why: both the worker's reading (every 15 s) and the fill's own slide can move between two
-    // measurements, so this measures around both and retries until the fill has settled at the
-    // level the reading implies — otherwise the bar and the figure compared are not the same pair.
+    // why: the worker's reading moves every 15 s, so this measures around a reading and retries until
+    // the figures printed in the rings are the ones the reading implies.
     await waitFor(
       async () => {
         const before = (await workerList(daemon))[0]?.load;
         const wanted = before === undefined ? undefined : gaugePercents(before);
         if (wanted === undefined) return false;
-        const painted = await paintedGauges(figures(page));
+        const painted = await figures(page)
+          .locator(".ring-box")
+          .evaluateAll((rings) =>
+            rings.slice(0, 3).map((ring) => {
+              const circle = ring.querySelector(".ring-value") as SVGCircleElement;
+              const [dash = 0] = (circle.getAttribute("stroke-dasharray") ?? "0").split(" ");
+              const radius = Number(circle.getAttribute("r"));
+              return {
+                fraction: Number(dash) / (2 * Math.PI * radius),
+                text: ring.querySelector(".ring-number")?.textContent ?? "",
+              };
+            }),
+          );
         const now = (await workerList(daemon))[0]?.load;
-        // why: what has to hold still is the level, not the reading — a fresh sample that rounds to
-        // the same percents is the same pair of figures and bars.
         const since = now === undefined ? undefined : gaugePercents(now);
         if (since === undefined || JSON.stringify(wanted) !== JSON.stringify(since)) return false;
-        if (painted.some((bar) => bar.sliding)) return false;
-        return fillsMatch(painted, wanted);
+        return painted.every(
+          (ring, index) =>
+            ring.text === `${wanted[index]}%` &&
+            Math.abs(ring.fraction - (wanted[index] ?? 0) / 100) < 0.005,
+        );
       },
-      { interval: 500, timeout: 40_000, label: () => "the fill to match the figure" },
+      { interval: 500, timeout: 40_000, label: () => "the rings to match the figures" },
     );
-
-    const card = figure(page, "Memory");
-    const geometry = await card.evaluate((element) => {
-      const text = element.querySelector(".figure-text") as HTMLElement;
-      const bar = element.querySelector(".load-bar") as HTMLElement;
-      return {
-        textBottom: text.getBoundingClientRect().bottom,
-        top: bar.getBoundingClientRect().top,
-      };
-    });
-    expect(geometry.top).toBeGreaterThanOrEqual(geometry.textBottom);
   });
 
-  test("each memory pressure paints its bar in that pressure's colour, and never the accent, in both themes", async ({
+  test("each memory pressure paints its ring in that pressure's colour, and never the accent, in both themes", async ({
     daemon,
     page,
   }) => {
     await openWorkerPage(page, daemon);
-    await expect(figure(page, "Memory")).toContainText("available");
+    await expect(figure(page, "Memory")).toContainText("used");
     // why: only macOS reports a memory pressure, and how full a CI machine's memory happens to be
     // is nobody's to predict. This answers the page's own read of the worker list with the memory
     // reading's own fields set to the level the case asks for and every other field left as the
@@ -1240,19 +1192,19 @@ test.describe("the workers page", () => {
 
     const memoryFill = () =>
       figure(page, "Memory").evaluate((card) => {
-        const bar = card.querySelector(".load-bar") as HTMLElement;
+        const ring = card.querySelector(".ring-box") as HTMLElement;
         return {
-          tone: /load-bar-(\w+)/.exec(bar.className)?.[1] ?? "",
-          colour: getComputedStyle(bar.firstElementChild as HTMLElement).backgroundColor,
+          tone: /ring-(ok|warn|error|idle|neutral)/.exec(ring.className)?.[1] ?? "",
+          colour: getComputedStyle(ring.querySelector(".ring-value") as SVGCircleElement).stroke,
         };
       });
     const paintedFills = () =>
       figures(page)
-        .locator(".load-bar")
-        .evaluateAll((bars) =>
-          bars.map((bar) => ({
-            tone: /load-bar-(\w+)/.exec(bar.className)?.[1] ?? "",
-            colour: getComputedStyle(bar.firstElementChild as HTMLElement).backgroundColor,
+        .locator(".ring-box")
+        .evaluateAll((rings) =>
+          rings.map((ring) => ({
+            tone: /ring-(ok|warn|error|idle|neutral)/.exec(ring.className)?.[1] ?? "",
+            colour: getComputedStyle(ring.querySelector(".ring-value") as SVGCircleElement).stroke,
           })),
         );
 
@@ -1296,43 +1248,6 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("a bar's fill transitions its width over the document's duration token, and over none under reduced motion", async ({
-    browserName,
-    daemon,
-    page,
-  }) => {
-    await openWorkerPage(page, daemon);
-
-    const fill = figures(page).locator(".load-bar-fill").first();
-    await expect(fill).toBeVisible();
-    // why: the stylesheet moves the fill's width over the document's own duration token, which is
-    // what `prefers-reduced-motion: reduce` already sets to zero. Both sides are read back as
-    // computed values and compared as milliseconds: a browser writes the token's `120ms` as `.12s`.
-    const asMs = (value: string) =>
-      value.trim().endsWith("ms") ? Number.parseFloat(value) : Number.parseFloat(value) * 1_000;
-    await expect
-      .poll(async () => {
-        const style = await fill.evaluate((element) => {
-          const computed = getComputedStyle(element);
-          return {
-            duration: computed.transitionDuration,
-            property: computed.transitionProperty,
-            token: getComputedStyle(document.documentElement).getPropertyValue("--duration").trim(),
-          };
-        });
-        return style.property === "width" && asMs(style.duration) === asMs(style.token);
-      })
-      .toBe(true);
-
-    if (browserName === "chromium") {
-      // why: emulated in Chromium alone — it is the one engine whose reduced-motion emulation was
-      // verified on the machine that wrote this test, and a guard must not hide a real failure in
-      // the other two.
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await expect(fill).toHaveCSS("transition-duration", "0s");
-    }
-  });
-
   test("a disconnected worker's state word and load eventually say so", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
@@ -1340,7 +1255,7 @@ test.describe("the workers page", () => {
     ]);
     try {
       await openConsole(page, fleet.gateway);
-      await row(page, "worker-b").getByRole("link").click();
+      await row(page, "worker-b").getByRole("link").first().click();
       // why: the gateway shows a worker's first reading after its refresh, so allow twice the default 5 s wait.
       await expect(figure(page, "CPU")).toBeVisible({ timeout: 10_000 });
 
@@ -1350,15 +1265,16 @@ test.describe("the workers page", () => {
         (views) => views.find((view) => view.label === "worker-b")?.connection === "disconnected",
       );
 
-      await expect(page.locator(".worker-line")).toContainText("disconnected", { timeout: 10_000 });
+      await expect(page.locator(".page-title-row .pill")).toContainText("disconnected", {
+        timeout: 10_000,
+      });
       await expect(page.getByText("No reading while disconnected")).toBeVisible({
         timeout: 10_000,
       });
 
       await page.goBack();
-      await expect(row(page, "worker-b").getByRole("cell").nth(1)).toHaveText("disconnected");
-      await expect(row(page, "worker-a").getByRole("cell").nth(1)).not.toHaveText("disconnected");
-      await expect(page.getByText("1 / 2 up")).toBeVisible();
+      await expect(row(page, "worker-b")).toContainText("disconnected");
+      await expect(row(page, "worker-a")).not.toContainText("disconnected");
     } finally {
       await disposeFleet(fleet);
     }
@@ -1373,22 +1289,22 @@ test.describe("the workers page", () => {
       await openConsole(page, host);
       await row(page, view?.id ?? "")
         .getByRole("link")
+        .first()
         .click();
-      await openTab(page, "Host");
       const banner = page.locator(".connection");
-      const tools = fact(page.locator("#main"), "Tools");
-      await expect(tools).toHaveText("xcode 16.4 for iOS");
+      const tools = fact(page.locator("#main"), "xcode");
+      await expect(tools).toHaveText("16.4");
 
       await host.stop();
       await expect(banner).toHaveText(/^Reconnecting/);
-      await expect(tools).toHaveText("xcode 16.4 for iOS");
+      await expect(tools).toHaveText("16.4");
       await host.writeDriverScript({
         ios: { ...IOS, toolVersions: [{ name: "xcode", version: "26.0" }] },
       });
       await host.start();
 
       await expect(banner).toHaveText("Connected", { timeout: 30_000 });
-      await expect(tools).toHaveText("xcode 26.0 for iOS");
+      await expect(tools).toHaveText("26.0");
     } finally {
       await host.dispose();
     }
@@ -1423,31 +1339,20 @@ test.describe("the workers page", () => {
           page,
           `list ${colorScheme}`,
           [
-            ["connected", "pill"],
             ["drained", "pill"],
             ["incompatible", "pill"],
+            ["live", "pill"],
           ],
           colorScheme,
         );
-        await row(page, "worker-a").getByRole("link").click();
-        await openTab(page, "Host");
+        await row(page, "worker-a").getByRole("link").first().click();
         await expectStatusIndicatorColours(
           page,
-          `host ${colorScheme}`,
+          `worker ${colorScheme}`,
           [
             ["connected", "pill"],
-            ["running", "pill"],
-            ["compatible", "pill"],
-          ],
-          colorScheme,
-        );
-        await openTab(page, "Devices");
-        await expectStatusIndicatorColours(
-          page,
-          `devices ${colorScheme}`,
-          [
-            ["connected", "pill"],
-            ["leased", "standalone"],
+            ["leased", "pill"],
+            ["live", "pill"],
           ],
           colorScheme,
         );
@@ -1458,7 +1363,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("the fleet pages have no horizontal scroll at 360px wide, in the table and on a worker's page", async ({
+  test("the fleet pages have no horizontal scroll at 360px wide, in the cards and on a worker's page", async ({
     page,
   }) => {
     const host = await startDaemon("worker", {
@@ -1480,10 +1385,11 @@ test.describe("the workers page", () => {
 
       await row(page, view?.id ?? "")
         .getByRole("link")
+        .first()
         .click();
-      await expect(page.locator("tbody tr").first()).toBeVisible();
+      await expect(page.locator(".worker-device").first()).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
-      for (const tab of ["Host", "Warm pool", "Events"]) {
+      for (const tab of ["Warm pool", "Devices"]) {
         await openTab(page, tab);
         expect(await hasHorizontalScroll(page), tab).toBe(false);
       }
@@ -1515,11 +1421,11 @@ test.describe("the workers page", () => {
     await follow(page.getByRole("link", { name: "Fleet", exact: true }));
     await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 
-    await follow(row(page, name).getByRole("link"));
+    await follow(row(page, name).getByRole("link").first());
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(name)}$`));
     await expect(title(page, name)).toBeVisible();
 
-    const host_tab = page.getByRole("tab", { name: "Host" });
+    const host_tab = page.getByRole("tab", { name: "Warm pool" });
     for (let step = 0; step < 30; step += 1) {
       if (await host_tab.evaluate((element) => element === document.activeElement)) break;
       await page.keyboard.press(tab);
@@ -1528,7 +1434,10 @@ test.describe("the workers page", () => {
     await page.keyboard.press("Enter");
     await expect(host_tab).toHaveAttribute("aria-selected", "true");
 
-    await follow(page.getByRole("link", { name: "Fleet", exact: true }), "backward");
+    await follow(
+      page.locator("#main").getByRole("link", { name: "Fleet", exact: true }),
+      "backward",
+    );
     await expect(page).toHaveURL(/\/fleet$/);
   });
 });
@@ -1590,8 +1499,9 @@ test.describe("Fleet worker actions", () => {
     try {
       await lease(daemon, "solo-agent");
       const workerAction = /^(Drain|Undrain|Remove)/;
+      await answerWithoutLoad(page);
       await openPage(page, daemon, "/fleet", "Fleet");
-      const row = page.locator("main tbody tr");
+      const row = page.locator(".fleet-card");
       await expect(row).toHaveCount(1);
       await row.click({ button: "right" });
       await expect(page.getByRole("menu")).toHaveCount(0);
@@ -1634,7 +1544,7 @@ test.describe("Fleet worker actions", () => {
     }
   });
 
-  test("a stopped worker is removed once its name is typed exactly, and a connected worker offers no Remove", async ({
+  test("a stopped worker is removed from its page once its name is typed exactly, and a connected worker offers no Remove", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -1645,6 +1555,7 @@ test.describe("Fleet worker actions", () => {
       const [stopped] = fleet.workers as [RunningDaemon];
       await stopped.stop();
       await waitForDisconnected(fleet.gateway);
+      await answerWithoutLoad(page);
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
 
       const live = rowOf(page, "live-b");
@@ -1653,8 +1564,9 @@ test.describe("Fleet worker actions", () => {
       await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveCount(0);
       await page.keyboard.press("Escape");
 
-      const row = rowOf(page, "gone-a");
-      await row.getByRole("button", { name: "Actions for gone-a" }).click();
+      await expect(rowOf(page, "gone-a").getByRole("button")).toHaveCount(0);
+      await rowOf(page, "gone-a").getByRole("link", { name: "Details" }).click();
+      await page.getByRole("button", { name: "Actions for gone-a" }).click();
       await page.getByRole("menuitem", { name: "Remove worker" }).click();
       const dialog = page.getByRole("alertdialog", { name: "Remove gone-a?" });
       await expect(dialog).toContainText(
@@ -1673,90 +1585,12 @@ test.describe("Fleet worker actions", () => {
 
       await remove.click();
       await expect(page.getByText("gone-a removed")).toBeVisible();
-      await expect(row).toHaveCount(0);
+      await page
+        .getByRole("navigation", { name: "Console" })
+        .getByRole("link", { name: "Fleet" })
+        .click();
+      await expect(rowOf(page, "gone-a")).toHaveCount(0);
       await expect(live).toBeVisible();
-    } finally {
-      await disposeFleet(fleet);
-    }
-  });
-
-  test("the row menu shows the dangerous items last, after a separator, in the error colour", async ({
-    page,
-  }) => {
-    const fleet = await startWithStoppedWorker("menu-a");
-    try {
-      await openPage(page, fleet.gateway, "/fleet", "Fleet");
-      await rowOf(page, "menu-a").getByRole("button", { name: "Actions for menu-a" }).click();
-
-      const items = page.getByRole("menuitem");
-      await expect(items).toHaveCount(2);
-      await expect(items.nth(0)).toHaveText("Drain");
-      await expect(items.nth(1)).toHaveText("Remove worker");
-      await expect(page.getByRole("separator")).toHaveCount(1);
-      const order = await page
-        .getByRole("menu")
-        .evaluate((menu) =>
-          [...menu.querySelectorAll('[role="menuitem"], [role="separator"]')].map((node) =>
-            node.getAttribute("role"),
-          ),
-        );
-      expect(order).toEqual(["menuitem", "separator", "menuitem"]);
-      const colours = await items.evaluateAll((nodes) =>
-        nodes.map((node) => getComputedStyle(node).color),
-      );
-      const error = await page.evaluate(() => {
-        const probe = document.createElement("span");
-        probe.style.color = "var(--status-error)";
-        document.body.append(probe);
-        const colour = getComputedStyle(probe).color;
-        probe.remove();
-        return colour;
-      });
-      expect(colours[1]).toBe(error);
-      expect(colours[0]).not.toBe(error);
-    } finally {
-      await disposeFleet(fleet);
-    }
-  });
-
-  test("a right-click on a row opens the same menu as its ⋯, Escape closes it, and the keyboard moves through it", async ({
-    page,
-  }) => {
-    const fleet = await startWithStoppedWorker("ctx-a");
-    try {
-      await openPage(page, fleet.gateway, "/fleet", "Fleet");
-      const row = rowOf(page, "ctx-a");
-      await row.getByRole("button", { name: "Actions for ctx-a" }).click();
-      await expect(page.getByRole("menu")).toBeVisible();
-      const viaButton = await page.getByRole("menuitem").allInnerTexts();
-      await page.keyboard.press("Escape");
-      await expect(page.getByRole("menu")).toHaveCount(0);
-
-      await row.click({ button: "right" });
-      await expect(page.getByRole("menu")).toBeVisible();
-      await expect(page.getByRole("menu")).toBeFocused();
-      await expect(page.getByRole("menuitem")).toHaveText(viaButton);
-      expect(viaButton).toEqual(["Drain", "Remove worker"]);
-
-      await page.keyboard.press("ArrowDown");
-      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toHaveAttribute(
-        "data-highlighted",
-        "",
-      );
-      await page.keyboard.press("ArrowDown");
-      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveAttribute(
-        "data-highlighted",
-        "",
-      );
-      await page.keyboard.press("ArrowUp");
-      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toHaveAttribute(
-        "data-highlighted",
-        "",
-      );
-
-      await page.keyboard.press("Escape");
-      await expect(page.getByRole("menu")).toHaveCount(0);
-      await expect(page).toHaveURL(/\/fleet$/);
     } finally {
       await disposeFleet(fleet);
     }
@@ -1768,6 +1602,7 @@ test.describe("Fleet worker actions", () => {
     const names = ["toast-a", "toast-b", "toast-c", "toast-d"];
     const fleet = await startFleet(names.map((label) => ({ driverScript: { ios: IOS }, label })));
     try {
+      await answerWithoutLoad(page);
       await page.clock.install();
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       // why: the page tells its views of an answer through a timer, which a frozen clock never fires, so a table still loading when time freezes never shows.
@@ -1777,7 +1612,13 @@ test.describe("Fleet worker actions", () => {
       const toasts = page.getByRole("region", { name: "Notifications" });
       const toastOf = (text: string) => toasts.locator(".toast").filter({ hasText: text });
       const act = async (worker: string, item: string) => {
-        // why: the toasts stack over the table's last column, so the keyboard opens the menu.
+        if (item === "Undrain") {
+          // why: a drained worker is a card whose first action is the button itself.
+          await rowOf(page, worker).getByRole("button", { name: "Undrain", exact: true }).click();
+          await page.mouse.move(0, 0);
+          return;
+        }
+        // why: the toasts stack over the page's right edge, so the keyboard opens the menu.
         await rowOf(page, worker)
           .getByRole("button", { name: `Actions for ${worker}` })
           .press("Enter");
@@ -1860,6 +1701,7 @@ test.describe("Fleet worker actions", () => {
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "say-a" }]);
     try {
+      await answerWithoutLoad(page);
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       const openMenu = async (item: string) => {
         await rowOf(page, "say-a").getByRole("button", { name: "Actions for say-a" }).click();
@@ -1883,6 +1725,7 @@ test.describe("Fleet worker actions", () => {
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "busy-a" }]);
     try {
+      await answerWithoutLoad(page);
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       const posts: string[] = [];
       let answer: (() => Promise<void>) | undefined;
@@ -1907,10 +1750,10 @@ test.describe("Fleet worker actions", () => {
 
       await answer?.();
       await expect(page.getByText("busy-a drained", { exact: true })).toBeVisible();
-      await menuButton.click();
-      await expect(page.getByRole("menuitem", { name: "Undrain", exact: true })).toBeEnabled();
+      await expect(
+        rowOf(page, "busy-a").getByRole("button", { name: "Undrain", exact: true }),
+      ).toBeEnabled();
       expect(posts).toHaveLength(1);
-      await page.keyboard.press("Escape");
 
       const undrains: string[] = [];
       let answerUndrain: (() => Promise<void>) | undefined;
