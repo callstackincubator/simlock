@@ -337,6 +337,13 @@ async function routeByHeader(
   if ("refused" in read) return read.refused;
   const { leaseId } = read;
   if (leaseId === undefined) return passThrough(context, request, identity, undefined);
+  // why: a gateway's link refuses another's lease itself; a worker's link takes any lease id, so the front's map says whose it is.
+  if (
+    context.link.stillHeld === undefined &&
+    context.map.get(leaseId)?.identity.principal !== identity.principal
+  ) {
+    return frontReply(refusal(`refused: lease ${leaseId} is not one of yours`, 403), undefined);
+  }
   const status = await context.link.status(leaseId, identity);
   if (status.state === "unavailable")
     return frontReply(notAvailable(status.reason, status.retriable), undefined);
