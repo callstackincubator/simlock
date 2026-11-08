@@ -206,7 +206,9 @@ Select an item to see the facts that matter for it, such as how much RAM the wor
 
 ## Activity
 
-**Activity** lists events newest first, starting with the last hour. New events appear at the top as they happen, and older ones load as you scroll down. A chart above the list counts events per minute, and a filter narrows the list to **Leases**, **Devices**, **Workers**, **Components** or **Other**.
+**Activity** lists events newest first, starting with the last hour. New events appear at the top as they happen, and older ones load as you scroll down. Each row shows the event's name, what it is about, the worker and the time. The search box and the range (**1 h**, **6 h**, **24 h** or **7 d**) are in the page header. If the events loaded do not reach back as far as the range, the page says so, and **Load older events** fetches more.
+
+A card on the left filters the list by **Kind** (**Leases**, **Queue**, **Devices**, **Workers**, **Baselines** or **Other**), by state (**Problems only**) and by **Worker**. Each option shows how many events it would show. Tick several options in a group to see all of them; tick none to see everything. Events with no worker are under **Other** in the Worker group. Above the list, a chart counts the events shown per minute over the last hour.
 
 Select an event to see its whole payload and a link to the lease, worker, request or Inbox item it is about. For what each event means, see [Events](/simlock/docs/reference/events).
 
