@@ -102,9 +102,9 @@ The console opens on **Overview**, the worker on one page.
 
 ## Fleet
 
-**Fleet** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status square, the worker's name, and its devices running of its limit.
+**Fleet** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status, the worker's name, and its devices running of its limit.
 
-The square shows the worst thing wrong with the worker, and always has a word behind it (point at it to read it):
+The status shows the worst thing wrong with the worker, with a word and a colour:
 
 | Colour | When |
 | --- | --- |
@@ -112,7 +112,7 @@ The square shows the worst thing wrong with the worker, and always has a word be
 | Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, or a figure is 85% full or more. |
 | Green | Nothing is wrong. The word is `connected`. |
 
-**Issues** shows only workers whose square is not green. **Busy** shows workers using three quarters of their device slots or more.
+**Issues** shows only workers whose status is not green. **Busy** shows workers using three quarters of their device slots or more.
 
 Select the worker to see its CPU, memory and disk, each with a bar, how many leases it holds, and device slots for iOS and Android (leased, ready, booting, quarantined or free). Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is not shown as zero. Under them are four tabs:
 
