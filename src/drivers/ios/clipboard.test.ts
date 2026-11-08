@@ -43,9 +43,9 @@ class FakeDeviceHubDomain {
     command: string,
     args: readonly string[],
   ): { code: number; stderr: string; stdout: string } {
-    const warmBoot = this.warm && command === "xcrun" && args[1] === "boot";
+    const warmBoot = this.warm && args[1] === "boot";
     if (warmBoot) this.warm = false;
-    if (command === "xcrun" && args[1] === "delete") this.sawDelete?.();
+    if (args[1] === "delete") this.sawDelete?.();
     const stderr = warmBoot ? "Unable to boot device in current state: Booted" : "failed";
     return { code: warmBoot || !this.succeeds(command, args) ? 1 : 0, stderr, stdout: "" };
   }
