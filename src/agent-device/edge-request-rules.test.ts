@@ -1005,6 +1005,142 @@ describe("the agent-device front's request rules", () => {
     });
   });
 
+  type BootScenario = {
+    platform: string;
+    model: string;
+    kind: string;
+    target: string;
+    omitTarget?: boolean;
+    flags: Record<string, unknown>;
+    runtime?: Record<string, unknown>;
+    physical?: boolean;
+  };
+  type AdoptedScenario = {
+    platform: "ios" | "android";
+    model: string;
+    deviceClass: string;
+    physical: boolean;
+    kind: string;
+    target: string;
+    address: string;
+  };
+  async function bootsOnItsLease(scenario: BootScenario): Promise<void> {
+    const rig: Rig = scenario.physical
+      ? await setUpWithPhone()
+      : await setUp({ drivers: bothDrivers });
+    rig.fake.nameDeviceInNextReply("none");
+    await granted(rig, 1, {
+      platform: scenario.platform,
+      ...("omitTarget" in scenario ? {} : { target: scenario.target }),
+      ...(scenario.physical ? { physical: true } : {}),
+    });
+    const address = scenario.physical ? phoneSerial : idOf(rig, 1);
+    const flags =
+      "udid" in scenario.flags
+        ? { udid: address }
+        : "device" in scenario.flags
+          ? { device: `simlock-${address}` }
+          : scenario.flags;
+    const answer = await envelopeOf(
+      await runCommand(rig, "boot", 1, {
+        flags,
+        ...(scenario.runtime && { runtime: scenario.runtime }),
+      }),
+    );
+    if ("omitTarget" in scenario) {
+      expect(answer.result?.["data"]).toMatchObject({ target: "mobile" });
+    }
+    expect(answer.result).toMatchObject({
+      ok: true,
+      data: {
+        platform: scenario.platform,
+        target: scenario.target,
+        device: "device" in scenario.flags ? `simlock-${address}` : scenario.model,
+        id: address,
+        kind: scenario.kind,
+        booted: true,
+      },
+    });
+    expect(
+      commandsReceived(rig).filter((request) => request.params?.["command"] === "boot"),
+    ).toEqual([]);
+  }
+  async function bootsOnAdoptedLease(scenario: AdoptedScenario): Promise<void> {
+    const leaseId = hex(1);
+    const entry = {
+      gatewayLeaseId: leaseId,
+      workerLeaseId: leaseId,
+      workerId: "w1",
+      ownerId: "tok_one",
+      requesterId: leaseId,
+    };
+    const view = {
+      id: "w1",
+      label: "w1",
+      connection: "connected",
+      drained: false,
+      catalogReadAt: 1_000,
+      lease: { maxTtlMs: 120_000 },
+      catalog: [
+        { platform: scenario.platform, modelClasses: { [scenario.model]: scenario.deviceClass } },
+      ],
+      leases: [{ id: leaseId, deviceId: "record", ttlMs: 120_000, ttlDeadline: 121_000 }],
+    } as unknown as WorkerView;
+    const { ctx, relayed } = await fakeGatewayContext(
+      "agent-device",
+      agentDeviceModule.config.defaults,
+      { serving: [view] },
+    );
+    const loaded = await agentDeviceModule.loadGateway!();
+    const module = loaded.createGateway({
+      ...ctx,
+      leases: { ...ctx.leases, all: () => [entry], resolve: () => entry },
+      grantedDevices: () => [
+        {
+          id: "record",
+          workerId: "w1",
+          driverDeviceId: scenario.address,
+          address: scenario.physical ? "not-the-phone-id" : scenario.address,
+          physical: scenario.physical,
+          spec: {
+            platform: scenario.platform,
+            model: scenario.model,
+            physical: scenario.physical,
+          },
+        },
+      ],
+    } as never);
+    const handle = module.mount!({
+      dispatch: (() =>
+        Promise.resolve({ leases: [{ id: leaseId, ttlDeadline: 121_000 }] })) as never,
+    });
+    const adopted = await envelopeOf(
+      await handle(
+        new Request("http://simlock.test/v1/agent-device/rpc", {
+          method: "POST",
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "agent_device.command",
+            params: { command: "boot", meta: { leaseId } },
+          }),
+        }),
+        tokenIdentity("tok_one"),
+      ),
+    );
+    expect(adopted.result).toMatchObject({
+      ok: true,
+      data: {
+        platform: scenario.platform,
+        target: scenario.target,
+        device: scenario.model,
+        id: scenario.address,
+        kind: scenario.kind,
+        booted: true,
+      },
+    });
+    expect(relayed).toEqual([]);
+  }
   it("A runner sends `boot` on its lease and simlock answers it; agent-device gets no `boot`", async () => {
     for (const scenario of [
       {
@@ -1055,48 +1191,9 @@ describe("the agent-device front's request rules", () => {
         flags: {},
         physical: true,
       },
-    ]) {
-      const rig: Rig = scenario.physical
-        ? await setUpWithPhone()
-        : await setUp({ drivers: bothDrivers });
-      rig.fake.nameDeviceInNextReply("none");
-      await granted(rig, 1, {
-        platform: scenario.platform,
-        ...("omitTarget" in scenario ? {} : { target: scenario.target }),
-        ...(scenario.physical ? { physical: true } : {}),
-      });
-      const address = scenario.physical ? phoneSerial : idOf(rig, 1);
-      const flags =
-        "udid" in scenario.flags
-          ? { udid: address }
-          : "device" in scenario.flags
-            ? { device: `simlock-${address}` }
-            : scenario.flags;
-      const answer = await envelopeOf(
-        await runCommand(rig, "boot", 1, {
-          flags,
-          ...(scenario.runtime && { runtime: scenario.runtime }),
-        }),
-      );
-      if ("omitTarget" in scenario) {
-        expect(answer.result?.["data"]).toMatchObject({ target: "mobile" });
-      }
-      expect(answer.result).toMatchObject({
-        ok: true,
-        data: {
-          platform: scenario.platform,
-          target: scenario.target,
-          device: "device" in scenario.flags ? `simlock-${address}` : scenario.model,
-          id: address,
-          kind: scenario.kind,
-          booted: true,
-        },
-      });
-      expect(
-        commandsReceived(rig).filter((request) => request.params?.["command"] === "boot"),
-      ).toEqual([]);
+    ] satisfies BootScenario[]) {
+      await bootsOnItsLease(scenario);
     }
-
     for (const scenario of [
       {
         platform: "ios",
@@ -1125,81 +1222,8 @@ describe("the agent-device front's request rules", () => {
         target: "mobile",
         address: "pixel-id",
       },
-    ] as const) {
-      const leaseId = hex(1);
-      const entry = {
-        gatewayLeaseId: leaseId,
-        workerLeaseId: leaseId,
-        workerId: "w1",
-        ownerId: "tok_one",
-        requesterId: leaseId,
-      };
-      const view = {
-        id: "w1",
-        label: "w1",
-        connection: "connected",
-        drained: false,
-        catalogReadAt: 1_000,
-        lease: { maxTtlMs: 120_000 },
-        catalog: [
-          { platform: scenario.platform, modelClasses: { [scenario.model]: scenario.deviceClass } },
-        ],
-        leases: [{ id: leaseId, deviceId: "record", ttlMs: 120_000, ttlDeadline: 121_000 }],
-      } as unknown as WorkerView;
-      const { ctx, relayed } = await fakeGatewayContext(
-        "agent-device",
-        agentDeviceModule.config.defaults,
-        { serving: [view] },
-      );
-      const loaded = await agentDeviceModule.loadGateway!();
-      const module = loaded.createGateway({
-        ...ctx,
-        leases: { ...ctx.leases, all: () => [entry], resolve: () => entry },
-        grantedDevices: () => [
-          {
-            id: "record",
-            workerId: "w1",
-            driverDeviceId: scenario.address,
-            address: scenario.physical ? "not-the-phone-id" : scenario.address,
-            physical: scenario.physical,
-            spec: {
-              platform: scenario.platform,
-              model: scenario.model,
-              physical: scenario.physical,
-            },
-          },
-        ],
-      } as never);
-      const handle = module.mount!({
-        dispatch: (() =>
-          Promise.resolve({ leases: [{ id: leaseId, ttlDeadline: 121_000 }] })) as never,
-      });
-      const adopted = await envelopeOf(
-        await handle(
-          new Request("http://simlock.test/v1/agent-device/rpc", {
-            method: "POST",
-            body: JSON.stringify({
-              id: 1,
-              jsonrpc: "2.0",
-              method: "agent_device.command",
-              params: { command: "boot", meta: { leaseId } },
-            }),
-          }),
-          tokenIdentity("tok_one"),
-        ),
-      );
-      expect(adopted.result).toMatchObject({
-        ok: true,
-        data: {
-          platform: scenario.platform,
-          target: scenario.target,
-          device: scenario.model,
-          id: scenario.address,
-          kind: scenario.kind,
-          booted: true,
-        },
-      });
-      expect(relayed).toEqual([]);
+    ] satisfies AdoptedScenario[]) {
+      await bootsOnAdoptedLease(scenario);
     }
   });
   it("A `boot` that names no lease, another token's lease, an ended lease or another device is refused", async () => {

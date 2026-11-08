@@ -1,16 +1,21 @@
 import type { Identity } from "../../auth/index.js";
 import { failure, frontReply, leaseEndedByHost, refusal, successReply } from "../shared/replies.js";
 import type { RpcRead } from "../shared/rpc.js";
-import { asRecord } from "../shared/selectors.js";
+import { asRecord, commandName } from "../shared/selectors.js";
 import { listLeases, type FrontContext } from "./context.js";
+
+export function isBootCall(kind: string, read: RpcRead & { readonly kind: "request" }): boolean {
+  return kind === "command" && commandName(asRecord(read.params)?.["command"]) === "boot";
+}
 
 export async function checkBootLease(
   context: FrontContext,
   identity: Identity,
   read: RpcRead & { readonly kind: "request" },
+  kind: string,
   leaseId: string | undefined,
 ): Promise<Response | undefined> {
-  if (leaseId === undefined) return undefined;
+  if (leaseId === undefined || !isBootCall(kind, read)) return undefined;
   const held = context.map.get(leaseId);
   if (held === undefined || held.identity.principal !== identity.principal) return undefined;
   if (held.endedBy !== undefined) return answerBoot(context, identity, read, leaseId);
