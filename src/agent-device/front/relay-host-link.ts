@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
-
 import type { Identity } from "../../auth/index.js";
 import type { Clock, TimerHandle } from "../../ports/index.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
 import { agentDeviceLeaseMaxTtlMs } from "../shared/daemon-environment.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
+import { relayTenant } from "../shared/tenant.js";
 import {
   frontReplyFor,
   markUnreachableAnswer,
@@ -72,30 +71,12 @@ export interface RelayHostLinkOptions {
 const NO_WORKER = "no worker connected to this gateway can serve agent-device";
 const HOLDER_CANNOT = "the worker holding this lease cannot serve agent-device";
 const TOO_OLD = "refused: this agent-device is too old to use through a gateway; update it";
-// why: agent-device accepts a tenant of 1 to 128 letters, digits, dots, underscores and hyphens.
-const MAX_TENANT_CHARS = 128;
-const HASH_CHARS = 27;
 const SWEEP_MS = 60_000;
 // why: after a restart the workers reconnect within this long; until then a lease the index lacks may still be one of theirs.
 const START_WINDOW_MS = 60_000;
 const WORKER_UNREACHABLE = "WORKER_UNREACHABLE";
 const TARGET_OF_CLASS: Record<string, string> = { desktop: "desktop", tv: "tv" };
 const FORBIDDEN = 403;
-
-// why: a character agent-device refuses (or a dot, the separator) becomes `_<hex>_`, so two names never share a tenant.
-function tenantPart(value: string): string {
-  return value.replace(/[^A-Za-z0-9-]/gu, (char) => `_${char.codePointAt(0)?.toString(16)}_`);
-}
-
-// why: `gw.<gateway instance id>.<principal>`, cut to 128 characters with a hash of the whole name when longer, so every input gives a tenant agent-device accepts and distinct inputs stay distinct.
-function relayTenant(instanceId: string, principal: string): string {
-  const tenant = `gw.${tenantPart(instanceId)}.${tenantPart(principal)}`;
-  if (tenant.length <= MAX_TENANT_CHARS) return tenant;
-  const hash = createHash("sha256")
-    .update(JSON.stringify([instanceId, principal]))
-    .digest("hex");
-  return `${tenant.slice(0, MAX_TENANT_CHARS - HASH_CHARS - 1)}.${hash.slice(0, HASH_CHARS)}`;
-}
 
 const UNREACHABLE: LinkStatus = { state: "unreachable" };
 
@@ -142,12 +123,15 @@ export class RelayHostLink implements HostLink {
     // why: a client pins the daemon it read `/health` from, which with several workers is often not the lease's worker's daemon, and that daemon refuses every pinned call as an instance mismatch (409).
     request.headers.delete("x-agent-device-instance");
     request.headers.delete("x-agent-device-upstream-instance");
-    const tenant = relayTenant(this.options.fleet.instanceId, identity.principal);
-    if (leaseId === undefined) return this.#forwardBare(request, tenant);
+    const { instanceId } = this.options.fleet;
+    if (leaseId === undefined) {
+      return this.#forwardBare(request, relayTenant(instanceId, identity.principal, undefined));
+    }
     const placed = this.#place(leaseId);
     if (placed === undefined || placed.ownerId !== identity.principal) {
       return refuseRequest(request, notYours(leaseId), FORBIDDEN);
     }
+    const tenant = relayTenant(instanceId, identity.principal, leaseId);
     return this.#relay(placed.workerId, request, tenant, leaseId);
   }
 

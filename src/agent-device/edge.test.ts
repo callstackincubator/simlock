@@ -55,6 +55,7 @@ import {
   bodyOf,
   envelopeOf,
   hex,
+  leaseTenant,
   allocateParams,
   allocate,
   granted,
@@ -300,10 +301,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("calls of two leases on one token reach agent-device as two tenants, and every call of one lease as one, though the client named another tenant", async () => {
     const rig = await setUp();
-    const named = { meta: { tenantId: "someone-else" }, tenantId: "someone-else" };
+    const named = { tenantId: "someone-else" };
     const tenants = (method: string) =>
       rig.fake.rpcRequests(method).map((request) => request.tenant);
-    const tenantOf = (n: number) => `tok_5f_one.${hex(n)}`;
+    const tenantOf = (n: number) => leaseTenant(principals.one, n);
 
     await granted(rig, 1, named);
     await granted(rig, 2, named);

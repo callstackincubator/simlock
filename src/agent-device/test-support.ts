@@ -306,6 +306,10 @@ export async function envelopeOf(response: Response): Promise<Envelope> {
 
 export const hex = (n: number): string => n.toString(16).padStart(32, "0");
 
+// why: the tenant a worker gives a lease's calls: the principal with `_` written `_5f_`, a dot, the lease id.
+export const leaseTenant = (principal: string, n: number): string =>
+  `${principal.replace(/_/gu, "_5f_")}.${hex(n)}`;
+
 export function allocateParams(
   n: number,
   extra: Record<string, unknown> = {},

@@ -3,7 +3,16 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { release } from "./test-edge.js";
-import { command, granted, hex, principals, secrets, setUp, type Rig } from "./test-support.js";
+import {
+  command,
+  granted,
+  hex,
+  leaseTenant,
+  principals,
+  secrets,
+  setUp,
+  type Rig,
+} from "./test-support.js";
 
 async function sessionFolder(rig: Rig, path: string): Promise<void> {
   await rig.filesystem.mkdirp(path);
@@ -19,17 +28,18 @@ describe("agent-device session folders on a worker", () => {
     await command(rig, "snapshot", 1, {}, { session: "my-session" });
     await command(rig, "snapshot", 1, {}, { session: "qa/ios" });
     await command(rig, "snapshot", 1, {}, { session: "x/../../../victim" });
+    const tenantOne = leaseTenant(principals.one, 1);
     const own = [
       join(sessions, hex(1)),
-      join(sessions, `${principals.one}_${hex(1)}`),
-      join(sessions, `${principals.one}_my-session`),
-      join(sessions, `${principals.one}_qa_ios`),
-      join(sessions, `${principals.one}_x_.._.._.._victim`),
+      join(sessions, `${tenantOne}_${hex(1)}`),
+      join(sessions, `${tenantOne}_my-session`),
+      join(sessions, `${tenantOne}_qa_ios`),
+      join(sessions, `${tenantOne}_x_.._.._.._victim`),
     ];
-    const other = join(sessions, `${principals.two}_${hex(2)}`);
+    const other = join(sessions, `${leaseTenant(principals.two, 2)}_${hex(2)}`);
     // why: the in-memory filesystem keeps `..` as a name, so this folder is the exact path a lease end would remove if the wire-supplied name `x/../../../victim` reached it with its separators; `join` would fold it away.
-    const victim = `${sessions}/${principals.one}_x/../../../victim`;
-    await sessionFolder(rig, join(sessions, `${principals.one}_x`));
+    const victim = `${sessions}/${tenantOne}_x/../../../victim`;
+    await sessionFolder(rig, join(sessions, `${tenantOne}_x`));
     for (const path of [...own, other]) await sessionFolder(rig, path);
     await rig.filesystem.mkdirp(victim);
 

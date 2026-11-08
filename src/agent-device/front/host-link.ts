@@ -5,6 +5,7 @@ import type { AgentDeviceHost } from "../host/host.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
 import { frontReplyFor, notAvailable } from "../shared/replies.js";
 import { classifyCall, readRpcBody } from "../shared/rpc.js";
+import { workerTenant } from "../shared/tenant.js";
 
 export type LinkStatus =
   | {
@@ -83,7 +84,10 @@ export class RoutedHostLink implements HostLink {
       }
       dropInstancePins(request);
     }
-    return this.hosts[role].forward(request, identity);
+    // why: a relayed call's principal is the gateway's tenant already, which names its lease; a worker's own call gets its lease's tenant here.
+    const tenant =
+      identity.via === "relay" ? identity.principal : workerTenant(identity.principal, leaseId);
+    return this.hosts[role].forward(request, identity, tenant);
   }
 
   // why: a lease that ended no longer needs its daemon remembered, and the map holds only live phone leases.
