@@ -3,7 +3,8 @@
 Rebuild the console to the look in [DESIGN.md](../DESIGN.md). The reference
 is the renders here, not the words: an agent compares its page with its
 render and stops only when the two differ in data alone, apart from the
-explicit Fleet navigation-link and Baselines filter/link amendments under stages 2 and 5.
+explicit Fleet navigation-link, Baselines filter/link, preserved sidebar-control
+and evidence-backed WCAG-AA amendments in DESIGN.md.
 
 | Render                                                   | Page                                  |
 | -------------------------------------------------------- | ------------------------------------- |
@@ -54,7 +55,7 @@ maintainer accepts or adjusts them from a screenshot.
    each page with the fixture data, and writes `current/<page>.png` beside
    this file.
 2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
-   record the explicit stage-2 Fleet and stage-5 Baselines amendments, then
+   record the explicit Fleet, Baselines, sidebar-control and WCAG-AA amendments, then
    list every other difference that is not data: a missing element, a wrong
    size, radius, colour, weight, spacing, alignment, a line that wraps or
    is cut where the render's is not. Fix, rerun, repeat. The fixture data
@@ -73,7 +74,10 @@ describes what the page now shows (documentation rule 9).
 ## Stages
 
 Stage 0 blocks the rest. Stages 1–6 run in parallel, each on its own
-branch from stage 0's merge, each one GPT 6.1 Sol agent. Stage 7 runs last.
+branch from stage 0's reviewed pinned head; start Overview and Fleet first,
+at most two agents in parallel. Subsequent delivery uses GPT 6.1 Terra;
+completed Sol spec checks remain valid. Stage 7 runs last. Keep the stack
+open and merge only after the complete feature passes its gate.
 
 ### 0. Foundation and harness
 
@@ -119,6 +123,14 @@ One agent; everything else waits for it.
 - Verify: the shell (sidebar, header, one card) against the top-left of
   `1-overview.png`; every existing page still renders with the new
   primitives, even if its layout is still the old one.
+- The preserved desktop collapse/expand button is in the wordmark row, the
+  account stays at the bottom, and the phone keeps its menu. Record that
+  exception in stage 0 and stage 7 paired images. For the sidebar group
+  labels, `#6f6f79` on `#141416` is 3.702:1; `#8e8e97` is 5.665:1.
+  Record every other necessary foreground or stroke change with selector,
+  before/after colours, ratios and paired images. Never change original PNGs.
+  Stage 7 removes the temporary `ui/src/state/navigation.ts` Fallow entry
+  after real page imports reach the facade. (decided in delivery, pending the maintainer)
 
 ### 1. Overview — `1-overview.png`
 

@@ -45,7 +45,7 @@ Actions and search:
 
 Look:
 
-- The renders in `docs/internal/console-redesign/renders/` are the reference and `docs/internal/DESIGN.md` the words; a screen that differs from its render is wrong until the render is changed.
+- The renders in `docs/internal/console-redesign/renders/` are the reference and `docs/internal/DESIGN.md` the words; only its explicit Fleet, Baselines, sidebar-control and evidence-backed WCAG-AA amendments permit differences.
 - Colour is never the only signal: a status is a pill with the daemon's word, a `Slots` group carries its counts as its accessible name, a `Meter` or a ring only shades a figure printed beside it.
 - Orange is brand and interaction only: never a state. Danger is `--status-error`.
 - Text that can grow (hostname, holder, device, baseline) is cut on one line with the whole value in `title`; a holder id is shortened in the middle by one helper in `src/model/` and nowhere else. A status pill never shares a line with such text.

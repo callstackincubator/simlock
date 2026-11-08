@@ -3,7 +3,8 @@
 How the web console looks. The reference is the set of renders in
 [console-redesign/renders/](console-redesign/renders/) and the prototype that
 draws them, [console-redesign/prototype/d.mjs](console-redesign/prototype/d.mjs):
-apart from the explicit Fleet and Baselines reference amendments below,
+apart from the explicit Fleet, Baselines, sidebar-control and WCAG-AA
+reference amendments below,
 when this guide and a render disagree, the render wins and this guide gets
 fixed. The tokens live in `ui/src/ds/foundation.css`; change this guide and
 that file together. The website and every other brand visual follow
@@ -52,7 +53,7 @@ own values; a change to it ships without a render until one exists.
 | `--surface`       | `#141416` | cards, the sidebar                                        |
 | `--surface-2`     | `#1b1b1f` | table headers, group rows, a filter group's track, a box inside a card |
 | `--border`        | `#232327` | card edges, dividers, grid lines                          |
-| `--border-strong` | `#3a3a41` | a button's or `kbd`'s edge, a free slot's dashed outline  |
+| `--border-strong` | `#75757d` | a button's or `kbd`'s edge, a free slot's dashed outline  |
 | `--text`          | `#ececea` | text                                                      |
 | `--text-muted`    | `#8e8e97` | units, second lines, labels, inactive links and tabs      |
 | `--accent`        | `#ff7a1a` | orange fills: wordmark block, primary button, tab underline, selected row's bar, a chart's line and its hot bar, a checked facet |
@@ -64,7 +65,7 @@ own values; a change to it ships without a render until one exists.
 | `--status-ok`     | `#4ade80` | healthy, connected, ready, live                           |
 | `--status-warn`   | `#facc15` | needs a look soon: drained, stale, over a limit, absent   |
 | `--status-error`  | `#f87171` | broken: disconnected, quarantined, failed                 |
-| `--status-idle`   | `#6f6f79` | neither: shut down, waiting, unknown, booting             |
+| `--status-idle`   | `#a8a29e` | neither: shut down, waiting, unknown, booting             |
 
 Orange is brand and interaction only, never a state. A status always has a
 word, drawn as a **pill** (below); the colour is the second signal. Use the
@@ -135,6 +136,8 @@ own that one of them draws. Named sizes and colours are above.
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the
   connection as `● connected` in `--status-ok`, and a sign-out icon.
+  The preserved desktop collapse/expand control sits in the wordmark row,
+  not beneath the account; the phone retains its separate menu control.
 - **Page header.** Title 21px with its breadcrumb in muted 500
   (`Fleet / mac-studio-01`), an optional one-line muted subtitle that holds
   figures only (`updated 18:18:04`, `49.5 GB on 4 workers`), never a
@@ -242,6 +245,20 @@ sentences, the CLI's names, verbs on buttons, no exclamation marks, no
 subtitles that explain, no key-hint decoration, an empty page says so in one
 line.
 
+
+## Sidebar and contrast reference amendments
+
+The desktop collapse/expand button in the wordmark row preserves the existing
+action and is an addition to the render; the account remains at the bottom.
+Stage 0 and stage 7 paired images must show this exception. Where a reference
+foreground or essential stroke fails WCAG AA, change only that colour, keeping
+the reference geometry, typography and fills. Record the selector, colours,
+ratios and paired images; this does not exempt other visual differences.
+
+For `.nav-group-label` on `--surface` (`#141416`), the reference's `#6f6f79`
+is 3.702:1; `--text-muted` (`#8e8e97`) is 5.665:1. Both-theme axe must
+evaluate `color-contrast`, not suppress it. The original renders stay intact.
+(decided in delivery, pending the maintainer)
 
 ## Fleet reference amendment
 
