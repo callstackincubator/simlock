@@ -102,6 +102,41 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("every view", () => {
+  test("existing pages keep usable shared controls after retired-token substitution in both themes", async ({
+    page,
+  }) => {
+    const { host, pages } = await hostWithLease();
+    try {
+      for (const [theme, background, surface] of [
+        ["light", "rgb(248, 248, 247)", "rgb(233, 233, 231)"],
+        ["dark", "rgb(12, 12, 14)", "rgb(27, 27, 31)"],
+      ] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.goto(host.url);
+        await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
+        await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
+        await signIn(page, host.tokens.operator);
+        await addInboxItems(page, () => [waitingItem("req_tokens", 125_000)]);
+        await visit(page, host, "/inbox");
+        const inboxRow = page.locator(".inbox-row").first();
+        await inboxRow.hover();
+        await expect(inboxRow).toHaveCSS("background-color", surface);
+        await visit(page, host, "/");
+        const overviewRow = page.locator(".overview-row").first();
+        await overviewRow.hover();
+        await expect(overviewRow).toHaveCSS("background-color", surface);
+        await visit(page, host, pages.device);
+        await page.getByRole("tab", { name: "Screen" }).click();
+        await expect(page.locator(".phone")).toHaveCSS("background-color", background);
+        await page.getByRole("button", { name: "Close" }).click();
+        await page.getByRole("button", { name: "Sign out" }).click();
+        await expect(page.getByLabel("Operator token")).toBeVisible();
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("every view has no horizontal page scroll at 360px wide", async ({ page }) => {
     const { host, pages } = await hostWithLease();
     try {
