@@ -291,6 +291,31 @@ describe("Fleet worker actions", () => {
     await waitFor(() => expect(rowOf("drain-a")).not.toHaveTextContent("drained"));
   });
 
+  it("a right-click on a worker's row opens the entries of its ⋯, and Escape closes them", async () => {
+    const view = renderConsole({
+      path: "/fleet",
+      routes: {
+        "/v1/workers": {
+          body: { workers: [worker({ connection: "disconnected", id: "wrk_g", label: "gone-a" })] },
+        },
+      },
+    });
+    await screen.findByRole("link", { name: "gone-a" });
+    await view.user.click(screen.getByRole("button", { name: "Actions for gone-a" }));
+    const viaButton = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    await view.user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+
+    await view.user.pointer({ keys: "[MouseRight]", target: rowOf("gone-a") });
+
+    expect(await screen.findByRole("menu")).toBeVisible();
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(viaButton);
+    expect(viaButton).toEqual(["View leases", "Drain", "Remove worker"]);
+    expect(window.location.pathname).toBe("/fleet");
+    await view.user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
   it("a stopped worker is removed from its page once its name is typed exactly, and a connected worker offers no Remove", async () => {
     let workers = [
       worker({ connection: "disconnected", id: "wrk_g", label: "gone-a" }),

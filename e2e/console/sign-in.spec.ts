@@ -176,4 +176,34 @@ test.describe("signing in through a proxy", () => {
       await proxied.dispose();
     }
   });
+
+  test("the proxy's own session ending reloads the page onto the proxy's login page", async ({
+    page,
+  }) => {
+    const proxied = await startProxiedDaemon();
+    try {
+      await page.goto(proxied.url);
+      await expect(page.getByText("Signed in as Alice")).toBeVisible();
+
+      proxied.endSession();
+      // why: the console reads again when the operator returns to the tab, so the next request
+      // comes at once.
+      await page.evaluate(() => {
+        const show = (state: "hidden" | "visible") => {
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            get: () => state,
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        };
+        show("hidden");
+        show("visible");
+      });
+
+      await expect(page).toHaveURL(proxied.loginUrl);
+      await expect(page.getByRole("heading", { name: "Proxy login" })).toBeVisible();
+    } finally {
+      await proxied.dispose();
+    }
+  });
 });

@@ -558,6 +558,10 @@ const PROXY_HEADER = "cf-access-jwt-assertion";
 export interface ProxiedDaemon {
   readonly url: string;
   readonly daemon: RunningDaemon;
+  // why: the proxy's own login page, where it sends a browser whose proxy session has ended.
+  readonly loginUrl: string;
+  // why: the proxy's session ends: every request but the daemon's health check is sent to its login page.
+  endSession(): void;
   dispose(): Promise<void>;
 }
 
@@ -579,6 +583,7 @@ export async function startProxiedDaemon(
       .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
       .sign(privateKey);
   let daemonPort = 0;
+  let ended = false;
   const listen = (server: Server, port: number) =>
     new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const close = (server: Server) =>
@@ -586,6 +591,15 @@ export async function startProxiedDaemon(
       server.closeAllConnections();
       server.close(() => resolve());
     });
+
+  // why: a proxy's login page is on its sign-in provider's host, so `fetch` cannot follow the redirect to it.
+  const login = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end("<h1>Proxy login</h1>");
+  });
+  const loginPort = await freeLoopbackPort();
+  await listen(login, loginPort);
+  const loginUrl = `http://127.0.0.1:${loginPort}/login`;
 
   const forward = async (req: IncomingMessage, res: ServerResponse) => {
     const headers = {
@@ -615,6 +629,11 @@ export async function startProxiedDaemon(
       res.end("<h1>Signed out of the proxy</h1>");
       return;
     }
+    if (ended && req.url !== "/v1/healthz") {
+      res.writeHead(302, { location: loginUrl });
+      res.end();
+      return;
+    }
     void forward(req, res);
   });
   const proxyPort = await freeLoopbackPort();
@@ -636,16 +655,20 @@ export async function startProxiedDaemon(
       },
     });
   } catch (error: unknown) {
-    await close(proxy);
+    await Promise.all([close(proxy), close(login)]);
     throw error;
   }
   daemonPort = daemon.port;
   return {
     daemon,
     dispose: async () => {
-      await close(proxy);
+      await Promise.all([close(proxy), close(login)]);
       await daemon.dispose();
     },
+    endSession: () => {
+      ended = true;
+    },
+    loginUrl,
     url: `http://127.0.0.1:${proxyPort}/`,
   };
 }

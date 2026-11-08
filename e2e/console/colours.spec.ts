@@ -390,6 +390,64 @@ test.describe("colours and sizes the style engine decides", () => {
     }
   });
 
+  test("a row menu shows its dangerous entry last, after a separator, in the error colour", async ({
+    gateway,
+    page,
+  }) => {
+    await stubJson(page, "/v1/workers", () => ({
+      workers: [
+        staticWorker({ connection: "disconnected", id: "wrk_gone", label: "gone-a", load: false }),
+      ],
+    }));
+    await openFleet(page, gateway.url, gateway.tokens.operator);
+    await row(page, "gone-a").getByRole("button", { name: "Actions for gone-a" }).click();
+
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText(["View leases", "Drain", "Remove worker"]);
+    const order = await menu.evaluate((element) =>
+      [...element.querySelectorAll('[role="menuitem"], [role="separator"]')].map((node) =>
+        node.getAttribute("role"),
+      ),
+    );
+    expect(order).toEqual(["menuitem", "menuitem", "separator", "menuitem"]);
+    const colours = await menu
+      .getByRole("menuitem")
+      .evaluateAll((items) => items.map((item) => getComputedStyle(item).color));
+    const error = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--status-error)";
+      document.body.append(probe);
+      const colour = getComputedStyle(probe).color;
+      probe.remove();
+      return colour;
+    });
+    expect(colours[2]).toBe(error);
+    expect(colours.slice(0, 2)).not.toContain(error);
+  });
+
+  test("a drawer's close button is 30px tall with the button's 1px border", async ({
+    gateway,
+    page,
+  }) => {
+    await stubJson(page, "/v1/inbox", () => ({ items: [waitingItem("req_close", 125_000)] }));
+    await page.goto(
+      new URL(`/inbox/${encodeURIComponent("request/req_close/waiting")}`, gateway.url).toString(),
+    );
+    await signIn(page, gateway.tokens.operator);
+
+    const close = page.getByRole("dialog").getByRole("button", { exact: true, name: "Close" });
+    await expect(close).toBeVisible();
+    const shape = await close.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        border: style.borderTopWidth,
+        borderStyle: style.borderTopStyle,
+        height: element.getBoundingClientRect().height,
+      };
+    });
+    expect(shape).toEqual({ border: "1px", borderStyle: "solid", height: 30 });
+  });
+
   test("existing pages keep usable shared controls after retired-token substitution in both themes, and the body follows the system setting", async ({
     page,
   }, testInfo) => {
