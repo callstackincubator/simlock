@@ -25,6 +25,17 @@ class FakeDeviceHubDomain {
   failing = "";
   hold: Promise<void> | undefined;
 
+  holdFirstImport(handle: { wait: () => Promise<unknown> }): void {
+    const gate = this.hold;
+    this.hold = undefined;
+    if (gate === undefined) return;
+    const wait = handle.wait.bind(handle);
+    handle.wait = async () => {
+      await gate;
+      return await wait();
+    };
+  }
+
   succeeds(command: string, args: readonly string[]): boolean {
     if (command === this.failing || (this.failing === "delete" && args[1] === "delete")) {
       return false;
@@ -38,27 +49,33 @@ class FakeDeviceHubDomain {
     if (verb === "import") this.domain = structuredClone(this.staged);
   }
 
+  // why: PlistBuddy's Add fails on a key that exists, and its Set and Delete on one that does not.
   private edit(command: string): boolean {
-    const [verb, path = "", value] = command.split(" ");
-    const [, , udid, key] = path.split(":");
-    const entry = udid === undefined ? undefined : this.staged[udid];
-    if (verb === "Delete" && entry !== undefined) {
-      delete this.staged[udid!];
-      return true;
-    }
-    if (verb === "Set" && entry?.[key!] !== undefined) {
-      entry[key!] = value === "true";
-      return true;
-    }
-    if (verb === "Add" && key === undefined && udid !== undefined && entry === undefined) {
-      this.staged[udid] = {};
-      return true;
-    }
-    if (verb === "Add" && entry !== undefined && key !== undefined) {
-      entry[key] = false;
-      return true;
-    }
-    return false;
+    const [verb = "", path = "", value] = command.split(" ");
+    const [, , udid = "", key] = path.split(":");
+    const entry = this.staged[udid];
+    if (verb === "Delete") return entry !== undefined && delete this.staged[udid];
+    if (verb === "Set") return this.setKey(entry, key, value === "true");
+    if (key === undefined) return this.addEntry(udid, entry);
+    return entry !== undefined && this.setKey(entry, key, false, true);
+  }
+
+  private addEntry(udid: string, entry: Record<string, unknown> | undefined): boolean {
+    if (udid === "" || entry !== undefined) return false;
+    this.staged[udid] = {};
+    return true;
+  }
+
+  private setKey(
+    entry: Record<string, unknown> | undefined,
+    key: string | undefined,
+    value: boolean,
+    adding = false,
+  ): boolean {
+    if (entry === undefined || key === undefined) return false;
+    if (!adding && entry[key] === undefined) return false;
+    entry[key] = value;
+    return true;
   }
 }
 
@@ -92,15 +109,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
           },
         ]).spawn(command, args, options);
         if (command === "xcrun" && args[1] === "delete") sawDelete?.();
-        if (command === "defaults" && args[0] === "import" && hub.hold !== undefined) {
-          const gate = hub.hold;
-          hub.hold = undefined;
-          const wait = handle.wait.bind(handle);
-          handle.wait = async () => {
-            await gate;
-            return await wait();
-          };
-        }
+        if (command === "defaults" && args[0] === "import") hub.holdFirstImport(handle);
         return handle;
       },
       spawnStreaming: () => {
