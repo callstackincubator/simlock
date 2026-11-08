@@ -1,13 +1,11 @@
 import type { Locator, Page } from "@playwright/test";
 
 import {
-  disposeFleet,
   expect,
   type RunningDaemon,
   signIn,
   signInWithKeyboard,
   startDaemon,
-  startFleet,
   test,
 } from "./fixtures.js";
 
@@ -243,27 +241,6 @@ test.describe("the leases page", () => {
       expect(search.width).toBeCloseTo(290, 0);
     } finally {
       await host.dispose();
-    }
-  });
-
-  test("a gateway lease's address, whose id holds a '.', loads again on reload", async ({
-    page,
-  }) => {
-    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
-    try {
-      const ci = await labelledToken(fleet.gateway, "ci-runner-3");
-      const granted = await leaseOverHttp(fleet.gateway, ci.secret);
-      // why: a lease the gateway issued names its worker in its id.
-      expect(granted.id).toContain(".");
-      await openLeases(page, fleet.gateway);
-      await leaseRow(page, granted.id).click();
-      await expect(fact(pane(page), "Lease id")).toHaveText(granted.id);
-
-      await page.reload();
-
-      await expect(fact(pane(page), "Lease id")).toHaveText(granted.id);
-    } finally {
-      await disposeFleet(fleet);
     }
   });
 

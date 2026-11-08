@@ -438,3 +438,17 @@ describe("the Overview's worker wall", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/fleet"));
   });
 });
+
+describe("the range chips", () => {
+  it.each([
+    ["/", "the page header", STATS, ".page-head .page-actions"],
+    ["/usage", "the toolbar", FULL_STATS, ".toolbar .toolbar-start"],
+  ])("%s has its four range chips in %s", async (path, _where, routes, area) => {
+    renderConsole({ path, routes });
+
+    const chips = await screen.findByRole("group", { name: "Range" });
+
+    expect(chips.closest(area)).not.toBeNull();
+    expect(within(chips).getAllByRole("radio")).toHaveLength(4);
+  });
+});

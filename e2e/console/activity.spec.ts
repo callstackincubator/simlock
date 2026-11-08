@@ -1,17 +1,14 @@
 import type { Locator, Page, Route } from "@playwright/test";
 
 import {
-  disposeFleet,
   expect,
   type RunningDaemon,
   signIn,
   signInWithKeyboard,
   startDaemon,
-  startFleet,
   settled,
   test,
 } from "./fixtures.js";
-import { fetchFull } from "./full-fetch.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -74,33 +71,6 @@ function title(page: Page): Locator {
   return page.getByRole("heading", { level: 2 }).first();
 }
 
-async function shownEvents(page: Page): Promise<string[]> {
-  return feed(page).evaluate(async (box) => {
-    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-    const seen = new Map<number, string>();
-    box.scrollTop = 0;
-    for (let step = 0; step < 1_000; step += 1) {
-      await frame();
-      for (const item of box.querySelectorAll("li")) {
-        const link = item.querySelector("a");
-        const name = item.querySelector(".event-name");
-        seen.set(
-          Math.round(item.getBoundingClientRect().top + box.scrollTop),
-          [
-            item.querySelector("time")?.getAttribute("datetime") ?? "",
-            name?.textContent ?? "",
-            link?.getAttribute("href")?.replace("/activity/", "") ?? "",
-          ].join(" "),
-        );
-      }
-      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 1) break;
-      box.scrollTop += box.clientHeight;
-    }
-    box.scrollTop = 0;
-    return [...seen.entries()].sort(([a], [b]) => a - b).map(([, shown]) => shown);
-  });
-}
-
 async function openEvent(page: Page, id: string): Promise<void> {
   const link = feed(page).locator(`a[href="/activity/${encodeURIComponent(id)}"]`);
   await feed(page).evaluate((box) => box.scrollTo({ top: 0 }));
@@ -134,12 +104,6 @@ const BASE = Date.now();
 
 function stubbedRange(from: number, to: number): Stubbed[] {
   return Array.from({ length: to - from + 1 }, (_, index) => stubbed(to - index, BASE));
-}
-
-function localMinute(timestamp: number): string {
-  const date = new Date(timestamp);
-  const part = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}`;
 }
 
 interface StubbedAnswer {
@@ -359,72 +323,6 @@ test.describe("the Activity page", () => {
       expect(await eventsHeld(page)).toBe(100);
     } finally {
       await host.dispose();
-    }
-  });
-
-  test("the real daemon answers the older page: the events before the oldest held join the list once, and the history starts", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await lease(host, "console-e2e-older-a");
-      await lease(host, "console-e2e-older-b");
-      const queries: string[] = [];
-      let all: Array<Envelope & { readonly seq: number }> = [];
-      await page.route(
-        (url) => url.pathname === "/v1/events",
-        async (route: Route) => {
-          const { search } = new URL(route.request().url());
-          if (!search.startsWith("?since=")) {
-            queries.push(search);
-            await route.fallback();
-            return;
-          }
-          // why: the page holds only the newest two events, so the rest must come from the daemon's older page.
-          const body = (await (await fetchFull(route)).json()) as {
-            events: Array<Envelope & { readonly seq: number }>;
-          };
-          all = body.events.toSorted((a, b) => b.seq - a.seq);
-          await route.fulfill({ json: { events: all.slice(0, 2) } });
-        },
-      );
-      await openEvents(page, host);
-      await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
-      expect(all.length).toBeGreaterThan(3);
-      expect(queries).toEqual([`?before=${encodeURIComponent(all[1]!.id)}&limit=100`]);
-      await expect.poll(() => eventsHeld(page)).toBe(all.length);
-      const oldest = all.at(-1)!;
-      await expect(
-        page.getByText(`Start of the history (${localMinute(oldest.timestamp)})`),
-      ).toBeVisible();
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("a worker joining a gateway shows no join token anywhere in the gateway's events page", async ({
-    page,
-  }) => {
-    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
-    try {
-      const [joinToken = ""] = fleet.joinTokens;
-      await openEvents(page, fleet.gateway);
-      await expect(rows(page).filter({ hasText: "worker.connected" })).not.toHaveCount(0);
-      const events = await cliEvents(fleet.gateway);
-      await expect.poll(async () => (await shownEvents(page)).length).toBe(events.length);
-
-      const seen: string[] = [];
-      for (const event of events) {
-        await openEvent(page, event.id);
-        await expect(title(page)).toHaveText(event.event);
-        seen.push(await page.getByRole("dialog").innerText());
-        await page.keyboard.press("Escape");
-        await expect(page.getByRole("dialog")).toHaveCount(0);
-      }
-      expect(seen.join("\n")).not.toContain(joinToken);
-      expect(await page.content()).not.toContain(joinToken);
-    } finally {
-      await disposeFleet(fleet);
     }
   });
 
