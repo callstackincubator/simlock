@@ -1,9 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { MenuEntry } from "./menu";
-import { type Paging } from "./pager";
-import { type Column, DataTable } from "./table";
+import { type Column, DataTable, type MenuEntry, type Paging } from "./index";
 
 interface Row {
   readonly group: string;
@@ -106,8 +104,6 @@ function draw(props: {
 const PAGE_1 = pager(1, 2, "1–2 of 5");
 const PAGE_2 = pager(2, 2, "3–4 of 5");
 
-// why: testing 6 — the line names this file's seam: DataTable through its public props, drawn with
-// renderToStaticMarkup as menu.test.tsx does; the barrel adds no behaviour between the two.
 describe("a table drawn through its public props", () => {
   it("groups the paged rows with a heading that is never a data row, marks only the selected row, and prints a count instead of a pager", () => {
     const first = draw({ paging: PAGE_1 });
@@ -125,6 +121,8 @@ describe("a table drawn through its public props", () => {
     expect(dataRows(chosen).filter((row) => row.attrs.includes("table-row-selected"))).toHaveLength(
       1,
     );
+    expect(chosen.match(/aria-selected="true"/g)).toHaveLength(1);
+    expect(chosen.match(/table-row-selected/g)).toHaveLength(1);
 
     const counted = draw({ footer: "count", paging: PAGE_2 });
     expect(counted).toContain("3–4 of 5");

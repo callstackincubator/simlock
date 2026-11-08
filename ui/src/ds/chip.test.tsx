@@ -1,11 +1,11 @@
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { type AgentKind, AgentChip } from "./chip";
+import { AgentChip } from "./index";
 
-// why: testing 6 — the line names this file's seam: AgentChip through its public props, drawn with
-// renderToStaticMarkup as menu.test.tsx does. The kind arrives as a value because a screen computes
-// it and the DS may not read the model.
+type AgentKind = ComponentProps<typeof AgentChip>["kind"];
+
 describe("a holder's chip", () => {
   it("prints two mono capitals for a known tool, a dot for any other holder, and the whole id in its title", () => {
     const known: readonly [AgentKind, string][] = [
