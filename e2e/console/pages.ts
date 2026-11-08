@@ -214,6 +214,7 @@ async function openPhoneMenu(
 ): Promise<void> {
   await page.setViewportSize({ height: 844, width: 390 });
   await visit(page, host, "/");
+  await check("/ at 390px");
   await page.getByRole("button", { name: "Open menu" }).click();
   await settled(page);
   await check("phone menu");
