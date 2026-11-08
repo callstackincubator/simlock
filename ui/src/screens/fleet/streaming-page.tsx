@@ -78,9 +78,6 @@ function StreamingBody(props: { readonly page: StreamingPageView; readonly worke
               <Status tone={device.status.tone}>{device.status.word}</Status>
             )}
           </div>
-          <span className="page-note">
-            {device.platform} {device.runtime} · watching since {page.since}
-          </span>
         </div>
         <div className="page-actions">
           <Button onClick={page.stop}>Stop watching</Button>

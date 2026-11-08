@@ -108,7 +108,6 @@ export function ActivityContent(props: {
   return (
     <Page
       title="Activity"
-      note="newest first"
       actions={
         <>
           <SearchField

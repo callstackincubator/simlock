@@ -180,7 +180,7 @@ test.describe("the console's layout", () => {
     }
   });
 
-  test("a fleet tile's ⋯ lies inside the tile with its 14px padding to the right edge, and an Inbox row's button has 8px above and below", async ({
+  test("a Fleet row's ⋯ lies inside the row with its 10px padding to the right edge, and an Inbox row's button has 8px above and below", async ({
     page,
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
@@ -189,9 +189,11 @@ test.describe("the console's layout", () => {
       const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
       await answerWithoutLoad(page);
       await openPage(page, fleet.gateway, "/fleet", "Fleet", false);
-      const menu = page.locator(".fleet-tile").getByRole("button", { name: /^Actions for/ });
+      const menu = page
+        .locator(".fleet-table tbody tr")
+        .getByRole("button", { name: /^Actions for/ });
       const box = await menu.evaluate((button) => {
-        const tile = button.closest(".fleet-tile")?.getBoundingClientRect();
+        const tile = button.closest("tr")?.getBoundingClientRect();
         const own = button.getBoundingClientRect();
         return {
           left: own.left,
@@ -201,7 +203,7 @@ test.describe("the console's layout", () => {
         };
       });
       expect(box.left).toBeGreaterThanOrEqual(box.tileLeft);
-      expect(box.tileRight - box.right).toBe(15);
+      expect(box.tileRight - box.right).toBe(10);
 
       expect((await fleet.gateway.cli(["worker", "drain", id])).code).toBe(0);
       await openPage(page, fleet.gateway, "/inbox", "Inbox", true);

@@ -164,7 +164,7 @@ describe("the events page", () => {
     const html = ready();
 
     expect(html).toContain('placeholder="Filter events"');
-    expect(html).toContain("newest first");
+    expect(html).not.toContain("newest first");
     const labels = [...html.matchAll(/<input type="radio"[^>]*\/><span>([^<]*)<\/span>/g)].map(
       (match) => match[1],
     );

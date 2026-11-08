@@ -18,6 +18,7 @@ import {
   StatusDot,
   Status,
   Tabs,
+  useNavigateTo,
 } from "../../ds";
 import {
   type DeviceRow,
@@ -72,19 +73,11 @@ export function WorkerPageBody({
 }) {
   const entries = useWorkerPageMenu(page);
   const again = entries.find((entry) => entry.key === "update-worker");
-  const note = [
-    page.system,
-    page.version,
-    page.overview.read === undefined ? undefined : `read ${page.overview.read}`,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" · ");
   return (
     <Page
       title={page.title}
       crumb={{ label: "Fleet", to: page.back }}
       status={<Pill tone={page.health.tone}>{page.health.word}</Pill>}
-      {...(note === "" ? {} : { note })}
       actions={<ActionBar label={`Actions for ${page.title}`} entries={entries} />}
     >
       {page.banners.map((banner) => (
@@ -199,26 +192,13 @@ function SideCard({ page }: { readonly page: WorkerPageView }) {
             ),
           },
         ]),
-    ...(Array.isArray(host.capabilities)
-      ? host.capabilities
-          .filter((row) => row.state !== "available")
-          .map((row) => ({
-            label: row.name,
-            value: (
-              <>
-                <Status tone={row.tone}>{row.state}</Status>
-                {row.reason === undefined ? null : ` ${row.reason}`}
-              </>
-            ),
-          }))
-      : []),
     {
       label: "Worker id",
       value: <span className="mono worker-id">{host.id}</span>,
     },
   ];
   return (
-    <aside className="worker-side" aria-label="Slots, host and baselines">
+    <aside className="worker-side" aria-label="Slots, host, capabilities and baselines">
       {overview.platforms.length === 0 ? null : (
         <section>
           <h2 className="fleet-label">Slots</h2>
@@ -240,6 +220,22 @@ function SideCard({ page }: { readonly page: WorkerPageView }) {
         <h2 className="fleet-label">Host</h2>
         <Facts facts={facts} />
       </section>
+      {Array.isArray(host.capabilities) && host.capabilities.length > 0 ? (
+        <section>
+          <h2 className="fleet-label">Capabilities</h2>
+          <ul className="worker-caps">
+            {host.capabilities.map((row) => (
+              <li key={row.name} title={row.reason}>
+                <span>{row.name}</span>
+                <Pill tone={row.tone}>{row.state === "available" ? "on" : row.state}</Pill>
+                {row.reason === undefined ? null : (
+                  <span className="muted worker-cap-reason">{row.reason}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <section>
         <h2 className="fleet-label">Baselines here</h2>
         {host.baselines.length === 0 ? (
@@ -296,78 +292,147 @@ function DevicesTab({ page }: { readonly page: WorkerPageView }) {
   }
   const devices = overview.devices ?? [];
   if (devices.length === 0) return <p className="muted worker-note">No devices.</p>;
+  return <DeviceTable devices={devices} watchTo={page.streamTo} />;
+}
+
+function holderOf(device: DeviceRow) {
+  const { holder } = device;
+  if (holder === undefined) return <span className="device-since">—</span>;
   return (
-    <ul className="worker-devices" aria-label="Devices">
-      {devices.map((device) => (
-        <DeviceTile key={device.id} device={device} watch={page.streamTo(device.id)} />
-      ))}
-    </ul>
+    <span className="device-held">
+      <AgentChip kind={holder.kind} title={holder.name} />
+      <Link className="mono" to={holder.to} title={holder.name}>
+        {holder.display}
+      </Link>
+    </span>
   );
 }
 
-function DeviceTile({ device, watch }: { readonly device: DeviceRow; readonly watch: string }) {
-  const { holder } = device;
-  const leased = holder !== undefined;
-  return (
-    <li className="worker-device">
-      <div className="worker-device-top">
-        <Link className="worker-device-name" to={device.to} title={device.model}>
-          {device.model}
-        </Link>
-        <div className="worker-device-sub">
-          <span className="mono" title={`${device.platform} ${device.runtime}`}>
+function DeviceTable(props: {
+  readonly devices: readonly DeviceRow[];
+  readonly watchTo: (deviceId: string) => string;
+}) {
+  const navigate = useNavigateTo();
+  const columns: readonly Column<DeviceRow>[] = [
+    {
+      cell: (device) => (
+        <>
+          <Link className="worker-device-name cell-line" to={device.to} title={device.model}>
+            {device.model}
+          </Link>
+          <span className="mono cell-line" title={`${device.platform} ${device.runtime}`}>
             {device.platform} {device.runtime}
           </span>
-          <Pill tone={device.status.tone} plain={device.status.word === "leased"}>
-            {device.status.word}
-          </Pill>
-        </div>
-      </div>
-      {leased ? (
-        <>
-          <div className="worker-device-holder">
-            <AgentChip kind={holder.kind} title={holder.name} />
-            <Link className="mono" to={holder.to} title={holder.name}>
-              {holder.display}
-            </Link>
-          </div>
-          <div
-            className="worker-device-ttl"
+        </>
+      ),
+      className: "device-name-cell",
+      header: "Device",
+      width: "190px",
+    },
+    {
+      cell: (device) => (
+        <Pill tone={device.status.tone} plain={device.status.word === "leased"}>
+          {device.status.word}
+        </Pill>
+      ),
+      header: "State",
+      width: "96px",
+    },
+    { cell: holderOf, drop: 2, header: "Held by" },
+    {
+      cell: (device) =>
+        device.holder === undefined || device.ttl === undefined ? (
+          <span className="device-since">—</span>
+        ) : (
+          <span
+            className="device-expires"
             title={device.expires === undefined ? undefined : `expires in ${device.expires}`}
           >
             <b className="mono">{device.ttl}</b>
             {device.ttlPercent === undefined ? null : (
               <Meter percent={device.ttlPercent} tone={device.ttlTone} size="thin" />
             )}
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="worker-device-idle">
-            {device.status.word === "ready" ? "warm, waiting for a lease" : device.status.word}
-          </p>
-          <div className="worker-device-spacer" />
-        </>
-      )}
-      <div className="worker-device-foot">
-        <Link className="button button-secondary button-sm" to={watch}>
-          Watch
-        </Link>
-        {device.timeNote === undefined ? null : <span>{device.timeNote}</span>}
-      </div>
-    </li>
+          </span>
+        ),
+      drop: 3,
+      header: "Expires in",
+      width: "136px",
+    },
+    {
+      cell: (device) => (
+        <span className="device-since" title={device.timeNote}>
+          {device.timeNote ?? "—"}
+        </span>
+      ),
+      drop: 1,
+      header: "Since",
+      width: "116px",
+    },
+    {
+      cell: (device) => {
+        const watch = props.watchTo(device.id);
+        return watch === "" ? null : (
+          <Link className="button button-secondary button-sm" to={watch}>
+            Watch
+          </Link>
+        );
+      },
+      className: "device-actions",
+      header: "Watch",
+      hideHeader: true,
+      width: "84px",
+    },
+  ];
+  return (
+    <DataTable
+      label="Devices"
+      rows={props.devices}
+      columns={columns}
+      rowId={(device) => device.id}
+      empty="No devices."
+      footer="count"
+      className="table-lines"
+      wide
+      menu={{
+        entries: (device) => [
+          {
+            danger: false,
+            disabled: false,
+            key: "details",
+            label: "Open details",
+            onSelect: () => navigate?.(device.to),
+          },
+          ...(device.lease === undefined
+            ? []
+            : [
+                {
+                  danger: false,
+                  disabled: false,
+                  key: "lease",
+                  label: "Open lease",
+                  onSelect: () => navigate?.(device.lease?.to ?? device.to),
+                },
+              ]),
+        ],
+        label: (device) => `Actions for ${device.model}`,
+      }}
+    />
   );
 }
 
 const WARM_COLUMNS: readonly Column<WarmRow>[] = [
-  { cell: (target) => target.model, header: "Model" },
-  { cell: (target) => target.runtime, header: "Runtime", mono: true },
-  { cell: (target) => target.mode, header: "Mode" },
-  { cell: (target) => target.origin, header: "Origin" },
-  { cell: (target) => target.wanted, header: "Wanted", numeric: true },
-  { cell: (target) => target.ready, header: "Ready", numeric: true },
-  { cell: (target) => target.booting, header: "Booting", numeric: true },
-  { cell: (target) => target.short, header: "Short", mono: true },
+  {
+    cell: (target) => <span title={target.model}>{target.model}</span>,
+    header: "Model",
+    width: "200px",
+  },
+  { cell: (target) => target.runtime, drop: 3, header: "Runtime", mono: true, width: "90px" },
+  { cell: (target) => target.mode, drop: 2, header: "Mode", width: "90px" },
+  { cell: (target) => target.origin, drop: 1, header: "Origin", width: "110px" },
+  { cell: (target) => target.wanted, header: "Wanted", numeric: true, width: "90px" },
+  { cell: (target) => target.ready, header: "Ready", numeric: true, width: "90px" },
+  { cell: (target) => target.booting, drop: 4, header: "Booting", numeric: true, width: "90px" },
+  { cell: (target) => target.short, header: "Short", numeric: true, width: "90px" },
 ];
 
 function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
@@ -394,6 +459,7 @@ function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
               rowId={(row) => row.key}
               empty="No targets."
               paging={inspector.warmPaging}
+              className="table-lines"
               wide
             />
           </>

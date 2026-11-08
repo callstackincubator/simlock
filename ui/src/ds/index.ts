@@ -10,7 +10,7 @@ export { ChoiceChips, Tabs } from "./choice";
 export { Feed } from "./feed";
 export { Facts } from "./facts";
 export { Icon, type IconName } from "./icon";
-export { Link, NavigationProvider } from "./link";
+export { Link, NavigationProvider, useNavigateTo } from "./link";
 export { Loaded, type LoadView, Refusal } from "./loaded";
 export { ActionBar, type MenuEntry, RowMenu } from "./menu";
 export { Meter } from "./meter";

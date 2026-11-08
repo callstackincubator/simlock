@@ -150,7 +150,7 @@ test.describe("every view", () => {
         );
         await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
         await visit(page, host, "/fleet");
-        await expect(page.locator(".fleet-card").first()).toHaveCSS("border-radius", "10px");
+        await expect(page.locator(".table-card").first()).toHaveCSS("border-radius", "10px");
         await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
         await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
         await expect(page.locator(".search-field-wrap .icon")).toBeVisible();

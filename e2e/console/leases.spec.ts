@@ -171,6 +171,8 @@ test.describe("the leases page", () => {
       { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
     ]);
     try {
+      // why: a narrow table leaves the Worker column out, so this reads the list at the designed width.
+      await page.setViewportSize({ height: 900, width: 1440 });
       const [workerA] = fleet.workers as [RunningDaemon];
       const ci = await labelledToken(fleet.gateway, "ci-runner-3");
       // Through the gateway with a token, through the gateway's socket, and on a worker itself.

@@ -185,30 +185,33 @@ describe("the fleet", () => {
     expect(none(false, "issues")).toContain("No worker matches.");
   });
 
-  it("draws a worker with something wrong as a card under Needs attention, and the rest as tiles under Healthy", () => {
+  it("draws the fleet as one table grouped under Needs attention and Healthy, one row a worker", () => {
     const markup = fleetHtml([WORKER, DRAINED, GONE]);
     const shown = text(markup);
 
     expect(shown).toContain("Needs attention 3");
     expect(shown).not.toContain("Healthy");
-    expect(markup.match(/fleet-card fleet-card-/g)).toHaveLength(3);
+    expect(markup).not.toContain("fleet-card");
+    expect(markup.match(/<tr class="row-(warn|error)"/g)).toHaveLength(3);
+    expect(markup).toContain('<tr class="row-error"');
+    expect(markup).toContain("table-lines");
+    expect(shown).toContain("Worker State Slots CPU Mem Disk Leases");
     expect(shown).toContain("1 lease left · accepts no new requests");
     expect(shown).toContain("last seen 14 min ago · 1 lease held");
     const healthy = fleetHtml([{ ...WORKER, load: undefined }]);
     expect(text(healthy)).toContain("Healthy 1");
-    expect(text(healthy)).toContain("worker-a 1 / 8");
-    expect(healthy).not.toContain("fleet-card-ok");
+    expect(text(healthy)).toContain("worker-a macOS 15.5");
+    expect(healthy).not.toContain("row-warn");
+    expect(healthy).not.toContain("row-error");
   });
 
-  it("gives each card its slots by platform, its three meters and its lease count", () => {
+  it("gives each row its slots, its three meters and its lease count", () => {
     const markup = fleetHtml([DRAINED]);
 
-    expect(markup).toContain('aria-label="iOS: 1 leased, 3 free"');
-    expect(markup).toContain('aria-label="Android: 4 free"');
+    expect(markup).toContain('aria-label="1 leased, 7 free"');
     expect(markup).toContain("--load-bar:28%");
-    expect(text(markup)).toContain("CPU 28% MEM 42% DISK 77%");
-    expect(text(markup)).toContain("memory pressure warn, 42% used");
-    expect(text(markup)).toContain("1 lease");
+    expect(text(markup)).toContain("28% 42% 77% 1");
+    expect(markup).toContain('title="worker-b"');
   });
 
   it("offers View leases as a plain link for a disconnected worker, and the drained worker's Undrain only on a gateway", () => {
@@ -261,8 +264,8 @@ describe("a worker's update on the Fleet screen", () => {
     expect(text(fleetHtml([WORKER]))).not.toContain("waiting for");
     const again = text(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />, GATEWAY));
     expect(again).toContain("Update to 1.5.0 failed (installing): EACCES Update again");
-    expect(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />)).toContain(
-      '<span class="page-note">macOS 15.5 · simlock 1.4.0 · 1.5.0 available · read 12 s ago</span>',
+    expect(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />)).not.toContain(
+      "page-note",
     );
     expect(text(idle)).not.toContain("Update again");
     expect(text(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />))).not.toContain(
@@ -272,13 +275,14 @@ describe("a worker's update on the Fleet screen", () => {
 });
 
 describe("a worker's page", () => {
-  it("is titled Fleet / name, with the health word beside it and the system and reading age beneath", () => {
+  it("is titled Fleet / name, with the health word beside it and no subtitle", () => {
     const markup = html(page(WORKER));
 
     expect(markup).toContain('<a class="page-crumb" href="/fleet">Fleet</a>');
     expect(markup).toMatch(/<h1[^>]*>.*worker-a<\/h1>/);
     expect(text(markup)).toContain("Fleet / worker-a memory pressure warn");
-    expect(text(markup)).toContain("macOS 15.5 · simlock 1.4.0 · read 12 s ago");
+    expect(markup).not.toContain("page-note");
+    expect(text(markup)).not.toContain("read 12 s ago");
   });
 
   it("draws CPU, memory, disk and slots as rings, each with its figure and one line of context", () => {
@@ -316,7 +320,7 @@ describe("a worker's page", () => {
     expect(shown).toContain("Baselines here ios-26-clean 8.1 GiB");
   });
 
-  it("draws a leased device as a tile with its holder, time left, Watch link and granted time", () => {
+  it("draws a leased device as a row with its holder, time left, Watch link and granted time", () => {
     const markup = html(page(WORKER));
     const shown = text(markup);
 
@@ -326,10 +330,10 @@ describe("a worker's page", () => {
     expect(shown).toContain("iPhone 17 iOS 26.0 leased");
     expect(shown).toContain("agent");
     expect(shown).toContain("01:00");
-    expect(shown).toMatch(/Watch granted \d\d:\d\d/);
+    expect(shown).toMatch(/granted \d\d:\d\d Watch/);
   });
 
-  it("draws a ready device as a warm tile that was booted, with no holder", () => {
+  it("draws a ready device as a row that was booted, with no holder", () => {
     const view: WorkerView = {
       ...WORKER,
       devices: [{ ...WORKER.devices![0]!, state: "ready", transitionAgeMs: 120_000 }],
@@ -338,8 +342,7 @@ describe("a worker's page", () => {
     const shown = text(html(page(view)));
 
     expect(shown).toContain("ready");
-    expect(shown).toContain("warm, waiting for a lease");
-    expect(shown).toMatch(/Watch booted \d\d:\d\d/);
+    expect(shown).toMatch(/booted \d\d:\d\d Watch/);
   });
 
   it("offers the Devices and Warm pool tabs only, with the events log on the page whichever is chosen", () => {
@@ -424,7 +427,7 @@ describe("a worker's page", () => {
     expect(shown).toContain("Protocol incompatible gateway 35–35, worker 30–30");
   });
 
-  it("lists capabilities that are not available with their reasons in the host facts", () => {
+  it("groups every capability under its own label, with the reason of an unavailable one", () => {
     const view: WorkerView = {
       ...WORKER,
       capabilities: [
@@ -443,9 +446,9 @@ describe("a worker's page", () => {
     const shown = text(markup);
 
     expect(shown).toContain("xcode 16.4 (16F6)");
-    expect(shown).toContain("stream unavailable found 0.20.1, need 0.21.28 or later");
-    expect(shown).not.toContain("agent-device");
-    expect(markup).toContain("status-warn");
+    expect(shown).toContain("Capabilities agent-device on stream unavailable found 0.20.1");
+    expect(shown).toContain("Host macOS 15.5 xcode 16.4 (16F6) simlock 1.4.0 Worker id");
+    expect(markup).toContain("pill-warn");
   });
 });
 

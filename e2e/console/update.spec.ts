@@ -67,7 +67,9 @@ test.describe("the console updates a worker", () => {
         });
       });
       await openFleet(page, fleet.gateway);
-      const row = page.locator(".fleet-card").filter({ hasText: "upd-a" });
+      const row = page
+        .locator(".fleet-table tbody tr:not(.table-group)")
+        .filter({ hasText: "upd-a" });
       await expect(row).toBeVisible();
       await expect(page.locator(".update-notice")).toHaveText("simlock 0.3.0 · 0.4.0 available");
       await row.getByRole("button", { name: "Actions for upd-a" }).click();
@@ -108,10 +110,12 @@ test.describe("the console updates a worker", () => {
         await route.fulfill(answers[posts.length - 1] ?? { status: 500 });
       });
       await openFleet(page, fleet.gateway);
-      const row = page.locator(".fleet-card").filter({ hasText: "upd-b" });
+      const row = page
+        .locator(".fleet-table tbody tr:not(.table-group)")
+        .filter({ hasText: "upd-b" });
       const toasts = page.getByRole("region", { name: "Notifications" });
-      // why: an updating worker is a card with no menu of its own; its page offers the actions.
-      await row.getByRole("link", { name: "Details" }).click();
+      // why: the update's actions live on the worker's page, reached by the row's name.
+      await row.getByRole("link", { name: "upd-b", exact: true }).click();
       for (const toast of ["upd-b already runs 0.4.0", "Another update is running."]) {
         await page.getByRole("button", { name: "Actions for upd-b" }).click();
         await page.getByRole("menuitem", { name: "Update now" }).click();

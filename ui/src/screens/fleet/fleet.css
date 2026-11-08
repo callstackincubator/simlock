@@ -165,108 +165,10 @@
   width: 240px;
 }
 
-.fleet-group {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
-
-.fleet-group > .visual-group {
-  margin: 2px 2px 0;
-}
-
-.fleet-cards {
-  display: grid;
-  gap: 12px;
-}
-
-.fleet-cards-attention {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
-}
-
-.fleet-cards-healthy {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
-}
-
-/* Below the designed 1440 the healthy tiles give first: four columns, then three. */
-@media (min-width: 768px) and (max-width: 1439.98px) {
-  .fleet-cards-healthy {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 768px) and (max-width: 1099.98px) {
-  .fleet-cards-healthy {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-.fleet-card {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.fleet-card-error {
-  border-color: color-mix(in srgb, var(--status-error) 28%, var(--border));
-}
-
-.fleet-card-warn {
-  border-color: color-mix(in srgb, var(--status-warn) 28%, var(--border));
-}
-
-.fleet-card-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.fleet-card-title {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
 .fleet-name {
-  overflow: hidden;
   color: var(--text);
   font: 500 13.5px/1.45 var(--font-mono);
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fleet-os {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fleet-reason {
-  display: -webkit-box;
-  margin: 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.fleet-platforms {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 .fleet-label {
@@ -277,31 +179,15 @@
   text-transform: uppercase;
 }
 
-.fleet-platform {
-  width: 52px;
-  flex: none;
-}
-
-.fleet-platform-android {
-  margin-left: 12px;
-}
-
-.fleet-metrics {
-  display: flex;
-  gap: 14px;
+.fleet-table {
+  min-width: 0;
 }
 
 .fleet-metric {
   display: flex;
   min-width: 0;
-  flex: 1;
   align-items: center;
   gap: 8px;
-}
-
-.fleet-metrics .fleet-label {
-  width: 28px;
-  flex: none;
 }
 
 .fleet-metric .load-bar,
@@ -317,107 +203,18 @@
 }
 
 .fleet-metric b {
-  width: 32px;
+  width: 34px;
   flex: none;
   font: 500 12px var(--font-mono);
   text-align: right;
 }
 
-.fleet-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
+.fleet-table td.fleet-actions {
+  text-align: right;
 }
 
-.fleet-leases {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.fleet-tile {
-  gap: 10px;
-  padding: 12px 14px;
-}
-
-.fleet-tile-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.fleet-tile-head .fleet-name {
-  min-width: 0;
-  flex: 1;
-  font-size: 12.5px;
-}
-
-.fleet-fraction {
-  color: var(--text-muted);
-  font: 500 12px var(--font-mono);
-  white-space: nowrap;
-}
-
-.fleet-tile-slots {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.fleet-tile-slots {
-  min-height: 16px;
-}
-
-.fleet-tile-slots .slots-meter {
-  width: 100%;
-}
-
-.fleet-tile-slots .slots-meter > :last-child {
-  color: var(--text-muted);
-  font: 500 12px var(--font-mono);
-}
-
-.fleet-divider {
-  width: 1px;
-  height: 12px;
-  margin: 0 2px;
-  background: var(--border-strong);
-}
-
-.fleet-tile-metrics {
-  display: grid;
-  gap: 5px;
-}
-
-.fleet-tile-metrics .fleet-label {
-  color: var(--text);
-  font: inherit;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.fleet-tile-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-
-.fleet-tile-foot {
-  min-height: 18px;
-}
-
-.fleet-tile-foot .icon-button {
-  width: 20px;
-  height: 18px;
-  min-height: 0;
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
+.fleet-table .fleet-actions .button {
+  max-width: 100%;
 }
 
 .fleet-log {
@@ -486,11 +283,6 @@
 @media (max-width: 720px) {
   .fleet-controls .search-field-wrap {
     width: 100%;
-  }
-
-  .fleet-metrics {
-    flex-direction: column;
-    gap: 8px;
   }
 
   .fleet-log .visual-log {
@@ -690,112 +482,87 @@
   margin-bottom: 8px;
 }
 
-.worker-devices {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.worker-device {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  background: var(--surface);
-  box-shadow:
-    inset -1px 0 0 var(--border),
-    inset 0 -1px 0 var(--border);
-}
-
-.worker-device-top {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
+/* Devices and warm pool tables: the worker card is the panel, so the table sits edge to edge. */
+.worker-main .table-card {
+  border: 0;
+  border-radius: 0;
+  background: none;
 }
 
 .worker-device-name {
-  overflow: hidden;
   color: var(--text);
-  font-size: var(--text-md);
   font-weight: 500;
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.worker-device-sub {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.device-since {
   color: var(--text-muted);
-  font-size: 11px;
 }
 
-.worker-device-sub > .mono {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.worker-device-holder {
+.device-held {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 8px;
 }
 
-.worker-device-holder a {
+.device-held a {
   min-width: 0;
   overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.worker-device-ttl {
+.device-expires {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.worker-device-ttl b {
-  min-width: 40px;
+.device-expires > .mono {
+  width: 40px;
+  flex: none;
   font-size: 12px;
   font-weight: 500;
 }
 
-.worker-device-ttl .load-bar {
+.device-expires .load-bar {
   flex: 1;
+  min-width: 0;
 }
 
-.worker-device-idle {
+.table td.device-actions {
+  text-align: right;
+}
+
+.worker-caps {
+  display: grid;
+  gap: 8px;
   margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
+  padding: 0;
+  font-size: var(--text-md);
+  list-style: none;
 }
 
-.worker-device-spacer {
-  height: 22px;
-}
-
-.worker-device-foot {
+.worker-caps li {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-top: auto;
-  color: var(--text-muted);
-  font-size: 11.5px;
 }
 
-.worker-device-foot > span {
-  margin-left: auto;
+.worker-caps li > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-cap-reason {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
 }
 
 .worker-log {

@@ -137,9 +137,11 @@ async function openWorkerPage(page: Page, daemon: RunningDaemon): Promise<void> 
   await expect(title(page, view.label ?? view.id)).toBeVisible();
 }
 
-// why: a worker is a card or a tile on the Fleet page, found by the link that carries its name.
+// why: a worker is a row of the Fleet table, found by the link that carries its name.
 function row(page: Page, name: string): Locator {
-  return page.locator(".fleet-card").filter({ has: page.getByRole("link", { exact: true, name }) });
+  return page
+    .locator(".fleet-table tbody tr:not(.table-group)")
+    .filter({ has: page.getByRole("link", { exact: true, name }) });
 }
 
 async function openPage(page: Page, daemon: RunningDaemon, path: string, title: string) {
@@ -149,7 +151,7 @@ async function openPage(page: Page, daemon: RunningDaemon, path: string, title: 
 }
 
 function rowOf(page: Page, name: string): Locator {
-  return page.locator(".fleet-card").filter({ hasText: name });
+  return page.locator(".fleet-table tbody tr:not(.table-group)").filter({ hasText: name });
 }
 
 async function waitForDisconnected(gateway: RunningDaemon): Promise<void> {
@@ -343,19 +345,20 @@ function expectedRow(view: WorkerView): {
   readonly text: readonly string[];
   readonly slots: string;
   readonly bars: number;
+  readonly leases: string;
 } {
   const name = view.label ?? view.id;
   const system = view.host === undefined ? [] : [`${view.host.os} ${view.host.osVersion}`];
   if (view.connection === "incompatible") {
-    return { bars: 0, slots: "", text: [name, "incompatible"] };
+    return { bars: 0, leases: "—", slots: "", text: [name, "incompatible"] };
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
-  const lease = `${leased} ${leased === 1 ? "lease" : "leases"}`;
   return {
     bars: 3,
+    leases: String(leased),
     slots: slotsText(leased, limit),
-    text: [name, ...system, lease, view.drained ? "drained" : `${leased} / ${limit}`],
+    text: [name, ...system, ...(view.drained ? ["drained"] : [])],
   };
 }
 
@@ -370,7 +373,7 @@ test.describe("the workers page", () => {
         name: "ten",
         limit: 10,
         states: ["leased", "leased", "absent", "quarantined"],
-        label: "iOS: 2 leased, 1 absent, 1 quarantined, 6 free",
+        label: "2 leased, 1 absent, 1 quarantined, 6 free",
         fraction: "",
       },
       {
@@ -426,8 +429,8 @@ test.describe("the workers page", () => {
       await expect(slots.locator(".load-bar"), name).toHaveCount(limit > 10 ? 1 : 0);
       await expect(slots, name).toHaveText(fraction);
       if (name === "ten") {
-        await expect(slots).toHaveCSS("gap", "4px");
-        await expect(slots.locator(".slot").first()).toHaveCSS("height", "16px");
+        await expect(slots).toHaveCSS("gap", "3px");
+        await expect(slots.locator(".slot").first()).toHaveCSS("height", "12px");
         await expect(slots.locator('[title="iPhone 16 18.4, absent"]')).toHaveCount(1);
         await expect(slots.locator('[title="iPhone 16 18.4, quarantined"]')).toHaveCount(1);
       }
@@ -439,7 +442,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("Fleet shows every worker as a card or a tile with its name, state word, slots and leases, and the amended Add worker link", async ({
+  test("Fleet shows every worker as a row of one grouped table with its name, state word, slots and leases, and the amended Add worker link", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -462,20 +465,22 @@ test.describe("the workers page", () => {
       await answerWithLoad(page, { cpu: 12, disk: 40, memory: 50 });
       await openConsole(page, fleet.gateway);
 
-      await expect(page.locator(".fleet-card")).toHaveCount(listed.length);
+      await expect(page.locator(".fleet-table tbody tr:not(.table-group)")).toHaveCount(
+        listed.length,
+      );
       await expect(page.getByRole("link", { name: "Add worker" })).toHaveAttribute(
         "href",
         "https://callstackincubator.github.io/simlock/docs/gateway/joining-workers",
       );
-      await expect(page.getByRole("region", { name: "Needs attention" })).toContainText(
-        "old-worker",
-      );
+      await expect(page.locator(".table-group", { hasText: "Needs attention" })).toBeVisible();
+      await expect(row(page, "old-worker")).toHaveClass(/row-(warn|error)/);
       for (const view of listed) {
         const name = view.label ?? view.id;
         const want = expectedRow(view);
         const shown = row(page, name);
         for (const text of want.text) await expect(shown, name).toContainText(text);
         await expect(shown.locator(".fleet-metric .load-bar"), name).toHaveCount(want.bars);
+        await expect(shown.locator("td.num"), name).toHaveText(want.leases);
         if (want.slots !== "") await expect(shown.getByRole("img").first(), name).toBeVisible();
       }
     } finally {
@@ -484,7 +489,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("clicking a worker's name opens /fleet/<id> with Fleet / name as the page heading, its state word beside it, the system beneath, and the Devices tab selected", async ({
+  test("clicking a worker's name opens /fleet/<id> with Fleet / name as the page heading, its state word beside it, and the Devices tab selected", async ({
     daemon,
     page,
   }) => {
@@ -506,7 +511,8 @@ test.describe("the workers page", () => {
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
     await expect(title(page, host.label ?? host.id)).toBeVisible();
     await expect(page.locator(".page-title-row .pill")).toHaveText("connected");
-    await expect(page.locator(".page-note")).toContainText(`${os} ${osVersion}`);
+    await expect(page.locator(".page-note")).toHaveCount(0);
+    await expect(fact(page.locator(".worker-side"), os)).toContainText(osVersion);
     await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -551,7 +557,7 @@ test.describe("the workers page", () => {
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
 
-    await expect(page.locator(".fleet-card")).toHaveCount(1);
+    await expect(page.locator(".fleet-table tbody tr:not(.table-group)")).toHaveCount(1);
     await expect(page).toHaveURL(/\/fleet$/);
     await row(page, host.id).getByRole("link").first().click();
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
@@ -720,7 +726,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("a worker's devices are tiles, each with its state, and for a leased one its holder, time left and when it was granted", async ({
+  test("a worker's devices are rows of a table, each with its state, and for a leased one its holder, time left and when it was granted", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -748,11 +754,12 @@ test.describe("the workers page", () => {
         .first()
         .click();
 
-      const tiles = page.getByRole("list", { name: "Devices", exact: true });
-      await expect(tiles.locator(".worker-device")).toHaveCount(devices.length);
+      await page.setViewportSize({ height: 900, width: 1440 });
+      const table = page.getByRole("tabpanel").locator("table");
+      await expect(table.locator("tbody tr")).toHaveCount(devices.length);
       for (const device of devices) {
-        const shown = tiles
-          .locator(".worker-device")
+        const shown = table
+          .locator("tbody tr")
           .filter({ has: page.locator(`a[href*="/${encodeURIComponent(device.id)}?"]`) });
         await expect(shown.locator(".pill"), device.id).toHaveText(device.state);
         await expect(shown, device.id).toContainText(device.spec.model);
@@ -761,17 +768,15 @@ test.describe("the workers page", () => {
         );
         const held = view?.leases.find((candidate) => candidate.deviceId === device.id);
         if (held === undefined) {
-          if (device.state === "ready") {
-            await expect(shown, device.id).toContainText("warm, waiting for a lease");
-          }
-          await expect(shown.locator(".worker-device-ttl"), device.id).toHaveCount(0);
+          await expect(shown.locator(".device-held"), device.id).toHaveCount(0);
+          await expect(shown.locator(".device-expires"), device.id).toHaveCount(0);
           continue;
         }
-        await expect(shown.locator(".worker-device-holder a"), device.id).toHaveAttribute(
+        await expect(shown.locator(".device-held a"), device.id).toHaveAttribute(
           "href",
           new RegExp(`/leases/${encodeURIComponent(held.id)}/?$`),
         );
-        await expect(shown.locator(".worker-device-ttl b"), device.id).toHaveText(
+        await expect(shown.locator(".device-expires b"), device.id).toHaveText(
           /^\d+:\d\d(:\d\d)?$/,
         );
         await expect(shown, device.id).toContainText(/granted \d\d:\d\d/);
@@ -825,10 +830,10 @@ test.describe("the workers page", () => {
       expect(udid).not.toBe("");
 
       await openWorkerPage(page, host);
-      const devicesTable = page.getByRole("list", { name: "Devices", exact: true });
+      const devicesTable = page.getByRole("tabpanel").locator("table");
       const tileOf = (id: string) =>
         devicesTable
-          .locator(".worker-device")
+          .locator("tbody tr")
           .filter({ has: page.locator(`a[href*="/${encodeURIComponent(id)}?"]`) });
       const drawer = page.getByRole("dialog");
 
@@ -873,8 +878,8 @@ test.describe("the workers page", () => {
       await openWorkerPage(page, host);
       await openTab(page, "Devices");
       const link = page
-        .getByRole("list", { name: "Devices", exact: true })
-        .locator(".worker-device")
+        .getByRole("tabpanel")
+        .locator("table tbody tr")
         .filter({ has: page.locator(`a[href*="/${encodeURIComponent(device.id)}?"]`) })
         .locator(".worker-device-name");
       const drawer = page.getByRole("dialog");
@@ -1101,10 +1106,10 @@ test.describe("the workers page", () => {
       { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
     ]);
     try {
-      const running = () => row(page, "worker-a").locator(".fleet-fraction");
+      const running = () => row(page, "worker-a").locator("td.num");
       await answerWithoutLoad(page);
       await openConsole(page, fleet.gateway);
-      await expect(running()).toHaveText(/^0 \/ \d+$/);
+      await expect(running()).toHaveText("0");
       await row(page, "worker-a").getByRole("link").first().click();
       await expect(figure(page, "Slots")).toContainText(/^.*0 of \d+ leased/);
 
@@ -1116,7 +1121,7 @@ test.describe("the workers page", () => {
 
       await expect(figure(page, "Slots")).toContainText(/1 of \d+ leased/, { timeout: 10_000 });
       await page.goBack();
-      await expect(running()).toHaveText(/^1 \/ \d+$/, { timeout: 10_000 });
+      await expect(running()).toHaveText("1", { timeout: 10_000 });
     } finally {
       await disposeFleet(fleet);
     }
@@ -1137,10 +1142,7 @@ test.describe("the workers page", () => {
     const grid = await page.locator(".worker-grid").boundingBox();
     const gauges = await figures(page).boundingBox();
     expect(gauges?.y, "the rings sit above the cards").toBeLessThan(grid?.y ?? 0);
-    const read = page.locator(".page-note").getByText(/read \d+ s ago/);
-    await expect(read).toBeVisible();
-    const first = await read.textContent();
-    await expect(read).not.toHaveText(first ?? "", { timeout: 10_000 });
+    await expect(page.locator(".page-note")).toHaveCount(0);
   });
 
   test("each ring is filled to its figure's own percent", async ({ daemon, page }) => {
@@ -1393,7 +1395,7 @@ test.describe("the workers page", () => {
         .getByRole("link")
         .first()
         .click();
-      await expect(page.locator(".worker-device").first()).toBeVisible();
+      await expect(page.getByRole("tabpanel").locator("table tbody tr").first()).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
       for (const tab of ["Warm pool", "Devices"]) {
         await openTab(page, tab);
@@ -1507,7 +1509,7 @@ test.describe("Fleet worker actions", () => {
       const workerAction = /^(Drain|Undrain|Remove)/;
       await answerWithoutLoad(page);
       await openPage(page, daemon, "/fleet", "Fleet");
-      const row = page.locator(".fleet-card");
+      const row = page.locator(".fleet-table tbody tr:not(.table-group)");
       await expect(row).toHaveCount(1);
       await row.click({ button: "right" });
       await expect(page.getByRole("menu")).toHaveCount(0);
@@ -1515,7 +1517,7 @@ test.describe("Fleet worker actions", () => {
       await row.getByRole("link").first().click();
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       await expect(page.getByRole("button", { name: workerAction })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Actions for (?!iPhone 16)/ })).toHaveCount(0);
     } finally {
       await daemon.dispose();
     }
@@ -1570,8 +1572,7 @@ test.describe("Fleet worker actions", () => {
       await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveCount(0);
       await page.keyboard.press("Escape");
 
-      await expect(rowOf(page, "gone-a").getByRole("button")).toHaveCount(0);
-      await rowOf(page, "gone-a").getByRole("link", { name: "Details" }).click();
+      await rowOf(page, "gone-a").getByRole("link", { name: "gone-a", exact: true }).click();
       await page.getByRole("button", { name: "Actions for gone-a" }).click();
       await page.getByRole("menuitem", { name: "Remove worker" }).click();
       const dialog = page.getByRole("alertdialog", { name: "Remove gone-a?" });

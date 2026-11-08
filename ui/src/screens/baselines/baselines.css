@@ -99,6 +99,26 @@
   width: 300px;
 }
 
+/* The reason sits in the State column while it is wide; narrower, it moves under the name. */
+.baseline-reason-under {
+  display: none;
+  margin-top: 0;
+}
+
+@container (max-width: 1060px) {
+  .baseline-reason-under {
+    display: block;
+  }
+
+  .baseline-state .baseline-reason {
+    display: none;
+  }
+
+  .table .baseline-state-col {
+    width: 110px;
+  }
+}
+
 .table .baseline-menu {
   width: 48px;
 }

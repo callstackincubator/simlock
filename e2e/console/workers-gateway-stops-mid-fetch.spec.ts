@@ -27,7 +27,7 @@ async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
 }
 
 function workerRows(page: Page): Locator {
-  return page.locator("main .fleet-card");
+  return page.locator("main .fleet-table tbody tr:not(.table-group)");
 }
 
 async function askForWorkerList(page: Page, daemon: RunningDaemon): Promise<number> {

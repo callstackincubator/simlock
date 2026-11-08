@@ -107,6 +107,7 @@ const COLUMNS: readonly Column<LeaseRowView>[] = [
         {row.runtime === undefined ? null : <small className="mono">{row.runtime}</small>}
       </span>
     ),
+    drop: 2,
     header: "Device",
     width: "170px",
   },
@@ -116,6 +117,7 @@ const COLUMNS: readonly Column<LeaseRowView>[] = [
         {row.worker ?? "—"}
       </span>
     ),
+    drop: 1,
     header: "Worker",
     mono: true,
     width: "150px",

@@ -54,7 +54,7 @@ test.describe("the Baselines page", () => {
       await expect(checkout).toContainText("1 MiB");
       await expect(checkout).toContainText("ago");
       await expect(checkout).toContainText("ready");
-      await expect(page.getByRole("cell", { name: /^iOS · 1 baseline · 1 MiB$/ })).toBeVisible();
+      await expect(page.getByRole("cell", { name: /^iOS · 1 baseline$/ })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Disk used by baselines" })).toBeVisible();
     } finally {
       await host.dispose();
@@ -147,17 +147,13 @@ test.describe("the Baselines page", () => {
       await expect(stale.locator(".pill")).toHaveText("stale");
       await expect(stale).toContainText(reason);
       await expect(stale).toContainText("—");
-      await expect(
-        page.getByRole("cell", { name: /^iOS · 26 baselines · 25 MiB known$/ }),
-      ).toBeVisible();
+      await expect(page.getByRole("cell", { name: /^iOS · 26 baselines$/ })).toBeVisible();
       await page.getByRole("button", { name: "Next" }).click();
       await expect(row(page, "base-25")).toBeVisible();
 
       await page.getByLabel("Stale", { exact: true }).check();
       await expect(page.locator("main tbody tr")).toHaveCount(2);
-      await expect(
-        page.getByRole("cell", { name: /^iOS · 1 baseline · size unknown$/ }),
-      ).toBeVisible();
+      await expect(page.getByRole("cell", { name: /^iOS · 1 baseline$/ })).toBeVisible();
       await page.getByLabel("Ready", { exact: true }).check();
       await page.getByRole("searchbox", { name: "Search baselines" }).fill("base-07");
       await expect(page.locator("main tbody tr")).toHaveCount(2);

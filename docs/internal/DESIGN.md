@@ -119,7 +119,8 @@ Rules that keep text from overflowing:
   ellipsis above 34 characters (`claude-code:3f2a9c…7f91c4`), since its
   tail tells sessions apart. One helper in `ui/src/model/` does it.
 - A status pill never shares a line with a name that can grow: it goes
-  under the name (worker tiles) or beside the runtime (device tiles).
+  under the name (worker tiles) or in its own State column (Fleet and
+  device tables).
 - Slot squares stop at ten; above that a meter and the fraction (`10 / 20`).
 - A page title ellipsises; its action buttons never shrink.
 - A free-text reason clamps to two lines. A long id in facts wraps.
@@ -180,15 +181,32 @@ own that one of them draws. Named sizes and colours are above.
   for ids, hostnames, durations. The selected row is `--row-selected` with a
   2px `--accent` bar inset at its left. Group rows (`iOS · 4 baselines ·
   25.4 GB`) are 28px labels on `--surface-2`. A footer line holds the row
-  count only (`1–14 of 19`). Every row ends in a `⋯` menu button.
+  count only (`1–14 of 19`). Every row ends in a `⋯` menu button. A header
+  never breaks inside a word: one line, an ellipsis when it is too narrow.
+  A table of one-line rows (`table-lines`: Fleet, a worker's devices and
+  warm pool) also keeps each cell to one line, cut with an ellipsis and the
+  whole value in `title`; its second line is muted.
+- **Fleet table.** The Fleet page is one table grouped by Needs attention
+  N, then Healthy N (an empty group is left out), one row per worker:
+  Worker (mono name linking to the worker page, muted `macOS <v> · simlock
+  <v>`), State (pill, and for an attention row the reason as a muted second
+  line), Slots (capped `Slots`), CPU / Mem / Disk (thin meter and a mono
+  figure), Leases, small buttons (Undrain, View leases) and `⋯`. An attention
+  row is tinted `--row-warn` (`#17140c`) or `--row-error` (`#19100f`).
+  Tables stack into blocks below 1100px, as every six-column table does.
+- **Worker devices table.** A worker page's Devices tab is a table: Device
+  (model, mono runtime beneath), State, Held by (agent chip, shortened
+  holder), Expires in (clock and meter), Since (`granted 18:10`), a small
+  Watch button and `⋯`. Its warm pool tab's columns have fixed widths.
+- **Capabilities.** The worker page's left card lists them under their own
+  label after Host: one row each, the name and a pill (`on` ok, `off` idle,
+  `unavailable` warn with its reason beneath).
 - **Worker tile.** In the Overview's wall (a 4-column grid with 1px
-  `--border` gaps) and the Fleet's Healthy row: mono name, its pill under it
+  `--border` gaps): mono name, its pill under it
   when not healthy, the slot squares (iOS, a 1px divider, Android) or the
   capped meter, then three meters CPU / MEM / DISK with 10px mono labels
-  and the figure in muted mono at the right. Fleet's attention cards are
-  bigger: name and OS line, pill at the right, a two-line reason, labelled
-  slot rows, meters, then action buttons and the lease count.
-- **Slots.** 12px squares (16px in attention cards), 3px apart: leased
+  and the figure in muted mono at the right.
+- **Slots.** 12px squares, 3px apart: leased
   `--slot-leased`, ready `--status-ok`, booting `--status-idle`, quarantined
   `--status-error`, absent `--status-warn`, free a dashed `--border-strong`
   outline. The group's counts are its accessible name.
@@ -267,6 +285,9 @@ evaluate `color-contrast`, not suppress it. The original renders stay intact.
 (decided in delivery, pending the maintainer)
 
 ## Fleet reference amendment
+
+The Fleet page is a grouped table, not the reference's cards and tiles (see
+Fleet table above); the Worker page's devices are a table too.
 
 The reference's **Add worker** is a link to the existing
 [joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
