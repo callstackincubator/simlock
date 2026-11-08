@@ -25,11 +25,11 @@ On a gateway the overview adds up the fleet:
 
 - The **Workers** tile shows how many workers are connected, of all the workers the gateway knows, for example `3` `of 4`.
 - **Leased** counts the leases on every worker the gateway knows. It shows `—` until every worker has reported, and a platform in the **Capacity** panel says how many workers are `not read yet`.
-- The **Fleet** panel has one tile per worker: its name, its status when something is wrong, device slots, CPU, memory and disk. Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is not shown as zero.
+- The **Fleet** panel is the same table as the **Fleet** page, for up to eight workers: each worker's name, its status, its device slots as a meter with the leased/total fraction, CPU, memory and disk. A row opens the worker. Slot state counts are available to screen readers. Unavailable load is not shown as zero.
 
 ## Fleet
 
-**Fleet** shows every worker the gateway knows, by label, or by id when it has no label. A worker with something wrong is a card under **Needs attention**; the others are tiles under **Healthy**, each with its leased slots over its total. A worker that isn't connected shows `—` for its load, since the numbers it last reported may be out of date. **Add worker** links to [Join workers](/simlock/docs/gateway/joining-workers).
+**Fleet** shows every worker the gateway knows, by label, or by id when it has no label. A worker with something wrong is a tinted row under **Needs attention**; the others are rows under **Healthy**, each with its leased slots over its total. A row opens the worker's page. A worker that isn't connected shows `—` for its load, since the numbers it last reported may be out of date. **Add worker** links to [Join workers](/simlock/docs/gateway/joining-workers).
 
 The status shows the worst of the worker's states. Besides the states a single worker can show, a gateway adds:
 
@@ -37,11 +37,11 @@ The status shows the worst of the worker's states. Besides the states a single w
 | --- | --- | --- |
 | `disconnected` | Red | The worker's connection to the gateway closed. The gateway shows what it last reported. |
 | `incompatible` | Red | The worker is connected, but its Simlock version cannot talk to the gateway's. It gets no requests. |
-| `updating` | Amber | The worker is updating and takes no new leases. Under the word, the card says `waiting for 2 leases`, `installing` or `restarting`. |
+| `updating` | Amber | The worker is updating and takes no new leases. Hover over the word to see `waiting for 2 leases`, `installing` or `restarting`. |
 | `drained` | Amber | The worker takes no new leases from the gateway. Its leases keep running. |
 | `starting` | Amber | The worker is starting up. |
 
-**Issues** narrows the list to workers that are on a card, and **Busy** to workers using three quarters or more of their device slots. A disconnected worker's card has **View leases**, a link to the leases list, and a drained worker's has **Undrain**.
+**Issues** narrows the list to workers under **Needs attention**, and **Busy** to workers using three quarters or more of their device slots. A disconnected worker's row has **View leases**, a link to the leases list, and a drained worker's has **Undrain**.
 
 Select a worker to open its page. On a gateway:
 
