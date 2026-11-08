@@ -8,7 +8,7 @@ import { workerName } from "./workers";
 
 export type Kind = "lease" | "queue" | "device" | "worker" | "baseline" | "other";
 
-export const KIND_CHOICES: readonly { readonly value: Kind; readonly label: string }[] = [
+const KIND_CHOICES: readonly { readonly value: Kind; readonly label: string }[] = [
   { label: "Leases", value: "lease" },
   { label: "Queue", value: "queue" },
   { label: "Devices", value: "device" },
@@ -18,7 +18,7 @@ export const KIND_CHOICES: readonly { readonly value: Kind; readonly label: stri
 ];
 
 // why: an event is of a kind by the prefix of its name; a component or unknown event is Other.
-export function kindOf(name: string): Kind {
+function kindOf(name: string): Kind {
   return (
     KIND_CHOICES.find((choice) => choice.value !== "other" && name.startsWith(`${choice.value}.`))
       ?.value ?? "other"
@@ -94,7 +94,7 @@ const RANGE_MS: Readonly<Record<ConsoleRange, number>> = {
   "7d": 604_800_000,
 };
 
-export function rangeStart(range: ConsoleRange, now: number): number {
+function rangeStart(range: ConsoleRange, now: number): number {
   return now - RANGE_MS[range];
 }
 

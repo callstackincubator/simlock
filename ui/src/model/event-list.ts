@@ -19,15 +19,14 @@ import { type WorkerView, workerPath } from "./workers";
 
 export type SubjectFilter = Subject | "all";
 
-export const SUBJECT_CHOICES: readonly { readonly value: SubjectFilter; readonly label: string }[] =
-  [
-    { label: "All", value: "all" },
-    { label: "Leases", value: "lease" },
-    { label: "Devices", value: "device" },
-    { label: "Workers", value: "worker" },
-    { label: "Components", value: "component" },
-    { label: "Other", value: "other" },
-  ];
+const SUBJECT_CHOICES: readonly { readonly value: SubjectFilter; readonly label: string }[] = [
+  { label: "All", value: "all" },
+  { label: "Leases", value: "lease" },
+  { label: "Devices", value: "device" },
+  { label: "Workers", value: "worker" },
+  { label: "Components", value: "component" },
+  { label: "Other", value: "other" },
+];
 
 // why: the filter lives in the URL as `?subject=`, so a reload or a shared link shows the same
 // events; a value this console does not know is the whole feed, not an empty one.
