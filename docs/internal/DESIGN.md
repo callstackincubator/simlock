@@ -121,7 +121,9 @@ Rules that keep text from overflowing:
 - A status pill never shares a line with a name that can grow: it goes
   under the name (worker tiles) or in its own State column (Fleet and
   device tables).
-- Slot squares stop at ten; above that a meter and the fraction (`10 / 20`).
+- Slots are a meter and the fraction (`10 / 20`) in every table and tile. Squares
+  are drawn only where a caller asks for them (a worker page's Slots card, and the
+  Overview's wall tile) and only up to ten slots; 100 slots never draw 100 squares.
 - A page title ellipsises; its action buttons never shrink.
 - A free-text reason clamps to two lines. A long id in facts wraps.
 - Counts live in one place: the page header or a group header, never on a
@@ -190,11 +192,17 @@ own that one of them draws. Named sizes and colours are above.
 - **Fleet table.** The Fleet page is one table grouped by Needs attention
   N, then Healthy N (an empty group is left out), one row per worker:
   Worker (mono name linking to the worker page, muted `macOS <v> · simlock
-  <v>`), State (pill, and for an attention row the reason as a muted second
-  line), Slots (capped `Slots`), CPU / Mem / Disk (thin meter and a mono
-  figure), Leases, small buttons (Undrain, View leases) and `⋯`. An attention
+  <v>`), State (the pill alone; the reason, such as `905.3 GiB used of 926.4
+  GiB`, shows in a popover on hover and keyboard focus of the pill), Slots
+  (meter and fraction), CPU / Mem / Disk (thin meter and a mono
+  figure), Leases and `⋯`, whose first entries are Undrain (confirmed) or View
+  leases (a worker that is gone), then the other actions. An attention
   row is tinted `--row-warn` (`#17140c`) or `--row-error` (`#19100f`).
-  Tables stack into blocks below 1100px, as every six-column table does.
+  Below 1100px (a phone, and the collapsed-sidebar layout) the table gives way to
+  a list: a worker is a mono name and its pill, one muted line `slots n/m · CPU
+  x% · Mem y% · Disk z% · N leases`, and `⋯` at the right; no labelled blocks and
+  no quick-action row. Its group headers are the table's group rows: a
+  `--surface-2` band in the label style, with no box or other fill around it.
 - **Worker devices table.** A worker page's Devices tab is a table: Device
   (model, mono runtime beneath), State, Held by (agent chip, shortened
   holder), Expires in (clock and meter), Since (`granted 18:10`), a small
@@ -248,7 +256,10 @@ own that one of them draws. Named sizes and colours are above.
   ring + countdown, Copy lease id / Lease details / Release), Device facts,
   Recent events. The countdown is 24px mono and, as on the Leases inspector,
   reads `mm:ss` (`h:mm:ss` past an hour) from one helper. Header actions: Stop
-  watching and `⋯`. View only. The device drawer has no Screen tab; an old
+  watching and `⋯`; no state pill by the device name (the facts show the state).
+  The frame stays centred in its card whatever the state: a refusal or notice is
+  drawn inside the phone's screen, centred, wrapping and muted, as the daemon's
+  sentence without its transport prefix (`The daemon answered 404 ...`). View only. The device drawer has no Screen tab; an old
   `?drawer=screen` link redirects here.
 - **Chart.** Recharts. Line and area in `--accent` with a 9% fill, bars in
   `--slot-leased` at 55% with the current bucket in `--accent`, grid lines

@@ -7,8 +7,6 @@ import {
   type BaselineList,
   type BaselineRow,
   baselineRows,
-  type DiskUse,
-  diskUse,
   filterBaselineRows,
   groupLabels,
   searchBaselineRows,
@@ -25,8 +23,6 @@ export { BASELINE_FILTERS, type BaselineFilter, type BaselineRow } from "../mode
 export interface BaselinesPage {
   readonly rows: readonly BaselineRow[];
   readonly group: (row: BaselineRow) => { readonly id: string; readonly label: string };
-  readonly summary: string;
-  readonly disk: DiskUse;
   readonly paging: Paging;
   readonly gateway: boolean;
   readonly narrowed: boolean;
@@ -56,21 +52,16 @@ export function useBaselines(): Baselines {
     total: all.kind === "ready" ? shown.length : undefined,
   });
   const labels = groupLabels(shown);
-  const view = mapView(all, (every) => {
-    const disk = diskUse(every, workers);
-    return {
-      disk,
-      gateway,
-      group: (row: BaselineRow) => ({
-        id: row.platform,
-        label: labels.get(row.platform) ?? row.platformName,
-      }),
-      narrowed: filter !== "all" || query !== "",
-      paging,
-      rows: shown,
-      summary: every.length === 0 ? "" : disk.summary,
-    };
-  });
+  const view = mapView(all, () => ({
+    gateway,
+    group: (row: BaselineRow) => ({
+      id: row.platform,
+      label: labels.get(row.platform) ?? row.platformName,
+    }),
+    narrowed: filter !== "all" || query !== "",
+    paging,
+    rows: shown,
+  }));
   return {
     choose: (next) => {
       setFilter(next);

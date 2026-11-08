@@ -9,21 +9,32 @@ export interface Slot {
   readonly label: string;
 }
 
+// why: squares are drawn one per slot, so 100 slots would be 100 squares. A table cell, and any
+// place that does not ask for squares, always shows the meter and the `n / m` fraction; a caller that
+// asks for squares gets them only up to this many slots, and the meter above it.
+export const SLOT_SQUARES_MAX = 10;
+
 // why: the group name carries the state counts even when the meter replaces individual tooltips.
 export function Slots(props: {
   readonly slots: readonly Slot[];
   readonly label: string;
   readonly size?: "sm" | "md" | "lg";
+  readonly squares?: boolean;
+  // why: with squares, the `n / m` figure beside them; the meter always carries its own.
+  readonly fraction?: boolean;
 }) {
-  const { label, size = "sm", slots } = props;
-  if (slots.length > 10) {
-    const leased = slots.filter((slot) => slot.kind === "leased").length;
+  const { fraction = false, label, size = "sm", slots, squares = false } = props;
+  const leased = slots.filter((slot) => slot.kind === "leased").length;
+  const figure = (
+    <span className="slots-fraction mono">
+      {leased} / {slots.length}
+    </span>
+  );
+  if (!squares || slots.length > SLOT_SQUARES_MAX) {
     return (
       <span className="slots slots-meter" role="img" aria-label={label}>
-        <Meter percent={(leased / slots.length) * 100} tone="neutral" />
-        <span>
-          {leased} / {slots.length}
-        </span>
+        <Meter percent={slots.length === 0 ? 0 : (leased / slots.length) * 100} tone="neutral" />
+        {figure}
       </span>
     );
   }
@@ -32,6 +43,7 @@ export function Slots(props: {
       {slots.map((slot, index) => (
         <span key={index} className={`slot slot-${slot.kind}`} title={slot.label} />
       ))}
+      {fraction ? figure : null}
     </span>
   );
 }

@@ -195,8 +195,8 @@ function slotsOf(worker: WallWorker) {
     };
   }
   return {
-    android: <Slots slots={worker.android} label={`Android: ${worker.slotsLabel}`} />,
-    ios: <Slots slots={worker.ios} label={`iOS: ${worker.slotsLabel}`} />,
+    android: <Slots squares slots={worker.android} label={`Android: ${worker.slotsLabel}`} />,
+    ios: <Slots squares slots={worker.ios} label={`iOS: ${worker.slotsLabel}`} />,
   };
 }
 

@@ -12,7 +12,6 @@ import {
   Pill,
   Ring,
   RowMenu,
-  Status,
 } from "../../ds";
 import {
   agentKind,
@@ -72,11 +71,6 @@ function StreamingBody(props: { readonly page: StreamingPageView; readonly worke
               </span>{" "}
               {device.model}
             </h1>
-            {page.streaming ? (
-              <Pill tone="ok">streaming</Pill>
-            ) : (
-              <Status tone={device.status.tone}>{device.status.word}</Status>
-            )}
           </div>
         </div>
         <div className="page-actions">

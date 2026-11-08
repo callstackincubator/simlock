@@ -1,11 +1,11 @@
 import "./fleet.css";
 
 import {
-  Button,
   ButtonLink,
   ChoiceChips,
   type Column,
   DataTable,
+  Hint,
   Link,
   Loaded,
   type LoadView,
@@ -14,6 +14,7 @@ import {
   Meter,
   Page,
   Pill,
+  RowMenu,
   SearchField,
   Slots,
   StatusDot,
@@ -94,34 +95,85 @@ export function FleetBody({
       {none ? (
         <p className="muted">{page.empty ? "No workers have connected." : "No worker matches."}</p>
       ) : null}
+      {none ? null : <FleetList groups={groups(page)} entries={entries} />}
       {none ? null : (
-        <DataTable
-          label="Workers"
-          rows={rows}
-          columns={columnsOf(entries)}
-          rowId={(row) => row.id}
-          empty="No workers."
-          menu={{
-            entries: (row) => entries(row),
-            label: (row) => `Actions for ${row.name}`,
-          }}
-          groupBy={(row) =>
-            attention.has(row.id)
-              ? { id: "attention", label: `Needs attention ${page.attention.length}` }
-              : { id: "healthy", label: `Healthy ${page.healthy.length}` }
-          }
-          rowClassName={(row) =>
-            attention.has(row.id)
-              ? `row-${row.health.tone === "error" ? "error" : "warn"}`
-              : undefined
-          }
-          className="fleet-table table-lines"
-          footer="count"
-          wide
-        />
+        <div className="fleet-wide">
+          <DataTable
+            label="Workers"
+            rows={rows}
+            columns={columnsOf()}
+            rowId={(row) => row.id}
+            empty="No workers."
+            menu={{
+              entries: (row) => entries(row),
+              label: (row) => `Actions for ${row.name}`,
+            }}
+            groupBy={(row) =>
+              attention.has(row.id)
+                ? { id: "attention", label: `Needs attention ${page.attention.length}` }
+                : { id: "healthy", label: `Healthy ${page.healthy.length}` }
+            }
+            rowClassName={(row) =>
+              attention.has(row.id)
+                ? `row-${row.health.tone === "error" ? "error" : "warn"}`
+                : undefined
+            }
+            className="fleet-table table-lines"
+            footer="count"
+            wide
+          />
+        </div>
       )}
       <Loaded view={log}>{(shown) => <FleetLog rows={shown.rows} />}</Loaded>
     </>
+  );
+}
+
+function groups(page: FleetPage) {
+  return [
+    { id: "attention", label: `Needs attention ${page.attention.length}`, rows: page.attention },
+    { id: "healthy", label: `Healthy ${page.healthy.length}`, rows: page.healthy },
+  ].filter((group) => group.rows.length > 0);
+}
+
+// why: under 1100px a worker is a list row, not a table row: name and pill, one muted line of
+// figures, and its menu. The sheet shows this list there and the table above it.
+function FleetList(props: {
+  readonly groups: ReturnType<typeof groups>;
+  readonly entries: (row: FleetRow) => readonly MenuEntry[];
+}) {
+  return (
+    <div className="fleet-list" role="list" aria-label="Workers">
+      {props.groups.map((group) => (
+        <div key={group.id} role="presentation">
+          <p className="fleet-list-group">{group.label}</p>
+          {group.rows.map((row) => (
+            <div
+              key={row.id}
+              role="listitem"
+              className={`fleet-item${
+                group.id === "attention"
+                  ? ` row-${row.health.tone === "error" ? "error" : "warn"}`
+                  : ""
+              }`}
+            >
+              <div className="fleet-item-main">
+                <p className="fleet-item-head">
+                  <Link className="fleet-name" to={row.to} title={row.name}>
+                    {row.name}
+                  </Link>
+                  <StatePill row={row} />
+                </p>
+                <p className="fleet-item-line" title={row.summary}>
+                  {row.summary}
+                </p>
+              </div>
+              <RowMenu label={`Actions for ${row.name}`} entries={props.entries(row)} />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -157,32 +209,17 @@ function metricColumn(header: string, label: string, drop: number): Column<Fleet
   };
 }
 
-function RowActions({
-  entries,
-  row,
-}: {
-  readonly row: FleetRow;
-  readonly entries: readonly MenuEntry[];
-}) {
-  const undrain = entries.find((entry) => entry.key === "undrain");
-  if (row.connection === "disconnected") {
-    return (
-      <ButtonLink small to="/leases">
-        View leases
-      </ButtonLink>
-    );
-  }
-  if (undrain === undefined) return null;
+// why: the reason a worker is not healthy is a line too long for the cell; it shows on hover and on
+// keyboard focus of the pill.
+function StatePill({ row }: { readonly row: FleetRow }) {
   return (
-    <Button small disabled={undrain.disabled} onClick={undrain.onSelect}>
-      {undrain.label}
-    </Button>
+    <Hint text={row.health.tone === "ok" ? "" : row.reason}>
+      <Pill tone={row.health.tone}>{row.health.word}</Pill>
+    </Hint>
   );
 }
 
-function columnsOf(
-  entriesOf: (row: FleetRow) => readonly MenuEntry[],
-): readonly Column<FleetRow>[] {
+function columnsOf(): readonly Column<FleetRow>[] {
   return [
     {
       cell: (row) => (
@@ -198,26 +235,13 @@ function columnsOf(
       header: "Worker",
     },
     {
-      cell: (row) => (
-        <>
-          <span className="cell-line">
-            <Pill tone={row.health.tone}>{row.health.word}</Pill>
-          </span>
-          {row.health.tone === "ok" ? null : (
-            <span className="cell-line" title={row.reason}>
-              {row.reason}
-            </span>
-          )}
-        </>
-      ),
+      cell: (row) => <StatePill row={row} />,
       header: "State",
-      width: "200px",
+      width: "140px",
     },
     {
       cell: (row) =>
-        row.slots.length === 0 ? null : (
-          <Slots size="sm" slots={row.slots} label={row.slotsLabel} />
-        ),
+        row.slots.length === 0 ? null : <Slots slots={row.slots} label={row.slotsLabel} />,
       drop: 5,
       header: "Slots",
       width: "120px",
@@ -231,13 +255,6 @@ function columnsOf(
       header: "Leases",
       numeric: true,
       width: "64px",
-    },
-    {
-      cell: (row) => <RowActions row={row} entries={entriesOf(row)} />,
-      className: "fleet-actions",
-      header: "Quick actions",
-      hideHeader: true,
-      width: "104px",
     },
   ];
 }

@@ -93,7 +93,6 @@ test.describe("the Queue page", () => {
       await expect(row(page, "agent-b")).toContainText("queued");
       await expect(row(page, "agent-c")).toContainText("#2");
       await expect(row(page, "agent-c")).toContainText("iOS iPhone 16, runtime 18.4, mode slim");
-      await expect(page.getByText("2 waiting")).toBeVisible();
 
       await expect(row(page, "agent-b")).toContainText("Full: device limit");
       await expect(row(page, "agent-b").locator("td:not(.table-menu)").last()).toHaveText(

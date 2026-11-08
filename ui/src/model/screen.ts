@@ -102,6 +102,12 @@ export function screenView(input: {
   };
 }
 
+// why: a reader needs the sentence, not the transport that carried it: "The daemon answered 404 A stream
+// is only offered ..." reads as "A stream is only offered ...".
+export function plainSentence(text: string): string {
+  return text.replace(/^The daemon answered \d{3}\.?\s*/, "").trim();
+}
+
 export interface StreamOffer {
   readonly offered: boolean;
   readonly reason?: string;
@@ -151,9 +157,11 @@ export function deviceScreen(input: {
   readonly conflict: string | undefined;
 }): DeviceScreen {
   const { conflict, offer, state } = input;
-  if (!offer.offered) return { kind: "sentence", text: offer.reason ?? "" };
+  if (!offer.offered) return { kind: "sentence", text: plainSentence(offer.reason ?? "") };
   if (STREAMING_STATES.has(state)) {
-    return conflict === undefined ? { kind: "picture" } : { kind: "sentence", text: conflict };
+    return conflict === undefined
+      ? { kind: "picture" }
+      : { kind: "sentence", text: plainSentence(conflict) };
   }
   return {
     kind: "sentence",

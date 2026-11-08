@@ -55,7 +55,6 @@ test.describe("the Baselines page", () => {
       await expect(checkout).toContainText("ago");
       await expect(checkout).toContainText("ready");
       await expect(page.getByRole("cell", { name: /^iOS · 1 baseline$/ })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Disk used by baselines" })).toBeVisible();
     } finally {
       await host.dispose();
     }

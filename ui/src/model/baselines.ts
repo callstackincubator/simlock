@@ -100,12 +100,6 @@ export function searchBaselineRows(
   );
 }
 
-// why: a size the daemon did not report is unknown, not zero, so a total is shown only when every size is known.
-function sizeTotal(rows: readonly BaselineRow[]): string | undefined {
-  if (rows.length === 0 || rows.some((row) => row.sizeBytes === undefined)) return undefined;
-  return formatBytes(rows.reduce((sum, row) => sum + (row.sizeBytes ?? 0), 0));
-}
-
 // why: a group's count is that of the rows that match, not of the page on screen.
 export function groupLabels(rows: readonly BaselineRow[]): ReadonlyMap<string, string> {
   const byPlatform = new Map<string, BaselineRow[]>();
@@ -119,53 +113,4 @@ export function groupLabels(rows: readonly BaselineRow[]): ReadonlyMap<string, s
       }`,
     ]),
   );
-}
-
-export interface DiskShare {
-  readonly key: string;
-  readonly name: string;
-  readonly text: string;
-  readonly percent?: number;
-}
-
-export interface DiskUse {
-  readonly summary: string;
-  readonly shares: readonly DiskShare[];
-}
-
-// why: each bar is the worker's own baseline bytes against its own disk, never a share of the fleet's baselines.
-export function diskUse(rows: readonly BaselineRow[], workers: readonly WorkerView[]): DiskUse {
-  const sole = workers.length === 1 ? workers[0] : undefined;
-  const byWorker = new Map<string, BaselineRow[]>();
-  for (const row of rows) {
-    const id = row.workerId ?? sole?.id;
-    if (id !== undefined) byWorker.set(id, [...(byWorker.get(id) ?? []), row]);
-  }
-  const shares = [...byWorker].map(([id, members]): DiskShare => {
-    const worker = workers.find((candidate) => candidate.id === id);
-    const name = worker === undefined ? id : workerName(worker);
-    const sized = members.filter((row) => row.sizeBytes !== undefined);
-    const known = sized.reduce((sum, row) => sum + (row.sizeBytes ?? 0), 0);
-    const total = worker?.load?.disk?.totalBytes;
-    const used =
-      sized.length === 0
-        ? "size unknown"
-        : sized.length === members.length
-          ? formatBytes(known)
-          : "size unknown";
-    if (total === undefined || !(total > 0)) {
-      return { key: id, name, text: `${used} · disk unknown` };
-    }
-    const percent = known === 0 ? 0 : Math.min(100, Math.max(2, Math.round((known / total) * 100)));
-    return { key: id, name, percent, text: `${used} of ${formatBytes(total)}` };
-  });
-  shares.sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
-  const total = sizeTotal(rows);
-  return {
-    shares,
-    summary:
-      total === undefined
-        ? ""
-        : `${total} on ${shares.length} ${shares.length === 1 ? "worker" : "workers"}`,
-  };
 }

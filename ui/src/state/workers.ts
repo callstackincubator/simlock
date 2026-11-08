@@ -57,7 +57,22 @@ export type { WorkerView } from "../model/workers";
 export function useWorkerMenu(): (row: WorkerRow) => readonly MenuEntry[] {
   const { entries } = useActions();
   const mode = useDaemonMode();
-  return (row) => entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
+  return (row) => {
+    const own = entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
+    // why: a worker that is gone holds leases that still need an owner's eye, so its menu opens on the
+    // way to them, before any action.
+    if (row.connection !== "disconnected") return own;
+    return [
+      {
+        danger: false,
+        disabled: false,
+        key: "view-leases",
+        label: "View leases",
+        onSelect: () => navigate("/leases"),
+      },
+      ...own,
+    ];
+  };
 }
 
 // why: the worker page's header reads the same list of actions as the Fleet row (ADR 0037 §3).

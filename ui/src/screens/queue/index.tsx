@@ -31,10 +31,7 @@ export function QueueScreen() {
   const urlId = useItemId("/queue");
   const { close, fromList } = useListDrawer("/queue", urlId);
   return (
-    <Page
-      title="Queue"
-      actions={view.kind === "ready" ? <span className="muted">{view.data.meta}</span> : null}
-    >
+    <Page title="Queue">
       <Loaded view={view}>
         {(page) => (
           <>

@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BaselineEntry } from "../../../src/contract/index";
-import {
-  baselineRows,
-  diskUse,
-  filterBaselineRows,
-  groupLabels,
-  searchBaselineRows,
-} from "./baselines";
+import { baselineRows, filterBaselineRows, groupLabels, searchBaselineRows } from "./baselines";
 import type { WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-11-03T12:00:00Z");
@@ -103,34 +97,5 @@ describe("baselineRows", () => {
     expect(groupLabels(rows.filter((row) => row.name === "b")).get("android")).toBe(
       "Android · 1 baseline",
     );
-  });
-
-  it("measures each worker's baselines against its own disk, never against the fleet's", () => {
-    const withDisk = (id: string, label: string, total?: number): WorkerView => ({
-      ...worker(id, label),
-      ...(total === undefined
-        ? {}
-        : { load: { disk: { freeBytes: 0, totalBytes: total } } as WorkerView["load"] }),
-    });
-    const workers = [
-      withDisk("w1", "big", 100 * 2 ** 30),
-      withDisk("w2", "small", 20 * 2 ** 30),
-      withDisk("w3", "none"),
-    ];
-    const rows = baselineRows(
-      [
-        entry({ name: "a", sizeBytes: 10 * 2 ** 30, workerId: "w1" }),
-        entry({ name: "b", sizeBytes: 10 * 2 ** 30, workerId: "w2" }),
-        entry({ name: "c", workerId: "w3" }),
-      ],
-      workers,
-      NOW,
-    );
-    const use = diskUse(rows, workers);
-    expect(use.shares.map((share) => [share.name, share.percent, share.text])).toEqual([
-      ["big", 10, "10.0 GiB of 100.0 GiB"],
-      ["none", undefined, "size unknown · disk unknown"],
-      ["small", 50, "10.0 GiB of 20.0 GiB"],
-    ]);
   });
 });

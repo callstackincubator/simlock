@@ -36,18 +36,13 @@
   color: #b4b4bc;
   font-size: var(--text-sm);
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .phone-wait {
   position: absolute;
   inset: auto 0 0;
   background: #000;
-}
-
-.screen-sentence {
-  margin: 0;
-  padding: var(--space-4);
-  text-align: center;
 }
 
 .screen-pills {
@@ -81,8 +76,8 @@
   background: #4ade80;
 }
 
-/* The frame and the notice are one centred column in the card, so a notice wraps inside the card
- * under the frame and never pushes the frame off centre. */
+/* The frame is centred in the card in every state; a refusal or notice is drawn inside the phone's
+ * screen, so it never moves the frame. */
 .screen-panel {
   display: flex;
   flex-direction: column;
@@ -91,14 +86,4 @@
   gap: var(--space-3);
   width: 100%;
   min-width: 0;
-}
-
-.screen-notice {
-  max-width: 100%;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-
-.screen-notice .refusal {
-  margin: 0;
 }

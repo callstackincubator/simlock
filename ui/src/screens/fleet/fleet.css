@@ -386,9 +386,13 @@
   color: var(--text-muted);
 }
 
-.worker-side-fraction {
+.worker-side-row .slots {
+  flex: 1;
+  align-items: center;
+}
+
+.worker-side-row .slots-fraction {
   margin-left: auto;
-  color: var(--text-muted);
 }
 
 .worker-side .facts {

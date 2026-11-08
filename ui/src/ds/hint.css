@@ -1,0 +1,24 @@
+.hint-subject {
+  display: inline-flex;
+  border-radius: 99px;
+}
+
+.hint-subject:focus-visible {
+  outline: var(--focus-width) solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hint-positioner {
+  z-index: 95;
+}
+
+.hint {
+  max-width: 280px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
