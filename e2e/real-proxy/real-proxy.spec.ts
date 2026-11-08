@@ -62,12 +62,8 @@ test.describe("behind a real sign-in proxy", () => {
       await logInAsAlice(page);
       await page.getByRole("link", { name: "Fleet", exact: true }).click();
 
-      await expect(
-        page
-          .getByRole("table")
-          .getByRole("row")
-          .filter({ has: page.getByRole("cell") }),
-      ).toHaveCount(1);
+      // why: the Fleet table groups its workers, so a group row ("Healthy 1") is a row with a cell too.
+      await expect(page.locator("main table tbody tr:not(.table-group)")).toHaveCount(1);
     } finally {
       await worker.dispose();
     }
