@@ -56,9 +56,8 @@ Look:
 Tests:
 
 - Unit tests run in Node with no DOM: test `src/model/` and `src/data/` directly, and a screen or a `ds` component with `renderToStaticMarkup`.
-- What a page does is a DOM test, `*.dom.test.tsx` beside the screen or in `src/app/` (vitest's `ui-dom` project, happy-dom). It renders the whole `App` through `src/test/console.tsx`: a route table stands in for the daemon (unlisted routes answer 404 and are recorded in `unanswered`), `events.push` and `events.drop` are its event stream, `Date` is fixed and `fakeTimers` fakes the timers too. Answers are built from contract types in `src/test/fixtures.ts`. Assert what a person sees: roles, names, text, the URL.
-- happy-dom lays nothing out: every element is as wide as the window (`src/test/setup.ts`) and 0px tall. A claim about geometry, overflow, colour, focus order in Base UI's menus and dialogs, CSP, axe or the virtual feed's scrolling is the browser lane's (`e2e/console/` at the repo root, Playwright). A browser spec is kept only when it needs a real daemon or a real browser engine.
-- `pnpm console:screenshots` writes the fixture pages (`e2e/console/render-fixtures.ts`) as pictures to compare with the renders; it is not a test.
+- What a page does is a DOM test (`*.dom.test.tsx`): the whole `App` through `src/test/console.tsx`, a route table for the daemon, `events` for its stream, a fixed `Date`, answers from `src/test/fixtures.ts`. Assert roles, names, text, the URL.
+- happy-dom lays nothing out: geometry, overflow, colour, Base UI focus, CSP, axe and the virtual feed stay in the browser lane (`e2e/console/` at the repo root), which keeps only what needs a real daemon or browser engine. `pnpm console:screenshots` writes pictures; it is not a test.
 - Console browser stubs fetch through the repo root's `e2e/console/full-fetch.ts`, which drops `If-None-Match`: a stub that edits the daemon's answer would otherwise be handed a `304` with no body to edit.
 
 ## Adding a page
