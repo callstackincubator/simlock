@@ -410,12 +410,14 @@ for (const entry of cases) {
               }
             }
             if (entry.name === "6-lease-drawer") {
-              await expect(page.getByRole("dialog")).toBeVisible();
-              await expect(page.getByRole("dialog")).toContainText("lse_1");
-              await expect(page.getByRole("tab", { name: "Details" })).toHaveAttribute(
-                "aria-selected",
-                "true",
-              );
+              const inspector =
+                viewport.width >= 1280
+                  ? page.locator("aside .lease-inspector")
+                  : page.getByRole("dialog");
+              await expect(inspector).toBeVisible();
+              await expect(inspector).toContainText("lse_1");
+              await expect(inspector.getByRole("button", { name: "Copy id" })).toBeVisible();
+              await expect(page.getByRole("tab")).toHaveCount(0);
             }
             if (entry.name === "7-baselines") {
               await expect(page.locator("main tbody tr")).toHaveCount(9);
@@ -809,7 +811,7 @@ for (const entry of cases) {
                 await renderScenario(page, scenario);
                 await page.goto(new URL("/leases", gateway.url).href);
                 if (scenario === "long")
-                  await expect(page.locator(`[title="${expected}"]`)).toBeVisible();
+                  await expect(page.locator(`main tbody a[title="${expected}"]`)).toBeVisible();
                 else await expect(page.getByText(expected, { exact: true })).toBeVisible();
                 await expect(page.locator(".connection [role=status]")).toHaveText("Connected");
                 await page.evaluate(() => document.fonts.ready);
