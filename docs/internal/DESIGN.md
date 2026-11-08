@@ -46,7 +46,8 @@ it shows with numbers, statuses and shape, not with sentences about them.
 Every colour is a custom property on `:root`. Dark is the designed theme and
 the one the renders show. The light theme keeps the same structure with its
 own values (an off-white page, near-white cards, the same accent) and is
-captured at 1440×900 in `docs/internal/console-redesign/current/light/`;
+captured at 1440×900 in `docs/internal/console-redesign/current/light/` by
+`pnpm console:screenshots`;
 the axe check in `browser-checks.spec.ts` runs in both.
 
 | Token             | Dark      | Use                                                       |

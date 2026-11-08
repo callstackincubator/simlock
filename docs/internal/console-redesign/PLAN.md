@@ -49,11 +49,11 @@ maintainer accepts or adjusts them from a screenshot.
 
 ## How an agent verifies a stage
 
-1. Build the console and run the render harness (stage 0 adds it):
-   `pnpm test:console --project=chromium e2e/console/renders.spec.ts`. It
-   signs in against the stubbed daemon, sets the window to 1440×900, opens
-   each page with the fixture data, and writes `current/<page>.png` beside
-   this file.
+1. Run `pnpm console:screenshots` (it builds the console first). It signs
+   in against the stubbed daemon, opens each page with the fixture data in
+   `e2e/console/render-fixtures.ts` at 1440×900, 1280×800 and 390×844, and
+   writes `current/<page>.png` beside this file (and `current/light/` at
+   1440×900). It compares nothing: a person or an agent looks.
 2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
    record the explicit Fleet, Baselines, sidebar-control and WCAG-AA amendments, then
    list every other difference that is not data: a missing element, a wrong
@@ -113,7 +113,7 @@ One agent; everything else waits for it.
   characters, and `agentKind(id)` for the chip; unit tests for ids of every
   form in `src/agent-identity/` (tool-prefixed session ids, token labels,
   `mcp:<pid>`, 256-character free-form).
-- The render harness `e2e/console/renders.spec.ts` with fixture data close
+- The render harness (now `pnpm console:screenshots`) with fixture data close
   to the mock data's shape: 8 workers (one with 20 slots, one with a
   `.local` hostname, one disconnected, one drained, one at 91% disk), 14
   leases with holders of every form, 9 baselines (ready and stale only; a ready row substitutes for the
@@ -202,9 +202,9 @@ ends it (`src/contract/operations.ts:711-725`,
 or progress wire field. Preserve original render files. Stage 5's PR records
 the DATA substitution and explicit filter/link differences alongside paired
 images; all other reference geometry remains required. Tests in
-`e2e/console/baselines.spec.ts` cover All/Stale/Ready with search and paging,
-the real keyboard-accessible documentation link and absence of a save request;
-the render harness covers the ready/stale substitution. (decided in delivery, pending the maintainer)
+`ui/src/screens/baselines/baselines.dom.test.tsx` cover All/Stale/Ready with search and paging,
+the documentation link and absence of a save request;
+the screenshots show the ready/stale substitution. (decided in delivery, pending the maintainer)
 
 ### 6. Activity and the pages without a render — `8-activity.png`
 
