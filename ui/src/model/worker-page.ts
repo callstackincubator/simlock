@@ -6,14 +6,17 @@ import {
   slotsLabel,
   stageLine,
   workerHealth,
+  workerReason,
   workerSlots,
 } from "./fleet";
+import { agentKind, type AgentKind, shortHolder } from "./holder";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { holderOf, platformName, stateEnteredAt } from "../../../src/contract/inbox";
 import { leasePath, type TokenRecord } from "./leases";
 import { devicePath } from "./paths";
 import { formatDuration } from "./time";
+import { clockTime } from "./events";
 import { type UpdateFacts, updateFactsOf, versionLine } from "./versions";
 import {
   connectionStatus,
@@ -122,6 +125,35 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   };
 }
 
+export interface FleetRow extends WorkerRow {
+  readonly ios: readonly DeviceSlot[];
+  readonly iosLabel: string;
+  readonly android: readonly DeviceSlot[];
+  readonly androidLabel: string;
+  // why: the tile's "leased / slots" counts the slots the worker may run, free ones included.
+  readonly slotsLeased: number;
+  readonly leaseCount?: number;
+  // why: the line under an attention card's name says why the worker is there, in the daemon's facts.
+  readonly reason: string;
+}
+
+// why: the Fleet page's cards show each platform's slots apart, the leases held and the reason.
+export function fleetRow(worker: WorkerView, search: string, now: number): FleetRow {
+  const row = workerRow(worker, search);
+  const ios = platformSlots(worker, "ios");
+  const android = platformSlots(worker, "android");
+  return {
+    ...row,
+    android,
+    androidLabel: slotsLabel(android),
+    ios,
+    iosLabel: slotsLabel(ios),
+    reason: workerReason(worker, now),
+    slotsLeased: row.slots.filter((slot) => slot.kind === "leased").length,
+    ...(worker.leases === undefined ? {} : { leaseCount: worker.leases.length }),
+  };
+}
+
 // why: the filter lives in the address beside the page, so opening a worker and coming back shows
 // the same list the page number was counted in; an unknown value is All.
 export function readFilter(search: string): WorkerFilter {
@@ -168,11 +200,6 @@ export function searchWorkers(
   );
 }
 
-export function upMeta(workers: readonly WorkerView[]): string {
-  const up = workers.filter((worker) => worker.connection === "connected").length;
-  return `${up} / ${workers.length} up`;
-}
-
 export type MeterTone = Tone | "neutral";
 
 export interface LoadDetail {
@@ -184,6 +211,9 @@ export interface LoadDetail {
 export interface FigureCard {
   readonly label: string;
   readonly text: string;
+  // why: a ring card prints the figure large and one line of context under it.
+  readonly big: string;
+  readonly small: string;
   readonly percent?: number;
   readonly tone: MeterTone;
   readonly details: readonly LoadDetail[];
@@ -210,6 +240,8 @@ function figureCards(worker: WorkerView): readonly FigureCard[] {
   const memoryTone =
     memory?.pressure === undefined ? levelOf(gauges.memory) : pressureStatus(memory.pressure).tone;
   const unavailable = (label: string): FigureCard => ({
+    big: UNAVAILABLE,
+    small: "",
     details: [],
     label,
     text: UNAVAILABLE,
@@ -220,6 +252,8 @@ function figureCards(worker: WorkerView): readonly FigureCard[] {
     cpu === undefined
       ? unavailable("CPU")
       : {
+          big: formatCores(cpu.cores),
+          small: limited(`${formatBusyPercent(cpu.busyPercent)} busy`, cpu.limited),
           details: [],
           label: "CPU",
           text: limited(
@@ -232,6 +266,16 @@ function figureCards(worker: WorkerView): readonly FigureCard[] {
     memory === undefined
       ? unavailable("Memory")
       : {
+          big: `${formatBytes(Math.max(0, memory.totalBytes - memory.availableBytes))} used`,
+          small: limited(
+            [
+              `of ${formatBytes(memory.totalBytes)}`,
+              memory.pressure === undefined ? undefined : `pressure ${memory.pressure}`,
+            ]
+              .filter((part) => part !== undefined)
+              .join(" · "),
+            memory.limited,
+          ),
           details: [
             { label: "Swap", text: `${formatBytes(memory.swapUsedBytes)} used` },
             ...(memory.pressure === undefined
@@ -255,6 +299,8 @@ function figureCards(worker: WorkerView): readonly FigureCard[] {
     disk === undefined
       ? unavailable("Disk")
       : {
+          big: `${formatBytes(disk.freeBytes)} free`,
+          small: `of ${formatBytes(disk.totalBytes)}`,
           details: [],
           label: "Disk",
           text: `${formatBytes(disk.freeBytes)} of ${formatBytes(disk.totalBytes)} free`,
@@ -295,9 +341,22 @@ export interface DeviceRow {
   readonly runtime: string;
   readonly platform: string;
   readonly status: Toned;
-  readonly holder?: { readonly name: string; readonly id: string; readonly to: string };
+  readonly holder?: {
+    readonly name: string;
+    readonly display: string;
+    readonly kind: AgentKind;
+    readonly id: string;
+    readonly to: string;
+  };
   readonly since?: string;
   readonly expires?: string;
+  // why: how much of the lease's time is left, for the bar beside the time, and the time itself as
+  // a clock; the bar is quiet until a third is left.
+  readonly ttlPercent?: number;
+  readonly ttl?: string;
+  readonly ttlTone: "warn" | "neutral";
+  // why: the tile's last line: when the lease was granted, or when a device with none got ready.
+  readonly timeNote?: string;
   readonly renewed?: string;
   readonly physical: boolean;
   readonly mode?: string;
@@ -335,6 +394,7 @@ function deviceRow(
     to: `${devicePath(worker.id, device.id)}${writeWorkerTab(writeDrawerTab(search, "details"), "devices")}`,
     ...leaseFacts(device, worker, now, tokens, leaseIds),
     ...defined({
+      timeNote: timeNoteOf(device, entered),
       udid: device.physical ? device.driverDeviceId : undefined,
       baseline:
         device.spec.baseline === undefined
@@ -347,25 +407,50 @@ function deviceRow(
   };
 }
 
+function ttlPercent(left: number, ttlMs: number): number {
+  return Math.max(0, Math.min(100, (left / ttlMs) * 100));
+}
+
+// why: the time left on a lease reads as a clock, minutes and seconds, with the hours when there are some.
+function clockLeft(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const two = (n: number) => String(n).padStart(2, "0");
+  const hours = Math.floor(total / 3600);
+  const rest = `${two(Math.floor((total % 3600) / 60))}:${two(total % 60)}`;
+  return hours === 0 ? rest : `${hours}:${rest}`;
+}
+
+function timeNoteOf(device: WorkerDevice, entered: number | undefined): string | undefined {
+  if (entered === undefined) return undefined;
+  if (device.state === "leased") return `granted ${clockTime(entered)}`;
+  return device.state === "ready" ? `booted ${clockTime(entered)}` : undefined;
+}
+
 function leaseFacts(
   device: WorkerDevice,
   worker: WorkerView,
   now: number,
   tokens: readonly TokenRecord[],
   leaseIds: ReadonlySet<string>,
-): Pick<DeviceRow, "expires" | "holder" | "lease" | "renewed"> {
+): Pick<DeviceRow, "expires" | "holder" | "lease" | "renewed" | "ttl" | "ttlPercent" | "ttlTone"> {
   const lease = worker.leases?.find((candidate) => candidate.deviceId === device.id);
-  if (lease === undefined) return {};
+  if (lease === undefined) return { ttlTone: "neutral" };
   const holder = holderOf(lease.requesterId, tokens);
   const onPage = leaseIdOnPage(worker, lease.id, leaseIds);
   return {
     lease: { id: onPage, to: leasePath(onPage) },
     expires: formatDuration(lease.ttlDeadline - now),
     holder: {
+      display: shortHolder(holder.label ?? holder.id),
       id: holder.id,
+      kind: agentKind(lease.requesterId),
       name: holder.label ?? holder.id,
       to: leasePath(onPage),
     },
+    ttl: clockLeft(lease.ttlDeadline - now),
+    ...(lease.ttlMs > 0 ? { ttlPercent: ttlPercent(lease.ttlDeadline - now, lease.ttlMs) } : {}),
+    ttlTone:
+      lease.ttlMs > 0 && ttlPercent(lease.ttlDeadline - now, lease.ttlMs) < 34 ? "warn" : "neutral",
     renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
   };
 }
@@ -401,6 +486,35 @@ export interface OverviewTab {
   readonly leases?: { readonly count: number; readonly running: number | undefined };
   readonly platforms: readonly PlatformCard[];
   readonly devices?: readonly DeviceRow[];
+  readonly slots?: SlotsGauge;
+}
+
+export interface SlotsGauge {
+  readonly percent: number;
+  readonly big: string;
+  readonly small: string;
+}
+
+// why: the slots ring says how much of what the worker may run is leased, and what the rest is.
+function slotsGauge(worker: WorkerView): SlotsGauge | undefined {
+  const slots = workerSlots(worker);
+  if (worker.connection !== "connected" || slots.length === 0) return undefined;
+  const count = (kind: DeviceSlot["kind"]) => slots.filter((slot) => slot.kind === kind).length;
+  const leased = count("leased");
+  const rest = [
+    [count("ready"), "ready"],
+    [count("busy"), "booting"],
+    [count("broken"), "quarantined"],
+    [count("free"), "free"],
+  ] as const;
+  return {
+    big: `${leased} of ${slots.length} leased`,
+    percent: Math.round((leased / slots.length) * 100),
+    small: rest
+      .filter(([n]) => n > 0)
+      .map(([n, word]) => `${n} ${word}`)
+      .join(" · "),
+  };
 }
 
 // why: a reading from a worker that is not connected is stale, so it has no figures.
@@ -490,14 +604,34 @@ export interface HostTab {
   readonly connection: Toned;
   readonly drained: boolean;
   readonly health?: Toned;
+  // why: the worker's own baselines, as the daemon lists them, with the size it reports.
+  readonly baselines: readonly {
+    readonly key: string;
+    readonly name: string;
+    readonly size: string;
+    readonly stale?: string;
+  }[];
+  // why: the devices a worker holds warm, ready and waiting for a lease, per platform.
+  readonly warm?: string;
   readonly host?: {
     readonly os: string;
+    readonly osName: string;
+    readonly osVersion: string;
     readonly arch: string;
     readonly tools: readonly ToolRow[];
   };
   readonly protocol: ProtocolView;
   readonly capabilities?: readonly CapabilityRow[] | "not-reported";
   readonly catalog: readonly CatalogRow[];
+}
+
+function warmReady(worker: WorkerView): string | undefined {
+  if (worker.devices === undefined || worker.warmPool?.enabled !== true) return undefined;
+  const ready = (platform: string) =>
+    worker.devices?.filter(
+      (device) => device.state === "ready" && device.spec.platform === platform,
+    ).length ?? 0;
+  return `${ready("ios")} iOS · ${ready("android")} Android`;
 }
 
 function hostTabOf(worker: WorkerView): HostTab {
@@ -516,6 +650,13 @@ function hostTabOf(worker: WorkerView): HostTab {
   return {
     connection: connectionStatus(worker.connection),
     drained: worker.drained,
+    baselines: (worker.baselines ?? []).map((entry) => ({
+      key: `${entry.name}-${String(entry.version)}`,
+      name: entry.name,
+      size: entry.sizeBytes === undefined ? "—" : formatBytes(entry.sizeBytes),
+      ...(entry.staleReason === undefined ? {} : { stale: entry.staleReason }),
+    })),
+    ...defined({ warm: warmReady(worker) }),
     catalog: (worker.catalog ?? []).map((entry) => ({
       models: entry.models.length === 0 ? "none" : entry.models.join(", "),
       platform: platformName(entry.platform),
@@ -539,6 +680,8 @@ function hostTabOf(worker: WorkerView): HostTab {
           host: {
             arch: host.arch,
             os: `${host.os} ${host.osVersion}`,
+            osName: host.os,
+            osVersion: host.osVersion,
             tools: host.tools.map((tool) => ({
               key: `${tool.platform}-${tool.name}`,
               name: tool.name,
@@ -614,7 +757,7 @@ function warmTabOf(worker: WorkerView, now: number): WarmTab {
   };
 }
 
-export type WorkerTab = "devices" | "warm-pool" | "host" | "events";
+export type WorkerTab = "devices" | "warm-pool";
 
 // why: the tab lives in the URL as `?tab=`, so a reload or a shared link shows the same tab; a value
 // the page does not offer, such as a warm pool on a starting worker, is the Devices tab.
@@ -688,8 +831,6 @@ export function workerPageOf(input: {
   const tabs: WorkerPage["tabs"] = [
     { label: "Devices", value: "devices" },
     ...(starting ? [] : [{ label: "Warm pool", value: "warm-pool" } as const]),
-    { label: "Host", value: "host" },
-    { label: "Events", value: "events" },
   ];
   return {
     banners: bannersOf(worker, now),
@@ -705,6 +846,7 @@ export function workerPageOf(input: {
       platforms: starting ? [] : platformCards(worker),
       starting,
       ...loadOf(worker, now),
+      ...defined({ slots: starting ? undefined : slotsGauge(worker) }),
       ...(starting || leases === undefined
         ? {}
         : { leases: { count: leases.length, running: worker.capacity?.global.running } }),

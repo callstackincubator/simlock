@@ -2,6 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 
 import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } from "./fixtures.js";
 import { answer, pad } from "./stub-answers.js";
+import { answerWithoutLoad } from "./workers-answers.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -19,8 +20,8 @@ async function openPage(
 
 function lastContentOf(page: Page, index: number): Locator {
   if (index === 0) return page.getByRole("link", { name: "layout-a", exact: true });
-  if (index === 1) return page.getByRole("link", { name: "worker-0025", exact: true });
-  return page.getByText("No devices.", { exact: true });
+  if (index === 1) return page.getByRole("region", { name: "Worker events" });
+  return page.getByRole("region", { name: "Events on this worker" });
 }
 
 async function expectShellGeometry(page: Page, nav: Locator, path: string): Promise<void> {
@@ -67,18 +68,13 @@ async function expectScrollsAndStaysReachable(
   title: string,
 ): Promise<void> {
   expect(await page.evaluate(() => window.scrollY), `${path} starts at top`).toBe(0);
-  await page.mouse.move(1000, 250);
+  // why: a wheel over the worker page's event log scrolls the log, so the pointer rests on its side card.
+  await page.mouse.move(index === 2 ? 400 : 1000, 250);
   await page.mouse.wheel(0, 5000);
   await expect
     .poll(() => page.evaluate(() => window.scrollY), { message: `${path} scrolls` })
     .toBeGreaterThan(0);
   await expect(target, `${path} last content is not clipped`).toBeInViewport({ ratio: 1 });
-  if (index === 1) {
-    await expect(
-      page.getByRole("navigation", { name: "Workers pages" }).getByRole("button", { name: "Next" }),
-      "Fleet pager is reachable",
-    ).toBeInViewport({ ratio: 1 });
-  }
   const box = await target.boundingBox();
   expect(box, `${path} last content`).not.toBeNull();
   expect(box!.y, `${path} last content top`).toBeGreaterThanOrEqual(0);
@@ -166,7 +162,7 @@ test.describe("the console's layout", () => {
       await openPage(page, fleet.gateway, `/fleet/${id}?tab=warm-pool`, "layout-a", false);
 
       await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toHaveCount(0);
-      const panel = page.getByRole("region", { name: "Warm pool", exact: true });
+      const panel = page.getByRole("region", { name: "Warm pool facts", exact: true });
       await expect(panel.locator(".facts")).toBeVisible();
       const line = await panel.locator(".table-card").evaluate((card) => {
         const style = getComputedStyle(card);
@@ -184,30 +180,28 @@ test.describe("the console's layout", () => {
     }
   });
 
-  test("a fleet row's ⋯ lies inside its cell with 10px to the table's right edge, and an Inbox row's button has 8px above and below", async ({
+  test("a fleet tile's ⋯ lies inside the tile with its 14px padding to the right edge, and an Inbox row's button has 8px above and below", async ({
     page,
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
     try {
       const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
       const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      await answerWithoutLoad(page);
       await openPage(page, fleet.gateway, "/fleet", "Fleet", false);
-      const menu = page.locator("main tbody tr").getByRole("button", { name: /^Actions for/ });
+      const menu = page.locator(".fleet-tile").getByRole("button", { name: /^Actions for/ });
       const box = await menu.evaluate((button) => {
-        const cell = button.closest("td")?.getBoundingClientRect();
-        const table = button.closest("table")?.getBoundingClientRect();
+        const tile = button.closest(".fleet-tile")?.getBoundingClientRect();
         const own = button.getBoundingClientRect();
         return {
-          cellLeft: cell?.left ?? 0,
-          cellRight: cell?.right ?? 0,
           left: own.left,
           right: own.right,
-          tableRight: table?.right ?? 0,
+          tileLeft: tile?.left ?? 0,
+          tileRight: tile?.right ?? 0,
         };
       });
-      expect(box.left).toBeGreaterThanOrEqual(box.cellLeft);
-      expect(box.right).toBeLessThanOrEqual(box.cellRight);
-      expect(box.tableRight - box.right).toBe(10);
+      expect(box.left).toBeGreaterThanOrEqual(box.tileLeft);
+      expect(box.tileRight - box.right).toBe(15);
 
       expect((await fleet.gateway.cli(["worker", "drain", id])).code).toBe(0);
       await openPage(page, fleet.gateway, "/inbox", "Inbox", true);

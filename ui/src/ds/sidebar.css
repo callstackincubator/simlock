@@ -444,6 +444,27 @@
   max-width: 100%;
 }
 
+.page-title-row {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.page-title-row h1 {
+  flex: 0 1 auto;
+  line-height: 1.45;
+}
+
+.page-crumb,
+.page-crumb:hover {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-decoration: none;
+}
+
 .page-note {
   color: var(--text-muted);
   font-size: var(--text-sm);

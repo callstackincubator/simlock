@@ -94,6 +94,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.visual-log > :first-child,
 .visual-log > :last-child {
   color: var(--text-muted);
 }
@@ -150,11 +151,12 @@
   justify-content: center;
   min-width: 18px;
   height: 18px;
-  padding: 0 5px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
   border-radius: 99px;
   background: var(--surface-2);
   color: var(--text-muted);
-  font: 500 var(--text-2xs) var(--font-mono);
+  font: 500 11px var(--font-mono);
 }
 .visual-banner {
   display: flex;

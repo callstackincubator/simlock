@@ -56,6 +56,12 @@ export function Grid(props: {
   );
 }
 
+// why: the main panel takes two shares and its neighbour one, and they stack on a phone; a row
+// laid out here keeps every page's proportions the same.
+export function Row(props: { readonly children: ReactNode; readonly even?: boolean }) {
+  return <div className={props.even === true ? "row row-even" : "row"}>{props.children}</div>;
+}
+
 export function Empty({ children }: { readonly children: ReactNode }) {
   return <p className="empty">{children}</p>;
 }

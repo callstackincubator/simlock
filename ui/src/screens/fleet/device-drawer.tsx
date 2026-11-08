@@ -128,7 +128,7 @@ function FactList({
 // gone or the drawer was loaded directly.
 function focusAfterClosing(workerId: string, deviceId: string): HTMLElement | null {
   const prefix = `/fleet/${encodeURIComponent(workerId)}/${encodeURIComponent(deviceId)}`;
-  const row = [...document.querySelectorAll<HTMLElement>("main tbody a")].find((link) =>
+  const row = [...document.querySelectorAll<HTMLElement>("main .worker-device-name")].find((link) =>
     link.getAttribute("href")?.startsWith(prefix),
   );
   return row ?? document.querySelector<HTMLElement>("main h1");

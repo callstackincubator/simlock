@@ -104,24 +104,32 @@ The console opens on **Overview**, the worker on one page. Under the title it sa
 
 ## Fleet
 
-**Fleet** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status, the worker's name, and its devices running of its limit.
+**Fleet** shows the workers the daemon knows. On a worker that is one card: this machine. **Add worker** at the top links to [Join workers](/simlock/docs/gateway/joining-workers); it changes nothing in the console.
 
-The status shows the worst thing wrong with the worker, with a word and a colour:
+**All**, **Issues** and **Busy** narrow the list, and the search box beside them matches a worker's name, id or system. **Issues** shows workers with something wrong. **Busy** shows workers using three quarters of their device slots or more.
+
+A worker with something wrong sits under **Needs attention** on a card. It has the name and system, a word and a colour for the worst thing wrong, and a line or two on why (for example how long a lost worker has been gone, or how full its disk is):
 
 | Colour | When |
 | --- | --- |
 | Red | The worker's health is `failed`, its memory pressure is `critical`, or its CPU, memory or disk is 95% full or more. |
 | Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, or a figure is 85% full or more. |
-| Green | Nothing is wrong. The word is `connected`. |
 
-**Issues** shows only workers whose status is not green. **Busy** shows workers using three quarters of their device slots or more.
+Under that the card shows the iOS and Android slots, CPU, memory and disk with a bar each, how many leases the worker holds, and its actions: **Open** and **Details** go to the worker's page, **Undrain** appears on a drained worker, and a disconnected worker has **View leases**, a link to [Leases](#leases). Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is shown as `—`, never as zero.
 
-Select the worker to see its CPU, memory and disk, each with a bar, how many leases it holds, and device slots for iOS and Android (leased, ready, booting, quarantined or free). Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is not shown as zero. Under them are four tabs:
+Every other worker sits under **Healthy**, as a compact tile with its leased slots over its total, its slots and its CPU, memory and disk. The tile's **⋯** menu offers the worker's actions. Under both groups, **Worker events** lists the workers' own events of the last hour, and new ones appear at the top.
 
-- **Devices**: every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
-- **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
+Select a worker to open its page. Its title reads **Fleet / name**, with the worker's status beside it, and its system, version and the age of its last reading beneath. At the top right are the worker's first action, for example **Drain**, and **⋯** for the rest. Four rings show CPU, memory, disk and slots, each with its figure and a line of context. Unavailable load is not shown as zero. Below them, the card on the left shows:
+
+- **Slots**: the iOS and Android slots, leased over total.
+- **Host**: the operating system, the version of each platform tool, the simlock version, the devices kept warm, any optional module that is not available (such as screen streaming) with its reason, and the worker's id.
+- **Baselines here**: the baselines saved on this worker, with their sizes.
+
+The card on the right has two tabs:
+
+- **Devices**: a tile for every device with its model, runtime and state. A leased device shows its holder, the time left on the lease and when it was granted; a device that is ready shows when it booted. **Watch** opens the device's screen.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
-- **Events**: this worker's events, newest first. Older events load as you scroll down, and new ones appear at the top.
+Under the tabs, **Events on this worker** lists this worker's events, newest first. Older events load as you scroll down, and new ones appear at the top.
 
 ### Open a device
 
@@ -134,9 +142,9 @@ The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens i
 
 ### Update a worker
 
-On a gateway, a worker that runs an older version than the gateway knows of shows `simlock 0.3.0 · 0.4.0 available` beside its name. Its **⋯** menu, and the search (⌘K), offer **Update…**. The dialog says how many leases the worker holds: with none it installs at once; otherwise it takes no new leases and waits for them to end, then restarts by itself. Confirm with **Update** and a toast says `Updating <name> to <version>`; if the worker already updates you see `<name> is already updating to <version>`, and if it already runs the version, `<name> already runs <version>`.
+On a gateway, a worker that runs an older version than the gateway knows of shows `simlock 0.3.0 · 0.4.0 available` under its name on its card and on its page. The worker page's **⋯** menu, and the search (⌘K), offer **Update…**. The dialog says how many leases the worker holds: with none it installs at once; otherwise it takes no new leases and waits for them to end, then restarts by itself. Confirm with **Update** and a toast says `Updating <name> to <version>`; if the worker already updates you see `<name> is already updating to <version>`, and if it already runs the version, `<name> already runs <version>`.
 
-While an update runs, the worker's state reads `updating` and the row says its stage: `waiting for 2 leases`, `installing` or `restarting`. A worker that waits for leases also offers **Update now**, which asks `Install <version> on <name> now?`; **Install now** restarts it at once, and its leases keep running through the restart. A disconnected worker offers no **Update now**. An incompatible worker, one that cannot talk to the gateway until it is updated, offers **Update…** whatever the latest version, and **Update now** once its update is waiting for leases.
+While an update runs, the worker's state reads `updating` and its card says its stage: `waiting for 2 leases`, `installing` or `restarting`. A worker that waits for leases also offers **Update now**, which asks `Install <version> on <name> now?`; **Install now** restarts it at once, and its leases keep running through the restart. A disconnected worker offers no **Update now**. An incompatible worker, one that cannot talk to the gateway until it is updated, offers **Update…** whatever the latest version, and **Update now** once its update is waiting for leases.
 
 If an update fails, the worker's page shows a red banner, `Update to 0.4.0 failed (installing): <message>`, with an **Update again** button, and the [Inbox](#inbox) lists it. The worker runs its old version again.
 
