@@ -1335,6 +1335,7 @@ test.describe("the workers page", () => {
           .getByRole("navigation", { name: "Console" })
           .getByRole("link", { name: "Fleet" })
           .click();
+        await expect(page.getByRole("region", { name: "Worker events" })).toBeVisible();
         await expectStatusIndicatorColours(
           page,
           `list ${colorScheme}`,
@@ -1346,6 +1347,7 @@ test.describe("the workers page", () => {
           colorScheme,
         );
         await row(page, "worker-a").getByRole("link").first().click();
+        await expect(page.getByRole("region", { name: "Events on this worker" })).toBeVisible();
         await expectStatusIndicatorColours(
           page,
           `worker ${colorScheme}`,
