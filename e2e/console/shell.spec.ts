@@ -80,6 +80,13 @@ test.describe("the shell", () => {
           }),
         ).toEqual([size, size, "1.4px", "round", "round"]);
       }
+      await expect(nav.locator(".sidebar-search")).toHaveCSS("font-size", "13px");
+      if (entry.theme === "dark") {
+        await expect(nav.locator(".sidebar-search kbd")).toHaveCSS(
+          "border-top-color",
+          "rgb(58, 58, 65)",
+        );
+      }
       await expect(nav.locator(".account-avatar")).toBeVisible();
       if (entry.session === "proxy") {
         await expect(nav.locator(".signed-in-as")).toHaveAttribute("title", "Alice");
