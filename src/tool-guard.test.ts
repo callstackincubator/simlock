@@ -86,6 +86,7 @@ describe("tool-guard.mjs", () => {
     "pnpm exec vitest run --project unit src/a.test.ts",
     "pnpm test:e2e e2e/http-api.test.ts",
     "pnpm test:console --project=chromium e2e/console/leases.spec.ts",
+    "pnpm mutate --touched-by refactor-draft-12",
     'git commit -qm "run pnpm check in CI"',
     'git commit -m "chore(fallow): remove four stale suppressions"',
     'gh pr edit 5 --title "chore(fallow): x"',
@@ -248,6 +249,7 @@ describe("tool-guard.mjs", () => {
     "gh issue edit 9 --add-label bug:ready --remove-label bug:new",
     "gh issue edit 9 --add-label=task:ready",
     "gh issue edit 9 --add-label x,feature:planned",
+    "gh issue edit 9 --add-label refactor:ready --remove-label refactor:new",
     "gh issue create --title x --label task:ready --body-file b.md",
     "gh api -X POST repos/o/r/issues/9/labels -f 'labels[]=bug:ready'",
   ])("refuses a sub-agent's label into work: %s", (command) => {

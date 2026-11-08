@@ -83,6 +83,7 @@ const task = (body: string, extra: Issue = {}): Issue => ({
 describe("claim.mjs", { timeout: 30_000 }, () => {
   it.each([
     ["a ready bug", { 5: { state: "open", labels: ["bug:ready"] } }, []],
+    ["a ready refactor", { 5: { state: "open", labels: ["refactor:ready"] } }, []],
     ["a bug:new issue to triage", { 5: { state: "open", labels: ["bug:new"] } }, ["--triage"]],
     ["a task with no dependency", { 5: task("none") }, []],
     [

@@ -6,6 +6,7 @@ name: Issue state
 # - a task:ready task whose Technical spec is emptied goes back to task:draft
 #   (the spec session sets task:ready; Depends on is the deliver skill's order);
 # - a task that gets task:ready and fails .agents/scripts/spec-lint.mjs goes back to task:draft,
+#   and a refactor that gets refactor:ready and fails it goes back to refactor:new,
 #   with a comment listing the blocking lines;
 # - a reporter's reply moves bug:needs-info back to bug:new, reopening the
 #   issue if the stale job closed it (agents post under a maintainer's
@@ -17,8 +18,8 @@ name: Issue state
 # - a claim with no activity for three days is released;
 # - bug:needs-info with no activity for two weeks closes as not planned;
 # - a PR from a <kind>/<n> branch must close issue <n> and no other; a branch starting with a
-#   kind prefix is exactly <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task
-#   or a bug comes from that issue's <kind>/<n>;
+#   kind prefix is exactly <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task,
+#   a bug or a refactor comes from that issue's <kind>/<n>;
 # - a PR body passes .agents/scripts/pr-body-check.mjs: warnings while it is a draft, a failed
 #   check once it is ready.
 # Actions taken with the workflow token do not trigger this workflow again,
@@ -102,10 +103,10 @@ jobs:
             core.info(`#${issue_number}: task:ready -> task:draft`);
 
   task-ready-lint:
-    name: Demote a task:ready task whose spec fails the lint
+    name: Demote a task:ready task or refactor:ready refactor whose spec fails the lint
     if: >-
       github.event_name == 'issues' && github.event.action == 'labeled' &&
-      github.event.label.name == 'task:ready'
+      (github.event.label.name == 'task:ready' || github.event.label.name == 'refactor:ready')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -128,6 +129,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
           CLAIMED: ${{ join(github.event.issue.assignees.*.login, ',') }}
+          READY: ${{ github.event.label.name }}
         run: |
           status=0
           node .agents/scripts/spec-lint.mjs "$ISSUE" > lint.txt || status=$?
@@ -139,16 +141,18 @@ jobs:
             echo "#$ISSUE fails the spec lint but is claimed by $CLAIMED; leaving it"
             exit 0
           fi
+          # why: a refactor has no draft state; it goes back to the state it came from.
+          case $READY in refactor:ready) back=refactor:new ;; *) back=task:draft ;; esac
           {
-            echo 'Back to `task:draft`: `.agents/scripts/spec-lint.mjs` found blocking lines. Fix them in the body, then set `task:ready` again.'
+            echo "Back to \`$back\`: \`.agents/scripts/spec-lint.mjs\` found blocking lines. Fix them in the body, then set \`$READY\` again."
             echo
             echo '```'
             grep '^B ' lint.txt
             echo '```'
           } > comment.md
-          gh issue edit "$ISSUE" --add-label task:draft --remove-label task:ready
+          gh issue edit "$ISSUE" --add-label "$back" --remove-label "$READY"
           gh issue comment "$ISSUE" --body-file comment.md
-          echo "#$ISSUE: task:ready -> task:draft"
+          echo "#$ISSUE: $READY -> $back"
 
   needs-info-reply:
     name: Reporter replied on bug:needs-info
@@ -294,7 +298,7 @@ jobs:
           script: |
             const days = 3;
             const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open -no:assignee label:bug:ready,task:ready`;
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open -no:assignee label:bug:ready,task:ready,refactor:ready`;
             const found = await github.paginate(github.rest.search.issuesAndPullRequests, { q, per_page: 100 });
             for (const issue of found) {
               let last = new Date(issue.updated_at).getTime();
@@ -356,7 +360,7 @@ jobs:
             const closes = [...(pr.body ?? "").matchAll(/\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi)]
               .map((x) => Number(x[1]));
             // why: a slugged <kind>/ branch would skip every check below and in pr-body-check.mjs.
-            if (/^(bug|feature|task)\//.test(head) && !/^(bug|feature|task)\/\d+$/.test(head) && !/^feature\/\d+-adr[\w-]*$/.test(head)) {
+            if (/^(bug|feature|refactor|task)\//.test(head) && !/^(bug|feature|refactor|task)\/\d+$/.test(head) && !/^feature\/\d+-adr[\w-]*$/.test(head)) {
               const repro = /^bug\/\d+-repro$/.test(head) ? " A bug/<n>-repro branch opens no pull request (delivery rule 8)." : "";
               core.setFailed(`Branch ${head} is not named from its issue: it is <kind>/<n>, no slug (coding rule 3).${repro}`);
               return;
@@ -364,14 +368,14 @@ jobs:
             for (const n of closes) {
               const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: n });
               const kind = issue.labels
-                .map((l) => /^(bug|task):/.exec(typeof l === "string" ? l : l.name)?.[1])
+                .map((l) => /^(bug|refactor|task):/.exec(typeof l === "string" ? l : l.name)?.[1])
                 .find(Boolean);
               if (kind !== undefined && head !== `${kind}/${n}`) {
                 core.setFailed(`#${n} is a ${kind}, so the PR that closes it comes from ${kind}/${n}, not ${head} (coding rule 3).`);
                 return;
               }
             }
-            const m = head.match(/^(bug|feature|task)\/(\d+)$/);
+            const m = head.match(/^(bug|feature|refactor|task)\/(\d+)$/);
             if (!m) {
               core.info(`${head} is not a <kind>/<n> branch; nothing more to check`);
               return;
