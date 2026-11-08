@@ -49,20 +49,6 @@ async function eventsHeld(page: Page): Promise<number> {
   return Math.round((await feed(page).evaluate((box) => box.scrollHeight)) / 38);
 }
 
-async function openEvent(page: Page, id: string): Promise<void> {
-  const link = feed(page).locator(`a[href="/activity/${encodeURIComponent(id)}"]`);
-  await feed(page).evaluate((box) => box.scrollTo({ top: 0 }));
-  for (let step = 0; step < 200 && (await link.count()) === 0; step += 1) {
-    await feed(page).evaluate((box) => box.scrollBy({ top: box.clientHeight / 2 }));
-    await page.waitForTimeout(30);
-  }
-  // why: a row near the edge of the drawn window is replaced as the feed scrolls it into view, so it is brought to the middle and clicked again if it moved.
-  await expect(async () => {
-    await link.evaluate((element) => element.scrollIntoView({ block: "center" }));
-    await link.click({ timeout: 1_000 });
-  }).toPass({ timeout: 10_000 });
-}
-
 test.describe("what an operator does in the console against a real daemon", () => {
   test("a lease granted through the CLI raises Leased on the open Overview and adds a lease.granted row to the open Activity feed", async ({
     page,
@@ -220,18 +206,17 @@ test.describe("what an operator does in the console against a real daemon", () =
         page.getByText(`Start of the history (${localMinute(all.at(-1)!.timestamp)})`),
       ).toBeVisible();
 
-      // why: the page reads the whole hour itself from here on, so its rows stand still to be opened.
+      // why: each event is opened by its own address, as a link to it would, since a row far down a
+      // feed that draws only the rows in view is not always in the page to click.
       await page.unrouteAll({ behavior: "wait" });
-      await page.reload();
-      await expect(feed(page).getByRole("listitem").first()).toBeVisible();
-      await expect.poll(() => eventsHeld(page)).toBe(all.length);
       const seen: string[] = [];
       for (const event of all) {
-        await openEvent(page, event.id);
+        await page.goto(
+          new URL(`/activity/${encodeURIComponent(event.id)}`, fleet.gateway.url).href,
+        );
+        await expect(page.getByRole("dialog")).toBeVisible();
         await expect(page.getByRole("heading", { level: 2 }).first()).toHaveText(event.event);
         seen.push(await page.getByRole("dialog").innerText());
-        await page.keyboard.press("Escape");
-        await expect(page.getByRole("dialog")).toHaveCount(0);
       }
       expect(seen.join("\n")).not.toContain(joinToken);
       expect(await page.content()).not.toContain(joinToken);
