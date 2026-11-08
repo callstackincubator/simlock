@@ -79,7 +79,9 @@ The sidebar floats beside the page in its own card. Use the button beside the Si
   <img src="/simlock/console-shell-light.png" alt="The Overview page with navigation and the signed-in account in the sidebar" />
 </picture>
 
-On **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Leases**, it opens in a pane beside the table. On **Fleet**, a worker opens as its own page. Lists show 25 rows at a time, with a pager for 50 or 100.
+On **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Leases**, it opens in a pane beside the table. On **Fleet**, a worker opens as its own page, and a device opens its streaming page. Lists show 25 rows at a time, with a pager for 50 or 100.
+
+The console follows your system's light or dark setting and fits the window it is in. It is laid out for a 1440 pixel wide window, where each page fits without scrolling. In a narrower window the tiles take fewer columns and the Overview's right-hand cards move under its chart. Below 1280 pixels a lease opens as a panel over the list, and below 768 the sidebar becomes a bar at the top with a menu button and tables stack into blocks. No page scrolls sideways, down to a 360 pixel wide phone.
 
 Pages update by themselves: a new lease or a booting device shows within about a second, and readings such as CPU load within 15 seconds. The bottom of the sidebar shows the connection:
 
@@ -129,6 +131,7 @@ The card on the right has two tabs:
 
 - **Devices**: a tile for every device with its model, runtime and state. A leased device shows its holder, the time left on the lease and when it was granted; a device that is ready shows when it booted. **Watch** opens the device's screen.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
+
 Under the tabs, **Events on this worker** lists this worker's events, newest first. Older events load as you scroll down, and new ones appear at the top.
 
 ### Open a device

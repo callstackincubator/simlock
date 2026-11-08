@@ -45,7 +45,9 @@ it shows with numbers, statuses and shape, not with sentences about them.
 
 Every colour is a custom property on `:root`. Dark is the designed theme and
 the one the renders show. The light theme keeps the same structure with its
-own values; a change to it ships without a render until one exists.
+own values (an off-white page, near-white cards, the same accent) and is
+captured at 1440×900 in `docs/internal/console-redesign/current/light/`;
+the axe checks in `views.spec.ts` and `shell.spec.ts` run in both.
 
 | Token             | Dark      | Use                                                       |
 | ----------------- | --------- | --------------------------------------------------------- |
@@ -104,9 +106,11 @@ Designed at 1440×900, where every page fits with no page scroll: a page is a
 column of cards, and the last row takes the rest (`flex: 1`). Only lists and
 feeds scroll, inside their card. Below 1440px the grids give first: six KPI
 tiles become three by two, five healthy tiles four then three columns, the
-Overview's right column drops under the charts, the Leases inspector becomes
-a drawer. Under 768px the sidebar is a top bar with a menu and tables stack
-into blocks, as before.
+Overview's right column drops under the charts, and the Leases inspector
+becomes a drawer strictly below 1280px (1279 is a drawer, 1280 a pane). Under
+768px the sidebar is a top bar with a menu and tables stack into blocks, as
+before. No page scrolls sideways at 1280×800, 1024×768, 768×1024, 390×844 or
+360 wide; `e2e/console/breakpoints.spec.ts` checks every page at each.
 
 Rules that keep text from overflowing:
 
@@ -223,8 +227,10 @@ own that one of them draws. Named sizes and colours are above.
   glow, two overlay pills at its corners (`● LIVE · 30 fps`, `h264 ·
   720×1560 · 1.4 Mb/s`); at the right the Holder card (chip, wrapped id,
   ring + countdown, Copy lease id / Lease details / Release), Device facts,
-  Recent events. Header actions: Stop watching and `⋯`. The same stream
-  component as today's drawer Screen tab; view only.
+  Recent events. The countdown is 24px mono and, as on the Leases inspector,
+  reads `mm:ss` (`h:mm:ss` past an hour) from one helper. Header actions: Stop
+  watching and `⋯`. View only. The device drawer has no Screen tab; an old
+  `?drawer=screen` link redirects here.
 - **Chart.** Recharts. Line and area in `--accent` with a 9% fill, bars in
   `--slot-leased` at 55% with the current bucket in `--accent`, grid lines
   `--border`, axis labels 10px mono muted. Height fixed by its card. No
