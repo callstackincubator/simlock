@@ -192,8 +192,8 @@ describe("the fleet", () => {
     expect(shown).toContain("Needs attention 3");
     expect(shown).not.toContain("Healthy");
     expect(markup).not.toContain("fleet-card");
-    expect(markup.match(/<tr class="row-(warn|error)"/g)).toHaveLength(3);
-    expect(markup).toContain('<tr class="row-error"');
+    expect(markup.match(/<tr class="table-row-link row-(warn|error)"/g)).toHaveLength(3);
+    expect(markup).toContain('<tr class="table-row-link row-error"');
     expect(markup).toContain("table-lines");
     expect(shown).toContain("Worker State Slots CPU Mem Disk Leases");
     // why: the reason is in the pill's hover, not in the cell, which holds only the pill.

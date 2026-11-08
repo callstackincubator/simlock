@@ -132,7 +132,7 @@ describe("the overview screen", () => {
     expect(shown).toContain("Worker State Slots CPU Mem Disk Leases");
     expect(shown).toContain("drained");
     expect(shown).toContain("2 workers");
-    expect(html).toContain('<tr class="row-warn"');
+    expect(html).toContain('<tr class="table-row-link row-warn"');
     expect(html).not.toContain("overview-wall");
     expect(shown).toContain("1–2 of 2");
     expect(html).toContain('href="/fleet">Open fleet</a>');

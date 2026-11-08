@@ -3,7 +3,7 @@ import "./worker-table.css";
 import type { ComponentProps } from "react";
 
 import { Hint } from "./hint";
-import { Link } from "./link";
+import { Link, useNavigateTo } from "./link";
 import { type MenuEntry, RowMenu } from "./menu";
 import { Meter } from "./meter";
 import { type Slot, Slots } from "./slots";
@@ -130,6 +130,7 @@ function WorkerList<R extends WorkerTableRow>(props: {
   readonly entries: (row: R) => readonly MenuEntry[];
   readonly count: string | undefined;
 }) {
+  const navigate = useNavigateTo();
   return (
     <div className="fleet-list" role="list" aria-label="Workers">
       {props.groups.map((group) => (
@@ -139,7 +140,10 @@ function WorkerList<R extends WorkerTableRow>(props: {
             <div
               key={row.id}
               role="listitem"
-              className={`fleet-item${group.id === "attention" ? ` ${rowTone(row)}` : ""}`}
+              className={`fleet-item table-row-link${group.id === "attention" ? ` ${rowTone(row)}` : ""}`}
+              onClick={(event) => {
+                if ((event.target as HTMLElement).closest("a, button") === null) navigate?.(row.to);
+              }}
             >
               <div className="fleet-item-main">
                 <p className="fleet-item-head">
@@ -196,6 +200,7 @@ export function WorkerTable<R extends WorkerTableRow>(props: {
             return { id: group?.id ?? "healthy", label: group?.label ?? "" };
           }}
           rowClassName={(row) => (attention.has(row.id) ? rowTone(row) : undefined)}
+          rowTo={(row) => row.to}
           className="fleet-table table-lines"
           footer="count"
           count={props.count}

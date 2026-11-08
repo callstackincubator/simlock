@@ -92,6 +92,11 @@
   background: var(--row-error);
 }
 
+/* why: the same overlay as a table row's hover, so a tinted row keeps its tint under it. */
+.fleet-item:hover {
+  background-image: linear-gradient(var(--row-hover), var(--row-hover));
+}
+
 .fleet-item-main {
   min-width: 0;
   flex: 1;

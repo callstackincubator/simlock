@@ -153,6 +153,15 @@ describe("the Fleet page", () => {
     for (const row of [a, b]) expect(within(row).getAllByRole("img").length).toBeGreaterThan(0);
   });
 
+  it("a click anywhere on a worker's row, not only its name, opens that worker's page", async () => {
+    const view = ofWorkers([
+      worker({ host: MAC, id: "wrk_a", label: "worker-a", leases: [], load: load(12, 50, 40) }),
+    ]);
+    const row = (await screen.findAllByRole("row")).find((r) => within(r).queryByText("worker-a"));
+    await view.user.click(within(row!).getAllByRole("cell")[2]!);
+    await waitFor(() => expect(window.location.pathname).toMatch(/^\/fleet\/wrk_a\/?$/));
+  });
+
   it("the Issues and Busy filters keep the workers they name", async () => {
     const view = ofWorkers([
       worker({ id: "wrk_a", label: "worker-a" }),
