@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { identityGet, runDispatch } from "../daemon/dispatch.js";
 import { DispatchError } from "../daemon/dispatcher.js";
+import { testConfig } from "../core/testing.js";
 import { streamModule } from "../stream/index.js";
 // why: the stream index exports only the definition, so a registry reads no module code; the real mount is reached through `testing.ts` to prove the listed route against the real handler.
 import { createStreamMount } from "../stream/testing.js";
@@ -1267,6 +1268,35 @@ describe("worker routes", () => {
     expect(await response.json()).toEqual({ items: [item] });
     expect(dispatcher.calls.map((call) => [call.operation, call.session.role])).toEqual([
       ["inbox.get", "admin"],
+    ]);
+  });
+
+  it("GET /v1/config dispatches config.get for the caller and answers the config; an agent token is a 403, no token a 401", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    const config = testConfig({ update: { check: false } }, "gateway");
+    // why: `config.get`'s own role check runs through the contract's real pipeline; the route adds none.
+    dispatcher.handlers["config.get"] = (input, session) =>
+      runDispatch("config.get", input, session, {
+        handlers: {
+          "config.get": (configInput) => {
+            expect(configInput).toEqual({});
+            return config;
+          },
+        },
+      });
+
+    const asOperator = await app.request("/v1/config", { headers: operatorAuth });
+    const asAgent = await app.request("/v1/config", { headers: agentAuth });
+    const anonymous = await app.request("/v1/config");
+
+    expect(asOperator.status).toBe(200);
+    expect(await asOperator.json()).toMatchObject({ mode: "gateway", update: { check: false } });
+    expect(asAgent.status).toBe(403);
+    expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    expect(anonymous.status).toBe(401);
+    expect(dispatcher.calls.map((call) => [call.operation, call.session.role])).toEqual([
+      ["config.get", "admin"],
+      ["config.get", "agent"],
     ]);
   });
 
