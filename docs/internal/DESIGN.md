@@ -153,9 +153,8 @@ own that one of them draws. Named sizes and colours are above.
   collapsed rail; the phone has no such control, its top bar is the wordmark on the
   left and the menu button on the right, 8px from the top.
 - **Page header.** Title 21px with its breadcrumb in muted 500
-  (`Fleet / mac-studio-01`), an optional one-line muted subtitle that holds
-  figures only (`updated 18:18:04`, `49.5 GB on 4 workers`), never a
-  sentence; a status pill may follow the title. Actions on the right: at most
+  (`Fleet / mac-studio-01`) and no subtitle; a status pill may follow the
+  title. Actions on the right: at most
   one primary, secondaries, then a square `⋯` menu button.
 - **Card.** `--surface`, 1px border, 10px radius, clips its content. Its
   header: a label on the left, pills next, then right-aligned mono muted text
@@ -198,7 +197,8 @@ own that one of them draws. Named sizes and colours are above.
 - **Fleet table.** The Fleet page is one table grouped by Needs attention
   N, then Healthy N (an empty group is left out), one row per worker:
   Worker (mono name linking to the worker page, muted `macOS <v> · simlock
-  <v>`), State (the pill alone; the reason, such as `905.3 GiB used of 926.4
+  <v>`; the whole row opens the worker page, as other clickable rows do,
+  through the table's `rowTo`), State (the pill alone; the reason, such as `905.3 GiB used of 926.4
   GiB`, shows in a popover on hover and keyboard focus of the pill), Slots
   (meter and fraction), CPU / Mem / Disk (thin meter and a mono
   figure), Leases and `⋯`, whose first entries are Undrain (confirmed) or View
@@ -217,7 +217,8 @@ own that one of them draws. Named sizes and colours are above.
   label after Host: one row each, the name and a pill (`on` ok, `off` idle,
   `unavailable` warn with its reason beneath).
 - **Worker table.** One `ds` component, `WorkerTable`, draws workers on the Fleet
-  page and in the Overview's Fleet card: grouped rows (Needs attention, Healthy), the
+  page and in the Overview's Fleet card, where a whole row opens the worker page too:
+  grouped rows (Needs attention, Healthy), the
   State pill with its reason on hover, a Slots meter and fraction, CPU / Mem / Disk
   meters, Leases and `⋯`; under 1100px a two-line list row. The Overview card shows
   the first eight rows of the Fleet page's grouping (a worker with an issue first); a
@@ -304,8 +305,8 @@ cards under a title with no actions or subtitle:
   system preference. A default range and rows per page only fill in what
   the URL leaves out.
 - **Daemon**: read-only. The daemon's live `config.get` answer (`GET
-  /v1/config`, admin), grouped by top-level section, each key as Facts with
-  the key path and the value in mono and a small Copy button for
+  /v1/config`, admin), as one `DataTable` grouped by top-level section, one
+  row per key: Key and Value in mono and a small Copy button for
   `simlock config set <key> <value>`; a masked secret has no button. A token
   that may not read it gets one muted line. A gateway shows its own config,
   not its workers'.

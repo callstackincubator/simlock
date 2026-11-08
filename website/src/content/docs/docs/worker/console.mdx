@@ -72,7 +72,7 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar floats beside the page in its own card. Use the button beside the Simlock name to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**, and **Settings** at the bottom. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
+The sidebar floats beside the page in its own card. Use the button at the foot of the sidebar, above the account box, to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**, and **Settings** at the bottom. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
 
 <picture>
   <source srcSet="/simlock/console-shell-dark.png" media="(prefers-color-scheme: dark)" />
@@ -93,7 +93,7 @@ Pages update by themselves: a new lease or a booting device shows within about a
 
 ## Overview
 
-The console opens on **Overview**, the worker on one page. Under the title it says when it last updated. It has no tables.
+The console opens on **Overview**, the worker on one page. The **Fleet** card is a table; the rest are tiles, charts and lists.
 
 - **Range**: **1 h**, **6 h**, **24 h** or **7 d**, at the top right. It sets the figures and charts below.
 - **Banner**: when something needs you, a line counts the problems from **Inbox**, links the first one and says how many more there are. **Open Inbox** goes to the list. With nothing to do, there is no banner.
@@ -110,20 +110,20 @@ The console opens on **Overview**, the worker on one page. Under the title it sa
 
 **All**, **Issues** and **Busy** narrow the list, and the search box beside them matches a worker's name, id or system. **Issues** shows workers with something wrong. **Busy** shows workers using three quarters of their device slots or more.
 
-Fleet is one list of workers in two groups, with one row for each worker. A worker with something wrong sits under **Needs attention**, on a tinted row. The row has the name and system, a word and a colour for the worst thing wrong, and a line beneath on why (for example how long a lost worker has been gone, or how full its disk is):
+Fleet is one list of workers in two groups, with one row for each worker. A worker with something wrong sits under **Needs attention**, on a tinted row. The row has the name and system, and a word and a colour for the worst thing wrong; hover over or focus the word to see why (for example how long a lost worker has been gone, or how full its disk is):
 
 | Colour | When |
 | --- | --- |
 | Red | The worker's health is `failed`, its memory pressure is `critical`, or its CPU, memory or disk is 95% full or more. |
 | Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, or a figure is 85% full or more. |
 
-Every row shows the iOS and Android slots together, CPU, memory and disk with a bar each, how many leases the worker holds, and its actions: **Undrain** appears on a drained worker, a disconnected worker has **View leases**, a link to [Leases](#leases), and **⋯** offers the rest. Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is shown as `—`, never as zero. Every cell is one line; a long value is cut with an ellipsis and shows in full on hover.
+Every row shows the iOS and Android slots together, CPU, memory and disk with a bar each, how many leases the worker holds, and its actions: **Undrain** appears on a drained worker, a disconnected worker has **View leases**, a link to [Leases](#leases), and **⋯** offers the rest. The slots show as a meter with the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is shown as `—`, never as zero. Every cell is one line; a long value is cut with an ellipsis and shows in full on hover.
 
 Every other worker sits under **Healthy**, in the same columns. Under both groups, **Worker events** lists the workers' own events of the last hour, and new ones appear at the top.
 
-Select a worker to open its page. Its title reads **Fleet / name**, with the worker's status beside it, and its system, version and the age of its last reading beneath. At the top right are the worker's first action, for example **Drain**, and **⋯** for the rest. Four rings show CPU, memory, disk and slots, each with its figure and a line of context. Unavailable load is not shown as zero. Below them, the card on the left shows:
+Select anywhere on a worker's row to open its page. Its title reads **Fleet / name**, with the worker's status beside it. At the top right are the worker's first action, for example **Drain**, and **⋯** for the rest. Four rings show CPU, memory, disk and slots, each with its figure and a line of context. Unavailable load is not shown as zero. Below them, the card on the left shows:
 
-- **Slots**: the iOS and Android slots, leased over total.
+- **Slots**: the iOS and Android slots, leased over total, as a square for each slot up to ten and a meter above ten.
 - **Host**: the operating system, the version of each platform tool, the simlock version, the devices kept warm and the worker's id.
 - **Capabilities**: each optional module (such as screen streaming) as `on` or `off`, or `unavailable` with its reason.
 - **Baselines here**: the baselines saved on this worker, with their sizes.
@@ -237,6 +237,6 @@ Select an event to see its whole payload and a link to the lease, worker, reques
 
 ## Settings
 
-**Settings** has two cards. **Console** holds your preferences for this browser: the theme (**System**, **Light** or **Dark**), the sidebar (**Expanded** or **Collapsed**, the same choice as the button beside the Simlock name), the default range for **Overview** and **Activity** when the address has none, the rows per page for tables, and whether holder ids are **Short** (cut in the middle) or **Full**. A change applies at once and stays in this browser.
+**Settings** has two cards. **Console** holds your preferences for this browser: the theme (**System**, **Light** or **Dark**), the sidebar (**Expanded** or **Collapsed**, the same choice as the button at the foot of the sidebar; a phone's menu ignores it), the default range for **Overview** and **Activity** when the address has none, the rows per page for tables, and whether holder ids are **Short** (cut in the middle) or **Full**. A change applies at once and stays in this browser.
 
-**Daemon** shows the daemon's live configuration, grouped by section, with secrets masked. It is read-only: change a value with `simlock config set <key> <value>` on the daemon's machine. The **Copy** button next to a key copies that command. It needs an admin token; with another token, the card says your token cannot read this daemon's settings. On a gateway it shows the gateway's own configuration, not its workers'.
+**Daemon** shows the daemon's live configuration, grouped by section, with secrets masked. It is read-only: change a value with `simlock config set <key> <value>` on the daemon's machine. The **Copy** button next to a key copies that command. It needs an admin token; with another token, the card says your token cannot read this daemon's settings, and a daemon too old to report them is said so. On a gateway it shows the gateway's own configuration, not its workers'.
