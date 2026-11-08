@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -85,12 +85,17 @@ describe.skipIf(process.platform !== "darwin")(
         expect(version.stdout).toMatch(/^Xcode 27\.2(?:\s|$)/);
         const previousClipboard = (await execFileAsync("pbpaste")).stdout;
         const sentinel = randomUUID().toUpperCase();
-        const plist = join(
-          homedir(),
-          "Library/Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist",
-        );
-        const buddy = async (command: string) =>
-          execFileAsync("/usr/libexec/PlistBuddy", ["-c", command, plist]);
+        // why: cfprefsd owns DeviceHub's preferences and rewrites the file over a direct edit, so
+        // the test reads and edits an export of the domain and imports a change back.
+        const staged = join(tmpdir(), `devicehub-${randomUUID()}.plist`);
+        const buddy = async (command: string) => {
+          await execFileAsync("defaults", ["export", "com.apple.dt.Devices", staged]);
+          const result = await execFileAsync("/usr/libexec/PlistBuddy", ["-c", command, staged]);
+          if (!command.startsWith("Print")) {
+            await execFileAsync("defaults", ["import", "com.apple.dt.Devices", staged]);
+          }
+          return result;
+        };
         const env = await withDaemon({
           configOverrides: {
             drivers: { ios: { deviceSet: "default" } },
@@ -139,11 +144,14 @@ describe.skipIf(process.platform !== "darwin")(
           };
           udid = grant.device.driverDeviceId;
           if (path === "warm") expect(grant.device.id).toBe(warmId);
-          await waitFor(async () => (await selectedInDeviceHub()) === udid, {
-            interval: 1_000,
-            label: "DeviceHub selected simulator",
-            timeout: 30_000,
-          });
+          // why: a warm pool refills after the grant, and the refill's boot selects its own simulator.
+          await waitFor(
+            async () => {
+              const selected = await selectedInDeviceHub();
+              return path === "warm" ? selected !== "" : selected === udid;
+            },
+            { interval: 1_000, label: "DeviceHub selected simulator", timeout: 30_000 },
+          );
           expect(
             (await buddy(`Print :DevicePreferences:${udid}:pasteboardSyncEnabled`)).stdout.trim(),
           ).toBe("false");
