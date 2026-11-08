@@ -84,6 +84,7 @@ export function Sidebar(props: {
         <button
           type="button"
           className="sidebar-search"
+          aria-label="Search or jump to…"
           title={collapsed ? "Search or jump to…" : undefined}
           onClick={() => {
             onSearch();
@@ -91,7 +92,8 @@ export function Sidebar(props: {
           }}
         >
           <Icon name="search" />
-          <span className="nav-label">Search or jump to…</span>
+          <span className="nav-label">Search</span>
+          <kbd aria-hidden="true" />
         </button>
         <NavList entries={entries.filter((entry) => entry.group === undefined)} {...nav} />
         {groups.map((group) => (
