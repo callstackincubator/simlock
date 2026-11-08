@@ -1,9 +1,9 @@
 const PATHS = {
   overview: "M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z",
   workers: "M2 3h12v4H2zM2 9h12v4H2zM5 5h.01M5 11h.01",
-  leases: "M10 2a4 4 0 1 1-3.5 6L2 12.5V14h2v-1.5h1.5V11h1.5l1-1",
+  leases: "M5 8.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM7 9l6-6M11 5l2 2",
   waiting: "M2 4h12M2 8h9M2 12h6",
-  baselines: "M3 2.5h10v11H3zM6 6h4M6 9h4M6 12h2",
+  baselines: "M8 2l6 3-6 3-6-3zM2 8l6 3 6-3M2 11l6 3 6-3",
   inbox: "M2 9l2-6h8l2 6v4H2zM2 9h4l1 2h2l1-2h4",
   events: "M1.5 8h3l2-5 3 10 2-5h3",
   usage: "M2 14V2M2 14h12M5 11V8M8 11V5M11 11V7",
@@ -15,7 +15,7 @@ const PATHS = {
   more: "M3.5 8h.01M8 8h.01M12.5 8h.01",
   device: "M5 1.5h6v13H5zM7.5 12.5h1",
   info: "M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM8 7.5v4M8 5h.01",
-  search: "M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5",
+  search: "M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5L14 14",
 } as const;
 
 export type IconName = keyof typeof PATHS;
