@@ -82,7 +82,7 @@ it("shows supplied labels, values and unavailable states in shared visual primit
   for (const value of [
     'title="mac-01.local"',
     'href="/fleet/mac-01"',
-    "mac-01",
+    ">mac-01</a>",
     "drained",
     "iOS slots",
     "Android slots",
