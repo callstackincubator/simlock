@@ -1,5 +1,5 @@
 import { formatBytes, loadGauges } from "./load";
-import { formatDuration } from "./time";
+import { formatAgo } from "./time";
 import { levelOf } from "./load-thresholds";
 import type { Tone, Toned } from "./tones";
 import type { WorkerDevice, WorkerView } from "./workers";
@@ -148,7 +148,7 @@ export function workerReason(worker: WorkerView, now?: number): string {
 function lostReason(worker: WorkerView, now: number | undefined): string {
   const held = worker.leases?.length;
   return [
-    now === undefined ? "disconnected" : `last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
+    now === undefined ? "disconnected" : `last seen ${formatAgo(now - worker.lastSeenAt)}`,
     ...(held !== undefined && held > 0 ? [`${leaseCountWord(held)} held`] : []),
   ].join(" · ");
 }

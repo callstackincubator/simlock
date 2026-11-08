@@ -15,7 +15,7 @@ import { levelOf } from "./load-thresholds";
 import { holderOf, platformName, stateEnteredAt } from "../../../src/contract/inbox";
 import { leasePath, type TokenRecord } from "./leases";
 import { devicePath } from "./paths";
-import { formatDuration } from "./time";
+import { formatAgo, formatDuration } from "./time";
 import { clockTime } from "./events";
 import { type UpdateFacts, updateFactsOf, versionLine } from "./versions";
 import {
@@ -451,7 +451,7 @@ function leaseFacts(
     ...(lease.ttlMs > 0 ? { ttlPercent: ttlPercent(lease.ttlDeadline - now, lease.ttlMs) } : {}),
     ttlTone:
       lease.ttlMs > 0 && ttlPercent(lease.ttlDeadline - now, lease.ttlMs) < 34 ? "warn" : "neutral",
-    renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
+    renewed: `${formatAgo(now - lease.lastRenewedAt)}`,
   };
 }
 
@@ -552,7 +552,7 @@ function bannersOf(worker: WorkerView, now: number): readonly WorkerBanner[] {
     ...(worker.connection === "disconnected"
       ? [
           {
-            text: `Disconnected · last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
+            text: `Disconnected · last seen ${formatAgo(now - worker.lastSeenAt)}`,
             tone: "warn" as const,
           },
         ]

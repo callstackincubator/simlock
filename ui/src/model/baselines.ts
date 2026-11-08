@@ -1,7 +1,7 @@
 import type { BaselineEntry } from "../../../src/contract/index";
 import { platformName } from "../../../src/contract/inbox";
 import { formatBytes } from "./load";
-import { formatDuration } from "./time";
+import { formatAgo } from "./time";
 import { type WorkerView, workerName } from "./workers";
 
 export interface BaselineList {
@@ -46,7 +46,7 @@ export function baselineRows(
     const model = entry.imageTag === undefined ? entry.model : `${entry.model} / ${entry.imageTag}`;
     const named = platformName(entry.platform);
     return {
-      built: `${formatDuration(now - Date.parse(entry.savedAt))} ago`,
+      built: `${formatAgo(now - Date.parse(entry.savedAt))}`,
       detail: `${model} · ${named} ${entry.osVersion}`,
       key: `${entry.workerId ?? ""}/${entry.name}`,
       name: entry.name,

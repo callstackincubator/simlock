@@ -6,7 +6,7 @@ import { eventSummary, eventTone } from "./activity";
 import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
 import { eventsOfLease, leasePath } from "./leases";
 import { inboxPath, itemPath } from "./paths";
-import { formatDuration } from "./time";
+import { formatAgo, formatDuration } from "./time";
 import type { Tone } from "./tones";
 import { type WorkerView, workerName, workerPath } from "./workers";
 
@@ -260,7 +260,7 @@ function updateFailureFacts(worker: WorkerItem["worker"], now: number): readonly
         { label: "From", value: failure.from },
         { label: "To", value: failure.to },
         { label: "Stage", value: failure.stage },
-        { label: "When", value: `${formatDuration(now - failure.at)} ago` },
+        { label: "When", value: `${formatAgo(now - failure.at)}` },
       ];
 }
 
@@ -276,7 +276,7 @@ function workerFacts(
     ];
   }
   if (item.condition === "disconnected") {
-    return [{ label: "Last seen", value: `${formatDuration(now - worker.lastSeenAt)} ago` }];
+    return [{ label: "Last seen", value: `${formatAgo(now - worker.lastSeenAt)}` }];
   }
   if (item.condition === "drained") {
     return [{ label: "Leases still held", value: String(worker.heldLeases) }];
