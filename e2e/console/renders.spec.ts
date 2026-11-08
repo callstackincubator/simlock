@@ -645,24 +645,32 @@ for (const entry of cases) {
                 "relative href",
               ] as const) {
                 await page.evaluate((reference) => {
-                  const svg = document.querySelector(".recharts-surface")!;
-                  const chart = svg.querySelector(".recharts-area-area")!;
+                  const svg = document.querySelector(".sidebar-search .icon")!;
+                  const path = svg.querySelector("path")!;
                   const hidden = document.createElementNS("http://www.w3.org/2000/svg", "svg");
                   hidden.id = "capture-reference-definitions";
-                  hidden.style.display = "none";
-                  const definition = svg.querySelector("clipPath")!.cloneNode(true) as Element;
-                  definition.id = "capture-reference-clip";
+                  hidden.style.cssText = "position:absolute;width:0;height:0";
+                  const definition = reference.endsWith("CSS")
+                    ? document.createElementNS("http://www.w3.org/2000/svg", "clipPath")
+                    : (path.cloneNode(true) as Element);
+                  definition.id = "capture-reference-target";
+                  if (reference.endsWith("CSS")) {
+                    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                    rect.setAttribute("width", "16");
+                    rect.setAttribute("height", "16");
+                    definition.append(rect);
+                  }
                   hidden.append(definition);
                   document.body.append(hidden);
                   const address = reference.startsWith("absolute")
-                    ? `${location.origin}${location.pathname}#capture-reference-clip`
-                    : `./#capture-reference-clip`;
+                    ? `${location.origin}${location.pathname}#capture-reference-target`
+                    : `./#capture-reference-target`;
                   if (reference.endsWith("CSS")) {
-                    chart.setAttribute(
+                    path.setAttribute(
                       "data-capture-old-clip",
-                      chart.getAttribute("clip-path") ?? "",
+                      path.getAttribute("clip-path") ?? "",
                     );
-                    chart.setAttribute("clip-path", `url("${address}")`);
+                    path.setAttribute("clip-path", `url("${address}")`);
                   } else {
                     const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
                     use.id = "capture-reference-use";
@@ -670,21 +678,42 @@ for (const entry of cases) {
                     svg.append(use);
                   }
                 }, kind);
+                const paintTarget = kind.endsWith("CSS")
+                  ? page.locator(".sidebar-search .icon path")
+                  : page.locator("#capture-reference-use");
+                const referenceAttribute = kind.endsWith("CSS") ? "clip-path" : "href";
+                await expect(paintTarget).toHaveAttribute(
+                  referenceAttribute,
+                  /capture-reference-target/,
+                );
+                expect(
+                  await paintTarget.evaluate((element) => {
+                    const rect = element.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                  }),
+                  `${kind} has a paintable target`,
+                ).toBe(true);
                 const before = await visibleState(page);
-                await page
-                  .locator("#capture-reference-definitions rect")
-                  .first()
-                  .evaluate((element) => {
-                    element.setAttribute("width", "1");
-                  });
+                const definition = page.locator(
+                  kind.endsWith("CSS")
+                    ? "#capture-reference-target rect"
+                    : "#capture-reference-target",
+                );
+                await definition.evaluate((element, css) => {
+                  element.setAttribute(css ? "width" : "d", css ? "1" : "M0 0L1 1");
+                }, kind.endsWith("CSS"));
                 const after = await visibleState(page);
+                await expect(paintTarget).toHaveAttribute(
+                  referenceAttribute,
+                  /capture-reference-target/,
+                );
                 await page.evaluate(() => {
-                  const chart = document.querySelector(".recharts-area-area")!;
-                  const old = chart.getAttribute("data-capture-old-clip");
+                  const path = document.querySelector(".sidebar-search .icon path")!;
+                  const old = path.getAttribute("data-capture-old-clip");
                   if (old !== null) {
-                    if (old === "") chart.removeAttribute("clip-path");
-                    else chart.setAttribute("clip-path", old);
-                    chart.removeAttribute("data-capture-old-clip");
+                    if (old === "") path.removeAttribute("clip-path");
+                    else path.setAttribute("clip-path", old);
+                    path.removeAttribute("data-capture-old-clip");
                   }
                   document.querySelector("#capture-reference-use")?.remove();
                   document.querySelector("#capture-reference-definitions")!.remove();
