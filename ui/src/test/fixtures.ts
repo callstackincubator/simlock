@@ -128,3 +128,37 @@ export function leaseDetails(overrides: Partial<LeaseDetails> = {}): LeaseDetail
     ...overrides,
   };
 }
+
+type InboxWorker = Extract<InboxItem, { readonly worker: unknown }>["worker"];
+type InboxDevice = Extract<InboxItem, { readonly device: unknown }>["device"];
+type InboxLease = Extract<InboxItem, { readonly lease: unknown }>["lease"];
+
+// why: the worker an Inbox item names is the daemon's trimmed view with two counts, not a full
+// worker view.
+export function inboxWorker(overrides: Partial<InboxWorker> = {}): InboxWorker {
+  return {
+    connection: "connected",
+    drained: false,
+    heldLeases: 0,
+    id: "wrk_1",
+    lastSeenAt: NOW - 2_000,
+    leasedDevices: 0,
+    ...overrides,
+  };
+}
+
+export function inboxDevice(overrides: Partial<InboxDevice> = {}): InboxDevice {
+  return {
+    id: "dev_1",
+    physical: false,
+    servesDefaultMode: true,
+    spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+    state: "ready",
+    workerId: "wrk_1",
+    ...overrides,
+  } as InboxDevice;
+}
+
+export function inboxLease(overrides: Partial<InboxLease> = {}): InboxLease {
+  return { ...lease(), holder: "tok_agent", model: "iPhone 16", ...overrides };
+}
