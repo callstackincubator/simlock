@@ -1,7 +1,7 @@
 import type { BaselineEntry } from "../../../src/contract/index";
 import type { ConsoleEvent } from "../model/events";
 import type { InboxItem } from "../model/inbox";
-import type { LeaseRecord, TokenRecord } from "../model/leases";
+import type { LeaseDetails, LeaseRecord, TokenRecord } from "../model/leases";
 import type { WaitingRequest } from "../model/waiting";
 import type { WorkerDevice, WorkerView } from "../model/workers";
 
@@ -112,4 +112,19 @@ export function workerItem(
   w: WorkerView = worker(),
 ): InboxItem {
   return { condition, group, key: `${w.id}/${condition}`, worker: w } as InboxItem;
+}
+
+// why: `GET /v1/leases/{id}` answers what the daemon knows of one lease; the holder and the renewal
+// come from its entry in the list.
+export function leaseDetails(overrides: Partial<LeaseDetails> = {}): LeaseDetails {
+  return {
+    createdAt: new Date(NOW - 3_600_000).toISOString(),
+    device: "iPhone 16",
+    deviceId: "dev_1",
+    expiresAt: new Date(NOW + 600_000).toISOString(),
+    id: "lse_1",
+    mode: "full",
+    udid: "UDID-1",
+    ...overrides,
+  };
 }
