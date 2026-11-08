@@ -22,7 +22,9 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
   // why: inherited stdio does not carry a signal sent only to this process; without a
   // forward the CLI dies on SIGINT/SIGTERM and leaves the tool (a recordVideo that still has to
   // flush) running unattended. The CLI stays until the tool's own close decides the exit code.
-  const signals = ["SIGINT", "SIGTERM"] as const;
+  // why: with a terminal on stdin the tool shares our foreground process group, so Ctrl-C already
+  // reaches it; a forwarded copy would be a second SIGINT, which makes recordVideo abandon its file.
+  const signals = process.stdin.isTTY ? (["SIGTERM"] as const) : (["SIGINT", "SIGTERM"] as const);
   const handlers = signals.map((signal) => {
     const handler = () => child.kill(signal);
     process.on(signal, handler);

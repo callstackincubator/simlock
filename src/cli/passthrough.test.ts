@@ -64,4 +64,28 @@ describe("spawnPassthrough", () => {
     await spawnPassthrough(nodeCommand("process.exit(0)"));
     expect(counts(), "after a repeated command").toEqual(before);
   });
+
+  it("forwards SIGINT to its tool only when stdin is not a terminal, SIGTERM always", async () => {
+    const tool = `process.on("SIGINT",()=>process.exit(40));process.on("SIGTERM",()=>process.exit(41));setTimeout(()=>process.exit(0),1500)`;
+    const original = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    // why: a signal is delivered to our own handler only, so other listeners of the test process never run.
+    const deliver = async (isTTY: boolean, signal: "SIGINT" | "SIGTERM") => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: isTTY });
+      const known = new Set(process.listeners(signal));
+      const done = spawnPassthrough(nodeCommand(tool));
+      // why: the handlers are installed after the spawn's dynamic imports, and the tool needs time to install its own.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const ours = process.listeners(signal).filter((listener) => !known.has(listener));
+      for (const listener of ours) listener(signal);
+      return done;
+    };
+    try {
+      expect(await deliver(false, "SIGINT"), "piped stdin: SIGINT forwarded").toBe(40);
+      expect(await deliver(true, "SIGINT"), "terminal stdin: Ctrl-C comes from the tty").toBe(0);
+      expect(await deliver(true, "SIGTERM"), "terminal stdin: SIGTERM forwarded").toBe(41);
+    } finally {
+      if (original) Object.defineProperty(process.stdin, "isTTY", original);
+      else Reflect.deleteProperty(process.stdin, "isTTY");
+    }
+  });
 });
