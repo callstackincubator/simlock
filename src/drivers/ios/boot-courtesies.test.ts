@@ -161,12 +161,12 @@ describe("IosSimctlDriver simulator window", () => {
         },
       });
 
-      const device = await driver.makeReady(
-        { address: udid, deviceId: udid, driverData: c.data ?? driverData },
-        c.options ?? { mode: "full", purpose: "prepare" },
-      );
-
-      expect(device.address).toBe(udid);
+      await expect(
+        driver.makeReady(
+          { address: udid, deviceId: udid, driverData: c.data ?? driverData },
+          c.options ?? { mode: "full", purpose: "prepare" },
+        ),
+      ).resolves.toMatchObject({ address: udid });
       expect(runner.calls.map(({ command, args }) => ({ command, args }))).toEqual([
         clipboard,
         ...c.expected,
