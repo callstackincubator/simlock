@@ -13,6 +13,9 @@ export interface Call {
   readonly path: string;
   readonly search: string;
   readonly body: unknown;
+  // why: a call the console aborts (a picture it stops watching) is the console's own act, so a
+  // test can see it.
+  readonly signal?: AbortSignal;
 }
 
 export interface Answer {
@@ -116,6 +119,7 @@ export function renderConsole(options: ConsoleOptions = {}) {
       method,
       path: url.pathname,
       search: url.search,
+      ...(init.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
     };
     calls.push(call);
     const handler = find(routes, method, url.pathname);
