@@ -22,7 +22,7 @@ Resolve and boot:
 - A recovery boot writes no slim overrides and reads nothing back. DeviceHub clipboard isolation is configured before preparation and recovery boots; ready default-set simulators reboot under the lease claim before a grant. Active leases at upgrade are not interrupted and may retain clipboard sync until a later boot or lease end.
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.
-- Volume (`ios.simulator.audio: false`): the step sets the volume state inside the simulator and reads nothing back. Apps keep playing, at volume 0. A baseline source is not silenced.
+- Volume (`ios.simulator.audio: false`): Apps keep playing at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running. Any other failure opens nothing.
 
 Seeds (ADR 0061):
