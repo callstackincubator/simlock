@@ -35,7 +35,7 @@ export function expectCaseList(cases: readonly RenderCase[]): void {
     "1-overview",
     "2-fleet",
     "3-worker",
-    "4-device-screen-drawer",
+    "4-streaming",
     "5-leases",
     "6-lease-drawer",
     "7-baselines",
@@ -47,13 +47,11 @@ export function expectCaseList(cases: readonly RenderCase[]): void {
   ]);
   expect(
     cases
-      .filter(({ name }) =>
-        ["4-device-screen-drawer", "6-lease-drawer", "7-baselines"].includes(name),
-      )
+      .filter(({ name }) => ["4-streaming", "6-lease-drawer", "7-baselines"].includes(name))
       .map(({ name, path }) => [name, path]),
-    "reference 4, 6 and 7 use existing drawer and ready/stale table routes",
+    "reference 4 is the streaming page; 6 and 7 use existing drawer and ready/stale table routes",
   ).toEqual([
-    ["4-device-screen-drawer", "/fleet/wrk_1/dev_1?tab=devices&drawer=screen"],
+    ["4-streaming", "/fleet/wrk_1/devices/dev_1/"],
     ["6-lease-drawer", "/leases/lse_1/"],
     ["7-baselines", "/baselines"],
   ]);
@@ -86,11 +84,14 @@ async function checkFleet(page: Page): Promise<void> {
   }
 }
 
-async function checkDeviceDrawer(page: Page): Promise<void> {
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("dialog")).toContainText("Streaming is off on mac-studio-01.");
-  await expect(page.locator("main .worker-device")).toHaveCount(2);
-  await expect(page.getByRole("tab", { name: "Screen" })).toHaveAttribute("aria-selected", "true");
+async function checkStreaming(page: Page): Promise<void> {
+  await expect(page.locator(".phone-canvas")).toBeVisible();
+  await expect(page.locator(".screen-pills")).toContainText("LIVE");
+  await expect(page.getByLabel("Holder")).toContainText("claude-code:checkout-flow");
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { streamFrames?: number }).streamFrames))
+    .toBe(10);
+  await expect(page.locator(".screen-pills")).toContainText("Mb/s");
 }
 
 async function checkLeases(page: Page): Promise<void> {
@@ -260,7 +261,7 @@ const PAGE_CHECKS: Readonly<Record<string, PageCheck>> = {
   "1-overview": checkOverview,
   "2-fleet": checkFleet,
   "3-worker": checkWorker,
-  "4-device-screen-drawer": checkDeviceDrawer,
+  "4-streaming": checkStreaming,
   "5-leases": checkLeases,
   "6-lease-drawer": checkLeaseDrawer,
   "7-baselines": checkBaselines,
@@ -274,7 +275,7 @@ const HEADINGS: Readonly<Record<string, string>> = {
   "1-overview": "Overview",
   "2-fleet": "Fleet",
   "3-worker": "mac-studio-01",
-  "4-device-screen-drawer": "mac-studio-01",
+  "4-streaming": "mac-studio-01",
   "5-leases": "Leases",
   "6-lease-drawer": "Leases",
   "7-baselines": "Baselines",
@@ -357,8 +358,7 @@ function createCapturer(page: Page, job: RunJob): Capturer {
     const evidenceName = `${run}-${name}-${kind}`;
     const retainPair =
       !comparison.matches ||
-      ((name === "1-overview-1280x800" || name === "4-device-screen-drawer-1280x800") &&
-        run === "fresh");
+      ((name === "1-overview-1280x800" || name === "4-streaming-1280x800") && run === "fresh");
     if (retainPair) {
       const firstPath = testInfo.outputPath(`${evidenceName}-first.png`);
       const secondPath = testInfo.outputPath(`${evidenceName}-second.png`);

@@ -133,12 +133,13 @@ Under the tabs, **Events on this worker** lists this worker's events, newest fir
 
 ### Open a device
 
-Select a device on the worker to open its drawer, which has two tabs:
+Select a device on the worker to open its drawer. It shows the model, runtime, state, the baseline and version the device was copied from (a device made from a baseline only), holder, lease and UDID, and a **Watch** link.
 
-- **Details**: the model, runtime, state, the baseline and version the device was copied from (a device made from a baseline only), holder, lease and UDID. The drawer opens here.
-- **Screen**: the device's live screen, whether or not it is leased. It plays while the tab is open. The **Stream details** button (ⓘ) shows the picture size, frame rate, bandwidth and dropped frames. A device that is not running says why instead, for example "The device is shut down. Its screen shows while it runs.", and the picture starts by itself once the device is `ready` again. If screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watch the screen](/simlock/docs/using-devices/watching-the-screen).
+**Watch** opens the device's streaming page, at `/fleet/<worker>/devices/<device>/`, so a pasted link or a reload opens it too. The live screen plays in a phone-shaped frame, whether or not the device is leased. Two pills over it show the stream's own figures: `LIVE` with the frame rate, and the codec, picture size and bandwidth. At the right are the **Holder** card (the agent, the lease id, the time left and when it was renewed, with **Copy lease id**, **Lease details** and **Release**), the device's facts and its recent events. A device with no lease has no Holder card. The page only watches: it does not send taps or keys.
 
-The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens it. On a gateway the drawer works the same, for a device on any connected worker.
+**Stop watching** closes the stream and returns to the worker's page; leaving the page any other way closes it too. A device that is not running says why instead of showing a picture, for example "The device is shut down. Its screen shows while it runs.", and the picture starts by itself once the device is `ready` again. If screen streaming is off for the worker, the page says "Streaming is off on" and the worker's name. See [Watch the screen](/simlock/docs/using-devices/watching-the-screen).
+
+An older link that ends in `?drawer=screen` opens the streaming page. On a gateway it works the same, for a device on any connected worker.
 
 ### Update a worker
 

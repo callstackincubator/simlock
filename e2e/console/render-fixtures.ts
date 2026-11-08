@@ -92,6 +92,7 @@ function worker(index: number) {
     lastSeenAt: NOW - (index === 6 ? 14 * 60_000 : 2_000),
     health: "running",
     version: "0.6.0",
+    capabilities: [{ name: "stream", state: "available" }],
     capacity: {
       ios: capacity(limit, held.length),
       android: capacity(0, 0),
@@ -288,8 +289,91 @@ async function respond(route: Route, scenario: Scenario): Promise<void> {
   await route.fulfill({ response, headers, ...override });
 }
 
+// why: the fixture daemon has no capture program, so the browser answers a stream request itself with
+// the capture envelope (a meta frame, then one JPEG a tenth of a second) of a checkout screen drawn on
+// the spot, and holds the body open like a live stream.
+function fakeStreams(): void {
+  const fetchDaemon = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      location.href,
+    );
+    if (!url.pathname.startsWith("/v1/stream/workers/")) return fetchDaemon(input, init);
+    const [width, height] = [720, 1560];
+    const canvas = new OffscreenCanvas(width, height);
+    const draw = canvas.getContext("2d")!;
+    draw.fillStyle = "#f6f6f8";
+    draw.fillRect(0, 0, width, height);
+    draw.fillStyle = "#111";
+    draw.font = "600 32px sans-serif";
+    draw.fillText("18:17", 60, 100);
+    draw.font = "700 56px sans-serif";
+    draw.fillText("Checkout", 44, 270);
+    draw.font = "32px sans-serif";
+    [
+      ["Email", "ada@example.com"],
+      ["Card", "•••• 4242"],
+      ["Expiry", "12 / 29"],
+      ["Postcode", ""],
+    ].forEach(([label, value], index) => {
+      const top = 380 + index * 130;
+      draw.fillStyle = "#fff";
+      draw.fillRect(36, top, 648, 104);
+      draw.strokeStyle = "#e3e3e8";
+      draw.strokeRect(36, top, 648, 104);
+      draw.fillStyle = "#555";
+      draw.fillText(label!, 66, top + 62);
+      draw.fillStyle = "#111";
+      draw.textAlign = "right";
+      draw.fillText(value!, 654, top + 62);
+      draw.textAlign = "left";
+    });
+    draw.fillStyle = "#111";
+    draw.fillRect(36, 940, 648, 112);
+    draw.fillStyle = "#fff";
+    draw.textAlign = "center";
+    draw.fillText("Pay $42.00", 360, 1008);
+    const jpeg = new Uint8Array(
+      await (await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 })).arrayBuffer(),
+    );
+    const envelope = (tag: number, payload: Uint8Array) => {
+      const out = new Uint8Array(5 + payload.length);
+      new DataView(out.buffer).setUint32(0, payload.length + 1);
+      out[4] = tag;
+      out.set(payload, 5);
+      return out;
+    };
+    const meta = new TextEncoder().encode(
+      JSON.stringify({ codec: "mjpeg", fps: 10, height, width }),
+    );
+    // why: the stream's figures are read off the browser's clock, so a capture that must repeat
+    // exactly runs on a clock that moves 100 ms with each frame, and sends ten frames and no more.
+    const base = performance.now();
+    let frames = 0;
+    performance.now = () => base + frames * 100;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(envelope(0x05, meta));
+        timer = setInterval(() => {
+          frames += 1;
+          (window as unknown as { streamFrames: number }).streamFrames = frames;
+          controller.enqueue(envelope(0x03, jpeg));
+          if (frames === 10) clearInterval(timer);
+        }, 50);
+      },
+      cancel() {
+        clearInterval(timer);
+      },
+    });
+    return new Response(body, { headers: { "content-type": "application/octet-stream" } });
+  };
+}
+
 export async function renderFixture(page: Page, scenario: Scenario = "populated"): Promise<void> {
   await page.clock.setFixedTime(NOW);
+  await page.addInitScript(fakeStreams);
   // why: the real SSE body stays open, so route.fetch cannot replace its Date without buffering it.
   await page.addInitScript((date) => {
     const fetchDaemon = window.fetch.bind(window);

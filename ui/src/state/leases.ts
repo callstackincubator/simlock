@@ -135,7 +135,7 @@ function isUnknownLease(error: unknown): boolean {
 
 // why: a lease that was released or has expired is gone, and the page says so instead of keeping
 // the details it last held; `undefined` is that answer.
-function useLeaseInspection(id: string): LoadView<LeaseInspection | undefined> {
+export function useLeaseInspection(id: string): LoadView<LeaseInspection | undefined> {
   const details = useRouteQuery<{ readonly lease: LeaseDetails }>(
     `/v1/leases/${encodeURIComponent(id)}`,
   );

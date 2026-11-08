@@ -1,7 +1,1 @@
-export default [
-  {
-    name: "4-device-screen-drawer",
-    path: "/fleet/wrk_1/dev_1?tab=devices&drawer=screen",
-    order: 4,
-  },
-];
+export default [{ name: "4-streaming", path: "/fleet/wrk_1/devices/dev_1/", order: 4 }];

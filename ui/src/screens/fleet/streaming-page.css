@@ -1,0 +1,245 @@
+.stream-page .page-head {
+  padding: 7px 4px 2px;
+}
+
+.stream-page .page-title {
+  gap: 3px;
+}
+
+/* Wide, the page is the window's height and the right column's feed scrolls inside it. */
+@media (min-width: 1101px) {
+  .stream-page {
+    flex: none;
+    height: 100vh;
+  }
+
+  .stream-grid {
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.stream-panel > .panel-body {
+  padding: 12px 14px;
+}
+
+.stream-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stream-title h1 {
+  flex: none;
+  max-width: 100%;
+}
+
+.stream-crumb {
+  display: inline;
+  color: var(--text-muted);
+}
+
+.stream-crumb a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.stream-crumb a:hover {
+  color: var(--text);
+}
+
+.stream-grid {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 12px;
+  min-height: 0;
+}
+
+.stream-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 18px;
+  overflow: hidden;
+  background: radial-gradient(
+    ellipse at 50% 40%,
+    color-mix(in srgb, var(--surface) 94%, var(--text)) 0%,
+    var(--surface) 70%
+  );
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stream-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.stream-holder {
+  padding: 14px;
+  flex: none;
+}
+
+.stream-holder-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.stream-holder-head .chip-agent {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: var(--text-xs);
+}
+
+.stream-holder-id {
+  min-width: 0;
+}
+
+.stream-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.stream-holder-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.stream-countdown {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.stream-remaining {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.stream-renewed {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.stream-holder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.stream-holder-actions .stream-release {
+  margin-left: auto;
+  color: var(--status-error);
+}
+
+.stream-events {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stream-events > .panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.stream-event-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stream-event {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: var(--text-sm);
+}
+
+.stream-event-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream-event-text b {
+  font-weight: 500;
+}
+
+.stream-event time {
+  font-size: 11.5px;
+}
+
+.stream-event-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.stream-event-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.stream-event-ok {
+  background: color-mix(in srgb, var(--status-ok) 14%, var(--surface));
+  color: var(--status-ok);
+}
+
+.stream-none {
+  margin: 0;
+  padding: 14px;
+}
+
+@media (max-width: 1100px) {
+  .stream-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Narrow, the two pills wrap onto their own rows above the frame. */
+@media (max-width: 480px) {
+  .stream-stage {
+    padding-top: 74px;
+  }
+}
+
+/* In a short window the frame would run under the pills, so the stage leaves them a row. */
+@media (min-width: 481px) and (max-height: 880px) {
+  .stream-stage {
+    padding-top: 44px;
+  }
+}

@@ -1,26 +1,28 @@
 import "./fleet.css";
 
-import { ActionBar, Drawer, DrawerTabs, Facts, Link, Loaded, Status } from "../../ds";
+import { ActionBar, ButtonLink, Drawer, Facts, Link, Loaded, Status } from "../../ds";
 import { useLeaseDrawerMenu } from "../../state/leases";
-import {
-  type DeviceDrawerTab,
-  type DeviceRow,
-  useDeviceDrawer,
-  useLeaseUdid,
-} from "../../state/workers";
-import { ScreenPanel } from "./screen-panel";
+import { streamPath } from "../../state/navigation";
+import { type DeviceRow, useDeviceDrawer, useLeaseUdid } from "../../state/workers";
 
 // why: the drawer opens at once, titled "Device" until the worker's page arrives, and says so when
 // the worker no longer lists the device, so an address that outlives its device still lands
 // somewhere.
 export function DeviceDrawer(props: { readonly workerId: string; readonly deviceId: string }) {
   const { deviceId, workerId } = props;
-  const { chooseTab, close, stream, tab, view } = useDeviceDrawer(workerId, deviceId);
+  const { close, view } = useDeviceDrawer(workerId, deviceId);
   const device = view.kind === "ready" ? view.data : undefined;
   return (
     <Drawer
       title={device === undefined ? "Device" : `${device.model} ${device.runtime}`}
-      actions={device?.lease === undefined ? null : <LeaseActions leaseId={device.lease.id} />}
+      actions={
+        device === undefined ? null : (
+          <>
+            <ButtonLink to={streamPath(workerId, deviceId)}>Watch</ButtonLink>
+            {device.lease === undefined ? null : <LeaseActions leaseId={device.lease.id} />}
+          </>
+        )
+      }
       onClose={close}
       finalFocus={() => focusAfterClosing(workerId, deviceId)}
     >
@@ -28,30 +30,7 @@ export function DeviceDrawer(props: { readonly workerId: string; readonly device
         <p className="muted device-drawer-body">This device is gone.</p>
       ) : (
         <Loaded view={view}>
-          {(row) =>
-            row === undefined ? null : (
-              <DrawerTabs
-                label="Device"
-                value={tab}
-                onValueChange={(next) => chooseTab(next as DeviceDrawerTab)}
-                tabs={[
-                  { content: <DeviceFacts device={row} />, label: "Details", value: "details" },
-                  {
-                    content: (
-                      <ScreenPanel
-                        workerId={workerId}
-                        deviceId={deviceId}
-                        state={row.status.word}
-                        offer={stream}
-                      />
-                    ),
-                    label: "Screen",
-                    value: "screen",
-                  },
-                ]}
-              />
-            )
-          }
+          {(row) => (row === undefined ? null : <DeviceFacts device={row} />)}
         </Loaded>
       )}
     </Drawer>
