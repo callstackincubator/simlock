@@ -26,9 +26,13 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
   // reaches it and a forwarded copy would be a second SIGINT, which makes recordVideo abandon its
   // file. The listener stays so Node's default does not kill the CLI before the tool has flushed.
   const forwardSigint = !process.stdin.isTTY;
+  // why: the real `simctl io recordVideo` finalizes its file on SIGINT only; SIGTERM kills it
+  // unfinished (exit 143, no moov atom), so for it a SIGTERM reaches the tool as SIGINT.
+  const sigtermAs = command.args.includes("recordVideo") ? "SIGINT" : "SIGTERM";
   const handlers = (["SIGINT", "SIGTERM"] as const).map((signal) => {
     const handler = () => {
-      if (signal === "SIGTERM" || forwardSigint) child.kill(signal);
+      if (signal === "SIGTERM") child.kill(sigtermAs);
+      else if (forwardSigint) child.kill(signal);
     };
     process.on(signal, handler);
     return [signal, handler] as const;

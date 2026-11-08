@@ -65,6 +65,21 @@ describe("spawnPassthrough", () => {
     expect(counts(), "after a repeated command").toEqual(before);
   });
 
+  it("passes a SIGTERM on as SIGINT to `simctl io recordVideo`, the only signal it finalizes its file on", async () => {
+    const tool = `process.on("SIGINT",()=>process.exit(40));process.on("SIGTERM",()=>process.exit(41));setTimeout(()=>process.exit(0),1500)`;
+    const known = new Set(process.listeners("SIGTERM"));
+    const done = spawnPassthrough({
+      args: ["-e", tool, "io", "recordVideo"],
+      command: process.execPath,
+      env: {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    for (const listener of process.listeners("SIGTERM").filter((l) => !known.has(l))) {
+      listener("SIGTERM");
+    }
+    expect(await done).toBe(40);
+  });
+
   it("forwards SIGINT to its tool only when stdin is not a terminal, and keeps a SIGINT listener either way, SIGTERM always forwarded", async () => {
     const tool = `process.on("SIGINT",()=>process.exit(40));process.on("SIGTERM",()=>process.exit(41));setTimeout(()=>process.exit(0),1500)`;
     const original = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
