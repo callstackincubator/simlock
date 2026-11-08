@@ -128,7 +128,8 @@ async function checkLeaseDrawer(page: Page): Promise<void> {
 }
 
 async function checkBaselines(page: Page, gateway: RunningDaemon): Promise<void> {
-  await expect(page.locator("main tbody tr")).toHaveCount(9);
+  // why: nine baselines plus the iOS and Android group headings.
+  await expect(page.locator("main tbody tr")).toHaveCount(11);
   for (const name of [
     "ios-18.4-iphone16",
     "ios-18.4-iphone16pro",

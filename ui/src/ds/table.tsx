@@ -23,6 +23,10 @@ export interface Column<T> {
   readonly mono?: boolean;
   // why: a fixed column keeps its width, so the first column takes the rest and a row never moves.
   readonly width?: string;
+  // why: a page sizes or marks one column in its own sheet.
+  readonly className?: string;
+  // why: a column that holds no text of its own (a reserved width) is still named for a screen reader.
+  readonly hideHeader?: boolean;
 }
 
 const features = tableFeatures({
@@ -138,10 +142,14 @@ export function DataTable<T extends RowData>(props: {
               <th
                 key={column.header}
                 scope="col"
-                className={column.numeric ? "num" : undefined}
+                className={cellClass(column.numeric, undefined, column.className)}
                 style={column.width === undefined ? undefined : { width: column.width }}
               >
-                {column.header}
+                {column.hideHeader === true ? (
+                  <span className="visually-hidden">{column.header}</span>
+                ) : (
+                  column.header
+                )}
               </th>
             ))}
             {menu === undefined ? null : (
@@ -171,9 +179,9 @@ export function DataTable<T extends RowData>(props: {
   );
 }
 
-function cellClass(numeric = false, mono = false): string | undefined {
-  if (numeric) return "num";
-  return mono ? "mono" : undefined;
+function cellClass(numeric = false, mono = false, extra?: string): string | undefined {
+  const base = numeric ? "num" : mono ? "mono" : undefined;
+  return [base, extra].filter(Boolean).join(" ") || undefined;
 }
 
 function rowClass(link: string | undefined, selected: boolean): string | undefined {
@@ -193,7 +201,7 @@ function rowCells<T>(
           <td
             key={cell.id}
             data-label={column?.header}
-            className={cellClass(column?.numeric, column?.mono)}
+            className={cellClass(column?.numeric, column?.mono, column?.className)}
           >
             {column?.cell(row.original)}
           </td>

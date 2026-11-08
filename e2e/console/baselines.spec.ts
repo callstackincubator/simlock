@@ -37,7 +37,7 @@ function row(page: Page, name: string): Locator {
 }
 
 test.describe("the Baselines page", () => {
-  test("lists each baseline the worker holds, a save shows its row with no reload", async ({
+  test("lists each baseline the worker holds in a platform group, a save shows its row with no reload", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -50,29 +50,28 @@ test.describe("the Baselines page", () => {
 
       const checkout = row(page, "checkout");
       await expect(checkout).toBeVisible();
-      await expect(checkout).toContainText("iOS");
-      await expect(checkout).toContainText("iPhone 16");
-      await expect(checkout).toContainText("18.4");
-      await expect(checkout).toContainText("app 4.2");
+      await expect(checkout).toContainText("iPhone 16 · iOS 18.4");
       await expect(checkout).toContainText("1 MiB");
       await expect(checkout).toContainText("ago");
+      await expect(checkout).toContainText("ready");
+      await expect(page.getByRole("cell", { name: /^iOS · 1 baseline · 1 MiB$/ })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Disk used by baselines" })).toBeVisible();
     } finally {
       await host.dispose();
     }
   });
 
-  test("a second save shows version 2 in place, a lease naming the baseline shows it in the device's drawer, and a removal takes the row away with no reload", async ({
+  test("a second save keeps one row, a lease naming the baseline shows it in the device's drawer, and a removal takes the row away with no reload", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await save(host, "checkout", await leaseId(host, "first"), "app 4.2");
       await openBaselines(page, host);
-      await expect(row(page, "checkout").getByRole("cell").nth(1)).toHaveText("1");
+      await expect(row(page, "checkout")).toBeVisible();
 
       await save(host, "checkout", await leaseId(host, "second"));
-      await expect(row(page, "checkout").getByRole("cell").nth(1)).toHaveText("2");
-      await expect(page.locator("main tbody tr")).toHaveCount(1);
+      await expect(page.locator("main tbody tr")).toHaveCount(2);
 
       const copy = await leaseId(host, "copier", ["--baseline", "checkout"]);
       const plain = await leaseId(host, "plain");
@@ -98,7 +97,7 @@ test.describe("the Baselines page", () => {
     }
   });
 
-  test("on a gateway, the Worker column names each worker's baseline and a relayed save shows its row", async ({
+  test("on a gateway, the Worker column names each worker's baseline, a relayed save shows its row and each worker has its own disk line", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -114,13 +113,14 @@ test.describe("the Baselines page", () => {
       await expect(row(page, "alpha")).toContainText("worker-a");
       await save(second, "beta", await leaseId(second, "b"));
       await expect(row(page, "beta")).toContainText("worker-b");
-      await expect(page.locator("main tbody tr")).toHaveCount(2);
+      await expect(page.locator("main tbody tr")).toHaveCount(3);
+      await expect(page.locator(".baseline-disk li")).toHaveCount(2);
     } finally {
       await disposeFleet(fleet);
     }
   });
 
-  test("a stale baseline shows the square, stale and its reason word for word, an entry with no size shows a dash, and 26 entries page at 25", async ({
+  test("a stale baseline shows its reason word for word, an entry with no size shows a dash, filters and search narrow the groups, and 26 entries page at 25", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -136,17 +136,59 @@ test.describe("the Baselines page", () => {
         version: 1,
         ...(index === 0 ? { staleReason: reason } : { sizeBytes: 2 ** 20 }),
       }));
+      const requests: string[] = [];
+      page.on("request", (request) => requests.push(`${request.method()} ${request.url()}`));
       await answer(page, "/v1/baselines", () => ({ baselines: entries }));
       await openBaselines(page, host);
 
-      await expect(page.locator("main tbody tr")).toHaveCount(25);
+      await expect(page.locator("main tbody tr")).toHaveCount(26);
       await expect(row(page, "base-25")).toHaveCount(0);
       const stale = row(page, "base-00");
-      await expect(stale).toContainText(`stale · ${reason}`);
-      await expect(stale.locator(".status.status-warn")).toHaveText("stale");
+      await expect(stale.locator(".pill")).toHaveText("stale");
+      await expect(stale).toContainText(reason);
       await expect(stale).toContainText("—");
+      await expect(
+        page.getByRole("cell", { name: /^iOS · 26 baselines · 25 MiB known$/ }),
+      ).toBeVisible();
       await page.getByRole("button", { name: "Next" }).click();
       await expect(row(page, "base-25")).toBeVisible();
+
+      await page.getByLabel("Stale", { exact: true }).check();
+      await expect(page.locator("main tbody tr")).toHaveCount(2);
+      await expect(
+        page.getByRole("cell", { name: /^iOS · 1 baseline · size unknown$/ }),
+      ).toBeVisible();
+      await page.getByLabel("Ready", { exact: true }).check();
+      await page.getByRole("searchbox", { name: "Search baselines" }).fill("base-07");
+      await expect(page.locator("main tbody tr")).toHaveCount(2);
+      await expect(row(page, "base-07")).toBeVisible();
+      await page.getByRole("searchbox", { name: "Search baselines" }).fill("zzz");
+      await expect(page.getByText("No baselines match this filter or search.")).toBeVisible();
+      expect(requests.filter((request) => request.includes("baseline.save"))).toEqual([]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("Prepare baseline is a link to the documentation, and no Building filter or row menu is shown", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const writes: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() !== "GET") writes.push(request.url());
+      });
+      await openBaselines(page, host);
+      const link = page.getByRole("link", { name: "Prepare baseline" });
+      await expect(link).toHaveAttribute(
+        "href",
+        "https://callstackincubator.github.io/simlock/docs/worker/baselines",
+      );
+      await expect(page.getByRole("radio")).toHaveCount(3);
+      await expect(page.getByLabel("Building")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /Actions for/ })).toHaveCount(0);
+      expect(writes).toEqual([]);
     } finally {
       await host.dispose();
     }
