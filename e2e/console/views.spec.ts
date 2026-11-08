@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import {
   expect,
@@ -90,6 +90,11 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
   await page.goto(host.url);
   await signIn(page, host.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+}
+
+// why: a lease opens in a pane beside the table, a drawer below 1280px wide, and every other item in a drawer.
+function inspector(page: Page): Locator {
+  return page.getByRole("region", { exact: true, name: "Lease" }).or(page.getByRole("dialog"));
 }
 
 // why: an open drawer hides the page behind it from assistive technology.
@@ -274,7 +279,7 @@ test.describe("every view", () => {
       await page.keyboard.press("ArrowRight");
       await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
       await visit(page, host, pages.lease);
-      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Close lease" }).click();
       await expect(page).toHaveURL(/\/leases$/);
     } finally {
       await host.dispose();
@@ -372,7 +377,7 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
-        if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
+        if (opensDrawer(path)) await expect(inspector(page)).toBeVisible();
         const chart = page.locator(".chart svg").first();
         if (!opensDrawer(path) && (await chart.count()) > 0) {
           await chart.hover();
@@ -393,7 +398,7 @@ test.describe("every view", () => {
         `/inbox/${encodeURIComponent("request/req_busy/waiting")}`,
       ]) {
         await visit(page, host, path);
-        if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
+        if (opensDrawer(path)) await expect(inspector(page)).toBeVisible();
         const found = await page.evaluate(() => ({
           styles: document.querySelectorAll("style").length,
           violations: (window as unknown as { cspViolations: string[] }).cspViolations,
@@ -464,7 +469,7 @@ test.describe("every view", () => {
           pages.event,
         ]) {
           await visit(page, host, path);
-          if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
+          if (opensDrawer(path)) await expect(inspector(page)).toBeVisible();
           const results = await new AxeBuilder({ page })
             .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
             .analyze();
@@ -517,7 +522,9 @@ test.describe("every view", () => {
     }
   });
 
-  test("a long lease id stays on one line and its full id is in its title", async ({ page }) => {
+  test("a long lease id wraps inside the inspector and its full id is in its title", async ({
+    page,
+  }) => {
     const { host, pages } = await hostWithLease();
     try {
       const id = decodeURIComponent(pages.lease.replace(/^\/leases\/|\/$/g, ""));
@@ -525,16 +532,13 @@ test.describe("every view", () => {
       for (const width of [1280, 1024, 768, 360]) {
         await page.setViewportSize({ height: 800, width });
         await visit(page, host, pages.lease);
-        const shown = page.locator(".drawer .id", { hasText: id });
+        const shown = page.locator(".lease-facts .lease-id", { hasText: id });
         await expect(shown).toHaveAttribute("title", id);
         const shape = await shown.evaluate((element) => ({
-          lines: Math.round(
-            element.getBoundingClientRect().height /
-              parseFloat(getComputedStyle(element).lineHeight),
-          ),
+          inside: element.scrollWidth <= element.clientWidth,
           readable: element.clientWidth >= 96,
         }));
-        expect(shape, `${width}px`).toEqual({ lines: 1, readable: true });
+        expect(shape, `${width}px`).toEqual({ inside: true, readable: true });
       }
     } finally {
       await host.dispose();

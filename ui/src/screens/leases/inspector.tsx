@@ -155,8 +155,22 @@ export function LeaseFacts({ lease }: { readonly lease: LeaseInspection }) {
     ...(lease.token === undefined
       ? []
       : [{ label: "Token", value: <span className="mono lease-id">{lease.token}</span> }]),
-    { label: "Lease id", value: <span className="mono lease-id">{lease.id}</span> },
-    { label: "Device id", value: <span className="mono lease-id">{device.deviceId}</span> },
+    {
+      label: "Lease id",
+      value: (
+        <span className="mono lease-id" title={lease.id}>
+          {lease.id}
+        </span>
+      ),
+    },
+    {
+      label: "Device id",
+      value: (
+        <span className="mono lease-id" title={device.deviceId}>
+          {device.deviceId}
+        </span>
+      ),
+    },
     ...(device.baseline === undefined
       ? []
       : [{ label: "Baseline", value: <span className="mono">{device.baseline}</span> }]),

@@ -293,7 +293,7 @@ test.describe("long lists page", () => {
     expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 50));
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2$/);
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("region", { exact: true, name: "Lease" })).toBeVisible();
   });
 
   for (const how of ["Escape", "the close button", "the dim layer"] as const) {
@@ -302,6 +302,8 @@ test.describe("long lists page", () => {
       page,
     }) => {
       await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
+      // why: below 1280px wide a lease opens as a drawer, which Escape, its close button and its dim layer close.
+      await page.setViewportSize({ height: 800, width: 1100 });
       await open(page, daemon, "/leases?page=2&size=25");
       const row = leaseRows(page).locator('a[href^="/leases/lse_0028/"]');
       await row.click();
@@ -712,12 +714,6 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     await expect(range).toHaveText("251–300 of 300");
 
     await page.keyboard.press(back);
-    await expect(
-      leaseRows(page)
-        .getByRole("button", { name: /^Actions for/ })
-        .last(),
-    ).toBeFocused();
-    await page.keyboard.press(back);
     const link = leaseRows(page).getByRole("link").last();
     await expect(link).toBeFocused();
     const href = await link.getAttribute("href");
@@ -816,7 +812,10 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
           .first(),
       ).toBeVisible();
       await expect(page.locator("#main")).not.toContainText("Loading…");
-      if (path.startsWith("/leases/")) await expect(page.getByRole("dialog")).toBeVisible();
+      if (path.startsWith("/leases/"))
+        await expect(
+          page.getByRole("region", { exact: true, name: "Lease" }).or(page.getByRole("dialog")),
+        ).toBeVisible();
       if (path === "/activity") {
         await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
         await feed(page).evaluate((box) => {
