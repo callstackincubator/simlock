@@ -5,7 +5,7 @@ export { AgentChip } from "./chip";
 export { CommandPalette, type PaletteGroup } from "./command-palette";
 export { ConfirmHost, createConfirmer, type ConfirmSpec } from "./confirm-dialog";
 export { Drawer, DrawerTabs } from "./drawer";
-export { ChartPanel, MinuteChart, MinuteTable } from "./chart";
+export { Bars, ChartPanel, MinuteChart, MinuteTable } from "./chart";
 export { ChoiceChips, Tabs } from "./choice";
 export { Feed } from "./feed";
 export { Facts } from "./facts";

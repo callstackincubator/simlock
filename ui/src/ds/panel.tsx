@@ -6,21 +6,27 @@ import { type ReactNode, useId } from "react";
 export function Panel(props: {
   readonly title: string;
   readonly actions?: ReactNode;
+  // why: a figure that sits right after the title, as "now 19" does beside a chart's name.
+  readonly lead?: ReactNode;
   readonly flush?: boolean;
   readonly level?: 1 | 2;
   readonly className?: string;
   readonly children: ReactNode;
 }) {
-  const { actions, children, className, flush = false, level = 2, title } = props;
+  const { actions, children, className, flush = false, lead, level = 2, title } = props;
   const Heading = level === 1 ? "h1" : "h2";
   const id = useId();
   const classes = ["panel", flush ? "panel-flush" : undefined, className].filter(Boolean).join(" ");
   return (
     <section className={classes} aria-labelledby={id}>
       <header className="panel-header">
-        <Heading id={id} className="panel-title">
+        <Heading
+          id={id}
+          className={lead === undefined ? "panel-title" : "panel-title panel-title-lead"}
+        >
           {title}
         </Heading>
+        {lead}
         {actions === undefined ? null : <div className="panel-actions">{actions}</div>}
       </header>
       <div className="panel-body">{children}</div>

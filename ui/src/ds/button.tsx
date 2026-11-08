@@ -40,11 +40,12 @@ export function IconButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
 export function ButtonLink(props: {
   readonly to: string;
   readonly variant?: ButtonVariant;
+  readonly small?: boolean;
   readonly children: ReactNode;
 }) {
-  const { children, to, variant = "secondary" } = props;
+  const { children, small = false, to, variant = "secondary" } = props;
   return (
-    <Link to={to} className={classOf(variant)}>
+    <Link to={to} className={small ? `${classOf(variant)} button-sm` : classOf(variant)}>
       {children}
     </Link>
   );

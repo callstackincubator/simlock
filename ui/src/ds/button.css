@@ -86,3 +86,10 @@
   border-color: var(--text);
   background: var(--surface);
 }
+
+/* A compact button for a card's header or a banner. */
+.button-sm {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}

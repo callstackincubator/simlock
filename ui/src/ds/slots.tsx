@@ -46,10 +46,10 @@ const LEGEND: readonly { readonly kind: SlotKind; readonly word: string }[] = [
   { kind: "free", word: "free" },
 ];
 
-export function SlotLegend() {
+export function SlotLegend({ kinds }: { readonly kinds?: readonly SlotKind[] }) {
   return (
     <ul className="slot-legend" aria-hidden="true">
-      {LEGEND.map((entry) => (
+      {LEGEND.filter((entry) => kinds === undefined || kinds.includes(entry.kind)).map((entry) => (
         <li key={entry.kind}>
           <span className={`slot slot-${entry.kind}`} />
           {entry.word}

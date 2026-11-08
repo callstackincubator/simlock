@@ -2,6 +2,7 @@
 // `<style>` element.
 import "./chart.css";
 
+import type { CSSProperties } from "react";
 import {
   Area,
   AreaChart,
@@ -32,14 +33,15 @@ export function MinuteChart(props: {
   readonly title: string;
   readonly unit: string;
   readonly minutes: readonly MinuteCount[];
-  readonly height?: number;
+  readonly height?: number | `${number}%`;
+  readonly tickGap?: number;
 }) {
-  const { height = HEIGHT, kind, minutes, title, unit } = props;
+  const { height = HEIGHT, kind, minutes, tickGap = 24, title, unit } = props;
   const data = [...minutes];
   const axes = (
     <>
       <CartesianGrid vertical={false} />
-      <XAxis dataKey="label" tickLine={false} minTickGap={24} interval="preserveStartEnd" />
+      <XAxis dataKey="label" tickLine={false} minTickGap={tickGap} interval="preserveStartEnd" />
       <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} />
       <Tooltip
         cursor={kind === "area" ? true : { className: "chart-cursor" }}
@@ -153,5 +155,29 @@ export function ChartPanel(props: {
       <p className="chart-summary">{summary}</p>
       <MinuteTable minutes={points} heading={heading} bucketMs={bucketMs} />
     </Panel>
+  );
+}
+
+// why: a row of columns for a series whose numbers are printed or tabled elsewhere, so it is hidden
+// from a screen reader; each height arrives as a custom property, which the CSP allows where a style
+// attribute is not. The newest column is the accent: it is "now".
+export function Bars({
+  values,
+  label,
+}: {
+  readonly values: readonly (number | null)[];
+  readonly label: string;
+}) {
+  const top = Math.max(1, ...values.map((value) => value ?? 0));
+  return (
+    <span className="bars" aria-hidden="true" data-label={label}>
+      {values.map((value, index) => (
+        <span
+          key={index}
+          className={index === values.length - 1 ? "bar bar-now" : "bar"}
+          style={{ "--bar": `${Math.max(2, ((value ?? 0) / top) * 100)}%` } as CSSProperties}
+        />
+      ))}
+    </span>
   );
 }

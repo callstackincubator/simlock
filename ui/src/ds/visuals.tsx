@@ -28,11 +28,14 @@ export function Ring({
   label,
   size = 54,
   tone = "neutral",
+  bare = false,
 }: {
   readonly percent?: number;
   readonly label: string;
   readonly size?: number;
   readonly tone?: Tone | "neutral";
+  // why: a ring beside its own caption keeps the label for a screen reader only.
+  readonly bare?: boolean;
 }) {
   const known = percent !== undefined && Number.isFinite(percent);
   const value = known ? `${percent}%` : "—";
@@ -56,7 +59,7 @@ export function Ring({
         </svg>
         <span className="ring-number">{value}</span>
       </span>
-      <span className="ring-label">{label}</span>
+      <span className={bare ? "ring-label visually-hidden" : "ring-label"}>{label}</span>
     </span>
   );
 }
@@ -160,6 +163,7 @@ export function WorkerTile({
   ios,
   android,
   leased,
+  tone,
   cpu,
   memory,
   disk,
@@ -172,26 +176,35 @@ export function WorkerTile({
   readonly to: string;
   readonly pill?: ReactNode;
   readonly ios: ReactNode;
-  readonly android: ReactNode;
-  readonly leased: ReactNode;
-  readonly cpu?: number;
-  readonly memory?: number;
-  readonly disk?: number;
+  readonly android?: ReactNode;
+  readonly leased?: ReactNode;
+  readonly tone?: Tone | "neutral";
+  readonly cpu?: number | undefined;
+  readonly memory?: number | undefined;
+  readonly disk?: number | undefined;
   readonly cpuTone?: Tone | "neutral";
   readonly memoryTone?: Tone | "neutral";
   readonly diskTone?: Tone | "neutral";
 }) {
   return (
-    <div className="worker-tile">
+    <div
+      className={
+        tone === "warn" || tone === "error" ? `worker-tile worker-tile-${tone}` : "worker-tile"
+      }
+    >
       <Link className="worker-tile-name" to={to} title={title}>
         {name}
       </Link>
       {pill === undefined ? null : <div>{pill}</div>}
       <div className="worker-tile-slots">
-        <span>{ios}</span>
-        <span className="worker-tile-divider" aria-hidden="true" />
-        <span>{android}</span>
-        <span className="worker-tile-fraction">{leased}</span>
+        <span className="worker-tile-group">{ios}</span>
+        {android === undefined ? null : (
+          <>
+            <span className="worker-tile-divider" aria-hidden="true" />
+            <span className="worker-tile-group">{android}</span>
+          </>
+        )}
+        {leased === undefined ? null : <span className="worker-tile-fraction">{leased}</span>}
       </div>
       <div className="worker-tile-metrics">
         <WorkerMetric label="CPU" percent={cpu} tone={cpuTone} />

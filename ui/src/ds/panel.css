@@ -35,6 +35,14 @@
   color: var(--text-muted);
 }
 
+.panel-title-lead {
+  flex: none;
+}
+
+.panel-title-lead ~ .panel-actions {
+  margin-left: auto;
+}
+
 .panel-actions {
   display: flex;
   align-items: center;
