@@ -1,14 +1,16 @@
 import { inConsole } from "../../state/test-support";
 import { describe, expect, it } from "vitest";
 
-import type { Paging } from "../../ds";
+import type { LoadView, Paging } from "../../ds";
 import {
+  type LogEventRow,
   type FleetPage,
+  type WorkerEventsPage,
   type WorkerPageView,
   type WorkerTab,
   type WorkerView,
+  fleetRow,
   workerPageOf,
-  workerRow,
 } from "../../state/workers";
 import { FleetBody } from "./index";
 import { WorkerPageBody } from "./worker-page";
@@ -95,18 +97,41 @@ function fleet(
   overrides: Partial<FleetPage> = {},
   filter: FleetPage["filter"] = "all",
 ): FleetPage {
+  const rows = workers.map((entry) => fleetRow(entry, "", NOW));
   return {
+    attention: rows.filter((row) => row.health.tone !== "ok"),
     empty: workers.length === 0,
     filter,
-    meta: "1 / 1 up",
-    paging: PAGING,
+    healthy: rows.filter((row) => row.health.tone === "ok"),
     query: "",
     search: () => {},
-    rows: workers.map((entry) => workerRow(entry)),
     setFilter: () => {},
     ...overrides,
   };
 }
+
+const EVENT: LogEventRow = {
+  detail: "no heartbeat for 30 s",
+  id: "evt_1",
+  iso: "2026-10-02T12:00:00.000Z",
+  name: "worker.disconnected",
+  squareTone: "error",
+  subject: "worker-a",
+  summary: "worker-a · no heartbeat for 30 s",
+  time: "12:00:00",
+  to: "/activity/evt_1",
+  tone: "error",
+};
+
+const NO_LOG: LoadView<{ readonly rows: readonly LogEventRow[] }> = {
+  data: { rows: [] },
+  kind: "ready",
+};
+
+const NO_EVENTS: LoadView<WorkerEventsPage> = {
+  data: { end: undefined, loadOlder: () => {}, rows: [] },
+  kind: "ready",
+};
 
 function page(worker: WorkerView, tab?: WorkerTab): WorkerPageView {
   return {
@@ -118,13 +143,13 @@ function page(worker: WorkerView, tab?: WorkerTab): WorkerPageView {
     }),
     back: "/fleet",
     chooseTab: () => {},
-    devicesPaging: PAGING,
+    streamTo: (deviceId) => `/fleet/wrk_1/devices/${deviceId}`,
     warmPaging: PAGING,
   };
 }
 
 function html(view: WorkerPageView): string {
-  return inConsole(<WorkerPageBody page={view} />);
+  return inConsole(<WorkerPageBody page={view} log={NO_EVENTS} />);
 }
 
 const GATEWAY = { mode: () => "gateway" as const };
@@ -138,18 +163,86 @@ function text(markup: string): string {
     .trim();
 }
 
-describe("the fleet table", () => {
+function fleetHtml(workers: readonly WorkerView[], filter: FleetPage["filter"] = "all"): string {
+  return inConsole(<FleetBody page={fleet(workers, {}, filter)} log={NO_LOG} />);
+}
+
+const DRAINED: WorkerView = { ...WORKER, drained: true, id: "wrk_2", label: "worker-b" };
+const GONE: WorkerView = {
+  ...WORKER,
+  connection: "disconnected",
+  id: "wrk_3",
+  label: "worker-c",
+  lastSeenAt: NOW - 14 * 60_000,
+};
+
+describe("the fleet", () => {
   it("says no workers have connected, or that none matches the filter", () => {
     const none = (empty: boolean, filter: FleetPage["filter"]) =>
-      text(inConsole(<FleetBody page={fleet([], { empty }, filter)} />));
+      text(inConsole(<FleetBody page={fleet([], { empty }, filter)} log={NO_LOG} />));
 
     expect(none(true, "all")).toContain("No workers have connected.");
     expect(none(false, "issues")).toContain("No worker matches.");
   });
+
+  it("draws a worker with something wrong as a card under Needs attention, and the rest as tiles under Healthy", () => {
+    const markup = fleetHtml([WORKER, DRAINED, GONE]);
+    const shown = text(markup);
+
+    expect(shown).toContain("Needs attention 3");
+    expect(shown).not.toContain("Healthy");
+    expect(markup.match(/fleet-card fleet-card-/g)).toHaveLength(3);
+    expect(shown).toContain("1 lease left · accepts no new requests");
+    expect(shown).toContain("last seen 14 min ago · 1 lease held");
+    const healthy = fleetHtml([{ ...WORKER, load: undefined }]);
+    expect(text(healthy)).toContain("Healthy 1");
+    expect(text(healthy)).toContain("worker-a 1 / 8");
+    expect(healthy).not.toContain("fleet-card-ok");
+  });
+
+  it("gives each card its slots by platform, its three meters and its lease count", () => {
+    const markup = fleetHtml([DRAINED]);
+
+    expect(markup).toContain('aria-label="iOS: 1 leased, 3 free"');
+    expect(markup).toContain('aria-label="Android: 4 free"');
+    expect(markup).toContain("--load-bar:28%");
+    expect(text(markup)).toContain("CPU 28% MEM 42% DISK 77%");
+    expect(text(markup)).toContain("memory pressure warn, 42% used");
+    expect(text(markup)).toContain("1 lease");
+  });
+
+  it("offers View leases as a plain link for a disconnected worker, and the drained worker's Undrain only on a gateway", () => {
+    const gone = fleetHtml([GONE]);
+    const drained = fleetHtml([DRAINED]);
+
+    expect(gone).toContain(
+      '<a class="button button-secondary button-sm" href="/leases">View leases</a>',
+    );
+    expect(gone).not.toContain("<form");
+    expect(drained).toContain('href="/fleet/wrk_2"');
+    expect(drained).not.toContain("Undrain");
+    expect(text(inConsole(<FleetBody page={fleet([DRAINED])} log={NO_LOG} />, GATEWAY))).toContain(
+      "Undrain",
+    );
+  });
+
+  it("shows the workers' events as a full-width log, or says there are none in the last hour", () => {
+    const empty = text(fleetHtml([WORKER]));
+    const shown = inConsole(
+      <FleetBody page={fleet([WORKER])} log={{ data: { rows: [EVENT] }, kind: "ready" }} />,
+    );
+
+    expect(empty).toContain("Worker events live last hour · 0");
+    expect(empty).toContain("No worker events in the last hour.");
+    expect(text(shown)).toContain("last hour · 1");
+    expect(text(shown)).toContain("12:00:00 worker.disconnected worker-a no heartbeat for 30 s");
+    expect(shown).toContain('href="/activity/evt_1"');
+    expect(shown).toContain("visual-log-error");
+  });
 });
 
 describe("a worker's update on the Fleet screen", () => {
-  it("reads its stage on the row, and the failed worker's page offers Update again", () => {
+  it("reads its stage on the card, and the failed worker's page offers Update again", () => {
     const updating = { ...WORKER, update: { ...UPDATE, stage: "waiting" as const } };
     const failed = {
       ...WORKER,
@@ -164,67 +257,122 @@ describe("a worker's update on the Fleet screen", () => {
     };
     const idle = html(page(WORKER));
 
-    expect(text(inConsole(<FleetBody page={fleet([updating])} />))).toContain(
-      "waiting for 2 leases",
-    );
-    expect(text(inConsole(<FleetBody page={fleet([WORKER])} />))).not.toContain("waiting for");
-    const again = text(inConsole(<WorkerPageBody page={page(failed)} />, GATEWAY));
+    expect(text(fleetHtml([updating]))).toContain("waiting for 2 leases");
+    expect(text(fleetHtml([WORKER]))).not.toContain("waiting for");
+    const again = text(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />, GATEWAY));
     expect(again).toContain("Update to 1.5.0 failed (installing): EACCES Update again");
-    expect(inConsole(<WorkerPageBody page={page(failed)} />)).toContain(
-      '<span class="page-note">simlock 1.4.0 · 1.5.0 available</span>',
+    expect(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />)).toContain(
+      '<span class="page-note">macOS 15.5 · simlock 1.4.0 · 1.5.0 available · read 12 s ago</span>',
     );
     expect(text(idle)).not.toContain("Update again");
-    expect(text(inConsole(<WorkerPageBody page={page(failed)} />))).not.toContain("Update again");
+    expect(text(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />))).not.toContain(
+      "Update again",
+    );
   });
 });
 
 describe("a worker's page", () => {
-  it("is titled with the worker's name and reads its health word and operating system beneath", () => {
+  it("is titled Fleet / name, with the health word beside it and the system and reading age beneath", () => {
     const markup = html(page(WORKER));
 
-    expect(markup).toMatch(/<h1[^>]*>worker-a<\/h1>/);
-    expect(text(markup)).toContain("memory pressure warn · macOS 15.5");
+    expect(markup).toContain('<a class="page-crumb" href="/fleet">Fleet</a>');
+    expect(markup).toMatch(/<h1[^>]*>.*worker-a<\/h1>/);
+    expect(text(markup)).toContain("Fleet / worker-a memory pressure warn");
+    expect(text(markup)).toContain("macOS 15.5 · simlock 1.4.0 · read 12 s ago");
   });
 
-  it("states the load in the old panel's words, each beside a meter in its tone, with swap, pressure and the reading's age", () => {
+  it("draws CPU, memory, disk and slots as rings, each with its figure and one line of context", () => {
     const shown = text(html(page(WORKER)));
 
-    expect(shown).toContain("CPU 28% busy, 12 cores");
-    expect(shown).toContain("Memory 20.9 GiB of 36.0 GiB available");
-    expect(shown).toContain("Swap 1.2 GiB used");
-    expect(shown).toContain("Pressure warn");
-    expect(shown).toContain("Disk 112.4 GiB of 494.4 GiB free");
-    expect(shown).toContain("Read 12 s ago");
-    const markup = html(page(WORKER));
-    expect(markup).toContain(
-      'class="load-bar load-bar-warn meter-regular" aria-hidden="true" style="--load-bar:42%"',
-    );
-    expect(markup).toContain(
-      'class="load-bar load-bar-neutral meter-regular" aria-hidden="true" style="--load-bar:28%"',
-    );
+    expect(shown).toContain("CPU 12 cores 28% busy");
+    expect(shown).toContain("Memory 15.1 GiB used of 36.0 GiB · pressure warn");
+    expect(shown).toContain("Disk 112.4 GiB free of 494.4 GiB");
+    expect(shown).toContain("Slots 1 of 8 leased 7 free");
+    expect(html(page(WORKER))).toContain("--load-bar:");
   });
 
-  it("counts the leases and draws a lg slots group with its legend for each platform", () => {
-    const markup = html(page(WORKER));
-
-    expect(text(markup)).toContain("Leases 1");
-    expect(text(markup)).toContain("iOS 1 of 4 running");
-    expect(text(markup)).toContain("Android 0 of 4 running");
-    expect(markup).toContain(
-      'class="slots slots-lg" role="img" aria-label="iOS: 1 leased, 3 free"',
+  it("lists slots by platform, the host's facts with the worker id, and its baselines", () => {
+    const markup = html(
+      page({
+        ...WORKER,
+        baselines: [
+          {
+            mode: "full",
+            model: "iPhone 17",
+            name: "ios-26-clean",
+            osVersion: "26.0",
+            platform: "ios",
+            savedAt: "2026-10-02T11:00:00Z",
+            sizeBytes: 8.1 * GIB,
+            version: 1,
+          },
+        ],
+      }),
     );
-    expect(markup).toContain("slot-legend");
+    const shown = text(markup);
+
+    expect(shown).toContain("Slots iOS 1 / 4 Android 0 / 4");
+    expect(shown).toContain("Host macOS 15.5 simlock 1.4.0 Worker id wrk_1");
+    expect(shown).toContain("Baselines here ios-26-clean 8.1 GiB");
   });
 
-  it("lists a leased device with its holder as a link to the lease, the time on it and what is left", () => {
+  it("draws a leased device as a tile with its holder, time left, Watch link and granted time", () => {
     const markup = html(page(WORKER));
+    const shown = text(markup);
 
+    expect(markup).toContain('href="/fleet/wrk_1/devices/dev_1"');
+    expect(markup).toContain(">Watch</a>");
     expect(markup).toContain('href="/leases/l_1/"');
-    expect(text(markup)).toContain("iPhone 17 26.0");
-    expect(text(markup)).toContain("agent renewed 0 s ago");
-    expect(text(markup)).toContain("5 s expires in 1 min");
-    expect(text(markup)).toContain("Virtual");
-    expect(markup).toContain('aria-label="leased"');
+    expect(shown).toContain("iPhone 17 iOS 26.0 leased");
+    expect(shown).toContain("agent");
+    expect(shown).toContain("01:00");
+    expect(shown).toMatch(/Watch granted \d\d:\d\d/);
+  });
+
+  it("draws a ready device as a warm tile that was booted, with no holder", () => {
+    const view: WorkerView = {
+      ...WORKER,
+      devices: [{ ...WORKER.devices![0]!, state: "ready", transitionAgeMs: 120_000 }],
+      leases: [],
+    };
+    const shown = text(html(page(view)));
+
+    expect(shown).toContain("ready");
+    expect(shown).toContain("warm, waiting for a lease");
+    expect(shown).toMatch(/Watch booted \d\d:\d\d/);
+  });
+
+  it("offers the Devices and Warm pool tabs only, with the events log on the page whichever is chosen", () => {
+    const devices = html(page(WORKER));
+    const warm = html(
+      page(
+        {
+          ...WORKER,
+          warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [] },
+        },
+        "warm-pool",
+      ),
+    );
+    const withEvent = inConsole(
+      <WorkerPageBody
+        page={page(WORKER)}
+        log={{
+          data: {
+            end: undefined,
+            loadOlder: () => {},
+            rows: [{ ...EVENT, name: "lease.granted" }],
+          },
+          kind: "ready",
+        }}
+      />,
+    );
+
+    expect(devices).not.toContain(">Events<");
+    expect(devices).not.toContain('class="tab">Host<');
+    expect(devices).toContain("Events on this worker");
+    expect(warm).toContain("Events on this worker");
+    expect(text(warm)).toContain("Pool On");
+    expect(text(withEvent)).toContain("lease.granted");
   });
 
   it("says No devices. for a worker whose devices were never read", () => {
@@ -233,14 +381,14 @@ describe("a worker's page", () => {
     expect(text(html(page(unread)))).toContain("No devices.");
   });
 
-  it("says No reading while disconnected in place of the load figures of a disconnected worker", () => {
+  it("says No reading while disconnected in place of the load rings of a disconnected worker", () => {
     const shown = text(html(page({ ...WORKER, connection: "disconnected" })));
 
     expect(shown).toContain("No reading while disconnected");
-    expect(shown).not.toContain("busy,");
+    expect(shown).not.toContain("busy");
   });
 
-  it("shows a starting worker without devices, capacity or a warm pool tab", () => {
+  it("shows a starting worker without devices, slots or a warm pool tab", () => {
     const starting: WorkerView = {
       connection: "connected",
       drained: false,
@@ -255,10 +403,9 @@ describe("a worker's page", () => {
     expect(shown).toContain("Devices, leases and capacity appear once startup finishes.");
     expect(shown).not.toContain("Warm pool");
     expect(shown).not.toContain("No devices.");
-    expect(shown).not.toContain("Capacity not reported.");
   });
 
-  it("shows an incompatible worker's protocol ranges on its Host tab, and no devices or load", () => {
+  it("shows an incompatible worker's protocol ranges beside its host facts, and no devices or load", () => {
     const old: WorkerView = {
       connection: "incompatible",
       drained: false,
@@ -268,36 +415,21 @@ describe("a worker's page", () => {
       protocol: { gateway: { max: 35, min: 35 }, worker: { max: 30, min: 30 } },
     };
 
-    const devicesMarkup = html(page(old));
-    const devices = text(devicesMarkup);
-    const host = text(html(page(old, "host")));
+    const markup = html(page(old));
+    const shown = text(markup);
 
-    expect(devices).toContain("No devices: the gateway cannot read this worker.");
-    expect(devices).not.toContain("Read ");
-    expect(devicesMarkup).not.toContain("Load and leases");
-    expect(host).toContain("incompatible gateway 35–35, worker 30–30");
+    expect(shown).toContain("No devices: the gateway cannot read this worker.");
+    expect(shown).not.toMatch(/read \d/);
+    expect(markup).not.toContain("Load and leases");
+    expect(shown).toContain("Protocol incompatible gateway 35–35, worker 30–30");
   });
-});
 
-describe("a worker's host and warm pool tabs", () => {
-  it("shows the machine, tools, protocol, capabilities with their reasons, and the catalog", () => {
+  it("lists capabilities that are not available with their reasons in the host facts", () => {
     const view: WorkerView = {
       ...WORKER,
       capabilities: [
         { name: "agent-device", state: "available" },
         { name: "stream", reason: "found 0.20.1, need 0.21.28 or later", state: "unavailable" },
-      ],
-      catalog: [
-        {
-          classDefaults: {},
-          defaultRuntime: "26.0",
-          modelAliases: {},
-          modelClasses: {},
-          modelRuntimes: {},
-          models: ["iPhone 17"],
-          platform: "ios",
-          runtimes: ["26.0"],
-        },
       ],
       host: {
         arch: "arm64",
@@ -307,20 +439,17 @@ describe("a worker's host and warm pool tabs", () => {
       },
     };
 
-    const markup = html(page(view, "host"));
+    const markup = html(page(view));
     const shown = text(markup);
 
-    expect(shown).toContain("Operating system macOS 15.5");
-    expect(shown).toContain("CPU architecture arm64");
-    expect(shown).toContain("xcode 16.4 (16F6) for iOS");
-    expect(shown).toContain("Protocol compatible");
-    expect(shown).toContain("agent-device available");
+    expect(shown).toContain("xcode 16.4 (16F6)");
     expect(shown).toContain("stream unavailable found 0.20.1, need 0.21.28 or later");
-    expect(shown).toContain("iOS Models: iPhone 17 Runtimes: 26.0 (default)");
-    expect(markup).toContain("status-ok");
+    expect(shown).not.toContain("agent-device");
     expect(markup).toContain("status-warn");
   });
+});
 
+describe("a worker's warm pool tab", () => {
   it("shows the warm pool's facts, its targets table and the installs in progress", () => {
     const view: WorkerView = {
       ...WORKER,

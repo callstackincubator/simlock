@@ -1,35 +1,32 @@
 import {
   ActionBar,
+  AgentChip,
   Button,
-  Card,
   type Column,
   DataTable,
   Facts,
   Feed,
-  Grid,
-  Id,
   Link,
-  ListRow,
   Loaded,
+  type LoadView,
+  LogRow,
   Meter,
   Page,
-  Panel,
-  SlotLegend,
+  Pill,
+  Ring,
   Slots,
-  Status,
   StatusDot,
+  Status,
   Tabs,
 } from "../../ds";
 import {
-  type CapabilityRow,
   type DeviceRow,
-  type FigureCard,
+  type LogEventRow,
   type InstallRow,
-  type PlatformCard,
   useWorkerEvents,
-  type WorkerEventsPage,
   useWorkerPage,
   useWorkerPageMenu,
+  type WorkerEventsPage,
   type WarmRow,
   type WorkerPageView,
 } from "../../state/workers";
@@ -41,10 +38,13 @@ export function WorkerPageScreen(props: {
 }) {
   const { deviceId, id } = props;
   const view = useWorkerPage(id);
+  const log = useWorkerEvents(id);
   return (
     <>
       <Loaded view={view}>
-        {(page) => (page === undefined ? <MissingWorker /> : <WorkerPageBody page={page} />)}
+        {(page) =>
+          page === undefined ? <MissingWorker /> : <WorkerPageBody page={page} log={log} />
+        }
       </Loaded>
       {deviceId === undefined ? null : (
         <DeviceDrawer key={deviceId} workerId={id} deviceId={deviceId} />
@@ -63,19 +63,30 @@ function MissingWorker() {
   );
 }
 
-export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
+export function WorkerPageBody({
+  log,
+  page,
+}: {
+  readonly page: WorkerPageView;
+  readonly log: LoadView<WorkerEventsPage>;
+}) {
   const entries = useWorkerPageMenu(page);
   const again = entries.find((entry) => entry.key === "update-worker");
+  const note = [
+    page.system,
+    page.version,
+    page.overview.read === undefined ? undefined : `read ${page.overview.read}`,
+  ]
+    .filter((part) => part !== undefined)
+    .join(" · ");
   return (
     <Page
       title={page.title}
-      {...(page.version === undefined ? {} : { note: page.version })}
+      crumb={{ label: "Fleet", to: page.back }}
+      status={<Pill tone={page.health.tone}>{page.health.word}</Pill>}
+      {...(note === "" ? {} : { note })}
       actions={<ActionBar label={`Actions for ${page.title}`} entries={entries} />}
     >
-      <p className="worker-line">
-        <Status tone={page.health.tone}>{page.health.word}</Status>
-        {page.system === undefined ? null : <> · {page.system}</>}
-      </p>
       {page.banners.map((banner) => (
         <p
           key={banner.text}
@@ -89,292 +100,262 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
           ) : null}
         </p>
       ))}
-      <Overview page={page} />
-      <Tabs label="Worker" tabs={page.tabs} value={page.tab} onChange={page.chooseTab}>
-        {page.tab === "devices" ? <DevicesTab page={page} /> : null}
-        {page.tab === "host" ? <HostTab inspector={page} /> : null}
-        {page.tab === "warm-pool" ? <WarmTab inspector={page} /> : null}
-        {page.tab === "events" ? <WorkerEvents key={page.id} id={page.id} /> : null}
-      </Tabs>
+      <Gauges page={page} />
+      <div className="worker-grid">
+        <SideCard page={page} />
+        <MainCard page={page} log={log} />
+      </div>
     </Page>
   );
 }
 
-function Overview({ page }: { readonly page: WorkerPageView }) {
+function Gauge(props: {
+  readonly label: string;
+  readonly percent?: number | undefined;
+  readonly tone: "ok" | "warn" | "error" | "idle" | "neutral";
+  readonly big: string;
+  readonly small: string;
+}) {
+  return (
+    <div className="worker-gauge">
+      <Ring
+        bare
+        label={props.label}
+        tone={props.tone}
+        {...(props.percent === undefined ? {} : { percent: props.percent })}
+      />
+      <div className="worker-gauge-text">
+        <span className="fleet-label">{props.label}</span>
+        <strong title={props.big}>{props.big}</strong>
+        <span title={props.small}>{props.small}</span>
+      </div>
+    </div>
+  );
+}
+
+function Gauges({ page }: { readonly page: WorkerPageView }) {
   const { overview } = page;
   if (overview.incompatible) return null;
   return (
-    <>
-      <Grid min="sm" label="Load and leases">
-        {overview.figures.map((card) => (
-          <FigureCardView key={card.label} card={card} />
-        ))}
-        {overview.loadNote === undefined ? null : (
-          <Card>
-            <p className="figure-label">Load</p>
-            <p className="figure-text">{overview.loadNote}</p>
-          </Card>
-        )}
-        {overview.leases === undefined ? null : (
-          <Card>
-            <p className="figure-label">Leases</p>
-            <p className="figure-count mono">{overview.leases.count}</p>
-            {overview.leases.running === undefined ? null : (
-              <p className="figure-detail">
-                <span className="muted">Running</span> {overview.leases.running}
-              </p>
-            )}
-          </Card>
-        )}
-      </Grid>
-      {overview.read === undefined ? null : (
-        <p className="muted figure-read">Read {overview.read}</p>
+    <div className="worker-gauges" role="group" aria-label="Load and leases">
+      {overview.figures.map((card) => (
+        <Gauge
+          key={card.label}
+          label={card.label}
+          percent={card.percent}
+          tone={card.tone}
+          big={card.big}
+          small={card.small}
+        />
+      ))}
+      {overview.loadNote === undefined ? null : (
+        <div className="worker-gauge">
+          <div className="worker-gauge-text">
+            <span className="fleet-label">Load</span>
+            <strong>{overview.loadNote}</strong>
+          </div>
+        </div>
       )}
-      {overview.starting ? null : <PlatformCards platforms={overview.platforms} />}
-    </>
+      {overview.slots === undefined ? null : (
+        <Gauge
+          label="Slots"
+          percent={overview.slots.percent}
+          tone="neutral"
+          big={overview.slots.big}
+          small={overview.slots.small}
+        />
+      )}
+    </div>
+  );
+}
+
+function SideCard({ page }: { readonly page: WorkerPageView }) {
+  const { host, overview } = page;
+  const mono = (text: string) => <span className="mono">{text}</span>;
+  const facts = [
+    ...(host.host === undefined
+      ? []
+      : [
+          { label: host.host.osName, value: mono(host.host.osVersion) },
+          ...host.host.tools.map((tool) => ({
+            label: tool.name,
+            value: mono(tool.version),
+          })),
+        ]),
+    ...(host.version === undefined ? [] : [{ label: "simlock", value: mono(host.version) }]),
+    ...(host.warm === undefined ? [] : [{ label: "Warm pool", value: mono(host.warm) }]),
+    ...(host.protocol.compatible
+      ? []
+      : [
+          {
+            label: "Protocol",
+            value: (
+              <>
+                <Status tone="error">incompatible</Status>
+                {host.protocol.ranges === undefined ? null : (
+                  <span className="mono"> {host.protocol.ranges}</span>
+                )}
+              </>
+            ),
+          },
+        ]),
+    ...(Array.isArray(host.capabilities)
+      ? host.capabilities
+          .filter((row) => row.state !== "available")
+          .map((row) => ({
+            label: row.name,
+            value: (
+              <>
+                <Status tone={row.tone}>{row.state}</Status>
+                {row.reason === undefined ? null : ` ${row.reason}`}
+              </>
+            ),
+          }))
+      : []),
+    {
+      label: "Worker id",
+      value: <span className="mono worker-id">{host.id}</span>,
+    },
+  ];
+  return (
+    <aside className="worker-side" aria-label="Slots, host and baselines">
+      {overview.platforms.length === 0 ? null : (
+        <section>
+          <h2 className="fleet-label">Slots</h2>
+          <div className="worker-side-slots">
+            {overview.platforms.map((platform) => (
+              <div key={platform.name} className="worker-side-row">
+                <span className="worker-side-name">{platform.name}</span>
+                <Slots slots={platform.slots} label={platform.label} />
+                <span className="mono worker-side-fraction">
+                  {platform.slots.filter((slot) => slot.kind === "leased").length} /{" "}
+                  {platform.slots.length}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      <section>
+        <h2 className="fleet-label">Host</h2>
+        <Facts facts={facts} />
+      </section>
+      <section>
+        <h2 className="fleet-label">Baselines here</h2>
+        {host.baselines.length === 0 ? (
+          <p className="muted worker-side-none">None.</p>
+        ) : (
+          <ul className="worker-baselines">
+            {host.baselines.map((baseline) => (
+              <li key={baseline.key}>
+                <span className="mono" title={baseline.name}>
+                  {baseline.name}
+                </span>
+                <span className="mono">
+                  {baseline.stale === undefined ? baseline.size : "stale"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </aside>
+  );
+}
+
+function MainCard({
+  log,
+  page,
+}: {
+  readonly page: WorkerPageView;
+  readonly log: LoadView<WorkerEventsPage>;
+}) {
+  return (
+    <div className="worker-main">
+      <div className="worker-main-top">
+        <Tabs label="Worker" tabs={page.tabs} value={page.tab} onChange={page.chooseTab}>
+          {page.tab === "devices" ? <DevicesTab page={page} /> : <WarmTab inspector={page} />}
+        </Tabs>
+      </div>
+      <WorkerEvents key={page.id} view={log} />
+    </div>
   );
 }
 
 function DevicesTab({ page }: { readonly page: WorkerPageView }) {
   const { overview } = page;
   if (overview.incompatible) {
-    return <p className="muted">No devices: the gateway cannot read this worker.</p>;
+    return <p className="muted worker-note">No devices: the gateway cannot read this worker.</p>;
   }
   if (overview.starting) {
-    return <p className="muted">Devices, leases and capacity appear once startup finishes.</p>;
+    return (
+      <p className="muted worker-note">
+        Devices, leases and capacity appear once startup finishes.
+      </p>
+    );
   }
+  const devices = overview.devices ?? [];
+  if (devices.length === 0) return <p className="muted worker-note">No devices.</p>;
   return (
-    <Panel title="Devices" flush>
-      <DataTable
-        label="Devices"
-        rows={overview.devices ?? []}
-        columns={DEVICE_COLUMNS}
-        rowId={(device) => device.id}
-        rowTo={(device) => device.to}
-        empty="No devices."
-        paging={page.devicesPaging}
-        wide
-      />
-    </Panel>
-  );
-}
-
-function FigureCardView({ card }: { readonly card: FigureCard }) {
-  return (
-    <Card>
-      <p className="figure-label">{card.label}</p>
-      <p className="figure-text">{card.text}</p>
-      {card.percent === undefined ? null : <Meter percent={card.percent} tone={card.tone} />}
-      {card.details.map((detail) => (
-        <p key={detail.label} className="figure-detail">
-          <span className="muted">{detail.label}</span>{" "}
-          {detail.tone === undefined ? (
-            detail.text
-          ) : (
-            <Status tone={detail.tone}>{detail.text}</Status>
-          )}
-        </p>
+    <ul className="worker-devices" aria-label="Devices">
+      {devices.map((device) => (
+        <DeviceTile key={device.id} device={device} watch={page.streamTo(device.id)} />
       ))}
-    </Card>
+    </ul>
   );
 }
 
-function PlatformCards({ platforms }: { readonly platforms: readonly PlatformCard[] }) {
-  if (platforms.length === 0) return <p className="muted">Capacity not reported.</p>;
+function DeviceTile({ device, watch }: { readonly device: DeviceRow; readonly watch: string }) {
+  const { holder } = device;
+  const leased = holder !== undefined;
   return (
-    <>
-      <Grid min="lg" label="Capacity">
-        {platforms.map((platform) => (
-          <Card key={platform.name}>
-            <p className="platform-head">
-              <span>{platform.name}</span>
-              <span className="mono">
-                {platform.running} <span className="muted">of {platform.limit} running</span>
-              </span>
-            </p>
-            <Slots size="lg" slots={platform.slots} label={platform.label} />
-          </Card>
-        ))}
-      </Grid>
-      <SlotLegend />
-    </>
-  );
-}
-
-const DEVICE_COLUMNS: readonly Column<DeviceRow>[] = [
-  {
-    cell: (device) => (
-      <span className="device-name">
-        <StatusDot tone={device.status.tone} label={device.status.word} />
-        <span className="device-text">
-          <span>
-            <Link to={device.to}>{device.model}</Link>{" "}
-            <span className="mono muted">{device.runtime}</span>
+    <li className="worker-device">
+      <div className="worker-device-top">
+        <Link className="worker-device-name" to={device.to} title={device.model}>
+          {device.model}
+        </Link>
+        <div className="worker-device-sub">
+          <span className="mono" title={`${device.platform} ${device.runtime}`}>
+            {device.platform} {device.runtime}
           </span>
-          <span className="device-sub">
-            {device.platform} · <Id>{device.id}</Id>
-          </span>
-        </span>
-      </span>
-    ),
-    header: "Device",
-  },
-  {
-    cell: (device) =>
-      device.holder === undefined ? (
-        device.status.word
+          <Pill tone={device.status.tone} plain={device.status.word === "leased"}>
+            {device.status.word}
+          </Pill>
+        </div>
+      </div>
+      {leased ? (
+        <>
+          <div className="worker-device-holder">
+            <AgentChip kind={holder.kind} title={holder.name} />
+            <Link className="mono" to={holder.to} title={holder.name}>
+              {holder.display}
+            </Link>
+          </div>
+          <div
+            className="worker-device-ttl"
+            title={device.expires === undefined ? undefined : `expires in ${device.expires}`}
+          >
+            <b className="mono">{device.ttl}</b>
+            {device.ttlPercent === undefined ? null : (
+              <Meter percent={device.ttlPercent} tone={device.ttlTone} size="thin" />
+            )}
+          </div>
+        </>
       ) : (
-        <span className="device-text">
-          <Link to={device.holder.to} title={device.holder.name}>
-            {device.holder.name}
-          </Link>
-          {device.renewed === undefined ? null : (
-            <span className="device-sub">renewed {device.renewed}</span>
-          )}
-        </span>
-      ),
-    header: "Holder",
-  },
-  {
-    cell: (device) => (
-      <span className="device-text">
-        <span>{device.since ?? "—"}</span>
-        {device.expires === undefined ? null : (
-          <span className="device-sub">expires in {device.expires}</span>
-        )}
-      </span>
-    ),
-    header: "In state for",
-  },
-  {
-    cell: (device) => (
-      <span className="device-text">
-        <span>{device.physical ? "Physical" : "Virtual"}</span>
-        {device.mode === undefined && device.imageTag === undefined ? null : (
-          <span className="device-sub">
-            {[device.mode, device.imageTag].filter((part) => part !== undefined).join(" · ")}
-          </span>
-        )}
-      </span>
-    ),
-    header: "Type",
-  },
-];
-
-function ProtocolFacts({ inspector }: { readonly inspector: WorkerPageView }) {
-  const { protocol } = inspector.host;
-  return protocol.compatible ? (
-    <Status tone="ok">compatible</Status>
-  ) : (
-    <>
-      <Status tone="error">incompatible</Status>
-      {protocol.ranges === undefined ? null : <span className="mono"> {protocol.ranges}</span>}
-    </>
-  );
-}
-
-function HostTab({ inspector }: { readonly inspector: WorkerPageView }) {
-  const { host } = inspector;
-  return (
-    <>
-      <Panel title="Host">
-        <Facts
-          facts={[
-            { label: "Worker id", value: <span className="mono">{host.id}</span> },
-            ...(host.version === undefined
-              ? []
-              : [{ label: "Version", value: <span className="mono">{host.version}</span> }]),
-            {
-              label: "Connection",
-              value: (
-                <span className="host-statuses">
-                  <Status tone={host.connection.tone}>{host.connection.word}</Status>
-                  {host.drained ? <Status tone="warn">drained</Status> : null}
-                </span>
-              ),
-            },
-            {
-              label: "Health",
-              value:
-                host.health === undefined ? (
-                  "Not reported"
-                ) : (
-                  <Status tone={host.health.tone}>{host.health.word}</Status>
-                ),
-            },
-            { label: "Protocol", value: <ProtocolFacts inspector={inspector} /> },
-            ...(host.host === undefined
-              ? [{ label: "Host", value: "Not reported" }]
-              : [
-                  { label: "Operating system", value: host.host.os },
-                  {
-                    label: "CPU architecture",
-                    value: <span className="mono">{host.host.arch}</span>,
-                  },
-                  {
-                    label: "Tools",
-                    value:
-                      host.host.tools.length === 0 ? (
-                        "None"
-                      ) : (
-                        <ul className="plain-list">
-                          {host.host.tools.map((tool) => (
-                            <li key={tool.key}>
-                              {tool.name} <span className="mono">{tool.version}</span>{" "}
-                              <span className="muted">for {tool.platform}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ),
-                  },
-                ]),
-          ]}
-        />
-      </Panel>
-      {host.capabilities === undefined ? null : (
-        <Panel title="Capabilities">
-          <Capabilities rows={host.capabilities} />
-        </Panel>
+        <>
+          <p className="worker-device-idle">
+            {device.status.word === "ready" ? "warm, waiting for a lease" : device.status.word}
+          </p>
+          <div className="worker-device-spacer" />
+        </>
       )}
-      <Panel title="Catalog">
-        {host.catalog.length === 0 ? (
-          <p className="muted">Nothing reported.</p>
-        ) : (
-          <Facts
-            facts={host.catalog.map((entry) => ({
-              label: entry.platform,
-              value: (
-                <>
-                  <p>
-                    <span className="muted">Models:</span> {entry.models}
-                  </p>
-                  <p>
-                    <span className="muted">Runtimes:</span> {entry.runtimes}
-                  </p>
-                </>
-              ),
-            }))}
-          />
-        )}
-      </Panel>
-    </>
-  );
-}
-
-function Capabilities({ rows }: { readonly rows: readonly CapabilityRow[] | "not-reported" }) {
-  if (rows === "not-reported") return <p className="muted">Not reported.</p>;
-  return (
-    <Facts
-      facts={rows.map((row) => ({
-        label: row.name,
-        value: (
-          <>
-            <Status tone={row.tone}>{row.state}</Status>
-            {row.reason === undefined ? null : ` ${row.reason}`}
-          </>
-        ),
-      }))}
-    />
+      <div className="worker-device-foot">
+        <Link className="button button-secondary button-sm" to={watch}>
+          Watch
+        </Link>
+        {device.timeNote === undefined ? null : <span>{device.timeNote}</span>}
+      </div>
+    </li>
   );
 }
 
@@ -393,8 +374,9 @@ function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
   const { warm } = inspector;
   if (warm === undefined) return null;
   return (
-    <>
-      <Panel title="Warm pool">
+    <div className="worker-warm">
+      <section>
+        <h2 className="fleet-label">Warm pool</h2>
         {warm.pool === undefined ? (
           <p className="muted">Not reported.</p>
         ) : (
@@ -416,11 +398,12 @@ function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
             />
           </>
         )}
-      </Panel>
-      <Panel title="Installs in progress">
+      </section>
+      <section>
+        <h2 className="fleet-label">Installs in progress</h2>
         <Installs rows={warm.installs} />
-      </Panel>
-    </>
+      </section>
+    </div>
   );
 }
 
@@ -440,15 +423,31 @@ function Installs({ rows }: { readonly rows: readonly InstallRow[] }) {
 }
 
 // why: one row of the feed is as tall as the feed says, so the rows can be placed by arithmetic.
-const EVENT_ROW_PX = 60;
+const EVENT_ROW_PX = 30;
 
-function WorkerEvents({ id }: { readonly id: string }) {
-  const view = useWorkerEvents(id);
-  return <Loaded view={view}>{(page) => <WorkerEventFeed page={page} />}</Loaded>;
+function WorkerEvents({ view }: { readonly view: LoadView<WorkerEventsPage> }) {
+  return (
+    <section className="worker-log" aria-label="Events on this worker">
+      <header className="fleet-log-head">
+        <h2 className="fleet-label">Events on this worker</h2>
+        <Pill tone="ok">live</Pill>
+      </header>
+      <Loaded view={view}>
+        {(page) => <WorkerEventFeed rows={page.rows} end={page.end} loadOlder={page.loadOlder} />}
+      </Loaded>
+    </section>
+  );
 }
 
-function WorkerEventFeed({ page }: { readonly page: WorkerEventsPage }) {
-  const { end, loadOlder, rows } = page;
+function WorkerEventFeed({
+  end,
+  loadOlder,
+  rows,
+}: {
+  readonly rows: readonly LogEventRow[];
+  readonly end: WorkerEventsPage["end"];
+  readonly loadOlder: () => void;
+}) {
   const endRow =
     end === undefined ? null : (
       <p className="feed-end muted">
@@ -460,7 +459,7 @@ function WorkerEventFeed({ page }: { readonly page: WorkerEventsPage }) {
         ) : null}
       </p>
     );
-  if (rows.length === 0) return endRow ?? <p className="muted">Loading…</p>;
+  if (rows.length === 0) return endRow ?? <p className="muted worker-note">Loading…</p>;
   return (
     <Feed
       label="Event feed for this worker"
@@ -474,19 +473,23 @@ function WorkerEventFeed({ page }: { readonly page: WorkerEventsPage }) {
       renderRow={(index) => {
         const row = rows[index];
         return row === undefined ? null : (
-          <ListRow
-            to={row.to}
-            selected={false}
-            title={
-              <>
-                <time className="worker-event-time mono" dateTime={row.iso}>
-                  {row.time}
-                </time>
-                <span className="mono">{row.name}</span>
-              </>
-            }
-            sub={row.summary}
-          />
+          <li className="list-item">
+            <LogRow
+              time={<time dateTime={row.iso}>{row.time}</time>}
+              status={
+                <StatusDot
+                  tone={row.squareTone}
+                  label={row.squareTone === "idle" ? "info" : row.squareTone}
+                />
+              }
+              event={<Link to={row.to}>{row.name}</Link>}
+              subject={row.subject}
+              detail={row.detail}
+              {...(row.tone === undefined || row.tone === "ok" || row.tone === "idle"
+                ? {}
+                : { tone: row.tone })}
+            />
+          </li>
         );
       }}
     />
