@@ -1,6 +1,4 @@
-import { mkdir } from "node:fs/promises";
-
-import type { Locator, Page, TestInfo } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import {
   disposeFleet,
@@ -9,7 +7,9 @@ import {
   signIn,
   startDaemon,
   startFleet,
+  startProxiedDaemon,
   test as base,
+  type ProxiedDaemon,
   type RunningDaemon,
 } from "./fixtures.js";
 import {
@@ -23,7 +23,6 @@ import {
 import { renderCases, renderFixture } from "./render-fixtures.js";
 import { pad, staticWorker, stubJson, waitingItem } from "./stubs.js";
 
-const LIGHT_DIRECTORY = "docs/internal/console-redesign/current/light";
 const SIZES = [
   { width: 1440, height: 900 },
   { width: 1280, height: 800 },
@@ -98,25 +97,7 @@ async function problemsOf(page: Page): Promise<readonly string[]> {
   });
 }
 
-async function shoot(
-  page: Page,
-  scheme: string,
-  name: string,
-  width: number,
-  out: string,
-): Promise<void> {
-  const light = scheme === "light" && width === 1440;
-  if (!light && (width === 1440 || width === 360)) return;
-  const path = light ? `${LIGHT_DIRECTORY}/${name}.png` : `${out}/${scheme}-${name}-${width}.png`;
-  await page.screenshot({ path, animations: "disabled" });
-}
-
-async function sweep(
-  page: Page,
-  gatewayUrl: string,
-  scheme: string,
-  out: string,
-): Promise<readonly string[]> {
+async function sweep(page: Page, gatewayUrl: string, scheme: string): Promise<readonly string[]> {
   const problems: string[] = [];
   for (const entry of await renderCases()) {
     for (const size of SIZES) {
@@ -127,7 +108,6 @@ async function sweep(
       await page.waitForTimeout(150);
       const label = `${scheme} ${entry.name} ${size.width}x${size.height}`;
       for (const problem of await problemsOf(page)) problems.push(`${label}: ${problem}`);
-      await shoot(page, scheme, entry.name, size.width, out);
     }
   }
   return problems;
@@ -136,7 +116,7 @@ async function sweep(
 for (const colorScheme of ["dark", "light"] as const) {
   test(`every page fits the window from 1440 to 360 pixels wide: no sideways scroll, no card past the edge, no title on its actions (${colorScheme})`, async ({
     browser,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(540_000);
     const gateway = await startDaemon("gateway");
     try {
@@ -152,8 +132,7 @@ for (const colorScheme of ["dark", "light"] as const) {
       await page.goto(gateway.url);
       await signIn(page, gateway.tokens.operator);
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-      await mkdir(LIGHT_DIRECTORY, { recursive: true });
-      expect(await sweep(page, gateway.url, colorScheme, testInfo.outputDir)).toEqual([]);
+      expect(await sweep(page, gateway.url, colorScheme)).toEqual([]);
       await context.close();
     } finally {
       await gateway.dispose();
@@ -249,17 +228,6 @@ async function expectPageMetrics(page: Page): Promise<void> {
   await expect(page.locator(".stat-unit").first()).toHaveCSS("font-size", "12px");
 }
 
-async function captureShell(page: Page, testInfo: TestInfo, entry: ShellCase): Promise<void> {
-  const captureDir = "docs/internal/console-redesign/current";
-  await mkdir(captureDir, { recursive: true });
-  const capturePath = `${captureDir}/shell-${entry.theme}-${entry.session}.png`;
-  await page.screenshot({ path: capturePath, animations: "disabled" });
-  await testInfo.attach(`shell-${entry.theme}-${entry.session}`, {
-    path: capturePath,
-    contentType: "image/png",
-  });
-}
-
 async function expectInboxCount(page: Page, nav: Locator, entry: ShellCase): Promise<void> {
   const inbox = nav.getByRole("link", { name: /^Inbox/ });
   await expect(inbox.locator(".nav-count")).toHaveCount(entry.count);
@@ -293,9 +261,21 @@ async function expectCollapsedIcons(nav: Locator): Promise<void> {
 test("an operator opens the console and sees the floating shell, page header and card at their reference geometry, icons and colours", async ({
   daemon,
   page,
-  proxied,
-}, testInfo) => {
+}) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  const proxied = await startProxiedDaemon();
+  try {
+    await walkShellCases(page, daemon, proxied);
+  } finally {
+    await proxied.dispose();
+  }
+});
+
+async function walkShellCases(
+  page: Page,
+  daemon: RunningDaemon,
+  proxied: ProxiedDaemon,
+): Promise<void> {
   let signedIn = false;
   for (const entry of SHELL_CASES) {
     await page.unrouteAll({ behavior: "wait" });
@@ -320,11 +300,10 @@ test("an operator opens the console and sees the floating shell, page header and
     await expectNavIcons(nav);
     await expectNavChrome(nav, entry);
     await expectPageMetrics(page);
-    await captureShell(page, testInfo, entry);
     await expectInboxCount(page, nav, entry);
     await expectCollapsedIcons(nav);
   }
-});
+}
 
 async function openPage(
   page: Page,

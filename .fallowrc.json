@@ -6,7 +6,8 @@
   // daemon via SIMLOCK_DRIVERS_MODULE (see the CLI reference) -- neither is visible to
   // fallow's static reachability graph without being declared explicitly.
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
-  // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.
+  // browser lane's specs are Playwright entry points, as the e2e tests are vitest's, and so are the
+  // console's DOM tests and `pnpm console:screenshots` (its script and its own Playwright config).
   // vitest.mutate.config.ts is named only by stryker.config.mjs (`pnpm mutate`).
   // .agents/scripts/*.mjs are run by node from the hooks, the skills and the merge gate; three of
   // them (budget-guard, comment-lint, test-lint) import from their neighbours (usage, comments).
@@ -35,6 +36,8 @@
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
     "e2e/console/*.spec.ts",
+    "e2e/console/screenshots.ts",
+    "playwright.screenshots.config.ts",
     "ui/**/*.dom.test.tsx",
     "e2e/real-proxy/*.spec.ts",
     "e2e/real-proxy/global-setup.ts",

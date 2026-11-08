@@ -58,6 +58,7 @@
     "test:e2e:physical": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && vitest run --project e2e --no-file-parallelism --reporter=default --reporter=./e2e/progress-reporter.ts --tags-filter='physical'",
     "test:e2e:physical-manual": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && vitest run --project e2e --no-file-parallelism --reporter=default --reporter=./e2e/progress-reporter.ts --tags-filter='physical-manual'",
     "test:console": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && playwright test",
+    "console:screenshots": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && playwright test --config playwright.screenshots.config.ts",
     "test:real-proxy": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && playwright test --config playwright.real-proxy.config.ts",
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/src.tsbuildinfo && tsc -p ui/tsconfig.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/ui.tsbuildinfo",
     "typecheck:e2e": "TURBO_TELEMETRY_DISABLED=1 turbo run build:ui:run build:capture:run && pnpm run typecheck:e2e:types",

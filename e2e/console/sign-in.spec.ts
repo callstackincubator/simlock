@@ -40,7 +40,7 @@ test.describe("sign-in", () => {
     }
 
     await page.reload();
-    await expect(page).toHaveURL(/\/usage$/);
+    await expect(page).toHaveURL(/\/settings$/);
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
     // why: every font the page uses has loaded by now, so a font request would have shown up.
     await page.evaluate(async () => {

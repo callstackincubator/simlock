@@ -4,4 +4,5 @@ export default [
   { name: "queue", path: "/queue", order: 10 },
   { name: "usage", path: "/usage", order: 11 },
   { name: "not-found", path: "/not-found", order: 12 },
+  { name: "settings", path: "/settings", order: 13 },
 ];
