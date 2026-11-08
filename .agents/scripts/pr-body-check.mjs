@@ -31,8 +31,11 @@
 //     (or there is none), the same for the parent's `## Completion conditions` (coding rule 5);
 //   - the diff's kind (`diff-kind.mjs` from the merge-base to the head) and the counts line
 //     disagree: Code review skipped on a `full`, `large` or `tests-only` diff, or Spec review
-//     skipped on a <kind>/<n> branch (REVIEW.md, "Routing"); a Claims review that ran on an
+//     skipped on a <kind>/<n> branch but `refactor/<n>` (REVIEW.md, "Routing"); a Claims review that ran on an
 //     `adr-only` diff is a warning;
+//   - on a `refactor/<n>` branch (delivery rule 18): Spec review ran, or the body lacks the line
+//     `Tests: <n> before, <m> after.` with m at least n, or a `Mutation:` line ending
+//     `0 alive.`;
 //   - a routine's branch changed what its routine may not: `chore/garden-comments-*` is
 //     `comments-only`, `chore/audit-tests-*` and `chore/harden-tests-*` are `tests-only`, and
 //     `chore/calibrate-reviews-*` changes `.agents/briefs/calibration.md` alone.
@@ -62,7 +65,8 @@ const REVIEW_COUNTS =
   /^Spec review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\. Code review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\. Claims review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\.(?: Comment review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\.)?\s*$/;
 const ROUNDS = /^Rounds: \d+\. Tokens: (?:[\d.]+M|n\/a)\.\s*$/m;
 
-const DELIVERY_BRANCH = /^(bug|feature|task)\/(\d+)$/;
+const DELIVERY_BRANCH = /^(bug|feature|refactor|task)\/(\d+)$/;
+const REFACTOR_BRANCH = /^refactor\/\d+$/;
 const ROUTINES = [
   [/^chore\/garden-comments-/, "comments-only"],
   [/^chore\/(?:audit|harden)-tests-/, "tests-only"],
@@ -323,13 +327,32 @@ function closesLastSubIssue(parent, number) {
 
 function checkDiff() {
   const counts = lines.find((l) => REVIEW_COUNTS.test(l)) ?? "";
-  if (DELIVERY_BRANCH.test(branch) && counts.startsWith("Spec review: skipped.")) {
+  const refactor = REFACTOR_BRANCH.test(branch);
+  if (DELIVERY_BRANCH.test(branch) && !refactor && counts.startsWith("Spec review: skipped.")) {
     failures.push(
       "Spec review is skipped on a branch whose issue is its spec (REVIEW.md, Routing)",
     );
   }
+  if (refactor) checkRefactor(counts);
   const kind = option("--kind", args) ?? kindFromGit();
   if (kind !== null) checkKind(kind, counts);
+}
+
+function checkRefactor(counts) {
+  if (counts !== "" && !counts.startsWith("Spec review: skipped.")) {
+    failures.push("a refactor gets no Spec review (delivery rule 18)");
+  }
+  const tests = lines.map((l) => /^Tests: (\d+) before, (\d+) after\.$/.exec(l)).find(Boolean);
+  if (tests === undefined) {
+    failures.push("no `Tests: <n> before, <m> after.` line on a refactor (delivery rule 18)");
+  } else if (Number(tests[2]) < Number(tests[1])) {
+    failures.push(
+      `the refactor lost tests: ${tests[1]} before, ${tests[2]} after (delivery rule 18)`,
+    );
+  }
+  if (!lines.some((l) => /^Mutation: .*\b0 alive\.$/.test(l))) {
+    failures.push("no `Mutation: ... 0 alive.` line on a refactor (delivery rule 18)");
+  }
 }
 
 // why: null when the diff cannot be read: no SHAs given, or this clone lacks them.

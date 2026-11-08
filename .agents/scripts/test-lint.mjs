@@ -22,6 +22,8 @@
 // or any `z.record(` fails (always-in-scope 8), unless a `why:` comment sits right above it or
 // its whole top-level declaration moved verbatim (whitespace, comments and trailing commas aside)
 // from another `src/contract/` file, one removal excusing one addition.
+// A pin (`*.pin.test.ts`) is skipped: only testing rule 2 binds it, and its PR deletes it
+// (delivery rule 18).
 // Strings and comments are never read as code, so a fixture in a string is no finding.
 // Each finding prints as `path:line: <what to do> (<rule>)` and the exit code is 1. <files>
 // restricts the paths, for the commit hook.
@@ -43,6 +45,7 @@ const MESSAGES = {
 
 const TEST_FILE = /\.test\.tsx?$/;
 const TIMING_FILE = /\.timing\.test\.tsx?$/;
+const PIN_FILE = /\.pin\.test\.tsx?$/;
 const SLOW_LANE = /^e2e\/slow-/;
 const CONTRACT_FILE = /^src\/contract\/[^/]+\.ts$/;
 const HELPER_FILE = /(?:^|\/)(?:testing|test-[^/]*)\.ts$/;
@@ -501,6 +504,7 @@ if (base === undefined || (args.includes("--head") && head === undefined)) usage
 const findings = [];
 const moved = movedContractDeclarations(base, head);
 for (const file of changedFiles({ base, head, files: files.length > 0 ? files : null })) {
+  if (PIN_FILE.test(file.path)) continue;
   if (TEST_FILE.test(file.path)) findings.push(...testFindings(file));
   else if (CONTRACT_FILE.test(file.path) && !HELPER_FILE.test(file.path)) {
     findings.push(...contractFindings(file, moved));

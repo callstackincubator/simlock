@@ -19,9 +19,32 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
     env: { ...process.env, ...command.env },
     stdio: "inherit",
   });
+  // why: inherited stdio does not carry a signal sent only to this process; without a
+  // forward the CLI dies on SIGINT/SIGTERM and leaves the tool (a recordVideo that still has to
+  // flush) running unattended. The CLI stays until the tool's own close decides the exit code.
+  // why: with a terminal on stdin the tool shares our foreground process group, so Ctrl-C already
+  // reaches it and a forwarded copy would be a second SIGINT, which makes recordVideo abandon its
+  // file. The listener stays so Node's default does not kill the CLI before the tool has flushed.
+  const forwardSigint = !process.stdin.isTTY;
+  // why: the real `simctl io recordVideo` finalizes its file on SIGINT only; SIGTERM kills it
+  // unfinished (exit 143, no moov atom), so for it a SIGTERM reaches the tool as SIGINT.
+  const sigtermAs = command.args.includes("recordVideo") ? "SIGINT" : "SIGTERM";
+  const handlers = (["SIGINT", "SIGTERM"] as const).map((signal) => {
+    const handler = () => {
+      if (signal === "SIGTERM") child.kill(sigtermAs);
+      else if (forwardSigint) child.kill(signal);
+    };
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  const detach = () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  };
   return new Promise<number>((resolve, reject) => {
     child.once("error", reject);
+    // why: a failed spawn emits close after error, so close alone detaches on every path.
     child.once("close", (code, signal) => {
+      detach();
       // A child killed by a signal has no exit code; report it the way a shell does, so a
       // passthrough interrupted with ^C is distinguishable from one that simply failed.
       if (code !== null) resolve(code);

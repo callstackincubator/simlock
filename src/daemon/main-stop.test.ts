@@ -653,7 +653,7 @@ describe("startDaemon socket race with HTTP enabled", () => {
 describe("startDaemon gateway uplink when the socket claim fails", () => {
   // why: #395: the uplink is dialled from `onSocketClaimed`, so a daemon that loses the claim never
   // dials its gateway -- it would otherwise join as a worker it is about to stop being.
-  it("never dials the gateway when the worker's socket is already claimed", async () => {
+  it("starts the socket holder while port 4701 is taken and never dials the gateway when the worker's socket is already claimed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-uplink-claim-"));
     temporaryDirectories.push(directory);
     const filesystem = new MemoryFilesystem();
@@ -668,9 +668,10 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
     const options = (gatewayUrl?: string): StartDaemonOptions =>
       ({
         clock: new FakeClock(1_000),
-        ...(gatewayUrl === undefined
-          ? {}
-          : { configOverrides: { gateway: { token: "join-token-395", url: gatewayUrl } } }),
+        configOverrides:
+          gatewayUrl === undefined
+            ? STANDALONE_OFF
+            : { gateway: { token: "join-token-395", url: gatewayUrl } },
         dataDirectory: directory,
         drivers: [
           new FakeDriver({
@@ -689,8 +690,20 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
         version: "1.2.3",
       }) as StartDaemonOptions;
 
-    const first = await startDaemon(options());
+    // why: this socket-only fixture must not depend on the standalone worker's default HTTP port being free.
+    const holder = createServer();
+    const held = await new Promise<boolean>((resolve, reject) => {
+      holder.once("error", (error: NodeJS.ErrnoException) =>
+        error.code === "EADDRINUSE" ? resolve(false) : reject(error),
+      );
+      holder.listen(4701, "127.0.0.1", () => resolve(true));
+    });
     try {
+      const first = startDaemon(options()).then((daemon) => {
+        runningDaemons.push(daemon);
+        return daemon;
+      });
+      await expect(first).resolves.toBeDefined();
       const outcome = await startDaemon(options(`ws://127.0.0.1:${port}`)).then(
         () => "resolved" as const,
         () => "rejected" as const,
@@ -698,8 +711,8 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect({ dials, outcome }).toEqual({ dials: [], outcome: "rejected" });
     } finally {
-      await first.stop("test-cleanup").catch(() => undefined);
       await new Promise<void>((resolve) => gateway.close(() => resolve()));
+      if (held) await new Promise<void>((resolve) => holder.close(() => resolve()));
     }
   });
 });

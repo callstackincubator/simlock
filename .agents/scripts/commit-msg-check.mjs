@@ -33,7 +33,7 @@ const repro = /^bug\/(\d+)-repro$/.exec(branch);
 if (repro !== null && !new RegExp(`^test: reproduce #${repro[1]} — .+`).test(subject)) {
   fail(`a commit on ${branch} is \`test: reproduce #${repro[1]} — <claim>\``);
 }
-const delivery = /^(?:bug|task|feature)\/(\d+)$/.exec(branch);
+const delivery = /^(?:bug|task|feature|refactor)\/(\d+)$/.exec(branch);
 if (delivery !== null) {
   const shape =
     /^(?:feat|fix|test|docs|chore|refactor|perf|build|ci)(?:\([\w./-]+\))?: .+ \(#(\d+)\)$/.exec(
