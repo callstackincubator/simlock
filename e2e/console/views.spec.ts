@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
@@ -15,6 +17,7 @@ import {
   withActionSurfaces,
 } from "./fixtures.js";
 import { addInboxItems, waitingItem } from "./inbox-stub.js";
+import { writeCaptureProgram } from "./screen-capture.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -34,8 +37,20 @@ async function takeLease(host: RunningDaemon, agent: string): Promise<string> {
   return (granted.json as { lease: { id: string } }).lease.id;
 }
 
-async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly pages: Pages }> {
-  const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+async function hostWithLease(
+  captureCommand?: string,
+): Promise<{ readonly host: RunningDaemon; readonly pages: Pages }> {
+  const host = await startDaemon("worker", {
+    driverScript: {
+      ios: {
+        ...IOS,
+        ...(captureCommand === undefined ? {} : { screenCaptureCommand: captureCommand }),
+      },
+    },
+    ...(captureCommand === undefined
+      ? {}
+      : { config: { capabilities: { stream: { enabled: true } } } }),
+  });
   const lease = await takeLease(host, "console-views");
   const listed = await host.cli(["worker", "list", "--json"]);
   const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
@@ -104,8 +119,10 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 test.describe("every view", () => {
   test("existing pages keep usable shared controls after retired-token substitution in both themes", async ({
     page,
-  }) => {
-    const { host, pages } = await hostWithLease();
+  }, testInfo) => {
+    const dir = testInfo.outputPath("capture");
+    await mkdir(dir, { recursive: true });
+    const { host, pages } = await hostWithLease(await writeCaptureProgram(dir));
     try {
       for (const [theme, background, surface] of [
         ["light", "rgb(248, 248, 247)", "rgb(233, 233, 231)"],
@@ -116,6 +133,7 @@ test.describe("every view", () => {
         await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
         await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
         await signIn(page, host.tokens.operator);
+        await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
         await addInboxItems(page, () => [waitingItem("req_tokens", 125_000)]);
         await visit(page, host, "/inbox");
         const inboxRow = page.locator(".inbox-row").first();

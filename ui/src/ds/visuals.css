@@ -23,7 +23,7 @@
 .ring-figure { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
 .ring-box { position: relative; display: inline-flex; flex: none; }
 .ring-box circle { fill: none; stroke-width: 5px; }
-.ring-track { stroke: var(--surface-2); }
+.ring-track { stroke: var(--track); }
 .ring-value { stroke: var(--slot-leased); stroke-linecap: round; }
 .ring-ok .ring-value { stroke: var(--status-ok); }
 .ring-warn .ring-value { stroke: var(--status-warn); }
@@ -56,4 +56,4 @@
 .worker-tile-metrics { display: grid; gap: 4px; }
 .worker-metric { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--text-muted); font: 10px var(--font-mono); }
 .worker-metric > :last-child { font-size: 11px; }
-.worker-metric-empty { height: 4px; background: var(--surface-2); }
+.worker-metric-empty { height: 4px; background: var(--track); }

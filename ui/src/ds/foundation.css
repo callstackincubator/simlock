@@ -31,8 +31,7 @@
   --surface: #f1f1ef;
   --surface-2: #e9e9e7;
   --nav-current: #fbe4d3;
-  --field: #e9e9e7;
-  --chip: #e6e6e3;
+  --track: #dededb;
   --border: #dededb;
   --border-strong: #85857f;
   --text: #111110;
@@ -68,8 +67,7 @@
     --surface: #141416;
     --surface-2: #1b1b1f;
     --nav-current: #2a2016;
-    --field: #1e1e21;
-    --chip: #232326;
+    --track: #26262b;
     --border: #232327;
     --border-strong: #75757d;
     --text: #ececea;
@@ -178,8 +176,6 @@ a:hover {
   white-space: nowrap;
 }
 
-/* Inputs: a grey fill and a 1px border. */
-
 label {
   font-size: var(--text-sm);
   font-weight: 500;
@@ -191,7 +187,7 @@ input {
   padding: 0 var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background: var(--field);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -207,7 +203,7 @@ select {
   padding: 0 calc(var(--space-3) + 20px) 0 var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background-color: var(--field);
+  background-color: var(--bg);
   background-image:
     linear-gradient(45deg, transparent 50%, var(--text) 50%),
     linear-gradient(135deg, var(--text) 50%, transparent 50%);

@@ -15,7 +15,7 @@
   display: block;
   height: 8px;
   max-width: 20rem;
-  background: var(--field);
+  background: var(--track);
 }
 
 /* why: a new reading lands every 15 seconds, so the fill slides to its level over --duration

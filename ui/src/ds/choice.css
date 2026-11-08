@@ -47,7 +47,7 @@
 
 .chip-choice input:checked + span {
   border-color: var(--border-strong);
-  background: var(--field);
+  background: var(--surface-2);
   color: var(--text);
 }
 

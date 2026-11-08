@@ -19,7 +19,7 @@
   max-width: 300px;
   margin: 0 auto;
   aspect-ratio: 9 / 19.5;
-  background: var(--field);
+  background: var(--bg);
   border: 1px solid var(--border-strong);
 }
 
@@ -42,7 +42,7 @@
 .phone-wait {
   position: absolute;
   inset: auto 0 0;
-  background: var(--field);
+  background: var(--bg);
 }
 
 .screen-head {

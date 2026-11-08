@@ -26,7 +26,7 @@
   padding: 0 var(--space-4);
   border: 0;
   border-bottom: 1px solid var(--border);
-  background: var(--field);
+  background: var(--bg);
   color: var(--text);
   font-size: var(--text-md);
 }
@@ -60,7 +60,7 @@
 }
 
 .palette-item[data-highlighted] {
-  background: var(--field);
+  background: var(--surface-2);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
