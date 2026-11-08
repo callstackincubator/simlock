@@ -48,6 +48,13 @@ test.describe("the shell", () => {
       await expect(page.locator(".connection")).toHaveText("Connected");
       await settled(page);
       for (const [selector, path, size] of [
+        [
+          "a[href='/']",
+          "M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z",
+          "16px",
+        ],
+        ["a[href='/inbox']", "M2 9l2-6h8l2 6v4H2zM2 9h3.5l1 2h3l1-2H14", "16px"],
+        ["a[href='/fleet']", "M2 3h12v4H2zM2 9h12v4H2zM4.5 5h.01M4.5 11h.01", "16px"],
         [".sidebar-search", "M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5L14 14", "14px"],
         [
           "a[href='/leases']",
@@ -55,6 +62,8 @@ test.describe("the shell", () => {
           "16px",
         ],
         ["a[href='/baselines']", "M8 2l6 3-6 3-6-3zM2 8l6 3 6-3M2 11l6 3 6-3", "16px"],
+        ["a[href='/usage']", "M2 14h12M4.5 14V8M8 14V3M11.5 14v-4", "16px"],
+        [".sign-out", "M6 2H3v12h3M7 8h7M11 5l3 3-3 3", "14px"],
       ] as const) {
         const icon = nav.locator(`${selector} .icon`);
         await expect(icon.locator("path")).toHaveAttribute("d", path);
