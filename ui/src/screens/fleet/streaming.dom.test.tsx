@@ -129,7 +129,7 @@ describe("the device's streaming page", () => {
     expect(callsTo("GET", STREAM)).toHaveLength(1);
   });
 
-  it("shows the daemon's words for a refused stream: a 409 as the explanation, any other refusal as an alert", async () => {
+  it("shows the daemon's words for a refused stream in the picture's place, a 409 and any other refusal alike", async () => {
     const refused = (status: number, code: string, message: string) => ({
       body: { error: { code, message } },
       status,
@@ -157,9 +157,9 @@ describe("the device's streaming page", () => {
         refused(500, "CAPTURE_FAILED", "The capture program could not start."),
       ),
     });
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The capture program could not start.",
-    );
+    expect(await screen.findByText("The capture program could not start.")).toBeVisible();
+    expect(picture()).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("says streaming is off where it is, and asks for no picture", async () => {

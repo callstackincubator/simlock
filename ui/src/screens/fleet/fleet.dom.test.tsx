@@ -54,7 +54,7 @@ function announce(view: ReturnType<typeof renderConsole>, name: string) {
 const DRAIN = "/v1/workers/*/drain";
 
 describe("the Fleet page", () => {
-  it("shows slots with accessible state counts, squares through ten and a meter with a printed fraction above ten", async () => {
+  it("shows slots as a meter with its printed fraction and the state counts as its name, at ten slots and at twenty", async () => {
     const cases = [
       { name: "zero", limit: 0, states: [] },
       { name: "ten", limit: 10, states: ["leased", "leased", "absent", "quarantined"] },
@@ -80,26 +80,20 @@ describe("the Fleet page", () => {
     expect(within(rowOf("zero")).queryByRole("img")).not.toBeInTheDocument();
     expect(within(rowOf("zero")).getAllByText("—")).toHaveLength(3);
 
-    const ten = within(rowOf("ten")).getByRole("img", {
-      name: "2 leased, 1 absent, 1 quarantined, 6 free",
-    });
-    expect(ten).toBeVisible();
-    expect(ten).toHaveTextContent("");
-    expect(within(ten).getAllByTitle(/./)).toHaveLength(10);
-    expect(within(ten).getAllByTitle("iPhone 16 18.4, absent")).toHaveLength(1);
-    expect(within(ten).getAllByTitle("iPhone 16 18.4, quarantined")).toHaveLength(1);
-    expect(ten.querySelector("[style*='--load-bar']")).toBeNull();
-    expect(within(rowOf("ten")).getAllByText("—")).toHaveLength(3);
-
-    const twenty = within(rowOf("twenty")).getByRole("img", {
-      name: "2 leased, 1 absent, 1 quarantined, 16 free",
-    });
-    expect(twenty).toBeVisible();
-    expect(twenty).toHaveTextContent("2 / 20");
-    expect(within(twenty).queryAllByTitle(/./)).toHaveLength(0);
-    expect(twenty.querySelectorAll("[style*='--load-bar']")).toHaveLength(1);
-    expect(twenty.querySelector("[style*='--load-bar']")).toHaveStyle("--load-bar: 10%");
-    expect(within(rowOf("twenty")).getAllByText("—")).toHaveLength(3);
+    for (const [name, label, fraction, percent] of [
+      ["ten", "2 leased, 1 absent, 1 quarantined, 6 free", "2 / 10", "20%"],
+      ["twenty", "2 leased, 1 absent, 1 quarantined, 16 free", "2 / 20", "10%"],
+    ] as const) {
+      const slots = within(rowOf(name)).getByRole("img", { name: label });
+      expect(slots, name).toBeVisible();
+      expect(slots, name).toHaveTextContent(fraction);
+      expect(within(slots).queryAllByTitle(/./), name).toHaveLength(0);
+      expect(slots.querySelectorAll("[style*='--load-bar']"), name).toHaveLength(1);
+      expect(slots.querySelector("[style*='--load-bar']"), name).toHaveStyle(
+        `--load-bar: ${percent}`,
+      );
+      expect(within(rowOf(name)).getAllByText("—"), name).toHaveLength(3);
+    }
   });
 
   it("shows every worker as a row of one grouped table with its name, state word, slots and leases, and the amended Add worker link", async () => {
@@ -395,9 +389,14 @@ describe("Fleet worker actions", () => {
     answerDrain();
     expect(await screen.findByText("busy-a drained")).toBeVisible();
     announce(view, "worker.drain-started");
-    await waitFor(() =>
-      expect(within(rowOf("busy-a")).getByRole("button", { name: "Undrain" })).toBeEnabled(),
+    await waitFor(() => expect(rowOf("busy-a")).toHaveTextContent("drained"));
+    await view.user.click(menuButton);
+    expect(await screen.findByRole("menuitem", { name: "Undrain" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
     );
+    await view.user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
     expect(view.callsTo("POST", "/v1/workers/wrk_b/drain")).toHaveLength(1);
 
     await view.user.click(within(rowOf("busy-a")).getByRole("link", { name: "busy-a" }));

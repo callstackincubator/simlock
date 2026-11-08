@@ -2,7 +2,6 @@ import "./sidebar.css";
 
 import { type ReactNode, useId, useState } from "react";
 
-import { Button } from "./button";
 import { Icon, type IconName } from "./icon";
 import { Link } from "./link";
 
@@ -70,16 +69,6 @@ export function Sidebar(props: {
         <span className="sidebar-mark-short">
           <Wordmark short />
         </span>
-        <Button
-          variant="secondary"
-          className="sidebar-toggle"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          onClick={onToggle}
-        >
-          <Icon name={collapsed ? "expand" : "collapse"} />
-        </Button>
         <button
           type="button"
           className="sidebar-menu"
@@ -115,7 +104,19 @@ export function Sidebar(props: {
           />
         ))}
       </div>
-      <div className="sidebar-foot">{footer(collapsed)}</div>
+      <div className="sidebar-foot">
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggle}
+        >
+          <Icon name={collapsed ? "expand" : "collapse"} />
+        </button>
+        {footer(collapsed)}
+      </div>
     </nav>
   );
 }

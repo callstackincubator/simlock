@@ -38,6 +38,9 @@ export default defineConfig({
           // sidebar opens wide from.
           environmentOptions: { happyDOM: { height: 720, width: 1280 } },
           setupFiles: ["ui/src/test/setup.ts"],
+          // why: the console's own sheets apply, so what a rule hides (the Fleet list a wide window
+          // does not show, a toast past the limit) is hidden here too.
+          css: true,
           testTimeout: 20_000,
         },
       },

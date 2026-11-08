@@ -122,7 +122,9 @@ Rules that keep text from overflowing:
 - A status pill never shares a line with a name that can grow: it goes
   under the name (worker tiles) or in its own State column (Fleet and
   device tables).
-- Slot squares stop at ten; above that a meter and the fraction (`10 / 20`).
+- Slots are a meter and the fraction (`10 / 20`) in every table and tile. Squares
+  are drawn only where a caller asks for them (a worker page's Slots card, and the
+  Overview's wall tile) and only up to ten slots; 100 slots never draw 100 squares.
 - A page title ellipsises; its action buttons never shrink.
 - A free-text reason clamps to two lines. A long id in facts wraps.
 - Counts live in one place: the page header or a group header, never on a
@@ -142,9 +144,14 @@ own that one of them draws. Named sizes and colours are above.
   group under a label. Inbox carries its
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the
-  connection as `● connected` in `--status-ok`, and a sign-out icon.
-  The preserved desktop collapse/expand control sits in the wordmark row,
-  not beneath the account; the phone retains its separate menu control.
+  connection as `● connected` in `--status-ok`, and a sign-out icon; in the
+  collapsed rail the connection is a 10px dot on the avatar's top-right corner
+  (green, amber or red), with no row of its own. Nav links are 2px apart, in the
+  rail too. The Settings link's icon is a cog with teeth.
+  The desktop collapse/expand control is a quiet 30px square icon button (16px
+  icon) at the foot of the sidebar, just above the account box and centred in the
+  collapsed rail; the phone has no such control, its top bar is the wordmark on the
+  left and the menu button on the right, 8px from the top.
 - **Page header.** Title 21px with its breadcrumb in muted 500
   (`Fleet / mac-studio-01`), an optional one-line muted subtitle that holds
   figures only (`updated 18:18:04`, `49.5 GB on 4 workers`), never a
@@ -191,11 +198,17 @@ own that one of them draws. Named sizes and colours are above.
 - **Fleet table.** The Fleet page is one table grouped by Needs attention
   N, then Healthy N (an empty group is left out), one row per worker:
   Worker (mono name linking to the worker page, muted `macOS <v> · simlock
-  <v>`), State (pill, and for an attention row the reason as a muted second
-  line), Slots (capped `Slots`), CPU / Mem / Disk (thin meter and a mono
-  figure), Leases, small buttons (Undrain, View leases) and `⋯`. An attention
+  <v>`), State (the pill alone; the reason, such as `905.3 GiB used of 926.4
+  GiB`, shows in a popover on hover and keyboard focus of the pill), Slots
+  (meter and fraction), CPU / Mem / Disk (thin meter and a mono
+  figure), Leases and `⋯`, whose first entries are Undrain (confirmed) or View
+  leases (a worker that is gone), then the other actions. An attention
   row is tinted `--row-warn` (`#17140c`) or `--row-error` (`#19100f`).
-  Tables stack into blocks below 1100px, as every six-column table does.
+  Below 1100px (a phone, and the collapsed-sidebar layout) the table gives way to
+  a list: a worker is a mono name and its pill, one muted line `slots n/m · CPU
+  x% · Mem y% · Disk z% · N leases`, and `⋯` at the right; no labelled blocks and
+  no quick-action row. Its group headers are the table's group rows: a
+  `--surface-2` band in the label style, with no box or other fill around it.
 - **Worker devices table.** A worker page's Devices tab is a table: Device
   (model, mono runtime beneath), State, Held by (agent chip, shortened
   holder), Expires in (clock and meter), Since (`granted 18:10`), a small
@@ -249,7 +262,10 @@ own that one of them draws. Named sizes and colours are above.
   ring + countdown, Copy lease id / Lease details / Release), Device facts,
   Recent events. The countdown is 24px mono and, as on the Leases inspector,
   reads `mm:ss` (`h:mm:ss` past an hour) from one helper. Header actions: Stop
-  watching and `⋯`. View only. The device drawer has no Screen tab; an old
+  watching and `⋯`; no state pill by the device name (the facts show the state).
+  The frame stays centred in its card whatever the state: a refusal or notice is
+  drawn inside the phone's screen, centred, wrapping and muted, as the daemon's
+  sentence without its transport prefix (`The daemon answered 404 ...`). View only. The device drawer has no Screen tab; an old
   `?drawer=screen` link redirects here.
 - **Chart.** Recharts. Line and area in `--accent` with a 9% fill, bars in
   `--slot-leased` at 55% with the current bucket in `--accent`, grid lines
@@ -294,8 +310,8 @@ cards under a title with no actions or subtitle:
 
 ## Sidebar and contrast reference amendments
 
-The desktop collapse/expand button in the wordmark row preserves the existing
-action and is an addition to the render; the account remains at the bottom.
+The desktop collapse/expand button, at the sidebar's foot above the account,
+preserves the existing action and is an addition to the render.
 Stage 0 and stage 7 paired images must show this exception. Where a reference
 foreground or essential stroke fails WCAG AA, change only that colour, keeping
 the reference geometry, typography and fills. Record the selector, colours,
@@ -304,6 +320,10 @@ ratios and paired images; this does not exempt other visual differences.
 For `.nav-group-label` on `--surface` (`#141416`), the reference's `#6f6f79`
 is 3.702:1; `--text-muted` (`#8e8e97`) is 5.665:1. Both-theme axe must
 evaluate `color-contrast`, not suppress it. The original renders stay intact.
+
+Agent chips, pills and buttons keep 4.5:1 or more in both themes; the
+chips' text is darker on its light tint and lighter on its dark tint than the
+reference, and `ui/src/ds/contrast.test.ts` computes every pair from the tokens.
 (decided in delivery, pending the maintainer)
 
 ## Fleet reference amendment

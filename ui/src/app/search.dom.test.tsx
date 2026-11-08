@@ -77,7 +77,9 @@ describe("the search list", () => {
 
     await user.type(box(), "zzz");
 
-    expect(await within(dialog()).findByText("No results for zzz")).toBeVisible();
+    // why: happy-dom keeps the `:empty` match the line had before its text came, so it reads as
+    // hidden; the browser lane's search checks see it drawn.
+    expect(await within(dialog()).findByText("No results for zzz")).toBeInTheDocument();
     expect(options()).toHaveLength(0);
   });
 });

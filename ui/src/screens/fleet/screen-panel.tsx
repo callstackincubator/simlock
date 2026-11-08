@@ -2,7 +2,6 @@ import "./screen-panel.css";
 
 import type { CSSProperties } from "react";
 
-import { Refusal } from "../../ds";
 import { type StreamOffer, useDeviceScreen } from "../../state/screen";
 
 // why: the hook lives in the panel's own component so that leaving the page ends the capture, and a
@@ -16,12 +15,20 @@ export function ScreenPanel(props: {
 }) {
   const { deviceId, offer, state, workerId } = props;
   const shown = useDeviceScreen(workerId, deviceId, state, offer);
-  if (shown.kind !== "picture") return <p className="muted screen-sentence">{shown.text}</p>;
+  if (shown.kind !== "picture") {
+    return (
+      <div className="screen-panel">
+        <div className="phone">
+          <p className="phone-off">{shown.text}</p>
+        </div>
+      </div>
+    );
+  }
   const { screen } = shown;
   const { live, note, readout, waiting } = screen;
   const landscape = screen.width > screen.height && screen.height > 0;
   return (
-    <>
+    <div className="screen-panel">
       {readout.overlay === undefined ? null : (
         <div className="screen-pills">
           <span className="screen-pill">
@@ -48,11 +55,10 @@ export function ScreenPanel(props: {
             width={screen.width}
           />
         ) : (
-          <p className="phone-off">No picture while this is off.</p>
+          <p className="phone-off">{note ?? "No picture while this is off."}</p>
         )}
         {waiting === undefined ? null : <p className="phone-wait">{waiting}</p>}
       </div>
-      {note === undefined ? null : <Refusal message={note} />}
-    </>
+    </div>
   );
 }

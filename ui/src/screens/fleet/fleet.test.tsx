@@ -196,8 +196,10 @@ describe("the fleet", () => {
     expect(markup).toContain('<tr class="row-error"');
     expect(markup).toContain("table-lines");
     expect(shown).toContain("Worker State Slots CPU Mem Disk Leases");
-    expect(shown).toContain("1 lease left · accepts no new requests");
-    expect(shown).toContain("last seen 14 min ago · 1 lease held");
+    // why: the reason is in the pill's hover, not in the cell, which holds only the pill.
+    expect(shown).not.toContain("accepts no new requests");
+    expect(fleetRow(DRAINED, "", NOW).reason).toContain("1 lease left · accepts no new requests");
+    expect(fleetRow(GONE, "", NOW).reason).toBe("last seen 14 min ago · 1 lease held");
     const healthy = fleetHtml([{ ...WORKER, load: undefined }]);
     expect(text(healthy)).toContain("Healthy 1");
     expect(text(healthy)).toContain("worker-a macOS 15.5");
@@ -218,15 +220,25 @@ describe("the fleet", () => {
     const gone = fleetHtml([GONE]);
     const drained = fleetHtml([DRAINED]);
 
-    expect(gone).toContain(
-      '<a class="button button-secondary button-sm" href="/leases">View leases</a>',
-    );
+    // why: both actions sit in the row's menu, which is drawn only when opened.
+    expect(gone).not.toContain("View leases");
     expect(gone).not.toContain("<form");
     expect(drained).toContain('href="/fleet/wrk_2"');
     expect(drained).not.toContain("Undrain");
-    expect(text(inConsole(<FleetBody page={fleet([DRAINED])} log={NO_LOG} />, GATEWAY))).toContain(
-      "Undrain",
+    const onGateway = inConsole(<FleetBody page={fleet([DRAINED])} log={NO_LOG} />, GATEWAY);
+    expect(onGateway).toContain('aria-label="Actions for worker-b"');
+    expect(onGateway).not.toContain("button-sm");
+  });
+
+  it("gives a narrow screen one muted line of figures per worker, and the wide table a meter and fraction for slots", () => {
+    const markup = fleetHtml([DRAINED]);
+
+    expect(fleetRow(DRAINED, "", NOW).summary).toBe(
+      "slots 1/8 · CPU 28% · Mem 42% · Disk 77% · 1 lease",
     );
+    expect(markup).toContain('class="fleet-list"');
+    expect(markup).toContain('<span class="slots-fraction mono">1 / 8</span>');
+    expect(markup).not.toContain("slot-leased");
   });
 
   it("shows the workers' events as a full-width log, or says there are none in the last hour", () => {
@@ -260,8 +272,8 @@ describe("a worker's update on the Fleet screen", () => {
     };
     const idle = html(page(WORKER));
 
-    expect(text(fleetHtml([updating]))).toContain("waiting for 2 leases");
-    expect(text(fleetHtml([WORKER]))).not.toContain("waiting for");
+    expect(fleetRow(updating, "", NOW).reason).toContain("waiting for 2 leases");
+    expect(fleetRow(WORKER, "", NOW).reason).not.toContain("waiting for");
     const again = text(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />, GATEWAY));
     expect(again).toContain("Update to 1.5.0 failed (installing): EACCES Update again");
     expect(inConsole(<WorkerPageBody page={page(failed)} log={NO_EVENTS} />)).not.toContain(
@@ -326,7 +338,6 @@ describe("a worker's page", () => {
 
     expect(markup).toContain('href="/fleet/wrk_1/devices/dev_1"');
     expect(markup).toContain(">Watch</a>");
-    expect(markup).toContain('href="/leases/l_1/"');
     expect(shown).toContain("iPhone 17 iOS 26.0 leased");
     expect(shown).toContain("agent");
     expect(shown).toContain("01:00");

@@ -30,6 +30,13 @@ describe("what a refused stream says", () => {
     );
   });
 
+  it("drops the transport prefix from the daemon's fallback words", () => {
+    expect(refusalOf(new ApiError(404, undefined, "The daemon answered 404"))).toBe(
+      "A stream is only offered where capabilities.stream.enabled is on.",
+    );
+    expect(refusalOf(new ApiError(502, undefined, "The daemon answered 502"))).toBe("");
+  });
+
   it("keeps a capture program's own words when the worker could not run one", () => {
     const refused = new ApiError(
       500,

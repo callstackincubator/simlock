@@ -43,7 +43,6 @@ describe("the Baselines page", () => {
     expect(checkout).toHaveTextContent("ago");
     expect(checkout).toHaveTextContent("ready");
     expect(screen.getByRole("cell", { name: /^iOS · 1 baseline$/ })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Disk used by baselines" })).toBeVisible();
   });
 
   it("a second save keeps one row", async () => {
@@ -114,7 +113,7 @@ describe("the Baselines page", () => {
     expect(await screen.findByText("No baselines.")).toBeVisible();
   });
 
-  it("on a gateway, the Worker column names each worker's baseline, a relayed save shows its row and each worker has its own disk line", async () => {
+  it("on a gateway, the Worker column names each worker's baseline and a relayed save shows its row", async () => {
     let baselines = [baseline({ name: "alpha", workerId: "wrk_a" })];
     const { events } = renderConsole({
       path: "/baselines",
@@ -139,8 +138,6 @@ describe("the Baselines page", () => {
 
     await waitFor(() => expect(rowOf("beta")).toHaveTextContent("worker-b"));
     expect(rows()).toHaveLength(3);
-    const disk = screen.getByRole("heading", { name: "Disk used by baselines" }).closest("section");
-    expect(within(disk as HTMLElement).getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("a stale baseline shows its reason word for word, an entry with no size shows a dash, filters and search narrow the groups, and 26 entries page at 25", async () => {

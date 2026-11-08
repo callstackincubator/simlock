@@ -341,3 +341,22 @@
   margin: 0;
   padding: var(--space-4) var(--space-6);
 }
+
+/* A group heading stays a full-width band when rows stack: no row padding or border around it. */
+@media (max-width: 1099.98px) {
+  .table-wide tr.table-group {
+    padding: 0;
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .table tr.table-group {
+    padding: 0;
+    border-bottom: 0;
+  }
+}
+
+.table .table-group td {
+  padding-left: 14px;
+}

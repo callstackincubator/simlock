@@ -147,7 +147,7 @@ async function expectStatusIndicatorColours(
 }
 
 test.describe("colours and sizes the style engine decides", () => {
-  test("slot squares are 12px tall with a 3px gap, and the meter above ten slots is 4px tall", async ({
+  test("a worker page's slot squares are 12px tall with a 3px gap, and the meter above ten slots is 4px tall", async ({
     gateway,
     page,
   }) => {
@@ -158,11 +158,15 @@ test.describe("colours and sizes the style engine decides", () => {
       ],
     }));
     await openFleet(page, gateway.url, gateway.tokens.operator);
+    const side = page.getByRole("complementary", { name: /^Slots, host/ });
 
-    const ten = row(page, "ten").getByRole("img");
+    await row(page, "ten").getByRole("link").first().click();
+    const ten = side.getByRole("img").first();
     await expect(ten).toHaveCSS("gap", "3px");
     await expect(ten.locator(".slot").first()).toHaveCSS("height", "12px");
-    await expect(row(page, "twenty").locator(".load-bar")).toHaveCSS("height", "4px");
+    await page.goBack();
+    await row(page, "twenty").getByRole("link").first().click();
+    await expect(side.getByRole("img").first().locator(".load-bar")).toHaveCSS("height", "4px");
   });
 
   test("each memory pressure paints its ring in that pressure's colour, and never the accent, in both themes", async ({

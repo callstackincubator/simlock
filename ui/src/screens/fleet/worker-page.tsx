@@ -206,11 +206,7 @@ function SideCard({ page }: { readonly page: WorkerPageView }) {
             {overview.platforms.map((platform) => (
               <div key={platform.name} className="worker-side-row">
                 <span className="worker-side-name">{platform.name}</span>
-                <Slots slots={platform.slots} label={platform.label} />
-                <span className="mono worker-side-fraction">
-                  {platform.slots.filter((slot) => slot.kind === "leased").length} /{" "}
-                  {platform.slots.length}
-                </span>
+                <Slots squares fraction slots={platform.slots} label={platform.label} />
               </div>
             ))}
           </div>
@@ -301,9 +297,9 @@ function holderOf(device: DeviceRow) {
   return (
     <span className="device-held">
       <AgentChip kind={holder.kind} title={holder.name} />
-      <Link className="mono" to={holder.to} title={holder.name}>
+      <span className="mono device-holder" title={holder.name}>
         {holder.display}
-      </Link>
+      </span>
     </span>
   );
 }
@@ -370,7 +366,7 @@ function DeviceTable(props: {
     },
     {
       cell: (device) => {
-        const watch = props.watchTo(device.id);
+        const watch = device.watchable ? props.watchTo(device.id) : "";
         return watch === "" ? null : (
           <Link className="button button-secondary button-sm" to={watch}>
             Watch

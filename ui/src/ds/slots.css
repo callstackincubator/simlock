@@ -114,3 +114,13 @@
   width: 8px;
   height: 8px;
 }
+
+.slots-fraction {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.slots-meter .slots-fraction {
+  color: inherit;
+}

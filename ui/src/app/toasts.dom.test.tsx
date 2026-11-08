@@ -92,14 +92,14 @@ describe("toasts", () => {
 
     for (const name of NAMES) await drain(user, name);
     await waitFor(() => expect(toastOf("toast-d drained")).toBeDefined());
-    const shown = () => toasts().filter((toast) => !toast.hasAttribute("data-limited"));
-    expect(shown()).toHaveLength(3);
-    expect(toastOf("toast-a drained")).toHaveAttribute("data-limited");
+    // why: a toast past the limit is hidden by the console's sheet, so it is not among those shown.
+    expect(toasts()).toHaveLength(3);
+    expect(toastOf("toast-a drained")).toBeUndefined();
 
     await user.click(within(toastOf("toast-d drained")!).getByRole("button", { name: "Close" }));
     await vi.advanceTimersByTimeAsync(500);
-    expect(toastOf("toast-a drained")).not.toHaveAttribute("data-limited");
-    expect(shown()).toHaveLength(3);
+    expect(toastOf("toast-a drained")).toBeVisible();
+    expect(toasts()).toHaveLength(3);
   });
 
   it("an error toast's text is in the role=alert element and a success toast's in the aria-live=polite region", async () => {

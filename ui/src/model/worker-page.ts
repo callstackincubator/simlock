@@ -135,6 +135,27 @@ export interface FleetRow extends WorkerRow {
   readonly leaseCount?: number;
   // why: the line under an attention card's name says why the worker is there, in the daemon's facts.
   readonly reason: string;
+  // why: a narrow screen has one muted line under the name, with the figures a wide row spreads over
+  // columns, in the order of the columns.
+  readonly summary: string;
+}
+
+const SUMMARY_METERS: readonly (readonly [string, string])[] = [
+  ["CPU", "CPU"],
+  ["Memory", "Mem"],
+  ["Disk", "Disk"],
+];
+
+function summaryOf(row: WorkerRow, leaseCount: number | undefined): string {
+  const leased = row.slots.filter((slot) => slot.kind === "leased").length;
+  return [
+    ...(row.slots.length === 0 ? [] : [`slots ${leased}/${row.slots.length}`]),
+    ...SUMMARY_METERS.flatMap(([label, word]) => {
+      const percent = row.meters.find((meter) => meter.label === label)?.percent;
+      return percent === undefined ? [] : [`${word} ${percent}%`];
+    }),
+    ...(leaseCount === undefined ? [] : [`${leaseCount} ${leaseCount === 1 ? "lease" : "leases"}`]),
+  ].join(" · ");
 }
 
 // why: the Fleet page's cards show each platform's slots apart, the leases held and the reason.
@@ -150,6 +171,7 @@ export function fleetRow(worker: WorkerView, search: string, now: number): Fleet
     iosLabel: slotsLabel(ios),
     reason: workerReason(worker, now),
     slotsLeased: row.slots.filter((slot) => slot.kind === "leased").length,
+    summary: summaryOf(row, worker.leases?.length),
     ...(worker.leases === undefined ? {} : { leaseCount: worker.leases.length }),
   };
 }
@@ -334,6 +356,8 @@ function platformCards(worker: WorkerView): readonly PlatformCard[] {
 
 export interface DeviceRow {
   readonly id: string;
+  // why: only a booted device has a screen to stream.
+  readonly watchable: boolean;
   readonly to: string;
   readonly lease?: { readonly id: string; readonly to: string };
   readonly udid?: string;
@@ -386,6 +410,7 @@ function deviceRow(
   const virtual = !device.physical;
   return {
     id: device.id,
+    watchable: device.state === "ready" || device.state === "leased",
     model: device.spec.model,
     physical: device.physical,
     platform: platformName(device.spec.platform),
@@ -853,9 +878,10 @@ export function workerPageOf(input: {
       ...(starting
         ? {}
         : {
-            devices: (worker.devices ?? []).map((d) =>
-              deviceRow(d, worker, now, tokens, leaseIds, input.search ?? ""),
-            ),
+            // why: a deleted device is a record of one that is gone; the worker page lists what it runs.
+            devices: (worker.devices ?? [])
+              .filter((d) => d.state !== "deleted")
+              .map((d) => deviceRow(d, worker, now, tokens, leaseIds, input.search ?? "")),
           }),
     },
     tabs,

@@ -7,9 +7,7 @@ import {
   DataTable,
   Icon,
   Loaded,
-  Meter,
   Page,
-  Panel,
   Pill,
   SearchField,
 } from "../../ds";
@@ -118,31 +116,6 @@ export function BaselinesScreen() {
               paging={page.paging}
               className="baselines-table"
             />
-            {page.disk.shares.length === 0 ? null : (
-              <Panel
-                title="Disk used by baselines"
-                actions={
-                  <span className="baseline-disk-note">
-                    {page.disk.summary === ""
-                      ? "share of each disk"
-                      : `${page.disk.summary} · share of each disk`}
-                  </span>
-                }
-                className="baselines-disk"
-              >
-                <ul className="baseline-disk">
-                  {page.disk.shares.map((share) => (
-                    <li key={share.key}>
-                      <span className="baseline-disk-name" title={share.name}>
-                        {share.name}
-                      </span>
-                      <Meter percent={share.percent ?? 0} tone="neutral" size="thin" />
-                      <span className="baseline-disk-text">{share.text}</span>
-                    </li>
-                  ))}
-                </ul>
-              </Panel>
-            )}
           </>
         )}
       </Loaded>

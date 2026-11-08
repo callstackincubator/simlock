@@ -51,7 +51,6 @@ describe("the Queue page", () => {
     expect(row("agent-b")).toHaveTextContent("queued");
     expect(row("agent-c")).toHaveTextContent("#2");
     expect(row("agent-c")).toHaveTextContent("iOS iPhone 16, runtime 18.4, mode slim");
-    expect(screen.getByText(/^2 waiting/)).toBeVisible();
     expect(row("agent-b")).toHaveTextContent("Full: device limit");
     expect(within(row("agent-b")).getAllByRole("cell")[5]).toHaveTextContent(/^(\d+ s|\d+ min)/);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

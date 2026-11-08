@@ -156,7 +156,7 @@ describe("the worker page", () => {
     expect(screen.queryByText(absent, { selector: "p" })).not.toBeInTheDocument();
   });
 
-  it("a worker's devices are rows of a table, each with its state, and for a leased one its holder, time left and when it was granted", async () => {
+  it("a worker's devices are rows of a table, each with its state, and for a leased one its holder as text, time left and when it was granted", async () => {
     const held = lease({ deviceId: "dev_leased", id: "lse_1", requesterId: "console-e2e-3" });
     ofWorkers(
       [
@@ -187,12 +187,10 @@ describe("the worker page", () => {
       expect(tile!.getByText("iPhone 16")).toBeVisible();
       expect(tile!.getByText("iOS 18.4")).toBeVisible();
     }
-    expect(idle!.queryByRole("link", { name: "console-e2e-3" })).not.toBeInTheDocument();
+    expect(idle!.queryByText("console-e2e-3")).not.toBeInTheDocument();
     expect(idle!.queryByTitle(/^expires in/)).not.toBeInTheDocument();
-    expect(leased!.getByRole("link", { name: "console-e2e-3" })).toHaveAttribute(
-      "href",
-      "/leases/lse_1/",
-    );
+    expect(leased!.getByText("console-e2e-3")).toBeVisible();
+    expect(leased!.queryByRole("link", { name: "console-e2e-3" })).not.toBeInTheDocument();
     expect(leased!.getByText("10:00")).toBeVisible();
     expect(tiles[1]).toHaveTextContent(/granted \d\d:\d\d/);
     expect(leased!.getByRole("link", { name: "Watch" })).toHaveAttribute(
@@ -545,6 +543,46 @@ describe("the worker page", () => {
     ).toBeVisible();
     expect(screen.queryByText(/read \d+ s ago/)).not.toBeInTheDocument();
   });
+
+  it.each([
+    { limit: 10, squares: 10, shown: "2 / 10", meter: 0 },
+    { limit: 20, squares: 0, shown: "2 / 20", meter: 1 },
+  ])(
+    "its side card draws $limit slots as $squares squares and $meter meter, with $shown beside them",
+    async ({ limit, meter, shown, squares }) => {
+      const base = worker().capacity!;
+      ofWorkers(
+        [
+          worker({
+            capacity: {
+              android: base.android,
+              global: { ...base.global, maxRunning: limit },
+              ios: { ...base.ios, limit, maxRunning: limit },
+            },
+            devices: ["leased", "leased", "absent", "quarantined"].map((state, index) =>
+              device({ id: `dev_${index}`, state: state as "leased" }),
+            ),
+            id: "wrk_s",
+            label: "slots-a",
+          }),
+        ],
+        "/fleet/wrk_s",
+      );
+      const side = within(
+        await screen.findByRole("complementary", {
+          name: "Slots, host, capabilities and baselines",
+        }),
+      );
+      const slots = side.getByRole("img", { name: /2 leased, 1 absent, 1 quarantined/ });
+      expect(slots).toHaveTextContent(shown);
+      expect(within(slots).queryAllByTitle(/./)).toHaveLength(squares);
+      if (squares > 0) {
+        expect(within(slots).getAllByTitle("iPhone 16 18.4, absent")).toHaveLength(1);
+        expect(within(slots).getAllByTitle("iPhone 16 18.4, quarantined")).toHaveLength(1);
+      }
+      expect(slots.querySelectorAll("[style*='--load-bar']")).toHaveLength(meter);
+    },
+  );
 
   it("fills each ring to its figure's own percent", async () => {
     ofWorkers([worker({ ...HOST, load: load(36.6, 61.4, 85) })], "/fleet/wrk_host");

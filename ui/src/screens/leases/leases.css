@@ -267,12 +267,15 @@
 }
 
 .lease-list-sub {
+  flex: none;
   font-size: 11.5px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .lease-list-grow {
   flex: 1;
+  min-width: 0;
 }
 
 .lease-list .lease-ttl {
@@ -280,7 +283,8 @@
 }
 
 .lease-held {
-  width: 76px;
+  flex: none;
+  min-width: 76px;
   text-align: right;
   white-space: nowrap;
 }
