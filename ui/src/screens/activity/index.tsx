@@ -281,7 +281,10 @@ function PerMinute({ chart }: { readonly chart: EventsChart }) {
       <div className="activity-chart-head">
         <h2 className="activity-label">Events per minute</h2>
         <Pill tone="ok">live</Pill>
-        <p className="chart-summary">{chart.summary}</p>
+        <p className="activity-figures" aria-hidden="true">
+          {chart.short}
+        </p>
+        <p className="chart-summary visually-hidden">{chart.summary}</p>
       </div>
       <MinuteChart
         kind="columns"

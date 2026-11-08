@@ -48,6 +48,7 @@ function page(over: Partial<EventsPage> = {}): EventsPage {
         { at: 1, count: 0, label: "11:29" },
         { at: 2, count: 3, label: "11:30" },
       ],
+      short: "3 in the last hour · peak 3 at 11:30",
       summary: "3 events in the last hour; the busiest minute was 11:30, with 3.",
     },
     chosen: { detail: DETAIL, kind: "event" },

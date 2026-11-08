@@ -195,6 +195,8 @@ export function eventDetail(event: ConsoleEvent, places: EventPlaces, now: numbe
 export interface EventsChart {
   readonly minutes: readonly MinuteCount[];
   readonly summary: string;
+  // why: the figures as a short line beside the chart's title; the sentence is for a screen reader.
+  readonly short: string;
 }
 
 // why: the chart counts every event held, whatever the filter shows, so its numbers stay put when
@@ -208,7 +210,15 @@ export function eventsChart(events: readonly ConsoleEvent[], now: number): Event
     busiest === undefined || busiest.count === 0
       ? ""
       : `; the busiest minute was ${busiest.label}, with ${formatCount(busiest.count)}`;
-  return { minutes, summary: `${count}${peak}.` };
+  const shortPeak =
+    busiest === undefined || busiest.count === 0
+      ? ""
+      : ` · peak ${formatCount(busiest.count)} at ${busiest.label}`;
+  return {
+    minutes,
+    short: `${formatCount(total)} in the last hour${shortPeak}`,
+    summary: `${count}${peak}.`,
+  };
 }
 
 export type Chosen =
