@@ -1,4 +1,4 @@
-import { expect, NAV_LABELS, openFromNav, signIn, test } from "./fixtures.js";
+import { expect, NAV_LABELS, openFromNav, signIn, startProxiedDaemon, test } from "./fixtures.js";
 
 const OPERATOR_NEEDED = "That token is real, but the console needs an operator token.";
 
@@ -103,5 +103,77 @@ test.describe("serving", () => {
     await signIn(page, gateway.tokens.operator);
 
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  });
+});
+
+test.describe("signing in through a proxy", () => {
+  test("the console opens on Overview with no token form, reading who is signed in, a release from it succeeds, and the page asks no host but the proxy", async ({
+    page,
+  }) => {
+    const proxied = await startProxiedDaemon({
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    try {
+      const granted = await proxied.daemon.cli([
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 16",
+        "--os",
+        "18.4",
+        "--detach",
+        "--agent-id",
+        "proxy-agent",
+      ]);
+      expect(granted.code, granted.stderr).toBe(0);
+      const origin = new URL(proxied.url).origin;
+      const requested: string[] = [];
+      const errors: string[] = [];
+      const deletes: { status: number; site: string | undefined }[] = [];
+      page.on("request", (request) => requested.push(request.url()));
+      page.on("console", (message) => {
+        if (message.type() === "error") errors.push(message.text());
+      });
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("response", async (response) => {
+        const request = response.request();
+        if (request.method() === "DELETE") {
+          deletes.push({
+            site: (await request.allHeaders())["sec-fetch-site"],
+            status: response.status(),
+          });
+        }
+      });
+
+      await page.goto(proxied.url);
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+      await expect(page.getByLabel("Operator token")).toHaveCount(0);
+      await expect(page.getByText("Signed in as Alice")).toBeVisible();
+
+      await openFromNav(page, "Leases");
+      const row = page.locator("main tbody tr").filter({ hasText: "proxy-agent" });
+      await row.click();
+      await page
+        .getByRole("region", { exact: true, name: "Lease" })
+        .getByRole("button", { exact: true, name: "Release" })
+        .click();
+      await page
+        .getByRole("alertdialog", { name: "Release proxy-agent's lease?" })
+        .getByRole("button", { name: "Release lease" })
+        .click();
+
+      await expect(page.getByText("Released proxy-agent's lease")).toBeVisible();
+      await expect(row).toHaveCount(0);
+      expect(deletes).toEqual([{ site: "same-origin", status: 202 }]);
+      expect(requested.length).toBeGreaterThan(0);
+      expect(requested.filter((url) => new URL(url).origin !== origin)).toEqual([]);
+      // why: a request the page's Content-Security-Policy refused never reaches the network, but
+      // the browser reports it as an error; the 404 of the released lease's details is the one
+      // error the flow expects.
+      expect(errors.filter((text) => !text.includes("404"))).toEqual([]);
+    } finally {
+      await proxied.dispose();
+    }
   });
 });
