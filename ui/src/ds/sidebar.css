@@ -237,15 +237,12 @@
   display: none;
 }
 
-/* Sign out and Collapse: one secondary button, icon and word centred together. */
-.sidebar-toggle,
 .sign-out {
   gap: var(--space-2);
   min-height: 36px;
   white-space: nowrap;
 }
 
-.sidebar-toggle .nav-label,
 .sign-out .nav-label {
   flex: 0 1 auto;
 }
@@ -260,8 +257,19 @@
 
 .sidebar-collapsed .sidebar-top,
 .sidebar-collapsed .sidebar-foot {
-  justify-content: center;
   padding: 0;
+}
+
+.sidebar-toggle {
+  flex: none;
+  width: 26px;
+  min-height: 26px;
+  padding: 0;
+}
+
+.sidebar-collapsed .sidebar-toggle {
+  width: 22px;
+  min-height: 24px;
 }
 
 .sidebar-collapsed .sidebar-account {
@@ -296,7 +304,6 @@
   display: none;
 }
 
-.sidebar-collapsed .sidebar-toggle,
 .sidebar-collapsed .sign-out {
   gap: 0;
   padding: 0;

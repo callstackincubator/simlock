@@ -70,6 +70,16 @@ export function Sidebar(props: {
         <span className="sidebar-mark-short">
           <Wordmark short />
         </span>
+        <Button
+          variant="secondary"
+          className="sidebar-toggle"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggle}
+        >
+          <Icon name={collapsed ? "expand" : "collapse"} />
+        </Button>
         <button
           type="button"
           className="sidebar-menu"
@@ -105,20 +115,7 @@ export function Sidebar(props: {
           />
         ))}
       </div>
-      <div className="sidebar-foot">
-        {footer(collapsed)}
-        <Button
-          variant="secondary"
-          className="sidebar-toggle"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          onClick={onToggle}
-        >
-          <Icon name={collapsed ? "expand" : "collapse"} />
-          <span className="nav-label">Collapse</span>
-        </Button>
-      </div>
+      <div className="sidebar-foot">{footer(collapsed)}</div>
     </nav>
   );
 }
