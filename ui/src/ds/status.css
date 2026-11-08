@@ -24,11 +24,22 @@
   border-radius: 50%;
 }
 
-.status-ok { color: var(--pill-ok-text); background: var(--pill-ok-bg); }
-.status-warn { color: var(--pill-warn-text); background: var(--pill-warn-bg); }
-.status-error { color: var(--pill-error-text); background: var(--pill-error-bg); }
+.status-ok {
+  color: var(--pill-ok-text);
+  background: var(--pill-ok-bg);
+}
+.status-warn {
+  color: var(--pill-warn-text);
+  background: var(--pill-warn-bg);
+}
+.status-error {
+  color: var(--pill-error-text);
+  background: var(--pill-error-bg);
+}
 
-.status .status-dot { background: currentColor; }
+.status .status-dot {
+  background: currentColor;
+}
 
 .status-dot-ok {
   background: var(--status-ok);
