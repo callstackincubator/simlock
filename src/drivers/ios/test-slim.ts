@@ -247,3 +247,15 @@ export async function prepareSlimWith(
 }
 
 export const prepareSlim = { mode: "slim", purpose: "prepare" } as const;
+
+// why: DeviceHub's preferences are edited as an export, a PlistBuddy edit of it and an import back
+// through cfprefsd (`defaults`); the export sits in the launchd overrides root.
+export const deviceHubStaging = "/private/var/tmp/devicehub-preferences.plist";
+
+export function deviceHubEdit(command: string) {
+  return [
+    { command: "defaults", args: ["export", "com.apple.dt.Devices", deviceHubStaging] },
+    { command: "/usr/libexec/PlistBuddy", args: ["-c", command, deviceHubStaging] },
+    { command: "defaults", args: ["import", "com.apple.dt.Devices", deviceHubStaging] },
+  ];
+}

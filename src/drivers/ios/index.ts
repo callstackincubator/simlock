@@ -142,6 +142,8 @@ const COLD_BOOT_ESTIMATE_MS = 60_000;
 const ERASE_ESTIMATE_MS = 34_000;
 const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
 const MARK_FILE_NAME = "simlock-mark.json";
+const DEVICEHUB_DOMAIN = "com.apple.dt.Devices";
+const DEVICEHUB_STAGING_FILE = "devicehub-preferences.plist";
 
 let pasteboardWrites: Promise<void> = Promise.resolve();
 
@@ -317,7 +319,6 @@ export class IosSimctlDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions | undefined;
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
-  readonly #deviceHubPlist: string;
   readonly #slim: SlimOptions | undefined;
   readonly #fullBootTimeoutMs: number;
   readonly #afterBoot: AfterBoot;
@@ -356,10 +357,6 @@ export class IosSimctlDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
-    this.#deviceHubPlist = join(
-      dirname(dirname(options.coreSimulatorRoot ?? ".")),
-      "Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist",
-    );
     this.#slim = options.config?.slim;
     this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
     this.#afterBoot = {
@@ -1229,18 +1226,7 @@ export class IosSimctlDriver implements Driver {
     set?: string,
     refreshBooted = false,
   ): Promise<void> {
-    let boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
-    if (
-      refreshBooted &&
-      this.#rootOptions === undefined &&
-      set === undefined &&
-      boot.kind === "finished" &&
-      boot.result.code !== 0 &&
-      alreadyBooted(boot.result.stderr)
-    ) {
-      await this.#shutdown(udid);
-      boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
-    }
+    const boot = await this.#boot(udid, set, refreshBooted);
     if (boot.kind === "timed-out") {
       throw new BootTimeoutError(deviceId);
     }
@@ -1257,6 +1243,22 @@ export class IosSimctlDriver implements Driver {
 
     await this.#bestEffortShutdown(udid, set);
     throw new BootTimeoutError(deviceId);
+  }
+
+  // why: a booted simulator keeps the clipboard sync it booted with, so a lease's device that is
+  // already up is shut down and booted again once DeviceHub's preference is set.
+  async #boot(udid: string, set: string | undefined, refreshBooted: boolean) {
+    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+    const refresh =
+      refreshBooted &&
+      this.#rootOptions === undefined &&
+      set === undefined &&
+      boot.kind === "finished" &&
+      boot.result.code !== 0 &&
+      alreadyBooted(boot.result.stderr);
+    if (!refresh) return boot;
+    await this.#shutdown(udid);
+    return await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
   }
 
   async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {
@@ -1428,41 +1430,47 @@ export class IosSimctlDriver implements Driver {
     await this.#removeOverrides(data.udid);
   }
 
-  async #disablePasteboardSync(udid: string): Promise<void> {
-    await withPasteboardWrite(async () => {
-      const path = `:DevicePreferences:${udid}`;
-      const invoke = async (command: string): Promise<boolean> => {
-        const outcome = await this.#invokeCommand(
-          "/usr/libexec/PlistBuddy",
-          ["-c", command, this.#deviceHubPlist],
-          COMMAND_TIMEOUT_MS,
-        );
+  // why: DeviceHub's preferences belong to cfprefsd, which keeps its own copy and writes it back
+  // over the file, so an edit made to the file alone is lost or ignored. The domain is exported
+  // to a scratch file, edited there with PlistBuddy, and imported back through cfprefsd.
+  async #editDeviceHubPreferences(
+    edit: (buddy: (command: string) => Promise<boolean>) => Promise<boolean>,
+  ): Promise<boolean> {
+    return await withPasteboardWrite(async () => {
+      await this.#filesystem.mkdirp(this.#overridesRoot, { mode: 0o700 });
+      const staged = join(this.#overridesRoot, DEVICEHUB_STAGING_FILE);
+      const run = async (command: string, args: string[]): Promise<boolean> => {
+        const outcome = await this.#invokeCommand(command, args, COMMAND_TIMEOUT_MS);
         return outcome.kind !== "timed-out" && outcome.result.code === 0;
       };
-      if (await invoke(`Set ${path}:pasteboardSyncEnabled false`)) return;
-      await invoke("Add :DevicePreferences dict");
-      await invoke(`Add ${path} dict`);
-      if (!(await invoke(`Add ${path}:pasteboardSyncEnabled bool false`))) {
-        throw new DriverCrashError(`Could not disable DeviceHub clipboard sync for ${udid}`);
+      try {
+        if (!(await run("defaults", ["export", DEVICEHUB_DOMAIN, staged]))) return false;
+        const buddy = (command: string) => run("/usr/libexec/PlistBuddy", ["-c", command, staged]);
+        return (await edit(buddy)) && (await run("defaults", ["import", DEVICEHUB_DOMAIN, staged]));
+      } finally {
+        await this.#filesystem.rm(staged).catch(() => undefined);
       }
     });
   }
 
+  async #disablePasteboardSync(udid: string): Promise<void> {
+    const path = `:DevicePreferences:${udid}`;
+    const done = await this.#editDeviceHubPreferences(async (buddy) => {
+      if (await buddy(`Set ${path}:pasteboardSyncEnabled false`)) return true;
+      await buddy("Add :DevicePreferences dict");
+      await buddy(`Add ${path} dict`);
+      return await buddy(`Add ${path}:pasteboardSyncEnabled bool false`);
+    });
+    if (!done) throw new DriverCrashError(`Could not disable DeviceHub clipboard sync for ${udid}`);
+  }
+
   async #removePasteboardPreference(udid: string): Promise<void> {
-    try {
-      await withPasteboardWrite(async () => {
-        const outcome = await this.#invokeCommand(
-          "/usr/libexec/PlistBuddy",
-          ["-c", `Delete :DevicePreferences:${udid}`, this.#deviceHubPlist],
-          COMMAND_TIMEOUT_MS,
-        );
-        if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-          throw new Error("preference deletion failed");
-        }
-      });
-    } catch (error: unknown) {
+    const done = await this.#editDeviceHubPreferences((buddy) =>
+      buddy(`Delete :DevicePreferences:${udid}`),
+    ).catch(() => false);
+    if (!done) {
       this.#logger?.warn(
-        `could not remove DeviceHub preference for ${udid}: ${errorMessage(error)}`,
+        `could not remove DeviceHub preference for ${udid}: preference deletion failed`,
       );
     }
   }

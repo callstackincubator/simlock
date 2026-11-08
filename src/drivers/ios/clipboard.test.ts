@@ -12,49 +12,75 @@ import { driverData, instanceId } from "./test-slim.js";
 
 const prepareFull = { mode: "full", purpose: "prepare" } as const;
 
+type Preferences = Record<string, Record<string, unknown>>;
+
+/**
+ * why: DeviceHub's preferences live in cfprefsd, so the driver may only change them by
+ * exporting the domain, editing the export and importing it back; this fake keeps the domain
+ * and the export apart so an edit that skips the import changes nothing.
+ */
+class FakeDeviceHubDomain {
+  domain: Preferences = {};
+  staged: Preferences = {};
+  failing = "";
+  hold: Promise<void> | undefined;
+
+  succeeds(command: string, args: readonly string[]): boolean {
+    if (command === this.failing || (this.failing === "delete" && args[1] === "delete")) {
+      return false;
+    }
+    if (command === "defaults") this.transfer(args[0]!);
+    return command === "/usr/libexec/PlistBuddy" ? this.edit(args[1]!) : true;
+  }
+
+  private transfer(verb: string): void {
+    if (verb === "export") this.staged = structuredClone(this.domain);
+    if (verb === "import") this.domain = structuredClone(this.staged);
+  }
+
+  private edit(command: string): boolean {
+    const [verb, path = "", value] = command.split(" ");
+    const [, , udid, key] = path.split(":");
+    const entry = udid === undefined ? undefined : this.staged[udid];
+    if (verb === "Delete" && entry !== undefined) {
+      delete this.staged[udid!];
+      return true;
+    }
+    if (verb === "Set" && entry?.[key!] !== undefined) {
+      entry[key!] = value === "true";
+      return true;
+    }
+    if (verb === "Add" && key === undefined && udid !== undefined && entry === undefined) {
+      this.staged[udid] = {};
+      return true;
+    }
+    if (verb === "Add" && entry !== undefined && key !== undefined) {
+      entry[key] = false;
+      return true;
+    }
+    return false;
+  }
+}
+
 describe("IosSimctlDriver DeviceHub clipboard", () => {
   it("under deviceSet default the driver turns DeviceHub's pasteboard sync off for a simulator before every boot and removes that entry when it destroys it", async () => {
-    const library = "/Users/u/Library";
-    const deviceHubPlist = `${library}/Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist`;
     const udid = driverData.udid;
     const calls: string[][] = [];
-    let failCommand = "";
-    let warm = false;
-    let holdWrite: Promise<void> | undefined;
-    let sawDelete: (() => void) | undefined;
-    const warnings: string[] = [];
-    const preferences: Record<string, Record<string, unknown>> = {
+    const hub = new FakeDeviceHubDomain();
+    hub.domain = {
       [udid]: { pasteboardSyncEnabled: true, windowScale: 75 },
       other: { pasteboardSyncEnabled: true, windowScale: 50 },
     };
+    let warm = false;
+    let sawDelete: (() => void) | undefined;
+    const warnings: string[] = [];
     const answersEveryCall: ProcessRunner = {
       run: () => Promise.reject(new Error("the driver runs commands through spawn")),
       spawn(command, args, options) {
         calls.push([command, ...args]);
         const isWarmBoot = warm && command === "xcrun" && args[1] === "boot";
         if (isWarmBoot) warm = false;
-        const missingKey =
-          command === "/usr/libexec/PlistBuddy" &&
-          args[1]?.startsWith("Set :DevicePreferences:") &&
-          preferences[udid]?.pasteboardSyncEnabled === undefined;
-        const failed =
-          command === failCommand ||
-          (failCommand === "delete" && args[1] === "delete") ||
-          isWarmBoot ||
-          missingKey;
-        if (!failed && command === "/usr/libexec/PlistBuddy") {
-          if (args[1]?.startsWith("Set :DevicePreferences:")) {
-            preferences[udid]!.pasteboardSyncEnabled = false;
-          } else if (
-            args[1] === `Add :DevicePreferences:${udid}:pasteboardSyncEnabled bool false`
-          ) {
-            preferences[udid]!.pasteboardSyncEnabled = false;
-          } else if (args[1] === `Delete :DevicePreferences:${udid}`) {
-            delete preferences[udid];
-          }
-        } else if (!failed && command === "defaults") {
-          preferences[udid] = { pasteboardSyncEnabled: false };
-        }
+        const failed = !hub.succeeds(command, args) || isWarmBoot;
         const handle = new ScriptedProcessRunner([
           {
             match: { args: [...args], command },
@@ -66,9 +92,9 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
           },
         ]).spawn(command, args, options);
         if (command === "xcrun" && args[1] === "delete") sawDelete?.();
-        if (command === "/usr/libexec/PlistBuddy" && holdWrite !== undefined) {
-          const gate = holdWrite;
-          holdWrite = undefined;
+        if (command === "defaults" && args[0] === "import" && hub.hold !== undefined) {
+          const gate = hub.hold;
+          hub.hold = undefined;
           const wait = handle.wait.bind(handle);
           handle.wait = async () => {
             await gate;
@@ -84,7 +110,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     const driver = await IosSimctlDriver.create({
       database: await memorySourceDatabase(),
       clock: new FakeClock(),
-      coreSimulatorRoot: `${library}/Developer/CoreSimulator`,
+      coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
       driverConfig: { deviceSet: "default" },
       filesystem: new MemoryFilesystem(),
       idGenerator: { generate: () => "device-1" },
@@ -94,49 +120,53 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
       logger: { warn: (message: string) => warnings.push(message) } as never,
     });
     const device = { address: udid, deviceId: udid, driverData };
+    const staged = (command: string) => [
+      "/usr/libexec/PlistBuddy",
+      "-c",
+      command,
+      expect.any(String),
+    ];
+    const exportDomain = ["defaults", "export", "com.apple.dt.Devices", expect.any(String)];
+    const importDomain = ["defaults", "import", "com.apple.dt.Devices", expect.any(String)];
 
     const syncOffThenBoot = [
-      [
-        "/usr/libexec/PlistBuddy",
-        "-c",
-        `Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`,
-        deviceHubPlist,
-      ],
+      exportDomain,
+      staged(`Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`),
+      importDomain,
       ["xcrun", "simctl", "boot", udid],
       ["xcrun", "simctl", "bootstatus", udid, "-b"],
       ["xcrun", "simctl", "listapps", udid],
     ];
 
     await driver.makeReady(device, prepareFull);
-    expect(preferences).toEqual({
+    expect(hub.domain).toEqual({
       [udid]: { pasteboardSyncEnabled: false, windowScale: 75 },
       other: { pasteboardSyncEnabled: true, windowScale: 50 },
     });
     await driver.makeReady(device, { mode: "full", purpose: "recover" });
     await driver.destroy(device);
-    expect(preferences).toEqual({ other: { pasteboardSyncEnabled: true, windowScale: 50 } });
+    expect(hub.domain).toEqual({ other: { pasteboardSyncEnabled: true, windowScale: 50 } });
 
     expect(calls).toEqual([
       ...syncOffThenBoot,
       ...syncOffThenBoot,
       ["xcrun", "simctl", "shutdown", udid],
       ["xcrun", "simctl", "delete", udid],
-      ["/usr/libexec/PlistBuddy", "-c", `Delete :DevicePreferences:${udid}`, deviceHubPlist],
+      exportDomain,
+      staged(`Delete :DevicePreferences:${udid}`),
+      importDomain,
     ]);
 
-    preferences[udid] = { windowScale: 75 };
+    hub.domain = { [udid]: { windowScale: 75 } };
     calls.length = 0;
     await expect(driver.makeReady(device, prepareFull)).resolves.toBeDefined();
-    expect(preferences[udid]).toEqual({ pasteboardSyncEnabled: false, windowScale: 75 });
-    expect(calls).toContainEqual([
-      "/usr/libexec/PlistBuddy",
-      "-c",
-      `Add :DevicePreferences:${udid}:pasteboardSyncEnabled bool false`,
-      deviceHubPlist,
-    ]);
+    expect(hub.domain[udid]).toEqual({ pasteboardSyncEnabled: false, windowScale: 75 });
+    expect(calls).toContainEqual(
+      staged(`Add :DevicePreferences:${udid}:pasteboardSyncEnabled bool false`),
+    );
 
     let releaseWrite!: () => void;
-    holdWrite = new Promise<void>((resolve) => {
+    hub.hold = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
     const deleted = new Promise<void>((resolve) => {
@@ -144,47 +174,45 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     });
     calls.length = 0;
     const preparing = driver.makeReady(device, prepareFull);
-    await vi.waitFor(() =>
-      expect(calls.some((call) => call[0] === "/usr/libexec/PlistBuddy")).toBe(true),
-    );
+    await vi.waitFor(() => expect(calls.some((call) => call[1] === "import")).toBe(true));
     const destroying = driver.destroy(device);
     await deleted;
     for (let i = 0; i < 20; i++) await Promise.resolve();
     expect(calls.some((call) => call[2] === `Delete :DevicePreferences:${udid}`)).toBe(false);
     releaseWrite();
     await Promise.all([preparing, destroying]);
-    expect(preferences[udid]).toBeUndefined();
+    expect(hub.domain[udid]).toBeUndefined();
     sawDelete = undefined;
 
-    preferences[udid] = { pasteboardSyncEnabled: true, windowScale: 75 };
+    hub.domain = { [udid]: { pasteboardSyncEnabled: true, windowScale: 75 } };
     calls.length = 0;
-    failCommand = "/usr/libexec/PlistBuddy";
+    hub.failing = "defaults";
     await expect(driver.makeReady(device, prepareFull)).rejects.toThrow(
       "Could not disable DeviceHub clipboard sync",
     );
-    expect(calls.every((call) => call[0] === "/usr/libexec/PlistBuddy")).toBe(true);
+    expect(calls.every((call) => call[0] === "defaults")).toBe(true);
+    expect(hub.domain[udid]?.pasteboardSyncEnabled).toBe(true);
 
     calls.length = 0;
-    failCommand = "";
+    hub.failing = "";
     warm = true;
     await driver.makeReady(device, prepareFull);
-    expect(calls.slice(0, 4)).toEqual([
-      syncOffThenBoot[0],
-      ["xcrun", "simctl", "boot", udid],
+    expect(calls.slice(0, 6)).toEqual([
+      ...syncOffThenBoot.slice(0, 4),
       ["xcrun", "simctl", "shutdown", udid],
       ["xcrun", "simctl", "boot", udid],
     ]);
 
     calls.length = 0;
-    failCommand = "/usr/libexec/PlistBuddy";
+    hub.failing = "defaults";
     await expect(driver.destroy(device)).resolves.toBeUndefined();
     expect(warnings).toContain(
       `could not remove DeviceHub preference for ${udid}: preference deletion failed`,
     );
 
     calls.length = 0;
-    failCommand = "delete";
+    hub.failing = "delete";
     await expect(driver.destroy(device)).rejects.toThrow();
-    expect(calls.some((call) => call[0] === "/usr/libexec/PlistBuddy")).toBe(false);
+    expect(calls.some((call) => call[0] === "defaults")).toBe(false);
   });
 });

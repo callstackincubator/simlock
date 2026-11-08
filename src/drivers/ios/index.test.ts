@@ -52,6 +52,7 @@ import {
   parseOverrides,
   plantManagedDevice,
   prepareSlim,
+  deviceHubEdit,
   prepareSlimWith,
   printDisabled,
   simctl,
@@ -5169,23 +5170,12 @@ describe("IosSimctlDriver device set", () => {
           : step.scoped && scoped
             ? simctlArgs(...step.args)
             : ["simctl", ...step.args];
-      const plist =
-        "/Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist";
       const runner = new ScriptedProcessRunner(
         steps.flatMap((step) => [
           ...(!scoped && step.args[0] === "boot" && step.sources !== true
-            ? [
-                {
-                  match: {
-                    command: "/usr/libexec/PlistBuddy",
-                    args: [
-                      "-c",
-                      `Set :DevicePreferences:${driverData.udid}:pasteboardSyncEnabled false`,
-                      plist,
-                    ],
-                  },
-                },
-              ]
+            ? deviceHubEdit(
+                `Set :DevicePreferences:${driverData.udid}:pasteboardSyncEnabled false`,
+              ).map((match) => ({ match }))
             : []),
           {
             match: { args: argvOf(step), command: "xcrun" },
@@ -5194,14 +5184,9 @@ describe("IosSimctlDriver device set", () => {
               : { result: { code: 0, stderr: "", stdout: step.stdout } }),
           },
           ...(!scoped && step.args[0] === "delete"
-            ? [
-                {
-                  match: {
-                    command: "/usr/libexec/PlistBuddy",
-                    args: ["-c", `Delete :DevicePreferences:${driverData.udid}`, plist],
-                  },
-                },
-              ]
+            ? deviceHubEdit(`Delete :DevicePreferences:${driverData.udid}`).map((match) => ({
+                match,
+              }))
             : []),
         ]),
       );
