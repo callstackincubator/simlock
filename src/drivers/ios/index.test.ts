@@ -5721,6 +5721,8 @@ describe("IosSimctlDriver device set", () => {
     const calls: string[][] = [];
     let failCommand = "";
     let warm = false;
+    let holdWrite: Promise<void> | undefined;
+    let sawDelete: (() => void) | undefined;
     const warnings: string[] = [];
     const preferences: Record<string, Record<string, unknown>> = {
       [udid]: { pasteboardSyncEnabled: true, windowScale: 75 },
@@ -5754,7 +5756,7 @@ describe("IosSimctlDriver device set", () => {
         } else if (!failed && command === "defaults") {
           preferences[udid] = { pasteboardSyncEnabled: false };
         }
-        return new ScriptedProcessRunner([
+        const handle = new ScriptedProcessRunner([
           {
             match: { args: [...args], command },
             result: {
@@ -5764,6 +5766,17 @@ describe("IosSimctlDriver device set", () => {
             },
           },
         ]).spawn(command, args, options);
+        if (command === "xcrun" && args[1] === "delete") sawDelete?.();
+        if (command === "/usr/libexec/PlistBuddy" && holdWrite !== undefined) {
+          const gate = holdWrite;
+          holdWrite = undefined;
+          const wait = handle.wait.bind(handle);
+          handle.wait = async () => {
+            await gate;
+            return await wait();
+          };
+        }
+        return handle;
       },
       spawnStreaming: () => {
         throw new Error("the driver streams nothing here");
@@ -5814,7 +5827,7 @@ describe("IosSimctlDriver device set", () => {
 
     preferences[udid] = { windowScale: 75 };
     calls.length = 0;
-    await driver.makeReady(device, prepareFull);
+    await expect(driver.makeReady(device, prepareFull)).resolves.toBeDefined();
     expect(preferences[udid]).toEqual({ pasteboardSyncEnabled: false, windowScale: 75 });
     expect(calls).toContainEqual([
       "/usr/libexec/PlistBuddy",
@@ -5822,6 +5835,27 @@ describe("IosSimctlDriver device set", () => {
       `Add :DevicePreferences:${udid}:pasteboardSyncEnabled bool false`,
       deviceHubPlist,
     ]);
+
+    let releaseWrite!: () => void;
+    holdWrite = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const deleted = new Promise<void>((resolve) => {
+      sawDelete = resolve;
+    });
+    calls.length = 0;
+    const preparing = driver.makeReady(device, prepareFull);
+    await vi.waitFor(() =>
+      expect(calls.some((call) => call[0] === "/usr/libexec/PlistBuddy")).toBe(true),
+    );
+    const destroying = driver.destroy(device);
+    await deleted;
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(calls.some((call) => call[2] === `Delete :DevicePreferences:${udid}`)).toBe(false);
+    releaseWrite();
+    await Promise.all([preparing, destroying]);
+    expect(preferences[udid]).toBeUndefined();
+    sawDelete = undefined;
 
     preferences[udid] = { pasteboardSyncEnabled: true, windowScale: 75 };
     calls.length = 0;
