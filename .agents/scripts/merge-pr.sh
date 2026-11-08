@@ -8,7 +8,8 @@
 # nothing. Gates, in order, for each: the PR is open and not a draft; it carries no needs-hardware label; from a
 # `bug/<n>` branch, fast-track.mjs's exit check passes (delivery rule 17); its body
 # passes pr-body-check.mjs (a `## Review` section with its counts line, no "spec needs" line,
-# the agent footer); every CI check passed or was skipped; and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
+# the agent footer); every CI check passed or was skipped; from a `refactor/<n>` branch,
+# refactor-check.mjs passes (delivery rule 18); and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
 # that fails and exits 1, or exits 2 when checks are still pending at the deadline. While it
 # waits it prints one line per poll to stderr, `merge-pr: #<pr> pending <n> check(s) (<up to 3
 # names>), <m> min waited`, and `merge-pr: #<pr> re-running the failed jobs of run <id>: <jobs>`
@@ -145,6 +146,12 @@ gates() {
     fi
   fi
   [ -z "$bad" ] || fail "CI not green on PR #$pr: $(echo "$bad" | tr '\n' ';')"
+
+  # why: last of the PR's own gates, since it prepares two worktrees and runs the mutants.
+  if pull .head.ref | grep -qE '^refactor/[0-9]+$'; then
+    node "$(dirname "$0")/refactor-check.mjs" --pr "$pr" ||
+      fail "PR #$pr fails refactor-check.mjs (above; delivery rule 18)"
+  fi
 
   # why: GitHub computes mergeability lazily; `null` (not computed yet) settles within seconds.
   for _ in 1 2 3 4 5 6; do

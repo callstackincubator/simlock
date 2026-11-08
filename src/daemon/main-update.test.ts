@@ -47,11 +47,6 @@ describe("startDaemon version check", () => {
     const { started: daemon } = await startOnFreePort((port) =>
       startDaemon({
         clock,
-        // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
-        configOverrides:
-          overrides.role === "gateway"
-            ? { http: { enabled: true, host: "127.0.0.1", port } }
-            : STANDALONE_OFF,
         dataDirectory: directory,
         drivers: [],
         filesystem: new MemoryFilesystem(),
@@ -60,6 +55,13 @@ describe("startDaemon version check", () => {
         npm,
         version: "0.3.0",
         ...overrides,
+        // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+        configOverrides: {
+          ...(overrides.role === "gateway"
+            ? { http: { enabled: true, host: "127.0.0.1", port } }
+            : STANDALONE_OFF),
+          ...overrides.configOverrides,
+        },
       } as StartDaemonOptions),
     );
     runningDaemons.push(daemon);
@@ -354,28 +356,34 @@ describe("startDaemon version check", () => {
     await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
   });
 
-  it("a gateway started by test-main's start helper and by this file's startChecked starts while 127.0.0.1:4700 is taken", async () => {
-    // why: 4700 is a gateway's default port; a gateway running on the host holds it already.
-    const holder = createServer();
-    const held = await new Promise<boolean>((resolve, reject) => {
-      holder.once("error", (error: NodeJS.ErrnoException) =>
-        error.code === "EADDRINUSE" ? resolve(false) : reject(error),
-      );
-      holder.listen(4700, "127.0.0.1", () => resolve(true));
-    });
-    try {
-      const outcomes = await Promise.allSettled([
-        start({ role: "gateway" }),
-        startChecked(new FakeNpmCli(), { role: "gateway" }),
-      ]);
+  it("the test start helpers start gateways while port 4700 is taken and workers with update overrides while port 4701 is taken", async () => {
+    for (const port of [4700, 4701]) {
+      // why: the default port may already belong to a daemon on the host; either listener supplies the occupied-port fixture.
+      const holder = createServer();
+      const held = await new Promise<boolean>((resolve, reject) => {
+        holder.once("error", (error: NodeJS.ErrnoException) =>
+          error.code === "EADDRINUSE" ? resolve(false) : reject(error),
+        );
+        holder.listen(port, "127.0.0.1", () => resolve(true));
+      });
+      try {
+        const outcomes = await Promise.allSettled(
+          port === 4700
+            ? [start({ role: "gateway" }), startChecked(new FakeNpmCli(), { role: "gateway" })]
+            : [
+                start({ configOverrides: { update: { check: false } } }),
+                startChecked(new FakeNpmCli(), { configOverrides: { update: { check: false } } }),
+              ],
+        );
 
-      expect(
-        outcomes.map((outcome) =>
-          outcome.status === "fulfilled" ? "started" : String(outcome.reason),
-        ),
-      ).toEqual(["started", "started"]);
-    } finally {
-      if (held) await new Promise<void>((resolve) => holder.close(() => resolve()));
+        expect(
+          outcomes.map((outcome) =>
+            outcome.status === "fulfilled" ? "started" : String(outcome.reason),
+          ),
+        ).toEqual(["started", "started"]);
+      } finally {
+        if (held) await new Promise<void>((resolve) => holder.close(() => resolve()));
+      }
     }
   });
 });
