@@ -123,8 +123,8 @@ function parseResult(code: number | null, stdout: string, stderr: string): Agent
 export interface MakeAgentOptions {
   // why: a test that needs several agents on one token passes it; the default is a fresh token per agent.
   readonly token?: { secret: string; id: string };
-  // why: appended to `connect proxy`, so an agent can bind to a lease another client allocated (`--run-id`, `--lease-id`).
-  readonly connectArgs?: readonly string[];
+  // why: a runner such as budgie names the lease on every command rather than saving a connection; with this the agent has the daemon's address in its environment and runs no `connect`.
+  readonly direct?: true;
 }
 
 export async function makeAgent(
@@ -145,6 +145,7 @@ export async function makeAgent(
     AGENT_DEVICE_STATE_DIR: home,
     AGENT_DEVICE_DAEMON_AUTH_TOKEN: token.secret,
     AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1",
+    ...(options.direct ? { AGENT_DEVICE_DAEMON_BASE_URL: proxyUrl(env) } : {}),
   };
   const background = new Set<CliBackgroundHandle>();
   const agent: Agent = {
@@ -166,13 +167,8 @@ export async function makeAgent(
     },
   };
   made.push({ env, agent, background });
-  const connected = await agent.run([
-    "connect",
-    "proxy",
-    "--daemon-base-url",
-    proxyUrl(env),
-    ...(options.connectArgs ?? []),
-  ]);
+  if (options.direct) return agent;
+  const connected = await agent.run(["connect", "proxy", "--daemon-base-url", proxyUrl(env)]);
   if (connected.code !== 0) {
     throw new Error(`agent-device connect proxy failed: ${connected.stdout}\n${connected.stderr}`);
   }
@@ -187,17 +183,14 @@ export interface ClientLease {
 
 export interface LeaseClient {
   allocate(options: {
-    readonly tenant: string;
+    // why: agent-device's client sends no lease id of its own, and simlock refuses an allocate without one as "too old".
+    readonly leaseId: string;
     readonly runId: string;
-    readonly leaseBackend: "ios-simulator";
+    readonly leaseBackend: "ios-instance";
     readonly platform: "ios";
     readonly retainOnClose: boolean;
   }): Promise<ClientLease>;
-  release(lease: {
-    readonly tenant: string;
-    readonly runId: string;
-    readonly leaseId: string;
-  }): Promise<unknown>;
+  release(lease: { readonly runId: string; readonly leaseId: string }): Promise<unknown>;
 }
 
 // why: agent-device's CLI has no flag that sends `retainOnClose`; its client library does, and a runner such as budgie allocates that way, so a test that proves a runner's flow loads the same library from the pinned install.

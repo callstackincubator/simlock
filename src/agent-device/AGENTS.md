@@ -32,7 +32,6 @@ Front:
 
 - The front serves the `agent` role only.
 - `checkRequest` (`front/request-rules.ts`) runs before anything is forwarded: no platform but iOS and Android, no device selector but the leased one, no device set or allowlist, `install` only from an upload, `devices` alone and not streamed.
-- `deviceExcept` becomes the lease's `except` in `stringFields` and is not forwarded to agent-device (`front/allocate.ts`).
 - A `devices` answer is cut to the token's leases before the CLI gets it.
 - The host sets the tenant and overwrites the client's. A call that names a lease gets a tenant made from the principal and the lease id (`shared/tenant.ts`), so each lease's sessions, uploads and artifacts are its own; a call that names none keeps the principal. A relayed call keeps the gateway's tenant, which names the lease already. On a worker, a non-RPC call whose lease header names a lease the token does not hold is refused 403.
 - A heartbeat is forwarded with `ttlMs` raised to the ceiling (`agentDeviceLeaseMaxTtlMs`), then renews the simlock lease, with `lease.renew` only when it moves the deadline. When agent-device says the lease is gone, the simlock lease is released and the reply is "ended by simlock".
@@ -47,7 +46,6 @@ Lease end and stop:
 
 - `AgentDeviceLeaseEnd.leaseEnded` waits for a running allocate or release, then sends `agent_device.lease.release` with the recorded scope, under leasing's signal. It then removes that lease's folders under its daemon's `sessions` folder: agent-device removes none itself.
 - Each daemon start empties that daemon's `sessions` folder before agent-device runs: a restart ends every agent-device lease.
-- A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
 
 Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)):
 
