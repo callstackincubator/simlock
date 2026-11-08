@@ -249,6 +249,7 @@ export interface DriverSource {
 }
 
 export interface Driver {
+  readonly rebootReadyBeforeGrant?: boolean;
   readonly platform: Platform;
   readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
   readonly deviceRoot: string;

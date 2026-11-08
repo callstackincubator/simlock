@@ -1107,7 +1107,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       spec: waiter.spec,
       requirement: waiter.requirement,
       classOf: waiter.classOf,
-      rebootReady: exceptOption(waiter).except !== undefined,
+      rebootReady:
+        exceptOption(waiter).except !== undefined ||
+        this.options.drivers.get(waiter.spec.platform).rebootReadyBeforeGrant === true,
     });
   }
 

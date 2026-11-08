@@ -289,6 +289,7 @@ interface ResolvedIosSpec {
 
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
+  readonly rebootReadyBeforeGrant: boolean;
   readonly defaultModels = IOS_DEFAULT_MODELS;
   readonly #clock: Clock;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
@@ -321,6 +322,7 @@ export class IosSimctlDriver implements Driver {
     deviceRoot: string,
     rootOptions: EnsureOwnedRootOptions | undefined,
   ) {
+    this.rebootReadyBeforeGrant = rootOptions === undefined;
     this.#clock = options.clock;
     this.componentFootprint = {
       bytes: IOS_RUNTIME_MIN_FREE_BYTES,
@@ -1172,7 +1174,13 @@ export class IosSimctlDriver implements Driver {
         ? await this.#writeOverrides(data.udid, plan.slim, options.except)
         : undefined;
 
-    await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
+    await this.#bootAndWait(
+      data.udid,
+      device.deviceId,
+      bootstatusTimeoutMs,
+      undefined,
+      options.purpose === "prepare",
+    );
     await runAfterBoot(this.#afterBoot, data.udid, device.deviceId);
 
     if (plan.kind === "skip") {
@@ -1207,8 +1215,20 @@ export class IosSimctlDriver implements Driver {
     deviceId: string,
     bootstatusTimeoutMs: number,
     set?: string,
+    refreshBooted = false,
   ): Promise<void> {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+    let boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+    if (
+      refreshBooted &&
+      this.#rootOptions === undefined &&
+      set === undefined &&
+      boot.kind === "finished" &&
+      boot.result.code !== 0 &&
+      alreadyBooted(boot.result.stderr)
+    ) {
+      await this.#shutdown(udid);
+      boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
+    }
     if (boot.kind === "timed-out") {
       throw new BootTimeoutError(deviceId);
     }

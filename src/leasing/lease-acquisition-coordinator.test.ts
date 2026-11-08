@@ -63,6 +63,22 @@ function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogS
 
 // why: drives the coordinator on its own, so a test can interleave its lifecycle, queue and clock in orders the leasing surface cannot force.
 describe("LeaseAcquisitionCoordinator", () => {
+  it("prepares a warm device before granting when its driver requires it", async () => {
+    const harness = await createHarness();
+    const device = await seedReady(harness);
+    Object.defineProperty(harness.driver, "rebootReadyBeforeGrant", { value: true });
+    const ready = vi.spyOn(harness.driver, "makeReady");
+    const grant = await harness.coordinator.request(request, {
+      ownerId: "agent",
+      requesterId: "agent",
+    });
+    expect(grant.device.id).toBe(device.id);
+    expect(ready).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: device.driverDeviceId }),
+      expect.objectContaining({ purpose: "prepare" }),
+    );
+  });
+
   it("rejects a second request from a requester whose first is still pending, under no key or a new idempotency key, with lease.rejected already-leased", async () => {
     // why: the one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
     // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a

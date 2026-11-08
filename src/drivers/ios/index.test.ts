@@ -5722,15 +5722,29 @@ describe("IosSimctlDriver device set", () => {
     const deviceHubPlist = `${library}/Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist`;
     const udid = driverData.udid;
     const calls: string[][] = [];
+    let failCommand = "";
+    let warm = false;
+    const warnings: string[] = [];
     const answersEveryCall: ProcessRunner = {
       run: () => Promise.reject(new Error("the driver runs commands through spawn")),
       spawn(command, args, options) {
         calls.push([command, ...args]);
-        return new ScriptedProcessRunner([{ match: { args: [...args], command } }]).spawn(
-          command,
-          args,
-          options,
-        );
+        const isWarmBoot = warm && command === "xcrun" && args[1] === "boot";
+        if (isWarmBoot) warm = false;
+        const failed =
+          command === failCommand ||
+          (failCommand === "delete" && args[1] === "delete") ||
+          isWarmBoot;
+        return new ScriptedProcessRunner([
+          {
+            match: { args: [...args], command },
+            result: {
+              code: failed ? 1 : 0,
+              stderr: isWarmBoot ? "Unable to boot device in current state: Booted" : "failed",
+              stdout: "",
+            },
+          },
+        ]).spawn(command, args, options);
       },
       spawnStreaming: () => {
         throw new Error("the driver streams nothing here");
@@ -5746,6 +5760,7 @@ describe("IosSimctlDriver device set", () => {
       instanceId,
       processRunner: answersEveryCall,
       simlockHome: "/home/.simlock",
+      logger: { warn: (message: string) => warnings.push(message) } as never,
     });
     const device = { address: udid, deviceId: udid, driverData };
 
@@ -5775,6 +5790,36 @@ describe("IosSimctlDriver device set", () => {
       ["xcrun", "simctl", "delete", udid],
       ["/usr/libexec/PlistBuddy", "-c", `Delete :DevicePreferences:${udid}`, deviceHubPlist],
     ]);
+
+    calls.length = 0;
+    failCommand = "defaults";
+    await expect(driver.makeReady(device, prepareFull)).rejects.toThrow(
+      "Could not disable DeviceHub clipboard sync",
+    );
+    expect(calls.map((call) => call[0])).toEqual(["defaults"]);
+
+    calls.length = 0;
+    failCommand = "";
+    warm = true;
+    await driver.makeReady(device, prepareFull);
+    expect(calls.slice(0, 4)).toEqual([
+      syncOffThenBoot[0],
+      ["xcrun", "simctl", "boot", udid],
+      ["xcrun", "simctl", "shutdown", udid],
+      ["xcrun", "simctl", "boot", udid],
+    ]);
+
+    calls.length = 0;
+    failCommand = "/usr/libexec/PlistBuddy";
+    await expect(driver.destroy(device)).resolves.toBeUndefined();
+    expect(warnings).toContain(
+      `could not remove DeviceHub preference for ${udid}: preference deletion failed`,
+    );
+
+    calls.length = 0;
+    failCommand = "delete";
+    await expect(driver.destroy(device)).rejects.toThrow();
+    expect(calls.some((call) => call[0] === "/usr/libexec/PlistBuddy")).toBe(false);
   });
 });
 
