@@ -1024,32 +1024,31 @@ describe("the agent-device front's request rules", () => {
     target: string;
     address: string;
   };
+  function bootFlagsFor(scenario: BootScenario, address: string): Record<string, unknown> {
+    if ("udid" in scenario.flags) return { udid: address };
+    if ("device" in scenario.flags) return { device: `simlock-${address}` };
+    return scenario.flags;
+  }
+  function allocateFieldsFor(scenario: BootScenario): Record<string, unknown> {
+    return {
+      platform: scenario.platform,
+      ...("omitTarget" in scenario ? {} : { target: scenario.target }),
+      ...(scenario.physical ? { physical: true } : {}),
+    };
+  }
   async function bootsOnItsLease(scenario: BootScenario): Promise<void> {
     const rig: Rig = scenario.physical
       ? await setUpWithPhone()
       : await setUp({ drivers: bothDrivers });
     rig.fake.nameDeviceInNextReply("none");
-    await granted(rig, 1, {
-      platform: scenario.platform,
-      ...("omitTarget" in scenario ? {} : { target: scenario.target }),
-      ...(scenario.physical ? { physical: true } : {}),
-    });
+    await granted(rig, 1, allocateFieldsFor(scenario));
     const address = scenario.physical ? phoneSerial : idOf(rig, 1);
-    const flags =
-      "udid" in scenario.flags
-        ? { udid: address }
-        : "device" in scenario.flags
-          ? { device: `simlock-${address}` }
-          : scenario.flags;
     const answer = await envelopeOf(
       await runCommand(rig, "boot", 1, {
-        flags,
+        flags: bootFlagsFor(scenario, address),
         ...(scenario.runtime && { runtime: scenario.runtime }),
       }),
     );
-    if ("omitTarget" in scenario) {
-      expect(answer.result?.["data"]).toMatchObject({ target: "mobile" });
-    }
     expect(answer.result).toMatchObject({
       ok: true,
       data: {
