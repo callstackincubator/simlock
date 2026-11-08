@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } from "./fixtures.js";
+import { answer, pad } from "./stub-answers.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -17,22 +18,113 @@ async function openPage(
 }
 
 test.describe("the console's layout", () => {
-  test("the page reserves room for a scrollbar on every page", async ({ page }) => {
+  test("the shell keeps its reference geometry and scrolls the Overview, Fleet and worker pages", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 500 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
     try {
       const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
       const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      const response = await fetch(new URL("/v1/workers", fleet.gateway.url), {
+        headers: { Authorization: `Bearer ${fleet.gateway.tokens.operator}` },
+      });
+      expect(response.status).toBe(200);
+      const host = ((await response.json()) as { workers: Record<string, unknown>[] }).workers[0];
+      expect(host).toBeDefined();
+      const workers = Array.from({ length: 30 }, (_, index) => ({
+        ...host,
+        id: `wrk_${pad(index + 1)}`,
+        label: `worker-${pad(index + 1)}`,
+      }));
       const pages = [
         { path: "/", title: "Overview" },
         { path: "/fleet", title: "Fleet" },
         { path: `/fleet/${id}`, title: "layout-a" },
       ];
       for (const [index, { path, title }] of pages.entries()) {
+        if (path === "/fleet") await answer(page, "/v1/workers", () => ({ workers }));
+        if (index === 2) await page.unrouteAll({ behavior: "wait" });
         await openPage(page, fleet.gateway, path, title, index > 0);
-        const gutter = await page.evaluate(
-          () => getComputedStyle(document.documentElement).scrollbarGutter,
-        );
-        expect(gutter, path).toBe("stable");
+        if (index === 0) await expect(page.getByText("Wait p95", { exact: true })).toBeVisible();
+        const target =
+          index === 0
+            ? page.getByRole("link", { name: "layout-a", exact: true })
+            : index === 1
+              ? page.getByRole("link", { name: "worker-0025", exact: true })
+              : page.getByText("No devices.", { exact: true });
+        await expect(target).toHaveCount(1);
+        const nav = page.getByRole("navigation", { name: "Console" });
+        for (const [height, navHeight] of [
+          [900, 876],
+          [500, 476],
+        ] as const) {
+          await page.setViewportSize({ width: 1440, height });
+          expect(await nav.boundingBox(), `${path} ${height} navigation`).toEqual({
+            x: 12,
+            y: 12,
+            width: 200,
+            height: navHeight,
+          });
+          const geometry = await page.evaluate(() => {
+            const main = document.querySelector("main")!.getBoundingClientRect();
+            const head = document.querySelector(".page-head")!.getBoundingClientRect();
+            return {
+              mainX: main.x,
+              mainWidth: main.width,
+              headX: head.x,
+              headY: head.y,
+              headWidth: head.width,
+              scrollWidth: document.documentElement.scrollWidth,
+            };
+          });
+          expect(geometry, `${path} ${height} content geometry`).toEqual({
+            mainX: 212,
+            mainWidth: 1228,
+            headX: 224,
+            headY: 12,
+            headWidth: 1204,
+            scrollWidth: 1440,
+          });
+        }
+        expect(await page.evaluate(() => window.scrollY), `${path} starts at top`).toBe(0);
+        await page.mouse.move(1000, 250);
+        await page.mouse.wheel(0, 5000);
+        await expect
+          .poll(() => page.evaluate(() => window.scrollY), { message: `${path} scrolls` })
+          .toBeGreaterThan(0);
+        await expect(target, `${path} last content is not clipped`).toBeInViewport({ ratio: 1 });
+        if (index === 1) {
+          await expect(
+            page
+              .getByRole("navigation", { name: "Workers pages" })
+              .getByRole("button", { name: "Next" }),
+            "Fleet pager is reachable",
+          ).toBeInViewport({ ratio: 1 });
+        }
+        const box = await target.boundingBox();
+        expect(box, `${path} last content`).not.toBeNull();
+        expect(box!.y, `${path} last content top`).toBeGreaterThanOrEqual(0);
+        expect(box!.y + box!.height, `${path} last content bottom`).toBeLessThanOrEqual(500);
+        const scrolledNav = await nav.boundingBox();
+        expect(scrolledNav!.x, `${path} scrolled navigation x`).toBe(12);
+        expect(scrolledNav!.y, `${path} scrolled navigation y`).toBeCloseTo(12, 0);
+        expect(scrolledNav!.width, `${path} scrolled navigation width`).toBe(200);
+        await expect(
+          nav.getByRole("link", { name: "Overview", exact: true }),
+          `${path} navigation remains reachable`,
+        ).toBeInViewport({ ratio: 1 });
+        await page.mouse.wheel(0, -5000);
+        await expect
+          .poll(() => page.evaluate(() => window.scrollY), {
+            message: `${path} scrolls back to the top`,
+          })
+          .toBe(0);
+        await expect(
+          page.getByRole("heading", { level: 1, name: title }),
+          `${path} heading is reachable again`,
+        ).toBeInViewport({ ratio: 1 });
       }
     } finally {
       await disposeFleet(fleet);
