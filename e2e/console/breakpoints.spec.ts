@@ -18,39 +18,58 @@ const SIZES = [
 ];
 
 // why: sideways page scroll, and anything drawn past the right edge of the card that holds it, are the
-// two ways a narrow window breaks a page; a list that scrolls inside its card is meant to.
+// two ways a narrow window breaks a page; a list that scrolls inside its own box does not widen the card.
 async function problemsOf(page: Page): Promise<readonly string[]> {
   return page.evaluate(() => {
-    const found: string[] = [];
     const root = document.documentElement;
+    const found: string[] = [];
     if (root.scrollWidth > root.clientWidth) {
       found.push(`page scrolls sideways (${root.scrollWidth} > ${root.clientWidth})`);
     }
-    const scrolls = (element: Element) => {
-      const style = getComputedStyle(element);
-      return /(auto|scroll|hidden|clip)/.test(`${style.overflowX}`) && style.display !== "inline";
-    };
     for (const card of document.querySelectorAll("#main .card, #main .panel, #main section")) {
-      const edge = card.getBoundingClientRect();
-      if (edge.width === 0) continue;
-      for (const child of card.querySelectorAll("*")) {
-        const box = child.getBoundingClientRect();
-        if (box.width === 0 || box.height === 0) continue;
-        if (box.right <= edge.right + 1 && box.left >= edge.left - 1) continue;
-        let clipped = false;
-        for (let up = child.parentElement; up !== null && up !== card; up = up.parentElement) {
-          if (scrolls(up)) clipped = true;
-        }
-        if (!clipped && !scrolls(card)) {
-          found.push(
-            `${child.tagName.toLowerCase()}.${String(child.className).slice(0, 40)} leaves its card`,
-          );
-          break;
-        }
+      if (card.scrollWidth > card.clientWidth + 1) {
+        found.push(
+          `${card.tagName.toLowerCase()}.${String(card.className).slice(0, 40)} overflows`,
+        );
       }
     }
     return found;
   });
+}
+
+async function shoot(
+  page: Page,
+  scheme: string,
+  name: string,
+  width: number,
+  out: string,
+): Promise<void> {
+  const light = scheme === "light" && width === 1440;
+  if (!light && (width === 1440 || width === 360)) return;
+  const path = light ? `${LIGHT_DIRECTORY}/${name}.png` : `${out}/${scheme}-${name}-${width}.png`;
+  await page.screenshot({ path, animations: "disabled" });
+}
+
+async function sweep(
+  page: Page,
+  gatewayUrl: string,
+  scheme: string,
+  out: string,
+): Promise<readonly string[]> {
+  const problems: string[] = [];
+  for (const entry of await renderCases()) {
+    for (const size of SIZES) {
+      await page.setViewportSize(size);
+      await page.goto(new URL(entry.path, gatewayUrl).href);
+      await expect(page.locator("#main")).not.toContainText("Loading…");
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForTimeout(150);
+      const label = `${scheme} ${entry.name} ${size.width}x${size.height}`;
+      for (const problem of await problemsOf(page)) problems.push(`${label}: ${problem}`);
+      await shoot(page, scheme, entry.name, size.width, out);
+    }
+  }
+  return problems;
 }
 
 for (const colorScheme of ["dark", "light"] as const) {
@@ -58,7 +77,6 @@ for (const colorScheme of ["dark", "light"] as const) {
     browser,
   }, testInfo) => {
     test.setTimeout(540_000);
-    const cases = await renderCases();
     const gateway = await startDaemon("gateway");
     try {
       const context = await browser.newContext({
@@ -74,30 +92,7 @@ for (const colorScheme of ["dark", "light"] as const) {
       await signIn(page, gateway.tokens.operator);
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
       await mkdir(LIGHT_DIRECTORY, { recursive: true });
-      const problems: string[] = [];
-      for (const entry of cases) {
-        for (const size of SIZES) {
-          await page.setViewportSize(size);
-          await page.goto(new URL(entry.path, gateway.url).href);
-          await expect(page.locator("#main")).not.toContainText("Loading…");
-          await page.evaluate(() => document.fonts.ready);
-          await page.waitForTimeout(150);
-          const label = `${colorScheme} ${entry.name} ${size.width}x${size.height}`;
-          for (const problem of await problemsOf(page)) problems.push(`${label}: ${problem}`);
-          if (size.width === 1440 && colorScheme === "light") {
-            await page.screenshot({
-              path: `${LIGHT_DIRECTORY}/${entry.name}.png`,
-              animations: "disabled",
-            });
-          } else if (size.width !== 1440 && size.width !== 360) {
-            await page.screenshot({
-              path: testInfo.outputPath(`${colorScheme}-${entry.name}-${size.width}.png`),
-              animations: "disabled",
-            });
-          }
-        }
-      }
-      expect(problems).toEqual([]);
+      expect(await sweep(page, gateway.url, colorScheme, testInfo.outputDir)).toEqual([]);
       await context.close();
     } finally {
       await gateway.dispose();

@@ -4,8 +4,6 @@ import {
   Button,
   ButtonLink,
   ChoiceChips,
-  type Column,
-  DataTable,
   GroupHeader,
   Link,
   Loaded,
@@ -14,12 +12,10 @@ import {
   type MenuEntry,
   Meter,
   Page,
-  type Paging,
   Pill,
   RowMenu,
   SearchField,
   Slots,
-  Status,
   StatusDot,
 } from "../../ds";
 import {
@@ -31,7 +27,6 @@ import {
   useFleetEvents,
   useWorkerMenu,
   WORKER_FILTERS,
-  type WorkerRow,
 } from "../../state/workers";
 import { StreamingPage, LegacyWatchRedirect } from "./streaming-page";
 import { WorkerPageScreen } from "./worker-page";
@@ -291,72 +286,3 @@ function FleetLog({ rows }: { readonly rows: readonly LogEventRow[] }) {
     </section>
   );
 }
-
-// why: the Overview draws this same table, every worker and no pager, so it passes no `paging`.
-export function WorkersTable(props: {
-  readonly rows: readonly WorkerRow[];
-  readonly empty: string;
-  readonly paging?: Paging;
-}) {
-  const entries = useWorkerMenu();
-  return (
-    <DataTable
-      label="Workers"
-      rows={props.rows}
-      columns={COLUMNS}
-      rowId={(row) => row.id}
-      rowTo={(row) => row.to}
-      menu={{ entries, label: (row) => `Actions for ${row.name}` }}
-      empty={props.empty}
-      {...(props.paging === undefined ? {} : { paging: props.paging })}
-      wide
-    />
-  );
-}
-
-function MeterCell({ label, row }: { readonly label: string; readonly row: WorkerRow }) {
-  const meter = row.meters.find((candidate) => candidate.label === label);
-  if (meter?.percent === undefined) return <>—</>;
-  return (
-    <span className="worker-meter">
-      <span className="mono">{meter.percent}%</span>
-      <Meter percent={meter.percent} tone={meter.tone} size="thin" />
-    </span>
-  );
-}
-
-const COLUMNS: readonly Column<WorkerRow>[] = [
-  {
-    cell: (row) => (
-      <span className="worker-name">
-        <Link to={row.to} title={row.name}>
-          {row.name}
-        </Link>
-        {row.system === undefined && row.version === undefined ? null : (
-          <span className="worker-system">
-            {[row.system, row.version].filter((part) => part !== undefined).join(" · ")}
-          </span>
-        )}
-      </span>
-    ),
-    header: "Worker",
-  },
-  {
-    cell: (row) => (
-      <span className="worker-name">
-        <Status tone={row.health.tone}>{row.health.word}</Status>
-        {row.stage === undefined ? null : <span className="worker-system">{row.stage}</span>}
-      </span>
-    ),
-    header: "State",
-  },
-  { cell: (row) => <Slots slots={row.slots} label={row.slotsLabel} />, header: "Slots" },
-  {
-    cell: (row) => (row.use === undefined ? "—" : `${row.use.running} / ${row.use.limit}`),
-    header: "Use",
-    mono: true,
-  },
-  { cell: (row) => <MeterCell label="CPU" row={row} />, header: "CPU" },
-  { cell: (row) => <MeterCell label="Memory" row={row} />, header: "Memory" },
-  { cell: (row) => <MeterCell label="Disk" row={row} />, header: "Disk" },
-];

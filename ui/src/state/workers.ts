@@ -39,7 +39,6 @@ import { useApi } from "./services";
 export type { LogEventRow } from "../model/event-list";
 export type {
   FleetRow,
-  CapabilityRow,
   DeviceRow,
   InstallRow,
   WarmRow,
