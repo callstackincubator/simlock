@@ -328,6 +328,17 @@ function readLeaseHeader(request: Request): HeaderLease {
   };
 }
 
+// why: a gateway's link refuses another's lease itself; a worker's link takes any lease id, so the front's map says whose it is.
+function refuseForeignLease(
+  context: FrontContext,
+  identity: Identity,
+  leaseId: string,
+): Response | undefined {
+  if (context.link.stillHeld !== undefined) return undefined;
+  if (context.map.get(leaseId)?.identity.principal === identity.principal) return undefined;
+  return frontReply(refusal(`refused: lease ${leaseId} is not one of yours`, 403), undefined);
+}
+
 async function routeByHeader(
   context: FrontContext,
   request: Request,
@@ -337,13 +348,8 @@ async function routeByHeader(
   if ("refused" in read) return read.refused;
   const { leaseId } = read;
   if (leaseId === undefined) return passThrough(context, request, identity, undefined);
-  // why: a gateway's link refuses another's lease itself; a worker's link takes any lease id, so the front's map says whose it is.
-  if (
-    context.link.stillHeld === undefined &&
-    context.map.get(leaseId)?.identity.principal !== identity.principal
-  ) {
-    return frontReply(refusal(`refused: lease ${leaseId} is not one of yours`, 403), undefined);
-  }
+  const foreign = refuseForeignLease(context, identity, leaseId);
+  if (foreign !== undefined) return foreign;
   const status = await context.link.status(leaseId, identity);
   if (status.state === "unavailable")
     return frontReply(notAvailable(status.reason, status.retriable), undefined);
