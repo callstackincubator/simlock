@@ -115,15 +115,18 @@ describe("a table drawn through its public props", () => {
     expect(dataRows(second).map((row) => row.name)).toEqual(["ios-16", "android-35"]);
     expect(groupHeadings(second)).toEqual(["iOS · 3 baselines", "Android · 2 baselines"]);
 
-    const chosen = draw({ paging: PAGE_2, selectedId: "b3" });
-    const marked = dataRows(chosen).filter((row) => row.attrs.includes('aria-selected="true"'));
-    expect(marked.map((row) => row.name)).toEqual(["ios-16"]);
-    expect(marked[0]?.attrs).toContain("table-row-selected");
-    expect(dataRows(chosen).filter((row) => row.attrs.includes("table-row-selected"))).toHaveLength(
-      1,
-    );
-    expect(chosen.match(/aria-selected="true"/g)).toHaveLength(1);
-    expect(chosen.match(/table-row-selected/g)).toHaveLength(1);
+    // why: a row with a menu and a plain row are drawn by different branches; both mark the selection.
+    for (const menu of [true, false]) {
+      const chosen = draw({ menu, paging: PAGE_2, selectedId: "b3" });
+      const marked = dataRows(chosen).filter((row) => row.attrs.includes('aria-selected="true"'));
+      expect(marked.map((row) => row.name)).toEqual(["ios-16"]);
+      expect(marked[0]?.attrs).toContain("table-row-selected");
+      expect(
+        dataRows(chosen).filter((row) => row.attrs.includes("table-row-selected")),
+      ).toHaveLength(1);
+      expect(chosen.match(/aria-selected="true"/g)).toHaveLength(1);
+      expect(chosen.match(/table-row-selected/g)).toHaveLength(1);
+    }
 
     const counted = draw({ footer: "count", paging: PAGE_2 });
     expect(counted).toContain("3–4 of 5");
