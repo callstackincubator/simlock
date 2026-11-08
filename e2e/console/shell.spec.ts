@@ -57,6 +57,8 @@ test.describe("the shell", () => {
         width: 200,
         height: 876,
       });
+      expect((await nav.locator(".sidebar-top").boundingBox())?.height).toBe(24);
+      expect((await nav.locator(".sidebar-account").boundingBox())?.height).toBeCloseTo(51.34, 1);
       const geometry = await page.evaluate(() => {
         const style = (selector: string) => getComputedStyle(document.querySelector(selector)!);
         return {
