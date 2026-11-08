@@ -75,22 +75,6 @@
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
-.row {
-  display: grid;
-  gap: var(--space-3);
-  align-items: stretch;
-}
-
-@media (min-width: 1024px) {
-  .row {
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  }
-
-  .row-even {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-}
-
 .empty {
   margin: 0;
   padding: var(--space-4);

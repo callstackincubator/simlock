@@ -183,35 +183,45 @@ export function OverviewBody(props: {
   );
 }
 
+function meterOf(worker: WallWorker, label: string) {
+  const found = worker.meters.find((meter) => meter.label === label);
+  return { percent: found?.percent, tone: found?.tone ?? "neutral" } as const;
+}
+
+// why: past ten slots the wall shows one capped meter for the worker, not a row of squares per platform.
+function slotsOf(worker: WallWorker) {
+  if (worker.ios.length + worker.android.length > 10) {
+    return {
+      android: undefined,
+      ios: <Slots slots={[...worker.ios, ...worker.android]} label={worker.slotsLabel} />,
+    };
+  }
+  return {
+    android: <Slots slots={worker.android} label={`Android: ${worker.slotsLabel}`} />,
+    ios: <Slots slots={worker.ios} label={`iOS: ${worker.slotsLabel}`} />,
+  };
+}
+
 function Tile({ worker }: { readonly worker: WallWorker }) {
-  const total = worker.ios.length + worker.android.length;
-  const [cpu, memory, disk] = ["CPU", "Memory", "Disk"].map((label) =>
-    worker.meters.find((meter) => meter.label === label),
-  );
+  const cpu = meterOf(worker, "CPU");
+  const memory = meterOf(worker, "Memory");
+  const disk = meterOf(worker, "Disk");
   const { tone, word } = worker.health;
+  const issue = tone === "ok" ? undefined : <Pill tone={tone}>{word}</Pill>;
   return (
     <WorkerTile
       name={worker.name}
       title={worker.name}
       to={worker.to}
       tone={tone === "ok" ? "neutral" : tone}
-      {...(tone === "ok" ? {} : { pill: <Pill tone={tone}>{word}</Pill> })}
-      ios={
-        total > 10 ? (
-          <Slots slots={[...worker.ios, ...worker.android]} label={worker.slotsLabel} />
-        ) : (
-          <Slots slots={worker.ios} label={`iOS: ${worker.slotsLabel}`} />
-        )
-      }
-      {...(total > 10
-        ? {}
-        : { android: <Slots slots={worker.android} label={`Android: ${worker.slotsLabel}`} /> })}
-      cpu={cpu?.percent}
-      memory={memory?.percent}
-      disk={disk?.percent}
-      cpuTone={cpu?.tone ?? "neutral"}
-      memoryTone={memory?.tone ?? "neutral"}
-      diskTone={disk?.tone ?? "neutral"}
+      pill={issue}
+      {...slotsOf(worker)}
+      cpu={cpu.percent}
+      memory={memory.percent}
+      disk={disk.percent}
+      cpuTone={cpu.tone}
+      memoryTone={memory.tone}
+      diskTone={disk.tone}
     />
   );
 }

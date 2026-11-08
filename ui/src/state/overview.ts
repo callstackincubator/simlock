@@ -11,13 +11,9 @@ import { bothViews, loadView, mapView } from "./resource";
 
 export type {
   EndingCard,
-  EndingRow,
   Overview,
-  OverviewBanner,
-  OverviewTile,
   PlatformCapacity,
   QueueCard,
-  QueueRow,
   WallWorker,
 } from "../model/overview";
 
