@@ -74,7 +74,7 @@ export function LeaseInspector(props: {
   );
 }
 
-export function InspectorBody(props: {
+function InspectorBody(props: {
   readonly lease: LeaseInspection;
   readonly onRelease: (() => void) | undefined;
   readonly busy: boolean | undefined;

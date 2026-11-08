@@ -37,10 +37,8 @@ export { type EventRow } from "../model/event-list";
 export {
   LEASE_FILTERS,
   leaseRows,
-  type HolderShare,
   type LeaseFilter,
   type LeaseSummary,
-  type PlatformShare,
   type LeaseInspection,
   type LeaseRowView,
 } from "../model/leases";
@@ -63,12 +61,6 @@ export interface Leases {
   readonly selectedKey: string | undefined;
   // why: counted over every lease, not the rows the filter and the search leave.
   readonly summary: LeaseSummary | undefined;
-}
-
-// why: the row's ⋯ menu reads the one list of actions a lease offers (ADR 0037 §3).
-export function useLeaseMenu(): (row: LeaseRowView) => readonly MenuEntry[] {
-  const { entries } = useActions();
-  return (row) => entries(leaseActions(row));
 }
 
 // why: a lease's drawer offers the actions of the same row the list shows, under the same item key,
@@ -143,7 +135,7 @@ function isUnknownLease(error: unknown): boolean {
 
 // why: a lease that was released or has expired is gone, and the page says so instead of keeping
 // the details it last held; `undefined` is that answer.
-export function useLeaseInspection(id: string): LoadView<LeaseInspection | undefined> {
+function useLeaseInspection(id: string): LoadView<LeaseInspection | undefined> {
   const details = useRouteQuery<{ readonly lease: LeaseDetails }>(
     `/v1/leases/${encodeURIComponent(id)}`,
   );
@@ -188,8 +180,8 @@ export function useWideLayout(): boolean {
   return useSyncExternalStore(subscribeWide, isWide, () => true);
 }
 
-export const COPY_DEADLINE_MS = 5_000;
-export const COPY_FAILURE = "Couldn't copy. Select and copy the id.";
+const COPY_DEADLINE_MS = 5_000;
+const COPY_FAILURE = "Couldn't copy. Select and copy the id.";
 
 // why: the Clipboard API alone: it may be absent, refuse, or never answer, and then the id stays on
 // screen to select. The first of its answer and the deadline wins; whatever comes later, or after the
