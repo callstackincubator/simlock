@@ -244,11 +244,12 @@ const TONE_OF: Readonly<Partial<Record<string, (typeof TONES)[number]>>> = {
   drained: "warn",
   incompatible: "error",
   leased: "ok",
+  off: "idle",
   ready: "ok",
   running: "ok",
 };
 
-async function readSquares(page: Page) {
+async function readStatusIndicators(page: Page) {
   return page.locator(".status-dot").evaluateAll((elements) => {
     const root = getComputedStyle(document.documentElement);
     const named = (token: string) => {
@@ -263,7 +264,15 @@ async function readSquares(page: Page) {
       accent: named("--accent"),
       neutral: named("--slot-leased"),
       shown: elements.map((element) => ({
+        ariaHidden: element.getAttribute("aria-hidden"),
+        ariaLabel: element.getAttribute("aria-label"),
         colour: getComputedStyle(element).backgroundColor,
+        kind:
+          element.closest(".status") && !element.closest(".sidebar-account")
+            ? ("pill" as const)
+            : ("standalone" as const),
+        role: element.getAttribute("role"),
+        title: element.getAttribute("title"),
         word:
           element.getAttribute("aria-label") ?? element.parentElement?.textContent?.trim() ?? "",
       })),
@@ -272,21 +281,47 @@ async function readSquares(page: Page) {
   });
 }
 
-async function expectSquareColours(
+async function expectStatusIndicatorColours(
   page: Page,
   where: string,
-  words: readonly string[],
+  words: readonly (readonly [string, "pill" | "standalone"])[],
+  theme: "light" | "dark",
 ): Promise<void> {
   await expect(page.locator(".status-dot").first()).toBeVisible();
-  const { accent, shown, tones } = await readSquares(page);
-  expect(shown.map((square) => square.word)).toEqual(expect.arrayContaining([...words]));
-  for (const square of shown) {
-    const context = `${square.word} in ${where}`;
-    expect(square.word, where).not.toBe("");
-    expect(tones, context).toContain(square.colour);
-    expect(square.colour, context).not.toBe(accent);
-    const tone = TONE_OF[square.word];
-    if (tone !== undefined) expect(square.colour, context).toBe(tones[TONES.indexOf(tone)]);
+  const { accent, shown } = await readStatusIndicators(page);
+  const colours = {
+    light: {
+      pill: ["rgb(20, 111, 53)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(85, 85, 95)"],
+      standalone: ["rgb(21, 128, 61)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(87, 83, 78)"],
+    },
+    dark: {
+      pill: ["rgb(134, 239, 172)", "rgb(253, 224, 71)", "rgb(252, 165, 165)", "rgb(185, 185, 194)"],
+      standalone: [
+        "rgb(74, 222, 128)",
+        "rgb(250, 204, 21)",
+        "rgb(248, 113, 113)",
+        "rgb(168, 162, 158)",
+      ],
+    },
+  } as const;
+  for (const [word, kind] of words) {
+    expect(shown, where).toEqual(expect.arrayContaining([expect.objectContaining({ word, kind })]));
+  }
+  for (const indicator of shown) {
+    const context = `${indicator.word} ${indicator.kind} in ${where}`;
+    expect(indicator.word, where).not.toBe("");
+    if (indicator.ariaLabel !== null) {
+      expect(indicator.role, context).toBe("img");
+      expect(indicator.title, context).toBe(indicator.word);
+    } else {
+      expect(indicator.ariaHidden, context).toBe("true");
+    }
+    const palette = colours[theme][indicator.kind];
+    expect(indicator.colour, context).not.toBe(accent);
+    expect(palette, context).toContain(indicator.colour);
+    const tone = TONE_OF[indicator.word.toLowerCase()];
+    expect(tone, context).toBeDefined();
+    expect(indicator.colour, context).toBe(palette[TONES.indexOf(tone!)]);
   }
 }
 
@@ -1227,7 +1262,7 @@ test.describe("the workers page", () => {
     // fails a named assertion here. A figure under its threshold is the neutral tone.
     for (const colorScheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme });
-      const { accent, neutral, tones } = await readSquares(page);
+      const { accent, neutral, tones } = await readStatusIndicators(page);
 
       for (const [level, usedPercent, tone] of [
         ["normal", 50, "ok"],
@@ -1359,7 +1394,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("every status square shows its word with a status colour, and none uses the accent colour", async ({
+  test("every status indicator shows its word with its context's status colour, and none uses the accent colour", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -1384,20 +1419,38 @@ test.describe("the workers page", () => {
           .getByRole("navigation", { name: "Console" })
           .getByRole("link", { name: "Fleet" })
           .click();
-        await expectSquareColours(page, `list ${colorScheme}`, [
-          "connected",
-          "drained",
-          "incompatible",
-        ]);
+        await expectStatusIndicatorColours(
+          page,
+          `list ${colorScheme}`,
+          [
+            ["connected", "pill"],
+            ["drained", "pill"],
+            ["incompatible", "pill"],
+          ],
+          colorScheme,
+        );
         await row(page, "worker-a").getByRole("link").click();
         await openTab(page, "Host");
-        await expectSquareColours(page, `host ${colorScheme}`, [
-          "connected",
-          "running",
-          "compatible",
-        ]);
+        await expectStatusIndicatorColours(
+          page,
+          `host ${colorScheme}`,
+          [
+            ["connected", "pill"],
+            ["running", "pill"],
+            ["compatible", "pill"],
+          ],
+          colorScheme,
+        );
         await openTab(page, "Devices");
-        await expectSquareColours(page, `devices ${colorScheme}`, ["connected", "leased"]);
+        await expectStatusIndicatorColours(
+          page,
+          `devices ${colorScheme}`,
+          [
+            ["connected", "pill"],
+            ["leased", "standalone"],
+          ],
+          colorScheme,
+        );
       }
     } finally {
       hangUp();
