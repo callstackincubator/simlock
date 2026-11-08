@@ -104,12 +104,17 @@ function sha256Sums(name: string): [string, string][] {
 /**
  * why: a committed binary is never searched as text -- built fixtures the e2e lane installs, and
  * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (a packed server APK), and
- * the website's fonts and images. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
+ * the website's fonts and images, and the nine approved console design renders. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
  * is a claim about their contents, so for `vendor/` the test that compares this list against the
  * files in `vendor/` that actually carry a NUL is what makes the skip mean something.
  */
 const isCommittedBinary = (name: string): boolean =>
-  name.startsWith("e2e/fixtures/") || pinnedVendoredArtifacts.has(name) || isWebsiteAsset(name);
+  name.startsWith("e2e/fixtures/") ||
+  pinnedVendoredArtifacts.has(name) ||
+  isWebsiteAsset(name) ||
+  /^docs\/internal\/console-redesign\/renders\/(?:1-overview|2-fleet|3-worker|4-streaming|5-leases-empty|6-leases-selected|7-baselines|8-activity|mosaic)\.png$/.test(
+    name,
+  );
 
 /**
  * why: the website ships its own fonts and the images `pnpm og` renders (the social card, the
@@ -129,7 +134,7 @@ const isWebsiteAsset = (name: string): boolean =>
  * tracked file in the repository (testing rule 4), not just the directories this test
  * happened to name. The exceptions are the committed binaries `isCommittedBinary` names:
  * built binaries committed for tests, the vendored third-party artifacts, and the
- * website's fonts and images, none of which is ever searched as text. Untracked and ignored files are out of scope:
+ * website's fonts and images, and approved design renders, none of which is searched as text. Untracked and ignored files are out of scope:
  * they are not part of what anyone clones or searches.
  */
 describe("tracked files", () => {
