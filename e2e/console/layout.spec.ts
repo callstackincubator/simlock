@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } from "./fixtures.js";
 import { answer, pad } from "./stub-answers.js";
@@ -16,6 +16,106 @@ async function openPage(
   await page.goto(new URL(path, daemon.url).toString());
   if (!signedIn) await signIn(page, daemon.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+}
+
+function lastContentOf(page: Page, index: number): Locator {
+  if (index === 0) return page.getByRole("link", { name: "layout-a", exact: true });
+  if (index === 1) return page.getByRole("region", { name: "Worker events" });
+  return page.getByRole("region", { name: "Events on this worker" });
+}
+
+async function expectShellGeometry(page: Page, nav: Locator, path: string): Promise<void> {
+  for (const [height, navHeight] of [
+    [900, 876],
+    [500, 476],
+  ] as const) {
+    await page.setViewportSize({ width: 1440, height });
+    expect(await nav.boundingBox(), `${path} ${height} navigation`).toEqual({
+      x: 12,
+      y: 12,
+      width: 200,
+      height: navHeight,
+    });
+    const geometry = await page.evaluate(() => {
+      const main = document.querySelector("main")!.getBoundingClientRect();
+      const head = document.querySelector(".page-head")!.getBoundingClientRect();
+      return {
+        mainX: main.x,
+        mainWidth: main.width,
+        headX: head.x,
+        headY: head.y,
+        headWidth: head.width,
+        scrollWidth: document.documentElement.scrollWidth,
+      };
+    });
+    expect(geometry, `${path} ${height} content geometry`).toEqual({
+      mainX: 212,
+      mainWidth: 1228,
+      headX: 224,
+      headY: 12,
+      headWidth: 1204,
+      scrollWidth: 1440,
+    });
+  }
+}
+
+async function expectScrollsAndStaysReachable(
+  page: Page,
+  nav: Locator,
+  target: Locator,
+  path: string,
+  index: number,
+  title: string,
+): Promise<void> {
+  expect(await page.evaluate(() => window.scrollY), `${path} starts at top`).toBe(0);
+  // why: a wheel over the worker page's event log scrolls the log, so the pointer rests on its side card.
+  await page.mouse.move(index === 2 ? 400 : 1000, 250);
+  await page.mouse.wheel(0, 5000);
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY), { message: `${path} scrolls` })
+    .toBeGreaterThan(0);
+  await expect(target, `${path} last content is not clipped`).toBeInViewport({ ratio: 1 });
+  const box = await target.boundingBox();
+  expect(box, `${path} last content`).not.toBeNull();
+  expect(box!.y, `${path} last content top`).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height, `${path} last content bottom`).toBeLessThanOrEqual(500);
+  const scrolledNav = await nav.boundingBox();
+  expect(scrolledNav!.x, `${path} scrolled navigation x`).toBe(12);
+  expect(scrolledNav!.y, `${path} scrolled navigation y`).toBeCloseTo(12, 0);
+  expect(scrolledNav!.width, `${path} scrolled navigation width`).toBe(200);
+  await expect(
+    nav.getByRole("link", { name: "Overview", exact: true }),
+    `${path} navigation remains reachable`,
+  ).toBeInViewport({ ratio: 1 });
+  await page.mouse.wheel(0, -5000);
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY), {
+      message: `${path} scrolls back to the top`,
+    })
+    .toBe(0);
+  await expect(
+    page.getByRole("heading", { level: 1, name: title }),
+    `${path} heading is reachable again`,
+  ).toBeInViewport({ ratio: 1 });
+}
+
+async function checkPage(
+  page: Page,
+  gateway: RunningDaemon,
+  workers: readonly unknown[],
+  index: number,
+  path: string,
+  title: string,
+): Promise<void> {
+  if (path === "/fleet") await answer(page, "/v1/workers", () => ({ workers }));
+  if (index === 2) await page.unrouteAll({ behavior: "wait" });
+  await openPage(page, gateway, path, title, index > 0);
+  if (index === 0) await expect(page.getByText("Wait p95", { exact: true })).toBeVisible();
+  const target = lastContentOf(page, index);
+  await expect(target).toHaveCount(1);
+  const nav = page.getByRole("navigation", { name: "Console" });
+  await expectShellGeometry(page, nav, path);
+  await expectScrollsAndStaysReachable(page, nav, target, path, index, title);
 }
 
 test.describe("the console's layout", () => {
@@ -45,80 +145,7 @@ test.describe("the console's layout", () => {
         { path: `/fleet/${id}`, title: "layout-a" },
       ];
       for (const [index, { path, title }] of pages.entries()) {
-        if (path === "/fleet") await answer(page, "/v1/workers", () => ({ workers }));
-        if (index === 2) await page.unrouteAll({ behavior: "wait" });
-        await openPage(page, fleet.gateway, path, title, index > 0);
-        if (index === 0) await expect(page.getByText("Wait p95", { exact: true })).toBeVisible();
-        const target =
-          index === 0
-            ? page.getByRole("link", { name: "layout-a", exact: true })
-            : index === 1
-              ? page.getByRole("region", { name: "Worker events" })
-              : page.getByRole("region", { name: "Events on this worker" });
-        await expect(target).toHaveCount(1);
-        const nav = page.getByRole("navigation", { name: "Console" });
-        for (const [height, navHeight] of [
-          [900, 876],
-          [500, 476],
-        ] as const) {
-          await page.setViewportSize({ width: 1440, height });
-          expect(await nav.boundingBox(), `${path} ${height} navigation`).toEqual({
-            x: 12,
-            y: 12,
-            width: 200,
-            height: navHeight,
-          });
-          const geometry = await page.evaluate(() => {
-            const main = document.querySelector("main")!.getBoundingClientRect();
-            const head = document.querySelector(".page-head")!.getBoundingClientRect();
-            return {
-              mainX: main.x,
-              mainWidth: main.width,
-              headX: head.x,
-              headY: head.y,
-              headWidth: head.width,
-              scrollWidth: document.documentElement.scrollWidth,
-            };
-          });
-          expect(geometry, `${path} ${height} content geometry`).toEqual({
-            mainX: 212,
-            mainWidth: 1228,
-            headX: 224,
-            headY: 12,
-            headWidth: 1204,
-            scrollWidth: 1440,
-          });
-        }
-        expect(await page.evaluate(() => window.scrollY), `${path} starts at top`).toBe(0);
-        // why: a wheel over the worker page's event log scrolls the log, so the pointer rests on its side card.
-        await page.mouse.move(index === 2 ? 400 : 1000, 250);
-        await page.mouse.wheel(0, 5000);
-        await expect
-          .poll(() => page.evaluate(() => window.scrollY), { message: `${path} scrolls` })
-          .toBeGreaterThan(0);
-        await expect(target, `${path} last content is not clipped`).toBeInViewport({ ratio: 1 });
-        const box = await target.boundingBox();
-        expect(box, `${path} last content`).not.toBeNull();
-        expect(box!.y, `${path} last content top`).toBeGreaterThanOrEqual(0);
-        expect(box!.y + box!.height, `${path} last content bottom`).toBeLessThanOrEqual(500);
-        const scrolledNav = await nav.boundingBox();
-        expect(scrolledNav!.x, `${path} scrolled navigation x`).toBe(12);
-        expect(scrolledNav!.y, `${path} scrolled navigation y`).toBeCloseTo(12, 0);
-        expect(scrolledNav!.width, `${path} scrolled navigation width`).toBe(200);
-        await expect(
-          nav.getByRole("link", { name: "Overview", exact: true }),
-          `${path} navigation remains reachable`,
-        ).toBeInViewport({ ratio: 1 });
-        await page.mouse.wheel(0, -5000);
-        await expect
-          .poll(() => page.evaluate(() => window.scrollY), {
-            message: `${path} scrolls back to the top`,
-          })
-          .toBe(0);
-        await expect(
-          page.getByRole("heading", { level: 1, name: title }),
-          `${path} heading is reachable again`,
-        ).toBeInViewport({ ratio: 1 });
+        await checkPage(page, fleet.gateway, workers, index, path, title);
       }
     } finally {
       await disposeFleet(fleet);

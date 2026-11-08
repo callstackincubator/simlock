@@ -333,6 +333,10 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
+function slotsText(leased: number, limit: number): string {
+  return leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`;
+}
+
 // why: taken from the gateway's own view of the worker and the figures the page was answered with,
 // so the page cannot agree with itself.
 function expectedRow(view: WorkerView): {
@@ -350,7 +354,7 @@ function expectedRow(view: WorkerView): {
   const lease = `${leased} ${leased === 1 ? "lease" : "leases"}`;
   return {
     bars: 3,
-    slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,
+    slots: slotsText(leased, limit),
     text: [name, ...system, lease, view.drained ? "drained" : `${leased} / ${limit}`],
   };
 }
