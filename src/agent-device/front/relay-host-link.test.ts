@@ -87,9 +87,15 @@ describe("RelayHostLink", () => {
       index.set("L", { ownerId: principal, workerId: "w1" });
       await link.forward(request(), tokenIdentity(principal), "L");
     }
+    const long = "t".repeat(300);
+    for (const leaseId of ["L1", "L2"]) {
+      index.set(leaseId, { ownerId: long, workerId: "w1" });
+      await link.forward(request(), tokenIdentity(long), leaseId);
+    }
 
     const tenants = relay.mock.calls.map((call) => call[2]);
-    expect(new Set(tenants).size).toBe(principals.length);
+    expect(new Set(tenants).size).toBe(tenants.length);
+    expect(tenants).toHaveLength(principals.length + 2);
   });
 
   it.each([

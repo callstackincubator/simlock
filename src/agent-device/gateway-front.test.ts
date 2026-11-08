@@ -1589,6 +1589,9 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
     expect(preflight.status).toBe(200);
     expect(pathsReceived(target)).toContain("/upload/preflight");
+    expect(target.fake.requests.find((seen) => seen.path === "/upload/preflight")?.tenant).toBe(
+      await tenantOf(target, 2),
+    );
     expect(pathsReceived(other)).toEqual(before);
   });
 
