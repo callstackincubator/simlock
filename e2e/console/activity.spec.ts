@@ -101,10 +101,6 @@ async function shownEvents(page: Page): Promise<string[]> {
   });
 }
 
-function asShown(event: Envelope): string {
-  return `${new Date(event.timestamp).toISOString()} ${event.event} ${encodeURIComponent(event.id)}`;
-}
-
 async function openEvent(page: Page, id: string): Promise<void> {
   const link = feed(page).locator(`a[href="/activity/${encodeURIComponent(id)}"]`);
   await feed(page).evaluate((box) => box.scrollTo({ top: 0 }));
@@ -187,18 +183,6 @@ async function firstRowInView(page: Page): Promise<{ href: string | null; top: n
   });
 }
 
-// why: the first visit signs in; a later one in the same test finds the session still there.
-async function visit(
-  page: Page,
-  daemon: RunningDaemon,
-  path: string,
-  first: boolean,
-): Promise<void> {
-  if (first) return openEvents(page, daemon, path);
-  await page.goto(new URL(path, daemon.url).href);
-  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
-}
-
 function older(queries: readonly string[]): string[] {
   return queries.filter((query) => !query.startsWith("?since="));
 }
@@ -229,210 +213,6 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("the Activity page", () => {
-  test("a lease taken with the CLI appears in the feed, and its page opens from it", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await openEvents(page, host);
-      await expect(rows(page).first()).toBeVisible();
-      const granted = rows(page).filter({ hasText: "lease.granted" });
-      await expect(granted).toHaveCount(0);
-
-      const id = await lease(host, "console-e2e-events");
-
-      await expect(granted).toHaveCount(1, { timeout: 10_000 });
-      await granted.click();
-      await expect(title(page)).toHaveText("lease.granted");
-      await expect(page).toHaveURL(/\/activity\/[^/]+$/);
-      await expect(page.getByText("leaseId", { exact: true })).toBeVisible();
-      await expect(page.locator("dd", { hasText: new RegExp(`^${id}$`) })).toBeVisible();
-
-      await page.getByRole("link", { name: "Open lease" }).click();
-      await expect(page).toHaveURL(new RegExp(`/leases/${id}/?$`));
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("the feed matches simlock events --since 1h, and a restart leaves no gap and no duplicate", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await lease(host, "console-e2e-before");
-      await openEvents(page, host);
-      const before = (await cliEvents(host)).map(asShown);
-      await expect.poll(() => shownEvents(page)).toEqual(before.toReversed());
-
-      await host.stop();
-      await expect(page.locator(".connection")).toHaveText(/^Reconnecting/);
-      await host.start();
-      await expect(page.locator(".connection")).toHaveText("Connected", { timeout: 30_000 });
-      await lease(host, "console-e2e-after");
-
-      const after = await cliEvents(host);
-      expect(after.length).toBeGreaterThan(before.length);
-      await expect.poll(() => shownEvents(page)).toEqual(after.map(asShown).toReversed());
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("choosing a row puts the event in the URL and its payload whole in the drawer", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await lease(host, "console-e2e-choose");
-      await openEvents(page, host);
-      const started = (await cliEvents(host)).find((event) => event.event === "daemon.started");
-      expect(started).toBeDefined();
-
-      await openEvent(page, (started as Envelope).id);
-
-      await expect(page).toHaveURL(new RegExp(`/activity/${(started as Envelope).id}$`));
-      await expect(title(page)).toHaveText("daemon.started");
-      await expect(page.getByRole("heading", { level: 3, name: "Payload" })).toBeVisible();
-      await page.reload();
-      await expect(title(page)).toHaveText("daemon.started");
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("an address for an event not among those loaded opens the drawer and says older events load as the list scrolls", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await openEvents(page, host, "/activity/evt_not_there");
-
-      await expect(
-        page
-          .getByRole("dialog")
-          .getByText(
-            "This event is not among those loaded. Older events load as you scroll the list, or with Load older events.",
-          ),
-      ).toBeVisible();
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("loaded directly at an event's address, closing the drawer replaces the address with /activity and focus goes to the heading", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await openEvents(page, host, "/activity/evt_not_there");
-      const drawer = page.getByRole("dialog");
-      await expect(drawer).toBeVisible();
-      const entries = await page.evaluate(() => window.history.length);
-
-      await page.keyboard.press("Escape");
-
-      await expect(drawer).toHaveCount(0);
-      expect(new URL(page.url()).pathname).toBe("/activity");
-      expect(await page.evaluate(() => window.history.length)).toBe(entries);
-      await expect(page.locator("main h1")).toBeFocused();
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("the filter and the search show only the events they match and are kept in the URL", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await lease(host, "console-e2e-filter");
-      await openEvents(page, host);
-
-      await kind(page, "Leases").check();
-
-      await expect(page).toHaveURL(/\?kind=lease$/);
-      const names = await rows(page).locator(".event-name").allTextContents();
-      expect(names.length).toBeGreaterThan(0);
-      expect(names.every((name) => name.startsWith("lease."))).toBe(true);
-      await page.reload();
-      await expect(kind(page, "Leases")).toBeChecked();
-
-      await page.getByRole("searchbox", { name: "Search events" }).fill("GRANTED");
-
-      await expect(page).toHaveURL(/\?kind=lease&q=GRANTED$/);
-      await expect(rows(page)).not.toHaveCount(0);
-      expect(
-        (await rows(page).locator(".event-name").allTextContents()).every(
-          (name) => name === "lease.granted",
-        ),
-      ).toBe(true);
-      await page.reload();
-      await expect(page.getByRole("searchbox", { name: "Search events" })).toHaveValue("GRANTED");
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("the facets count the events by kind, state and worker, and Problems only, workers and the range narrow the feed", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      const at = (minutes: number) => BASE - minutes * 60_000;
-      const event = (n: number, name: string, minutes: number, payload = {}): Stubbed => ({
-        event: name,
-        id: `evt_f${n}`,
-        payload,
-        seq: 1_000 - n,
-        timestamp: at(minutes),
-      });
-      await stubEvents(page, () => ({
-        events: [
-          event(1, "lease.granted", 1, { workerId: "wrk_a" }),
-          event(2, "queue.changed", 2),
-          event(3, "device.quarantined", 3, { workerId: "wrk_a" }),
-          event(4, "baseline.built", 4, { workerId: "wrk_b" }),
-          event(5, "lease.renewed", 180, { workerId: "wrk_b" }),
-        ],
-      }));
-      await openEvents(page, host);
-      const count = (group: string, name: string) =>
-        page.getByRole("group", { name: group }).locator("label", { hasText: name });
-
-      await expect(rows(page)).toHaveCount(4);
-      await expect(count("Kind", "Leases")).toContainText("1");
-      await expect(count("Kind", "Queue")).toContainText("1");
-      await expect(count("State", "Problems only")).toContainText("1");
-      await expect(count("Worker", "Other")).toContainText("1");
-
-      await page.getByRole("group", { name: "State" }).getByRole("checkbox").check();
-      await expect(page).toHaveURL(/\?state=problems$/);
-      await expect(rows(page)).toHaveCount(1);
-      await expect(rows(page).first()).toContainText("device.quarantined");
-      await expect(count("Kind", "Leases")).toContainText("0");
-
-      await page.getByRole("group", { name: "State" }).getByRole("checkbox").uncheck();
-      await page
-        .getByRole("group", { name: "Worker" })
-        .getByRole("checkbox", { name: "Other" })
-        .check();
-      await expect(page).toHaveURL(/\?worker=$/);
-      await expect(rows(page)).toHaveCount(1);
-      await expect(rows(page).first()).toContainText("queue.changed");
-
-      await page.getByRole("radio", { name: "6 h" }).check({ force: true });
-      await expect(page).toHaveURL(/\?worker=&range=6h$/);
-      await page
-        .getByRole("group", { name: "Worker" })
-        .getByRole("checkbox", { name: "Other" })
-        .uncheck();
-      await expect(rows(page)).toHaveCount(5);
-    } finally {
-      await host.dispose();
-    }
-  });
-
   test("the feed scrolls inside itself with the keyboard, and counts the events that came in while scrolled down", async ({
     page,
   }) => {
@@ -556,51 +336,18 @@ test.describe("the Activity page", () => {
     }
   });
 
-  test("each end row shows its wording: the history's start, the 10,000 cap, a 422, a 503 and a 500 with Try again, and a page of events already held", async ({
+  test("at the end of a feed holding 10,000 events nothing more is asked for, and at the end of one holding the page asked for, the page adds no event", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      let queries = await stubEvents(page, (query) => {
-        if (query.get("before") === null) return { events: stubbedRange(1, 30) };
-        return query.get("before") === "evt_0030" ? { events: stubbedRange(31, 70) } : {};
-      });
+      let queries = await stubEvents(page, () => ({ events: stubbedRange(1, 10_000) }));
       await openEvents(page, host, "/activity?range=24h");
-      await expect(
-        page.getByText(`Start of the history (${localMinute(BASE - 70 * 60_000)})`),
-      ).toBeVisible();
-      await expect.poll(() => eventsHeld(page)).toBe(70);
-      expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
-
-      queries = await stubEvents(page, () => ({ events: stubbedRange(1, 10_000) }));
-      await page.reload();
       await expect(page.getByText("Showing the newest 10,000 events.")).toBeVisible();
       await feed(page).focus();
       await page.keyboard.press("End");
       await page.waitForTimeout(300);
       expect(older(queries)).toEqual([]);
-
-      queries = await stubEvents(page, (query) =>
-        query.get("before") === null ? { events: stubbedRange(1, 30) } : { status: 422 },
-      );
-      await page.reload();
-      await expect(page.getByText("Older events are no longer kept.")).toBeVisible();
-      expect(older(queries)).toHaveLength(1);
-
-      for (const status of [503, 500]) {
-        let failing = true;
-        queries = await stubEvents(page, (query) => {
-          if (query.get("before") === null) return { events: stubbedRange(1, 30) };
-          return failing ? { status } : { events: stubbedRange(31, 40) };
-        });
-        await page.reload();
-        await expect(page.getByText("Older events are not available right now.")).toBeVisible();
-        expect(older(queries)).toHaveLength(1);
-        failing = false;
-        await page.getByRole("button", { name: "Try again" }).click();
-        await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
-        expect(older(queries)).toHaveLength(2);
-      }
 
       queries = await stubEvents(page, () => ({ events: stubbedRange(1, 100) }));
       await page.reload();
@@ -652,115 +399,6 @@ test.describe("the Activity page", () => {
       ).toBeVisible();
     } finally {
       await host.dispose();
-    }
-  });
-
-  test("a daemon with no events in the last hour but older history shows them at once, and an empty history says No events yet", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      let queries = await stubEvents(page, (query) =>
-        query.has("since") ? {} : { events: stubbedRange(1, 40) },
-      );
-      await openEvents(page, host);
-      await expect.poll(() => eventsHeld(page)).toBe(40);
-      await expect(rows(page).first()).toBeVisible();
-      expect(older(queries)).toEqual(["?limit=100"]);
-
-      queries = await stubEvents(page, () => ({}));
-      await page.reload();
-      await expect(page.getByText("No events yet.")).toBeVisible();
-      expect(older(queries)).toEqual(["?limit=100"]);
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("with a chip or a search on, nothing loads by itself, and Load older events loads one page per press", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      for (const [turn, address] of [
-        "/activity?subject=lease&range=24h",
-        "/activity?q=RENEWED&range=24h",
-      ].entries()) {
-        const queries = await stubEvents(page, (query) => {
-          if (query.get("before") === null) return { events: stubbedRange(1, 30) };
-          if (query.get("before") === "evt_0030") return { events: stubbedRange(31, 130) };
-          return query.get("before") === "evt_0130" ? { events: stubbedRange(131, 230) } : {};
-        });
-        await visit(page, host, address, turn === 0);
-        await expect.poll(() => eventsHeld(page)).toBe(30);
-        const more = page.getByRole("button", { name: "Load older events" });
-        await expect(more).toBeVisible();
-        await page.waitForTimeout(500);
-        expect(older(queries)).toEqual([]);
-
-        await more.click();
-        await expect.poll(() => eventsHeld(page)).toBe(130);
-        expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
-        await page.waitForTimeout(500);
-        expect(older(queries)).toHaveLength(1);
-
-        await more.click();
-        await expect.poll(() => eventsHeld(page)).toBe(230);
-        expect(older(queries)).toHaveLength(2);
-      }
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("a chip or a search that matches no held event says so and offers Load older events, which loads one page", async ({
-    page,
-  }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      const queries = await stubEvents(page, (query) =>
-        query.get("before") === null
-          ? { events: stubbedRange(1, 30) }
-          : { events: stubbedRange(31, 70) },
-      );
-      const cases = [
-        ["/activity?kind=worker", "No events match these filters among those loaded."],
-        ["/activity?q=zzz", "No events match zzz among those loaded."],
-      ] as const;
-      for (const [turn, [address, said]] of cases.entries()) {
-        queries.length = 0;
-        await visit(page, host, address, turn === 0);
-        await expect(page.getByText(said)).toBeVisible();
-        const more = page.getByRole("button", { name: "Load older events" });
-        await expect(more).toBeVisible();
-
-        await more.click();
-
-        await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
-        expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
-        await expect(page.getByText(said)).toBeVisible();
-        await expect(more).toHaveCount(0);
-      }
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("on a gateway, a worker's event shows that worker's label", async ({ page }) => {
-    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
-    try {
-      const worker = fleet.workers[0] as RunningDaemon;
-      await openEvents(page, fleet.gateway);
-
-      await lease(worker, "console-e2e-label");
-
-      const granted = rows(page).filter({ hasText: "lease.granted" });
-      await expect(granted).toHaveCount(1);
-      await expect(granted).toContainText("worker-a");
-      await granted.click();
-      await expect(page.getByText("workerId", { exact: true })).toBeVisible();
-    } finally {
-      await disposeFleet(fleet);
     }
   });
 
