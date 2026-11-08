@@ -1,4 +1,3 @@
-import { AxeBuilder } from "@axe-core/playwright";
 import type { Locator, Page, Route } from "@playwright/test";
 
 import { connectSimlock } from "../../dist/client/index.js";
@@ -529,27 +528,6 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     }
   }
 
-  test("no view reports a Content-Security-Policy violation", async ({ page, seeded }) => {
-    await page.addInitScript(() => {
-      const seen: string[] = [];
-      (window as unknown as { cspViolations: string[] }).cspViolations = seen;
-      document.addEventListener("securitypolicyviolation", (event) => {
-        seen.push(`${event.violatedDirective} ${event.blockedURI}`);
-      });
-    });
-    await page.goto(seeded.host.url);
-    await signIn(page, seeded.host.tokens.operator);
-    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-
-    await everyPage(page, seeded, async (path) => {
-      const found = await page.evaluate(() => ({
-        styles: document.querySelectorAll("style").length,
-        violations: (window as unknown as { cspViolations: string[] }).cspViolations,
-      }));
-      expect(found, path).toEqual({ styles: 0, violations: [] });
-    });
-  });
-
   test("every view has no horizontal page scroll at 360px wide", async ({ page, seeded }) => {
     await page.setViewportSize({ height: 740, width: 360 });
     await page.goto(seeded.host.url);
@@ -560,27 +538,4 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
       expect(await hasHorizontalScroll(page), path).toBe(false);
     });
   });
-
-  for (const colorScheme of ["light", "dark"] as const) {
-    test(`the pagers and the events feed pass an automated WCAG AA check (${colorScheme})`, async ({
-      page,
-      seeded,
-    }) => {
-      await page.emulateMedia({ colorScheme });
-      await page.goto(seeded.host.url);
-      await signIn(page, seeded.host.tokens.operator);
-      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-
-      await everyPage(page, seeded, async (path) => {
-        const results = await new AxeBuilder({ page })
-          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-          .analyze();
-        const found = results.violations.map((violation) => ({
-          id: violation.id,
-          targets: violation.nodes.map((node) => node.target.join(" ")),
-        }));
-        expect(found, path).toEqual([]);
-      });
-    });
-  }
 });

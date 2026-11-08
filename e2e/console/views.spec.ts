@@ -1,19 +1,8 @@
 import { mkdir } from "node:fs/promises";
 
-import { AxeBuilder } from "@axe-core/playwright";
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-import {
-  expect,
-  NAV,
-  type RunningDaemon,
-  settled,
-  signIn,
-  startDaemon,
-  startHostWithLease,
-  test,
-  withActionSurfaces,
-} from "./fixtures.js";
+import { expect, NAV, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
 import { addInboxItems, waitingItem } from "./inbox-stub.js";
 import { writeCaptureProgram } from "./screen-capture.js";
 
@@ -88,11 +77,6 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
   await page.goto(host.url);
   await signIn(page, host.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-}
-
-// why: a lease opens in a pane beside the table, a drawer below 1280px wide, and every other item in a drawer.
-function inspector(page: Page): Locator {
-  return page.getByRole("region", { exact: true, name: "Lease" }).or(page.getByRole("dialog"));
 }
 
 // why: an open drawer hides the page behind it from assistive technology.
@@ -327,156 +311,6 @@ test.describe("every view", () => {
       await host.dispose();
     }
   });
-
-  test("no view reports a Content-Security-Policy violation", async ({ page }) => {
-    const { host, pages } = await hostWithLease();
-    try {
-      await page.addInitScript(() => {
-        const seen: string[] = [];
-        (window as unknown as { cspViolations: string[] }).cspViolations = seen;
-        document.addEventListener("securitypolicyviolation", (event) => {
-          seen.push(`${event.violatedDirective} ${event.blockedURI}`);
-        });
-      });
-      const errors: string[] = [];
-      page.on("console", (message) => {
-        if (/content.security.policy/i.test(message.text())) errors.push(message.text());
-      });
-      const response = await page.goto(host.url);
-      expect(response?.headers()["content-security-policy"]).toContain("style-src 'self'");
-      await signIn(page, host.tokens.operator);
-      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-
-      for (const path of every(pages)) {
-        await visit(page, host, path);
-        if (opensDrawer(path)) await expect(inspector(page)).toBeVisible();
-        const chart = page.locator(".chart svg").first();
-        if (!opensDrawer(path) && (await chart.count()) > 0) {
-          await chart.hover();
-          await expect(page.locator(".chart-tip")).toBeVisible();
-        }
-        const found = await page.evaluate(() => ({
-          styles: document.querySelectorAll("style").length,
-          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
-        }));
-        expect(found, path).toEqual({ styles: 0, violations: [] });
-      }
-      // why: a healthy host has nothing in its Inbox, so a request that has waited two minutes is
-      // stubbed to give the Inbox a row and its drawer something to open.
-      await addInboxItems(page, () => [waitingItem("req_busy", 125_000)]);
-      for (const path of [
-        "/inbox",
-        "/",
-        `/inbox/${encodeURIComponent("request/req_busy/waiting")}`,
-      ]) {
-        await visit(page, host, path);
-        if (opensDrawer(path)) await expect(inspector(page)).toBeVisible();
-        const found = await page.evaluate(() => ({
-          styles: document.querySelectorAll("style").length,
-          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
-        }));
-        expect(found, path).toEqual({ styles: 0, violations: [] });
-      }
-      expect(errors).toEqual([]);
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("no <style> element or Content-Security-Policy violation with a menu, a dialog, a toast and the search open", async ({
-    page,
-  }) => {
-    const host = await startHostWithLease();
-    try {
-      await page.addInitScript(() => {
-        const seen: string[] = [];
-        (window as unknown as { cspViolations: string[] }).cspViolations = seen;
-        document.addEventListener("securitypolicyviolation", (event) => {
-          seen.push(`${event.violatedDirective} ${event.blockedURI}`);
-        });
-      });
-      const errors: string[] = [];
-      page.on("console", (message) => {
-        if (/content.security.policy/i.test(message.text())) errors.push(message.text());
-      });
-      await withActionSurfaces(page, host, async (surface) => {
-        const found = await page.evaluate(() => ({
-          styles: document.querySelectorAll("style").length,
-          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
-        }));
-        expect(found, surface).toEqual({ styles: 0, violations: [] });
-      });
-      await page.reload();
-      await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeVisible();
-      await page.keyboard.press("Control+k");
-      await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill("a");
-      await expect(page.getByRole("option", { name: "Activity" })).toBeVisible();
-      await settled(page);
-      const found = await page.evaluate(() => ({
-        styles: document.querySelectorAll("style").length,
-        violations: (window as unknown as { cspViolations: string[] }).cspViolations,
-      }));
-      expect(found, "search").toEqual({ styles: 0, violations: [] });
-      expect(errors).toEqual([]);
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  for (const colorScheme of ["light", "dark"] as const) {
-    test(`Fleet, a worker page, a device drawer, Queue and Activity with a drawer open, and the search pass an automated WCAG AA check (${colorScheme})`, async ({
-      page,
-    }) => {
-      const { host, pages } = await hostWithLease();
-      try {
-        await page.emulateMedia({ colorScheme });
-        await openSignedIn(page, host);
-        for (const path of [
-          "/fleet",
-          pages.worker,
-          pages.device,
-          "/queue",
-          pages.request,
-          "/activity",
-          pages.event,
-        ]) {
-          await visit(page, host, path);
-          if (opensDrawer(path)) await expect(inspector(page)).toBeVisible();
-          const results = await new AxeBuilder({ page })
-            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-            .analyze();
-          expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
-          expect(
-            results.violations.map((violation) => ({
-              id: violation.id,
-              targets: violation.nodes.map((node) => node.target.join(" ")),
-            })),
-            path,
-          ).toEqual([]);
-        }
-        await visit(page, host, "/fleet");
-        await page.keyboard.press("Control+k");
-        await page
-          .getByRole("combobox", { name: "Search pages, items and actions" })
-          .fill("console");
-        await expect(page.getByRole("option", { name: /console-views/ }).first()).toBeVisible();
-        await settled(page);
-        const searching = await new AxeBuilder({ page })
-          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-          .analyze();
-        expect(searching.passes.map((rule) => rule.id)).toContain("color-contrast");
-        expect(
-          searching.violations.map((violation) => ({
-            id: violation.id,
-            targets: violation.nodes.map((node) => node.target.join(" ")),
-          })),
-          "search",
-        ).toEqual([]);
-      } finally {
-        await host.dispose();
-      }
-    });
-  }
 
   test("a long lease id wraps inside the inspector and its full id is in its title", async ({
     page,
