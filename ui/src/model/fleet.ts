@@ -136,34 +136,46 @@ function leaseCountWord(count: number): string {
 // lost worker has been gone, what a drained one still holds, how full the disk is. `now` is left out
 // where the caller has no clock, and the age with it.
 export function workerReason(worker: WorkerView, now?: number): string {
+  if (worker.connection === "disconnected") return lostReason(worker, now);
+  if (worker.connection === "incompatible") return "speaks a protocol this gateway does not";
+  return [
+    ...updateReasons(worker),
+    ...stateReasons(worker),
+    ...loadFindings(worker).map((finding) => loadReason(worker, finding.word)),
+  ].join(" · ");
+}
+
+function lostReason(worker: WorkerView, now: number | undefined): string {
   const held = worker.leases?.length;
-  const parts: string[] = [];
-  if (worker.connection === "disconnected") {
-    parts.push(
-      now === undefined
-        ? "disconnected"
-        : `last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
-    );
-    if (held !== undefined && held > 0) parts.push(`${leaseCountWord(held)} held`);
-  } else if (worker.connection === "incompatible") {
-    parts.push("speaks a protocol this gateway does not");
-  } else {
-    if (worker.update !== undefined && worker.update !== null) {
-      parts.push(`updating to ${worker.update.to}, ${stageLine(worker.update)}`);
-    }
-    if (worker.drained) {
-      parts.push(
-        held === undefined || held === 0
-          ? "accepts no new requests"
-          : `${leaseCountWord(held)} left · accepts no new requests`,
-      );
-    }
-    if (worker.health === "failed") parts.push("the daemon failed");
-    if (worker.health === "starting") parts.push("still starting");
-    if (worker.capacity?.ramBudget?.overLimit === true) parts.push("over its RAM budget");
-    for (const finding of loadFindings(worker)) parts.push(loadReason(worker, finding.word));
-  }
-  return parts.join(" · ");
+  return [
+    now === undefined ? "disconnected" : `last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
+    ...(held !== undefined && held > 0 ? [`${leaseCountWord(held)} held`] : []),
+  ].join(" · ");
+}
+
+function updateReasons(worker: WorkerView): string[] {
+  const held = worker.leases?.length;
+  const { update } = worker;
+  return [
+    ...(update === undefined || update === null
+      ? []
+      : [`updating to ${update.to}, ${stageLine(update)}`]),
+    ...(worker.drained
+      ? [
+          held === undefined || held === 0
+            ? "accepts no new requests"
+            : `${leaseCountWord(held)} left · accepts no new requests`,
+        ]
+      : []),
+  ];
+}
+
+function stateReasons(worker: WorkerView): string[] {
+  return [
+    ...(worker.health === "failed" ? ["the daemon failed"] : []),
+    ...(worker.health === "starting" ? ["still starting"] : []),
+    ...(worker.capacity?.ramBudget?.overLimit === true ? ["over its RAM budget"] : []),
+  ];
 }
 
 // why: the pill already says "disk 91%"; the card's line says what that is made of.
