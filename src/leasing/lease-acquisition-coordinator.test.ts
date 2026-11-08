@@ -67,12 +67,30 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
     const device = await seedReady(harness);
     Object.defineProperty(harness.driver, "rebootReadyBeforeGrant", { value: true });
-    const ready = vi.spyOn(harness.driver, "makeReady");
-    const grant = await harness.coordinator.request(request, {
+    let release!: () => void;
+    let started!: () => void;
+    const preparing = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = harness.driver.makeReady.bind(harness.driver);
+    const ready = vi.spyOn(harness.driver, "makeReady").mockImplementation(async (...args) => {
+      started();
+      await gate;
+      return original(...args);
+    });
+    const grant = harness.coordinator.request(request, {
       ownerId: "agent",
       requesterId: "agent",
     });
-    expect(grant.device.id).toBe(device.id);
+    const state = promiseState(grant);
+    await preparing;
+    await settle();
+    expect(state.state, "grant waits for preparation").toBe("pending");
+    release();
+    expect((await grant).device.id).toBe(device.id);
     expect(ready).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: device.driverDeviceId }),
       expect.objectContaining({ purpose: "prepare" }),

@@ -5120,18 +5120,19 @@ describe("IosSimctlDriver device set", () => {
   }
 
   it.each([
-    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`],
-    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`],
+    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`, false],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`, false],
     [
       "default",
       { deviceSet: "default" },
       `${coreSimulatorRoot}/Devices`,
       false,
       "/home/.simlock/devices/ios-sources",
+      true,
     ],
   ] as const)(
     "the driver given deviceSet %s runs every simctl call with or without --set",
-    async (_case, config, devicesDir, scoped, sourcesSet) => {
+    async (_case, config, devicesDir, scoped, sourcesSet, rebootBeforeGrant) => {
       const steps: Step[] = [
         { args: ["list", "-j", "devicetypes", "runtimes"], scoped: true, stdout: listFixture },
         {
@@ -5219,6 +5220,7 @@ describe("IosSimctlDriver device set", () => {
         processRunner: runner,
         simlockHome: "/home/.simlock",
       });
+      expect(driver.rebootReadyBeforeGrant).toBe(rebootBeforeGrant);
       const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
 
       await expect(
