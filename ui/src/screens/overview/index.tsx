@@ -1,167 +1,329 @@
 import "./overview.css";
 
 import {
-  ChartPanel,
+  AgentChip,
+  Banner,
+  Bars,
+  ButtonLink,
   ChoiceChips,
   Link,
   Loaded,
+  Meter,
+  MinuteChart,
+  MinuteTable,
   Page,
   Panel,
+  Pill,
   Refusal,
-  Row,
-  ShareBar,
+  Ring,
+  SlotLegend,
+  Slots,
   StatRow,
   StatTile,
-  Status,
-  Toolbar,
+  WorkerTile,
 } from "../../ds";
-import { WorkersTable } from "../fleet";
-import type { FiguresState } from "../../state/figures";
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
+import type { FiguresState } from "../../state/figures";
 import {
+  type EndingCard,
   type Overview,
-  type OverviewInbox,
   type PlatformCapacity,
+  type QueueCard,
+  type WallWorker,
   useOverview,
 } from "../../state/overview";
+
+type Unavailable = { readonly unavailable: string };
+type FigureChart = Extract<FiguresState, { kind: "ready" }>["data"]["charts"][number];
+
+// why: the header filter is compact, so its words are the short forms of the range's own.
+function shortRange(value: ConsoleRange): string {
+  return value.replace(/^(\d+)([hd])$/, "$1 $2");
+}
+
+const SHORT_RANGES = RANGE_CHOICES.map((choice) => ({
+  label: shortRange(choice.value),
+  value: choice.value,
+}));
 
 export function OverviewScreen() {
   const [range, setRange] = useRange();
   const view = useOverview(range);
+  const updated = view.kind === "ready" ? view.data.updated : undefined;
   return (
-    <Page title="Overview">
+    <Page
+      title="Overview"
+      {...(updated === undefined ? {} : { note: `updated ${updated}` })}
+      actions={
+        <ChoiceChips legend="Range" choices={SHORT_RANGES} value={range} onChange={setRange} />
+      }
+    >
       <Loaded view={view}>
-        {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
+        {(overview) => <OverviewBody overview={overview} range={range} />}
       </Loaded>
     </Page>
   );
 }
 
-function FigureNote({ figures }: { readonly figures: FiguresState }) {
-  if (figures.kind === "loading") return <p className="muted loaded-note">Loading…</p>;
-  if (figures.kind === "refused") return <Refusal message={figures.message} />;
-  return null;
-}
-
 export function OverviewBody(props: {
   readonly overview: Overview;
   readonly range?: ConsoleRange;
-  readonly onRange?: (range: ConsoleRange) => void;
 }) {
-  const { overview, range = "1h", onRange = () => undefined } = props;
-  const { figures } = overview;
+  const { overview, range = "1h" } = props;
+  const { banner, figures } = overview;
   const ready = figures.kind === "ready" ? figures : undefined;
-  // why: Device slots in use is drawn on Usage; the Overview keeps the two charts of load.
-  const [leases, ...others] = (ready?.data.charts ?? []).filter(
-    (chart) => chart.key !== "slotsUsed",
-  );
+  const leases = ready?.data.charts.find((chart) => chart.key === "leasesHeld");
+  const queued = ready?.data.charts.find((chart) => chart.key === "queueDepth");
   return (
     <>
-      <Toolbar
-        start={
-          <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
-        }
-        end={ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
-      />
+      {banner === undefined ? null : (
+        <Banner
+          count={banner.count}
+          title={banner.title}
+          detail={
+            <span className="overview-banner-detail">
+              <Link to={banner.first.to}>{banner.first.text}</Link>
+              {banner.more === 0 ? "" : ` · and ${banner.more} more`}
+            </span>
+          }
+          action={
+            <ButtonLink to="/inbox" variant="primary" small>
+              Open Inbox
+            </ButtonLink>
+          }
+        />
+      )}
       {ready?.refusal === undefined ? null : <Refusal message={ready.refusal} />}
+      {figures.kind === "refused" ? <Refusal message={figures.message} /> : null}
+      {ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
       <StatRow label="Fleet at a glance">
         {overview.tiles.map((tile) => (
           <StatTile key={tile.label} {...tile} />
         ))}
-        {overview.wait === undefined ? (
-          <li className="stat">
-            <div className="stat-body">
-              <FigureNote figures={figures} />
-            </div>
-          </li>
-        ) : (
-          <StatTile {...overview.wait} />
-        )}
-        <StatTile {...overview.ending} />
       </StatRow>
-      <Row>
-        <NeedsYou inbox={overview.inbox} />
-        <Panel title="Capacity · all workers">
-          <div className="capacity">
-            {overview.capacity.map((platform) => (
-              <PlatformBar key={platform.name} platform={platform} />
-            ))}
-          </div>
-        </Panel>
-      </Row>
-      <Row even>
-        {leases === undefined ? (
-          <Panel title="Figures">
-            <FigureNote figures={figures} />
+      <div className="overview-grid">
+        <div className="overview-main">
+          <Panel
+            title="Fleet"
+            flush
+            actions={
+              <>
+                <span className="overview-meta overview-fleet-meta">
+                  {overview.workers.length} workers ·
+                  <SlotLegend kinds={["leased", "ready", "free"]} />
+                </span>
+                <ButtonLink to="/fleet" small>
+                  Open fleet
+                </ButtonLink>
+              </>
+            }
+          >
+            {overview.workers.length === 0 ? (
+              <p className="empty">No workers have connected.</p>
+            ) : (
+              <ul className="overview-wall">
+                {overview.workers.map((worker) => (
+                  <li key={worker.key}>
+                    <Tile worker={worker} />
+                  </li>
+                ))}
+              </ul>
+            )}
           </Panel>
-        ) : (
-          <ChartPanel chart={leases} />
-        )}
-        {others.map((chart) => (
-          <ChartPanel key={chart.key} chart={chart} />
-        ))}
-      </Row>
-      <Panel title="Workers" flush actions={<Link to="/fleet">Open Fleet</Link>}>
-        <WorkersTable rows={overview.workers} empty="No workers have connected." />
-      </Panel>
+          <LeasesHeld chart={leases} figures={figures} />
+        </div>
+        <div className="overview-side">
+          <Panel title="Capacity">
+            <div className="overview-capacity">
+              {overview.capacity.map((platform) => (
+                <Capacity key={platform.name} platform={platform} />
+              ))}
+            </div>
+          </Panel>
+          <Panel
+            title="Queue"
+            flush
+            className="overview-queue"
+            actions={
+              <span className="overview-meta">
+                {"meta" in overview.queue ? overview.queue.meta : ""}
+              </span>
+            }
+          >
+            <QueueList queue={overview.queue} />
+            <section className="overview-sub" aria-label="Ending soon">
+              <h3 className="overview-sub-title">Ending soon</h3>
+              <span className="overview-meta">
+                {"meta" in overview.ending ? overview.ending.meta : ""}
+              </span>
+            </section>
+            <EndingList ending={overview.ending} />
+            <div className="overview-waiting">
+              <h3 className="overview-sub-title">Requests waiting · {shortRange(range)}</h3>
+              {queued === undefined ? (
+                <p className="muted">
+                  {figures.kind === "refused" ? "Not available." : "Loading…"}
+                </p>
+              ) : (
+                <>
+                  <Bars values={queued.points.map((point) => point.count)} label={queued.title} />
+                  <p className="visually-hidden">{queued.summary}</p>
+                  <MinuteTable
+                    minutes={queued.points}
+                    heading={queued.heading}
+                    bucketMs={queued.bucketMs}
+                  />
+                </>
+              )}
+            </div>
+          </Panel>
+        </div>
+      </div>
     </>
   );
 }
 
-function PlatformBar({ platform }: { readonly platform: PlatformCapacity }) {
-  const words = platform.parts.map((part) => `${part.count} ${part.word}`).join(", ");
-  const notRead =
-    platform.notRead === 0
-      ? null
-      : platform.notRead === 1
-        ? "1 worker not read yet"
-        : `${platform.notRead} workers not read yet`;
+function Tile({ worker }: { readonly worker: WallWorker }) {
+  const total = worker.ios.length + worker.android.length;
+  const [cpu, memory, disk] = ["CPU", "Memory", "Disk"].map((label) =>
+    worker.meters.find((meter) => meter.label === label),
+  );
+  const { tone, word } = worker.health;
   return (
-    <div className="platform">
-      <p className="platform-head">
-        <span>{platform.name}</span>
-        {notRead === null ? null : <span className="muted">{notRead}</span>}
-      </p>
-      <span role="img" aria-label={`${platform.name}: ${words === "" ? "no devices" : words}`}>
-        <ShareBar shares={platform.parts} />
-      </span>
-      <ul className="platform-parts">
-        {platform.parts.map((part) => (
-          <li key={part.kind}>
-            <span className={`slot slot-${part.kind}`} aria-hidden="true" />
-            <span className="mono">{part.count}</span> {part.word}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <WorkerTile
+      name={worker.name}
+      title={worker.name}
+      to={worker.to}
+      tone={tone === "ok" ? "neutral" : tone}
+      {...(tone === "ok" ? {} : { pill: <Pill tone={tone}>{word}</Pill> })}
+      ios={
+        total > 10 ? (
+          <Slots slots={[...worker.ios, ...worker.android]} label={worker.slotsLabel} />
+        ) : (
+          <Slots slots={worker.ios} label={`iOS: ${worker.slotsLabel}`} />
+        )
+      }
+      {...(total > 10
+        ? {}
+        : { android: <Slots slots={worker.android} label={`Android: ${worker.slotsLabel}`} /> })}
+      cpu={cpu?.percent}
+      memory={memory?.percent}
+      disk={disk?.percent}
+      cpuTone={cpu?.tone ?? "neutral"}
+      memoryTone={memory?.tone ?? "neutral"}
+      diskTone={disk?.tone ?? "neutral"}
+    />
   );
 }
 
-function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
-  if (inbox.problems === 0) {
+function LeasesHeld(props: {
+  readonly chart: FigureChart | undefined;
+  readonly figures: FiguresState;
+}) {
+  const { chart, figures } = props;
+  if (chart === undefined) {
     return (
-      <Panel title="Needs you">
-        <p className="muted needs-you-none">Nothing needs you</p>
+      <Panel title="Leases held">
+        <p className="muted">{figures.kind === "refused" ? "Not available." : "Loading…"}</p>
       </Panel>
     );
   }
   return (
-    <div className="overview-side">
-      <Panel title="Needs you" flush>
-        <ul className="overview-list">
-          {inbox.needsYou.map((item) => (
-            <li key={item.key}>
-              <Link to={item.to} className="overview-row">
-                <Status tone={item.tone}>{item.word}</Status>
-                <span className="overview-row-aside">{item.subject}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-        <p className="overview-all">
-          <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
-        </p>
-      </Panel>
+    <Panel
+      title="Leases held"
+      className="overview-chart"
+      lead={
+        chart.now === undefined ? undefined : (
+          <Pill tone="idle" plain>
+            {chart.now}
+          </Pill>
+        )
+      }
+      actions={
+        chart.peak === undefined ? undefined : <span className="overview-meta">{chart.peak}</span>
+      }
+    >
+      <MinuteChart
+        kind="area"
+        title={chart.title}
+        unit={chart.unit}
+        minutes={chart.points}
+        height="100%"
+        tickGap={100}
+      />
+      <p className="visually-hidden">{chart.summary}</p>
+      <MinuteTable minutes={chart.points} heading={chart.heading} bucketMs={chart.bucketMs} />
+    </Panel>
+  );
+}
+
+function Capacity({ platform }: { readonly platform: PlatformCapacity }) {
+  const percent =
+    platform.total === 0 ? undefined : Math.round((platform.leased / platform.total) * 100);
+  return (
+    <div className="overview-ring">
+      <Ring
+        bare
+        size={52}
+        label={`${platform.name} leased`}
+        {...(percent === undefined ? {} : { percent })}
+      />
+      <div>
+        <div className="overview-ring-name">{platform.name}</div>
+        <div className="overview-meta">
+          {platform.leased} of {platform.total} leased
+          {platform.notRead === 0 ? "" : ` · ${platform.notRead} not read yet`}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function QueueList({ queue }: { readonly queue: QueueCard | Unavailable }) {
+  if ("unavailable" in queue) return <p className="empty">Unavailable: {queue.unavailable}</p>;
+  if (queue.rows.length === 0) return <p className="empty">Nothing is waiting.</p>;
+  return (
+    <ul className="overview-list">
+      {queue.rows.map((row) => (
+        <li key={row.key}>
+          <Link to={row.to} className="overview-item">
+            <span className="overview-place">{row.place}</span>
+            <AgentChip kind={row.kind} title={row.holderTitle} />
+            <span className="overview-holder" title={row.holderTitle}>
+              {row.holder}
+            </span>
+            <span className="overview-time">{row.waited}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EndingList({ ending }: { readonly ending: EndingCard | Unavailable }) {
+  if ("unavailable" in ending) return <p className="empty">Unavailable: {ending.unavailable}</p>;
+  if (ending.rows.length === 0) return <p className="empty">No lease ends soon.</p>;
+  return (
+    <ul className="overview-list">
+      {ending.rows.map((row) => (
+        <li key={row.key}>
+          <Link to={row.to} className="overview-item">
+            <AgentChip kind={row.kind} title={row.holderTitle} />
+            <span className="overview-stack">
+              <span className="overview-holder" title={row.holderTitle}>
+                {row.holder}
+              </span>
+              <span className="overview-clip" title={row.sub}>
+                {row.sub}
+              </span>
+            </span>
+            <span className="overview-ttl">
+              <b>{row.remaining}</b>
+              <Meter percent={row.percent} tone="warn" size="thin" />
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
