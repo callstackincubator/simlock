@@ -195,6 +195,7 @@
 
 .lease-holders {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
   padding: 12px 14px;
 }
@@ -207,7 +208,7 @@
 
 .lease-holders .lease-ellipsis {
   flex: 1;
-  min-width: 96px;
+  min-width: 0;
   font-size: 12px;
 }
 
@@ -224,6 +225,7 @@
 }
 
 .lease-holder-count {
+  flex: none;
   width: 20px;
   font-size: 12px;
   text-align: right;
