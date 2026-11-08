@@ -142,6 +142,18 @@ const COLD_BOOT_ESTIMATE_MS = 60_000;
 const ERASE_ESTIMATE_MS = 34_000;
 const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
 const MARK_FILE_NAME = "simlock-mark.json";
+
+let pasteboardWrites: Promise<void> = Promise.resolve();
+
+async function withPasteboardWrite<T>(run: () => Promise<T>): Promise<T> {
+  const turn = pasteboardWrites.then(run, run);
+  pasteboardWrites = turn.then(
+    () => undefined,
+    () => undefined,
+  );
+  return await turn;
+}
+
 /**
  * why: a driver that refused to start has no instance to ask, so the `simlock <tool>` names
  * it answers to are a constant, and `DriverRejection` carries them so `simlock simctl` can
@@ -1417,30 +1429,37 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #disablePasteboardSync(udid: string): Promise<void> {
-    const args = [
-      "write",
-      this.#deviceHubPlist,
-      "DevicePreferences",
-      "-dict-add",
-      udid,
-      "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
-    ];
-    const outcome = await this.#invokeCommand("defaults", args, COMMAND_TIMEOUT_MS);
-    if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-      throw new DriverCrashError(`Could not disable DeviceHub clipboard sync for ${udid}`);
-    }
+    await withPasteboardWrite(async () => {
+      const path = `:DevicePreferences:${udid}`;
+      const invoke = async (command: string): Promise<boolean> => {
+        const outcome = await this.#invokeCommand(
+          "/usr/libexec/PlistBuddy",
+          ["-c", command, this.#deviceHubPlist],
+          COMMAND_TIMEOUT_MS,
+        );
+        return outcome.kind !== "timed-out" && outcome.result.code === 0;
+      };
+      if (await invoke(`Set ${path}:pasteboardSyncEnabled false`)) return;
+      await invoke("Add :DevicePreferences dict");
+      await invoke(`Add ${path} dict`);
+      if (!(await invoke(`Add ${path}:pasteboardSyncEnabled bool false`))) {
+        throw new DriverCrashError(`Could not disable DeviceHub clipboard sync for ${udid}`);
+      }
+    });
   }
 
   async #removePasteboardPreference(udid: string): Promise<void> {
     try {
-      const outcome = await this.#invokeCommand(
-        "/usr/libexec/PlistBuddy",
-        ["-c", `Delete :DevicePreferences:${udid}`, this.#deviceHubPlist],
-        COMMAND_TIMEOUT_MS,
-      );
-      if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-        throw new Error("preference deletion failed");
-      }
+      await withPasteboardWrite(async () => {
+        const outcome = await this.#invokeCommand(
+          "/usr/libexec/PlistBuddy",
+          ["-c", `Delete :DevicePreferences:${udid}`, this.#deviceHubPlist],
+          COMMAND_TIMEOUT_MS,
+        );
+        if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
+          throw new Error("preference deletion failed");
+        }
+      });
     } catch (error: unknown) {
       this.#logger?.warn(
         `could not remove DeviceHub preference for ${udid}: ${errorMessage(error)}`,

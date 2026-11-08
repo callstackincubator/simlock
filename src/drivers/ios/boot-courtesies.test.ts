@@ -80,14 +80,11 @@ describe("IosSimctlDriver simulator window", () => {
   const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
   const open = (...args: string[]) => ({ command: "open", args: ["-g", ...args] });
   const clipboard = {
-    command: "defaults",
+    command: "/usr/libexec/PlistBuddy",
     args: [
-      "write",
+      "-c",
+      `Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`,
       "Containers/com.apple.dt.Devices/Data/Library/Preferences/com.apple.dt.Devices.plist",
-      "DevicePreferences",
-      "-dict-add",
-      udid,
-      "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
     ],
   };
   const bootCalls = [xcrun("boot", udid), xcrun("bootstatus", udid, "-b"), xcrun("listapps", udid)];

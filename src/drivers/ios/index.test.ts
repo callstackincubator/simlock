@@ -5177,14 +5177,11 @@ describe("IosSimctlDriver device set", () => {
             ? [
                 {
                   match: {
-                    command: "defaults",
+                    command: "/usr/libexec/PlistBuddy",
                     args: [
-                      "write",
+                      "-c",
+                      `Set :DevicePreferences:${driverData.udid}:pasteboardSyncEnabled false`,
                       plist,
-                      "DevicePreferences",
-                      "-dict-add",
-                      driverData.udid,
-                      "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
                     ],
                   },
                 },
@@ -5725,6 +5722,10 @@ describe("IosSimctlDriver device set", () => {
     let failCommand = "";
     let warm = false;
     const warnings: string[] = [];
+    const preferences: Record<string, Record<string, unknown>> = {
+      [udid]: { pasteboardSyncEnabled: true, windowScale: 75 },
+      other: { pasteboardSyncEnabled: true, windowScale: 50 },
+    };
     const answersEveryCall: ProcessRunner = {
       run: () => Promise.reject(new Error("the driver runs commands through spawn")),
       spawn(command, args, options) {
@@ -5735,6 +5736,15 @@ describe("IosSimctlDriver device set", () => {
           command === failCommand ||
           (failCommand === "delete" && args[1] === "delete") ||
           isWarmBoot;
+        if (!failed && command === "/usr/libexec/PlistBuddy") {
+          if (args[1]?.startsWith("Set :DevicePreferences:")) {
+            preferences[udid]!.pasteboardSyncEnabled = false;
+          } else if (args[1] === `Delete :DevicePreferences:${udid}`) {
+            delete preferences[udid];
+          }
+        } else if (!failed && command === "defaults") {
+          preferences[udid] = { pasteboardSyncEnabled: false };
+        }
         return new ScriptedProcessRunner([
           {
             match: { args: [...args], command },
@@ -5766,13 +5776,10 @@ describe("IosSimctlDriver device set", () => {
 
     const syncOffThenBoot = [
       [
-        "defaults",
-        "write",
+        "/usr/libexec/PlistBuddy",
+        "-c",
+        `Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`,
         deviceHubPlist,
-        "DevicePreferences",
-        "-dict-add",
-        udid,
-        "<dict><key>pasteboardSyncEnabled</key><false/></dict>",
       ],
       ["xcrun", "simctl", "boot", udid],
       ["xcrun", "simctl", "bootstatus", udid, "-b"],
@@ -5780,8 +5787,13 @@ describe("IosSimctlDriver device set", () => {
     ];
 
     await driver.makeReady(device, prepareFull);
+    expect(preferences).toEqual({
+      [udid]: { pasteboardSyncEnabled: false, windowScale: 75 },
+      other: { pasteboardSyncEnabled: true, windowScale: 50 },
+    });
     await driver.makeReady(device, { mode: "full", purpose: "recover" });
     await driver.destroy(device);
+    expect(preferences).toEqual({ other: { pasteboardSyncEnabled: true, windowScale: 50 } });
 
     expect(calls).toEqual([
       ...syncOffThenBoot,
@@ -5791,12 +5803,13 @@ describe("IosSimctlDriver device set", () => {
       ["/usr/libexec/PlistBuddy", "-c", `Delete :DevicePreferences:${udid}`, deviceHubPlist],
     ]);
 
+    preferences[udid] = { pasteboardSyncEnabled: true, windowScale: 75 };
     calls.length = 0;
-    failCommand = "defaults";
+    failCommand = "/usr/libexec/PlistBuddy";
     await expect(driver.makeReady(device, prepareFull)).rejects.toThrow(
       "Could not disable DeviceHub clipboard sync",
     );
-    expect(calls.map((call) => call[0])).toEqual(["defaults"]);
+    expect(calls.every((call) => call[0] === "/usr/libexec/PlistBuddy")).toBe(true);
 
     calls.length = 0;
     failCommand = "";
