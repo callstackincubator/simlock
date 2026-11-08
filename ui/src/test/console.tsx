@@ -87,6 +87,38 @@ function json(status: number, body: unknown, etag?: string): Response {
   });
 }
 
+// why: the event stream stays open until the test drops it or the console aborts it.
+function openStream(
+  streams: ReadableStreamDefaultController<Uint8Array>[],
+  signal: AbortSignal | null | undefined,
+): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streams.push(controller);
+      signal?.addEventListener("abort", () => {
+        try {
+          controller.close();
+        } catch {
+          // why: the test already ended this stream.
+        }
+      });
+    },
+  });
+  return new Response(body, { headers: { "Content-Type": "text/event-stream" }, status: 200 });
+}
+
+function callOf(url: URL, init: Parameters<Fetch>[1]): Call {
+  const bearer = new Headers(init.headers).get("Authorization")?.replace(/^Bearer /, "");
+  return {
+    ...(bearer === undefined ? {} : { bearer }),
+    body: typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
+    method: init.method ?? "GET",
+    path: url.pathname,
+    search: url.search,
+    ...(init.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
+  };
+}
+
 export function renderConsole(options: ConsoleOptions = {}) {
   vi.useFakeTimers({
     now: NOW,
@@ -110,42 +142,17 @@ export function renderConsole(options: ConsoleOptions = {}) {
 
   const fetch: Fetch = async (input, init) => {
     const url = new URL(input, "http://console.test");
-    const method = init.method ?? "GET";
-    if (url.pathname === STREAM) {
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          streams.push(controller);
-          init.signal?.addEventListener("abort", () => {
-            try {
-              controller.close();
-            } catch {
-              // why: the test already ended this stream.
-            }
-          });
-        },
-      });
-      return new Response(body, { headers: { "Content-Type": "text/event-stream" }, status: 200 });
-    }
-    const bearer = new Headers(init.headers).get("Authorization")?.replace(/^Bearer /, "");
-    const call: Call = {
-      ...(bearer === undefined ? {} : { bearer }),
-      body: typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
-      method,
-      path: url.pathname,
-      search: url.search,
-      ...(init.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
-    };
+    if (url.pathname === STREAM) return openStream(streams, init.signal);
+    const call = callOf(url, init);
     calls.push(call);
-    const handler = find(routes, method, url.pathname);
+    const handler = find(routes, call.method, call.path);
     if (handler === undefined) {
-      unanswered.push(`${method} ${url.pathname}`);
+      unanswered.push(`${call.method} ${call.path}`);
       return json(404, { error: { code: "NOT_FOUND", message: "No route in this test" } });
     }
     const answer = typeof handler === "function" ? await handler(call) : handler;
-    const headers = new Headers(init.headers);
-    if (answer.etag !== undefined && headers.get("If-None-Match") === answer.etag) {
-      return json(304, undefined, answer.etag);
-    }
+    const tag = new Headers(init.headers).get("If-None-Match");
+    if (answer.etag !== undefined && tag === answer.etag) return json(304, undefined, answer.etag);
     return json(answer.status ?? 200, answer.body, answer.etag);
   };
 

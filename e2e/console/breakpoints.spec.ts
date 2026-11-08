@@ -61,40 +61,33 @@ const test = base.extend<object, { leased: Leased }>({
 // two ways a narrow window breaks a page; a list that scrolls inside its own box does not widen the
 // card. A page's title never sits on top of its actions, and no card reaches past the window.
 async function problemsOf(page: Page): Promise<readonly string[]> {
-  return page.evaluate(() => {
+  const overflow = await page.evaluate(() => {
     const root = document.documentElement;
-    const found: string[] = [];
-    if (root.scrollWidth > root.clientWidth) {
-      found.push(`page scrolls sideways (${root.scrollWidth} > ${root.clientWidth})`);
-    }
+    const wide = root.scrollWidth > root.clientWidth;
+    const found = wide ? [`page scrolls sideways (${root.scrollWidth} > ${root.clientWidth})`] : [];
     for (const card of document.querySelectorAll("#main .card, #main .panel, #main section")) {
-      if (card.scrollWidth > card.clientWidth + 1) {
-        found.push(
-          `${card.tagName.toLowerCase()}.${String(card.className).slice(0, 40)} overflows`,
-        );
-      }
-    }
-    const head = document.querySelector("#main .page-head");
-    const title = head?.querySelector("h1")?.getBoundingClientRect();
-    const actions = head?.querySelector(".page-actions")?.getBoundingClientRect();
-    if (
-      title !== undefined &&
-      actions !== undefined &&
-      title.left < actions.right &&
-      title.right > actions.left &&
-      title.top < actions.bottom &&
-      title.bottom > actions.top
-    ) {
-      found.push("the title and the page actions overlap");
-    }
-    for (const panel of document.querySelectorAll("#main .panel")) {
-      const rect = panel.getBoundingClientRect();
-      if (rect.left < 0 || rect.right > root.clientWidth) {
-        found.push(`panel.${String(panel.className).slice(0, 40)} reaches past the window`);
-      }
+      if (card.scrollWidth <= card.clientWidth + 1) continue;
+      found.push(`${card.tagName.toLowerCase()}.${String(card.className).slice(0, 40)} overflows`);
     }
     return found;
   });
+  const overlap = await page.evaluate(() => {
+    const head = document.querySelector("#main .page-head");
+    const title = head?.querySelector("h1")?.getBoundingClientRect();
+    const actions = head?.querySelector(".page-actions")?.getBoundingClientRect();
+    if (title === undefined || actions === undefined) return false;
+    const across = title.left < actions.right && title.right > actions.left;
+    return across && title.top < actions.bottom && title.bottom > actions.top;
+  });
+  const outside = await page.evaluate(() =>
+    [...document.querySelectorAll("#main .panel")]
+      .filter((panel) => {
+        const rect = panel.getBoundingClientRect();
+        return rect.left < 0 || rect.right > document.documentElement.clientWidth;
+      })
+      .map((panel) => `panel.${String(panel.className).slice(0, 40)} reaches past the window`),
+  );
+  return [...overflow, ...(overlap ? ["the title and the page actions overlap"] : []), ...outside];
 }
 
 async function sweep(page: Page, gatewayUrl: string, scheme: string): Promise<readonly string[]> {
