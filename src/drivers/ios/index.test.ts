@@ -5732,12 +5732,21 @@ describe("IosSimctlDriver device set", () => {
         calls.push([command, ...args]);
         const isWarmBoot = warm && command === "xcrun" && args[1] === "boot";
         if (isWarmBoot) warm = false;
+        const missingKey =
+          command === "/usr/libexec/PlistBuddy" &&
+          args[1]?.startsWith("Set :DevicePreferences:") &&
+          preferences[udid]?.pasteboardSyncEnabled === undefined;
         const failed =
           command === failCommand ||
           (failCommand === "delete" && args[1] === "delete") ||
-          isWarmBoot;
+          isWarmBoot ||
+          missingKey;
         if (!failed && command === "/usr/libexec/PlistBuddy") {
           if (args[1]?.startsWith("Set :DevicePreferences:")) {
+            preferences[udid]!.pasteboardSyncEnabled = false;
+          } else if (
+            args[1] === `Add :DevicePreferences:${udid}:pasteboardSyncEnabled bool false`
+          ) {
             preferences[udid]!.pasteboardSyncEnabled = false;
           } else if (args[1] === `Delete :DevicePreferences:${udid}`) {
             delete preferences[udid];
@@ -5801,6 +5810,17 @@ describe("IosSimctlDriver device set", () => {
       ["xcrun", "simctl", "shutdown", udid],
       ["xcrun", "simctl", "delete", udid],
       ["/usr/libexec/PlistBuddy", "-c", `Delete :DevicePreferences:${udid}`, deviceHubPlist],
+    ]);
+
+    preferences[udid] = { windowScale: 75 };
+    calls.length = 0;
+    await driver.makeReady(device, prepareFull);
+    expect(preferences[udid]).toEqual({ pasteboardSyncEnabled: false, windowScale: 75 });
+    expect(calls).toContainEqual([
+      "/usr/libexec/PlistBuddy",
+      "-c",
+      `Add :DevicePreferences:${udid}:pasteboardSyncEnabled bool false`,
+      deviceHubPlist,
     ]);
 
     preferences[udid] = { pasteboardSyncEnabled: true, windowScale: 75 };
