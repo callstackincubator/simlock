@@ -143,9 +143,14 @@ own that one of them draws. Named sizes and colours are above.
   group under a label. Inbox carries its
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the
-  connection as `● connected` in `--status-ok`, and a sign-out icon.
-  The preserved desktop collapse/expand control sits in the wordmark row,
-  not beneath the account; the phone retains its separate menu control.
+  connection as `● connected` in `--status-ok`, and a sign-out icon; in the
+  collapsed rail the connection is a 10px dot on the avatar's top-right corner
+  (green, amber or red), with no row of its own. Nav links are 2px apart, in the
+  rail too. The Settings link's icon is a cog with teeth.
+  The desktop collapse/expand control is a quiet 30px square icon button (16px
+  icon) at the foot of the sidebar, just above the account box and centred in the
+  collapsed rail; the phone has no such control, its top bar is the wordmark on the
+  left and the menu button on the right, 8px from the top.
 - **Page header.** Title 21px with its breadcrumb in muted 500
   (`Fleet / mac-studio-01`), an optional one-line muted subtitle that holds
   figures only (`updated 18:18:04`, `49.5 GB on 4 workers`), never a
@@ -304,8 +309,8 @@ cards under a title with no actions or subtitle:
 
 ## Sidebar and contrast reference amendments
 
-The desktop collapse/expand button in the wordmark row preserves the existing
-action and is an addition to the render; the account remains at the bottom.
+The desktop collapse/expand button, at the sidebar's foot above the account,
+preserves the existing action and is an addition to the render.
 Stage 0 and stage 7 paired images must show this exception. Where a reference
 foreground or essential stroke fails WCAG AA, change only that colour, keeping
 the reference geometry, typography and fills. Record the selector, colours,
@@ -314,6 +319,10 @@ ratios and paired images; this does not exempt other visual differences.
 For `.nav-group-label` on `--surface` (`#141416`), the reference's `#6f6f79`
 is 3.702:1; `--text-muted` (`#8e8e97`) is 5.665:1. Both-theme axe must
 evaluate `color-contrast`, not suppress it. The original renders stay intact.
+
+Agent chips, pills and buttons keep 4.5:1 or more in both themes; the
+chips' text is darker on its light tint and lighter on its dark tint than the
+reference, and `ui/src/ds/contrast.test.ts` computes every pair from the tokens.
 (decided in delivery, pending the maintainer)
 
 ## Fleet reference amendment

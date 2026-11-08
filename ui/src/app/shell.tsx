@@ -73,8 +73,11 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
     <>
       <UpdateNotice collapsed={collapsed} />
       <div className="sidebar-account">
-        <span className="account-avatar" aria-hidden="true">
-          {signedIn.name?.slice(0, 1).toUpperCase() ?? "•"}
+        <span className="account-avatar-wrap">
+          <span className="account-avatar" aria-hidden="true">
+            {signedIn.name?.slice(0, 1).toUpperCase() ?? "•"}
+          </span>
+          {collapsed ? <ConnectionDot /> : null}
         </span>
         <div className="account-detail">
           {signedIn.name === undefined || collapsed ? null : (
@@ -93,6 +96,12 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
   );
 }
 
+// why: a collapsed rail has no room for a word, so the state is a dot on the avatar's corner.
+function ConnectionDot() {
+  const status = useConnectionStatus();
+  return <StatusDot tone={status.tone} label={status.word} />;
+}
+
 // why: the connection's word is a live region so a screen reader hears it change; the data's age
 // beside it ticks every second, so it stays outside the region.
 function ConnectionStatus({ collapsed }: { readonly collapsed: boolean }) {
@@ -100,12 +109,9 @@ function ConnectionStatus({ collapsed }: { readonly collapsed: boolean }) {
   return (
     <div className="connection">
       {collapsed ? (
-        <>
-          <StatusDot tone={status.tone} label={status.word} />
-          <span role="status" className="visually-hidden">
-            {status.word}
-          </span>
-        </>
+        <span role="status" className="visually-hidden">
+          {status.word}
+        </span>
       ) : (
         <Status tone={status.tone}>
           <span role="status">{status.word}</span>

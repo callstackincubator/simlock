@@ -12,7 +12,7 @@ export interface Slot {
 // why: squares are drawn one per slot, so 100 slots would be 100 squares. A table cell, and any
 // place that does not ask for squares, always shows the meter and the `n / m` fraction; a caller that
 // asks for squares gets them only up to this many slots, and the meter above it.
-export const SLOT_SQUARES_MAX = 10;
+const SLOT_SQUARES_MAX = 10;
 
 // why: the group name carries the state counts even when the meter replaces individual tooltips.
 export function Slots(props: {

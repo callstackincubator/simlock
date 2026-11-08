@@ -39,7 +39,7 @@
   --accent: #f76b15;
   --accent-hover: #e2560a;
   --on-accent: #111110;
-  --accent-text: #b93d0b;
+  --accent-text: #a93509;
   --selection: #fed7aa;
   --row-selected: #f2e4d9;
   --row-warn: #fbf3dc;
@@ -47,13 +47,13 @@
 
   /* An agent chip's own tints, as a tool's mark, never a status. */
   --agent-claude-code: #f3e3cf;
-  --agent-claude-code-text: #8a5013;
+  --agent-claude-code-text: #6b3c08;
   --agent-codex: #dbe9f6;
-  --agent-codex-text: #1d4a72;
+  --agent-codex-text: #123a5e;
   --agent-cursor: #e6e0f5;
-  --agent-cursor-text: #4a3a80;
+  --agent-cursor-text: #392a6e;
   --agent-pi: #d9efdd;
-  --agent-pi-text: #1e6b34;
+  --agent-pi-text: #14562a;
   --agent-unknown: #e4e4e8;
   --agent-unknown-text: #55555f;
 
@@ -63,11 +63,11 @@
   --status-idle: #57534e;
   --pill-plain-text: #55555f;
   --pill-plain-bg: #e4e4e8;
-  --pill-ok-text: #146f35;
+  --pill-ok-text: #11602d;
   --pill-ok-bg: #d7ecdc;
-  --pill-warn-text: #92570a;
+  --pill-warn-text: #7a4708;
   --pill-warn-bg: #eee3d2;
-  --pill-error-text: #b91c1c;
+  --pill-error-text: #a31a1a;
   --pill-error-bg: #f0d7d6;
 }
 
@@ -98,13 +98,13 @@
 
     /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
     --agent-claude-code: #3a2a18;
-    --agent-claude-code-text: #f5c08a;
+    --agent-claude-code-text: #ffdcb8;
     --agent-codex: #1d2d3b;
-    --agent-codex-text: #9cc4e6;
+    --agent-codex-text: #c4def4;
     --agent-cursor: #2a2440;
-    --agent-cursor-text: #bdb1ea;
+    --agent-cursor-text: #d9d1f5;
     --agent-pi: #1c3022;
-    --agent-pi-text: #9ad6ae;
+    --agent-pi-text: #c0eacd;
     --agent-unknown: #24242a;
     --agent-unknown-text: #b9b9c2;
 
@@ -145,13 +145,13 @@
 
   /* An agent chip's own tints, the designed theme's, from docs/internal/DESIGN.md's Colour. */
   --agent-claude-code: #3a2a18;
-  --agent-claude-code-text: #f5c08a;
+  --agent-claude-code-text: #ffdcb8;
   --agent-codex: #1d2d3b;
-  --agent-codex-text: #9cc4e6;
+  --agent-codex-text: #c4def4;
   --agent-cursor: #2a2440;
-  --agent-cursor-text: #bdb1ea;
+  --agent-cursor-text: #d9d1f5;
   --agent-pi: #1c3022;
-  --agent-pi-text: #9ad6ae;
+  --agent-pi-text: #c0eacd;
   --agent-unknown: #24242a;
   --agent-unknown-text: #b9b9c2;
 
