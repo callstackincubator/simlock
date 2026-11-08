@@ -191,9 +191,9 @@ test.describe("every view", () => {
         ).toBe("92px");
         await page.keyboard.press("Escape");
         await visit(page, host, pages.device);
-        await page.getByRole("tab", { name: "Screen" }).click();
-        await expect(page.locator(".phone")).toHaveCSS("background-color", background);
-        await page.getByRole("button", { name: "Close" }).click();
+        await page.getByRole("link", { name: "Watch" }).click();
+        await expect(page.locator(".phone")).toHaveCSS("background-color", "rgb(0, 0, 0)");
+        await page.getByRole("button", { name: "Stop watching" }).click();
         await page.getByRole("button", { name: "Sign out" }).click();
         await expect(page.getByLabel("Operator token")).toBeVisible();
       }

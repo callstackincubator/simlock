@@ -187,7 +187,7 @@ for (const entry of cases) {
         "1-overview",
         "2-fleet",
         "3-worker",
-        "4-device-screen-drawer",
+        "4-streaming",
         "5-leases",
         "6-lease-drawer",
         "7-baselines",
@@ -199,13 +199,11 @@ for (const entry of cases) {
       ]);
       expect(
         cases
-          .filter(({ name }) =>
-            ["4-device-screen-drawer", "6-lease-drawer", "7-baselines"].includes(name),
-          )
+          .filter(({ name }) => ["4-streaming", "6-lease-drawer", "7-baselines"].includes(name))
           .map(({ name, path }) => [name, path]),
-        "reference 4, 6 and 7 use existing drawer and ready/stale table routes",
+        "reference 4 is the streaming page; 6 and 7 use existing drawer and ready/stale table routes",
       ).toEqual([
-        ["4-device-screen-drawer", "/fleet/wrk_1/dev_1?tab=devices&drawer=screen"],
+        ["4-streaming", "/fleet/wrk_1/devices/dev_1/"],
         ["6-lease-drawer", "/leases/lse_1/"],
         ["7-baselines", "/baselines"],
       ]);
@@ -265,7 +263,7 @@ for (const entry of cases) {
               const evidenceName = `${run}-${name}-${kind}`;
               const retainPair =
                 !comparison.matches ||
-                ((name === "1-overview-1280x800" || name === "4-device-screen-drawer-1280x800") &&
+                ((name === "1-overview-1280x800" || name === "4-streaming-1280x800") &&
                   run === "fresh");
               if (retainPair) {
                 const firstPath = testInfo.outputPath(`${evidenceName}-first.png`);
@@ -328,7 +326,7 @@ for (const entry of cases) {
               "1-overview": "Overview",
               "2-fleet": "Fleet",
               "3-worker": "mac-studio-01",
-              "4-device-screen-drawer": "mac-studio-01",
+              "4-streaming": "mac-studio-01",
               "5-leases": "Leases",
               "6-lease-drawer": "Leases",
               "7-baselines": "Baselines",
@@ -373,16 +371,18 @@ for (const entry of cases) {
                 ).toContainText(state);
               }
             }
-            if (entry.name === "4-device-screen-drawer") {
-              await expect(page.getByRole("dialog")).toBeVisible();
-              await expect(page.getByRole("dialog")).toContainText(
-                "Streaming is off on mac-studio-01.",
-              );
-              await expect(page.locator("main tbody tr")).toHaveCount(2);
-              await expect(page.getByRole("tab", { name: "Screen" })).toHaveAttribute(
-                "aria-selected",
-                "true",
-              );
+            if (entry.name === "4-streaming") {
+              await expect(page.locator(".phone-canvas")).toBeVisible();
+              await expect(page.locator(".screen-pills")).toContainText("LIVE");
+              await expect(page.getByLabel("Holder")).toContainText("claude-code:checkout-flow");
+              await expect
+                .poll(() =>
+                  page.evaluate(
+                    () => (window as unknown as { streamFrames?: number }).streamFrames,
+                  ),
+                )
+                .toBe(10);
+              await expect(page.locator(".screen-pills")).toContainText("Mb/s");
             }
             if (entry.name === "5-leases") {
               await expect(page.locator("main tbody tr")).toHaveCount(14);
