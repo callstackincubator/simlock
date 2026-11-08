@@ -5221,7 +5221,9 @@ describe("IosSimctlDriver device set", () => {
       });
       const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
 
-      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      await expect(
+        driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" }),
+      ).resolves.toBeDefined();
       await driver.provision(spec);
       await expect(filesystem.exists(`${sourcesSet}/${OWNED_ROOT_MARKER_FILE}`)).resolves.toBe(
         !scoped,
