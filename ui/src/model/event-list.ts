@@ -79,6 +79,34 @@ export interface EventRow {
   readonly summary: string;
 }
 
+export function eventRow(
+  event: ConsoleEvent,
+  workers: readonly WorkerView[],
+  query: string,
+): EventRow {
+  const tone = eventTone(event.event);
+  return {
+    id: event.id,
+    iso: new Date(event.timestamp).toISOString(),
+    name: event.event,
+    summary: eventSummary(event, workers),
+    time: timeOfDay(event.timestamp),
+    to: `${itemPath("/activity", event.id)}${query}`,
+    ...(tone === undefined ? {} : { tone }),
+  };
+}
+
+// why: the match is over what a row shows, its name and its summary line, and over no other part
+// of the payload.
+export function rowMatches(row: EventRow, search: string): boolean {
+  const wanted = search.toLowerCase();
+  return (
+    wanted === "" ||
+    row.name.toLowerCase().includes(wanted) ||
+    row.summary.toLowerCase().includes(wanted)
+  );
+}
+
 // why: a row keeps the filter and the search in its link, so choosing an event does not undo them.
 export function eventRows(
   events: readonly ConsoleEvent[],
@@ -87,27 +115,9 @@ export function eventRows(
   search = "",
 ): readonly EventRow[] {
   const query = writeQuery(writeSubject("", subject), search);
-  const wanted = search.toLowerCase();
-  const rows = shownEvents(events, subject).map((event) => {
-    const tone = eventTone(event.event);
-    return {
-      id: event.id,
-      iso: new Date(event.timestamp).toISOString(),
-      name: event.event,
-      summary: eventSummary(event, workers),
-      time: timeOfDay(event.timestamp),
-      to: `${itemPath("/activity", event.id)}${query}`,
-      ...(tone === undefined ? {} : { tone }),
-    };
-  });
-  // why: the match is over what a row shows, its name and its summary line, and over no other
-  // part of the payload.
-  return wanted === ""
-    ? rows
-    : rows.filter(
-        (row) =>
-          row.name.toLowerCase().includes(wanted) || row.summary.toLowerCase().includes(wanted),
-      );
+  return shownEvents(events, subject)
+    .map((event) => eventRow(event, workers, query))
+    .filter((row) => rowMatches(row, search));
 }
 
 export interface EventAction {

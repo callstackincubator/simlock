@@ -84,3 +84,18 @@
   font-family: var(--font-mono);
   font-weight: 600;
 }
+
+/* A strip of grey columns whose newest is orange, as in a card's header. */
+.chart-compact {
+  margin: 0;
+}
+
+.chart-compact.chart-columns .recharts-bar-rectangle path {
+  fill: var(--slot-leased);
+  fill-opacity: 0.55;
+}
+
+.chart-compact.chart-columns .recharts-bar-rectangle:last-child path {
+  fill: var(--accent);
+  fill-opacity: 1;
+}
