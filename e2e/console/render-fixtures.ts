@@ -208,24 +208,34 @@ function servesBody(pathname: string, response: APIResponse): boolean {
   return response.ok() || (pathname === "/v1/leases/lse_1" && response.status() === 404);
 }
 
+type Override = { status?: number; json: unknown } | undefined;
+
+const REFUSED: Override = {
+  status: 403,
+  json: { error: { code: "FIXTURE_REFUSED", message: "Fixture route refused" } },
+};
+
+// why: each live route the fixture rewrites, by path; a route not listed falls through to the fixture body.
+const LIVE_OVERRIDES: Record<
+  string,
+  (scenario: Scenario, response: APIResponse) => Promise<Override>
+> = {
+  "/v1/leases": async (scenario) => (scenario === "refused" ? REFUSED : undefined),
+  "/v1/identity": async (_scenario, response) => ({
+    json: { ...((await response.json()) as Record<string, unknown>), name: "Render operator" },
+  }),
+  "/v1/stats": async (_scenario, response) => ({
+    json: statsBody((await response.json()) as Record<string, unknown>),
+  }),
+};
+
 async function overrideFor(
   pathname: string,
   scenario: Scenario,
   response: APIResponse,
-): Promise<{ status?: number; json: unknown } | undefined> {
-  if (pathname === "/v1/leases" && scenario === "refused" && response.ok()) {
-    return {
-      status: 403,
-      json: { error: { code: "FIXTURE_REFUSED", message: "Fixture route refused" } },
-    };
-  }
-  if (pathname === "/v1/identity" && response.ok()) {
-    const identity = (await response.json()) as Record<string, unknown>;
-    return { json: { ...identity, name: "Render operator" } };
-  }
-  if (pathname === "/v1/stats" && response.ok()) {
-    return { json: statsBody((await response.json()) as Record<string, unknown>) };
-  }
+): Promise<Override> {
+  const live = response.ok() ? await LIVE_OVERRIDES[pathname]?.(scenario, response) : undefined;
+  if (live !== undefined) return live;
   const body = bodyFor(pathname, scenario);
   if (body !== undefined && servesBody(pathname, response)) return { status: 200, json: body };
   return undefined;
