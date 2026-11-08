@@ -47,6 +47,10 @@ test.describe("the shell", () => {
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
       await expect(page.locator(".connection")).toHaveText("Connected");
       await settled(page);
+      await expect(nav.locator(".account-avatar")).toBeVisible();
+      if (entry.session === "proxy") {
+        await expect(nav.locator(".signed-in-as")).toHaveAttribute("title", "Alice");
+      }
       expect(await nav.boundingBox(), entry.theme).toEqual({
         x: 12,
         y: 12,
