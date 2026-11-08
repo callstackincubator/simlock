@@ -6,6 +6,8 @@ import {
   granted,
   hex,
   leaseTenant,
+  longPrincipal,
+  longSecret,
   principals,
   rpc,
   scope,
@@ -41,5 +43,21 @@ describe("the agent-device front gives each lease its own tenant on a worker", (
     expect(tenants("agent_device.lease.heartbeat")).toEqual([tenantOf(1)]);
     expect(tenants("agent_device.command")).toEqual([tenantOf(1), tenantOf(2), principals.one]);
     expect(tenants("agent_device.lease.release")).toEqual([tenantOf(1)]);
+  });
+
+  it("a principal long enough to pass 128 characters gets a tenant cut with a hash that agent-device accepts, and its two leases get two tenants", async () => {
+    const rig = await setUp();
+    const as = { token: longSecret };
+
+    await granted(rig, 1, {}, as);
+    await granted(rig, 2, {}, as);
+
+    const tenants = rig.fake.rpcRequests("agent_device.lease.allocate").map((r) => r.tenant);
+    expect(tenants).toHaveLength(2);
+    for (const tenant of tenants) expect(tenant).toMatch(/^[a-zA-Z0-9._-]{1,128}$/u);
+    expect(tenants[0]).toHaveLength(128);
+    expect(tenants[0]).toMatch(/^tok_5f_x{90,}/u);
+    expect(tenants[0]).not.toBe(tenants[1]);
+    expect(longPrincipal.length).toBeGreaterThan(128);
   });
 });
