@@ -18,7 +18,7 @@ import { useNotify } from "./services";
 import { type DeviceRow, useWorkerPage } from "./workers";
 
 export type { DeviceRow, EventRow, LeaseInspection };
-export { agentKind, shortHolder } from "../model/holder";
+export { agentKind } from "../model/holder";
 
 export interface StreamingPageView {
   readonly worker: { readonly name: string; readonly to: string };

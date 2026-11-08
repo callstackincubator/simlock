@@ -38,7 +38,6 @@ import { useApi } from "./services";
 export type { EventRow } from "../model/event-list";
 export type {
   CapabilityRow,
-  DeviceDrawerTab,
   DeviceRow,
   FigureCard,
   InstallRow,
