@@ -16,6 +16,8 @@ export interface Call {
   // why: a call the console aborts (a picture it stops watching) is the console's own act, so a
   // test can see it.
   readonly signal?: AbortSignal;
+  // why: the token the call carried, so a daemon-like answer can depend on who asks.
+  readonly bearer?: string;
 }
 
 export interface Answer {
@@ -53,6 +55,8 @@ export interface ConsoleOptions {
   // why: a test that lets minutes pass (a poll, an idle window) fakes the timers too; every other
   // test keeps real ones and a fixed `Date`.
   readonly fakeTimers?: boolean;
+  // why: the page reload the session asks for when a proxy session ends; a test sees it called.
+  readonly reload?: () => void;
 }
 
 const TIMERS = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] as const;
@@ -122,7 +126,9 @@ export function renderConsole(options: ConsoleOptions = {}) {
       });
       return new Response(body, { headers: { "Content-Type": "text/event-stream" }, status: 200 });
     }
+    const bearer = new Headers(init.headers).get("Authorization")?.replace(/^Bearer /, "");
     const call: Call = {
+      ...(bearer === undefined ? {} : { bearer }),
       body: typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
       method,
       path: url.pathname,
@@ -146,7 +152,7 @@ export function renderConsole(options: ConsoleOptions = {}) {
   const session = createSession(() => window.sessionStorage, {
     fetch,
     now: () => Date.now(),
-    reload: () => undefined,
+    reload: options.reload ?? (() => undefined),
   });
   if (options.token !== null) session.signIn(options.token ?? "tok_operator");
   const api = createApiClient({ fetch, onRefused: session.refused, token: session.token });
