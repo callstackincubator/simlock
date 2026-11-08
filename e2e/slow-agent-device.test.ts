@@ -19,6 +19,7 @@ import {
   freeLoopbackPort,
   makeAgent,
   makeProfileAgent,
+  leaseClient,
   openInputSocket,
   newAgentToken,
   waitForAgentDevice,
@@ -730,6 +731,69 @@ function defineSuite(target: Target): void {
         refused(await b.run(["snapshot", target.deviceFlag, addressOf(a)]));
         ok(await b.run(["close"]));
         ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
+      },
+    );
+
+    it.runIf(target === IOS)(
+      "keeps two same-named sessions apart: a runner's lease boots, survives closes, serves a new session and ends on release",
+      { timeout: 900_000 },
+      async () => {
+        const token = await newAgentToken(env);
+        const client = await leaseClient(env, token.secret);
+        const tenant = "e2e-runner";
+        const allocate = (runId: string) =>
+          client.allocate({
+            leaseBackend: "ios-simulator",
+            platform: "ios",
+            retainOnClose: true,
+            runId,
+            tenant,
+          });
+        const first = await allocate("run-one");
+        const second = await allocate("run-two");
+        expect(first.retainOnClose, "the daemon keeps the lease through close").toBe(true);
+        const bind = (lease: { leaseId: string; runId: string }) => [
+          "--tenant",
+          tenant,
+          "--run-id",
+          lease.runId,
+          "--lease-id",
+          lease.leaseId,
+        ];
+        const one = await makeAgent(env, "run-one", { connectArgs: bind(first), token });
+        const two = await makeAgent(env, "run-two", { connectArgs: bind(second), token });
+        const session = ["--session", "e2e-ios-0"];
+        const devices = await listDevices(env);
+        const leases = await listLeases(env);
+        const addressOf = (lease: { leaseId: string }): string | undefined => {
+          const held = leases.find((row) => row.id === lease.leaseId);
+          return devices.find((device) => device.id === held?.deviceId)?.address;
+        };
+        expect(new Set([addressOf(first), addressOf(second)]).size).toBe(2);
+
+        for (const [who, lease] of [
+          [one, first],
+          [two, second],
+        ] as const) {
+          const booted = await who.run(["boot", ...session], { timeout: 300_000 });
+          ok(booted);
+          expect((booted.data as { id?: string } | undefined)?.id).toBe(addressOf(lease));
+          ok(await who.run(["install", "Appduct", target.app, ...session]));
+          ok(await who.run(["open", target.bundleId, ...session]));
+          ok(await who.run(["snapshot", ...session], FIRST_SNAPSHOT));
+        }
+
+        ok(await one.run(["close", ...session]));
+        ok(await one.run(["close", target.bundleId, ...session]));
+        const next = ["--session", "e2e-ios-1"];
+        ok(await one.run(["open", target.bundleId, ...next]));
+        ok(await one.run(["snapshot", ...next], FIRST_SNAPSHOT));
+        ok(await two.run(["snapshot", ...session], FIRST_SNAPSHOT));
+
+        await client.release({ leaseId: first.leaseId, runId: first.runId, tenant });
+        await client.release({ leaseId: second.leaseId, runId: second.runId, tenant });
+        await waitForFree(env);
+        expect(await listLeases(env)).toEqual([]);
       },
     );
 

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach } from "vitest";
 
@@ -119,8 +120,19 @@ function parseResult(code: number | null, stdout: string, stderr: string): Agent
   return { code, stdout, stderr, json, data: record?.data, error: record?.error };
 }
 
-export async function makeAgent(env: SharedTestEnv, name: string): Promise<Agent> {
-  const token = await newAgentToken(env);
+export interface MakeAgentOptions {
+  // why: a test that needs several agents on one token passes it; the default is a fresh token per agent.
+  readonly token?: { secret: string; id: string };
+  // why: appended to `connect proxy`, so an agent can bind to a lease another client allocated (`--run-id`, `--lease-id`).
+  readonly connectArgs?: readonly string[];
+}
+
+export async function makeAgent(
+  env: SharedTestEnv,
+  name: string,
+  options: MakeAgentOptions = {},
+): Promise<Agent> {
+  const token = options.token ?? (await newAgentToken(env));
   const home = await mkdtemp(join(tmpdir(), `simlock-ad-${name}-`));
   const entry = agentDeviceEntry();
   // why: a developer's own AGENT_DEVICE_* settings must never point an agent at their own daemon.
@@ -154,11 +166,52 @@ export async function makeAgent(env: SharedTestEnv, name: string): Promise<Agent
     },
   };
   made.push({ env, agent, background });
-  const connected = await agent.run(["connect", "proxy", "--daemon-base-url", proxyUrl(env)]);
+  const connected = await agent.run([
+    "connect",
+    "proxy",
+    "--daemon-base-url",
+    proxyUrl(env),
+    ...(options.connectArgs ?? []),
+  ]);
   if (connected.code !== 0) {
     throw new Error(`agent-device connect proxy failed: ${connected.stdout}\n${connected.stderr}`);
   }
   return agent;
+}
+
+export interface ClientLease {
+  readonly leaseId: string;
+  readonly runId: string;
+  readonly retainOnClose?: true;
+}
+
+export interface LeaseClient {
+  allocate(options: {
+    readonly tenant: string;
+    readonly runId: string;
+    readonly leaseBackend: "ios-simulator";
+    readonly platform: "ios";
+    readonly retainOnClose: boolean;
+  }): Promise<ClientLease>;
+  release(lease: {
+    readonly tenant: string;
+    readonly runId: string;
+    readonly leaseId: string;
+  }): Promise<unknown>;
+}
+
+// why: agent-device's CLI has no flag that sends `retainOnClose`; its client library does, and a runner such as budgie allocates that way, so a test that proves a runner's flow loads the same library from the pinned install.
+export async function leaseClient(env: SharedTestEnv, secret: string): Promise<LeaseClient> {
+  const entry = realpathSync(agentDeviceEntry());
+  const library = (await import(
+    pathToFileURL(join(dirname(entry), "..", "dist", "src", "index.js")).href
+  )) as {
+    createAgentDeviceClient(config: Record<string, unknown>): { leases: LeaseClient };
+  };
+  return library.createAgentDeviceClient({
+    daemonAuthToken: secret,
+    daemonBaseUrl: proxyUrl(env),
+  }).leases;
 }
 
 const PROFILE_TOKEN_LABEL = "agent-device on this Mac";
