@@ -2306,15 +2306,20 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(rig)).toEqual([hex(2)]);
   });
 
-  it("after the agent-device daemon restarts, the next heartbeat answers `LEASE_ENDED_BY_HOST` and releases the simlock lease", async () => {
+  it("after agent-device restarts on a worker, an agent's next heartbeat succeeds and the simlock lease is kept on the same device", async () => {
     const rig: Rig = await setUp();
     await granted(rig, 1);
+    const address = rig.fake.leases.get(hex(1))?.address;
+    expect(address).toBeDefined();
     rig.fake.restart();
+    expect(rig.fake.leases.has(hex(1))).toBe(false);
 
     const answer = await envelopeOf(await heartbeat(rig, 1));
 
-    expectEndedBySimlock(answer);
-    expect(await listed(rig)).toEqual([]);
+    expect(answer.error).toBeUndefined();
+    expect(answer.result).toMatchObject({ ok: true });
+    expect(rig.fake.leases.get(hex(1))?.address).toBe(address);
+    expect(await listed(rig)).toEqual([hex(1)]);
   });
 
   it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {
