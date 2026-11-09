@@ -61,7 +61,7 @@ interface Plan {
 }
 
 // why: connect proxy names the backend that rents the platform (ios-instance, android-instance) on every allocate; any other backend is a different kind of device.
-const BACKEND_OF_PLATFORM: Record<string, string> = {
+export const BACKEND_OF_PLATFORM: Record<string, string> = {
   android: "android-instance",
   ios: "ios-instance",
 };
