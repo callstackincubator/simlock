@@ -296,6 +296,21 @@ export async function heartbeat(
   }
   const gone = leaseGoneReason(reading);
   if (gone === undefined) return relay(reply);
+  return leaseGone(context, arguments_, { entry, gone, leaseId, reply });
+}
+
+async function leaseGone(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  found: {
+    readonly entry: HeldView | undefined;
+    readonly gone: string;
+    readonly leaseId: string;
+    readonly reply: Exchange;
+  },
+): Promise<Response> {
+  const { identity, call } = arguments_;
+  const { entry, gone, leaseId, reply } = found;
   if (entry?.endedBy === "agent") return relay(reply);
   if (gone === "LEASE_NOT_FOUND" && entry !== undefined) {
     return restored(context, arguments_, entry, leaseId);
