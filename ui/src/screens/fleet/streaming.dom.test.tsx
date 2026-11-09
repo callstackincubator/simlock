@@ -61,6 +61,46 @@ describe("the device's streaming page", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it.each([
+    {
+      from: "/fleet/wrk_1",
+      open: async () =>
+        within(
+          (await screen.findAllByRole("row")).find(
+            (row) => within(row).queryByRole("link", { name: "Watch" }) !== null,
+          )!,
+        ).getByRole("link", { name: "Watch" }),
+      title: "a device row on the worker page",
+    },
+    {
+      from: "/leases/lse_1/",
+      open: async () =>
+        within(await screen.findByRole("region", { name: "Lease" })).findByRole("link", {
+          name: "Watch",
+        }),
+      title: "the lease inspector",
+    },
+  ])(
+    "Watch on $title opens the device's streaming page and its picture",
+    async ({ from, open }) => {
+      const { callsTo, user } = renderConsole({
+        mode: "worker",
+        path: from,
+        routes: routes(LEASED),
+      });
+      expect(callsTo("GET", STREAM)).toEqual([]);
+
+      await user.click(await open());
+
+      expect(window.location.pathname).toBe(PAGE);
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Fleet / mac-studio-01 / iPhone 16" }),
+      ).toBeVisible();
+      expect(await screen.findByLabelText("The device's screen")).toBeVisible();
+      await waitFor(() => expect(callsTo("GET", STREAM)).toHaveLength(1));
+    },
+  );
+
   it("shows the Holder card only while the device is leased, and keeps one picture request across the lease", async () => {
     let view = host("ready");
     const { callsTo, events } = renderConsole({
