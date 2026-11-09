@@ -7,9 +7,12 @@ import {
   type ReplyReading,
   type RpcRead,
 } from "../shared/rpc.js";
+import { addressField } from "../shared/selectors.js";
 import {
   REPLY_SCOPE_KEYS,
   exchange,
+  leaseCall,
+  listLeases,
   heldForAnother,
   releaseAgentDevice,
   releaseSimlock,
@@ -98,6 +101,41 @@ async function renewHeld(
   return relay(reply);
 }
 
+// why: agent-device keeps its leases in memory, so after its restart the front allocates the lease again, on the device simlock still holds for it, before it answers the heartbeat.
+async function restoreLease(
+  context: FrontContext,
+  { request, identity, call, leaseMaxTtlMs }: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Response | undefined> {
+  if (entry.platform === undefined) return undefined;
+  const listed = await listLeases(context, identity);
+  if (!listed.some((lease) => lease.id === leaseId)) return undefined;
+  const params = {
+    ...call.params,
+    leaseId,
+    ttlMs: leaseMaxTtlMs ?? entry.ttlMs,
+    [addressField(entry.platform)]: entry.address,
+  };
+  const allocated = await exchange(
+    context,
+    leaseCall(request, "agent_device.lease.allocate", params, call.id),
+    identity,
+    "allocate",
+    leaseId,
+  );
+  if (allocated.reading.kind !== "success") return undefined;
+  const again = await exchange(
+    context,
+    forwardedHeartbeat(request, call, leaseMaxTtlMs),
+    identity,
+    undefined,
+    leaseId,
+  );
+  if (again.reading.kind !== "success") return undefined;
+  return renewHeld(context, call, entry, leaseId, again);
+}
+
 function ownEntry(context: FrontContext, leaseId: string, identity: Identity) {
   const entry = context.map.get(leaseId);
   return entry?.identity.principal === identity.principal ? entry : undefined;
@@ -112,14 +150,16 @@ function badTtl(call: Call): boolean {
   );
 }
 
+interface HeartbeatArguments {
+  readonly request: Request;
+  readonly identity: Identity;
+  readonly call: Call;
+  readonly leaseMaxTtlMs: number | undefined;
+}
+
 export async function heartbeat(
   context: FrontContext,
-  arguments_: {
-    readonly request: Request;
-    readonly identity: Identity;
-    readonly call: Call;
-    readonly leaseMaxTtlMs: number | undefined;
-  },
+  arguments_: HeartbeatArguments,
 ): Promise<Response> {
   const { request, identity, call, leaseMaxTtlMs } = arguments_;
   if (badTtl(call)) {
@@ -146,8 +186,13 @@ export async function heartbeat(
     if (entry.endedAt !== undefined) return relay(reply);
     return renewHeld(context, call, entry, leaseId, reply);
   }
-  if (leaseGoneReason(reading) === undefined) return relay(reply);
+  const gone = leaseGoneReason(reading);
+  if (gone === undefined) return relay(reply);
   if (entry?.endedBy === "agent") return relay(reply);
+  if (gone === "LEASE_NOT_FOUND" && entry !== undefined) {
+    const restored = await restoreLease(context, arguments_, entry, leaseId);
+    if (restored !== undefined) return restored;
+  }
   if (entry === undefined && (await heldForAnother(context, identity, leaseId))) {
     return relay(reply);
   }

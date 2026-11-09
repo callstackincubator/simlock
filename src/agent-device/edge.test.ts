@@ -1881,13 +1881,34 @@ describe("the agent-device front, through the whole worker daemon", () => {
     },
   );
 
-  it.each(["LEASE_NOT_FOUND", "LEASE_EXPIRED", "LEASE_REVOKED"] as const)(
-    "a heartbeat the agent-device daemon answers `%s`, for a lease simlock holds and the agent did not release, releases the simlock lease and answers `LEASE_ENDED_BY_HOST`",
-    async (reason) => {
+  it.each([
+    [
+      "`LEASE_NOT_FOUND` with the simlock lease already released",
+      async (rig: Rig) => {
+        await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+        expect(await listed(rig)).toEqual([]);
+      },
+    ],
+    [
+      "`LEASE_EXPIRED`",
+      async (rig: Rig) => {
+        rig.fake.loseLease(hex(1), "LEASE_EXPIRED");
+        expect(await listed(rig)).toEqual([hex(1)]);
+      },
+    ],
+    [
+      "`LEASE_REVOKED`",
+      async (rig: Rig) => {
+        rig.fake.loseLease(hex(1), "LEASE_REVOKED");
+        expect(await listed(rig)).toEqual([hex(1)]);
+      },
+    ],
+  ] as const)(
+    "a heartbeat the agent-device daemon answers with %s, for a lease that really ended, releases the simlock lease and answers `LEASE_ENDED_BY_HOST`",
+    async (_case, end) => {
       const rig: Rig = await setUp();
       await granted(rig, 1);
-      rig.fake.loseLease(hex(1), reason);
-      expect(await listed(rig)).toEqual([hex(1)]);
+      await end(rig);
 
       const answer = await envelopeOf(await heartbeat(rig, 1));
 
