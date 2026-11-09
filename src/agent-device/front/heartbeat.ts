@@ -115,6 +115,7 @@ async function restoreLease(
     ...call.params,
     leaseId,
     ttlMs: leaseMaxTtlMs ?? entry.ttlMs,
+    ...(entry.retainOnClose === true ? { retainOnClose: true } : {}),
     [addressField(entry.platform)]: entry.address,
   };
   const allocated = await exchange(
