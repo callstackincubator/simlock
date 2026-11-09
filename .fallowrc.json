@@ -34,15 +34,19 @@
     "src/core/usage/read-thread.ts",
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
+    // why: the stream route facade is the agreed screen entry until page stages consume it; stage 7 removes this entry.
+    "ui/src/state/navigation.ts",
     "e2e/console/*.spec.ts",
     "e2e/real-proxy/*.spec.ts",
     "e2e/real-proxy/global-setup.ts",
     "vitest.mutate.config.ts",
     ".agents/scripts/*.mjs",
     ".dependency-cruiser.cycles.mjs",
-    "vendor/screen-capture/scripts/*.mjs"
+    "vendor/screen-capture/scripts/*.mjs",
+    "docs/internal/console-redesign/prototype/build.mjs"
   ],
   "dynamicallyLoaded": [
+    "docs/internal/console-redesign/prototype/d.mjs",
     "e2e/fake-driver/index.ts",
     // The command tree names its modules in an `import("./commands/<name>.js")` thunk, so
     // reachability is the tree's job and never a static edge; the tree's own module list is
@@ -63,6 +67,9 @@
     "@tanstack/react-virtual",
     // Recharts' peer dependency: installed for it, never imported by the console itself.
     "react-is",
+    // why: the console test refactor's screenshot tooling, later in this stack, uses these.
+    "pixelmatch",
+    "pngjs",
     // The update e2e (e2e/update/update.e2e.test.ts) runs its binary as a local npm registry.
     "verdaccio"
   ],
@@ -104,6 +111,8 @@
     "require-suppression-reason": "error"
   },
   "health": {
+    // why: the redesign prototype is frozen reference code that the stages copy values from; it is never refactored.
+    "ignore": ["docs/internal/console-redesign/prototype/**"],
     "thresholdOverrides": [
       {
         "files": [".agents/scripts/*.mjs"],

@@ -372,7 +372,7 @@ test.describe("the leases page", () => {
     }
   });
 
-  test("the drawer's close button is 40px tall with the button border", async ({ page }) => {
+  test("the drawer's close button is 30px tall with the button border", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await leaseOverSocket(host, "agent-icon");
@@ -387,7 +387,7 @@ test.describe("the leases page", () => {
           return { border: style.borderTopWidth, height: element.getBoundingClientRect().height };
         });
 
-      expect(shape).toEqual({ border: "1px", height: 40 });
+      expect(shape).toEqual({ border: "1px", height: 30 });
     } finally {
       await host.dispose();
     }
@@ -441,7 +441,7 @@ test.describe("the leases page", () => {
     }
   });
 
-  test("the toolbar puts the filter chips on the left and the search box on the right, at the page title's padding", async ({
+  test("the toolbar puts the filter chips on the left and the search box on the right, aligned to the table", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -454,7 +454,8 @@ test.describe("the leases page", () => {
       const search = await boxOf(page.getByRole("searchbox", { name: "Search leases" }));
       const table = await boxOf(page.locator("main .table-card"));
 
-      expect(chips.x).toBeCloseTo(title.x, 0);
+      expect(chips.x).toBeCloseTo(table.x, 0);
+      expect(title.x - table.x).toBeCloseTo(4, 0);
       expect(search.x).toBeGreaterThan(chips.x + chips.width);
       expect(search.x + search.width).toBeCloseTo(table.x + table.width, 0);
     } finally {

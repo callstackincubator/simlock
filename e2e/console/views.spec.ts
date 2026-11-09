@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
@@ -15,6 +17,7 @@ import {
   withActionSurfaces,
 } from "./fixtures.js";
 import { addInboxItems, waitingItem } from "./inbox-stub.js";
+import { writeCaptureProgram } from "./screen-capture.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -34,8 +37,20 @@ async function takeLease(host: RunningDaemon, agent: string): Promise<string> {
   return (granted.json as { lease: { id: string } }).lease.id;
 }
 
-async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly pages: Pages }> {
-  const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+async function hostWithLease(
+  captureCommand?: string,
+): Promise<{ readonly host: RunningDaemon; readonly pages: Pages }> {
+  const host = await startDaemon("worker", {
+    driverScript: {
+      ios: {
+        ...IOS,
+        ...(captureCommand === undefined ? {} : { screenCaptureCommand: captureCommand }),
+      },
+    },
+    ...(captureCommand === undefined
+      ? {}
+      : { config: { capabilities: { stream: { enabled: true } } } }),
+  });
   const lease = await takeLease(host, "console-views");
   const listed = await host.cli(["worker", "list", "--json"]);
   const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
@@ -101,7 +116,129 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
+const DARK_STATUS_COLOURS: readonly [string, readonly [string, string]][] = [
+  ["status-ok", ["rgb(134, 239, 172)", "rgb(27, 46, 36)"]],
+  ["status-warn", ["rgb(253, 224, 71)", "rgb(50, 44, 22)"]],
+  ["status-error", ["rgb(252, 165, 165)", "rgb(54, 34, 36)"]],
+];
+
+function statusColours(tone: string): readonly [string, string] {
+  return (
+    DARK_STATUS_COLOURS.find(([name]) => tone.includes(name))?.[1] ?? [
+      "rgb(185, 185, 194)",
+      "rgb(36, 36, 42)",
+    ]
+  );
+}
+
+async function checkSharedControls(
+  page: Page,
+  host: RunningDaemon,
+  pages: Pages,
+  theme: "light" | "dark",
+  background: string,
+  surface: string,
+): Promise<void> {
+  await page.emulateMedia({ colorScheme: theme });
+  await page.goto(host.url);
+  await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
+  await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
+  const signInButton = page.getByRole("button", { name: "Sign in" });
+  await expect(signInButton).toHaveCSS("min-height", "30px");
+  await expect(signInButton).toHaveCSS("border-radius", "8px");
+  await expect(signInButton).toHaveCSS("text-transform", "none");
+  await expect(signInButton).toHaveCSS("font-family", /Geist Variable/);
+  await signIn(page, host.tokens.operator);
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.locator(".chart .recharts-cartesian-axis-tick-value").first()).toHaveCSS(
+    "font-size",
+    "10px",
+  );
+  await expect(page.locator(".panel-header").first()).toHaveCSS("gap", "8px");
+  await visit(page, host, "/fleet");
+  await expect(page.locator(".table-card").first()).toHaveCSS("border-radius", "10px");
+  await expect(page.locator(".table th").first()).toHaveCSS("height", "34px");
+  await expect(page.locator(".chips").first()).toHaveCSS("border-radius", "8px");
+  await expect(page.getByRole("searchbox").first()).toHaveCSS("min-height", "30px");
+  await expect(page.locator(".search-field-wrap .icon")).toBeVisible();
+  const dark = theme === "dark";
+  const search = page.getByRole("searchbox").first();
+  await expect(search).toHaveCSS(
+    "border-top-color",
+    dark ? "rgb(35, 35, 39)" : "rgb(222, 222, 219)",
+  );
+  await expect(search).toHaveCSS("background-color", background);
+  await expect(search).toHaveCSS("border-top-left-radius", "8px");
+  const status = page.locator("#main .status").first();
+  await expect(status).toHaveCSS("height", "20px");
+  await expect(status.locator(".status-dot")).toHaveCSS("width", "6px");
+  const statusWidths = await status.evaluate((element) => ({
+    pill: element.getBoundingClientRect().width,
+    cell: element.closest("td")!.getBoundingClientRect().width,
+  }));
+  expect(statusWidths.pill).toBeLessThan(statusWidths.cell - 30);
+  if (theme === "dark") {
+    const tone = await status.getAttribute("class");
+    const colors = statusColours(tone ?? "");
+    await expect(status).toHaveCSS("color", colors[0]!);
+    await expect(status).toHaveCSS("background-color", colors[1]!);
+  }
+  await addInboxItems(page, () => [waitingItem("req_tokens", 125_000)]);
+  await visit(page, host, "/inbox");
+  const inboxRow = page.locator(".inbox-row").first();
+  await inboxRow.hover();
+  await expect(inboxRow).toHaveCSS("background-color", surface);
+  await visit(page, host, "/");
+  const overviewRow = page.locator(".overview-row").first();
+  await overviewRow.hover();
+  await expect(overviewRow).toHaveCSS("background-color", surface);
+  await visit(page, host, "/leases");
+  const more = page.getByRole("button", { name: /^Actions for/ }).first();
+  await expect(more).toHaveCSS("border-top-width", "0px");
+  await expect(more).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(more).toHaveCSS("color", dark ? "rgb(142, 142, 151)" : "rgb(90, 90, 85)");
+  await expect(more).toHaveCSS("width", "26px");
+  await expect(more).toHaveCSS("height", "26px");
+  await more.hover();
+  await expect(more).toHaveCSS("background-color", surface);
+  await visit(page, host, pages.lease);
+  const facts = page.locator(".facts").first();
+  await expect(facts).toHaveCSS("row-gap", "8px");
+  await expect(facts.locator("dt").first()).toHaveCSS("text-transform", "none");
+  expect(
+    await facts
+      .locator(":scope > div")
+      .first()
+      .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ")[0]),
+  ).toBe("92px");
+  await page.keyboard.press("Escape");
+  await visit(page, host, pages.device);
+  await page.getByRole("tab", { name: "Screen" }).click();
+  await expect(page.locator(".phone")).toHaveCSS("background-color", background);
+  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByLabel("Operator token")).toBeVisible();
+}
+
 test.describe("every view", () => {
+  test("existing pages keep usable shared controls after retired-token substitution in both themes", async ({
+    page,
+  }, testInfo) => {
+    const dir = testInfo.outputPath("capture");
+    await mkdir(dir, { recursive: true });
+    const { host, pages } = await hostWithLease(await writeCaptureProgram(dir));
+    try {
+      for (const [theme, background, surface] of [
+        ["light", "rgb(248, 248, 247)", "rgb(233, 233, 231)"],
+        ["dark", "rgb(12, 12, 14)", "rgb(27, 27, 31)"],
+      ] as const) {
+        await checkSharedControls(page, host, pages, theme, background, surface);
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("every view has no horizontal page scroll at 360px wide", async ({ page }) => {
     const { host, pages } = await hostWithLease();
     try {

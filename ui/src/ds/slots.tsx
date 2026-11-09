@@ -2,6 +2,8 @@ import "./slots.css";
 
 import type { CSSProperties } from "react";
 
+import { Meter } from "./meter";
+
 export type SlotKind = "leased" | "ready" | "busy" | "broken" | "absent" | "free";
 
 export interface Slot {
@@ -9,14 +11,24 @@ export interface Slot {
   readonly label: string;
 }
 
-// why: every slot carries its word as a tooltip and in the group's text, so the colours are never
-// the only way to read a worker's devices.
+// why: the group name carries the state counts even when the meter replaces individual tooltips.
 export function Slots(props: {
   readonly slots: readonly Slot[];
   readonly label: string;
   readonly size?: "sm" | "lg";
 }) {
   const { label, size = "sm", slots } = props;
+  if (slots.length > 10) {
+    const leased = slots.filter((slot) => slot.kind === "leased").length;
+    return (
+      <span className="slots slots-meter" role="img" aria-label={label}>
+        <Meter percent={(leased / slots.length) * 100} tone="neutral" />
+        <span>
+          {leased} / {slots.length}
+        </span>
+      </span>
+    );
+  }
   return (
     <span className={`slots slots-${size}`} role="img" aria-label={label}>
       {slots.map((slot, index) => (

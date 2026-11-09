@@ -1,8 +1,8 @@
-/* Panels: a card with a title and actions over its body. A table, a chart or a list sits in one. */
-
 .panel,
 .card {
   min-width: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
 }
@@ -18,24 +18,27 @@
 .panel-header {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  min-height: 52px;
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-2);
+  height: 38px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border);
 }
 
 .panel-title {
   flex: 1;
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: 600;
-  letter-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .panel-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   font-size: var(--text-sm);
 }
 

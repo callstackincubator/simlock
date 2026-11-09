@@ -1,29 +1,40 @@
-/* Slots: one square per device a worker can run, shaded by what the device is doing. */
-
 .slots {
   display: flex;
   min-width: 0;
 }
 
+.slots-meter {
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.slots-meter .load-bar {
+  flex: 1 1 4rem;
+}
+
+.slots-meter > :last-child {
+  white-space: nowrap;
+}
+
 .slots-sm {
-  gap: 2px;
+  gap: 3px;
 }
 
 .slots-sm .slot {
-  flex: 1 1 0;
-  min-width: 4px;
-  max-width: 9px;
-  height: 9px;
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
 .slots-lg {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(8, 16px);
   gap: var(--space-1);
 }
 
 .slots-lg .slot {
-  height: 22px;
+  width: 16px;
+  height: 16px;
 }
 
 .slot {
@@ -52,7 +63,7 @@
 }
 
 .slot-drained {
-  background: repeating-linear-gradient(135deg, var(--status-ok) 0 3px, var(--field) 3px 6px);
+  background: repeating-linear-gradient(135deg, var(--status-ok) 0 3px, var(--surface-2) 3px 6px);
 }
 
 .slot-shutdown {
@@ -60,7 +71,11 @@
 }
 
 .slot-offline {
-  background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, var(--field) 3px 6px);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--border-strong) 0 3px,
+    var(--surface-2) 3px 6px
+  );
 }
 
 .slot-free {
@@ -93,7 +108,7 @@
   display: flex;
   gap: 2px;
   height: 10px;
-  background: var(--field);
+  background: var(--track);
 }
 
 .share {

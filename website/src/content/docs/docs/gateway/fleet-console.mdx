@@ -25,13 +25,13 @@ On a gateway the overview adds up the fleet:
 
 - The **Workers** tile shows how many workers are connected, of all the workers the gateway knows, for example `3` `of 4`.
 - **Leased** counts the leases on every worker the gateway knows. It shows `—` until every worker has reported, and **Capacity · all workers** says how many workers have not reported yet.
-- The **Workers** panel has one row per worker: its status square and name, a square per device slot, CPU, memory, and its lease count.
+- The **Workers** panel has one row per worker: its status and name, device slots, CPU, memory, and its lease count. Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is not shown as zero.
 
 ## Fleet
 
 **Fleet** lists every worker the gateway knows, by label, or by id when it has no label. Each row shows how many devices it runs out of its limit. A worker that isn't connected shows `—` instead, since the numbers it last reported may be out of date.
 
-The square shows the worst of the worker's states. Besides the states a single worker can show, a gateway adds:
+The status shows the worst of the worker's states. Besides the states a single worker can show, a gateway adds:
 
 | Word | Colour | What it means |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ The square shows the worst of the worker's states. Besides the states a single w
 | `drained` | Amber | The worker takes no new leases from the gateway. Its leases keep running. |
 | `starting` | Amber | The worker is starting up. |
 
-**Issues** narrows the list to workers whose square is not green, and **Busy** to workers using three quarters or more of their device slots.
+**Issues** narrows the list to workers whose status is not green, and **Busy** to workers using three quarters or more of their device slots.
 
 Select a worker to see its tabs. On a gateway:
 

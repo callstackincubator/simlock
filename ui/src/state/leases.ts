@@ -33,6 +33,7 @@ import { setSearch, usePath, useSearch } from "./router";
 export { type EventRow } from "../model/event-list";
 export {
   LEASE_FILTERS,
+  leaseRows,
   type LeaseFilter,
   type LeaseInspection,
   type LeaseRowView,

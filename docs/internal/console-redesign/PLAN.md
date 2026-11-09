@@ -1,0 +1,279 @@
+# Console redesign: the plan
+
+Rebuild the console to the look in [DESIGN.md](../DESIGN.md). The reference
+is the renders here, not the words: an agent compares its page with its
+render and stops only when the two differ in data alone, apart from the
+explicit Fleet navigation-link, Baselines filter/link, preserved sidebar-control
+and evidence-backed WCAG-AA amendments in DESIGN.md.
+
+| Render                                                   | Page                                  |
+| -------------------------------------------------------- | ------------------------------------- |
+| [renders/1-overview.png](renders/1-overview.png)         | Overview                              |
+| [renders/2-fleet.png](renders/2-fleet.png)               | Fleet                                 |
+| [renders/3-worker.png](renders/3-worker.png)             | A worker's page                       |
+| [renders/4-streaming.png](renders/4-streaming.png)       | A device's streaming page (new route) |
+| [renders/5-leases-empty.png](renders/5-leases-empty.png) | Leases, nothing selected              |
+| [renders/6-leases-selected.png](renders/6-leases-selected.png) | Leases, one selected            |
+| [renders/7-baselines.png](renders/7-baselines.png)       | Baselines                             |
+| [renders/8-activity.png](renders/8-activity.png)         | Activity                              |
+| [renders/mosaic.png](renders/mosaic.png)                 | All eight on one sheet                |
+
+The renders come from [prototype/](prototype/): `node
+docs/internal/console-redesign/prototype/build.mjs` from the repo root
+redraws them into `prototype/screens/` (fonts from `node_modules`, Chromium
+from `@playwright/test`). `d.mjs` holds every CSS value the renders use; when
+DESIGN.md is unclear, read the prototype's CSS. The prototype is mock HTML,
+not component code: copy its values, not its markup.
+
+Foundation captures the existing pages, not the later redesigned states.
+`current/1-overview.png`, `2-fleet.png`, `3-worker.png`, `5-leases.png`
+and `8-activity.png` map to their numbered references. The baseline for
+`4-streaming.png` is `current/4-device-screen-drawer.png`, with the existing
+Screen tab; `6-leases-selected.png` maps to `current/6-lease-drawer.png`;
+`7-baselines.png` maps to the existing ready/stale table in
+`current/7-baselines.png`. These drawer and table images are baseline evidence,
+not approval of the later page geometry. Stages 3, 4 and 5 replace their own
+case modules with the final inspector, stream and Baselines states.
+
+The fixture's `android-35-pixel8` is ready: it replaces the reference's
+unsupported building row as a DATA difference. Stage 5 retains the reference
+row/pill geometry, replaces Building with Ready and Build baseline with the
+Prepare baseline documentation link, and leaves the unsupported row-menu
+trigger out while retaining its reserved width. The original renders stay
+unchanged. Inbox, Queue, Usage, sign-in and not found have no reference.
+
+Pages without a render (Inbox, Queue, Usage, sign-in, not found) keep their
+structure and take the new components. Dark is the designed theme; the light
+theme takes the same structure with values the implementer derives, and the
+maintainer accepts or adjusts them from a screenshot.
+
+## How an agent verifies a stage
+
+1. Build the console and capture each page with the fixture data at
+   1440×900 into `current/<page>.png` beside this file (the console test
+   refactor in this stack adds the screenshot script that does it).
+2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
+   record the explicit Fleet, Baselines, sidebar-control and WCAG-AA amendments, then
+   list every other difference that is not data: a missing element, a wrong
+   size, radius, colour, weight, spacing, alignment, a line that wraps or
+   is cut where the render's is not. Fix, rerun, repeat. The fixture data
+   differs from the mock data; shape, colour and size do not.
+3. Check the same page at 1280×800 and 390×844: no sideways page scroll, no
+   element outside its card, no text over another.
+4. Run the console lane in Chromium for the specs the diff touches and axe
+   in both themes (the lane does this).
+5. The PR body carries both images for each page the stage touched, and a
+   list of what still differs and why.
+
+A stage is done when its pages match their renders, its tests pass, and the
+website page [console.mdx](../../../website/src/content/docs/docs/worker/console.mdx)
+describes what the page now shows (documentation rule 9).
+
+## Stages
+
+Stage 0 blocks the rest. Stages 1–6 run in parallel, each on its own
+branch from stage 0's reviewed pinned head; start Overview and Fleet first,
+at most two agents in parallel. Subsequent delivery uses GPT 6.1 Terra;
+completed Sol spec checks remain valid. Stage 7 runs last. Keep the stack
+open and merge only after the complete feature passes its gate.
+
+### 0. Foundation and harness
+
+One agent; everything else waits for it.
+
+- `ui/src/ds/foundation.css`: the tokens, scale, radii and control heights
+  of DESIGN.md. Rename or add tokens; delete `--chip` and `--field` (an
+  input's fill is `--bg`). Foundation also owns mechanical substitutions in
+  `ui/src/screens/sign-in.css`, `inbox/inbox.css`,
+  `overview/overview.css` and `fleet/screen-panel.css`; no other changes to
+  those screens before their page stages. Verify no retired-token consumers
+  remain and existing pages render in both themes. (decided in delivery, pending the maintainer)
+- Restyle the `ds` primitives every page shares, to the renders' sidebar,
+  page header and cards: `sidebar` (floating card, search box, group
+  labels, account box, red Inbox badge), the page header (title with
+  breadcrumb, subtitle for figures, actions), `panel` (card with the 38px
+  header), `button` (30/26px, primary/secondary/danger/icon), `choice`
+  (filter group), `search-field`, `table` (34px header on `--surface-2`,
+  40px rows, selected row bar, group rows, footer with the count only),
+  `facts`, `stat` (KPI tile, no sparkline), `status` (pill, dot), `meter`,
+  `slots` (cap at ten), `menu`, `drawer`, `confirm-dialog`, `toast`,
+  `command-palette` (radii and tokens only).
+- Verify public `DataTable` props in new `ui/src/ds/table.test.tsx`, using
+  the static component seam in `ui/src/ds/menu.test.tsx`: `groupBy` repeats
+  headings across page boundaries without counting them as data rows;
+  `selectedId` marks only its row; `footer="count"` hides pager controls
+  while retaining supplied paging/range/count. Omitted props retain existing
+  paging and row/menu behavior. Extend `e2e/console/long-lists.spec.ts` for
+  existing pager controls and URL state. (decided in delivery, pending the maintainer)
+- New primitives: `pill`, `chip` (agent chip with the known-prefix rule),
+  `ring`, `log-row`, `list-row`, `feed-row`, `group-header`, `banner`.
+- `ui/src/model/holder.ts`: `shortHolder(id)` middle ellipsis above 34
+  characters, and `agentKind(id)` for the chip; unit tests for ids of every
+  form in `src/agent-identity/` (tool-prefixed session ids, token labels,
+  `mcp:<pid>`, 256-character free-form).
+- Fixture data for the captures, close to the mock data's shape: 8 workers
+  (one with 20 slots, one with a `.local` hostname, one disconnected, one
+  drained, one at 91% disk), 14 leases with holders of every form, 9
+  baselines (ready and stale only), an hour of events. The render harness
+  that first held it is removed by the maintainer's decision: a pixel
+  comparison of a live page cannot be stable in CI, so captures are a
+  review aid, not a test.
+- Verify: the shell (sidebar, header, one card) against the top-left of
+  `1-overview.png`; every existing page still renders with the new
+  primitives, even if its layout is still the old one.
+- The preserved desktop collapse/expand button is in the wordmark row, the
+  account stays at the bottom, and the phone keeps its menu. Record that
+  exception in stage 0 and stage 7 paired images. For the sidebar group
+  labels, `#6f6f79` on `#141416` is 3.702:1; `#8e8e97` is 5.665:1.
+  Record every other necessary foreground or stroke change with selector,
+  before/after colours, ratios and paired images. Never change original PNGs.
+  Stage 7 removes the temporary `ui/src/state/navigation.ts` Fallow entry
+  after real page imports reach the facade. (decided in delivery, pending the maintainer)
+
+### 1. Overview — `1-overview.png`
+
+Banner (count, first issue, "and N more", Open Inbox), six KPI tiles, the
+worker wall (4 columns, 1px gaps, pill under the name, capped slots, three
+meters), Leases held area chart, Capacity rings, Queue and Ending soon lists,
+Requests waiting bars. Range filter in the header. Subtitle is
+`updated <time>` only.
+
+### 2. Fleet and the worker page — `2-fleet.png`, `3-worker.png`
+
+Fleet: All / Issues / Busy filter and a search box, "Needs attention N"
+attention cards (two-line reason, labelled slot rows, meters, actions, lease
+count), "Healthy N" compact tiles with the `leased / slots` fraction, Worker
+events log full width. No Groups/Table toggle: the table view goes.
+
+Explicit reference amendment: **Add worker** links to the existing
+[joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
+**Release leases** becomes an equally styled **View leases** link to `/leases`;
+neither link sends a write. Preserve placement and geometry, test both links
+in the worker browser spec, and record these exceptions in paired stage-2
+and stage-7 images. (decided in delivery, pending the maintainer)
+
+Worker page: breadcrumb title with the state pill, Drain and `⋯`; four ring
+gauge cards; a left card with Slots, Host facts (worker id wraps), Baselines
+here; a right card with Devices / Warm pool tabs, device tiles (name, then
+runtime + pill, holder chip, TTL, Watch button and `granted` / `booted`
+time), and the Events on this worker log. No Events tab.
+
+### 3. Leases — `5-leases-empty.png`, `6-leases-selected.png`
+
+Filter group and search box; a table of Held by / Device / Worker / Expires
+in (no Granted column) with the footer count only; a stable 420px right pane:
+the summary (By holder, By platform, Ending in 5 min, Longest held, a help
+line) when nothing is selected, the inspector (chip, wrapped title, ring and
+countdown, Watch / Copy id / Release, facts, Recent events; no tabs) when a
+row is. Selecting a row never reflows the table. Below 1280px the inspector
+is a drawer. The lease drawer's Screen tab goes; Watch opens the streaming
+page.
+
+### 4. Streaming page — `4-streaming.png`
+
+A new route `/fleet/<worker>/devices/<device>` reusing
+`ui/src/screens/fleet/screen-panel.tsx` and `ui/src/state/screen.ts`: the
+phone frame centred in a card with the two overlay pills, Holder card
+(wrapped id, ring and countdown, Copy lease id / Lease details / Release),
+Device facts, Recent events; header: breadcrumb, `streaming` pill, Stop
+watching, `⋯`. One stream per open page, closed with it. The device drawer's
+Screen tab becomes a Watch button to this page. View only; the input socket
+stays unused.
+
+### 5. Baselines — `7-baselines.png`
+
+All / Stale / Ready filter group and search; a grouped table (iOS, Android group rows with count
+and size) of Baseline (name, model · runtime), Size as text, Worker, Built,
+State (pill, and a stale reason as a muted second line), `⋯`; under it one
+"Disk used by baselines" card, two columns of worker meters relative to each
+disk. No builds chart, no "runtimes without a baseline".
+
+Explicit reference amendment: replace Building with Ready, and the toolbar's
+Build baseline with an equally styled **Prepare baseline** link to the existing
+[baseline preparation instructions](https://callstackincubator.github.io/simlock/docs/worker/baselines).
+The URL follows `website/astro.config.mjs` (base, file paths, sidebar) and
+`website/src/site/content.ts` (site origin and `/simlock` base). Use only
+supported ready/stale statuses; substitute the harness's ready row as DATA
+with unchanged row/pill geometry. `baseline.save` requires a held lease and
+ends it (`src/contract/operations.ts:711-725`,
+`src/http/admin-declarations.ts:158-174`); this stage adds no saving workflow
+or progress wire field. Preserve original render files. Stage 5's PR records
+the DATA substitution and explicit filter/link differences alongside paired
+images; all other reference geometry remains required. Tests in
+`e2e/console/baselines.spec.ts` cover All/Stale/Ready with search and paging,
+the real keyboard-accessible documentation link and absence of a save request;
+the render harness covers the ready/stale substitution. (decided in delivery, pending the maintainer)
+
+### 6. Activity and the pages without a render — `8-activity.png`
+
+Activity: a 230px facets card (Kind, State, Worker with counts) and the feed
+card with the Events per minute bars at its top and feed rows under; the
+search box and range filter in the header. Then re-skin Inbox, Queue, Usage,
+sign-in and not found with the stage-0 primitives, keeping their structure;
+screenshot each at 1440×900 for the PR so the maintainer can judge them
+without a render.
+
+### 7. Breakpoints, themes, docs
+
+After 1–6 merge, one agent: the breakpoints DESIGN.md names (1280, 768,
+390), the light theme values with a screenshot of every page in both themes,
+the axe pass, `DESIGN.md` corrected wherever a merged page settled a detail
+the guide got wrong, the website's console page and its screenshots, and the
+removal of anything in `ui/src/ds/` no page uses (fallow finds it).
+
+## Decisions for the maintainer
+
+- **Light theme:** derived values accepted from screenshots (the plan), or
+  dark only until a light render exists.
+- **Leases inspector under 1280px:** a drawer (the plan), or the pane stays
+  and the table narrows.
+- **Streaming page input:** view only (the plan); driving the device from
+  the console is a product decision with its own ADR.
+
+## Delivery execution record
+
+Feature: [#1425](https://github.com/callstackincubator/simlock/issues/1425).
+The feature body and its subissues hold the technical specs, ownership,
+source gaps and overlap findings. They remain draft pending independent spec
+checking; this record grants no issue claim or implementation permission.
+
+| Stage | Task | Depends on |
+| --- | --- | --- |
+| 0. Foundation and render harness | [#1426](https://github.com/callstackincubator/simlock/issues/1426) | — |
+| 1. Overview | [#1427](https://github.com/callstackincubator/simlock/issues/1427) | stage 0 |
+| 2. Fleet and worker page | [#1428](https://github.com/callstackincubator/simlock/issues/1428) | stage 0 |
+| 3. Leases table, summary and inspector | [#1429](https://github.com/callstackincubator/simlock/issues/1429) | stage 0 |
+| 4. Device streaming page and Watch links | [#1430](https://github.com/callstackincubator/simlock/issues/1430) | stage 0 |
+| 5. Baselines grouped table and disk usage | [#1431](https://github.com/callstackincubator/simlock/issues/1431) | stage 0 |
+| 6. Activity and pages without renders | [#1432](https://github.com/callstackincubator/simlock/issues/1432) | stage 0 |
+| 7. Breakpoints, themes and final docs | [#1434](https://github.com/callstackincubator/simlock/issues/1434) | stages 1–6 |
+
+Stage 0's reviewed branch and pinned head are the parallel pages' baseline.
+The stages' “merge” above means merge-forward integration into the retained
+feature stack, not an early merge to `main`: stages 1–6 start after foundation
+review, stage 7 after their reviews and integration. Delivery rule 15 keeps
+all PRs open and merges the complete stack together. The orchestrator orders
+parallel branches into that stack as reviews pass. Subsequent delivery agents
+use GPT 6.1 Terra; completed Sol spec checks remain valid.
+
+
+Foundation runs first on the current committed baseline. Redesign owns the
+WorkerPageBody/DevicesTab/action hunks overlapping #1133 and Warm pool hunks
+overlapping #1145 in stage 2, and DeviceDrawer hunks overlapping #1133 in
+stage 4, throughout this feature. Those product tasks stay drafts and adapt
+afterward through normal merge-forward resolution. #1135/#1146/#1156 are
+future hunk conflicts, not consumed dependencies or prerequisites; their specs
+and claims are unchanged. Existing worker/action and streaming Tests pin the
+retained behavior. (decided in delivery, pending the maintainer)
+
+PR #1256 is not imported into the redesign. Inspected head:
+`54a1dc3b9262fc5f984421d66dac4d7fe008c514`; its streaming/docs overlap does
+not change foundation DS/paths ownership. Foundation edits only its owned
+shared-shell docs. Stage 4 rechecks current merge-base/head at its start and
+resolves actual merged changes: preserve ScreenPanel callable props, current
+four-argument useDeviceScreen callers and any merged optional
+capture-acquisition argument and cancellation ownership. Reconcile an
+extracted renderer rather than discard it; never overwrite that branch.
+Its independent `/screens` route is no functional prerequisite. Stage 4's
+`e2e/console/screen.spec.ts` and `ui/src/state/screen.test.ts` cover retained
+callers, acquisition and cleanup compatibility. (decided in delivery, pending the maintainer)

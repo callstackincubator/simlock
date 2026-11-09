@@ -1,6 +1,7 @@
 import "./leases.css";
 
 import {
+  AgentChip,
   ChoiceChips,
   type Column,
   focusAfterClosing,
@@ -70,7 +71,14 @@ export function LeasesScreen() {
 
 const COLUMNS: readonly Column<LeaseRowView>[] = [
   {
-    cell: (row) => <Link to={row.to}>{row.holder}</Link>,
+    cell: (row) => (
+      <span className="lease-holder">
+        <AgentChip kind={row.holderKind} />
+        <Link to={row.to} title={row.holderTitle}>
+          {row.holderDisplay}
+        </Link>
+      </span>
+    ),
     header: "Holder",
     mono: true,
   },

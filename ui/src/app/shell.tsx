@@ -72,13 +72,23 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
   return (
     <>
       <UpdateNotice collapsed={collapsed} />
-      <ConnectionStatus collapsed={collapsed} />
-      {signedIn.name === undefined || collapsed ? null : (
-        <p className="signed-in-as">Signed in as {signedIn.name}</p>
-      )}
-      {signedIn.canSignOut ? (
-        <SignOutButton collapsed={collapsed} name={signedIn.name} onClick={signOut} />
-      ) : null}
+      <div className="sidebar-account">
+        <span className="account-avatar" aria-hidden="true">
+          {signedIn.name?.slice(0, 1).toUpperCase() ?? "•"}
+        </span>
+        <div className="account-detail">
+          {signedIn.name === undefined || collapsed ? null : (
+            <p className="signed-in-as" title={signedIn.name}>
+              <span className="visually-hidden">Signed in as </span>
+              {signedIn.name}
+            </p>
+          )}
+          <ConnectionStatus collapsed={collapsed} />
+        </div>
+        {signedIn.canSignOut ? (
+          <SignOutButton collapsed={collapsed} name={signedIn.name} onClick={signOut} />
+        ) : null}
+      </div>
     </>
   );
 }

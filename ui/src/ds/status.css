@@ -1,35 +1,58 @@
-/* A status: the daemon's word, with a square of its colour before it. Never the accent. */
-
 .status {
   display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-2);
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 99px;
+  color: var(--pill-plain-text);
+  background: var(--pill-plain-bg);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .status-dot {
   display: inline-block;
   flex: none;
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   align-self: center;
+  border-radius: 50%;
 }
 
-.status-ok .status-dot,
+.status-ok {
+  color: var(--pill-ok-text);
+  background: var(--pill-ok-bg);
+}
+.status-warn {
+  color: var(--pill-warn-text);
+  background: var(--pill-warn-bg);
+}
+.status-error {
+  color: var(--pill-error-text);
+  background: var(--pill-error-bg);
+}
+
+.status .status-dot {
+  background: currentColor;
+}
+
 .status-dot-ok {
   background: var(--status-ok);
 }
 
-.status-warn .status-dot,
 .status-dot-warn {
   background: var(--status-warn);
 }
 
-.status-error .status-dot,
 .status-dot-error {
   background: var(--status-error);
 }
 
-.status-idle .status-dot,
 .status-dot-idle {
   background: var(--status-idle);
 }

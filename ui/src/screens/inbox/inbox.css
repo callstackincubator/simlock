@@ -36,7 +36,7 @@
 }
 
 .inbox-event:hover {
-  background: var(--field);
+  background: var(--surface-2);
   color: var(--text);
 }
 
@@ -117,7 +117,7 @@
 }
 
 .inbox-row:hover {
-  background: var(--field);
+  background: var(--surface-2);
   color: var(--text);
 }
 

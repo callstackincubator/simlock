@@ -1,0 +1,48 @@
+/* A holder's chip: a 26px rounded square with two mono capitals for a tool the id names, or a dot
+ * for any other holder. Its own tints, from docs/internal/DESIGN.md's Colour. */
+
+.chip-agent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.chip-agent-claude-code {
+  background: var(--agent-claude-code);
+  color: var(--agent-claude-code-text);
+}
+
+.chip-agent-codex {
+  background: var(--agent-codex);
+  color: var(--agent-codex-text);
+}
+
+.chip-agent-cursor {
+  background: var(--agent-cursor);
+  color: var(--agent-cursor-text);
+}
+
+.chip-agent-pi {
+  background: var(--agent-pi);
+  color: var(--agent-pi-text);
+}
+
+.chip-agent-unknown {
+  background: var(--agent-unknown);
+  color: var(--agent-unknown-text);
+}
+
+.chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 99px;
+  background: currentColor;
+}

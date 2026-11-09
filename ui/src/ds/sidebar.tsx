@@ -70,6 +70,16 @@ export function Sidebar(props: {
         <span className="sidebar-mark-short">
           <Wordmark short />
         </span>
+        <Button
+          variant="secondary"
+          className="sidebar-toggle"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggle}
+        >
+          <Icon name={collapsed ? "expand" : "collapse"} />
+        </Button>
         <button
           type="button"
           className="sidebar-menu"
@@ -84,6 +94,7 @@ export function Sidebar(props: {
         <button
           type="button"
           className="sidebar-search"
+          aria-label="Search or jump to…"
           title={collapsed ? "Search or jump to…" : undefined}
           onClick={() => {
             onSearch();
@@ -91,7 +102,8 @@ export function Sidebar(props: {
           }}
         >
           <Icon name="search" />
-          <span className="nav-label">Search or jump to…</span>
+          <span className="nav-label">Search</span>
+          <kbd aria-hidden="true" />
         </button>
         <NavList entries={entries.filter((entry) => entry.group === undefined)} {...nav} />
         {groups.map((group) => (
@@ -103,20 +115,7 @@ export function Sidebar(props: {
           />
         ))}
       </div>
-      <div className="sidebar-foot">
-        {footer(collapsed)}
-        <Button
-          variant="secondary"
-          className="sidebar-toggle"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          onClick={onToggle}
-        >
-          <Icon name={collapsed ? "expand" : "collapse"} />
-          <span className="nav-label">Collapse</span>
-        </Button>
-      </div>
+      <div className="sidebar-foot">{footer(collapsed)}</div>
     </nav>
   );
 }

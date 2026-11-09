@@ -72,7 +72,12 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**. **Inbox** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway that is behind the latest release, a line above them says, for example, `simlock 0.3.0 · 0.4.0 available`.
+The sidebar floats beside the page in its own card. Use the button beside the Simlock name to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
+
+<picture>
+  <source srcSet="/simlock/console-shell-dark.png" media="(prefers-color-scheme: dark)" />
+  <img src="/simlock/console-shell-light.png" alt="The Overview page with navigation and the signed-in account in the sidebar" />
+</picture>
 
 On **Leases**, **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Fleet**, a worker opens as its own page. Lists show 25 rows at a time, with a pager for 50 or 100.
 
@@ -97,9 +102,9 @@ The console opens on **Overview**, the worker on one page.
 
 ## Fleet
 
-**Fleet** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status square, the worker's name, and its devices running of its limit.
+**Fleet** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status, the worker's name, and its devices running of its limit.
 
-The square shows the worst thing wrong with the worker, and always has a word behind it (point at it to read it):
+The status shows the worst thing wrong with the worker, with a word and a colour:
 
 | Colour | When |
 | --- | --- |
@@ -107,9 +112,9 @@ The square shows the worst thing wrong with the worker, and always has a word be
 | Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, it has `warming paused`, or a figure is 85% full or more. |
 | Green | Nothing is wrong. The word is `connected`. |
 
-**Issues** shows only workers whose square is not green. **Busy** shows workers using three quarters of their device slots or more.
+**Issues** shows only workers whose status is not green. **Busy** shows workers using three quarters of their device slots or more.
 
-Select the worker to see its CPU, memory and disk, each with a bar, how many leases it holds, and a square per device slot for iOS and Android (leased, ready, booting, quarantined or free). Under them are four tabs:
+Select the worker to see its CPU, memory and disk, each with a bar, how many leases it holds, and device slots for iOS and Android (leased, ready, booting, quarantined or free). Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is not shown as zero. Under them are four tabs:
 
 - **Devices**: every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
 - **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
@@ -146,6 +151,7 @@ simlock token create --role agent --label ci-runner-3
 ```
 
 A lease taken with the CLI or MCP server on this machine shows the agent identity it was taken with.
+Long holder names are shortened in the middle; hover over the holder link to see the complete requester identity. A chip identifies a known agent tool, or shows a dot when the tool is unknown.
 
 Select a lease to see:
 

@@ -45,8 +45,11 @@ Actions and search:
 
 Look:
 
-- Colour is never the only signal: a `StatusDot` and a `Slots` group carry their words as accessible names; a `Meter` and a `ShareBar` only shade a figure printed beside them.
-- Orange is brand and interaction only: never a state.
+- The renders in `docs/internal/console-redesign/renders/` are the reference and `docs/internal/DESIGN.md` the words; only its explicit Fleet, Baselines, sidebar-control and evidence-backed WCAG-AA amendments permit differences.
+- Colour is never the only signal: a status is a pill with the daemon's word, a `Slots` group carries its counts as its accessible name, a `Meter` or a ring only shades a figure printed beside it.
+- Orange is brand and interaction only: never a state. Danger is `--status-error`.
+- Text that can grow (hostname, holder, device, baseline) is cut on one line with the whole value in `title`; a holder id is shortened in the middle by one helper in `src/model/` and nowhere else. A status pill never shares a line with such text.
+- Counts live in the page header or a group header, never on a filter or a tab. A tab never duplicates a section already on the page.
 - Nothing sets a `<style>` element (CSP `style-src 'self'`); a level arrives as a CSS custom property through React's `style` prop, as `Meter` does.
 - Motion is short, never loops, and stops under `prefers-reduced-motion`. Every page works at the narrowest phone width with no sideways page scroll. DESIGN.md holds both figures.
 

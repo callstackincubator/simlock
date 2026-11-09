@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { LeaseInspection, LeaseRowView } from "../../state/leases";
+import { leaseRows } from "../../state/leases";
 import type { Paging } from "../../ds";
 import { inConsole } from "../../state/test-support";
 import { LeaseDetail, LeaseEventList, LeaseTitle } from "./drawer";
@@ -18,6 +19,9 @@ function row(overrides: Partial<LeaseRowView> = {}): LeaseRowView {
   return {
     expiring: false,
     holder: "ci-runner-3",
+    holderDisplay: "ci-runner-3",
+    holderKind: "unknown",
+    holderTitle: "tok_1",
     id: "lse_1",
     key: " lse_1",
     model: "iPhone 16",
@@ -78,6 +82,62 @@ describe("the lease list", () => {
       "Holder Device Expires in Actions ci-runner-3 iPhone 16 · mac-mini-1 2 min 5 s",
     );
     expect(html).toContain('href="/leases/lse_1/"');
+  });
+
+  it("shows the complete requester identity in the title and a tool chip only for a known prefix", () => {
+    const cases = [
+      { id: "", display: "", kind: "unknown" },
+      {
+        id: "claude-code:3f2a9c8b7d6e5f4a3b2c1d",
+        display: "claude-code:3f2a9c8b7d6e5f4a3b2c1d",
+        kind: "claude-code",
+      },
+      {
+        id: "claude-code:3f2a9c8b7d6e5f4a3b2c1d0",
+        display: "claude-code:3f2a9c8b7d6e5…b2c1d0",
+        kind: "claude-code",
+      },
+      { id: "codex:session-1", display: "codex:session-1", kind: "codex" },
+      { id: "cursor:session-1", display: "cursor:session-1", kind: "cursor" },
+      { id: "pi:session-1", display: "pi:session-1", kind: "pi" },
+      { id: "mcp:48213", display: "mcp:48213", kind: "unknown" },
+      { id: "codex/free-label", display: "codex/free-label", kind: "unknown" },
+      { id: `${"f".repeat(250)}z2y8x7`, display: `${"f".repeat(25)}…z2y8x7`, kind: "unknown" },
+      {
+        id: "tok_1",
+        label: "codex:long-token-label-01234567890123456789",
+        display: "codex:long-token-label-01…456789",
+        kind: "unknown",
+      },
+    ];
+    for (const { id, label, display, kind } of cases) {
+      const rows = leaseRows({
+        leases: [
+          {
+            deviceId: "dev_1",
+            grantedAt: 0,
+            id: "lse_1",
+            idChosenByRequester: false,
+            lastRenewedAt: 0,
+            ownerId: id,
+            requesterId: id,
+            ttlDeadline: 125_000,
+            ttlMs: 250_000,
+          },
+        ],
+        now: 0,
+        tokens: label === undefined ? [] : [{ createdAt: 0, id, label, role: "agent" }],
+        workers: [],
+      });
+      const html = table(rows);
+
+      expect(rows[0]?.holder, id).toBe(label ?? id);
+      expect(html, id).toContain(`title="${id}"`);
+      expect(html, id).toContain(`chip-agent-${kind}`);
+      expect(html, id).toContain(`>${display}</a>`);
+      expect(html, id).toContain('href="/leases/lse_1/"');
+      expect(html, id).toContain(`Actions for ${label ?? id}`);
+    }
   });
 
   it("says in words that a lease is expiring, not only in colour", () => {

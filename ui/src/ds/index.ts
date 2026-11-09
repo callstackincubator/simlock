@@ -1,6 +1,7 @@
 import "./foundation.css";
 
 export { Button, ButtonLink } from "./button";
+export { AgentChip } from "./chip";
 export { CommandPalette, type PaletteGroup } from "./command-palette";
 export { ConfirmHost, createConfirmer, type ConfirmSpec } from "./confirm-dialog";
 export { Drawer, DrawerTabs } from "./drawer";
@@ -27,3 +28,4 @@ export { type Column, DataTable } from "./table";
 export { createToaster, ToastHost, type ToastSpec } from "./toast";
 export { Toolbar } from "./toolbar";
 export { focusAfterClosing } from "./focus-after-drawer";
+export { Banner, FeedRow, GroupHeader, LogRow, Pill, Ring, WorkerTile } from "./visuals";

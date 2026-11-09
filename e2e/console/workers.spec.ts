@@ -20,6 +20,8 @@ import {
   test,
 } from "./fixtures.js";
 import { returnToTab } from "./tab.js";
+import { answer } from "./stub-answers.js";
+import { fetchFull } from "./full-fetch.js";
 
 interface WorkerView {
   readonly id: string;
@@ -140,6 +142,36 @@ function row(page: Page, name: string): Locator {
   return page.getByRole("row").filter({ has: page.getByRole("link", { exact: true, name }) });
 }
 
+async function openPage(page: Page, daemon: RunningDaemon, path: string, title: string) {
+  await page.goto(new URL(path, daemon.url).toString());
+  await signIn(page, daemon.tokens.operator);
+  await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+}
+
+function rowOf(page: Page, name: string): Locator {
+  return page.locator("main tbody tr").filter({ hasText: name });
+}
+
+async function waitForDisconnected(gateway: RunningDaemon): Promise<void> {
+  await waitFor(
+    async () => {
+      const listed = await gateway.cli(["worker", "list", "--json"]);
+      return (listed.json as { workers: { connection: string }[] }).workers.some(
+        (view) => view.connection === "disconnected",
+      );
+    },
+    { label: "the gateway sees the stopped worker disconnected" },
+  );
+}
+
+async function startWithStoppedWorker(label: string) {
+  const fleet = await startFleet([{ driverScript: { ios: IOS }, label }]);
+  const [stopped] = fleet.workers as [RunningDaemon];
+  await stopped.stop();
+  await waitForDisconnected(fleet.gateway);
+  return fleet;
+}
+
 function title(page: Page, name: string): Locator {
   return page.getByRole("heading", { level: 1, name, exact: true });
 }
@@ -214,11 +246,12 @@ const TONE_OF: Readonly<Partial<Record<string, (typeof TONES)[number]>>> = {
   drained: "warn",
   incompatible: "error",
   leased: "ok",
+  off: "idle",
   ready: "ok",
   running: "ok",
 };
 
-async function readSquares(page: Page) {
+async function readStatusIndicators(page: Page) {
   return page.locator(".status-dot").evaluateAll((elements) => {
     const root = getComputedStyle(document.documentElement);
     const named = (token: string) => {
@@ -233,7 +266,15 @@ async function readSquares(page: Page) {
       accent: named("--accent"),
       neutral: named("--slot-leased"),
       shown: elements.map((element) => ({
+        ariaHidden: element.getAttribute("aria-hidden"),
+        ariaLabel: element.getAttribute("aria-label"),
         colour: getComputedStyle(element).backgroundColor,
+        kind:
+          element.closest(".status") && !element.closest(".sidebar-account")
+            ? ("pill" as const)
+            : ("standalone" as const),
+        role: element.getAttribute("role"),
+        title: element.getAttribute("title"),
         word:
           element.getAttribute("aria-label") ?? element.parentElement?.textContent?.trim() ?? "",
       })),
@@ -242,21 +283,47 @@ async function readSquares(page: Page) {
   });
 }
 
-async function expectSquareColours(
+async function expectStatusIndicatorColours(
   page: Page,
   where: string,
-  words: readonly string[],
+  words: readonly (readonly [string, "pill" | "standalone"])[],
+  theme: "light" | "dark",
 ): Promise<void> {
   await expect(page.locator(".status-dot").first()).toBeVisible();
-  const { accent, shown, tones } = await readSquares(page);
-  expect(shown.map((square) => square.word)).toEqual(expect.arrayContaining([...words]));
-  for (const square of shown) {
-    const context = `${square.word} in ${where}`;
-    expect(square.word, where).not.toBe("");
-    expect(tones, context).toContain(square.colour);
-    expect(square.colour, context).not.toBe(accent);
-    const tone = TONE_OF[square.word];
-    if (tone !== undefined) expect(square.colour, context).toBe(tones[TONES.indexOf(tone)]);
+  const { accent, shown } = await readStatusIndicators(page);
+  const colours = {
+    light: {
+      pill: ["rgb(20, 111, 53)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(85, 85, 95)"],
+      standalone: ["rgb(21, 128, 61)", "rgb(146, 87, 10)", "rgb(185, 28, 28)", "rgb(87, 83, 78)"],
+    },
+    dark: {
+      pill: ["rgb(134, 239, 172)", "rgb(253, 224, 71)", "rgb(252, 165, 165)", "rgb(185, 185, 194)"],
+      standalone: [
+        "rgb(74, 222, 128)",
+        "rgb(250, 204, 21)",
+        "rgb(248, 113, 113)",
+        "rgb(168, 162, 158)",
+      ],
+    },
+  } as const;
+  for (const [word, kind] of words) {
+    expect(shown, where).toEqual(expect.arrayContaining([expect.objectContaining({ word, kind })]));
+  }
+  for (const indicator of shown) {
+    const context = `${indicator.word} ${indicator.kind} in ${where}`;
+    expect(indicator.word, where).not.toBe("");
+    if (indicator.ariaLabel !== null) {
+      expect(indicator.role, context).toBe("img");
+      expect(indicator.title, context).toBe(indicator.word);
+    } else {
+      expect(indicator.ariaHidden, context).toBe("true");
+    }
+    const palette = colours[theme][indicator.kind];
+    expect(indicator.colour, context).not.toBe(accent);
+    expect(palette, context).toContain(indicator.colour);
+    const tone = TONE_OF[indicator.word.toLowerCase()];
+    expect(tone, context).toBeDefined();
+    expect(indicator.colour, context).toBe(palette[TONES.indexOf(tone!)]);
   }
 }
 
@@ -289,6 +356,19 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
+function systemOf(view: WorkerView): string {
+  return [
+    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
+    view.version === undefined ? "" : `simlock ${view.version}`,
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
+function slotsText(leased: number, limit: number): string {
+  return leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`;
+}
+
 // why: taken from the gateway's own view of the worker and the figures the page was answered with,
 // so the page cannot agree with itself.
 function expectedRow(view: WorkerView): {
@@ -296,29 +376,23 @@ function expectedRow(view: WorkerView): {
   readonly slots: string;
   readonly bars: number;
 } {
-  const name = view.label ?? view.id;
-  const system = [
-    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
-    view.version === undefined ? "" : `simlock ${view.version}`,
-  ]
-    .filter((part) => part !== "")
-    .join(" · ");
+  const name = `${view.label ?? view.id}${systemOf(view)}`;
   if (view.connection === "incompatible") {
     return {
       bars: 0,
       slots: "No devices",
-      text: [`${name}${system}`, "incompatible", "", "—", "—", "—", "—", ""],
+      text: [name, "incompatible", "", "—", "—", "—", "—", ""],
     };
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
   return {
     bars: 3,
-    slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,
+    slots: slotsText(leased, limit),
     text: [
-      `${name}${system}`,
+      name,
       view.drained ? "drained" : "connected",
-      "",
+      limit > 10 ? `${leased} / ${limit}` : "",
       runningOverLimit(view),
       "12%",
       "50%",
@@ -329,6 +403,83 @@ function expectedRow(view: WorkerView): {
 }
 
 test.describe("the workers page", () => {
+  test("an operator reads slots and sees accessible state counts, squares through ten and a meter with a printed fraction above ten", async ({
+    daemon,
+    page,
+  }) => {
+    const cases = [
+      { name: "zero", limit: 0, states: [], label: "No devices", fraction: "" },
+      {
+        name: "ten",
+        limit: 10,
+        states: ["leased", "leased", "absent", "quarantined"],
+        label: "2 leased, 1 absent, 1 quarantined, 6 free",
+        fraction: "",
+      },
+      {
+        name: "twenty",
+        limit: 20,
+        states: ["leased", "leased", "absent", "quarantined"],
+        label: "2 leased, 1 absent, 1 quarantined, 16 free",
+        fraction: "2 / 20",
+      },
+    ] as const;
+    const platform = (limit: number) => ({
+      atRamBudget: false,
+      limit,
+      maxRunning: limit,
+      overLimit: false,
+      reserved: 0,
+      running: 0,
+      used: 0,
+      warm: 0,
+    });
+    await answer(page, "/v1/workers", () => ({
+      workers: cases.map(({ limit, name, states }) => ({
+        id: `wrk_${name}`,
+        label: name,
+        connection: "connected",
+        drained: false,
+        lastSeenAt: Date.now(),
+        capacity: {
+          android: platform(0),
+          global: { maxRunning: limit, overLimit: false, reserved: 0, running: 0, warm: 0 },
+          ios: platform(limit),
+        },
+        devices: states.map((state, index) => ({
+          id: `dev_${name}_${index}`,
+          physical: false,
+          servesDefaultMode: true,
+          spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+          state,
+        })),
+      })),
+    }));
+    await openConsole(page, daemon);
+    for (const { name, limit, label, fraction } of cases) {
+      const shown = row(page, name);
+      const slots = shown.getByRole("img", { name: label, exact: true });
+      await expect(slots, name).toHaveCount(1);
+      if (limit > 0) await expect(slots, name).toBeVisible();
+      await expect(slots.locator(".slot"), name).toHaveCount(limit <= 10 ? limit : 0);
+      await expect(slots.locator(".load-bar"), name).toHaveCount(limit > 10 ? 1 : 0);
+      await expect(slots, name).toHaveText(fraction);
+      if (name === "ten") {
+        await expect(slots).toHaveCSS("gap", "3px");
+        await expect(slots.locator(".slot").first()).toHaveCSS("height", "12px");
+        await expect(slots.locator('[title="iPhone 16 18.4, absent"]')).toHaveCount(1);
+        await expect(slots.locator('[title="iPhone 16 18.4, quarantined"]')).toHaveCount(1);
+      }
+      if (name === "twenty") {
+        await expect(slots.locator(".load-bar")).toHaveCSS("--load-bar", "10%");
+        await expect(slots.locator(".load-bar")).toHaveCSS("height", "4px");
+      }
+      for (const index of [4, 5, 6]) {
+        await expect(shown.getByRole("cell").nth(index), name).toHaveText("—");
+      }
+    }
+  });
+
   test("the Fleet table lists every worker with its name, system, state word, slots group and its label, running of limit, and CPU, memory and disk", async ({
     page,
   }) => {
@@ -363,7 +514,7 @@ test.describe("the workers page", () => {
           "aria-label",
           want.slots,
         );
-        await expect(shown.locator(".load-bar"), name).toHaveCount(want.bars);
+        await expect(shown.locator(".worker-meter .load-bar"), name).toHaveCount(want.bars);
       }
     } finally {
       hangUp();
@@ -380,6 +531,13 @@ test.describe("the workers page", () => {
 
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
+    for (const index of [4, 5, 6]) {
+      await expect(
+        row(page, host.label ?? host.id)
+          .getByRole("cell")
+          .nth(index),
+      ).toHaveText("—");
+    }
     await row(page, host.label ?? host.id)
       .getByRole("cell")
       .nth(3)
@@ -1113,7 +1271,7 @@ test.describe("the workers page", () => {
     // fails a named assertion here. A figure under its threshold is the neutral tone.
     for (const colorScheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme });
-      const { accent, neutral, tones } = await readSquares(page);
+      const { accent, neutral, tones } = await readStatusIndicators(page);
 
       for (const [level, usedPercent, tone] of [
         ["normal", 50, "ok"],
@@ -1245,7 +1403,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("every status square shows its word with a status colour, and none uses the accent colour", async ({
+  test("every status indicator shows its word with its context's status colour, and none uses the accent colour", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -1270,20 +1428,38 @@ test.describe("the workers page", () => {
           .getByRole("navigation", { name: "Console" })
           .getByRole("link", { name: "Fleet" })
           .click();
-        await expectSquareColours(page, `list ${colorScheme}`, [
-          "connected",
-          "drained",
-          "incompatible",
-        ]);
+        await expectStatusIndicatorColours(
+          page,
+          `list ${colorScheme}`,
+          [
+            ["connected", "pill"],
+            ["drained", "pill"],
+            ["incompatible", "pill"],
+          ],
+          colorScheme,
+        );
         await row(page, "worker-a").getByRole("link").click();
         await openTab(page, "Host");
-        await expectSquareColours(page, `host ${colorScheme}`, [
-          "connected",
-          "running",
-          "compatible",
-        ]);
+        await expectStatusIndicatorColours(
+          page,
+          `host ${colorScheme}`,
+          [
+            ["connected", "pill"],
+            ["running", "pill"],
+            ["compatible", "pill"],
+          ],
+          colorScheme,
+        );
         await openTab(page, "Devices");
-        await expectSquareColours(page, `devices ${colorScheme}`, ["connected", "leased"]);
+        await expectStatusIndicatorColours(
+          page,
+          `devices ${colorScheme}`,
+          [
+            ["connected", "pill"],
+            ["leased", "standalone"],
+          ],
+          colorScheme,
+        );
       }
     } finally {
       hangUp();
@@ -1363,5 +1539,415 @@ test.describe("the workers page", () => {
 
     await follow(page.getByRole("link", { name: "Fleet", exact: true }), "backward");
     await expect(page).toHaveURL(/\/fleet$/);
+  });
+});
+
+test.describe("Fleet worker actions", () => {
+  test("a worker drawer's button is its first safe action", async ({ page }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "bar-a" }]);
+    try {
+      const workersUrl = (url: URL) => url.pathname === "/v1/workers";
+      await page.route(workersUrl, async (route) => {
+        const response = await fetchFull(route);
+        const body = (await response.json()) as { workers: Record<string, unknown>[] };
+        await route.fulfill({
+          response,
+          json: {
+            ...body,
+            workers: body.workers.map((worker) => ({
+              ...worker,
+              version: "0.3.0",
+              latestVersion: "0.4.0",
+              update: null,
+              lastUpdateFailure: null,
+            })),
+          },
+        });
+      });
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      await page.goto(new URL(`/fleet/${id}`, fleet.gateway.url).toString());
+      await expect(page.getByRole("heading", { level: 1, name: "bar-a" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Drain", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Actions for bar-a" }).click();
+      await expect(page.getByRole("menuitem", { name: "Update…" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.unroute(workersUrl);
+      await page.getByRole("button", { name: "Drain", exact: true }).click();
+      await expect(page.getByText("bar-a drained", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Actions for bar-a" })).toHaveCount(0);
+
+      const [stopped] = fleet.workers as [RunningDaemon];
+      await stopped.stop();
+      await waitForDisconnected(fleet.gateway);
+      await page.getByRole("button", { name: "Actions for bar-a" }).click();
+      await expect(page.getByRole("menuitem")).toHaveText(["Remove worker"]);
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Remove worker" })).toHaveCount(0);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("on a single host no Fleet menu or worker page offers Drain, Undrain or Remove", async ({
+    page,
+  }) => {
+    const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await lease(daemon, "solo-agent");
+      const workerAction = /^(Drain|Undrain|Remove)/;
+      await openPage(page, daemon, "/fleet", "Fleet");
+      const row = page.locator("main tbody tr");
+      await expect(row).toHaveCount(1);
+      await row.click({ button: "right" });
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await expect(row.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+      await row.getByRole("link").first().click();
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(page.getByRole("button", { name: workerAction })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+    } finally {
+      await daemon.dispose();
+    }
+  });
+
+  test("a worker is drained from Fleet with no dialog, and Undo undrains it", async ({ page }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "drain-a" }]);
+    try {
+      // why: the row shows the host's own disk and CPU; one over its limit outranks "drained" (#886).
+      await answerWithoutLoad(page);
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const row = rowOf(page, "drain-a");
+      await expect(row).toBeVisible();
+      await expect(row).not.toContainText("drained");
+
+      const menuButton = row.getByRole("button", { name: "Actions for drain-a" });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Drain", exact: true }).click();
+      await expect(page.getByText("drain-a drained", { exact: true })).toBeVisible();
+      await expect(
+        page.getByText("Its leases keep running. New leases go to other workers."),
+      ).toBeVisible();
+      await expect(page.getByRole("alertdialog")).toHaveCount(0);
+      await expect(row).toContainText("drained", { timeout: 10_000 });
+
+      await page.getByRole("button", { name: "Undo" }).click();
+      await expect(page.getByText("drain-a takes leases again")).toBeVisible();
+      await expect(row).not.toContainText("drained");
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("a stopped worker is removed once its name is typed exactly, and a connected worker offers no Remove", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "gone-a" },
+      { driverScript: { ios: IOS }, label: "live-b" },
+    ]);
+    try {
+      const [stopped] = fleet.workers as [RunningDaemon];
+      await stopped.stop();
+      await waitForDisconnected(fleet.gateway);
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+
+      const live = rowOf(page, "live-b");
+      await live.getByRole("button", { name: "Actions for live-b" }).click();
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toBeVisible();
+      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+
+      const row = rowOf(page, "gone-a");
+      await row.getByRole("button", { name: "Actions for gone-a" }).click();
+      await page.getByRole("menuitem", { name: "Remove worker" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "Remove gone-a?" });
+      await expect(dialog).toContainText(
+        "It leaves the fleet and its devices are forgotten. It can join again with a worker token. Type gone-a to confirm.",
+      );
+      const remove = dialog.getByRole("button", { name: "Remove worker" });
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("gone-");
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("gone-a ");
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("Gone-A");
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("gone-a");
+      await expect(remove).toBeEnabled();
+
+      await remove.click();
+      await expect(page.getByText("gone-a removed")).toBeVisible();
+      await expect(row).toHaveCount(0);
+      await expect(live).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("the row menu shows the dangerous items last, after a separator, in the error colour", async ({
+    page,
+  }) => {
+    const fleet = await startWithStoppedWorker("menu-a");
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      await rowOf(page, "menu-a").getByRole("button", { name: "Actions for menu-a" }).click();
+
+      const items = page.getByRole("menuitem");
+      await expect(items).toHaveCount(2);
+      await expect(items.nth(0)).toHaveText("Drain");
+      await expect(items.nth(1)).toHaveText("Remove worker");
+      await expect(page.getByRole("separator")).toHaveCount(1);
+      const order = await page
+        .getByRole("menu")
+        .evaluate((menu) =>
+          [...menu.querySelectorAll('[role="menuitem"], [role="separator"]')].map((node) =>
+            node.getAttribute("role"),
+          ),
+        );
+      expect(order).toEqual(["menuitem", "separator", "menuitem"]);
+      const colours = await items.evaluateAll((nodes) =>
+        nodes.map((node) => getComputedStyle(node).color),
+      );
+      const error = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--status-error)";
+        document.body.append(probe);
+        const colour = getComputedStyle(probe).color;
+        probe.remove();
+        return colour;
+      });
+      expect(colours[1]).toBe(error);
+      expect(colours[0]).not.toBe(error);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("a right-click on a row opens the same menu as its ⋯, Escape closes it, and the keyboard moves through it", async ({
+    page,
+  }) => {
+    const fleet = await startWithStoppedWorker("ctx-a");
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const row = rowOf(page, "ctx-a");
+      await row.getByRole("button", { name: "Actions for ctx-a" }).click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      const viaButton = await page.getByRole("menuitem").allInnerTexts();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+
+      await row.click({ button: "right" });
+      await expect(page.getByRole("menu")).toBeVisible();
+      await expect(page.getByRole("menu")).toBeFocused();
+      await expect(page.getByRole("menuitem")).toHaveText(viaButton);
+      expect(viaButton).toEqual(["Drain", "Remove worker"]);
+
+      await page.keyboard.press("ArrowDown");
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toHaveAttribute(
+        "data-highlighted",
+        "",
+      );
+      await page.keyboard.press("ArrowDown");
+      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveAttribute(
+        "data-highlighted",
+        "",
+      );
+      await page.keyboard.press("ArrowUp");
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toHaveAttribute(
+        "data-highlighted",
+        "",
+      );
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await expect(page).toHaveURL(/\/fleet$/);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("a success toast leaves after 6 s and stays while hovered, an error toast stays until closed, and at most three show while a fourth hides the oldest until one closes", async ({
+    page,
+  }) => {
+    const names = ["toast-a", "toast-b", "toast-c", "toast-d"];
+    const fleet = await startFleet(names.map((label) => ({ driverScript: { ios: IOS }, label })));
+    try {
+      await page.clock.install();
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      // why: the page tells its views of an answer through a timer, which a frozen clock never fires, so a table still loading when time freezes never shows.
+      await expect(rowOf(page, "toast-d")).toBeVisible();
+      // why: with time frozen, only the fast-forwards below age a toast, however slow the machine.
+      await page.clock.pauseAt(new Date(Date.now() + 1_000));
+      const toasts = page.getByRole("region", { name: "Notifications" });
+      const toastOf = (text: string) => toasts.locator(".toast").filter({ hasText: text });
+      const act = async (worker: string, item: string) => {
+        // why: the toasts stack over the table's last column, so the keyboard opens the menu.
+        await rowOf(page, worker)
+          .getByRole("button", { name: `Actions for ${worker}` })
+          .press("Enter");
+        const entry = page
+          .getByRole("menu", { name: `Actions for ${worker}` })
+          .getByRole("menuitem", { name: item, exact: true });
+        // why: the answer to the read an earlier action set off lands in real time, and the page shows it only once the frozen clock moves again, so until the menu offers the item the clock moves a little at a time.
+        let tries = 0;
+        await expect(async () => {
+          if (tries++ > 0) await page.clock.runFor(500);
+          await expect(entry).toBeVisible({ timeout: 1_000 });
+        }).toPass({ timeout: 20_000 });
+        await entry.click();
+        // why: a pointer left on the clicked item can sit where the toast appears, and a hovered
+        // toast never times out.
+        await page.mouse.move(0, 0);
+      };
+
+      await page.route("**/v1/workers/*/drain", (route) => route.abort());
+      await act("toast-b", "Drain");
+      const refused = toastOf("Couldn't drain toast-b");
+      await expect(refused).toBeVisible();
+      await page.clock.runFor(500);
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await page.clock.fastForward(30_000);
+      await page.clock.runFor(500);
+      await expect(refused).toBeVisible();
+      await expect(
+        refused.getByRole("button", { name: "Close", includeHidden: true }),
+      ).toBeVisible();
+      await refused.getByRole("button", { name: "Close", includeHidden: true }).click();
+      await page.clock.runFor(500);
+      await expect(refused).toBeHidden();
+      await page.unroute("**/v1/workers/*/drain");
+
+      await act("toast-a", "Drain");
+      const drained = toastOf("toast-a drained");
+      await expect(drained).toBeVisible();
+      await page.clock.fastForward(5_500);
+      await expect(drained).toBeVisible();
+      await page.clock.fastForward(1_000);
+      await page.clock.runFor(500);
+      await expect(drained).toBeHidden();
+
+      await act("toast-a", "Undrain");
+      const undrained = toastOf("toast-a takes leases again");
+      await expect(undrained).toBeVisible();
+      await undrained.hover();
+      await page.clock.fastForward(10_000);
+      await expect(undrained).toBeVisible();
+      await page.mouse.move(0, 0);
+      await page.clock.fastForward(6_500);
+      await page.clock.runFor(500);
+      await expect(undrained).toBeHidden();
+
+      await act("toast-a", "Drain");
+      await act("toast-b", "Drain");
+      await act("toast-c", "Drain");
+      await act("toast-d", "Drain");
+      await expect(toastOf("toast-d drained")).toBeVisible();
+      await expect(toasts.locator(".toast:visible")).toHaveCount(3);
+      await expect(toastOf("toast-a drained")).toBeHidden();
+
+      await expect(
+        toastOf("toast-d drained").getByRole("button", { name: "Close", includeHidden: true }),
+      ).toBeVisible();
+      await toastOf("toast-d drained")
+        .getByRole("button", { name: "Close", includeHidden: true })
+        .click();
+      await page.clock.runFor(500);
+      await expect(toastOf("toast-a drained")).toBeVisible();
+      await expect(toasts.locator(".toast:visible")).toHaveCount(3);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("an error toast's text is in the role=alert element and a success toast's in the aria-live=polite region", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "say-a" }]);
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const openMenu = async (item: string) => {
+        await rowOf(page, "say-a").getByRole("button", { name: "Actions for say-a" }).click();
+        await page.getByRole("menuitem", { name: item, exact: true }).click();
+      };
+      await page.route("**/v1/workers/*/drain", (route) => route.abort());
+      await openMenu("Drain");
+      await expect(page.getByRole("alert")).toContainText("Couldn't drain say-a");
+      await expect(page.getByRole("alert")).toContainText("The daemon did not answer.");
+
+      await page.unroute("**/v1/workers/*/drain");
+      await openMenu("Drain");
+      await expect(page.locator('[aria-live="polite"]')).toContainText("say-a drained");
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("an item's menu entries are disabled while its action is in flight, and a click on one sends nothing", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "busy-a" }]);
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const posts: string[] = [];
+      let answer: (() => Promise<void>) | undefined;
+      await page.route("**/v1/workers/*/drain", async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        posts.push(route.request().url());
+        answer = () => route.continue();
+        return undefined;
+      });
+      const menuButton = rowOf(page, "busy-a").getByRole("button", { name: "Actions for busy-a" });
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Drain", exact: true }).click();
+      await expect.poll(() => posts.length).toBe(1);
+
+      await menuButton.click();
+      const entry = page.getByRole("menuitem", { name: "Drain", exact: true });
+      await expect(entry).toHaveAttribute("aria-disabled", "true");
+      await entry.click({ force: true });
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      expect(posts).toHaveLength(1);
+
+      await answer?.();
+      await expect(page.getByText("busy-a drained", { exact: true })).toBeVisible();
+      await menuButton.click();
+      await expect(page.getByRole("menuitem", { name: "Undrain", exact: true })).toBeEnabled();
+      expect(posts).toHaveLength(1);
+      await page.keyboard.press("Escape");
+
+      const undrains: string[] = [];
+      let answerUndrain: (() => Promise<void>) | undefined;
+      await page.route("**/v1/workers/*/drain", async (route) => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        undrains.push(route.request().url());
+        answerUndrain = () => route.continue();
+        return undefined;
+      });
+      await rowOf(page, "busy-a").getByRole("link").first().click();
+      const pageButton = page.getByRole("button", { name: "Undrain", exact: true });
+      await pageButton.click();
+      await expect.poll(() => undrains.length).toBe(1);
+      await expect(pageButton).toBeDisabled();
+      await page.getByRole("navigation").getByRole("link", { name: /Inbox/ }).click();
+      const fix = page
+        .locator("main .inbox-list li")
+        .filter({ hasText: "busy-a" })
+        .getByRole("button", { name: "Undrain", exact: true });
+      await expect(fix).toBeDisabled();
+      await fix.click({ force: true });
+      expect(undrains).toHaveLength(1);
+
+      await answerUndrain?.();
+      await expect(page.getByText("busy-a takes leases again")).toBeVisible();
+      expect(undrains).toHaveLength(1);
+    } finally {
+      await disposeFleet(fleet);
+    }
   });
 });

@@ -1,12 +1,12 @@
-/* Filter chips: radios drawn as small mono buttons, the one on filled. */
-
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: 2px;
   margin: 0;
-  padding: 0;
-  border: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
   min-width: 0;
 }
 
@@ -29,12 +29,14 @@
 .chip-choice span {
   display: inline-flex;
   align-items: center;
-  height: 28px;
-  padding: 0 var(--space-2);
-  border: 1px solid var(--border);
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
   color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
   transition:
     background-color var(--duration),
     border-color var(--duration),
@@ -46,8 +48,7 @@
 }
 
 .chip-choice input:checked + span {
-  border-color: var(--border-strong);
-  background: var(--field);
+  background: var(--track);
   color: var(--text);
 }
 
