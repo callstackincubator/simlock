@@ -21,7 +21,7 @@ import { seedTokensDatabase } from "../auth/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 export const runningDaemons: DaemonServer[] = [];
-export const temporaryDirectories: string[] = [];
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
@@ -49,10 +49,10 @@ export const slowCatalogMs = 8_000;
 export const phoneSerial = "R58Y61A60HN";
 const defaultTtlMs = 600_000;
 export const gatewayMaxTtlMs = 1_800_000;
-export const workerMaxTtlMs = 50_000_000;
+const workerMaxTtlMs = 50_000_000;
 export const workerCeilingMs = 2 * workerMaxTtlMs;
 export const scope = { clientId: "client-1", leaseProvider: "proxy", runId: "run-1" } as const;
-export const endedMessage = "lease ended by simlock; run disconnect, then open";
+const endedMessage = "lease ended by simlock; run disconnect, then open";
 
 export const adminSession = {
   manageEventSubscription: () => undefined,
@@ -145,7 +145,7 @@ export async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export function driverFor(
+function driverFor(
   spec: WorkerSpec,
   clock: FakeClock,
   latency: Record<string, number>,
@@ -442,10 +442,7 @@ export async function envelopeOf(response: Response): Promise<Envelope> {
 
 export const hex = (n: number): string => n.toString(16).padStart(32, "0");
 
-export function allocateParams(
-  n: number,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
+function allocateParams(n: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { ...scope, leaseId: hex(n), platform: "ios", ttlMs: 120_000, ...extra };
 }
 
@@ -611,7 +608,7 @@ export function expectEndedBySimlock(answer: Envelope): void {
   });
 }
 
-export type RawDispatch = (operation: string, input: unknown, session: unknown) => Promise<unknown>;
+type RawDispatch = (operation: string, input: unknown, session: unknown) => Promise<unknown>;
 
 export interface DispatchTap {
   readonly operations: string[];
@@ -646,7 +643,7 @@ export function tapDispatch(daemon: DaemonServer): DispatchTap {
   };
 }
 
-export type RelayFn = (workerId: string, call: unknown) => Promise<Response>;
+type RelayFn = (workerId: string, call: unknown) => Promise<Response>;
 
 // why: the relay is the gateway's own object, so a test decides what the next relays do before they reach the worker.
 export function interceptRelay(
@@ -666,7 +663,7 @@ export function relayFailsWith(rig: Rig, code: string, message: string): void {
   target.relay = () => Promise.reject(new DispatchError(code, message));
 }
 
-export const wipeOperations = new Set(["reclaim", "shutdown", "destroy"]);
+const wipeOperations = new Set(["reclaim", "shutdown", "destroy"]);
 
 export function wipes(member: Member): number {
   return member.driver.calls.filter((call) => wipeOperations.has(call.operation)).length;
