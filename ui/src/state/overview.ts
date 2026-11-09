@@ -33,7 +33,12 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
         updatedAt: now.server,
         figures,
         items: inboxList.items,
-        leases: leases.error === undefined ? leases.data?.leases : undefined,
+        leases:
+          leases.error !== undefined
+            ? undefined
+            : leases.data === undefined
+              ? "loading"
+              : leases.data.leases,
         now: now.server,
         range,
         requests: queueRefusal === undefined ? waitingList.requests : undefined,

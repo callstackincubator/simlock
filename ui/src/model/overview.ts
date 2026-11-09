@@ -89,7 +89,8 @@ export interface Overview {
   readonly capacity: readonly PlatformCapacity[];
   // why: a refused read of the requests is "not known", never an empty queue.
   readonly queue: QueueCard | { readonly unavailable: string };
-  readonly ending: EndingCard | { readonly unavailable: string };
+  // why: leases still being read are loading, not unreadable; only a refused read says so.
+  readonly ending: EndingCard | { readonly unavailable: string } | { readonly loading: true };
   readonly figures: FiguresState;
   readonly updated?: string;
 }
@@ -328,21 +329,25 @@ export function overviewOf(input: {
   readonly requests: readonly WaitingRequest[] | undefined;
   readonly queueRefusal?: string;
   readonly items?: readonly InboxItem[];
-  readonly leases?: readonly LeaseRecord[] | undefined;
+  // why: undefined is a refused read of the leases, "loading" one that has not answered yet.
+  readonly leases?: readonly LeaseRecord[] | "loading" | undefined;
   readonly figures?: FiguresState;
   readonly range?: ConsoleRange;
   readonly updatedAt?: number | undefined;
   readonly now: number;
 }): Overview {
-  const { figures = { kind: "loading" }, items = [], leases, now, requests, workers } = input;
+  const { figures = { kind: "loading" }, items = [], now, requests, workers } = input;
+  const leases = input.leases === "loading" ? undefined : input.leases;
   const { queueRefusal = "The queue could not be read.", range = "1h" } = input;
   const banner = bannerOf(items, now);
   return {
     capacity: [platformCapacity(workers, "ios"), platformCapacity(workers, "android")],
     ending:
-      leases === undefined
-        ? { unavailable: "The leases could not be read." }
-        : endingOf(leases, workers, now),
+      input.leases === "loading"
+        ? { loading: true }
+        : leases === undefined
+          ? { unavailable: "The leases could not be read." }
+          : endingOf(leases, workers, now),
     figures,
     fleet: fleetOf(workers, now),
     queue: requests === undefined ? { unavailable: queueRefusal } : queueOf(requests, workers, now),

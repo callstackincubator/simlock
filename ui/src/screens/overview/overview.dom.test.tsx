@@ -445,6 +445,45 @@ describe("the Overview's queue when /v1/lease-requests is not answered", () => {
   });
 });
 
+describe("the Overview's Ending soon card", () => {
+  // why: the card's heading is a section of its own, and its list is drawn just after it.
+  function endingCard(): HTMLElement {
+    return within(screen.getByRole("region", { name: "Queue" })).getByRole("region", {
+      name: "Ending soon",
+    }).nextElementSibling as HTMLElement;
+  }
+
+  it("says Loading… while /v1/leases has not answered, and only a refused read says the leases could not be read", async () => {
+    const pending = renderConsole({
+      routes: {
+        ...STATS,
+        "/v1/leases": () => new Promise<Answer>(() => undefined),
+        "/v1/workers": { body: { workers: [ONE_HOST] } },
+      },
+    });
+    await screen.findByRole("region", { name: "Queue" });
+    await waitFor(() => expect(pending.callsTo("GET", "/v1/leases")).toHaveLength(1));
+    expect(endingCard()).toHaveTextContent("Loading…");
+    expect(endingCard()).not.toHaveTextContent("The leases could not be read.");
+    pending.unmount();
+
+    renderConsole({
+      routes: {
+        ...STATS,
+        "/v1/leases": {
+          body: { error: { code: "FORBIDDEN", message: "Not yours." } },
+          status: 403,
+        },
+        "/v1/workers": { body: { workers: [ONE_HOST] } },
+      },
+    });
+    await waitFor(() =>
+      expect(endingCard()).toHaveTextContent("Unavailable: The leases could not be read."),
+    );
+    expect(endingCard()).not.toHaveTextContent("Loading…");
+  });
+});
+
 describe("the Overview's Fleet card", () => {
   it("draws a row for every worker in the Fleet table, with no pager, and Open fleet goes to /fleet", async () => {
     const { user } = renderConsole({

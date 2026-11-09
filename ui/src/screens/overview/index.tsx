@@ -24,7 +24,6 @@ import {
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import type { FiguresState } from "../../state/figures";
 import {
-  type EndingCard,
   type Overview,
   type PlatformCapacity,
   type OverviewFleet,
@@ -277,7 +276,8 @@ function QueueList({ queue }: { readonly queue: QueueCard | Unavailable }) {
   );
 }
 
-function EndingList({ ending }: { readonly ending: EndingCard | Unavailable }) {
+function EndingList({ ending }: { readonly ending: Overview["ending"] }) {
+  if ("loading" in ending) return <p className="muted">Loading…</p>;
   if ("unavailable" in ending) return <p className="empty">Unavailable: {ending.unavailable}</p>;
   if (ending.rows.length === 0) return <p className="empty">No lease ends soon.</p>;
   return (
