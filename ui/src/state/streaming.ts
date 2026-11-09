@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { LoadView } from "../ds/loaded";
 import { type EventRow, eventRows } from "../model/event-list";
@@ -14,11 +14,12 @@ import { type LeaseInspection, useLeaseDrawerMenu, useLeaseInspection } from "./
 import { useNow, useRouteQuery } from "./live";
 import { loadView, mapView } from "./resource";
 import { navigate, useSearch } from "./router";
-import { useNotify } from "./services";
 import { type DeviceRow, useWorkerPage } from "./workers";
 
 export type { DeviceRow, EventRow, LeaseInspection };
 export { agentKind } from "../model/holder";
+// why: the streaming page copies a lease id by the same rule, and with the same words, as Leases.
+export { useCopyLeaseId } from "./leases";
 
 export interface StreamingPageView {
   readonly worker: { readonly name: string; readonly to: string };
@@ -77,47 +78,6 @@ export interface HolderCard {
 
 export function useHolder(leaseId: string): HolderCard {
   return { menu: useLeaseDrawerMenu(leaseId), view: useLeaseInspection(leaseId) };
-}
-
-const COPY_WAIT_MS = 3_000;
-
-// why: a clipboard that is missing, refused or silent is a copy that did not happen, and the page
-// says so with the id in the message, so it can still be taken by hand.
-export function useCopy(): (text: string, what: string) => void {
-  const notify = useNotify();
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  return (text, what) => {
-    let write: Promise<void> | undefined;
-    try {
-      write = navigator.clipboard?.writeText(text);
-    } catch {
-      write = undefined;
-    }
-    const silent = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("no answer")), COPY_WAIT_MS);
-    });
-    const attempt = write === undefined ? Promise.reject(new Error("unavailable")) : write;
-    void Promise.race([attempt, silent]).then(
-      () => {
-        if (mounted.current) notify({ title: `${what} copied` });
-      },
-      () => {
-        if (mounted.current) {
-          notify({
-            description: text,
-            title: `Couldn't copy the ${what.toLowerCase()}`,
-            tone: "error",
-          });
-        }
-      },
-    );
-  };
 }
 
 export interface DeviceEvents {

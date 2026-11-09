@@ -17,7 +17,7 @@ import {
   agentKind,
   type DeviceRow,
   type LeaseInspection,
-  useCopy,
+  useCopyLeaseId,
   useDeviceEvents,
   useHolder,
   useLegacyWatchRedirect,
@@ -117,7 +117,7 @@ function StreamingBody(props: { readonly page: StreamingPageView; readonly worke
 
 function HolderCard(props: { readonly leaseId: string; readonly to: string }) {
   const { view, menu } = useHolder(props.leaseId);
-  const copy = useCopy();
+  const copy = useCopyLeaseId();
   if (view.kind !== "ready" || view.data === undefined) return null;
   const lease = view.data;
   const release = menu.entries.find((entry) => entry.danger);
@@ -133,7 +133,7 @@ function HolderCard(props: { readonly leaseId: string; readonly to: string }) {
       </div>
       <Countdown lease={lease} />
       <div className="stream-holder-actions">
-        <Button onClick={() => copy(lease.id, "Lease id")}>Copy lease id</Button>
+        <Button onClick={() => copy(lease.id)}>Copy lease id</Button>
         <Link className="button button-secondary" to={props.to}>
           Lease details
         </Link>

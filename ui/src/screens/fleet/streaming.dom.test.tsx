@@ -1,5 +1,5 @@
-import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type Answer, renderConsole, type Routes } from "../../test/console";
 import { device, event, lease, NOW, worker } from "../../test/fixtures";
@@ -172,5 +172,133 @@ describe("the device's streaming page", () => {
     expect(await screen.findByText(/^Streaming is off on /)).toBeVisible();
     expect(picture()).toBeNull();
     expect(callsTo("GET", STREAM)).toEqual([]);
+  });
+});
+
+describe("the streaming page's holder actions", () => {
+  const FAILURE = "Couldn't copy. Select and copy the id.";
+
+  // why: user-event gives the page a clipboard of its own when a test sets it up, so the test's
+  // clipboard replaces that one after the page is drawn.
+  function setClipboard(clipboard: unknown) {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
+  function notifications() {
+    return within(screen.getByRole("region", { name: "Notifications" }));
+  }
+
+  async function holderCard(extra: Routes = {}) {
+    const view = renderConsole({
+      mode: "worker",
+      path: PAGE,
+      routes: { ...routes(LEASED), ...extra },
+    });
+    const holder = await screen.findByRole("region", { name: "Holder" });
+    return { holder, view };
+  }
+
+  it("Copy lease id puts the complete lease id on the clipboard and says so", async () => {
+    const { holder, view } = await holderCard();
+    const writeText = vi.fn(() => Promise.resolve());
+    setClipboard({ writeText });
+
+    await view.user.click(within(holder).getByRole("button", { name: "Copy lease id" }));
+
+    expect(await screen.findByText("Copied lease id")).toBeVisible();
+    expect(writeText).toHaveBeenCalledWith("lse_1");
+  });
+
+  it.each([
+    ["is absent", undefined],
+    [
+      "refuses access",
+      { writeText: () => Promise.reject(new DOMException("no", "NotAllowedError")) },
+    ],
+  ])(
+    "when the Clipboard API %s, Copy lease id says so, shows no success and keeps focus",
+    async (_name, clipboard) => {
+      const { holder, view } = await holderCard();
+      setClipboard(clipboard);
+      const copy = within(holder).getByRole("button", { name: "Copy lease id" });
+
+      await view.user.click(copy);
+
+      expect(await notifications().findByText(FAILURE)).toBeVisible();
+      expect(screen.queryByText("Copied lease id")).not.toBeInTheDocument();
+      expect(copy).toHaveFocus();
+    },
+  );
+
+  it("when the Clipboard API never answers, Copy lease id gives up after 5 seconds, keeps focus, and a late success shows nothing", async () => {
+    let finishCopy: () => void = () => undefined;
+    const { holder } = await holderCard();
+    setClipboard({
+      writeText: () =>
+        new Promise<void>((resolve) => {
+          finishCopy = resolve;
+        }),
+    });
+    const copy = within(holder).getByRole("button", { name: "Copy lease id" });
+    vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+    copy.focus();
+    fireEvent.click(copy);
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(screen.queryByText(FAILURE)).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(notifications().getByText(FAILURE)).toBeVisible();
+    expect(copy).toHaveFocus();
+    finishCopy();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.queryByText("Copied lease id")).not.toBeInTheDocument();
+  });
+
+  it("Release asks first: Keep sends nothing, Release lease releases it, and a refusal says the daemon's words", async () => {
+    let answer: Answer = { body: {} };
+    const { holder, view } = await holderCard({ "DELETE /v1/leases/*": () => answer });
+    const dialogTitle = "Release console's lease?";
+    const holderName = within(holder).getByText(/^console|agent/, {
+      selector: ".stream-holder-name",
+    });
+    const name = holderName.textContent ?? "";
+    const title = `Release ${name}'s lease?`;
+    void dialogTitle;
+
+    await view.user.click(within(holder).getByRole("button", { name: "Release" }));
+    const asked = await screen.findByRole("alertdialog", { name: title });
+    await view.user.click(within(asked).getByRole("button", { name: "Keep" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: title })).toBeNull());
+    expect(view.callsTo("DELETE", "/v1/leases/lse_1")).toHaveLength(0);
+
+    answer = {
+      body: { error: { code: "LEASE_BUSY", message: "The lease is being renewed." } },
+      status: 409,
+    };
+    await view.user.click(within(holder).getByRole("button", { name: "Release" }));
+    await view.user.click(
+      within(await screen.findByRole("alertdialog", { name: title })).getByRole("button", {
+        name: "Release lease",
+      }),
+    );
+    expect(await notifications().findByText(`Couldn't release ${name}'s lease`)).toBeVisible();
+    expect(notifications().getByText("The lease is being renewed.")).toBeVisible();
+    expect(view.callsTo("DELETE", "/v1/leases/lse_1")).toHaveLength(1);
+
+    answer = { body: {} };
+    await view.user.click(within(holder).getByRole("button", { name: "Release" }));
+    await view.user.click(
+      within(await screen.findByRole("alertdialog", { name: title })).getByRole("button", {
+        name: "Release lease",
+      }),
+    );
+    expect(await notifications().findByText(`Released ${name}'s lease`)).toBeVisible();
+    expect(view.callsTo("DELETE", "/v1/leases/lse_1")).toHaveLength(2);
   });
 });
