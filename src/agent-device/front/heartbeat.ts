@@ -1,5 +1,5 @@
 import type { Identity } from "../../auth/index.js";
-import { failure, frontReply, leaseEndedByHost, refusal } from "../shared/replies.js";
+import { failure, frontReply, leaseEndedByHost, notAvailable, refusal } from "../shared/replies.js";
 import {
   leaseCallFields,
   leaseGoneReason,
@@ -7,9 +7,12 @@ import {
   type ReplyReading,
   type RpcRead,
 } from "../shared/rpc.js";
+import { addressField } from "../shared/selectors.js";
 import {
   REPLY_SCOPE_KEYS,
   exchange,
+  leaseCall,
+  listLeases,
   heldForAnother,
   releaseAgentDevice,
   releaseSimlock,
@@ -22,6 +25,8 @@ import {
 import type { HeldView } from "./front-map.js";
 import { renewLease } from "./renewals.js";
 import { chosenTtl } from "./ttl.js";
+
+const RESTORING = "the lease is being restored after an agent-device restart; try again";
 
 type Call = RpcRead & { readonly kind: "request" };
 
@@ -98,6 +103,147 @@ async function renewHeld(
   return relay(reply);
 }
 
+const RESTORE_TIMEOUT_MS = 10_000;
+
+type Restore =
+  | { readonly kind: "restored"; readonly reply: Exchange }
+  | { readonly kind: "ended" }
+  | { readonly kind: "retry" }
+  | { readonly kind: "relay"; readonly reply: Exchange };
+
+async function allocateAgain(
+  context: FrontContext,
+  { request, identity, call, leaseMaxTtlMs }: HeartbeatArguments,
+  entry: HeldView & { readonly platform: "ios" | "android" },
+  leaseId: string,
+): Promise<Exchange> {
+  const params = {
+    ...call.params,
+    leaseId,
+    ttlMs: leaseMaxTtlMs ?? entry.ttlMs,
+    ...(entry.retainOnClose === true ? { retainOnClose: true } : {}),
+    [addressField(entry.platform)]: entry.address,
+  };
+  const abort = new AbortController();
+  const timer = context.clock.setTimer(RESTORE_TIMEOUT_MS, () => abort.abort());
+  // why: a proxy that ignores the abort would leave the heartbeat waiting for its own five-minute default, so the bound is also a race.
+  const silent = new Promise<Exchange>((resolve) => {
+    abort.signal.addEventListener(
+      "abort",
+      () =>
+        resolve({
+          reading: { kind: "unusable" },
+          response: undefined,
+          text: undefined,
+          unreachable: RESTORING,
+        }),
+      { once: true },
+    );
+  });
+  try {
+    return await Promise.race([
+      exchange(
+        context,
+        leaseCall(request, "agent_device.lease.allocate", params, call.id, abort.signal),
+        identity,
+        "allocate",
+        leaseId,
+      ),
+      silent,
+    ]);
+  } finally {
+    context.clock.cancel(timer);
+  }
+}
+
+async function stillHeld(
+  context: FrontContext,
+  identity: Identity,
+  leaseId: string,
+  deadline: number,
+): Promise<boolean | undefined> {
+  try {
+    const listed = (await listLeases(context, identity)).some((lease) => lease.id === leaseId);
+    if (listed) return true;
+    // why: a gateway's list trails a worker that is still starting, so a lease its index holds is not gone; one past its deadline is, whatever the index still says.
+    const indexed = context.link.stillHeld?.(leaseId) === true;
+    return indexed && deadline > context.clock.now() ? undefined : false;
+  } catch {
+    return undefined;
+  }
+}
+
+// why: agent-device keeps its leases in memory, so after its restart the front allocates the lease again, on the device simlock still holds for it, before it answers the heartbeat.
+async function restoreLease(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Restore> {
+  const { request, identity, call, leaseMaxTtlMs } = arguments_;
+  if (entry.platform === undefined || entry.releasing === true) return { kind: "ended" };
+  const held = await stillHeld(context, identity, leaseId, entry.deadline);
+  if (held === undefined) return { kind: "retry" };
+  if (!held) return { kind: "ended" };
+  const allocated = await allocateAgain(
+    context,
+    arguments_,
+    { ...entry, platform: entry.platform },
+    leaseId,
+  );
+  if (allocated.reading.kind !== "success") return { kind: "retry" };
+  const again = await exchange(
+    context,
+    forwardedHeartbeat(request, call, leaseMaxTtlMs),
+    identity,
+    undefined,
+    leaseId,
+  );
+  if (again.reading.kind === "success") return { kind: "restored", reply: again };
+  return leaseGoneReason(again.reading) === undefined
+    ? { kind: "relay", reply: again }
+    : { kind: "retry" };
+}
+
+const restoring = new WeakMap<FrontContext, Map<string, Promise<Restore>>>();
+
+// why: heartbeats that arrive while one re-allocate runs wait for it, so agent-device sees one allocate and none waits past its bound.
+function sharedRestore(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Restore> {
+  let running = restoring.get(context);
+  if (running === undefined) {
+    running = new Map();
+    restoring.set(context, running);
+  }
+  const live = running.get(leaseId);
+  if (live !== undefined) return live;
+  const started = restoreLease(context, arguments_, entry, leaseId).finally(() => {
+    running.delete(leaseId);
+  });
+  running.set(leaseId, started);
+  return started;
+}
+
+async function restored(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Response> {
+  const { call, identity } = arguments_;
+  const outcome = await sharedRestore(context, arguments_, entry, leaseId);
+  if (outcome.kind === "restored") {
+    return renewHeld(context, call, entry, leaseId, outcome.reply);
+  }
+  if (outcome.kind === "relay") return relay(outcome.reply);
+  if (outcome.kind === "retry") return frontReply(notAvailable(RESTORING), call);
+  return releaseOurs(context, identity, leaseId, call, true);
+}
+
 function ownEntry(context: FrontContext, leaseId: string, identity: Identity) {
   const entry = context.map.get(leaseId);
   return entry?.identity.principal === identity.principal ? entry : undefined;
@@ -112,14 +258,16 @@ function badTtl(call: Call): boolean {
   );
 }
 
+interface HeartbeatArguments {
+  readonly request: Request;
+  readonly identity: Identity;
+  readonly call: Call;
+  readonly leaseMaxTtlMs: number | undefined;
+}
+
 export async function heartbeat(
   context: FrontContext,
-  arguments_: {
-    readonly request: Request;
-    readonly identity: Identity;
-    readonly call: Call;
-    readonly leaseMaxTtlMs: number | undefined;
-  },
+  arguments_: HeartbeatArguments,
 ): Promise<Response> {
   const { request, identity, call, leaseMaxTtlMs } = arguments_;
   if (badTtl(call)) {
@@ -146,8 +294,27 @@ export async function heartbeat(
     if (entry.endedAt !== undefined) return relay(reply);
     return renewHeld(context, call, entry, leaseId, reply);
   }
-  if (leaseGoneReason(reading) === undefined) return relay(reply);
+  const gone = leaseGoneReason(reading);
+  if (gone === undefined) return relay(reply);
+  return leaseGone(context, arguments_, { entry, gone, leaseId, reply });
+}
+
+async function leaseGone(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  found: {
+    readonly entry: HeldView | undefined;
+    readonly gone: string;
+    readonly leaseId: string;
+    readonly reply: Exchange;
+  },
+): Promise<Response> {
+  const { identity, call } = arguments_;
+  const { entry, gone, leaseId, reply } = found;
   if (entry?.endedBy === "agent") return relay(reply);
+  if (gone === "LEASE_NOT_FOUND" && entry !== undefined) {
+    return restored(context, arguments_, entry, leaseId);
+  }
   if (entry === undefined && (await heldForAnother(context, identity, leaseId))) {
     return relay(reply);
   }

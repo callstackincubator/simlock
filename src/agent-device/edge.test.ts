@@ -16,6 +16,7 @@ import { FakeAgentDevice, FakeAgentDeviceHealth } from "./testing.js";
 import { AgentDeviceSupervisor } from "./host/agent-device-supervisor.js";
 import { SupervisorAgentDeviceUpstream } from "./host/upstream.js";
 import {
+  heartbeat,
   phoneSerial,
   setUpWithPhone,
   advance,
@@ -48,7 +49,6 @@ import {
   taggedAndroidDriver,
   sleep,
   setUp,
-  type SendOptions,
   send,
   rpcBody,
   rpc,
@@ -136,15 +136,6 @@ async function waiting(
 }
 
 const endedMessage = "lease ended by simlock; run disconnect, then open";
-
-function heartbeat(
-  rig: Rig,
-  n: number,
-  extra: Record<string, unknown> = {},
-  options: Omit<SendOptions, "body"> = {},
-): Promise<Response> {
-  return rpc(rig, "agent_device.lease.heartbeat", { ...scope, leaseId: hex(n), ...extra }, options);
-}
 
 function heartbeatsReceived(rig: Rig): number {
   return rig.fake.rpcRequests("agent_device.lease.heartbeat").length;
@@ -1881,13 +1872,34 @@ describe("the agent-device front, through the whole worker daemon", () => {
     },
   );
 
-  it.each(["LEASE_NOT_FOUND", "LEASE_EXPIRED", "LEASE_REVOKED"] as const)(
-    "a heartbeat the agent-device daemon answers `%s`, for a lease simlock holds and the agent did not release, releases the simlock lease and answers `LEASE_ENDED_BY_HOST`",
-    async (reason) => {
+  it.each([
+    [
+      "`LEASE_NOT_FOUND` with the simlock lease already released",
+      async (rig: Rig) => {
+        await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+        expect(await listed(rig)).toEqual([]);
+      },
+    ],
+    [
+      "`LEASE_EXPIRED`",
+      async (rig: Rig) => {
+        rig.fake.loseLease(hex(1), "LEASE_EXPIRED");
+        expect(await listed(rig)).toEqual([hex(1)]);
+      },
+    ],
+    [
+      "`LEASE_REVOKED`",
+      async (rig: Rig) => {
+        rig.fake.loseLease(hex(1), "LEASE_REVOKED");
+        expect(await listed(rig)).toEqual([hex(1)]);
+      },
+    ],
+  ] as const)(
+    "a heartbeat the agent-device daemon answers with %s, for a lease that really ended, releases the simlock lease and answers `LEASE_ENDED_BY_HOST`",
+    async (_case, end) => {
       const rig: Rig = await setUp();
       await granted(rig, 1);
-      rig.fake.loseLease(hex(1), reason);
-      expect(await listed(rig)).toEqual([hex(1)]);
+      await end(rig);
 
       const answer = await envelopeOf(await heartbeat(rig, 1));
 
@@ -2304,17 +2316,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(rig)).toEqual([]);
     await granted(rig, 2);
     expect(await listed(rig)).toEqual([hex(2)]);
-  });
-
-  it("after the agent-device daemon restarts, the next heartbeat answers `LEASE_ENDED_BY_HOST` and releases the simlock lease", async () => {
-    const rig: Rig = await setUp();
-    await granted(rig, 1);
-    rig.fake.restart();
-
-    const answer = await envelopeOf(await heartbeat(rig, 1));
-
-    expectEndedBySimlock(answer);
-    expect(await listed(rig)).toEqual([]);
   });
 
   it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {

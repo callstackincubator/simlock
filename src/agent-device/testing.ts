@@ -75,8 +75,8 @@ export interface FakeInventoryDevice {
 }
 
 export interface FakeAllocateReplyEdit {
-  readonly runId?: string;
-  readonly clientId?: string;
+  readonly runId?: string | undefined;
+  readonly clientId?: string | undefined;
 }
 
 interface Gate {
@@ -186,6 +186,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #failAllocate: FakeFailure | undefined;
   #failRelease: FakeFailure | undefined;
   #failHeartbeat: FakeFailure | undefined;
+  #failHeartbeatAfterAllocate: FakeFailure | undefined;
   #failCommand: FakeFailure | undefined;
   #failCommandStatus: { readonly status: number; readonly body: string } | undefined;
   readonly #goneReasons = new Map<string, FakeLeaseGoneReason>();
@@ -250,6 +251,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   failNextHeartbeat(failure: FakeFailure): void {
     this.#failHeartbeat = failure;
+  }
+
+  // why: a restart test needs the heartbeat that follows the re-allocate to fail, not the one that finds the lease gone.
+  failHeartbeatAfterNextAllocate(failure: FakeFailure): void {
+    this.#failHeartbeatAfterAllocate = failure;
   }
 
   failNextCommand(failure: FakeFailure): void {
@@ -525,6 +531,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       runId: params["runId"],
     };
     this.#replyDeviceKey = undefined;
+    this.#failHeartbeat = this.#failHeartbeatAfterAllocate;
+    this.#failHeartbeatAfterAllocate = undefined;
     const edit = this.#replyEdit;
     this.#replyEdit = undefined;
     const picked = this.#replyDevice;
@@ -565,6 +573,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         code: "UNAUTHORIZED",
         details: { reason },
         message: reason.toLowerCase().replaceAll("_", " "),
+      });
+    }
+    const keys = ["runId", "leaseProvider", "clientId", "deviceKey"] as const;
+    if (keys.some((key) => present(params[key]) && lease.scope[key] !== params[key])) {
+      return errorEnvelope(id, {
+        code: "UNAUTHORIZED",
+        details: { reason: "LEASE_SCOPE_MISMATCH" },
+        message: "lease scope mismatch",
       });
     }
     return envelope(id, { data: { lease: params }, ok: true });

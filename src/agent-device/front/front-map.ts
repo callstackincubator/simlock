@@ -10,6 +10,8 @@ interface DeviceFacts {
   readonly name?: string;
   readonly target?: string;
   readonly physical?: boolean;
+  // why: a re-allocate after agent-device restarts must keep the lease open after the runner's `close`, as the first allocate asked.
+  readonly retainOnClose?: boolean;
   readonly deviceKey?: string;
   // why: an adopted entry was rebuilt after a gateway restart and has no device key until a call names one.
   readonly adopted?: boolean;
@@ -30,8 +32,10 @@ export interface HeldView extends DeviceFacts {
   readonly identity: Identity;
   readonly address: string;
   readonly ttlMs: number;
+  readonly deadline: number;
   readonly endedAt?: number;
   readonly endedBy?: EndedBy;
+  readonly releasing?: boolean;
 }
 
 export interface ListedLease {
@@ -104,6 +108,11 @@ export class FrontMap {
   setTtl(leaseId: string, ttlMs: number): void {
     const held = this.#held.get(leaseId);
     if (held !== undefined) held.ttlMs = ttlMs;
+  }
+
+  setDeadline(leaseId: string, deadline: number): void {
+    const held = this.#held.get(leaseId);
+    if (held !== undefined) held.deadline = deadline;
   }
 
   beginRelease(leaseId: string): void {
