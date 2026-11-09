@@ -200,6 +200,29 @@ async function restoreLease(
     : { kind: "retry" };
 }
 
+const restoring = new WeakMap<FrontContext, Map<string, Promise<Restore>>>();
+
+// why: heartbeats that arrive while one re-allocate runs wait for it, so agent-device sees one allocate and none waits past its bound.
+function sharedRestore(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Restore> {
+  let running = restoring.get(context);
+  if (running === undefined) {
+    running = new Map();
+    restoring.set(context, running);
+  }
+  const live = running.get(leaseId);
+  if (live !== undefined) return live;
+  const started = restoreLease(context, arguments_, entry, leaseId).finally(() => {
+    running.delete(leaseId);
+  });
+  running.set(leaseId, started);
+  return started;
+}
+
 async function restored(
   context: FrontContext,
   arguments_: HeartbeatArguments,
@@ -207,7 +230,7 @@ async function restored(
   leaseId: string,
 ): Promise<Response> {
   const { call, identity } = arguments_;
-  const outcome = await restoreLease(context, arguments_, entry, leaseId);
+  const outcome = await sharedRestore(context, arguments_, entry, leaseId);
   if (outcome.kind === "restored") {
     return renewHeld(context, call, entry, leaseId, outcome.reply);
   }
