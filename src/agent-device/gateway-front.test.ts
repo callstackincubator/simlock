@@ -242,11 +242,13 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const fake = existing?.fake ?? new FakeAgentDevice();
     const phone = existing?.phone ?? new FakeAgentDevice();
     if (spec.capability === "unavailable") fake.setUnavailable("down");
-    const latency: Record<string, number> =
-      spec.slowCatalog === true ? { listCatalog: slowCatalogMs } : {};
+    const latency: Record<string, number> = existing?.latency ?? {};
+    if (spec.slowCatalog === true) latency["listCatalog"] = slowCatalogMs;
     const workerClock =
-      spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs);
-    const driver = driverFor(spec, workerClock, latency);
+      existing?.clock ??
+      (spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs));
+    // why: a restarted worker keeps its driver, so the devices it leased are still running, as after a real daemon restart.
+    const driver = existing?.driver ?? driverFor(spec, workerClock, latency);
     if (spec.direct === true) {
       await seedTokensDatabase(workerDirectory, [[principals.one, secrets.direct, "agent"]]);
     }
@@ -2284,6 +2286,67 @@ async function restarted(rig: Rig, member: Member, leases: number): Promise<void
   await untilRead(rig, member);
   await expect.poll(async () => (await fleetLeases(rig)).length).toBe(leases);
 }
+
+async function restartedWorker(rig: Rig, original: Member): Promise<Member> {
+  const stopped = await original.daemon;
+  await stopped.stop("test");
+  runningDaemons.splice(runningDaemons.indexOf(stopped), 1);
+  await vi.waitFor(async () =>
+    expect((await viewOf(rig, original.label))?.connection).toBe("disconnected"),
+  );
+  original.fake.restart();
+  const member = await rig.addWorker(original.spec, original);
+  await untilRead(rig, member);
+  await expect
+    .poll(async () => (await fleetLeases(rig)).map((lease) => lease.id))
+    .toEqual([hex(1)]);
+  return member;
+}
+
+describe("the agent-device front, through a gateway: after a restart", { timeout: 90_000 }, () => {
+  it.each([
+    ["a worker restart", async (rig: Rig, member: Member) => restartedWorker(rig, member)],
+    [
+      "a gateway restart, then a worker restart",
+      async (rig: Rig, member: Member) => {
+        await restarted(rig, member, 1);
+        return restartedWorker(rig, member);
+      },
+    ],
+    [
+      "a worker restart, then a gateway restart",
+      async (rig: Rig, member: Member) => {
+        const next = await restartedWorker(rig, member);
+        await restarted(rig, next, 1);
+        return next;
+      },
+    ],
+  ])(
+    "through a gateway, %s leaves the lease working and the device unwiped, and an `open` relayed through the gateway reaches the worker's same fake daemon and answers ok",
+    async (_case, restart) => {
+      const rig = await setUp();
+      const original = first(rig);
+      await granted(rig, 1);
+      const leased = await grantedDevice(original);
+      const member = await restart(rig, original);
+      expect(member.fake.leases.has(hex(1))).toBe(false);
+      const wiped = wipes(member);
+
+      const answer = await envelopeOf(await heartbeat(rig, 1));
+
+      expect(answer.error).toBeUndefined();
+      expect(answer.result).toMatchObject({ ok: true });
+      expect(member.fake.leases.get(hex(1))?.address).toBe(leased.address);
+      expect(await workerLeaseFor(member, 1)).toBeDefined();
+      expect(wipes(member)).toBe(wiped);
+      const commands = commandsReceived(member);
+      const opened = await envelopeOf(await command(rig, "open", 1));
+      expect(opened.error).toBeUndefined();
+      expect(opened.result).toMatchObject({ ok: true });
+      expect(commandsReceived(member)).toBe(commands + 1);
+    },
+  );
+});
 
 describe(
   "the agent-device front, through a gateway: after a gateway restart",
