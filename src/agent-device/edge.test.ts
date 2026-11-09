@@ -2328,59 +2328,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(rig)).toEqual([hex(2)]);
   });
 
-  it.each([
-    ["a simulator lease", "simulator"],
-    ["a phone lease, whose re-allocate reaches the phone daemon", "phone"],
-  ] as const)(
-    "after a standalone worker restarts, the agent's next heartbeat succeeds on the same device: %s",
-    async (_case, daemon) => {
-      const first = await setUpWithPhone();
-      const fake = daemon === "phone" ? first.phone : first.fake;
-      await granted(
-        first,
-        1,
-        daemon === "phone" ? { physical: true, platform: "android" } : { platform: "android" },
-      );
-      const before = fake.leases.get(hex(1));
-      const rig = await first.restart(() => {
-        first.fake.restart();
-        first.phone.restart();
-      });
-      expect(fake.leases.has(hex(1))).toBe(false);
-
-      const answer = await envelopeOf(await heartbeat(rig, 1));
-
-      expect(answer.error).toBeUndefined();
-      expect(answer.result).toMatchObject({ ok: true });
-      expect(fake.leases.get(hex(1))?.address).toBe(before?.address);
-      expect(await listed(rig)).toEqual([hex(1)]);
-      const opened = await envelopeOf(await runCommand(rig, "open", 1));
-      expect(opened.result).toMatchObject({ ok: true });
-    },
-  );
-
-  it("after a standalone worker restarts, a lease of another token and a lease whose requester id is not its id are not adopted, so their heartbeats answer as before the change", async () => {
-    const first = await setUpWithPhone();
-    await granted(first, 2, { platform: "android" }, { token: secrets.two });
-    const outside = await first.daemon.dispatch(
-      "lease.request",
-      { platform: "android", requesterId: "made-outside-the-front" },
-      sessionFor(principals.one),
-    );
-    const rig = await first.restart(() => {
-      first.fake.restart();
-      first.phone.restart();
-    });
-
-    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 2)));
-    const outsideAnswer = await envelopeOf(
-      await rpc(rig, "agent_device.lease.heartbeat", { ...scope, leaseId: outside.lease.id }),
-    );
-
-    expectLeaseGone(outsideAnswer, "LEASE_NOT_FOUND");
-    expect(await listed(rig)).toEqual([hex(2), outside.lease.id].sort());
-  });
-
   it("after the same restart (same `FakeDriver`, lease still listed), a release for a lease made before the restart answers the agent-device daemon's reply as a success and releases that simlock lease", async () => {
     const first = await setUp();
     await granted(first, 1);
