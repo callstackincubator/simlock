@@ -101,6 +101,7 @@ export interface DispatchTap {
   readonly operations: string[];
   rejectNext(operation: string, error?: Error): void;
   afterNext(operation: string, run: () => Promise<void>): void;
+  beforeNext(operation: string, run: () => Promise<void>): void;
 }
 
 // why: the front reaches simlock through `daemon.dispatch` looked up at call time, so a wrapper on the daemon object sits between the front and leasing.
@@ -110,6 +111,7 @@ export function tapDispatch(rig: Rig): DispatchTap {
   const operations: string[] = [];
   const rejections = new Map<string, Error>();
   const afters = new Map<string, () => Promise<void>>();
+  const befores = new Map<string, () => Promise<void>>();
   daemon.dispatch = async (operation, input, session) => {
     operations.push(operation);
     const rejection = rejections.get(operation);
@@ -117,6 +119,9 @@ export function tapDispatch(rig: Rig): DispatchTap {
       rejections.delete(operation);
       throw rejection;
     }
+    const before = befores.get(operation);
+    befores.delete(operation);
+    await before?.();
     const result = await original(operation, input, session);
     const after = afters.get(operation);
     afters.delete(operation);
@@ -125,6 +130,7 @@ export function tapDispatch(rig: Rig): DispatchTap {
   };
   return {
     afterNext: (operation, run) => afters.set(operation, run),
+    beforeNext: (operation, run) => befores.set(operation, run),
     operations,
     rejectNext: (operation, error = new Error("simlock could not do that")) =>
       rejections.set(operation, error),

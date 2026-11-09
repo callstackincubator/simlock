@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { heartbeat, setUpWithPhone, advance, listed, track } from "./test-edge.js";
+import {
+  heartbeat,
+  setUpWithPhone,
+  advance,
+  listed,
+  release,
+  tapDispatch,
+  track,
+} from "./test-edge.js";
 import {
   notAvailable,
   type Rig,
+  type Envelope,
   sleep,
   setUp,
   envelopeOf,
@@ -11,6 +20,7 @@ import {
   granted,
   allocatesReceived,
   runCommand,
+  leases,
 } from "./test-support.js";
 
 describe("the agent-device front, through the whole worker daemon: after agent-device restarts", () => {
@@ -95,6 +105,14 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
         `${notAvailable}${restoring}`,
       ],
       [
+        "allocate accepted with no release scope",
+        async (rig: Rig) => {
+          rig.fake.editNextAllocateReply({ runId: undefined });
+          return heartbeat(rig, 1);
+        },
+        `${notAvailable}${restoring}`,
+      ],
+      [
         "agent-device still starting",
         async (rig: Rig) => {
           rig.fake.setUnavailable("starting", true);
@@ -142,5 +160,63 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
       expect.objectContaining({ ok: true }),
     ]);
     expect(allocatesReceived(rig, 1)).toHaveLength(2);
+  });
+
+  it("after a restart, a heartbeat on a lease whose release is running answers ended and sends no re-allocate, a restored lease is renewed, and a second heartbeat's other error is relayed", async () => {
+    const deadline = async (rig: Rig) =>
+      (await leases(rig)).find((lease) => lease.id === hex(1))?.ttlDeadline;
+    const cases = [
+      [
+        "a release is running",
+        async (rig: Rig) => {
+          // why: the entry is marked releasing only while simlock's own release runs, after agent-device has already dropped the lease.
+          const tap = tapDispatch(rig);
+          let answer: Envelope | undefined;
+          tap.beforeNext("lease.release", async () => {
+            answer = await envelopeOf(await heartbeat(rig, 1));
+          });
+          await release(rig, 1);
+          expect(answer?.error).toMatchObject({
+            data: { details: { reason: "LEASE_ENDED_BY_HOST" } },
+          });
+          expect(allocatesReceived(rig, 1)).toHaveLength(1);
+        },
+      ],
+      [
+        "the lease is restored",
+        async (rig: Rig) => {
+          const before = await deadline(rig);
+          rig.fake.restart();
+          await advance(rig, 5_000);
+          const answer = await envelopeOf(await heartbeat(rig, 1));
+          expect(answer.result).toMatchObject({ ok: true });
+          expect(await deadline(rig)).toBe((before as number) + 5_000);
+        },
+      ],
+      [
+        "the second heartbeat fails with another error",
+        async (rig: Rig) => {
+          const before = await deadline(rig);
+          rig.fake.restart();
+          await advance(rig, 5_000);
+          rig.fake.failHeartbeatAfterNextAllocate({
+            code: "COMMAND_FAILED",
+            message: "daemon is busy",
+          });
+          const answer = await envelopeOf(await heartbeat(rig, 1));
+          expect(answer.error).toMatchObject({
+            data: { code: "COMMAND_FAILED" },
+            message: "daemon is busy",
+          });
+          expect(await listed(rig)).toEqual([hex(1)]);
+          expect(await deadline(rig)).toBe(before);
+        },
+      ],
+    ] as const;
+    for (const [, check] of cases) {
+      const rig: Rig = await setUp();
+      await granted(rig, 1);
+      await check(rig);
+    }
   });
 });
