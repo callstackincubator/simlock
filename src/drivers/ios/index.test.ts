@@ -1138,12 +1138,6 @@ describe("IosSimctlDriver", () => {
       tail: ["shutdown", "delete"],
     },
     {
-      name: "the seed's boot times out",
-      message: `seed ${seedUdid} did not boot: `,
-      script: [{ hangs: true, op: "bootstatus" }],
-      tail: ["shutdown", "shutdown", "delete"],
-    },
-    {
       name: "the seed's shutdown fails",
       message: "Unable to shutdown",
       script: [{ code: 1, op: "shutdown" }],
@@ -1201,6 +1195,58 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.slice(1).map((call) => call.args[2])).toEqual(
         runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
       );
+      expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
+    },
+  );
+
+  it.each([
+    { name: "bootstatus does not finish", hangs: "bootstatus" },
+    { name: "the installer never answers listapps", hangs: "listapps" },
+  ] as const)(
+    "a seed whose boot runs past ios.full.bootTimeoutMs because $name makes provision throw BootTimeoutError, as an Android seed's does, and leaves no seed and no row",
+    async ({ hangs }) => {
+      const bootSteps = ["boot", "bootstatus", "listapps"];
+      const ran = bootSteps.slice(0, bootSteps.indexOf(hangs) + 1);
+      const database = await memorySourceDatabase();
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: sourcesSimctl(
+            "create",
+            "simlock-seed-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ),
+          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+        },
+        ...ran.map((op) => {
+          const match = sourcesSimctl(
+            ...(op === "bootstatus" ? [op, seedUdid, "-b"] : [op, seedUdid]),
+          );
+          return op === hangs ? { hangs: true, match } : { match };
+        }),
+        ...["shutdown", "shutdown", "delete"].map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+      ]);
+      const clock = new FakeClock();
+      const driver = await createDriver(runner, clock, undefined, database, undefined, 2_000);
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      const provisioned = driver.provision(spec);
+      void provisioned.catch(() => undefined);
+      await waitForCalls(runner, ran.length + 2);
+      clock.advance(2_000);
+      const error = await provisioned.catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(BootTimeoutError);
+      expect((error as Error).message).toBe("Timed out waiting for device to boot: device-1");
+      expect(runner.calls.map((call) => call.args[3])).toEqual([
+        "list",
+        "create",
+        ...ran,
+        "shutdown",
+        "shutdown",
+        "delete",
+      ]);
       expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
     },
   );
