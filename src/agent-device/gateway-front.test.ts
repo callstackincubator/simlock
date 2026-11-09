@@ -35,7 +35,7 @@ import {
   envelopeOf,
   hex,
   allocate,
-  granted,
+  grantedOnGateway,
   release,
   heartbeat,
   command,
@@ -117,7 +117,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("with the only capable worker drained, allocate answers `refused by simlock: No worker in the fleet can currently serve this request`, while a command on a lease it already holds still works", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const view = await viewOf(rig, member.label);
     await rig.gateway.dispatch("worker.drain", { workerId: view?.id ?? "" }, adminSession);
     await vi.waitFor(async () => expect((await viewOf(rig, member.label))?.drained).toBe(true));
@@ -144,8 +144,8 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       workers: [{ label: "sim" }, { label: "phone", phone: true, platform: "android" }],
     });
     const phone = { physical: true, platform: "android" };
-    await granted(rig, 1);
-    await granted(rig, 2, phone);
+    await grantedOnGateway(rig, 1);
+    await grantedOnGateway(rig, 2, phone);
     await release(rig, 1);
     await release(rig, 2);
     await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
@@ -220,7 +220,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const rig = await setUp();
     const tap = tapDispatch(rig.gateway);
 
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
 
     await expect.poll(async () => (await fleetLeases(rig)).length).toBe(1);
     expect(await fleetLeases(rig)).toMatchObject([
@@ -331,7 +331,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const member = first(rig);
     const tap = tapDispatch(await member.daemon);
 
-    await granted(member, 1, {}, { token: secrets.direct });
+    await grantedOnGateway(member, 1, {}, { token: secrets.direct });
 
     const request = tap.inputs.find((entry) => entry.operation === "lease.request");
     expect(request).toBeDefined();
@@ -348,7 +348,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const labels: (string | undefined)[] = [];
     for (let n = 1; n <= 5; n += 1) {
-      await granted(rig, n);
+      await grantedOnGateway(rig, n);
       await expect.poll(async () => (await fleetLeases(rig)).length).toBe(1);
       labels.push((await fleetLeases(rig))[0]?.worker?.label);
       expect((await envelopeOf(await release(rig, n))).result).toMatchObject({ ok: true });
@@ -362,7 +362,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const rig = await setUp();
     const member = first(rig);
 
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
 
     const received = allocatesReceived(member, 1);
     expect(received).toHaveLength(1);
@@ -389,7 +389,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
   it("allocate `--platform ios` when the capable workers have Android only is refused `refused: ios is not available on this simlock`", async () => {
     const rig = await setUp({ workers: [{ label: "droid", platform: "android" }] });
-    await granted(rig, 1, { platform: "android" });
+    await grantedOnGateway(rig, 1, { platform: "android" });
     await release(rig, 1);
 
     const answer = await envelopeOf(await allocate(rig, 2));
@@ -405,7 +405,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
         { capability: "off", label: "plain", model: "iPhone 17 Pro" },
       ],
     });
-    await granted(rig, 1, { device: "iPhone 16" });
+    await grantedOnGateway(rig, 1, { device: "iPhone 16" });
     await release(rig, 1);
     await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
 
@@ -447,7 +447,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
   it("with every matching device leased, allocate waits and is granted once one is released", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 1 }] });
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
 
     const second = track(allocate(rig, 2, {}, { token: secrets.two }));
     await expect.poll(() => waiting(rig)).toEqual([hex(2)]);
@@ -465,7 +465,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a CLI that hangs up while its allocate waits leaves the gateway's queue, and nothing is granted later", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 1 }] });
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const hangUp = new AbortController();
     const second = track(allocate(rig, 2, {}, { signal: hangUp.signal, token: secrets.two }));
     await expect.poll(() => waiting(rig)).toEqual([hex(2)]);
@@ -484,7 +484,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a command for the lease reaches that worker's agent-device daemon with the prefixed tenant, and its streamed reply reaches the CLI unchanged", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const chunks = [
       '{"type":"progress","event":{"kind":"command","message":"one"}}\n',
       '{"type":"progress","event":{"kind":"command","message":"two"}}\n',
@@ -503,7 +503,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a heartbeat reaches the worker's agent-device daemon first, then renews the simlock lease to now plus its `ttlMs`", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1, { ttlMs: 60_000 });
+    await grantedOnGateway(rig, 1, { ttlMs: 60_000 });
     const allocated = await deadlineOf(member, 1);
     let deadlineAtDaemon: number | undefined;
     member.fake.onHeartbeat = async () => {
@@ -526,7 +526,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a heartbeat for a lease whose worker stopped being capable answers the notAvailable reply naming `the worker holding this lease cannot serve agent-device`", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
     await turn(rig, member, "unavailable");
     const received = heartbeatsReceived(member);
@@ -540,7 +540,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("while a command runs longer than the TTL, the simlock lease is renewed every TTL/3 through the gateway and does not expire", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1, { ttlMs: 30_000 });
+    await grantedOnGateway(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, member, 1);
     const tap = tapDispatch(rig.gateway);
     const deadlines: (number | undefined)[] = [];
@@ -567,7 +567,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     member.fake.onRelease = async () => {
       heldAtDaemonRelease = (await workerLeases(member)).map((lease) => lease.requesterId);
     };
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
 
     const released = await envelopeOf(await release(rig, 1));
 
@@ -581,7 +581,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a release the agent-device daemon fails keeps the simlock lease", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     member.fake.failNextRelease({ code: "COMMAND_FAILED", message: "daemon could not release" });
 
     const answer = await envelopeOf(await release(rig, 1));
@@ -601,7 +601,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     member.fake.onRelease = async () => {
       wipesAtRelease.push(wipes(member));
     };
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const before = wipes(member);
 
     await rig.gateway.dispatch("lease.release-all", {}, adminSession);
@@ -616,7 +616,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const bootRig = await setUp();
     const bootMember = first(bootRig);
-    await granted(bootRig, 1);
+    await grantedOnGateway(bootRig, 1);
     await listedByGateway(bootRig, 1);
     expect((await envelopeOf(await command(bootRig, "boot", 1))).result).toMatchObject({
       ok: true,
@@ -626,7 +626,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expectEndedBySimlock(await envelopeOf(await command(bootRig, "boot", 1)));
     expect(bootMember.fake.rpcRequests("agent_device.command")).toHaveLength(commands);
 
-    await granted(bootRig, 2, { ttlMs: 5_000 });
+    await grantedOnGateway(bootRig, 2, { ttlMs: 5_000 });
     await listedByGateway(bootRig, 1);
     const address = (await grantedDevice(bootMember)).address;
     expect((await envelopeOf(await command(bootRig, "boot", 2))).result).toMatchObject({
@@ -644,7 +644,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a command with no device selector naming a lease id another token holds, and one the gateway does not know, answer `refused: lease <id> is not one of yours on this gateway` with status 403, and no worker receives it; with `--udid`, the same command answers `refused: simlock picks the device`, as on a worker", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const own = await envelopeOf(await command(rig, "snapshot", 1));
     expect(own.result).toMatchObject({ ok: true });
     const received = member.fake.rpcRequests("agent_device.command").length;
@@ -673,7 +673,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const options = { defaultTtlMs: 60_000, maxTtlMs: 120_000 } as const;
     const early = await setUp(options);
     const earlyMember = first(early);
-    await granted(early, 1, { ttlMs: 30_000 });
+    await grantedOnGateway(early, 1, { ttlMs: 30_000 });
     await early.gateway.dispatch("lease.release-all", {}, adminSession);
     await expect.poll(async () => (await fleetLeases(early)).length).toBe(0);
     await advance(early, 119_000, 10_000);
@@ -684,7 +684,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const late = await setUp(options);
     const lateMember = first(late);
-    await granted(late, 1, { ttlMs: 30_000 });
+    await grantedOnGateway(late, 1, { ttlMs: 30_000 });
     await late.gateway.dispatch("lease.release-all", {}, adminSession);
     await expect.poll(async () => (await fleetLeases(late)).length).toBe(0);
     await advance(late, 121_000, 10_000);
@@ -716,7 +716,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const rig = await setUp({ leaseTtlCapMs: 10_000 });
     const member = first(rig);
 
-    await granted(rig, 1, { ttlMs: 300_000 });
+    await grantedOnGateway(rig, 1, { ttlMs: 300_000 });
 
     expect((await workerLeaseFor(member, 1)).ttlMs).toBe(10_000);
     await expect.poll(async () => (await fleetLeases(rig))[0]?.ttlMs).toBe(10_000);
@@ -725,7 +725,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("stopping the gateway while an allocate waits ends its lease request `cancelled`, not `DAEMON_STOPPING`, and a running command's renewals stop", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 1 }] });
     const member = first(rig);
-    await granted(rig, 1, { ttlMs: 30_000 }, { token: secrets.two });
+    await grantedOnGateway(rig, 1, { ttlMs: 30_000 }, { token: secrets.two });
     await runningCommand(rig, member, 1, { token: secrets.two });
     const tap = tapDispatch(rig.gateway);
     await advance(rig, 20_000, 5_000);
@@ -758,7 +758,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a heartbeat, a command, a release and an allocate whose relay fails with `RELAY_TARGET_MISSING` answer the notAvailable reply with that message, and the failed allocate leaves no lease", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const missing = `${notAvailable}no relay target agent-device on this worker`;
     expect((await envelopeOf(await command(rig, "snapshot", 1))).result).toMatchObject({
       ok: true,
@@ -781,7 +781,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   it("a heartbeat for a lease the front's memory lacks, whose release relay then fails with `RELAY_TARGET_MISSING`, answers the notAvailable reply with that message and leaves the simlock lease", async () => {
     const rig = await setUp();
     const member = first(rig);
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     const held = member.fake.leases.get(hex(1));
     expect(held).toBeDefined();
     member.fake.leases.set(hex(2), {
@@ -815,7 +815,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const during: Record<string, unknown> = {};
     const triggers: Record<string, (rig: Rig, member: Member) => Promise<void>> = {
       allocate: async (rig) => {
-        await granted(rig, 2);
+        await grantedOnGateway(rig, 2);
       },
       devices: async (rig) => {
         await command(rig, "devices", undefined);
@@ -840,7 +840,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     for (const [name, trigger] of Object.entries(triggers)) {
       const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
       const member = first(rig);
-      await granted(rig, 1, { ttlMs: 30_000 });
+      await grantedOnGateway(rig, 1, { ttlMs: 30_000 });
       await listedByGateway(rig, 1);
       // why: the front's own record of the deadline is only the grant's, so an allocate re-reads lease 1 only once that has passed; a heartbeat keeps the simlock lease alive meanwhile.
       await advance(rig, 20_000, 5_000);
@@ -910,8 +910,8 @@ async function twoLeasesOnTwoWorkers(): Promise<Rig> {
       { label: "w2", maxRunning: 1 },
     ],
   });
-  await granted(rig, 1);
-  await granted(rig, 2);
+  await grantedOnGateway(rig, 1);
+  await grantedOnGateway(rig, 2);
   await listedByGateway(rig, 2);
   expect(holderOf(rig, 1)).not.toBe(holderOf(rig, 2));
   return rig;
@@ -1160,8 +1160,8 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
   it("through the gateway, `devices` with two leases on one worker answers both devices, each once", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
-    await granted(rig, 1);
-    await granted(rig, 2);
+    await grantedOnGateway(rig, 1);
+    await grantedOnGateway(rig, 2);
     await listedByGateway(rig, 2);
     const member = first(rig);
     member.fake.listDevices([
@@ -1178,8 +1178,8 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
   it("through the gateway, `devices` with two leases on one worker, sent with a `meta.requestId` as the agent-device CLI does, answers both devices", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
-    await granted(rig, 1);
-    await granted(rig, 2);
+    await grantedOnGateway(rig, 1);
+    await grantedOnGateway(rig, 2);
     await listedByGateway(rig, 2);
     const member = first(rig);
     member.fake.listDevices([
@@ -1198,7 +1198,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
   it("through the gateway, `devices` leaves out a lease that was released, and a lease the gateway's `lease.list` omits from that one answer while still holding it", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 3 }] });
-    for (const n of [1, 2, 3]) await granted(rig, n);
+    for (const n of [1, 2, 3]) await grantedOnGateway(rig, n);
     await listedByGateway(rig, 3);
     first(rig).fake.listDevices(
       [1, 2, 3].map((n) => ({ id: addressOfLease(rig, n), name: `lease-${String(n)}` })),
@@ -1216,7 +1216,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
   it("through the gateway, `devices` after `simlock release --all` on the gateway leaves the ended lease out and ends it for the front, so the next heartbeat answers the ended-by-simlock reply without reaching the worker", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
-    await granted(rig, 1);
+    await grantedOnGateway(rig, 1);
     await listedByGateway(rig, 1);
     first(rig).fake.listDevices([{ id: addressOfLease(rig, 1), name: "lease-1" }]);
     await rig.gateway.dispatch("lease.release-all", {}, adminSession);
@@ -1409,7 +1409,7 @@ describe(
     it("with the device's worker disconnected, a command, a heartbeat and a release each answer 503 with `details.reason` `WORKER_UNREACHABLE` and the `workerUnreachable` message, and no agent-device daemon receives them", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       await dropUplink(rig, member);
       const received = member.fake.requests.length;
@@ -1429,7 +1429,7 @@ describe(
     it("with the device's worker disconnected, an upload with the lease header answers 503 with that message, reason and retry flag, and `devices` answers the RPC reply", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       await dropUplink(rig, member);
 
@@ -1470,7 +1470,7 @@ describe(
     it("while the worker is disconnected, the simlock lease is not released, and the front's entry is not marked ended", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       const tap = tapDispatch(rig.gateway);
       await dropUplink(rig, member);
@@ -1489,7 +1489,7 @@ describe(
     it("a command answered WORKER_UNREACHABLE after an uplink drop stops renewing its lease after reconnect without releasing it", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1, { ttlMs: 30_000 });
+      await grantedOnGateway(rig, 1, { ttlMs: 30_000 });
       await listedByGateway(rig, 1);
       member.fake.keepCommandsAfterAbort();
       const running = await runningCommand(rig, member, 1);
@@ -1517,7 +1517,7 @@ describe(
     it("right after the worker reconnects and before its view is refreshed, a command answers `workerUnreachable()`; once it is refreshed, within the TTL, the next command reaches it, and the next heartbeat renews the lease", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1, { ttlMs: 60_000 });
+      await grantedOnGateway(rig, 1, { ttlMs: 60_000 });
       await listedByGateway(rig, 1);
       await dropUplink(rig, member);
       member.latency["listCatalog"] = slowCatalogMs;
@@ -1544,7 +1544,7 @@ describe(
     it("a worker that stays disconnected past the TTL: once it reconnects, the next heartbeat answers `LEASE_ENDED_BY_HOST`", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       await dropUplink(rig, member);
 
@@ -1560,7 +1560,7 @@ describe(
       // why: a worker clock of its own, so moving the gateway's clock past the start window does not make the worker redial.
       const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await rig.gateway.dispatch("lease.release-all", {}, adminSession);
       await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
       await dropUplink(rig, member);
@@ -1574,7 +1574,7 @@ describe(
       // why: a worker clock of its own, so moving the gateway's clock does not make the worker redial.
       const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
       const member = first(rig);
-      await granted(rig, 1, { ttlMs: 30_000 });
+      await grantedOnGateway(rig, 1, { ttlMs: 30_000 });
       await listedByGateway(rig, 1);
       const running = await runningCommand(rig, member, 1);
       const tap = tapDispatch(rig.gateway);
@@ -1606,12 +1606,12 @@ describe(
           { label: "w2", maxRunning: 1 },
         ],
       });
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       const holder = holderOf(rig, 1);
       await dropUplink(rig, holder);
 
-      await granted(rig, 2);
+      await grantedOnGateway(rig, 2);
       expect((await fleetLeases(rig)).map((lease) => lease.id)).toContain(hex(1));
       await untilConnected(rig, holder);
 
@@ -1631,7 +1631,7 @@ describe(
     it("after a gateway restart and the worker's reconnect, the next heartbeat for the lease reaches the worker's agent-device daemon and renews the simlock lease, and a following command works", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1, { ttlMs: 60_000 });
+      await grantedOnGateway(rig, 1, { ttlMs: 60_000 });
       await listedByGateway(rig, 1);
       await restarted(rig, member, 1);
       const received = heartbeatsReceived(member);
@@ -1647,7 +1647,7 @@ describe(
     it("after a gateway restart, a command, a release, `devices` and an upload with the lease header, each as the token's first request, work on the adopted lease", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
 
       await restarted(rig, member, 1);
@@ -1671,7 +1671,7 @@ describe(
     it("after a gateway restart, an adopted lease on a TV model reads target `tv`, and `test --target tv` sharding uses it", async () => {
       const rig = await setUp({ workers: [{ label: "w1", modelClass: "tv" }] });
       const member = first(rig);
-      await granted(rig, 1, { target: "tv" });
+      await grantedOnGateway(rig, 1, { target: "tv" });
       await listedByGateway(rig, 1);
       await restarted(rig, member, 1);
 
@@ -1688,7 +1688,7 @@ describe(
     it("after a gateway restart, a command naming a `deviceKey` on the adopted lease is accepted and sets it; a later command naming another `deviceKey` is refused `refused: simlock picks the device`", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       await restarted(rig, member, 1);
 
@@ -1713,7 +1713,7 @@ describe(
       // why: a worker clock of its own, so the worker does not redial until the test moves it.
       const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
       const member = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       await listedByGateway(rig, 1);
       await rig.restart();
       const received = member.fake.requests.length;
@@ -1734,7 +1734,7 @@ describe(
     it("after a gateway restart, a lease of another token is not adopted, and a heartbeat naming it is refused", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1, {}, { token: secrets.two });
+      await grantedOnGateway(rig, 1, {}, { token: secrets.two });
       await expect.poll(async () => (await fleetLeases(rig, principals.two)).length).toBe(1);
       await rig.restart();
       await untilConnected(rig, member);
@@ -1793,7 +1793,7 @@ describe(
       for (const skew of [-hourMs, hourMs]) {
         const rig = await setUp({ workers: [{ clockSkewMs: skew, label: "w1" }] });
         const member = first(rig);
-        await granted(rig, 1);
+        await grantedOnGateway(rig, 1);
         await listedByGateway(rig, 1);
         await restarted(rig, member, 1);
 

@@ -10,7 +10,7 @@ import {
   untilRead,
   envelopeOf,
   hex,
-  granted,
+  grantedOnGateway,
   heartbeat,
   command,
   fleetLeases,
@@ -62,7 +62,7 @@ describe("the agent-device front, through a gateway: after a restart", { timeout
     async (_case, restart) => {
       const rig = await setUp();
       const original = first(rig);
-      await granted(rig, 1);
+      await grantedOnGateway(rig, 1);
       const leased = await grantedDevice(original);
       const member = await restart(rig, original);
       expect(member.fake.leases.has(hex(1))).toBe(false);
@@ -95,7 +95,7 @@ describe(
       "through a gateway, a worker still starting, whose list leaves the lease out while the index holds it, gets the retryable reply and keeps the lease, %s",
       async (_case, renewals) => {
         const rig = await setUp();
-        await granted(rig, 1);
+        await grantedOnGateway(rig, 1);
         for (let renewed = 0; renewed < renewals; renewed += 1) {
           await advance(rig, 100_000);
           expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();

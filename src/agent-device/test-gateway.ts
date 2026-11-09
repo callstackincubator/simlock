@@ -455,7 +455,7 @@ export function allocate(
   return rpc(target, "agent_device.lease.allocate", allocateParams(n, extra), options);
 }
 
-export async function granted(
+export async function grantedOnGateway(
   target: { readonly origin: string },
   n: number,
   extra: Record<string, unknown> = {},
