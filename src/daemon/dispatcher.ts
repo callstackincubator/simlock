@@ -502,11 +502,11 @@ export class Dispatcher {
     );
   }
 
-  // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
     const requesterId = input.requesterId ?? principalAsRequester(session.principal);
+    // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
     return this.#unadmitted.track(requesterId, async (admittedHook) => {
       const requestedAllowDownload = input.allowDownload ?? false;
       const downloadsPolicy = this.options.config.downloads.policy;
