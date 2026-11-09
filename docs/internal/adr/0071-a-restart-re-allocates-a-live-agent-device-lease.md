@@ -1,6 +1,6 @@
 # 0071. A restart re-allocates a live agent-device lease on its device
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-09
 - **Issue:** [#1461](https://github.com/callstackincubator/simlock/issues/1461) (bug [#1103](https://github.com/callstackincubator/simlock/issues/1103))
 - **Supersedes in part:** [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
