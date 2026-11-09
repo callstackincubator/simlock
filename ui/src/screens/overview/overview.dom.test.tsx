@@ -408,6 +408,43 @@ describe("the Overview's six numbers", () => {
   });
 });
 
+describe("the Overview's queue when /v1/lease-requests is not answered", () => {
+  it.each([
+    {
+      answer: { body: { error: { code: "FORBIDDEN", message: "Not yours." } }, status: 403 },
+      queue: "Unavailable: Not yours.",
+      title: "a refusal shows the Queue and the Waiting tile unavailable, not zero",
+      waiting: "Waiting —",
+    },
+    {
+      answer: {
+        body: { error: { code: "UNSUPPORTED_IN_WORKER_MODE", message: "No queue." } },
+        status: 501,
+      },
+      queue: "Nothing is waiting.",
+      title: "a 501 from a daemon with no queue of its own shows none waiting",
+      waiting: "Waiting 0 none",
+    },
+  ])("$title", async ({ answer, queue, waiting }) => {
+    renderConsole({
+      routes: {
+        ...STATS,
+        "/v1/lease-requests": answer,
+        "/v1/workers": { body: { workers: [ONE_HOST] } },
+      },
+    });
+
+    await waitFor(() => expect(tile("Waiting")).toHaveAccessibleName(waiting));
+    const card = screen.getByRole("region", { name: "Queue" });
+    expect(card).toHaveTextContent(queue);
+    for (const other of ["Unavailable:", "Nothing is waiting."].filter(
+      (t) => !queue.startsWith(t),
+    )) {
+      expect(card).not.toHaveTextContent(other);
+    }
+  });
+});
+
 describe("the Overview's Fleet card", () => {
   it("draws a row for every worker in the Fleet table, with no pager, and Open fleet goes to /fleet", async () => {
     const { user } = renderConsole({
