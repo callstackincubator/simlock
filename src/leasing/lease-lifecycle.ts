@@ -134,14 +134,7 @@ export class LeaseLifecycle {
     return { device, environment, lease, timing };
   }
 
-  /**
-   * The one thing that keeps a lease alive (ADR 0004 §1). An omitted `ttlMs` re-applies the
-   * lease's own stored width, never `lease.defaultTtlMs`: a lease granted for four hours keeps
-   * its four hours through renewals that do not ask for anything different. A named `ttlMs`
-   * changes that width from this renewal on, which is why it is written back to the record.
-   * The fallback to `defaultMs` is unreachable for a live lease -- it only covers a lease the
-   * snapshot no longer has, whose `renewLease` below is about to throw `UnknownLeaseError`.
-   */
+  // fallow-ignore-next-line unused-class-member -- reached through the LeaseReleaseLifecycle port by the release coordinator.
   async prepareRenewal(leaseId: string, ttlMs?: number): Promise<number> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
     if (current === undefined) throw new UnknownLeaseError(leaseId);

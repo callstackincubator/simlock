@@ -289,65 +289,7 @@ async function discoverAndroidDriver(
   logger: Logger,
 ): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
   try {
-    const settings = options.driversConfig.android ?? {};
-    if (
-      settings.backend !== undefined &&
-      settings.backend !== "local" &&
-      settings.backend !== "adc"
-    ) {
-      throw new Error('drivers.android.backend must be "local" or "adc"');
-    }
-    if (settings.backend === "adc") {
-      const driver = await createCloudAndroidDriver({
-        clock: options.clock,
-        database: options.database,
-        driverConfig: settings,
-        env: process.env,
-        filesystem: options.filesystem,
-        http: new FetchHttpJsonRequester(),
-        idGenerator: options.idGenerator,
-        instanceId: options.instanceId,
-        logger: logger.child("android-cloud"),
-        processRunner: options.processRunner,
-        processSupervisor: options.processSupervisor,
-        scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
-        simlockHome: options.simlockHome,
-        tcpListener: new NodeTcpListenerFactory(),
-        tcpProbe: options.tcpProbe,
-        tcpStreamConnector: new NodeTcpStreamConnector(),
-        webSockets: new NodeWebSocketClientConnector(),
-        ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
-        pid: process.pid,
-      });
-      logger.info("Discovered cloud driver", { platform: "android" });
-      return { driver };
-    }
-    const driver = await AndroidDriver.create({
-      acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
-      clock: options.clock,
-      database: options.database,
-      driverConfig: options.driversConfig["android"] ?? {},
-      config: options.androidConfig,
-      env: process.env,
-      filesystem: options.filesystem,
-      homeDirectory: homedir(),
-      hostAbi: hostAbiFor(options.hostArch),
-      idGenerator: options.idGenerator,
-      instanceId: options.instanceId,
-      logger: logger.child("android"),
-      onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
-      processRunner: options.processRunner,
-      processSupervisor: options.processSupervisor,
-      scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
-      simlockHome: options.simlockHome,
-      tcpListener: new NodeTcpListenerFactory(),
-      tcpProbe: options.tcpProbe,
-      tcpStreamConnector: new NodeTcpStreamConnector(),
-      // why: Ambient like `homedir()` above, and read here rather than in the driver so the
-      // composition root stays the only place that touches process state.
-      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
-      pid: process.pid,
-    });
+    const driver = await createConfiguredAndroidDriver(options, logger);
     logger.info("Discovered driver", { platform: "android" });
     return { driver };
   } catch (error: unknown) {
@@ -374,6 +316,79 @@ async function discoverAndroidDriver(
 
     throw error;
   }
+}
+
+async function createConfiguredAndroidDriver(
+  options: DriverDiscoveryContext,
+  logger: Logger,
+): Promise<Driver> {
+  const settings = options.driversConfig.android ?? {};
+  if (
+    settings.backend !== undefined &&
+    settings.backend !== "local" &&
+    settings.backend !== "adc"
+  ) {
+    throw new Error('drivers.android.backend must be "local" or "adc"');
+  }
+  if (settings.backend === "adc") {
+    const driver = await createCloudAndroidDriver({
+      clock: options.clock,
+      database: options.database,
+      driverConfig: settings,
+      env: process.env,
+      filesystem: options.filesystem,
+      http: new FetchHttpJsonRequester(),
+      idGenerator: options.idGenerator,
+      instanceId: options.instanceId,
+      logger: logger.child("android-cloud"),
+      processRunner: options.processRunner,
+      processSupervisor: options.processSupervisor,
+      scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
+      simlockHome: options.simlockHome,
+      tcpListener: new NodeTcpListenerFactory(),
+      tcpProbe: options.tcpProbe,
+      tcpStreamConnector: new NodeTcpStreamConnector(),
+      webSockets: new NodeWebSocketClientConnector(),
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+      pid: process.pid,
+    });
+    logger.info("Discovered cloud driver", { platform: "android" });
+    return driver;
+  }
+  return createLocalAndroidDriver(options, logger);
+}
+
+async function createLocalAndroidDriver(
+  options: DriverDiscoveryContext,
+  logger: Logger,
+): Promise<Driver> {
+  const driver = await AndroidDriver.create({
+    acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
+    clock: options.clock,
+    database: options.database,
+    driverConfig: options.driversConfig["android"] ?? {},
+    config: options.androidConfig,
+    env: process.env,
+    filesystem: options.filesystem,
+    homeDirectory: homedir(),
+    hostAbi: hostAbiFor(options.hostArch),
+    idGenerator: options.idGenerator,
+    instanceId: options.instanceId,
+    logger: logger.child("android"),
+    onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
+    processRunner: options.processRunner,
+    processSupervisor: options.processSupervisor,
+    scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
+    simlockHome: options.simlockHome,
+    tcpListener: new NodeTcpListenerFactory(),
+    tcpProbe: options.tcpProbe,
+    tcpStreamConnector: new NodeTcpStreamConnector(),
+    // why: Ambient like `homedir()` above, and read here rather than in the driver so the
+    // composition root stays the only place that touches process state.
+    ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+    pid: process.pid,
+  });
+  return driver;
 }
 
 function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {

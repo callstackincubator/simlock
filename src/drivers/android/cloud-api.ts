@@ -20,6 +20,58 @@ const leaseResponse = z.object({
   error: errorMessage,
 });
 
+type LeaseResponse = z.infer<typeof leaseResponse>;
+
+function cloudOrigin(value: string): string {
+  const url = new URL(value);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  const secure = url.protocol === "https:" || (url.protocol === "http:" && local);
+  const originOnly = isOriginOnly(url);
+  if (secure === false || originOnly === false) {
+    throw new Error("AgentDeviceCloud URL must be an HTTPS origin, or HTTP on localhost");
+  }
+  return url.origin;
+}
+
+function isOriginOnly(url: URL): boolean {
+  return (
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.pathname === "/"
+  );
+}
+
+function decodeLease(body: unknown, expectedId?: string): CloudLease {
+  const checked = leaseResponse.safeParse(body);
+  if (checked.success === false) throw new Error("AgentDeviceCloud returned an invalid lease");
+  const lease = checked.data;
+  if (expectedId !== undefined && lease.id !== expectedId) {
+    throw new Error("AgentDeviceCloud returned a different lease");
+  }
+  requireActiveLifetime(lease);
+  const startedAtMs = timestampMs(lease.started_at);
+  const expiresAtMs = timestampMs(lease.expires_at);
+  return {
+    id: lease.id,
+    status: lease.status,
+    startedAtMs,
+    expiresAtMs,
+    error: lease.error === null ? undefined : lease.error,
+  };
+}
+
+function requireActiveLifetime(lease: LeaseResponse): void {
+  if (lease.status === "active" && (lease.started_at === null || lease.expires_at === null)) {
+    throw new Error("AgentDeviceCloud returned an active lease without its lifetime");
+  }
+}
+
+function timestampMs(value: string | null): number | undefined {
+  return value === null ? undefined : Date.parse(value);
+}
+
 export interface CloudLease {
   readonly id: string;
   readonly status: "queued" | "active" | "released" | "expired" | "failed";
@@ -55,21 +107,8 @@ export class CloudApi {
   readonly #origin: string;
 
   constructor(private readonly options: CloudApiOptions) {
-    const url = new URL(options.url);
-    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-    const secure = url.protocol === "https:" || (url.protocol === "http:" && local);
-    if (
-      secure === false ||
-      url.username !== "" ||
-      url.password !== "" ||
-      url.search !== "" ||
-      url.hash !== "" ||
-      url.pathname !== "/"
-    ) {
-      throw new Error("AgentDeviceCloud URL must be an HTTPS origin, or HTTP on localhost");
-    }
+    this.#origin = cloudOrigin(options.url);
     if (options.apiKey.length === 0) throw new Error("AgentDeviceCloud API key is required");
-    this.#origin = url.origin;
   }
 
   async createLease(input: CloudProvisionRequest): Promise<CloudLease> {
@@ -129,23 +168,6 @@ export class CloudApi {
       const code = String(response.status);
       throw new CloudApiError(response.status, `AgentDeviceCloud request failed (HTTP ${code})`);
     }
-    const checked = leaseResponse.safeParse(response.body);
-    if (checked.success === false) throw new Error("AgentDeviceCloud returned an invalid lease");
-    const lease = checked.data;
-    if (expectedId !== undefined && lease.id !== expectedId) {
-      throw new Error("AgentDeviceCloud returned a different lease");
-    }
-    const startedAtMs = lease.started_at === null ? undefined : Date.parse(lease.started_at);
-    const expiresAtMs = lease.expires_at === null ? undefined : Date.parse(lease.expires_at);
-    if (lease.status === "active" && (startedAtMs === undefined || expiresAtMs === undefined)) {
-      throw new Error("AgentDeviceCloud returned an active lease without its lifetime");
-    }
-    return {
-      id: lease.id,
-      status: lease.status,
-      startedAtMs,
-      expiresAtMs,
-      error: lease.error === null ? undefined : lease.error,
-    };
+    return decodeLease(response.body, expectedId);
   }
 }

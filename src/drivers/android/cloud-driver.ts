@@ -379,49 +379,51 @@ class CloudAndroidDriver implements Driver {
   async listManaged(): Promise<DriverReality> {
     const devices: ObservedDevice[] = [];
     for (const allocation of this.allocations.active()) {
-      const id = this.#leaseId(allocation);
-      let lease: CloudLease;
-      try {
-        lease = await this.api.get(id);
-      } catch (error) {
-        if (error instanceof CloudApiError && error.status === 404) {
-          await this.#closeConnection(allocation.id);
-          this.allocations.release(allocation.id);
-          continue;
-        }
-        throw error;
-      }
-      if (lease.status !== "active" && lease.status !== "queued") {
-        await this.#closeConnection(allocation.id);
-        this.allocations.release(allocation.id);
-        continue;
-      }
-      this.allocations.update(allocation.id, lease);
-      const device = {
-        deviceId: allocation.id,
-        driverData: { allocationId: allocation.id },
-        address: "",
-        physical: false as const,
-      };
-      if (lease.status === "queued") {
-        devices.push({ ...device, runState: "transitioning" });
-      } else {
-        const connection = await this.#connectionFor(device);
-        const args = ["-P", String(this.adbServerPort), "-s", connection.serial, "get-state"];
-        const state = await this.options.processRunner.run(this.adb, args, {
-          env: this.#environment,
-          timeoutMs: ADB_TIMEOUT_MS,
-        });
-        const status = state.stdout.trim();
-        const running = state.code === 0 && status === "device";
-        devices.push({
-          ...device,
-          address: connection.serial,
-          runState: running ? "running" : "stopped",
-        });
-      }
+      const observed = await this.#observeAllocation(allocation);
+      if (observed !== undefined) devices.push(observed);
     }
     return { devices, processes: devices };
+  }
+
+  async #observeAllocation(allocation: CloudAllocation): Promise<ObservedDevice | undefined> {
+    const id = this.#leaseId(allocation);
+    let lease: CloudLease;
+    try {
+      lease = await this.api.get(id);
+    } catch (error) {
+      if (error instanceof CloudApiError && error.status === 404) {
+        await this.#closeConnection(allocation.id);
+        this.allocations.release(allocation.id);
+        return undefined;
+      }
+      throw error;
+    }
+    if (lease.status !== "active" && lease.status !== "queued") {
+      await this.#closeConnection(allocation.id);
+      this.allocations.release(allocation.id);
+      return undefined;
+    }
+    this.allocations.update(allocation.id, lease);
+    const device = {
+      deviceId: allocation.id,
+      driverData: { allocationId: allocation.id },
+      address: "",
+      physical: false as const,
+    };
+    if (lease.status === "queued") return { ...device, runState: "transitioning" };
+    return await this.#observeAdb(device);
+  }
+
+  async #observeAdb(device: VirtualDriverDevice): Promise<ObservedDevice> {
+    const connection = await this.#connectionFor(device);
+    const args = ["-P", String(this.adbServerPort), "-s", connection.serial, "get-state"];
+    const state = await this.options.processRunner.run(this.adb, args, {
+      env: this.#environment,
+      timeoutMs: ADB_TIMEOUT_MS,
+    });
+    const status = state.stdout.trim();
+    const running = state.code === 0 && status === "device";
+    return { ...device, address: connection.serial, runState: running ? "running" : "stopped" };
   }
 
   async shutdown(): Promise<void> {
@@ -641,28 +643,33 @@ export function cloudAndroidPrerequisites(
           message: `AgentDeviceCloud requires ${keyName}`,
           remedy: `Set ${keyName} in the worker environment and restart Simlock.`,
         });
-      const adb = options.adbPath ?? "adb";
-      try {
-        const result = await options.processRunner.run(adb, ["version"], {
-          timeoutMs: ADB_TIMEOUT_MS,
-          env: { ...options.env },
-        });
-        if (result.code === 0) return missing;
-      } catch (error) {
-        if (
-          typeof error !== "object" ||
-          error === null ||
-          !("code" in error) ||
-          error.code !== "ENOENT"
-        )
-          throw error;
-      }
-      missing.push({
-        prerequisite: "android-platform-tools",
-        message: "AgentDeviceCloud requires adb on the worker",
-        remedy: "Install Android platform-tools and add adb to PATH.",
-      });
+      const adb = await missingCloudAdb(options);
+      if (adb !== undefined) missing.push(adb);
       return missing;
     },
   };
+}
+
+async function missingCloudAdb(
+  options: Pick<CloudAndroidDriverOptions, "processRunner" | "env" | "adbPath">,
+): Promise<MissingPrerequisite | undefined> {
+  const adb = options.adbPath ?? "adb";
+  try {
+    const result = await options.processRunner.run(adb, ["version"], {
+      timeoutMs: ADB_TIMEOUT_MS,
+      env: { ...options.env },
+    });
+    if (result.code === 0) return undefined;
+  } catch (error) {
+    if (isMissingExecutable(error) === false) throw error;
+  }
+  return {
+    prerequisite: "android-platform-tools",
+    message: "AgentDeviceCloud requires adb on the worker",
+    remedy: "Install Android platform-tools and add adb to PATH.",
+  };
+}
+
+function isMissingExecutable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

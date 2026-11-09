@@ -197,7 +197,6 @@ export {
   FetchHttpJsonRequester,
   type HttpJsonClient,
   type HttpJsonRequester,
-  type HttpJsonRequest,
 } from "./http-json.js";
 export {
   defaultWorkerLockPath,

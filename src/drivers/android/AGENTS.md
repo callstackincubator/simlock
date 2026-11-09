@@ -7,11 +7,7 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [dr
 
 AgentDeviceCloud:
 
-- The selected backend never changes after a cloud failure. Cloud ownership comes from the journaled allocation and API origin, not an AVD path or an account-wide listing.
-- Every tool shares the worker's one ADB transport per cloud lease. A raw emulator ADB tunnel would open a second transport and is unsupported.
-- Recovery reconnects the same active cloud lease on its persisted local port. It never creates a replacement device under an existing lease.
-- A worker stop disconnects transports but does not release cloud leases. Reconciliation must preserve unreadable provider state rather than declaring the devices gone.
-- A crash after remote creation and before journaling its response can leave an allocation with no remote ID. Do not re-provision such an intent during startup: the API cannot look it up without possibly creating another device.
+- Journaled allocations prove ownership, not names. Recovery keeps the lease and ADB port. An API outage is not loss; stopping the worker keeps its leases.
 
 Local containment:
 

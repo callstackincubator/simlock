@@ -80,11 +80,7 @@ import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
-export {
-  createCloudAndroidDriver,
-  cloudAndroidPrerequisites,
-  type CloudAndroidDriverOptions,
-} from "./cloud-driver.js";
+export { createCloudAndroidDriver, cloudAndroidPrerequisites } from "./cloud-driver.js";
 export { cloudDeviceDataTable } from "./cloud-data.js";
 export { AndroidLicenseNotAcceptedError } from "./system-images.js";
 export {
