@@ -1,4 +1,5 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type Answer, renderConsole, type Routes } from "../../test/console";
@@ -85,6 +86,52 @@ describe("the device's streaming page", () => {
     expect(within(holder).getByRole("button", { name: "Release" })).toBeVisible();
     expect(picture()).not.toBeNull();
     expect(callsTo("GET", STREAM)).toHaveLength(1);
+  });
+
+  it("keeps its one stream while the tab is hidden, and closes it on a switch to another device and on sign-out", async () => {
+    const SECOND = "/v1/stream/workers/wrk_1/devices/dev_2";
+    const two = worker({
+      capabilities: CAPABLE,
+      devices: [device({ state: "ready" }), device({ id: "dev_2", state: "ready" })],
+    });
+    const { callsTo } = renderConsole({
+      mode: "worker",
+      path: PAGE,
+      routes: { ...routes(two), [`GET ${SECOND}`]: PENDING },
+    });
+    expect(await screen.findByLabelText("The device's screen")).toBeVisible();
+    await waitFor(() => expect(callsTo("GET", STREAM)).toHaveLength(1));
+    const first = callsTo("GET", STREAM)[0]?.signal;
+
+    const reads = callsTo("GET", "/v1/workers").length;
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(first?.aborted).toBe(false);
+    Reflect.deleteProperty(document, "visibilityState");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // why: a tab shown again reads each key on screen once, so that read is the moment it is back.
+    await waitFor(() => expect(callsTo("GET", "/v1/workers").length).toBeGreaterThan(reads));
+    expect(first?.aborted).toBe(false);
+    expect(callsTo("GET", STREAM)).toHaveLength(1);
+
+    act(() => {
+      window.history.pushState(null, "", "/fleet/wrk_1/devices/dev_2/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await waitFor(() => expect(callsTo("GET", SECOND)).toHaveLength(1));
+    expect(first?.aborted).toBe(true);
+    const second = callsTo("GET", SECOND)[0]?.signal;
+    expect(second?.aborted).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(second?.aborted).toBe(true));
+    expect(picture()).toBeNull();
+    expect(callsTo("GET", STREAM)).toHaveLength(1);
+    expect(callsTo("GET", SECOND)).toHaveLength(1);
   });
 
   it("says why instead of asking for a picture of a device that is shut down", async () => {

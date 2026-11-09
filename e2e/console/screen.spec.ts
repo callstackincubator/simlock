@@ -143,7 +143,7 @@ async function captureLogLines(dir: string, word: string): Promise<number> {
 }
 
 test.describe("the device's streaming page", () => {
-  test("opens from the drawer's Watch link with no capture before it, paints a picture and owns one capture until Stop watching, leaving or reloading, and no input socket", async ({
+  test("opens from the drawer's Watch link with no capture before it, paints a picture and owns one capture until Stop watching, leaving, reloading or signing out, and no input socket", async ({
     page,
   }) => {
     const started = await streamingHost();
@@ -228,6 +228,13 @@ test.describe("the device's streaming page", () => {
         await expect(screen(page)).toBeVisible();
         await page.goBack();
         await logReached(dir, "closed", 3);
+
+        // why: signing out ends the session, and the capture the page owned with it.
+        await openStream(page, target, true);
+        await logReached(dir, "opened", 4);
+        await page.getByRole("button", { name: "Sign out" }).click();
+        await logReached(dir, "closed", 4);
+        await expect(screen(page)).toHaveCount(0);
         expect(sockets).toEqual([]);
         page.removeAllListeners("websocket");
         await host.cli(["release", "--all", "--yes"]);
