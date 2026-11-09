@@ -107,6 +107,7 @@ import {
   type ErasedHandler,
 } from "./dispatch.js";
 import type { RelayConnection } from "./relay.js";
+import { UnadmittedRequests } from "./unadmitted-requests.js";
 import type { UpdateCoordinator, UpdateProgress } from "./update-coordinator.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
@@ -251,8 +252,7 @@ export class Dispatcher {
    */
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
   readonly #unsubscribe: (() => void)[] = [];
-  // why: a `lease.cancel` that overtakes its own `lease.request` (still awaiting capabilities and the lock) would answer `not-found` for a request about to queue; per requester, one promise per request not yet admitted, which the cancel waits on first.
-  readonly #unadmitted = new Map<string, Set<Promise<void>>>();
+  readonly #unadmitted = new UnadmittedRequests();
 
   readonly #usage: UsageReader;
 
@@ -502,136 +502,100 @@ export class Dispatcher {
     );
   }
 
+  // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
     const requesterId = input.requesterId ?? principalAsRequester(session.principal);
-    const admitted = this.#awaitAdmission(requesterId);
-    try {
-      return await this.#admitLeaseRequest(input, session, request, requesterId, admitted.admit);
-    } finally {
-      admitted.admit();
-      admitted.forget();
-    }
-  };
-
-  #awaitAdmission(requesterId: string): { admit: () => void; forget: () => void } {
-    let admit!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      admit = resolve;
-    });
-    const set = this.#unadmitted.get(requesterId) ?? new Set<Promise<void>>();
-    set.add(pending);
-    this.#unadmitted.set(requesterId, set);
-    return {
-      admit,
-      forget: () => {
-        set.delete(pending);
-        if (set.size === 0 && this.#unadmitted.get(requesterId) === set) {
-          this.#unadmitted.delete(requesterId);
-        }
-      },
-    };
-  }
-
-  // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
-  async #admitLeaseRequest(
-    input: Parameters<Handler<"lease.request">>[0],
-    session: DispatchSession,
-    request: DeviceRequest,
-    requesterId: string,
-    admit: () => void,
-  ): Promise<unknown> {
-    const requestedAllowDownload = input.allowDownload ?? false;
-    const downloadsPolicy = this.options.config.downloads.policy;
-    // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
-    // maps to `admin`, so a role check would let any operator name someone else's owner. Refused, not ignored.
-    if (input.owner !== undefined && session.isGatewayUplink !== true) {
-      throw new DispatchError(
-        "FORBIDDEN",
-        "Only the gateway's own uplink session may set lease.request's `owner` field",
-      );
-    }
-    // why: Uplink only, refused before anything is stored: a probe is never queued on a worker, so it must say `noWait`.
-    if (input.fleetRequestId !== undefined) {
-      if (session.isGatewayUplink !== true) {
+    return this.#unadmitted.track(requesterId, async (admittedHook) => {
+      const requestedAllowDownload = input.allowDownload ?? false;
+      const downloadsPolicy = this.options.config.downloads.policy;
+      // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
+      // maps to `admin`, so a role check would let any operator name someone else's owner. Refused, not ignored.
+      if (input.owner !== undefined && session.isGatewayUplink !== true) {
         throw new DispatchError(
           "FORBIDDEN",
-          "Only the gateway's own uplink session may set lease.request's `fleetRequestId` field",
+          "Only the gateway's own uplink session may set lease.request's `owner` field",
         );
       }
-      if (input.noWait !== true) {
-        throw new DispatchError(
-          "BAD_REQUEST",
-          "lease.request's `fleetRequestId` is sent only with `noWait: true`",
-        );
-      }
-    }
-    await this.#requireCapabilities(input.requires);
-    const ownerId = input.owner ?? session.principal;
-    try {
-      const grant = await this.options.leases.request(request, {
-        allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
-        noWait: input.noWait ?? false,
-        ownerId,
-        requesterId,
-        ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
-        onAdmitted: (requestId, replayed) => {
-          admit();
-          session.onRequestAdmitted?.(requestId, replayed);
-        },
-        ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-        ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
-        ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
-        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-        ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
-      });
-      const { device } = grant;
-      return {
-        ...grant,
-        device: device.physical ? { ...device, class: device.spec.class } : device,
-      };
-    } catch (error: unknown) {
-      if (error instanceof LeaseIdTakenError) {
-        throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
-      }
-      if (error instanceof UnknownBaselineError) {
-        throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
-      }
-      if (error instanceof BaselineMismatchError) {
-        throw new DispatchError("BASELINE_MISMATCH", error.message, {
-          baseline: error.baselineName,
-          field: error.field,
-        });
-      }
-      if (error instanceof BaselineStaleError) {
-        throw new DispatchError("BASELINE_STALE", error.message, {
-          baseline: error.baselineName,
-          reason: error.reason,
-        });
-      }
-      if (error instanceof NoCapacityError) {
-        const capacityReason = capacityReasonOf(error.reason);
-        if (capacityReason !== undefined) {
-          throw new DispatchError("NO_CAPACITY", error.message, { capacityReason });
+      // why: Uplink only, refused before anything is stored: a probe is never queued on a worker, so it must say `noWait`.
+      if (input.fleetRequestId !== undefined) {
+        if (session.isGatewayUplink !== true) {
+          throw new DispatchError(
+            "FORBIDDEN",
+            "Only the gateway's own uplink session may set lease.request's `fleetRequestId` field",
+          );
+        }
+        if (input.noWait !== true) {
+          throw new DispatchError(
+            "BAD_REQUEST",
+            "lease.request's `fleetRequestId` is sent only with `noWait: true`",
+          );
         }
       }
-      // why: The lease path sees only the clamped-to-false permission, so this is the one place that can
-      // tell the caller that config, not missing consent, blocked the download.
-      if (
-        downloadsPolicy === "never" &&
-        error instanceof RuntimeMissingError &&
-        error.downloadable
-      ) {
-        error.message = `${error.message} (downloads are disabled by configuration: downloads.policy is "never")`;
+      await this.#requireCapabilities(input.requires);
+      const ownerId = input.owner ?? session.principal;
+      try {
+        const grant = await this.options.leases.request(request, {
+          allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
+          noWait: input.noWait ?? false,
+          ownerId,
+          requesterId,
+          ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
+          onAdmitted: admittedHook(session.onRequestAdmitted),
+          ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+          ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+          ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
+          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+          ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
+        });
+        const { device } = grant;
+        return {
+          ...grant,
+          device: device.physical ? { ...device, class: device.spec.class } : device,
+        };
+      } catch (error: unknown) {
+        if (error instanceof LeaseIdTakenError) {
+          throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+        }
+        if (error instanceof UnknownBaselineError) {
+          throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
+        }
+        if (error instanceof BaselineMismatchError) {
+          throw new DispatchError("BASELINE_MISMATCH", error.message, {
+            baseline: error.baselineName,
+            field: error.field,
+          });
+        }
+        if (error instanceof BaselineStaleError) {
+          throw new DispatchError("BASELINE_STALE", error.message, {
+            baseline: error.baselineName,
+            reason: error.reason,
+          });
+        }
+        if (error instanceof NoCapacityError) {
+          const capacityReason = capacityReasonOf(error.reason);
+          if (capacityReason !== undefined) {
+            throw new DispatchError("NO_CAPACITY", error.message, { capacityReason });
+          }
+        }
+        // why: The lease path sees only the clamped-to-false permission, so this is the one place that can
+        // tell the caller that config, not missing consent, blocked the download.
+        if (
+          downloadsPolicy === "never" &&
+          error instanceof RuntimeMissingError &&
+          error.downloadable
+        ) {
+          error.message = `${error.message} (downloads are disabled by configuration: downloads.policy is "never")`;
+        }
+        throw error;
       }
-      throw error;
-    }
-  }
+    });
+  };
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
-    await Promise.all(this.#unadmitted.get(requesterId) ?? []);
+    await this.#unadmitted.settled(requesterId);
     const result = await this.options.queue.cancelPending(requesterId, input.platform);
     return { result };
   };
