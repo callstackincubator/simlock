@@ -167,7 +167,7 @@ git show "$rules_ref:docs/internal/adr/README.md" >"$out/rules/adr-index.md"
 
 issue=
 case $head_ref in
-  bug/* | feature/* | task/*)
+  bug/* | feature/* | refactor/* | task/*)
     n=${head_ref#*/}
     case $n in '' | *[!0-9]*) ;; *) issue=$n ;; esac
     ;;

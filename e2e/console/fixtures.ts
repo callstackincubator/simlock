@@ -18,7 +18,7 @@ import { type RawData, WebSocket } from "ws";
 
 import type { FakeDriverScript } from "../fake-driver/types.js";
 import { cli, cliBackground, type CliBackgroundHandle, type CliResult } from "../helpers/cli.js";
-import { freeLoopbackPort } from "../helpers/port.js";
+import { startOnFreePort } from "../helpers/port.js";
 import { REPO_ROOT } from "../helpers/repo-root.js";
 import { waitFor } from "../helpers/wait.js";
 
@@ -213,43 +213,66 @@ const FAKE_CAPACITY = {
   ramBudget: { iosBytesPerDevice: 1024 * 1024, androidBytesPerDevice: 1024 * 1024 },
 };
 
+// why: `freeLoopbackPort` releases its port, so another process can take it before the daemon binds
+// it. A failed start carries the daemon log's tail, which names EADDRINUSE, so the start runs again on a new port.
 export async function startDaemon(
   mode: "worker" | "gateway",
   options: StartOptions = {},
 ): Promise<RunningDaemon> {
-  const home = await mkdtemp(join(tmpdir(), "simlock-console-"));
-  const port = await freeLoopbackPort();
-  const scriptPath = join(home, "fake-driver-script.json");
-  // why: a gateway lives in `<home>/gateway` and every CLI call that reaches it says `--gateway` (ADR 0034).
-  const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
-  const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
+  const { started } = await startOnFreePort(async (port) => {
+    try {
+      return await startDaemonOn(port, mode, options);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message.includes("EADDRINUSE")) {
+        throw Object.assign(error, { code: "EADDRINUSE" });
+      }
+      throw error;
+    }
+  });
+  return started;
+}
+
+// why: split out of `startDaemonOn` so the config file's branches stay apart from the daemon's start.
+function daemonConfig(mode: "worker" | "gateway", port: number, options: StartOptions) {
   const { http: extraHttp, ...extraConfig } = options.config ?? {};
   // why: a worker that joins a gateway may not enable HTTP (it is reached through the gateway), so it defaults off; a test's explicit `http.enabled` still wins, so an invalid override is not silently repaired.
   const joined = (extraConfig.gateway as { url?: unknown } | undefined)?.url !== undefined;
-  const httpConfig = {
+  const http = {
     enabled: !joined,
     host: "127.0.0.1",
     port,
     ...(extraHttp as object | undefined),
   };
+  const config = {
+    ...(mode === "worker" ? FAKE_CAPACITY : {}),
+    http,
+    ...extraConfig,
+    // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
+    ...(mode === "worker"
+      ? {
+          capabilities: {
+            "agent-device": { enabled: false },
+            ...(extraConfig.capabilities as object | undefined),
+          },
+        }
+      : {}),
+  };
+  return { config, httpEnabled: http.enabled };
+}
+
+async function startDaemonOn(
+  port: number,
+  mode: "worker" | "gateway",
+  options: StartOptions,
+): Promise<RunningDaemon> {
+  const home = await mkdtemp(join(tmpdir(), "simlock-console-"));
+  const scriptPath = join(home, "fake-driver-script.json");
+  // why: a gateway lives in `<home>/gateway` and every CLI call that reaches it says `--gateway` (ADR 0034).
+  const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
+  const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
+  const { config, httpEnabled } = daemonConfig(mode, port, options);
   await mkdir(dataDirectory, { recursive: true });
-  await writeFile(
-    join(dataDirectory, "config.json"),
-    JSON.stringify({
-      ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      http: httpConfig,
-      ...extraConfig,
-      // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
-      ...(mode === "worker"
-        ? {
-            capabilities: {
-              "agent-device": { enabled: false },
-              ...(extraConfig.capabilities as object | undefined),
-            },
-          }
-        : {}),
-    }),
-  );
+  await writeFile(join(dataDirectory, "config.json"), JSON.stringify(config));
   if (options.driverScript !== undefined) {
     await writeFile(scriptPath, JSON.stringify(options.driverScript));
   }
@@ -346,7 +369,7 @@ export async function startDaemon(
     await start();
     const status = await cli([...gatewayFlag, "status", "--json"], env);
     const url = (status.json as { daemon: { consoleUrl?: string } }).daemon.consoleUrl;
-    if (httpConfig.enabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
+    if (httpEnabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
     else expect(url).toBeUndefined();
     const mint = async (role: string) => {
       const minted = await cli([...gatewayFlag, "token", "create", "--role", role], env);
@@ -555,58 +578,69 @@ const PROXY_ISSUER = "https://proxy.example.test";
 const PROXY_AUDIENCE = "simlock-console";
 const PROXY_HEADER = "cf-access-jwt-assertion";
 
+export type ProxyMode = "signed-in" | "expired" | "redirect" | "html";
+
 export interface ProxiedDaemon {
   readonly url: string;
-  readonly daemon: RunningDaemon;
-  // why: the proxy's own login page, where it sends a browser whose proxy session has ended.
   readonly loginUrl: string;
-  // why: the proxy's session ends: every request but the daemon's health check is sent to its login page.
+  readonly signedOutUrl: string;
+  readonly daemon: RunningDaemon;
+  setMode(mode: ProxyMode): void;
+  // why: the proxy's session ends: every request but the daemon's health check goes to its login page.
   endSession(): void;
+  holdIdentity(): () => void;
+  reset(): void;
   dispose(): Promise<void>;
 }
 
-// why: a sign-in proxy in front of a worker daemon: it signs "Alice" in on every request, the way
-// Cloudflare Access does, and the daemon checks the proxy's token against the proxy's keys. The
-// daemon names the proxy's sign-out page, so the console draws its Sign out button.
 export async function startProxiedDaemon(
-  options: { readonly driverScript?: FakeDriverScript } = {},
+  options: { readonly signOutUrl?: boolean; readonly driverScript?: FakeDriverScript } = {},
 ): Promise<ProxiedDaemon> {
   const { privateKey, publicKey } = await generateKeyPair("ES256");
   const jwk = { ...(await exportJWK(publicKey)), alg: "ES256", kid: "test-key", use: "sig" };
-  const sign = () =>
+  const sign = (expiresAt: number) =>
     new SignJWT({ email: "alice@example.test", name: "Alice" })
       .setProtectedHeader({ alg: "ES256", kid: "test-key" })
       .setIssuer(PROXY_ISSUER)
       .setAudience(PROXY_AUDIENCE)
       .setSubject("u1")
       .setIssuedAt()
-      .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+      .setExpirationTime(expiresAt)
       .sign(privateKey);
+  let mode: ProxyMode = "signed-in";
+  let held: Promise<void> | undefined;
   let daemonPort = 0;
-  let ended = false;
   const listen = (server: Server, port: number) =>
-    new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+    new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
   const close = (server: Server) =>
     new Promise<void>((resolve) => {
       server.closeAllConnections();
       server.close(() => resolve());
     });
 
-  // why: a proxy's login page is on its sign-in provider's host, so `fetch` cannot follow the redirect to it.
-  const login = createServer((_req, res) => {
+  const idp = createServer((req, res) => {
+    const signedOut = req.url === "/signed-out";
     res.setHeader("content-type", "text/html");
-    res.end("<h1>Proxy login</h1>");
+    res.end(`<h1>${signedOut ? "Signed out of the proxy" : "Proxy login"}</h1>`);
   });
-  const loginPort = await freeLoopbackPort();
-  await listen(login, loginPort);
-  const loginUrl = `http://127.0.0.1:${loginPort}/login`;
+  const { port: idpPort } = await startOnFreePort((port) => listen(idp, port));
+  const loginUrl = `http://127.0.0.1:${idpPort}/login`;
+  const signedOutUrl = `http://127.0.0.1:${idpPort}/signed-out`;
 
   const forward = async (req: IncomingMessage, res: ServerResponse) => {
+    const exp = Math.floor(Date.now() / 1000) + (mode === "expired" ? -600 : 3600);
     const headers = {
       ...req.headers,
-      [PROXY_HEADER]: await sign(),
+      [PROXY_HEADER]: await sign(exp),
       host: `127.0.0.1:${daemonPort}`,
     };
+    if (req.url === "/v1/identity" && held !== undefined) await held;
     const upstream = httpRequest(
       { headers, host: "127.0.0.1", method: req.method, path: req.url, port: daemonPort },
       (answer) => {
@@ -624,20 +658,19 @@ export async function startProxiedDaemon(
       res.end(JSON.stringify({ keys: [jwk] }));
       return;
     }
-    if (req.url === "/.test/signed-out") {
-      res.setHeader("content-type", "text/html");
-      res.end("<h1>Signed out of the proxy</h1>");
-      return;
-    }
-    if (ended && req.url !== "/v1/healthz") {
+    if (req.url !== "/v1/healthz" && mode === "redirect") {
       res.writeHead(302, { location: loginUrl });
       res.end();
       return;
     }
+    if (req.url !== "/v1/healthz" && mode === "html") {
+      res.writeHead(403, { "content-type": "text/html" });
+      res.end("<h1>Proxy sign-in</h1>");
+      return;
+    }
     void forward(req, res);
   });
-  const proxyPort = await freeLoopbackPort();
-  await listen(proxy, proxyPort);
+  const { port: proxyPort } = await startOnFreePort((port) => listen(proxy, port));
   let daemon: RunningDaemon;
   try {
     daemon = await startDaemon("worker", {
@@ -649,26 +682,38 @@ export async function startProxiedDaemon(
             header: PROXY_HEADER,
             issuer: PROXY_ISSUER,
             jwksUrl: `http://127.0.0.1:${proxyPort}/.test/jwks`,
-            signOutUrl: `http://127.0.0.1:${proxyPort}/.test/signed-out`,
+            ...(options.signOutUrl === false ? {} : { signOutUrl: signedOutUrl }),
           },
         },
       },
     });
   } catch (error: unknown) {
-    await Promise.all([close(proxy), close(login)]);
+    await Promise.all([close(proxy), close(idp)]);
     throw error;
   }
   daemonPort = daemon.port;
   return {
     daemon,
     dispose: async () => {
-      await Promise.all([close(proxy), close(login)]);
+      await Promise.all([close(proxy), close(idp)]);
       await daemon.dispose();
     },
-    endSession: () => {
-      ended = true;
+    endSession: () => void (mode = "redirect"),
+    holdIdentity() {
+      let release: () => void = () => {};
+      held = new Promise<void>((resolve) => (release = resolve));
+      return () => {
+        held = undefined;
+        release();
+      };
     },
     loginUrl,
+    reset() {
+      mode = "signed-in";
+      held = undefined;
+    },
+    setMode: (next) => void (mode = next),
+    signedOutUrl,
     url: `http://127.0.0.1:${proxyPort}/`,
   };
 }

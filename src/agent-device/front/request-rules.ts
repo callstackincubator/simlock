@@ -388,7 +388,7 @@ export async function checkRequest(
   } catch (error) {
     if (error instanceof Refused) return { kind: "refused", reply: error.reply };
     if (error instanceof LeaseCheckFailed) {
-      return { kind: "refused", reply: failure(error.message) };
+      return { kind: "refused", reply: failure(error.message, 502, true) };
     }
     throw error;
   }

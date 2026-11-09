@@ -4,6 +4,7 @@ import type { Clock } from "../../ports/index.js";
 const MAX_PRINCIPALS_PER_REFRESH = 100;
 
 interface DeviceFacts {
+  readonly bootTarget?: string;
   readonly platform?: "ios" | "android";
   readonly model?: string;
   readonly name?: string;

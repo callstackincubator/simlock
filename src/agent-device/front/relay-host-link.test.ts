@@ -87,9 +87,15 @@ describe("RelayHostLink", () => {
       index.set("L", { ownerId: principal, workerId: "w1" });
       await link.forward(request(), tokenIdentity(principal), "L");
     }
+    const long = "t".repeat(300);
+    for (const leaseId of ["L1", "L2"]) {
+      index.set(leaseId, { ownerId: long, workerId: "w1" });
+      await link.forward(request(), tokenIdentity(long), leaseId);
+    }
 
     const tenants = relay.mock.calls.map((call) => call[2]);
-    expect(new Set(tenants).size).toBe(principals.length);
+    expect(new Set(tenants).size).toBe(tenants.length);
+    expect(tenants).toHaveLength(principals.length + 2);
   });
 
   it.each([
@@ -125,6 +131,8 @@ describe("RelayHostLink", () => {
       code: "INVALID_ARGS",
       error: "refused: this agent-device is too old to use through a gateway; update it",
       ok: false,
+      reason: "REFUSED_BY_SIMLOCK",
+      retriable: false,
     });
   });
 

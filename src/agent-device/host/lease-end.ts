@@ -1,16 +1,59 @@
 import type { EndedLease, LeaseEndParticipant } from "../../leasing/index.js";
+import type { Filesystem } from "../../ports/index.js";
 import { readReleaseScope, type ReleaseScope } from "../shared/release-scope.js";
-import { classifyCall, leaseIdOf, readReply, readRpcBody, replyData } from "../shared/rpc.js";
+import {
+  classifyCall,
+  type CallClass,
+  commandLeaseId,
+  leaseIdOf,
+  readReply,
+  readRpcBody,
+  replyData,
+} from "../shared/rpc.js";
 import type { AgentDeviceUpstream } from "./upstream.js";
 
 // why: the ids of ended leases are remembered so a late reply writes nothing; the cap keeps that memory bounded.
 const MAX_ENDED_IDS = 4096;
+// why: the session names come from the wire, so a lease remembers a bounded number of them.
+const MAX_SESSION_NAMES = 64;
+// why: the lease id comes from the wire and is a folder name as it is, so only a plain one is trusted; a separator would make a path.
+const FOLDER_PART = /^[A-Za-z0-9._-]+$/;
+// why: agent-device writes each character of a tenant or `--session` name outside this set as `_` in its folder name, so the folder is found by the same rewrite, and no separator survives it.
+const UNSAFE_FOLDER_CHARACTER = /[^A-Za-z0-9._-]/g;
+
+interface Served {
+  readonly tenantId: string;
+  readonly sessions: Set<string>;
+}
 
 export class ReleaseScopeRecord {
   readonly #scopes = new Map<string, ReleaseScope>();
   readonly #allocating = new Map<string, Promise<ReleaseScope | undefined>>();
   readonly #releasing = new Map<string, Promise<boolean>>();
   readonly #ended = new Set<string>();
+  readonly #served = new Map<string, Served>();
+
+  // why: the lease end needs the tenant and the `--session` names to find the folders agent-device made, and only a call through this daemon names them.
+  serve(leaseId: string, tenantId: string, session: string | undefined): void {
+    if (this.#ended.has(leaseId)) return;
+    const served = this.#served.get(leaseId) ?? { sessions: new Set<string>(), tenantId };
+    this.#served.set(leaseId, served);
+    if (session !== undefined && served.sessions.size < MAX_SESSION_NAMES) {
+      served.sessions.add(session);
+    }
+  }
+
+  // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
+  folderNames(leaseId: string): readonly string[] {
+    const served = this.#served.get(leaseId);
+    if (served === undefined) return [];
+    return [
+      ...(FOLDER_PART.test(leaseId) ? [leaseId] : []),
+      ...[leaseId, ...served.sessions].map((name) =>
+        `${served.tenantId}_${name}`.replace(UNSAFE_FOLDER_CHARACTER, "_"),
+      ),
+    ];
+  }
 
   get(leaseId: string): ReleaseScope | undefined {
     return this.#scopes.get(leaseId);
@@ -87,6 +130,7 @@ export class ReleaseScopeRecord {
   // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
   drop(leaseId: string): void {
     this.#scopes.delete(leaseId);
+    this.#served.delete(leaseId);
   }
 }
 
@@ -97,25 +141,39 @@ export function recordingFetch(
   return async (request) => {
     const named = await nameCall(request);
     const reply = upstream.fetch(request);
+    if (named?.tenantId !== undefined) {
+      record.serve(named.leaseId, named.tenantId, named.session);
+    }
     if (named?.kind === "allocate") return record.trackAllocate(named.leaseId, reply);
     if (named?.kind === "release") return record.trackRelease(named.leaseId, reply, request.signal);
     return reply;
   };
 }
 
-async function nameCall(
-  request: Request,
-): Promise<{ readonly kind: "allocate" | "release"; readonly leaseId: string } | undefined> {
+interface NamedCall {
+  readonly kind: CallClass;
+  readonly leaseId: string;
+  readonly tenantId: string | undefined;
+  readonly session: string | undefined;
+}
+
+async function nameCall(request: Request): Promise<NamedCall | undefined> {
   if (request.method !== "POST" || !new URL(request.url).pathname.endsWith("/rpc")) {
     return undefined;
   }
   const read = await readRpcBody(request.clone());
   if (read.kind !== "request") return undefined;
   const kind = classifyCall(read.method, read.params);
-  const leaseId = leaseIdOf(read.params["leaseId"]);
-  return (kind === "allocate" || kind === "release") && leaseId !== undefined
-    ? { kind, leaseId }
-    : undefined;
+  const leaseId = leaseIdOf(read.params["leaseId"]) ?? commandLeaseId(read.params);
+  if (leaseId === undefined) return undefined;
+  const tenantId = read.params["tenantId"];
+  const session = read.params["session"];
+  return {
+    kind,
+    leaseId,
+    session: kind === "command" && typeof session === "string" ? session : undefined,
+    tenantId: typeof tenantId === "string" ? tenantId : undefined,
+  };
 }
 
 const ABORTED = Symbol("aborted");
@@ -141,10 +199,17 @@ function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | typ
   });
 }
 
+export interface SessionFolders {
+  readonly filesystem: Filesystem;
+  // why: the daemon's `sessions` folder, where agent-device makes one folder per session address and removes none.
+  readonly directory: string;
+}
+
 export class AgentDeviceLeaseEnd implements LeaseEndParticipant {
   constructor(
     readonly upstream: AgentDeviceUpstream,
     readonly record: ReleaseScopeRecord,
+    readonly folders: SessionFolders,
   ) {}
 
   async leaseEnded(ended: EndedLease, signal: AbortSignal): Promise<void> {
@@ -153,8 +218,19 @@ export class AgentDeviceLeaseEnd implements LeaseEndParticipant {
     try {
       await this.#end(leaseId, signal);
     } finally {
-      this.record.drop(leaseId);
+      try {
+        await this.#removeFolders(leaseId);
+      } finally {
+        this.record.drop(leaseId);
+      }
     }
+  }
+
+  async #removeFolders(leaseId: string): Promise<void> {
+    const { directory, filesystem } = this.folders;
+    await Promise.all(
+      this.record.folderNames(leaseId).map((name) => filesystem.rm(`${directory}/${name}`)),
+    );
   }
 
   async #end(leaseId: string, signal: AbortSignal): Promise<void> {

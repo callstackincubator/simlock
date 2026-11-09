@@ -104,6 +104,7 @@ function describeDevice(
     address,
     model,
     platform,
+    ...(device.spec.physical === undefined ? {} : { physical: device.spec.physical }),
     ttlDeadline: record.ttlDeadline,
     ttlMs: record.ttlMs,
     ...(deviceClass === undefined ? {} : { deviceClass }),

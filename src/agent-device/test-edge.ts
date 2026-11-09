@@ -99,7 +99,7 @@ type RawDispatch = (operation: string, input: unknown, session: unknown) => Prom
 
 export interface DispatchTap {
   readonly operations: string[];
-  rejectNext(operation: string): void;
+  rejectNext(operation: string, error?: Error): void;
   afterNext(operation: string, run: () => Promise<void>): void;
 }
 
@@ -108,11 +108,15 @@ export function tapDispatch(rig: Rig): DispatchTap {
   const daemon = rig.daemon as unknown as { dispatch: RawDispatch };
   const original = daemon.dispatch.bind(daemon);
   const operations: string[] = [];
-  const rejections = new Set<string>();
+  const rejections = new Map<string, Error>();
   const afters = new Map<string, () => Promise<void>>();
   daemon.dispatch = async (operation, input, session) => {
     operations.push(operation);
-    if (rejections.delete(operation)) throw new Error("simlock could not do that");
+    const rejection = rejections.get(operation);
+    if (rejection !== undefined) {
+      rejections.delete(operation);
+      throw rejection;
+    }
     const result = await original(operation, input, session);
     const after = afters.get(operation);
     afters.delete(operation);
@@ -122,7 +126,8 @@ export function tapDispatch(rig: Rig): DispatchTap {
   return {
     afterNext: (operation, run) => afters.set(operation, run),
     operations,
-    rejectNext: (operation) => rejections.add(operation),
+    rejectNext: (operation, error = new Error("simlock could not do that")) =>
+      rejections.set(operation, error),
   };
 }
 

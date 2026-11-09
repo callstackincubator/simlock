@@ -39,7 +39,8 @@ Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
 `pnpm format`, `pnpm format:check`,
-`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
+`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine and a
+refactor's `--touched-by` run, below), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine), `.agents/scripts/test-lint.mjs`. A PreToolUse hook
@@ -70,7 +71,21 @@ list and this one the same.
 
 ## Mutation testing
 
-Not part of delivery. The weekly `harden-tests` routine runs `pnpm mutate
+Part of delivery for a refactor only (delivery rule 18). On the branch's
+pin commit, `pnpm mutate --touched-by <head>` mutates the source lines that
+commit has and `<head>` moves or changes, and runs them against the pins
+and the existing tests; it exits 0 only when every mutant died. The
+implementer runs it before the refactor, and the gate again through
+`refactor-check.mjs`; the results cache in the clone's git directory, so a
+second run on unchanged lines is quick.
+
+`node .agents/scripts/refactor-check.mjs --pr <m>` is the gate's
+refactor check (delivery rule 18): it fetches the PR, prepares detached
+worktrees of the merge base or pin commit and of the head, and compares
+test titles, the module surfaces, the pins and the mutants. `--base <sha>
+--head <sha>` checks two commits of this clone with no PR.
+
+Otherwise not part of delivery. The weekly `harden-tests` routine runs `pnpm mutate
 <base> --max-lines 1500` on `main` for the source lines changed since
 `<base>`, newest files first up to that many lines, kills the survivors that
 change behaviour a caller or user can see, and opens one tests-only PR. The
@@ -91,9 +106,12 @@ gate:
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
 | Recurring findings | `recurring-findings` | weekly |
+| Refactor           | `refactor`          | weekly |
 
 `recurring-findings` opens draft task issues instead of a PR, and skips
-the ending below. Every other routine ends the same way; its skill adds
+the ending below. `refactor` opens one `refactor:new` issue from a
+measured target and, when delivery rule 18's three conditions hold, sets
+it ready and runs `deliver` on it, whose gate ends it instead. Every other routine ends the same way; its skill adds
 only what it changes:
 
 1. `reviewer` with the PR number, round 1, started as the `review` skill

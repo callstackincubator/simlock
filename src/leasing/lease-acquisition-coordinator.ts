@@ -244,6 +244,11 @@ const noTiming: LeaseTiming = {
   estimatedReadyMs: 0,
 };
 
+/** why: an `except` list, or a driver that must boot a ready device again before it can be granted, sends the device through the claimed reboot. */
+function rebootsBeforeGrant(waiter: AcquisitionWaiter, driver: Driver): boolean {
+  return exceptOption(waiter).except !== undefined || driver.rebootReadyBeforeGrant === true;
+}
+
 export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #activeWorkflows = new Set<Promise<void>>();
   readonly #driving = new WeakSet<AcquisitionWaiter>();
@@ -1107,7 +1112,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       spec: waiter.spec,
       requirement: waiter.requirement,
       classOf: waiter.classOf,
-      rebootReady: exceptOption(waiter).except !== undefined,
+      rebootReady: rebootsBeforeGrant(waiter, this.options.drivers.get(waiter.spec.platform)),
     });
   }
 

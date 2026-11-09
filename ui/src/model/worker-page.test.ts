@@ -345,6 +345,30 @@ describe("a worker's load figures", () => {
     expect(inspector.overview.read).toBe("12 s ago");
   });
 
+  it("lists a Paused row on the Memory card while the worker's memory-pressure step pauses something", () => {
+    const paused = (step: string | undefined) =>
+      figure(
+        inspect(
+          worker({
+            capacity: {
+              ...CAPACITY,
+              ...(step === undefined ? {} : { memoryPressure: { step } }),
+            } as unknown as WorkerView["capacity"],
+            load: LOAD,
+          }),
+        ),
+        "Memory",
+      )?.details.find((detail) => detail.label === "Paused");
+    expect(paused("new-devices-paused")).toEqual({
+      label: "Paused",
+      text: "new devices",
+      tone: "error",
+    });
+    expect(paused("warming-paused")).toEqual({ label: "Paused", text: "warming", tone: "warn" });
+    expect(paused("none")).toBeUndefined();
+    expect(paused(undefined)).toBeUndefined();
+  });
+
   it("fills each meter to the figure's own percent", () => {
     const inspector = inspect(worker({ load: LOAD }));
 

@@ -20,7 +20,7 @@ export type HostStatus =
       readonly leaseMaxTtlMs: number;
       readonly platforms: readonly AgentDevicePlatform[];
     }
-  | { readonly state: "unavailable"; readonly reason: string };
+  | { readonly state: "unavailable"; readonly reason: string; readonly retriable: boolean };
 
 function stripBodyHeaders(headers: Headers): Headers {
   const copy = new Headers(headers);
@@ -84,7 +84,10 @@ function capped(response: Response): Response {
 }
 
 export class AgentDeviceHost {
-  readonly #identities = new Map<string, Identity>();
+  readonly #identities = new Map<
+    string,
+    { readonly identity: Identity; readonly tenant: string }
+  >();
   #loading: Promise<ProxyModule | undefined> | undefined;
   #loadError: string | undefined;
   #proxy: { readonly generation: number; readonly proxy: DaemonProxy } | undefined;
@@ -105,7 +108,8 @@ export class AgentDeviceHost {
     const current = this.upstream.current();
     if (current.state === "unavailable") return current;
     await this.#load();
-    if (this.#loadError !== undefined) return { reason: this.#loadError, state: "unavailable" };
+    if (this.#loadError !== undefined)
+      return { reason: this.#loadError, retriable: false, state: "unavailable" };
     return {
       leaseMaxTtlMs: current.leaseMaxTtlMs,
       platforms: this.platforms,
@@ -113,20 +117,20 @@ export class AgentDeviceHost {
     };
   }
 
-  tag(request: Request, identity: Identity): string {
+  tag(request: Request, identity: Identity, tenant: string = identity.principal): string {
     const tag = randomUUID();
-    this.#identities.set(tag, identity);
+    this.#identities.set(tag, { identity, tenant });
     request.headers.set(TAG_HEADER, tag);
     return tag;
   }
 
   authenticate(request: Request): { readonly tenantId: string } | null {
     const tag = request.headers.get(TAG_HEADER);
-    const identity = tag === null ? undefined : this.#identities.get(tag);
-    return identity === undefined ? null : { tenantId: identity.principal };
+    const tagged = tag === null ? undefined : this.#identities.get(tag);
+    return tagged === undefined ? null : { tenantId: tagged.tenant };
   }
 
-  async forward(request: Request, identity: Identity): Promise<Response> {
+  async forward(request: Request, identity: Identity, tenant?: string): Promise<Response> {
     const status = await this.status();
     if (status.state === "unavailable") throw new Error(status.reason);
     const module = await this.#load();
@@ -146,7 +150,7 @@ export class AgentDeviceHost {
       };
     }
     const proxied = this.#rewrite(request);
-    const tag = this.tag(proxied, identity);
+    const tag = this.tag(proxied, identity, tenant);
     try {
       const response = await this.#proxy.proxy.handle(proxied);
       if (new URL(proxied.url).pathname === PREFLIGHT_PATH) {

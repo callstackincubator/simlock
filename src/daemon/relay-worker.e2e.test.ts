@@ -4,7 +4,7 @@ import { creditEnvelope } from "../link/testing.js";
 import type { DaemonServer } from "./server.js";
 import type { RelayTarget } from "./relay.js";
 import {
-  adminSession,
+  relayAdminSession,
   aborted,
   cleanUp,
   gate,
@@ -48,9 +48,9 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     const dispatch = fixture.worker.dispatch.bind(fixture.worker) as unknown as (
       operation: string,
       input: unknown,
-      session: typeof adminSession,
+      session: typeof relayAdminSession,
     ) => Promise<unknown>;
-    return dispatch(operation, input, adminSession);
+    return dispatch(operation, input, relayAdminSession);
   }
 
   it("sends a 20 MiB response body on the channel byte for byte, then ends it, and answers relay.request {}", async () => {

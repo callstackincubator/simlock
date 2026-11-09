@@ -175,9 +175,17 @@ describe("the allocate front", () => {
     const answer = await rig.run();
 
     expect(releases).toEqual([{ leaseId }]);
-    expect(await answer?.text()).toContain(
-      "agent-device is not available on this simlock: agent-device reported no lease ceiling for this lease",
-    );
+    expect(await answer?.json()).toMatchObject({
+      error: {
+        message:
+          "agent-device is not available on this simlock: agent-device reported no lease ceiling for this lease",
+        data: {
+          code: "COMMAND_FAILED",
+          details: { reason: "SIMLOCK_UNAVAILABLE" },
+          retriable: false,
+        },
+      },
+    });
     expect(rig.link["forward"]).not.toHaveBeenCalled();
   });
 });

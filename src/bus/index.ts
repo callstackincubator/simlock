@@ -270,6 +270,16 @@ export interface EventMap {
     readonly forced: boolean;
   };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };
+  "memory.pressure-changed": {
+    readonly from: "none" | "warming-paused" | "new-devices-paused";
+    readonly to: "none" | "warming-paused" | "new-devices-paused";
+    readonly cause?: {
+      readonly trigger: "level" | "floor";
+      readonly availablePercent: number;
+      readonly level?: "normal" | "warn" | "critical";
+      readonly floorPercent?: number;
+    };
+  };
   "device.foreign-provenance-detected": {
     readonly deviceId: string;
     readonly platform: string;

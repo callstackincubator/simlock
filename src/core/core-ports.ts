@@ -21,6 +21,26 @@ export interface CapacityReader {
   atRamBudget(platform: CapacityPlatform): boolean;
 }
 
+/** why: ADR 0068 §2: what core reads of a worker's memory pressure step, so it never names host-load. */
+export interface MemoryPressureReader {
+  /** why: the step with when and why it began, and when the latest reading came; `undefined` while host load is off or before its first reading. */
+  current():
+    | {
+        readonly step: "none" | "warming-paused" | "new-devices-paused";
+        readonly since?: number;
+        readonly cause?: {
+          readonly trigger: "level" | "floor";
+          readonly availablePercent: number;
+          readonly level?: "normal" | "warn" | "critical";
+          readonly floorPercent?: number;
+        };
+        readonly readingAt: number;
+      }
+    | undefined;
+  /** why: calls the listener after each reading, once the step is updated; returns the way to stop. */
+  onReading(listener: () => void): () => void;
+}
+
 /** Read-only view of the warm pool, used by daemon status and doctor. */
 export interface WarmPoolReader {
   /** The pool as its last pass left it. */

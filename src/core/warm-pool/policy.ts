@@ -30,7 +30,8 @@ export type WarmProposal =
         | "waiting-request"
         | "displaced"
         | "target"
-        | "never-leased-idle";
+        | "never-leased-idle"
+        | "memory-pressure";
       readonly target?: VirtualSpec;
     }
   | {
@@ -57,7 +58,8 @@ export type TargetShort =
   | "running-limit"
   | "device-limit"
   | "ram-budget"
-  | "reserve";
+  | "reserve"
+  | "memory-pressure";
 
 /** A target's kind as reported: the platform, the exact model, and the OS and mode it names. */
 export interface TargetKind {
@@ -132,6 +134,12 @@ export interface WarmPolicyView {
    * the reset's point is that they stay down, so they are never booted back unasked.
    */
   readonly resetDevices: ReadonlySet<string>;
+  /** why: the worker's memory pressure step (ADR 0068), whether a reading not yet used may shed a device, and the devices whose shutdown failed in the last 30 s. */
+  readonly pressure: {
+    readonly step: "none" | "warming-paused" | "new-devices-paused";
+    readonly mayShed: boolean;
+    readonly shedFailed: ReadonlySet<string>;
+  };
 }
 
 type Slots = { global: number; ios: number; android: number };
@@ -173,11 +181,17 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const bootable = view.devices.filter(
     (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
-  const queued = boots(view, running, bootable, room);
+  // why: ADR 0068 §3: at `warming-paused` the pool starts nothing, for a target, a learned kind or a waiter.
+  const queued: QueuePass =
+    view.pressure.step === "none"
+      ? boots(view, running, bootable, room)
+      : { proposals: [], started: 0, stuck: new Set() };
   const keeps = queued.proposals;
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
   const proposed = new Set([...shutdowns, ...unneeded].map((proposal) => proposal.deviceId));
+  const shed = shedForPressure(view, running, proposed);
+  for (const proposal of shed) proposed.add(proposal.deviceId);
   const sparedDevices = targetedDevices({ ...view, learned: [], targets: view.spared });
   const wanted = planTargets(
     view,
@@ -195,7 +209,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
       : running.filter((device) => !proposed.has(device.id) && !sparedDevices.has(device.id)),
   );
   return {
-    proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
+    proposals: [...shutdowns, ...keeps, ...unneeded, ...shed, ...wanted.proposals],
     targets: wanted.reports,
   };
 }
@@ -439,25 +453,17 @@ function plannedKinds(
 }
 
 /**
- * why: what a learned kind has: its ready idle devices, and the ones leased, reclaiming or under
- * an operation claim (a reclaim that has not yet given its claim up), which come back on their own.
- * A burst held at its peak so makes nothing more.
+ * why: the kind's devices under an open lease; the pool keeps a spare while they are held. A
+ * baseline kind is one row per name, so it counts the leased copies of every version of it, whatever
+ * their platform, model, OS or mode, as its peak does, not only those of the newest.
  */
-function haveOfKind(
-  view: WarmPolicyView,
-  isIdle: (device: VirtualDevice) => boolean,
-  spec: VirtualSpec,
-): number {
+function leasedOfKind(view: WarmPolicyView, spec: VirtualSpec): number {
   const leased = new Set(view.leases.map((lease) => lease.deviceId));
-  const ready = new Set(readyOfKind(view.devices, isIdle, spec).map((device) => device.id));
-  return view.devices.filter(
-    (device) =>
-      sameSpec(device.spec, spec) &&
-      (ready.has(device.id) ||
-        leased.has(device.id) ||
-        device.state === "reclaiming" ||
-        (device.state !== "provisioning" && view.isClaimed(device.id))),
-  ).length;
+  const ofKind = (device: VirtualDevice): boolean =>
+    spec.baseline
+      ? !device.spec.physical && device.spec.baseline?.name === spec.baseline.name
+      : sameSpec(device.spec, spec);
+  return view.devices.filter((device) => ofKind(device) && leased.has(device.id)).length;
 }
 
 /** The targets with those that resolved to one spec merged into one, counts summed. */
@@ -574,6 +580,36 @@ function neverLeasedIdle(
   return proposals;
 }
 
+/**
+ * why: ADR 0068 §3: while warming is paused each new reading gives memory back by shutting down
+ * one idle device: first one no configured target keeps, then a kept one, least recently used
+ * first, never one a waiting request would be granted (the budget's own shield) or one whose
+ * shutdown just failed.
+ */
+function shedForPressure(
+  view: WarmPolicyView,
+  running: readonly VirtualDevice[],
+  proposed: ReadonlySet<string>,
+): DeviceProposal[] {
+  if (view.pressure.step === "none" || !view.pressure.mayShed) return [];
+  const kept = targetedDevices({
+    ...view,
+    learned: [],
+    targets: [...view.targets, ...view.spared],
+    waiting: [],
+  });
+  const candidates = running.filter(
+    (device) =>
+      !proposed.has(device.id) &&
+      !view.pressure.shedFailed.has(device.id) &&
+      !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
+  );
+  const victim = candidates.find((device) => !kept.has(device.id)) ?? candidates[0];
+  return victim === undefined
+    ? []
+    : [{ action: "shutdown", deviceId: victim.id, reason: "memory-pressure" }];
+}
+
 /** Why a slot of `platform` is not free for an idle warm device, when it is not. */
 function slotShort(
   room: Slots,
@@ -588,7 +624,9 @@ function slotShort(
 /** What the capacity strategy's refusal means for a target's report. */
 function shortOf(refusal: CapacityRefusalReason | undefined): TargetShort | undefined {
   if (refusal === undefined) return undefined;
-  return refusal === "device-limit" || refusal === "ram-budget" ? refusal : "running-limit";
+  return refusal === "device-limit" || refusal === "ram-budget" || refusal === "memory-pressure"
+    ? refusal
+    : "running-limit";
 }
 
 /** What `planTargets` shares across targets: the room left, the devices taken, the boots begun. */
@@ -670,7 +708,10 @@ function planTargets(
       const filling = pending(spec);
       const configured = first[index] ?? { added: 0 };
       const missing =
-        Math.max(configuredCount - ready, learnedCount - haveOfKind(view, isIdle, spec)) -
+        Math.max(
+          configuredCount - ready,
+          Math.max(learnedCount - leasedOfKind(view, spec), 1) - ready,
+        ) -
         filling -
         configured.added;
       const learned =
@@ -694,6 +735,23 @@ function planTargets(
   return { proposals: plan.proposals, reports };
 }
 
+/** why: at `warming-paused` a target adds nothing and, unless a boot of its own is still running, is short for memory pressure. */
+function heldByPressure(filling: boolean): { added: number; short?: TargetShort } {
+  return filling ? { added: 0 } : { added: 0, short: "memory-pressure" };
+}
+
+/** why: what stops a target from adding anything this pass (pressure, a waiter it could not serve, a retry delay), or undefined when it may add. */
+function holdFill(
+  plan: TargetPlan,
+  spec: VirtualSpec,
+  filling: boolean,
+): { added: number; short?: TargetShort } | undefined {
+  if (plan.view.pressure.step !== "none") return heldByPressure(filling);
+  if (plan.stuck.has(spec.platform)) return { added: 0 };
+  if (plan.view.retry.mayAttempt(spec, plan.view.now)) return undefined;
+  return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
+}
+
 /**
  * why: adds the boots and creations a target is missing, after the queue's. A target with a boot
  * already running or one proposed here is still filling, and one on a platform where a waiter
@@ -706,10 +764,8 @@ function fillTarget(
   filling: boolean,
   count: "configured" | "learned",
 ): { added: number; short?: TargetShort } {
-  if (plan.stuck.has(spec.platform)) return { added: 0 };
-  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) {
-    return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
-  }
+  const held = holdFill(plan, spec, filling);
+  if (held !== undefined) return held;
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
     const refused = addDisplacing(plan, spec, count);

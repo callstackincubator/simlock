@@ -114,10 +114,11 @@ Fleet is one list of workers in two groups, with one row for each worker. A work
 
 | Colour | When |
 | --- | --- |
-| Red | The worker's health is `failed`, its memory pressure is `critical`, or its CPU, memory or disk is 95% full or more. |
-| Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, or a figure is 85% full or more. |
+| Red | The worker's health is `failed`, its memory pressure is `critical`, it has `new devices paused`, or its CPU, memory or disk is 95% full or more. |
+| Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, it has `warming paused`, or a figure is 85% full or more. |
+| Green | Nothing is wrong. The word is `connected`. |
 
-Every row shows the iOS and Android slots together, CPU, memory and disk with a bar each, how many leases the worker holds, and its actions: **Undrain** appears on a drained worker, a disconnected worker has **View leases**, a link to [Leases](#leases), and **⋯** offers the rest. The slots show as a meter with the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is shown as `—`, never as zero. Every cell is one line; a long value is cut with an ellipsis and shows in full on hover.
+Every row shows the iOS and Android slots together, CPU, memory and disk with a bar each, and how many leases the worker holds. A click anywhere on the row opens the worker's page; **⋯** holds its actions, with **Undrain** first on a drained worker and **View leases**, a link to [Leases](#leases), first on a disconnected one. The slots show as a meter with the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is shown as `—`, never as zero. Every cell is one line; a long value is cut with an ellipsis and shows in full on hover.
 
 Every other worker sits under **Healthy**, in the same columns. Under both groups, **Worker events** lists the workers' own events of the last hour, and new ones appear at the top.
 
@@ -196,6 +197,7 @@ Select a request to see when it was made, its place, its stage and, for a `queue
 | Full: running limit | The worker runs as many devices as it may. |
 | Full: running limit for iOS | The worker runs as many iOS devices as it may (or Android). |
 | Full: RAM budget | Booting another device would go over the worker's RAM budget. |
+| Full: host memory pressure | The worker's host is short of memory and has paused new devices (`memoryPressure.*`). |
 | A matching device is starting | A device that fits is booting and will serve it. |
 | Every matching device is leased or absent | The request names physical devices that are all in use or unplugged. |
 

@@ -270,6 +270,18 @@ function limited(text: string, isLimited: boolean): string {
   return isLimited ? `${text} (limit)` : text;
 }
 
+// why: the step names what the worker refuses to start, so the row is there only while it refuses.
+function pausedDetail(worker: WorkerView): readonly LoadDetail[] {
+  switch (worker.capacity?.memoryPressure?.step) {
+    case "new-devices-paused":
+      return [{ label: "Paused", text: "new devices", tone: "error" }];
+    case "warming-paused":
+      return [{ label: "Paused", text: "warming", tone: "warn" }];
+    default:
+      return [];
+  }
+}
+
 function figureCards(worker: WorkerView): readonly FigureCard[] {
   const { load } = worker;
   if (load === undefined) return [];
@@ -328,6 +340,7 @@ function figureCards(worker: WorkerView): readonly FigureCard[] {
                     tone: pressureStatus(memory.pressure).tone,
                   },
                 ]),
+            ...pausedDetail(worker),
           ],
           label: "Memory",
           text: limited(

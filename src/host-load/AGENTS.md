@@ -10,3 +10,4 @@ Does: samples this host's CPU, memory and disk on a fixed interval and keeps the
 - `firstReading()` settles at the first recorded read, whatever it found, or at dispose. A worker dials its gateway only after it, so the first `status.get` the gateway reads has a load.
 - `hostLoadProbe: null` turns sampling off: no sampler, no `load` field.
 - Readers fit the reading to the contract with `fitHostLoad`.
+- `MemoryPressureTracker` works out the memory pressure step from each recorded reading (ADR 0068).

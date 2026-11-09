@@ -27,6 +27,7 @@ import {
   granted,
   receivedAllocate,
   allocatesReceived,
+  leaseTenant,
 } from "./test-support.js";
 
 // why: Fallow reads a `rig` binding's type only from an annotation in this file, not from an imported
@@ -83,12 +84,12 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
 
     await expect.poll(() => releasesReceived(rig).length).toBe(1);
     const sent = releasesReceived(rig)[0];
-    expect(sent?.tenant).toBe(principals.one);
+    expect(sent?.tenant).toBe(leaseTenant(principals.one, 1));
     expect(sent?.params).toEqual({
       ...scope,
       deviceKey: "device-key-1",
       leaseId: hex(1),
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
 
     const plain = await setUp();
@@ -98,7 +99,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(plain)[0]?.params).toEqual({
       ...scope,
       leaseId: hex(1),
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
   });
 
@@ -113,7 +114,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(rig)[0]?.params).toEqual({
       ...scope,
       leaseId: hex(1),
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
   });
 
@@ -208,7 +209,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(expiring)[0]?.params).toEqual({
       ...scope,
       leaseId: hex(1),
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
     expect(atRelease).toEqual([expiringBefore]);
 
@@ -221,7 +222,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(operator)[0]?.params).toEqual({
       ...scope,
       leaseId: hex(1),
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
     expect(atOperatorRelease).toEqual([operatorBefore]);
 
@@ -239,7 +240,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(lost)[0]?.params).toEqual({
       ...scope,
       leaseId: hex(1),
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
     expect(atLostRelease).toEqual([lostBefore]);
   });
@@ -278,7 +279,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
       expect(releasesReceived(rig).at(-1)?.params).toEqual({
         ...scope,
         leaseId: hex(1),
-        tenantId: principals.one,
+        tenantId: leaseTenant(principals.one, 1),
       });
     },
   );
@@ -389,14 +390,14 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
       clientId: "client-1",
       leaseId: hex(1),
       runId: "run-1",
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 1),
     });
     expect(byLease.get(hex(2))).toEqual({
       ...scope,
       clientId: "client-2",
       leaseId: hex(2),
       runId: "run-2",
-      tenantId: principals.one,
+      tenantId: leaseTenant(principals.one, 2),
     });
   });
 

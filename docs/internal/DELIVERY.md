@@ -9,7 +9,8 @@ holds its own steps. This page links to them rather than restating them.
 
 GitHub Issues is the spec and the queue. Every issue carries exactly one
 `<kind>:<state>` label, and agents act only on `bug:new` (to triage it,
-and to fix it when the fast track passes it), `bug:ready` and `task:ready`. The body is the spec; a
+and to fix it when the fast track passes it), `bug:ready`, `task:ready`
+and `refactor:ready`. The body is the spec; a
 comment changes nothing until a spec session folds it in. A reporter's
 issue is never rewritten. After `ready`, state is read from GitHub itself
 (assignee, linked PR, closed).
@@ -28,6 +29,9 @@ Issue `<n>` is built on branch `<kind>/<n>`.
 | `task:draft`      | Scope written; technical spec or its spec check missing. |
 | `task:ready`      | Spec checked; runs once its Depends on allow.            |
 | `task:blocked`    | Waiting on the maintainer to clear a blocker.            |
+| `refactor:new`    | A proposed refactor. Never picked up.                    |
+| `refactor:ready`  | An agent may build it; it needs no spec.                 |
+| `refactor:blocked` | Waiting on the maintainer to clear a blocker.           |
 
 ## A bug
 
@@ -54,8 +58,9 @@ Issue `<n>` is built on branch `<kind>/<n>`.
    re-add `bug:ready` and run `deliver` again.
 
 `gh issue list --label fast-track --state all` lists every bug that took
-the fast track. The limits are `MAX_LINES`, `MAX_FILES` and `HOLD_PATHS`
-at the top of `.agents/scripts/fast-track.mjs`.
+the fast track. The limits are `MAX_LINES` and `MAX_FILES` at the top of
+`.agents/scripts/fast-track.mjs`, and the held paths `SURFACE_PATHS` in
+`.agents/scripts/surface-paths.mjs`.
 
 ## A feature
 
@@ -79,6 +84,29 @@ at the top of `.agents/scripts/fast-track.mjs`.
 
 A session can stop part way: what is settled is written, the rest goes
 under Open questions, and the next session starts there.
+
+## A refactor
+
+A refactor moves or reshapes code and changes no behaviour, bugs
+included (delivery rule 18). It needs no spec session.
+
+1. Write a `refactor:new` issue from
+   [templates/refactor.md](templates/refactor.md): Why, Target shape, Out
+   of bounds, Done when. Set `refactor:ready` when you want it built.
+   The weekly `refactor` routine also opens these, from a measured target
+   only, and sets `refactor:ready` itself when rule 18's three conditions
+   hold; its PRs carry `auto-refactor`.
+2. `deliver #<n>` runs one `implementer` in `refactor` mode: pins first
+   (`*.pin.test.ts`, passing on the base, until `pnpm mutate --touched-by`
+   leaves no mutant alive), then the refactor, then the pins deleted.
+3. The review runs the code and claims lenses, no spec lens. The gate runs
+   `.agents/scripts/refactor-check.mjs`: tests unchanged, surface
+   unchanged, pins passed, mutants killed. A PR that passes merges without
+   you, whatever its size.
+
+A refactor that finds it must change behaviour stops with a handoff and
+asks for a task. `gh pr list --label auto-refactor --state merged` lists
+what the routine landed.
 
 ## What `deliver` does, and when it stops
 
@@ -159,7 +187,7 @@ how often each role opens each rule, brief and manual. Change one thing in
 the pipeline at a time and compare the rows before and after.
 
 Weekly routines keep the suite and the reviews in shape: `harden-tests`,
-`audit-tests`, `garden-comments` and `calibrate-reviews`
+`audit-tests`, `garden-comments`, `calibrate-reviews` and `refactor`
 ([toolchain.md](agent-rules/toolchain.md) "Routines").
 
 ## `main` and releases
@@ -200,7 +228,7 @@ templates and the issue-state workflow and labels hold no fact about this
 project. To move them, copy those, then write the new project's
 `toolchain.md`, `always-in-scope.md` and its own rules, rewrite
 `worktree.sh` and `ensure-pnpm.sh` for its package manager, and change
-`tool-guard.mjs`'s list of checks and `fast-track.mjs`'s `HOLD_PATHS`.
+`tool-guard.mjs`'s list of checks and `surface-paths.mjs`'s `SURFACE_PATHS`.
 
 ## Where things live
 

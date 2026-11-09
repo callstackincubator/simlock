@@ -185,6 +185,11 @@ function view(
     /** why: a creation the capacity strategy refuses until the plan has shut a device down. */
     refuseProvisionUntilDown?: CapacityRefusalReason;
     unplanned?: readonly VirtualSpec[];
+    pressure?: {
+      step?: WarmPolicyView["pressure"]["step"];
+      mayShed?: boolean;
+      shedFailed?: readonly string[];
+    };
   } = {},
 ): WarmPolicyView {
   return {
@@ -217,6 +222,11 @@ function view(
     devices,
     handoffInFlight: options.handoffInFlight ?? false,
     resetDevices: new Set(options.reset ?? []),
+    pressure: {
+      mayShed: options.pressure?.mayShed ?? true,
+      shedFailed: new Set(options.pressure?.shedFailed ?? []),
+      step: options.pressure?.step ?? "none",
+    },
     isClaimed: (id) => options.claimed?.includes(id) ?? false,
     leases: (options.leased ?? devices.filter((item) => item.state === "leased")).map(leaseOn),
     now,
@@ -1739,7 +1749,7 @@ describe("warm pool policy", () => {
         target: wanted,
       });
 
-      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating, and counts a learned kind's leased, reclaiming and claimed devices as had", () => {
+      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating", () => {
         const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 1, now - 2 * minute)];
 
         const first = plan(view([], { learned, limit: 1, maxConcurrentBoots: 2 }));
@@ -1761,24 +1771,6 @@ describe("warm pool policy", () => {
           { action: "boot", deviceId: "shut", reason: "target", target: kind },
         ]);
 
-        const held = [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")];
-        expect(evaluate(view(held, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
-        const claimed = ofKind("claimed", "ready");
-        expect(
-          evaluate(view([claimed], { claimed: ["claimed"], learned: [learnedOf(kind, 1, now)] })),
-        ).toEqual([]);
-        const reclaiming = [
-          ofKind("a", "leased"),
-          ofKind("b", "leased"),
-          ofKind("c", "reclaiming"),
-        ];
-        expect(evaluate(view(reclaiming, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
-
-        const mixed = [ofKind("a", "leased"), ofKind("b", "ready")];
-        expect(
-          evaluate(view(mixed, { learned: [learnedOf(kind, 3, now)], maxConcurrentBoots: 3 })),
-        ).toEqual([provision(kind)]);
-
         const merged = plan(
           view([ofKind("a", "leased")], {
             learned: [learnedOf(kind, 2, now), learnedOf(older, 1, now - minute)],
@@ -1793,6 +1785,131 @@ describe("warm pool policy", () => {
           ["configured", 2, 1],
           ["learned", 1, 0],
         ]);
+      });
+
+      it("plans enough copies to keep max(peak - leased, 1) of a learned kind ready, counting copies on their way, for a plain kind and a baseline kind alike", () => {
+        const baselined = { ...kind, baseline: { name: "demo", version: 1 } };
+        const cases = [
+          ["peak 1, 1 leased", [ofKind("a", "leased")], 1, kind, [], [provision(kind)]],
+          ["peak 1, 1 reclaiming", [ofKind("a", "reclaiming")], 1, kind, [], [provision(kind)]],
+          [
+            "peak 1, 1 ready under a claim",
+            [ofKind("a", "ready")],
+            1,
+            kind,
+            ["a"],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 3 leased",
+            [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")],
+            3,
+            kind,
+            [],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 2 leased + 1 reclaiming",
+            [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "reclaiming")],
+            3,
+            kind,
+            [],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 1 leased + 1 ready",
+            [ofKind("a", "leased"), ofKind("b", "ready")],
+            3,
+            kind,
+            [],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 3 leased + 1 boot in flight",
+            [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")],
+            3,
+            kind,
+            [],
+            [],
+            [kind],
+          ],
+          [
+            "baseline kind, peak 1, 1 leased",
+            [ofKind("a", "leased", { spec: baselined })],
+            1,
+            baselined,
+            [],
+            [provision(baselined)],
+          ],
+          [
+            "baseline kind, peak 2, 2 copies of version 1 leased while version 2 is newest",
+            [
+              ofKind("a", "leased", { spec: baselined }),
+              ofKind("b", "leased", { spec: baselined }),
+            ],
+            2,
+            { ...kind, baseline: { name: "demo", version: 2 } },
+            [],
+            [provision({ ...kind, baseline: { name: "demo", version: 2 } })],
+          ],
+          [
+            "baseline kind, peak 2, 2 copies of version 1 on another model leased while version 2 is newest",
+            [
+              ofKind("a", "leased", { spec: { ...baselined, model: "iPhone 15" } }),
+              ofKind("b", "leased", { spec: { ...baselined, model: "iPhone 15" } }),
+            ],
+            2,
+            { ...kind, baseline: { name: "demo", version: 2 } },
+            [],
+            [provision({ ...kind, baseline: { name: "demo", version: 2 } })],
+          ],
+          [
+            "baseline kind, peak 2, 2 copies of version 1 on another platform leased while version 2 is newest",
+            [
+              ofKind("a", "leased", { spec: { ...baselined, platform: "android" } }),
+              ofKind("b", "leased", { spec: { ...baselined, platform: "android" } }),
+            ],
+            2,
+            { ...kind, baseline: { name: "demo", version: 2 } },
+            [],
+            [provision({ ...kind, baseline: { name: "demo", version: 2 } })],
+          ],
+        ] as const;
+
+        for (const [name, devices, peak, wanted, claimed, expected, inFlight = []] of cases) {
+          expect(
+            evaluate(
+              view(devices, {
+                claimed,
+                inFlight,
+                learned: [learnedOf(wanted, peak, now)],
+                maxConcurrentBoots: 3,
+              }),
+            ),
+            name,
+          ).toEqual(expected);
+        }
+      });
+
+      it("plans the larger of what the configured count and the learned count each lack for a kind both configured and learned", () => {
+        const cases = [
+          ["configured 1 + peak 2, 1 leased", 1, 2, 1],
+          ["configured 2 + peak 1, 1 leased", 2, 1, 2],
+          ["configured 1 + peak 3, 1 leased", 1, 3, 2],
+        ] as const;
+
+        for (const [name, configuredCount, peak, created] of cases) {
+          expect(
+            evaluate(
+              view([ofKind("a", "leased")], {
+                learned: [learnedOf(kind, peak, now)],
+                maxConcurrentBoots: 3,
+                targets: [{ count: configuredCount, spec: kind }],
+              }),
+            ),
+            name,
+          ).toEqual(Array.from({ length: created }, () => provision(kind)));
+        }
       });
 
       it("keeps a learned kind's never-leased device out of never-leased-idle while the kind wants it, and proposes one beyond its count after idle.shutdownAfterMs", () => {
@@ -1903,6 +2020,132 @@ describe("warm pool policy", () => {
           ),
         ).toEqual([{ ...displace, deviceId: "recent" }, provision(phone)]);
       });
+    });
+  });
+  describe("memory pressure", () => {
+    const kind = spec("iPhone 17");
+    const paused = { mayShed: false, step: "warming-paused" as const };
+    const waiter = (inFlight = false) => classDemand("full", "ios", inFlight, "iPhone 17");
+
+    it("at warming-paused starts nothing and reports every short target as memory-pressure, in place of any other reason", () => {
+      const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+      const shut = device("shut", "shutdown", { endedAgo: 20 * minute, spec: kind });
+      const cases = [
+        { name: "configured target", options: { targets: [{ count: 1, spec: kind }] } },
+        { name: "learned kind", options: { learned: [learnedOf(kind)] } },
+        {
+          name: "configured target also short for the reserve",
+          options: {
+            limits: { ios: 2 },
+            reserve: { ios: 1 },
+            targets: [{ count: 1, spec: kind }],
+          },
+          other: "reserve",
+          proposes: false,
+        },
+        {
+          name: "configured target also short for a boot that failed",
+          options: { blocked: [kind], targets: [{ count: 1, spec: kind }] },
+          other: "boot-failed",
+          proposes: false,
+        },
+        {
+          name: "creation for a queued request",
+          options: { maxConcurrentBoots: 3, waiting: [waiter(true), waiter(), waiter()] },
+        },
+        {
+          name: "boot of a shut-down device for a queued request",
+          devices: [busy, shut],
+          options: { waiting: [waiter()] },
+        },
+      ];
+
+      const refused = plan(
+        view([busy], { refuseProvision: "memory-pressure", targets: [{ count: 1, spec: kind }] }),
+      );
+      expect(refused.targets[0]?.short, "a capacity refusal for memory pressure").toBe(
+        "memory-pressure",
+      );
+
+      for (const { devices = [busy], name, options, other, proposes = true } of cases) {
+        const open = plan(view(devices, options));
+        const held = plan(view(devices, { ...options, pressure: paused }));
+        if (proposes)
+          expect(open.proposals, `${name} is proposed when memory is not short`).not.toEqual([]);
+        expect(held.proposals, name).toEqual([]);
+        expect(open.targets[0]?.short, name).toBe(other);
+        if (options.targets !== undefined || options.learned !== undefined)
+          expect(held.targets[0]?.short, name).toBe("memory-pressure");
+      }
+    });
+
+    it("sheds one idle device a reading: a device no configured target keeps first, then a kept one, least recently used first, never one a waiter would take, one the budget already shuts down or one whose shutdown just failed", () => {
+      const ofKind = (id: string, endedAgo: number) =>
+        device(id, "ready", { endedAgo, spec: kind });
+      const keptOldest = ofKind("kept", 90 * minute);
+      const extra = ofKind("extra", 40 * minute);
+      const olderOther = device("older", "ready", {
+        endedAgo: 60 * minute,
+        spec: spec("iPad Pro"),
+      });
+      const newerOther = device("newer", "ready", { endedAgo: 5 * minute, spec: spec("iPad Pro") });
+      const learnedOnly = device("learned", "ready", { endedAgo: 30 * minute });
+      const targets = [{ count: 1, spec: kind }];
+      const sheds = (
+        devices: readonly VirtualDevice[],
+        options: Parameters<typeof view>[1] = {},
+        pressure: NonNullable<NonNullable<Parameters<typeof view>[1]>["pressure"]> = {},
+      ): string[] =>
+        evaluate(
+          view(devices, { targets, ...options, pressure: { step: "warming-paused", ...pressure } }),
+        ).flatMap((proposal) =>
+          proposal.action === "shutdown" && proposal.reason === "memory-pressure"
+            ? [proposal.deviceId]
+            : [],
+        );
+
+      expect(sheds([keptOldest, newerOther, olderOther]), "unkept, least recently used").toEqual([
+        "older",
+      ]);
+      expect(sheds([keptOldest, extra]), "a copy past the configured count").toEqual(["extra"]);
+      expect(sheds([keptOldest]), "a kept device when nothing else is idle").toEqual(["kept"]);
+      expect(
+        sheds([learnedOnly, keptOldest], { learned: [learnedOf(learnedOnly.spec)] }),
+        "a learned kind keeps nothing",
+      ).toEqual(["learned"]);
+      expect(
+        sheds([keptOldest, extra], { spared: targets, targets: [] }),
+        "a spared target's device counts as kept",
+      ).toEqual(["extra"]);
+      expect(
+        sheds([keptOldest, olderOther, newerOther], {
+          waiting: [modelDemand("iPad Pro")],
+        }),
+        "a device a waiter would take",
+      ).toEqual(["kept"]);
+      expect(
+        sheds([keptOldest, olderOther, newerOther], { claimed: ["older"] }),
+        "a claimed device",
+      ).toEqual(["newer"]);
+      expect(
+        sheds([keptOldest, olderOther, newerOther], {}, { shedFailed: ["older"] }),
+        "a device whose shutdown just failed",
+      ).toEqual(["newer"]);
+      expect(sheds([keptOldest, olderOther], {}, { mayShed: false }), "no new reading").toEqual([]);
+      expect(sheds([keptOldest, olderOther], {}, { step: "none" }), "step none").toEqual([]);
+      expect(sheds([device("busy", "leased")]), "nothing idle").toEqual([]);
+
+      const overBudget = evaluate(
+        view([keptOldest, olderOther, newerOther], {
+          limit: 2,
+          pressure: { step: "warming-paused" },
+          targets: [],
+        }),
+      ).flatMap((proposal) => (proposal.action === "shutdown" ? [proposal.deviceId] : []));
+      expect(overBudget, "a device the budget shuts down is not shed again").toEqual([
+        "kept",
+        "older",
+      ]);
     });
   });
 });

@@ -1,25 +1,16 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -57,16 +48,17 @@ describe("lease.request requires, through a gateway", () => {
   async function startGateway() {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-requires-gateway-"));
     directories.push(directory);
-    const port = await freeLoopbackPort();
-    const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-      role: "gateway",
-      dataDirectory: directory,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      optionalModules: [agentDeviceModuleWith({})],
-      version: "1.0.0-e2e",
-    });
+    const { port, started: gateway } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        role: "gateway",
+        dataDirectory: directory,
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        optionalModules: [agentDeviceModuleWith({})],
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(gateway);
     return { gateway, port };
   }

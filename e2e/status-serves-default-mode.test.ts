@@ -11,7 +11,8 @@ interface StatusDevice {
 describe("status shows whether a device serves a request with no mode", () => {
   it("shows mode and servesDefaultMode for every device, true only for the pool the worker's default draws from", async () => {
     const env = await withDaemon({
-      configOverrides: { ios: { defaultMode: "slim" } },
+      // why: a leased learned kind keeps a spare ready copy (ADR 0069); the claim counts leased devices only.
+      configOverrides: { ios: { defaultMode: "slim" }, warmPool: { enabled: false } },
       driverScript: {
         ios: {
           availableOsVersions: ["26.0"],

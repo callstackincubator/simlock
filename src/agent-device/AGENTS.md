@@ -25,27 +25,27 @@ The two daemons:
 - A daemon's environment takes no `AGENT_DEVICE_*` key from the operator's shell. The phone daemon's also takes no simulator set and no driver lease key, and names the host's default adb server.
 - A platform that is off is hidden from both daemons by a sentinel, not left to agent-device's own discovery.
 - `AGENT_DEVICE_POLICY` (`shared/daemon-environment.ts`) keeps agent-device from booting or shutting down a device.
-- `RoutedHostLink` sends a physical allocate, and every later call for that lease, to the phone daemon, and everything else to the simulator daemon. It forgets a lease when it ends.
+- `RoutedHostLink` sends a physical allocate, and later calls forwarded for that lease, to the phone daemon, and everything else it forwards to the simulator daemon. It forgets a lease when it ends.
 - Each daemon has its own `ReleaseScopeRecord` and `AgentDeviceLeaseEnd`; for an ended lease only the one whose record holds its scope sends a release.
 
 Front:
 
 - The front serves the `agent` role only.
 - `checkRequest` (`front/request-rules.ts`) runs before anything is forwarded: no platform but iOS and Android, no device selector but the leased one, no device set or allowlist, `install` only from an upload, `devices` alone and not streamed.
-- `deviceExcept` becomes the lease's `except` in `stringFields` and is not forwarded to agent-device (`front/allocate.ts`).
 - A `devices` answer is cut to the token's leases before the CLI gets it.
-- The host sets the tenant to the requester's id and overwrites the client's.
+- The host sets the tenant and overwrites the client's. A call that names a lease gets a tenant made from the principal and the lease id (`shared/tenant.ts`), so each lease's sessions, uploads and artifacts are its own; a call that names none keeps the principal. A relayed call keeps the gateway's tenant, which names the lease already. On a worker, a non-RPC call whose lease header names a lease the token does not hold is refused 403.
 - A heartbeat is forwarded with `ttlMs` raised to the ceiling (`agentDeviceLeaseMaxTtlMs`), then renews the simlock lease, with `lease.renew` only when it moves the deadline. When agent-device says the lease is gone, the simlock lease is released and the reply is "ended by simlock".
 - On a gateway, a lease its `lease.list` omits is ended only when the index lost it (`HostLink.stillHeld`); a worker's list is final.
 - A release goes to agent-device first, then `lease.release`.
-- A command on a lease renews the simlock lease until its body ends (`Renewals`), never past `lease.maxTtlMs`.
+- A command on a lease that runs through `Renewals` renews the simlock lease until its body ends, never past `lease.maxTtlMs`; standalone `boot` checks liveness without renewing.
 - A reply naming `endedLeases` ends each simlock lease this token holds, as a release does: agent-device sends no release of its own for a lease it ended.
+- Standalone `boot` on a leased device is answered by the front; a batch containing `boot` is forwarded and agent-device's policy refuses the step.
 - `orientation` on an iOS phone or tablet simulator lease is Simlock's `device.rotate`, answered with agent-device's unconfirmed reply. Every other lease, and a batch step, forwards it.
 
 Lease end and stop:
 
-- `AgentDeviceLeaseEnd.leaseEnded` waits for a running allocate or release, then sends `agent_device.lease.release` with the recorded scope, under leasing's signal.
-- A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
+- `AgentDeviceLeaseEnd.leaseEnded` waits for a running allocate or release, then sends `agent_device.lease.release` with the recorded scope, under leasing's signal. It then removes that lease's folders under its daemon's `sessions` folder: agent-device removes none itself.
+- Each daemon start empties that daemon's `sessions` folder before agent-device runs: a restart ends every agent-device lease.
 
 Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)):
 
@@ -59,14 +59,13 @@ Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serve
 3. If the CLI hangs up while the request waits, the front cancels it (`lease.cancel`, retried until it is gone).
 4. On the grant the front forwards the allocate to agent-device with the granted device's address in place of the CLI's device selectors (a phone's address is its enrolled id). `RoutedHostLink` picks the daemon.
 5. agent-device refuses: the front releases the simlock lease. It accepts: the front keeps a map entry and relays the reply with the granted device added.
-6. Commands carry the lease id: the request rules check them, renewals run, `devices` is filtered.
-7. Release: agent-device first, then `lease.release`, which deletes the device; the lease end finds no scope left.
+6. Release: agent-device first, then `lease.release`, which deletes the device; the lease end finds no scope left.
 
 ## Flow: through a gateway
 
 1. The gateway's front runs the same rules; its link is `RelayHostLink`.
 2. The allocate's `lease.request` requires the `agent-device` capability, so the gateway places it on a worker whose capability is available.
-3. Every later call is relayed to the lease's worker with a tenant made from the gateway's instance id and the principal (`relayTenant`). A lease that is not the token's is refused with 403. Without a lease only `GET /health` is relayed, to the first undrained capable worker.
+3. Calls forwarded to the lease's worker carry a tenant made from the gateway's instance id, the principal and the lease id (`relayTenant`); standalone `boot` is answered by the gateway front instead. A relayed lease that is not the token's is refused with 403. Without a lease only `GET /health` is relayed, to the first undrained capable worker.
 4. Relayed calls drop the client's `x-agent-device-instance` and `x-agent-device-upstream-instance` pins: they name the daemon `/health` was read from, not the lease's.
 5. On the worker, `agentDeviceRelayTarget` hands the call to `RoutedHostLink` and the host, with the tenant as the requester. No front rules run on the worker.
 6. Worker unreachable: the call answers "try again". A command so answered ends its renewal reference without releasing the lease or ending the worker's work; the last reference ends with one final renewal attempt.
@@ -76,4 +75,4 @@ Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serve
 ## Known gaps
 
 - **A daemon restart loses agent-device leases.** The next heartbeat answers ended by simlock and the simlock lease is released. A call on a phone lease drops the client's instance pins too (`front/host-link.ts`), since they name the simulator daemon; so this holds for the phone daemon as well.
-- **Agents sharing a token share a tenant**, and see each other's sessions.
+- **Calls that name no lease share the token's tenant**: `session list` and an upload with no lease header see what every run of the token left under it.

@@ -11,6 +11,7 @@ Does: how many virtual devices may exist and run at once — limits, RAM budget,
 - Until its reservation is released, a device being booted counts `full` and no longer `shutdown`, so it holds RAM in every decision.
 - `ramBudget` reads devices only; reservations are left out.
 - Running slots ignore mode; RAM does not. A `quarantined` device holds a running slot. Physical devices are never read.
+- At `new-devices-paused` (the memory pressure port) every reservation that adds a device or RAM is refused `memory-pressure` before the strategy is asked, under every strategy; it evicts nothing. `canProvision` and `canBoot` stay the strategy's answer.
 - A boot refused for RAM evicts nothing; the request waits.
 - Over the RAM limit (sizes raised by a restart), every create and every boot that adds RAM is refused. Nothing is stopped or reclaimed for it.
 - Release is idempotent. Every take and release calls the observer.

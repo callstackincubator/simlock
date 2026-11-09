@@ -27,6 +27,7 @@ import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-
 import { heartbeat } from "./heartbeat.js";
 import type { LinkStatus } from "./host-link.js";
 import { releaseEndedLeases } from "./ended.js";
+import { answerBoot, checkBootLease, isBootCall } from "./boot.js";
 import { answerOrientation, isOrientationCall } from "./orientation.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
@@ -95,7 +96,7 @@ async function notRunning(
       (await anyUnreachable(context, identity, context.map.liveOf(identity.principal)))
     )
   ) {
-    return frontReply(notAvailable(status.reason), read);
+    return frontReply(notAvailable(status.reason, status.retriable), read);
   }
   return frontReply(workerUnreachable(), read);
 }
@@ -118,6 +119,8 @@ async function handleRpc(
   if (kind === "wrapped-lease") {
     return frontReply(refusal("refused: send lease calls as lease RPCs"), read);
   }
+  const refused = await checkBootLease(context, identity, read, kind, leaseOf(kind, read));
+  if (refused !== undefined) return refused;
   const checked = await checkRequest(context, identity, read, status.platforms, request);
   if (checked.kind === "refused") return frontReply(checked.reply, read);
   return routeCall(context, {
@@ -142,6 +145,7 @@ async function routeCall(
     });
     return untilHangUp(request.signal, work);
   }
+  if (isBootCall(kind, read)) return answerBoot(context, identity, read, leaseOf(kind, read));
   const forwarded = carry(request, read.text);
   if (kind === "heartbeat") {
     return heartbeat(context, { call: read, identity, leaseMaxTtlMs, request: forwarded });
@@ -320,6 +324,17 @@ function readLeaseHeader(request: Request): HeaderLease {
   };
 }
 
+// why: a gateway's link refuses another's lease itself; a worker's link takes any lease id, so the front's map says whose it is.
+function refuseForeignLease(
+  context: FrontContext,
+  identity: Identity,
+  leaseId: string,
+): Response | undefined {
+  if (context.link.stillHeld !== undefined) return undefined;
+  if (context.map.get(leaseId)?.identity.principal === identity.principal) return undefined;
+  return frontReply(refusal(`refused: lease ${leaseId} is not one of yours`, 403), undefined);
+}
+
 async function routeByHeader(
   context: FrontContext,
   request: Request,
@@ -329,8 +344,11 @@ async function routeByHeader(
   if ("refused" in read) return read.refused;
   const { leaseId } = read;
   if (leaseId === undefined) return passThrough(context, request, identity, undefined);
+  const foreign = refuseForeignLease(context, identity, leaseId);
+  if (foreign !== undefined) return foreign;
   const status = await context.link.status(leaseId, identity);
-  if (status.state === "unavailable") return frontReply(notAvailable(status.reason), undefined);
+  if (status.state === "unavailable")
+    return frontReply(notAvailable(status.reason, status.retriable), undefined);
   if (status.state === "unreachable") return frontReply(workerUnreachable(), undefined);
   const response = await passThrough(context, request, identity, undefined, leaseId);
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
@@ -354,7 +372,7 @@ async function handlePlain(
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
   const probe = request.method === "GET" && path === "/health";
   if (status.state === "unavailable" && !namesLease(context, request, probe)) {
-    const reply = notAvailable(status.reason);
+    const reply = notAvailable(status.reason, status.retriable);
     return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, undefined);
   }
   if (!isKnownRoute(request.method, path)) {
@@ -372,11 +390,13 @@ function adoptLeases(context: FrontContext, identity: Identity): void {
     if (context.map.get(lease.leaseId) !== undefined) continue;
     context.map.add(lease.leaseId, {
       address: lease.address,
+      bootTarget: lease.target,
       adopted: true,
       deadline: lease.ttlDeadline,
       identity,
       model: lease.model,
       platform: lease.platform,
+      ...(lease.physical === undefined ? {} : { physical: lease.physical }),
       target: lease.target,
       ttlMs: lease.ttlMs,
     });

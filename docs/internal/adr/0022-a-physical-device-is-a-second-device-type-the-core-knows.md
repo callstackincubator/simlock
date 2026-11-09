@@ -11,6 +11,9 @@
   catalog (§6). Amends [ADR
   0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) §1–2
   for physical devices (§7). Amends the agent rules listed in §12.
+- **Amended:** §2 on 2026-11-07, on the maintainer's decision (#1410): a
+  deleted record stays for `devices.deletedRetentionMs` (default 1 h), not
+  for good.
 - **Depends on:** ADR 0001, 0003, 0015, 0017, 0018, 0019.
 
 ## Context
@@ -98,7 +101,8 @@ stateDiagram-v2
 
 The virtual machine is unchanged. The physical one has no `provisioning`
 or `shutdown`. `deleted` on a physical record means unenrolled: the record
-stays, like every deleted record, and nothing on the device changed.
+stays for `devices.deletedRetentionMs`, like every deleted record, and
+nothing on the device changed.
 
 `device add` of an enrolled device re-records its apps and is allowed from
 `ready`, `absent` and `quarantined`; it ends in `ready` (from `absent` only

@@ -93,11 +93,13 @@ step 3 is the mode's own brief in `.agents/briefs/`:
 | `audit`        | `implement-audit.md`        | the spec and immutable PR diff          | fixes, PR body done                          |
 | `fix`          | `implement-fix.md`          | the branch and `fixes`                  | each finding fixed                           |
 | `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests  | those tests pass on the lane                 |
+| `refactor`     | `implement-refactor.md`     | a `refactor:ready` issue                | pins, refactor, pins deleted, draft PR       |
 
 **Order**, which the caller runs, a fresh agent per mode: `build`, again
 with the last `remaining` while a report lists `remaining` and built a
 cycle since the last; then `audit` with the PR's base, merge-base
-and head from `review-inputs.sh`. `fix` applies findings, `hardware-fix`
+and head from `review-inputs.sh`. A refactor issue (delivery rule 18)
+runs `refactor` alone in place of both. `fix` applies findings, `hardware-fix`
 failing slow-lane tests. An agent given `fixes` does them and skips the
 audit. Every caller stops at `spec needs` under `open`.
 
