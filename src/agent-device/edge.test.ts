@@ -2377,6 +2377,66 @@ describe("the agent-device front, through the whole worker daemon", () => {
     },
   );
 
+  it("while a re-allocate fails, the agent gets the retryable reply and the simlock lease stays listed, and a later heartbeat recovers", async () => {
+    const restoring = "the lease is being restored after an agent-device restart; try again";
+    const cases = [
+      [
+        "allocate answered `LEASE_ID_IN_USE`",
+        async (rig: Rig) => {
+          rig.fake.failNextAllocate({
+            code: "INVALID_ARGS",
+            details: { reason: "LEASE_ID_IN_USE" },
+            message: "lease id in use",
+          });
+          return heartbeat(rig, 1);
+        },
+        `${notAvailable}${restoring}`,
+      ],
+      [
+        "allocate unanswered for 10 s",
+        async (rig: Rig) => {
+          rig.fake.holdAllocate();
+          const pending = track(heartbeat(rig, 1));
+          await expect.poll(() => allocatesReceived(rig, 1)).toHaveLength(2);
+          await advance(rig, 9_000);
+          expect(pending.done()).toBe(false);
+          await advance(rig, 1_000);
+          const response = await pending.promise;
+          rig.fake.letAllocateGo();
+          return response;
+        },
+        `${notAvailable}${restoring}`,
+      ],
+      [
+        "agent-device still starting",
+        async (rig: Rig) => {
+          rig.fake.setUnavailable("starting", true);
+          const response = await heartbeat(rig, 1);
+          rig.fake.setUnavailable(undefined);
+          return response;
+        },
+        `${notAvailable}starting`,
+      ],
+    ] as const;
+    for (const [label, failing, message] of cases) {
+      const rig: Rig = await setUp();
+      await granted(rig, 1);
+      rig.fake.restart();
+      const before = allocatesReceived(rig, 1).length;
+
+      const answer = await envelopeOf(await failing(rig));
+
+      expect(answer.error).toMatchObject({ data: { retriable: true }, message });
+      if (label === "agent-device still starting") {
+        expect(allocatesReceived(rig, 1)).toHaveLength(before);
+      }
+      expect(await listed(rig)).toEqual([hex(1)]);
+      const recovered = await envelopeOf(await heartbeat(rig, 1));
+      expect(recovered.error).toBeUndefined();
+      expect(recovered.result).toMatchObject({ ok: true });
+    }
+  });
+
   it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {
     const first = await setUp();
     await granted(first, 1);
