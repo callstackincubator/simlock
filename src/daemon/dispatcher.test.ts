@@ -1288,6 +1288,53 @@ describe("Dispatcher: baseline.remove", () => {
   });
 });
 
+describe("Dispatcher: baseline.remove while a copy is reclaiming", () => {
+  it("refuses the remove with DEVICE_BUSY naming the reclaiming device, and removes the baseline once its reclaim ends", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      driverOptions: { latencyMs: { shutdown: 1_000 } },
+    });
+    const admin = session({ role: "admin" });
+    const operator = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: operator.lease.id, name: "checkout" },
+      admin,
+    );
+    const copy = await dispatcher.dispatch(
+      "lease.request",
+      { baseline: "checkout", platform: "ios" },
+      session(),
+    );
+    const stateOf = (): string | undefined =>
+      registry.snapshot.devices.find((device) => device.id === copy.device.id)?.state;
+    await dispatcher.dispatch("lease.release", { leaseId: copy.lease.id }, session());
+    await vi.waitFor(() => expect(stateOf()).toBe("reclaiming"));
+
+    const refusal = await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin).then(
+      () => undefined,
+      (rejected: unknown) => rejected,
+    );
+
+    expect(refusal).toMatchObject({
+      code: "DEVICE_BUSY",
+      details: { id: copy.device.id, reason: "reclaiming" },
+    });
+    await vi.waitFor(() => {
+      clock.advance(1_000);
+      expect(stateOf()).toBe("deleted");
+    });
+    expect(await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin)).toEqual({
+      deletedDevices: [],
+      name: "checkout",
+      versions: [1],
+    });
+  });
+});
+
 describe("Dispatcher: doctor baseline sources", () => {
   it("lists a baseline's source with its name and version, a ready baseline source no row names as an orphan only doctor --purge-orphans deletes, and finds a stale baseline", async () => {
     const { dispatcher, driver, eventBus, registry } = await buildDispatcher();
