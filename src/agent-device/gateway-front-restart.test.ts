@@ -19,6 +19,7 @@ import {
   wipes,
   first,
   leaveOutOfNextListing,
+  advance,
   restarted,
 } from "./test-gateway.js";
 
@@ -87,23 +88,33 @@ describe(
   "the agent-device front, through a gateway: a worker still starting",
   { timeout: 90_000 },
   () => {
-    it("through a gateway, a worker still starting, whose list leaves the lease out while the index holds it, gets the retryable reply and keeps the lease", async () => {
-      const rig = await setUp();
-      await granted(rig, 1);
-      const member = await restartedWorker(rig, first(rig));
-      const listing = leaveOutOfNextListing(rig.gateway, hex(1));
+    it.each([
+      ["inside the first grant's TTL", 0],
+      ["past the first grant's TTL, after two renewing heartbeats", 2],
+    ])(
+      "through a gateway, a worker still starting, whose list leaves the lease out while the index holds it, gets the retryable reply and keeps the lease, %s",
+      async (_case, renewals) => {
+        const rig = await setUp();
+        await granted(rig, 1);
+        for (let renewed = 0; renewed < renewals; renewed += 1) {
+          await advance(rig, 100_000);
+          expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+        }
+        const member = await restartedWorker(rig, first(rig));
+        const listing = leaveOutOfNextListing(rig.gateway, hex(1));
 
-      const answer = await envelopeOf(await heartbeat(rig, 1));
+        const answer = await envelopeOf(await heartbeat(rig, 1));
 
-      expect(listing.cut()).toBe(1);
-      expect(answer.error).toMatchObject({
-        data: { retriable: true },
-        message:
-          "agent-device is not available on this simlock: the lease is being restored after an agent-device restart; try again",
-      });
-      expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
-      expect(member.fake.leases.has(hex(1))).toBe(false);
-      expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
-    });
+        expect(listing.cut()).toBe(1);
+        expect(answer.error).toMatchObject({
+          data: { retriable: true },
+          message:
+            "agent-device is not available on this simlock: the lease is being restored after an agent-device restart; try again",
+        });
+        expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+        expect(member.fake.leases.has(hex(1))).toBe(false);
+        expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+      },
+    );
   },
 );

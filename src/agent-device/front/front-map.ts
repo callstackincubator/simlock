@@ -110,6 +110,11 @@ export class FrontMap {
     if (held !== undefined) held.ttlMs = ttlMs;
   }
 
+  setDeadline(leaseId: string, deadline: number): void {
+    const held = this.#held.get(leaseId);
+    if (held !== undefined) held.deadline = deadline;
+  }
+
   beginRelease(leaseId: string): void {
     const held = this.#held.get(leaseId);
     if (held !== undefined) held.releasing = true;
