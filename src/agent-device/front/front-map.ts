@@ -34,6 +34,7 @@ export interface HeldView extends DeviceFacts {
   readonly ttlMs: number;
   readonly endedAt?: number;
   readonly endedBy?: EndedBy;
+  readonly releasing?: boolean;
 }
 
 export interface ListedLease {

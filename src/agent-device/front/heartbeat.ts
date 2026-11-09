@@ -1,5 +1,5 @@
 import type { Identity } from "../../auth/index.js";
-import { failure, frontReply, leaseEndedByHost, refusal } from "../shared/replies.js";
+import { failure, frontReply, leaseEndedByHost, notAvailable, refusal } from "../shared/replies.js";
 import {
   leaseCallFields,
   leaseGoneReason,
@@ -25,6 +25,8 @@ import {
 import type { HeldView } from "./front-map.js";
 import { renewLease } from "./renewals.js";
 import { chosenTtl } from "./ttl.js";
+
+const RESTORING = "the lease is being restored after an agent-device restart; try again";
 
 type Call = RpcRead & { readonly kind: "request" };
 
@@ -101,16 +103,20 @@ async function renewHeld(
   return relay(reply);
 }
 
-// why: agent-device keeps its leases in memory, so after its restart the front allocates the lease again, on the device simlock still holds for it, before it answers the heartbeat.
-async function restoreLease(
+const RESTORE_TIMEOUT_MS = 10_000;
+
+type Restore =
+  | { readonly kind: "restored"; readonly reply: Exchange }
+  | { readonly kind: "ended" }
+  | { readonly kind: "retry" }
+  | { readonly kind: "relay"; readonly reply: Exchange };
+
+async function allocateAgain(
   context: FrontContext,
   { request, identity, call, leaseMaxTtlMs }: HeartbeatArguments,
-  entry: HeldView,
+  entry: HeldView & { readonly platform: "ios" | "android" },
   leaseId: string,
-): Promise<Response | undefined> {
-  if (entry.platform === undefined) return undefined;
-  const listed = await listLeases(context, identity);
-  if (!listed.some((lease) => lease.id === leaseId)) return undefined;
+): Promise<Exchange> {
   const params = {
     ...call.params,
     leaseId,
@@ -118,14 +124,69 @@ async function restoreLease(
     ...(entry.retainOnClose === true ? { retainOnClose: true } : {}),
     [addressField(entry.platform)]: entry.address,
   };
-  const allocated = await exchange(
+  const abort = new AbortController();
+  const timer = context.clock.setTimer(RESTORE_TIMEOUT_MS, () => abort.abort());
+  // why: a proxy that ignores the abort would leave the heartbeat waiting for its own five-minute default, so the bound is also a race.
+  const silent = new Promise<Exchange>((resolve) => {
+    abort.signal.addEventListener(
+      "abort",
+      () =>
+        resolve({
+          reading: { kind: "unusable" },
+          response: undefined,
+          text: undefined,
+          unreachable: RESTORING,
+        }),
+      { once: true },
+    );
+  });
+  try {
+    return await Promise.race([
+      exchange(
+        context,
+        leaseCall(request, "agent_device.lease.allocate", params, call.id, abort.signal),
+        identity,
+        "allocate",
+        leaseId,
+      ),
+      silent,
+    ]);
+  } finally {
+    context.clock.cancel(timer);
+  }
+}
+
+async function stillHeld(
+  context: FrontContext,
+  identity: Identity,
+  leaseId: string,
+): Promise<boolean | undefined> {
+  try {
+    return (await listLeases(context, identity)).some((lease) => lease.id === leaseId);
+  } catch {
+    return undefined;
+  }
+}
+
+// why: agent-device keeps its leases in memory, so after its restart the front allocates the lease again, on the device simlock still holds for it, before it answers the heartbeat.
+async function restoreLease(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Restore> {
+  const { request, identity, call, leaseMaxTtlMs } = arguments_;
+  if (entry.platform === undefined || entry.releasing === true) return { kind: "ended" };
+  const held = await stillHeld(context, identity, leaseId);
+  if (held === undefined) return { kind: "retry" };
+  if (!held) return { kind: "ended" };
+  const allocated = await allocateAgain(
     context,
-    leaseCall(request, "agent_device.lease.allocate", params, call.id),
-    identity,
-    "allocate",
+    arguments_,
+    { ...entry, platform: entry.platform },
     leaseId,
   );
-  if (allocated.reading.kind !== "success") return undefined;
+  if (allocated.reading.kind !== "success") return { kind: "retry" };
   const again = await exchange(
     context,
     forwardedHeartbeat(request, call, leaseMaxTtlMs),
@@ -133,8 +194,26 @@ async function restoreLease(
     undefined,
     leaseId,
   );
-  if (again.reading.kind !== "success") return undefined;
-  return renewHeld(context, call, entry, leaseId, again);
+  if (again.reading.kind === "success") return { kind: "restored", reply: again };
+  return leaseGoneReason(again.reading) === undefined
+    ? { kind: "relay", reply: again }
+    : { kind: "retry" };
+}
+
+async function restored(
+  context: FrontContext,
+  arguments_: HeartbeatArguments,
+  entry: HeldView,
+  leaseId: string,
+): Promise<Response> {
+  const { call, identity } = arguments_;
+  const outcome = await restoreLease(context, arguments_, entry, leaseId);
+  if (outcome.kind === "restored") {
+    return renewHeld(context, call, entry, leaseId, outcome.reply);
+  }
+  if (outcome.kind === "relay") return relay(outcome.reply);
+  if (outcome.kind === "retry") return frontReply(notAvailable(RESTORING), call);
+  return releaseOurs(context, identity, leaseId, call, true);
 }
 
 function ownEntry(context: FrontContext, leaseId: string, identity: Identity) {
@@ -191,8 +270,7 @@ export async function heartbeat(
   if (gone === undefined) return relay(reply);
   if (entry?.endedBy === "agent") return relay(reply);
   if (gone === "LEASE_NOT_FOUND" && entry !== undefined) {
-    const restored = await restoreLease(context, arguments_, entry, leaseId);
-    if (restored !== undefined) return restored;
+    return restored(context, arguments_, entry, leaseId);
   }
   if (entry === undefined && (await heldForAnother(context, identity, leaseId))) {
     return relay(reply);
