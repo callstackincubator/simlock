@@ -68,7 +68,7 @@ Capacity is how many simulators and emulators one machine may run and keep. By d
 
 The warm pool keeps some devices booted and unleased, so the next lease skips the boot wait. It is on by default.
 
-- Simlock remembers which kinds of device were leased in the last 24 hours, and keeps ready as many of each kind as were in use at the busiest moment.
+- Simlock remembers which kinds of device were leased in the last 24 hours, and keeps ready as many of each kind as were in use at the busiest moment. While copies of a kind are leased, it keeps the rest of that peak ready, at least one spare.
 - An operator can also name kinds of device to keep ready at all times.
 - The warm pool never downloads anything and never goes over capacity.
 

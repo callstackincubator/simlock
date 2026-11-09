@@ -12,7 +12,6 @@ import {
   NodeFilesystem,
   NoopLogger,
 } from "../ports/index.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
 import { start, runningDaemons } from "./test-main.js";
 
 afterEach(async () => {
@@ -30,20 +29,19 @@ const ios = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 // why: a real daemon with HTTP on, a real data folder, and a lease its token holds, so lease end reaches the lease-files participant through the same path production uses.
 async function rig() {
   const clock = new FakeClock(1_000);
-  const port = await freeLoopbackPort();
   const drivers = [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })];
   const started = await start({
     clock,
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
     drivers,
     filesystem: new NodeFilesystem(),
+    withHttp: true,
   });
   const { secret, token } = await started.daemon.dispatch(
     "token.create",
     { label: "holder", role: "agent" },
     admin,
   );
-  const origin = `http://127.0.0.1:${String(port)}`;
+  const origin = `http://127.0.0.1:${String(started.port)}`;
   const headers = { authorization: `Bearer ${secret}` };
   const holder = {
     manageEventSubscription: () => undefined,
@@ -139,13 +137,12 @@ describe("a lease's files at lease end", () => {
 
     await r.daemon.stop("test");
     runningDaemons.length = 0;
-    const port = await freeLoopbackPort();
     const again = await start({
       clock: r.clock,
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       dataDirectory: r.directory,
       drivers: r.drivers,
       filesystem: new NodeFilesystem(),
+      withHttp: true,
     });
 
     expect(again.daemon).toBeDefined();

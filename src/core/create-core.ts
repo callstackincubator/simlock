@@ -17,6 +17,7 @@ import type {
   WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
+  MemoryPressureReader,
   PassthroughResolver,
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -47,6 +48,8 @@ export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "health" | "id
 
 interface CoreOptions {
   readonly clock: Clock;
+  /** why: the worker's memory pressure step; absent when host load is off, so a reader sees no step. */
+  readonly memoryPressure?: MemoryPressureReader;
   /**
    * The daemon's one `ComponentInstaller`, built and closed by the composition root. Warm-pool
    * provisioning and startup convergence never install through it (safety rule 4); every device
@@ -112,6 +115,7 @@ class CorePortMissingError extends Error {
 }
 
 export interface Core {
+  readonly memoryPressure: MemoryPressureReader;
   readonly capacity: CapacityCoordinator;
   readonly capacityReader: CapacityReader;
   readonly warmPoolReader: WarmPoolReader;
@@ -159,8 +163,14 @@ export interface Core {
   dispose(): void;
 }
 
+const NO_MEMORY_PRESSURE: MemoryPressureReader = {
+  current: () => undefined,
+  onReading: () => () => undefined,
+};
+
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
+  const memoryPressure = options.memoryPressure ?? NO_MEMORY_PRESSURE;
   let ports: CorePorts | undefined;
   const port = <Name extends keyof CorePorts>(name: Name): CorePorts[Name] => {
     if (ports === undefined) throw new CorePortMissingError(name);
@@ -184,6 +194,7 @@ export function createCore(options: CoreOptions): Core {
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(options.config.capacity, options.systemStats),
     () => capacityObserver.changed(),
+    memoryPressure,
   );
   const devices = () => capacityDevices(registry.snapshot.virtualDevices);
   const capacityReader: CapacityReader = {
@@ -261,6 +272,8 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
+  // why: a waiting request is only planned again by an event; the step lifting is the one that frees it.
+  options.eventBus.subscribe("memory.pressure-changed", notifyAvailability);
   // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {
@@ -314,6 +327,7 @@ export function createCore(options: CoreOptions): Core {
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    memoryPressure,
     provisioner,
     registry,
     state: options.state,
@@ -391,6 +405,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
+    memoryPressure,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     baselines,

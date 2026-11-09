@@ -48,6 +48,7 @@ const present = (value: unknown): boolean => value !== undefined && value !== nu
 interface Plan {
   readonly leaseId: string;
   readonly platform: "ios" | "android";
+  readonly bootTarget: string;
   readonly model?: string;
   readonly baseline?: string;
   readonly class?: "phone" | "tv" | "desktop";
@@ -76,7 +77,6 @@ function notPlain(params: Record<string, unknown>): boolean {
   const provider = params["leaseProvider"];
   return (
     foreignBackend(params) ||
-    params["retainOnClose"] === true ||
     (present(provider) && provider !== "proxy") ||
     Object.entries(params).some(
       ([key, value]) => present(value) && (key.startsWith("provider") || key.startsWith("aws")),
@@ -115,7 +115,10 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
 
 function holderReply(holder: Awaited<ReturnType<FrontContext["link"]["status"]>>): FrontReply {
   if (holder.state === "unreachable") return workerUnreachable();
-  return notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING);
+  return notAvailable(
+    holder.state === "unavailable" ? holder.reason : NO_CEILING,
+    holder.state === "unavailable" && holder.retriable,
+  );
 }
 
 function stringFields(fields: ReturnType<typeof leaseCallFields>) {
@@ -143,6 +146,7 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
+    bootTarget: typeof fields.target === "string" ? fields.target : "mobile",
     ...chosenDevice(fields),
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
@@ -188,7 +192,7 @@ function requiresOf(context: FrontContext): { readonly requires?: string[] } {
 }
 
 function leaseInput(context: FrontContext, plan: Plan) {
-  const { leaseId, platform, ...constraints } = plan;
+  const { leaseId, platform, bootTarget: _bootTarget, ...constraints } = plan;
   return {
     ...constraints,
     leaseId,
@@ -261,7 +265,14 @@ async function requestLease(
       reply:
         mapped.code === "QUEUE_TIMEOUT"
           ? failure("timed out waiting for a device; nothing was leased", 504)
-          : refusal(`refused by simlock: ${mapped.message}`),
+          : {
+              ...refusal(`refused by simlock: ${mapped.message}`),
+              ...(mapped.code === "WORKER_UNREACHABLE"
+                ? { details: { reason: "WORKER_UNREACHABLE" }, retriable: true }
+                : ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_CONNECTION_LOST"].includes(mapped.code)
+                  ? { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true }
+                  : {}),
+            },
     };
   } finally {
     settled = true;
@@ -367,6 +378,7 @@ async function keepOrRelease(
   if (!request.signal.aborted) {
     context.map.add(plan.leaseId, {
       address,
+      bootTarget: plan.bootTarget,
       deadline: grant.lease.ttlDeadline,
       identity,
       model: grant.device.spec.model,
@@ -418,6 +430,9 @@ function withGrantedDevice<T extends { text: string | undefined }>(
   const lease = asRecord(asRecord(asRecord(body["result"])?.["data"])?.["lease"]);
   if (lease === undefined) return reply;
   lease["device"] = {
+    [addressField(device.spec.platform)]: device.spec.physical
+      ? device.driverDeviceId
+      : device.address,
     model: device.spec.model,
     osVersion: device.spec.osVersion,
     physical: device.spec.physical,

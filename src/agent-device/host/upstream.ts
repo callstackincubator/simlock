@@ -8,7 +8,7 @@ export type AgentDeviceUpstreamState =
       readonly generation: number;
       readonly leaseMaxTtlMs: number;
     }
-  | { readonly state: "unavailable"; readonly reason: string };
+  | { readonly state: "unavailable"; readonly reason: string; readonly retriable: boolean };
 
 export interface AgentDeviceUpstream {
   current(): AgentDeviceUpstreamState;
@@ -30,9 +30,17 @@ export class SupervisorAgentDeviceUpstream implements AgentDeviceUpstream {
           token: availability.token,
         };
       case "unavailable":
-        return { reason: availability.message, state: "unavailable" };
+        return {
+          reason: availability.message,
+          retriable: availability.reason === "start-failed",
+          state: "unavailable",
+        };
       default:
-        return { reason: availability.state === "off" ? "off" : "starting", state: "unavailable" };
+        return {
+          reason: availability.state === "off" ? "off" : "starting",
+          retriable: availability.state !== "off",
+          state: "unavailable",
+        };
     }
   }
 

@@ -25,7 +25,7 @@ Lock, claims and commits:
 
 Devices:
 
-- The state machine is `transition` in `domain.ts`. `markDeviceMissing` writes `deleted` from any state of a device with no lease. `deleted` records stay in `state.db`.
+- The state machine is `transition` in `domain.ts`. `markDeviceMissing` writes `deleted` from any state of a device with no lease. A `deleted` record stays in `state.db` and `status.get` for `devices.deletedRetentionMs`, counted from `deletedAt`, then the registry drops it in a commit with no event; a row already `deleted` at the first start after the upgrade gets that start's time.
 - Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in.
 - Nothing in core acts on a leased device, except `recoverLeased`, under the lease: it reboots with no commit and no event.
 - Grant paths select by exact state. `mayBeGranted` refuses every virtual device that has ended a lease, whatever its `leaseIdentity` (ADR 0061 §2).

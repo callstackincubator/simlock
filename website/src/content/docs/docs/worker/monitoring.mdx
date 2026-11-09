@@ -44,6 +44,7 @@ What each line means:
 | `Console` | The web console's address. Shown only when HTTP is on. |
 | `Host` | The operating system, the CPU architecture, and the Xcode version the iOS tools report. |
 | `Load` | CPU, memory, swap and free disk, and how many seconds ago they were read. A part that could not be read says `unavailable`. |
+| `Memory pressure` | Shown only while the worker has paused warming or new devices because the host is short of memory: the step, when it began (local time) and why, either `pressure warn` or the available memory against its floor. See `memoryPressure.*` in the [configuration reference](/simlock/docs/reference/configuration). |
 | `History` | Shown only when something is wrong with the event history. See [Troubleshooting](/simlock/docs/worker/troubleshooting#the-event-history-is-not-written). |
 | `Running global` | Devices running now, plus slots held for devices that are booting, out of the most that may run at once, and how many of the running ones are warm. |
 | `Capacity ios` / `Capacity android` | Per platform: `managed` is devices that exist out of the device limit; `running` is as above. `(over limit)` means more devices exist than the limit allows, for example after you lowered it. `(at RAM budget)` means no more devices fit in the memory set aside for them. |
@@ -72,7 +73,7 @@ simlock list --requests
 Request req_3c8e1f52-9a4d-4b7e-8f20-6d1a5c9e3b74: codex:7a1d4e9b-2c3f-4e8a-b6d0-1f5c8a3e9d27, ios iPhone 16 18.4, queued at 1, waiting 42s — full: running limit for iOS
 ```
 
-Each waiting request shows who asked, the device it asked for, its place in the queue and the reason it waits: `full: device limit`, `full: running limit`, `full: running limit for iOS`, `full: RAM budget`, `behind an earlier request`, `a matching device is starting`, or `every matching device is leased or absent` for a physical device.
+Each waiting request shows who asked, the device it asked for, its place in the queue and the reason it waits: `full: device limit`, `full: running limit`, `full: running limit for iOS`, `full: RAM budget`, `full: host memory pressure`, `behind an earlier request`, `a matching device is starting`, or `every matching device is leased or absent` for a physical device.
 
 ## Read the event stream
 

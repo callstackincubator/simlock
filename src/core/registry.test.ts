@@ -223,6 +223,64 @@ describe("Registry", () => {
     }
   });
 
+  it("a state.db at registry version 4 with deleted rows migrates, keeps them for one retention period after the first start, then drops them", async () => {
+    const MINUTE = 60_000;
+    const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
+    try {
+      // why: created_at 5 is two hours old at the first start, so a stamp taken from it would drop the rows at once.
+      const clock = new FakeClock(120 * MINUTE);
+      const deviceData = new Map<Platform, DeviceDataTable>([
+        ["android", fakeDeviceDataTable],
+        ["ios", fakeDeviceDataTable],
+      ]);
+      const openState = (owner: typeof registryOwner) =>
+        openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [owner, fakeDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+      const loadRegistry = async () => {
+        const state = await openState(registryOwner);
+        const registry = await Registry.load({
+          clock,
+          deviceData,
+          eventBus: new EventBus(clock),
+          idGenerator: { generate: () => "id" },
+          state,
+        });
+        const ids = registry.snapshot.devices.map((device) => device.id);
+        state.close();
+        return ids;
+      };
+      const old = await openState({
+        ...registryOwner,
+        migrations: registryOwner.migrations.slice(0, 4),
+        version: 4,
+      });
+      for (const id of ["dev_gone_1", "dev_gone_2"]) {
+        old.database
+          .prepare(
+            "INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version, mode, created_at) VALUES (?, 'ios', 0, ?, 'deleted', 'iPhone 16', '18.0', 'full', 5)",
+          )
+          .run(id, `drv-${id}`);
+        fakeDeviceDataTable.write(old.database, id, { fakeDeviceId: id });
+      }
+      old.close();
+
+      expect(await loadRegistry()).toEqual(["dev_gone_1", "dev_gone_2"]);
+      clock.advance(59 * MINUTE);
+      expect(await loadRegistry()).toEqual(["dev_gone_1", "dev_gone_2"]);
+      clock.advance(2 * MINUTE);
+      expect(await loadRegistry()).toEqual([]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("a registry restarted on the same state.db returns every record as committed, optional fields set and absent", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
     try {
@@ -1314,6 +1372,7 @@ describe("Registry", () => {
     expect(viaLease).toEqual({
       physical: false,
       createdAt: 1_000,
+      deletedAt: 1_000,
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       id: "dev_test",

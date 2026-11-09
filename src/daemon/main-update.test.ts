@@ -27,7 +27,7 @@ import {
   stopDaemons,
   temporaryDirectories,
 } from "./test-main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -44,22 +44,26 @@ describe("startDaemon version check", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const sink = new MemoryLogSink();
-    const daemon = await startDaemon({
-      clock,
-      // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
-      configOverrides:
-        overrides.role === "gateway"
-          ? { http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() } }
-          : STANDALONE_OFF,
-      dataDirectory: directory,
-      drivers: [],
-      filesystem: new MemoryFilesystem(),
-      hostLoadProbe: null,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
-      npm,
-      version: "0.3.0",
-      ...overrides,
-    } as StartDaemonOptions);
+    const { started: daemon } = await startOnFreePort((port) =>
+      startDaemon({
+        clock,
+        dataDirectory: directory,
+        drivers: [],
+        filesystem: new MemoryFilesystem(),
+        hostLoadProbe: null,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+        npm,
+        version: "0.3.0",
+        ...overrides,
+        // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+        configOverrides: {
+          ...(overrides.role === "gateway"
+            ? { http: { enabled: true, host: "127.0.0.1", port } }
+            : STANDALONE_OFF),
+          ...overrides.configOverrides,
+        },
+      } as StartDaemonOptions),
+    );
     runningDaemons.push(daemon);
     return { clock, daemon, sink };
   }
@@ -352,28 +356,34 @@ describe("startDaemon version check", () => {
     await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
   });
 
-  it("a gateway started by test-main's start helper and by this file's startChecked starts while 127.0.0.1:4700 is taken", async () => {
-    // why: 4700 is a gateway's default port; a gateway running on the host holds it already.
-    const holder = createServer();
-    const held = await new Promise<boolean>((resolve, reject) => {
-      holder.once("error", (error: NodeJS.ErrnoException) =>
-        error.code === "EADDRINUSE" ? resolve(false) : reject(error),
-      );
-      holder.listen(4700, "127.0.0.1", () => resolve(true));
-    });
-    try {
-      const outcomes = await Promise.allSettled([
-        start({ role: "gateway" }),
-        startChecked(new FakeNpmCli(), { role: "gateway" }),
-      ]);
+  it("the test start helpers start gateways while port 4700 is taken and workers with update overrides while port 4701 is taken", async () => {
+    for (const port of [4700, 4701]) {
+      // why: the default port may already belong to a daemon on the host; either listener supplies the occupied-port fixture.
+      const holder = createServer();
+      const held = await new Promise<boolean>((resolve, reject) => {
+        holder.once("error", (error: NodeJS.ErrnoException) =>
+          error.code === "EADDRINUSE" ? resolve(false) : reject(error),
+        );
+        holder.listen(port, "127.0.0.1", () => resolve(true));
+      });
+      try {
+        const outcomes = await Promise.allSettled(
+          port === 4700
+            ? [start({ role: "gateway" }), startChecked(new FakeNpmCli(), { role: "gateway" })]
+            : [
+                start({ configOverrides: { update: { check: false } } }),
+                startChecked(new FakeNpmCli(), { configOverrides: { update: { check: false } } }),
+              ],
+        );
 
-      expect(
-        outcomes.map((outcome) =>
-          outcome.status === "fulfilled" ? "started" : String(outcome.reason),
-        ),
-      ).toEqual(["started", "started"]);
-    } finally {
-      if (held) await new Promise<void>((resolve) => holder.close(() => resolve()));
+        expect(
+          outcomes.map((outcome) =>
+            outcome.status === "fulfilled" ? "started" : String(outcome.reason),
+          ),
+        ).toEqual(["started", "started"]);
+      } finally {
+        if (held) await new Promise<void>((resolve) => holder.close(() => resolve()));
+      }
     }
   });
 });
@@ -395,24 +405,24 @@ describe("startDaemon gateway update", () => {
     const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-update-")));
     if (given === undefined) temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
-    const daemon = await startDaemon({
-      clock,
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-      },
-      dataDirectory: directory,
-      drivers: [],
-      filesystem,
-      hostLoadProbe: null,
-      logger: new NoopLogger(),
-      npm: new FakeNpmCli({
-        globalRoot: [{ ok: true, output: "/opt" }],
-        view: [{ ok: true, output: "0.4.0" }],
-      }),
-      role: "gateway",
-      updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
-      version: "0.3.0",
-    } as StartDaemonOptions);
+    const { started: daemon } = await startOnFreePort((port) =>
+      startDaemon({
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [],
+        filesystem,
+        hostLoadProbe: null,
+        logger: new NoopLogger(),
+        npm: new FakeNpmCli({
+          globalRoot: [{ ok: true, output: "/opt" }],
+          view: [{ ok: true, output: "0.4.0" }],
+        }),
+        role: "gateway",
+        updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+        version: "0.3.0",
+      } as StartDaemonOptions),
+    );
     runningDaemons.push(daemon);
     return { daemon, directory, filesystem };
   }

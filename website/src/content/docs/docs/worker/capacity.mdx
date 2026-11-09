@@ -50,6 +50,8 @@ When a lease needs a device, Simlock tries these in order:
 5. At the running limit, shut down an idle device to make room.
 6. Otherwise, wait in the queue until a device frees up. With `--no-wait`, the request fails at once with `NO_CAPACITY`.
 
+When the host is short of memory enough to pause new devices, steps 2 and 3 are skipped and so is rebooting a ready device for an `--except` lease or a default-set iOS simulator: the request waits for pressure to lift, or returns `NO_CAPACITY` when it cannot wait. Other fitting ready devices can still be handed over, and nothing is shut down for the wait.
+
 A leased device is never shut down or deleted to make room. When RAM is the only thing in the way, Simlock shuts nothing down for it; the request waits until RAM frees up, for example when an idle device shuts down on its own.
 
 Each simulator or emulator serves one lease and is deleted when that lease ends. The first lease of an iOS model and version takes longer; later ones of the same kind start faster.
@@ -153,7 +155,7 @@ A device counts at the full size until it has booted and been checked as slim. S
 
 The warm pool keeps idle devices booted, so a lease starts without waiting for a boot. It is on by default and needs no setup: it learns from your leases.
 
-- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode), it keeps as many booted as were leased at the same time at the busiest moment of the last 24 hours, at least one. What it learned survives a daemon restart.
+- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode), it keeps ready as many as were leased at the same time at the busiest moment of the last 24 hours (its peak) while none is leased. While some of its copies are leased, it keeps the peak less those leased ready, at least one spare. What it learned survives a daemon restart.
 - **A baseline is learned on its Nth lease within 24 hours.** N is `warmPool.baselineLearnAfter` (3 by default). Until then a lease of it leaves nothing booted. Once learned, it stays learned and is kept warm like any other kind, as the baseline's newest version: if you save a version from another model, the next pass warms that model.
 - **You can add targets.** `warmPool.targets` names devices to keep booted before anyone asks:
 
@@ -176,6 +178,7 @@ What the warm pool does and does not do:
 - Your targets come first. To fill a target, it may shut down an idle device that only a learned kind keeps.
 - It never downloads a runtime or system image. A target whose runtime is missing stays short.
 - A booted device that nobody leases and nothing keeps warm is shut down after `idle.shutdownAfterMs` (10 minutes). See [Cleanup](/simlock/docs/worker/cleanup).
+- When host memory pressure pauses warming, it starts nothing, a target left short reports `memory-pressure`, and each new memory reading it shuts down one idle device. It fills its targets again when the pause lifts.
 - A target that fails to boot is tried again after 1, 2, 4 and so on minutes, at most 10 minutes apart.
 
 | Key | Meaning | Default |
@@ -224,5 +227,6 @@ warm pool: enabled, reserve ios 1 android 0
 | `device-limit` | The platform is at its device limit. |
 | `reserve` | The slot is held back by `warmPool.reserveRunning`. |
 | `ram-budget` | The device would not fit in the RAM budget. |
+| `memory-pressure` | The host is short of memory and warming is paused (`memoryPressure.*`). |
 
 A line that is filling, or waiting behind a queued lease, shows no reason. `simlock doctor` warns when your targets add up to more devices than the running limit allows.

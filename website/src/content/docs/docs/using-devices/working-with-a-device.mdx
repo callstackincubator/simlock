@@ -11,6 +11,8 @@ You need these wrappers because Simlock keeps its devices apart from your own, s
 
 The exception: when an admin sets `drivers.ios.deviceSet` to `default`, iOS simulators live alongside your own simulators in Xcode, and a plain `xcrun simctl` sees them. Android is the same under either setting. To build your own app for the device, see [Build and run your app](/simlock/docs/using-devices/build-and-run).
 
+For Simlock-managed iOS simulators in Xcode's default device set, Simlock disables DeviceHub's automatic Mac clipboard sync before a lease is granted. A warm simulator is restarted before its next lease, and a lease is refused if the setting cannot be applied. Simlock removes that simulator's DeviceHub preference after deleting it; a cleanup failure is logged. Leases already active when Simlock is upgraded are not interrupted and can continue syncing until a later boot or the lease ends.
+
 ## Find your device in the grant
 
 Take these from the grant line `simlock lease` prints (see [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle#get-a-device-and-keep-it)):

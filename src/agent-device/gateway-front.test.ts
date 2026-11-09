@@ -1,9 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -142,15 +142,6 @@ interface SetUpOptions {
   readonly workers?: readonly WorkerSpec[];
 }
 
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -199,7 +190,6 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     [principals.two, secrets.two, "agent"],
     ["tok_operator", secrets.operator, "operator"],
   ]);
-  const port = await freeLoopbackPort();
   const logs = new MemoryLogSink();
   let relay: GatewayRelay | undefined;
   let uplinks: WebSocketUplinkListenerFactory | undefined;
@@ -208,7 +198,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     ...(options.command === undefined ? {} : { command: options.command }),
     ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
   };
-  const startGateway = async (): Promise<DaemonServer> => {
+  const startGateway = async (port: number): Promise<DaemonServer> => {
     const started = await startDaemon({
       clock,
       configOverrides: {
@@ -237,7 +227,8 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     runningDaemons.push(started);
     return started;
   };
-  let gateway = await startGateway();
+  const { port, started: firstGateway } = await startOnFreePort(startGateway);
+  let gateway = firstGateway;
   const members: Member[] = [];
   // fallow-ignore-next-line complexity -- one worker daemon with its own token, directory, fake agent-device and optional direct port.
   const addWorker = async (spec: WorkerSpec, existing?: Member): Promise<Member> => {
@@ -256,36 +247,45 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const workerClock =
       spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs);
     const driver = driverFor(spec, workerClock, latency);
-    let directPort: number | undefined;
     if (spec.direct === true) {
-      directPort = await freeLoopbackPort();
       await seedTokensDatabase(workerDirectory, [[principals.one, secrets.direct, "agent"]]);
     }
-    const started = startDaemon({
-      clock: workerClock,
-      configOverrides: {
-        capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
-        capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
-        ...(directPort === undefined
-          ? { gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${String(port)}` } }
-          : { http: { enabled: true, host: "127.0.0.1", port: directPort } }),
-        lease: { defaultTtlMs, maxTtlMs: workerMaxTtlMs },
-      },
-      dataDirectory: workerDirectory,
-      deviceDataTables: fakeDeviceDataTables,
-      drivers: [driver],
-      filesystem: workerFilesystem,
-      logger: new JsonLinesLogger({
+    const launch = (directPort: number | undefined) =>
+      startDaemon({
         clock: workerClock,
-        level: "debug",
-        sink: new MemoryLogSink(),
-      }),
-      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
-      version: "1.2.3",
-    } as StartDaemonOptions).then((daemon) => {
-      runningDaemons.push(daemon);
-      return daemon;
-    });
+        configOverrides: {
+          capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
+          capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
+          ...(directPort === undefined
+            ? {
+                gateway: {
+                  label: spec.label,
+                  token: secret,
+                  url: `ws://127.0.0.1:${String(port)}`,
+                },
+              }
+            : { http: { enabled: true, host: "127.0.0.1", port: directPort } }),
+          lease: { defaultTtlMs, maxTtlMs: workerMaxTtlMs },
+        },
+        dataDirectory: workerDirectory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [driver],
+        filesystem: workerFilesystem,
+        logger: new JsonLinesLogger({
+          clock: workerClock,
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
+        optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
+        version: "1.2.3",
+      } as StartDaemonOptions).then((daemon) => {
+        runningDaemons.push(daemon);
+        return daemon;
+      });
+    // why: a direct worker binds a port picked a moment before, so a start that lost it runs again on another.
+    const direct = spec.direct === true ? await startOnFreePort(launch) : undefined;
+    const directPort = direct?.port;
+    const started = direct === undefined ? launch(undefined) : Promise.resolve(direct.started);
     const member: Member = {
       clock: workerClock,
       daemon: started,
@@ -320,7 +320,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     restart: async () => {
       await gateway.stop("test");
       runningDaemons.splice(runningDaemons.indexOf(gateway), 1);
-      gateway = await startGateway();
+      gateway = await startGateway(port);
     },
     get uplinks() {
       if (uplinks === undefined) throw new Error("the gateway never handed over its uplinks");
@@ -542,12 +542,12 @@ async function deadlineOf(member: Member, n: number): Promise<number | undefined
     ?.ttlDeadline;
 }
 
-// why: the worker's lease requester is `gw:<gateway instance id>:<CLI lease id>`, which is where the gateway's instance id is read from; the tenant spells it with dots and writes each `_` of the principal as `_5f_`.
+// why: the worker's lease requester is `gw:<gateway instance id>:<CLI lease id>`, which is where the gateway's instance id is read from; the tenant spells it with dots and writes each `_` of the principal as `_5f_`, then the lease id.
 async function tenantOf(member: Member, n: number, principal: string = principals.one) {
   const lease = await workerLeaseFor(member, n);
   const prefix = lease.requesterId.slice(0, -(hex(n).length + 1));
   expect(prefix).toMatch(/^gw:[^:]+$/);
-  return `gw.${prefix.slice("gw:".length)}.${principal.replaceAll("_", "_5f_")}`;
+  return `gw.${prefix.slice("gw:".length)}.${principal.replaceAll("_", "_5f_")}.${hex(n)}`;
 }
 
 async function grantedDevice(member: Member) {
@@ -594,6 +594,7 @@ function expectEndedBySimlock(answer: Envelope): void {
       code: "UNAUTHORIZED",
       details: { reason: "LEASE_ENDED_BY_HOST" },
       message: endedMessage,
+      retriable: false,
     },
   });
 }
@@ -752,9 +753,14 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const refused = await allocate(rig, 2);
 
     expect(refused.status).toBe(400);
-    expect((await envelopeOf(refused)).error?.message).toBe(
+    const refusalAnswer = await envelopeOf(refused);
+    expect(refusalAnswer.error?.message).toBe(
       "refused by simlock: No worker in the fleet can currently serve this request",
     );
+    expect(refusalAnswer.error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_UNAVAILABLE" },
+      retriable: true,
+    });
     const before = member.fake.rpcRequests("agent_device.command").length;
     const held = await envelopeOf(await command(rig, "snapshot", 1));
     expect(held.result).toMatchObject({ command: "snapshot", ok: true });
@@ -891,6 +897,12 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["the phone"]);
 
     await restarted(rig, member, 1);
+    const beforeBoot = reached();
+    expect((await envelopeOf(await command(rig, "boot", 1))).result).toMatchObject({
+      ok: true,
+      data: { id: phoneSerial, kind: "device" },
+    });
+    expect(reached()).toBe(beforeBoot);
     expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
     expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
     expect(reached()).toBe(3);
@@ -974,7 +986,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(labels).toEqual(Array.from({ length: 5 }, () => "capable"));
   });
 
-  it("the allocate the worker's agent-device daemon receives names the granted device, carries `ttlMs` equal to that worker's ceiling, and has tenant `gw.<gateway instance id>.<principal>`", async () => {
+  it("the allocate the worker's agent-device daemon receives names the granted device, carries `ttlMs` equal to that worker's ceiling, and has tenant `gw.<gateway instance id>.<principal>.<lease id>`", async () => {
     const rig = await setUp();
     const member = first(rig);
 
@@ -994,7 +1006,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const answer = await allocate(rig, 1);
 
     expect(answer.status).toBe(503);
-    expect((await envelopeOf(answer)).error?.message).toBe(`${notAvailable}${noWorker}`);
+    expect((await envelopeOf(answer)).error).toMatchObject({
+      message: `${notAvailable}${noWorker}`,
+      data: { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true },
+    });
     expect(await fleetLeases(rig)).toEqual([]);
     expect(await workerLeases(member)).toEqual([]);
     expect(member.fake.requests).toEqual([]);
@@ -1037,7 +1052,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const answer = await envelopeOf(await allocate(rig, 1));
 
-    expect(answer.error?.message).toBe(`${notAvailable}${holderCannot}`);
+    expect(answer.error).toMatchObject({
+      message: `${notAvailable}${holderCannot}`,
+      data: { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true },
+    });
     await expect.poll(async () => (await workerLeases(member)).length).toBe(0);
     expect(await fleetLeases(rig)).toEqual([]);
     expect(allocatesReceived(member)).toEqual([]);
@@ -1204,7 +1222,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
   });
 
-  it("after `simlock release --all` on the gateway, the worker's agent-device lease is released before the wipe, and the next heartbeat reaches that worker and answers `LEASE_ENDED_BY_HOST`", async () => {
+  it("after gateway release or expiry, boot is refused locally; release reaches agent-device before the wipe and heartbeat answers `LEASE_ENDED_BY_HOST`", async () => {
     const rig = await setUp();
     const member = first(rig);
     const wipesAtRelease: number[] = [];
@@ -1223,6 +1241,32 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
 
     expect(heartbeatsReceived(member)).toBe(received + 1);
+
+    const bootRig = await setUp();
+    const bootMember = first(bootRig);
+    await granted(bootRig, 1);
+    await listedByGateway(bootRig, 1);
+    expect((await envelopeOf(await command(bootRig, "boot", 1))).result).toMatchObject({
+      ok: true,
+    });
+    await bootRig.gateway.dispatch("lease.release-all", {}, adminSession);
+    const commands = bootMember.fake.rpcRequests("agent_device.command").length;
+    expectEndedBySimlock(await envelopeOf(await command(bootRig, "boot", 1)));
+    expect(bootMember.fake.rpcRequests("agent_device.command")).toHaveLength(commands);
+
+    await granted(bootRig, 2, { ttlMs: 5_000 });
+    await listedByGateway(bootRig, 1);
+    const address = (await grantedDevice(bootMember)).address;
+    expect((await envelopeOf(await command(bootRig, "boot", 2))).result).toMatchObject({
+      ok: true,
+    });
+    await advance(bootRig, 6_000, 1_000);
+    await expect.poll(() => fleetLeases(bootRig)).toEqual([]);
+    const afterExpiry = bootMember.fake.rpcRequests("agent_device.command").length;
+    expectEndedBySimlock(
+      await envelopeOf(await command(bootRig, "boot", 2, {}, { flags: { udid: address } })),
+    );
+    expect(bootMember.fake.rpcRequests("agent_device.command")).toHaveLength(afterExpiry);
   });
 
   it("a command with no device selector naming a lease id another token holds, and one the gateway does not know, answer `refused: lease <id> is not one of yours on this gateway` with status 403, and no worker receives it; with `--udid`, the same command answers `refused: simlock picks the device`, as on a worker", async () => {
@@ -1368,7 +1412,11 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     await granted(rig, 1);
     const held = member.fake.leases.get(hex(1));
     expect(held).toBeDefined();
-    member.fake.leases.set(hex(2), { ...(held as NonNullable<typeof held>), leaseId: hex(2) });
+    member.fake.leases.set(hex(2), {
+      ...(held as NonNullable<typeof held>),
+      leaseId: hex(2),
+      tenant: (held?.tenant ?? "").replace(hex(1), hex(2)),
+    });
     // why: a lease whose requester is not its own id is never adopted, so the front's memory lacks it however soon the worker's catalog arrives.
     await rig.gateway.dispatch(
       "lease.request",
@@ -1391,7 +1439,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await fleetLeases(rig)).map((lease) => lease.id)).toContain(hex(2));
   });
 
-  it("a lease the gateway's `lease.list` leaves out of one answer, read by a `devices` call, an allocate, a renewal while a command runs, or a heartbeat, is not ended: the next heartbeat succeeds and renews the simlock lease", async () => {
+  it("a lease the gateway's `lease.list` leaves out during devices, allocate, boot, renewal or heartbeat is not ended, and the next heartbeat renews it", async () => {
     const during: Record<string, unknown> = {};
     const triggers: Record<string, (rig: Rig, member: Member) => Promise<void>> = {
       allocate: async (rig) => {
@@ -1403,6 +1451,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       heartbeat: async (rig) => {
         const beat = await envelopeOf(await heartbeat(rig, 1));
         during.heartbeat = beat.result ?? beat.error?.data;
+      },
+      boot: async (rig) => {
+        const answer = await envelopeOf(await command(rig, "boot", 1));
+        during.boot = answer.error?.data;
       },
       renewal: async (rig, member) => {
         const running = await runningCommand(rig, member, 1);
@@ -1427,7 +1479,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       const listing = leaveOutOfNextListing(rig.gateway, hex(1));
 
       await trigger(rig, member);
-      await expect.poll(() => listing.cut()).toBe(1);
+      expect(listing.cut()).toBe(1);
       await advance(rig, 1_000, 1_000);
       const answer = await envelopeOf(await heartbeat(rig, 1, { ttlMs: 60_000 }));
 
@@ -1440,9 +1492,21 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     }
 
     const live = { answer: expect.objectContaining({ ok: true }), cut: 1, leftMs: 60_000 };
-    expect(outcomes).toEqual({ allocate: live, devices: live, heartbeat: live, renewal: live });
+    expect(outcomes).toEqual({
+      allocate: live,
+      boot: live,
+      devices: live,
+      heartbeat: live,
+      renewal: live,
+    });
     // why: the command already ran on the worker, so the heartbeat that met the omission still answers its reply.
-    expect(during).toEqual({ heartbeat: expect.objectContaining({ ok: true }) });
+    expect(during).toEqual({
+      boot: expect.objectContaining({
+        message: "could not check your leases; try again",
+        retriable: true,
+      }),
+      heartbeat: expect.objectContaining({ ok: true }),
+    });
   });
 });
 
@@ -1525,6 +1589,9 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
     expect(preflight.status).toBe(200);
     expect(pathsReceived(target)).toContain("/upload/preflight");
+    expect(target.fake.requests.find((seen) => seen.path === "/upload/preflight")?.tenant).toBe(
+      await tenantOf(target, 2),
+    );
     expect(pathsReceived(other)).toEqual(before);
   });
 
@@ -1840,6 +1907,10 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
     const answer = await envelopeOf(await command(rig, "devices", undefined));
 
+    expect(answer.error?.data).toMatchObject({
+      details: { reason: "SIMLOCK_FAILED" },
+      retriable: true,
+    });
     expect(answer.error?.message).toBe("could not check your leases; try again");
     expect(
       rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),
@@ -1919,7 +1990,11 @@ const hourMs = 3_600_000;
 function expectUnreachable(answer: Envelope): void {
   expect(answer.result).toBeUndefined();
   expect(answer.error).toMatchObject({
-    data: { details: { reason: "WORKER_UNREACHABLE" }, message: unreachableMessage },
+    data: {
+      details: { reason: "WORKER_UNREACHABLE" },
+      message: unreachableMessage,
+      retriable: true,
+    },
     message: unreachableMessage,
   });
 }
@@ -1928,7 +2003,7 @@ async function expectUnreachablePlain(response: Response): Promise<void> {
   expect(response.status).toBe(503);
   const body = (await response.json()) as Record<string, unknown>;
   expect(body["error"]).toBe(unreachableMessage);
-  expect(body).not.toHaveProperty("details");
+  expect(body).toMatchObject({ reason: "WORKER_UNREACHABLE", retriable: true });
 }
 
 async function expectUnreachableEverywhere(rig: Rig, n: number): Promise<void> {
@@ -1999,7 +2074,7 @@ describe(
       expect(member.fake.requests.length).toBe(received);
     });
 
-    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message and no `details`, and `devices` answers the RPC reply with `details`", async () => {
+    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message, reason and retry flag, and `devices` answers the RPC reply", async () => {
       const rig = await setUp();
       const member = first(rig);
       await granted(rig, 1);

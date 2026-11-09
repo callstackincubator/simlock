@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// `node .agents/scripts/spec-lint.mjs [<issue>] [--feature] [--body-file <f>] [--parent-file <f>]
-// [--world <f>]`: the structural half of the spec checker's categories, run before any checker
-// starts and when a task gets `task:ready`. It reads the posted body (a task with its parent, a
+// `node .agents/scripts/spec-lint.mjs [<issue>] [--feature | --refactor] [--body-file <f>]
+// [--parent-file <f>] [--world <f>]`: the structural half of the spec checker's categories, run
+// before any checker starts and when a task gets `task:ready` or a refactor `refactor:ready`. It reads the posted body (a task with its parent, a
 // feature with its sub-issues) and prints one line per finding, `B <n> <section>: <what, and
 // what to do>` for a blocking one and `N ...` for a note, where <n> is the issue the line is
 // about (`-` for a draft with no number yet). Then `spec-lint: <b> blocking, <k> notes`; exit 1
@@ -40,7 +40,12 @@
 // each Depends on number exists, a closed one is a note, an open issue of another feature is a
 // `depends-outside` note, a cycle blocks, and `chain <k> of <t> tasks` is printed.
 //
-// `--feature` reads <issue> as a feature (also when its body starts with `Request:`).
+// A refactor (refactor template, delivery rule 18): `## Why`, `## Target shape`, `## Out of
+// bounds`, `## Done when`, in that order, each with text; no leftovers; the footer. Nothing else
+// is checked: a refactor has no Technical spec.
+//
+// `--feature` reads <issue> as a feature (also when its body starts with `Request:`), and
+// `--refactor` as a refactor (also when it carries a `refactor:` label).
 // `--body-file` reads the body from a file and `--parent-file` the parent's; either one, or
 // `--world <f>` (the issues as JSON, see spec-body.mjs), reads nothing from GitHub, so a draft
 // can be checked before it is posted. Paths resolve in the git repository of the working
@@ -96,6 +101,7 @@ const FEATURE_H2 = [
   "Behaviours",
   "Tasks",
 ];
+const REFACTOR_H2 = ["Why", "Target shape", "Out of bounds", "Done when"];
 const FAILURE_HEADER = ["Call", "Outcome", "What happens", "Limit, counted from"];
 const CANNOT_SPLIT =
   /\b(cannot|can't|can not|does not|doesn't|won't) split\b|\bone task, not\b|\bkept? (it )?whole\b/i;
@@ -136,6 +142,7 @@ const value = (name) => {
   return v;
 };
 const asFeature = flag("--feature");
+const asRefactor = flag("--refactor");
 const bodyFile = value("--body-file");
 const parentFile = value("--parent-file");
 const worldFile = value("--world");
@@ -165,10 +172,13 @@ if (bodyFile === null && self === null) {
 const body = bodyFile === null ? self.body : readFileSync(bodyFile, "utf8");
 const parsed = splitBody(body);
 const isFeature = asFeature || /^\s*Request:/.test(body);
+const isRefactor =
+  !isFeature && (asRefactor || (self?.labels ?? []).some((l) => l.startsWith("refactor:")));
 
 checkLeftovers();
 checkFooter();
 if (isFeature) lintFeature();
+else if (isRefactor) lintRefactor();
 else lintTask();
 
 for (const f of findings.filter((x) => x.level === "B")) printFinding(f);
@@ -179,7 +189,7 @@ process.exit(blocking > 0 ? 1 : 0);
 
 function usage() {
   console.error(
-    "usage: spec-lint.mjs [<issue>] [--feature] [--body-file <f>] [--parent-file <f>] [--world <f>]",
+    "usage: spec-lint.mjs [<issue>] [--feature | --refactor] [--body-file <f>] [--parent-file <f>] [--world <f>]",
   );
   process.exit(2);
 }
@@ -215,7 +225,7 @@ function checkOrder(found, expected, where, prefix) {
 
 function templateComments() {
   const out = [];
-  for (const name of ["task.md", "feature.md"]) {
+  for (const name of ["task.md", "feature.md", "refactor.md"]) {
     const raw = readFileSync(join(ROOT, "docs", "internal", "templates", name), "utf8");
     for (const m of raw.matchAll(/<!--([\s\S]*?)-->/g)) out.push(squash(m[1]).slice(0, 40));
   }
@@ -255,6 +265,19 @@ function checkFooter() {
 
 function lacksMermaid(s) {
   return s !== undefined && !s.lines.some((l) => /^\s*```mermaid\s*$/.test(l));
+}
+
+function lintRefactor() {
+  checkOrder(
+    parsed.sections.filter((s) => s.level === 2),
+    REFACTOR_H2,
+    "body",
+    "##",
+  );
+  for (const name of REFACTOR_H2) {
+    const s = section(parsed, name, 2);
+    if (s !== undefined && text(s) === "") add("B", name, "empty; fill it in");
+  }
 }
 
 function lintTask() {

@@ -45,9 +45,22 @@ export function formatWorkers(
             : ` -- ${esc(entry.name)} ${esc(entry.state)}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${workerBaselinesLine(worker)}${installs}`;
+      const memory = memoryStep(worker);
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${memory}${load}${workerBaselinesLine(worker)}${installs}`;
     })
     .join("\n");
+}
+
+function memoryStep(worker: WorkerView): string {
+  if (worker.connection === "disconnected") return "";
+  switch (worker.capacity?.memoryPressure?.step) {
+    case "warming-paused":
+      return " -- memory: warming paused";
+    case "new-devices-paused":
+      return " -- memory: new devices paused";
+    default:
+      return "";
+  }
 }
 
 function workerLoadLine(worker: WorkerView, now: number): string {
@@ -152,6 +165,20 @@ function formatLoadLine(
       : [`disk ${formatLoadBytes(disk.freeBytes)} of ${formatLoadBytes(disk.totalBytes)} free`];
   const age = `read ${String(ageSeconds)}s ago`;
   return `Load: ${[...cpuPart, ...memoryParts, ...diskPart, age].join(" · ")}`;
+}
+
+function memoryPressureLines(status: StatusGetOutput): string[] {
+  const pressure = status.capacity?.memoryPressure;
+  if (pressure === undefined || pressure.step === "none") return [];
+  const { cause, since } = pressure;
+  const words = pressure.step === "warming-paused" ? "warming paused" : "new devices paused";
+  const at = new Date(since ?? 0);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const why =
+    cause?.trigger === "floor"
+      ? `${cause.availablePercent}% available, floor ${cause.floorPercent}%`
+      : `pressure ${cause?.level}`;
+  return [`Memory pressure: ${words} since ${pad(at.getHours())}:${pad(at.getMinutes())} (${why})`];
 }
 
 function loadLines(status: StatusGetOutput): string[] {
@@ -295,6 +322,7 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
     ...daemonLines(daemon, cliVersion),
     `Host: ${formatHost(host)}`,
     ...loadLines(status),
+    ...memoryPressureLines(status),
     ...historyLines(status.history),
     globalLine,
     ...capacityLines,

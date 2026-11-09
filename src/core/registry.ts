@@ -1,7 +1,11 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { Clock, IdGenerator } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
-import { DEFAULT_LEASE_MAX_REQUEST_RECORDS, DEFAULT_LEASE_REQUEST_RETENTION_MS } from "./config.js";
+import {
+  DEFAULT_DEVICES_DELETED_RETENTION_MS,
+  DEFAULT_LEASE_MAX_REQUEST_RECORDS,
+  DEFAULT_LEASE_REQUEST_RETENTION_MS,
+} from "./config.js";
 import {
   type AbsentReason,
   type DeviceRecord,
@@ -37,6 +41,7 @@ import {
 import {
   deleteComponentRows,
   deleteLease,
+  deleteDevice,
   deleteLeaseRequest,
   loadRegistryRows,
   writeComponent,
@@ -62,6 +67,8 @@ export interface RegistryOptions {
    * kept and how many are kept at most. Defaults to the config defaults.
    */
   readonly leaseRequestLimits?: LeaseRequestLimits;
+  /** why: `devices.deletedRetentionMs`, how long a `deleted` device record is kept; defaults to the config default. */
+  readonly deletedRetentionMs?: number;
 }
 
 export interface RegistrySnapshot {
@@ -182,6 +189,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   static async load(options: RegistryOptions): Promise<Registry> {
     const registry = new Registry({
       ...options,
+      deletedRetentionMs: options.deletedRetentionMs ?? DEFAULT_DEVICES_DELETED_RETENTION_MS,
       leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
       leaseRequestLimits: options.leaseRequestLimits ?? {
         maxRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
@@ -193,6 +201,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     registry.#leases = loaded.leases;
     registry.#leaseRequests = loaded.leaseRequests;
     registry.#components = loaded.components;
+    // why: a record deleted before the upgrade has no `deletedAt`; this commit stamps it and drops what has expired.
+    if (registry.#devices.some((device) => device.state === "deleted")) {
+      registry.#commit(registry.#devices, registry.#leases);
+    }
     return registry;
   }
 
@@ -643,7 +655,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       candidate.id === device.id ? deleted : candidate,
     );
     this.#commit(devices, leases);
-    return deleted;
+    return this.#committed(device.id);
   }
 
   async enrollPhysical(input: PhysicalEnrollmentInput): Promise<PhysicalDevice> {
@@ -971,15 +983,29 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     leaseRequests: readonly LeaseRequestRecord[] = this.#leaseRequests,
     components: readonly ComponentRecord[] = this.#components,
   ): void {
-    const committed = devices.map(withoutCauseUnlessQuarantined);
-    const { deviceData, state } = this.options;
+    const now = this.options.clock.now();
+    const { deletedRetentionMs, deviceData, state } = this.options;
+    const stamped = devices
+      .map(withoutCauseUnlessQuarantined)
+      .map((device) =>
+        device.state === "deleted" && device.deletedAt === undefined
+          ? ({ ...device, deletedAt: now } as DeviceRecord)
+          : device,
+      );
+    const committed = stamped.filter((device) => !isExpired(device, now, deletedRetentionMs));
+    // why: a granted request names its device, so a request the purged device outlives goes with it; it has expired by then (`deletedRetentionMs` is at least `lease.requestRetentionMs`).
+    const requests =
+      committed.length < stamped.length
+        ? retainedLeaseRequests(leaseRequests, now, this.options.leaseRequestLimits.retentionMs)
+        : leaseRequests;
     state.transaction(() => {
       const { database } = state;
       const device = changes(this.#devices, committed, (record) => record.id);
       const lease = changes(this.#leases, leases, (record) => record.id);
-      const request = changes(this.#leaseRequests, leaseRequests, (record) => record.id);
+      const request = changes(this.#leaseRequests, requests, (record) => record.id);
       const component = changes(this.#components, components, componentKey);
       for (const id of request.removed) deleteLeaseRequest(database, id);
+      for (const id of device.removed) deleteDevice(database, id);
       for (const record of device.changed) writeDevice(database, record, deviceData);
       for (const id of lease.removed) deleteLease(database, id);
       for (const record of lease.changed) writeLease(database, record);
@@ -992,7 +1018,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     });
     this.#devices = committed;
     this.#leases = leases;
-    this.#leaseRequests = leaseRequests;
+    this.#leaseRequests = requests;
     this.#components = components;
     this.#commitListeners.forEach((listener) => listener());
   }
@@ -1031,6 +1057,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         );
     }
   }
+}
+
+function isExpired(device: DeviceRecord, now: number, retentionMs: number): boolean {
+  return device.deletedAt !== undefined && now - device.deletedAt > retentionMs;
 }
 
 function componentKey(record: ComponentRecord): string {

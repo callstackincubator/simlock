@@ -379,7 +379,11 @@ describe("the core knows physical devices", () => {
   });
 
   it("with a ready and a leased physical record, the capacity.changed emitted at start and after a simulator lease count only the simulator in iOS running and warm; under the resource capacity strategy its ramBudget.usedBytes and status' match the simulator's alone", async () => {
-    const env = await startWith([READY, LEASED], { leases: [HELD_LEASE(600_000)] });
+    // why: a leased learned kind keeps a spare ready copy (ADR 0069); the claim counts the leased simulator alone.
+    const env = await startWith([READY, LEASED], {
+      config: { warmPool: { enabled: false } },
+      leases: [HELD_LEASE(600_000)],
+    });
     const perDevice = 1024 * 1024;
 
     const atStart = (await named(env, "capacity.changed")).at(0)?.payload as {

@@ -32,6 +32,7 @@ The plan (`evaluate`), in this order: pool off → over budget → the queue →
 - No target is filled while a waiter on its platform is one the pass could not serve.
 - Every configured count fills before any learned count.
 - Only displacement shuts a device down for a target or learned kind, and never one a configured count keeps; what does not fit is reported short. Nothing is displaced when the capacity strategy would still refuse the kind after the shutdown.
+- At memory pressure `warming-paused` or higher (ADR 0068) the queue, the targets and the learned kinds propose no boot or creation, and a short target reports `memory-pressure` instead of any capacity reason (a target that does not resolve keeps its own). Each reading not yet used sheds one idle device: first one no configured count keeps, then a kept one, least recently used first, never one a waiter would take or one whose shutdown failed recently. `memory.pressure-changed` asks for a pass, so the pool fills again at once when the step lifts.
 - `reserveRunning` holds slots from idle devices only; it never holds back a request.
 - An `unresolvable` target keeps its last spec, so its devices stay spared.
 
@@ -56,6 +57,6 @@ What others read:
 
 - **A warm target costs one create per lease.** Every virtual device serves one lease (ADR 0061 §2), so each grant spends a
   device; the pool creates and boots the next one off the lease path. It holds a slot and RAM while
-  it waits; a burst larger than `count` pays the boot.
+  it waits; a burst larger than the peak pays the boot. A learned kind keeps `max(peak - leased, 1)` ready while its copies are leased, a baseline kind counting those of every version (ADR 0069).
 - **A failing target retries forever.** The delay doubles from `RETRY_FIRST_MS` up to `RETRY_MAX_MS`, with no attempt limit; each
   try boots or creates a device. `retry.ts` is the one place to add a limit.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { MemoryFilesystem } from "../../ports/index.js";
 import type { EndedLease } from "../../leasing/index.js";
 import { FakeAgentDevice } from "../testing.js";
 import { AgentDeviceLeaseEnd, recordingFetch, ReleaseScopeRecord } from "./lease-end.js";
@@ -44,7 +45,10 @@ function setUp() {
   const record = new ReleaseScopeRecord();
   return {
     fake,
-    leaseEnd: new AgentDeviceLeaseEnd(fake, record),
+    leaseEnd: new AgentDeviceLeaseEnd(fake, record, {
+      directory: "/sessions",
+      filesystem: new MemoryFilesystem(),
+    }),
     record,
     through: recordingFetch(fake, record),
   };
@@ -163,7 +167,10 @@ describe("the host's lease-end participant and recording wrapper", () => {
     await sleep(20);
     expect(record.get(hex(1))).toBeDefined();
 
-    await new AgentDeviceLeaseEnd(fake, record).leaseEnded(ended(1), new AbortController().signal);
+    await new AgentDeviceLeaseEnd(fake, record, {
+      directory: "/sessions",
+      filesystem: new MemoryFilesystem(),
+    }).leaseEnded(ended(1), new AbortController().signal);
 
     expect(fake.rpcRequests("agent_device.lease.release")).toHaveLength(2);
   });
@@ -193,7 +200,10 @@ describe("the host's lease-end participant and recording wrapper", () => {
     );
     await sleep(10);
     const ending = track(
-      new AgentDeviceLeaseEnd(fake, record).leaseEnded(ended(1), new AbortController().signal),
+      new AgentDeviceLeaseEnd(fake, record, {
+        directory: "/sessions",
+        filesystem: new MemoryFilesystem(),
+      }).leaseEnded(ended(1), new AbortController().signal),
     );
     await sleep(10);
     expect(ending.done()).toBe(false);

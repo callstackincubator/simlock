@@ -87,6 +87,7 @@ describe("the agent-device front's `deviceBaseline`", () => {
       model: "iPhone 16",
       osVersion: "26.5",
       physical: false,
+      udid: expect.any(String),
     });
     expect(result.data.lease["deviceKey"]).toBe("key-1");
     expect(result.data.device).toMatchObject({ id: expect.any(String) });

@@ -63,6 +63,41 @@ function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogS
 
 // why: drives the coordinator on its own, so a test can interleave its lifecycle, queue and clock in orders the leasing surface cannot force.
 describe("LeaseAcquisitionCoordinator", () => {
+  it("prepares a warm device before granting when its driver requires it", async () => {
+    const harness = await createHarness();
+    const device = await seedReady(harness);
+    Object.defineProperty(harness.driver, "rebootReadyBeforeGrant", { value: true });
+    let release!: () => void;
+    let started!: () => void;
+    const preparing = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = harness.driver.makeReady.bind(harness.driver);
+    const ready = vi.spyOn(harness.driver, "makeReady").mockImplementation(async (...args) => {
+      started();
+      await gate;
+      return original(...args);
+    });
+    const grant = harness.coordinator.request(request, {
+      ownerId: "agent",
+      requesterId: "agent",
+    });
+    const state = promiseState(grant);
+    await preparing;
+    await settle();
+    expect(state.state, "grant waits for preparation").toBe("pending");
+    release();
+    expect((await grant).device.id).toBe("dev_0");
+    expect(device.id).toBe("dev_0");
+    expect(ready).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: device.driverDeviceId }),
+      expect.objectContaining({ purpose: "prepare" }),
+    );
+  });
+
   it("rejects a second request from a requester whose first is still pending, under no key or a new idempotency key, with lease.rejected already-leased", async () => {
     // why: the one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
     // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a

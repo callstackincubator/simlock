@@ -52,6 +52,7 @@ import {
   parseOverrides,
   plantManagedDevice,
   prepareSlim,
+  deviceHubEdit,
   prepareSlimWith,
   printDisabled,
   simctl,
@@ -5119,18 +5120,19 @@ describe("IosSimctlDriver device set", () => {
   }
 
   it.each([
-    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`],
-    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`],
+    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`, false],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`, false],
     [
       "default",
       { deviceSet: "default" },
       `${coreSimulatorRoot}/Devices`,
       false,
       "/home/.simlock/devices/ios-sources",
+      true,
     ],
   ] as const)(
-    "the driver given deviceSet %s runs every simctl call with or without --set",
-    async (_case, config, devicesDir, scoped, sourcesSet) => {
+    "the driver given deviceSet %s selects simctl scope and whether a ready device needs reboot before grant",
+    async (_case, config, devicesDir, scoped, sourcesSet, rebootBeforeGrant) => {
       const steps: Step[] = [
         { args: ["list", "-j", "devicetypes", "runtimes"], scoped: true, stdout: listFixture },
         {
@@ -5169,12 +5171,24 @@ describe("IosSimctlDriver device set", () => {
             ? simctlArgs(...step.args)
             : ["simctl", ...step.args];
       const runner = new ScriptedProcessRunner(
-        steps.map((step) => ({
-          match: { args: argvOf(step), command: "xcrun" },
-          ...(step.stdout === undefined
-            ? {}
-            : { result: { code: 0, stderr: "", stdout: step.stdout } }),
-        })),
+        steps.flatMap((step) => [
+          ...(!scoped && step.args[0] === "boot" && step.sources !== true
+            ? deviceHubEdit(
+                `Set :DevicePreferences:${driverData.udid}:pasteboardSyncEnabled false`,
+              ).map((match) => ({ match }))
+            : []),
+          {
+            match: { args: argvOf(step), command: "xcrun" },
+            ...(step.stdout === undefined
+              ? {}
+              : { result: { code: 0, stderr: "", stdout: step.stdout } }),
+          },
+          ...(!scoped && step.args[0] === "delete"
+            ? deviceHubEdit(`Delete :DevicePreferences:${driverData.udid}`).map((match) => ({
+                match,
+              }))
+            : []),
+        ]),
       );
       const filesystem = new MemoryFilesystem();
       await plantDevice(filesystem, devicesDir);
@@ -5190,9 +5204,12 @@ describe("IosSimctlDriver device set", () => {
         processRunner: runner,
         simlockHome: "/home/.simlock",
       });
+      expect(driver.rebootReadyBeforeGrant).toBe(rebootBeforeGrant);
       const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
 
-      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      await expect(
+        driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" }),
+      ).resolves.toBeDefined();
       await driver.provision(spec);
       await expect(filesystem.exists(`${sourcesSet}/${OWNED_ROOT_MARKER_FILE}`)).resolves.toBe(
         !scoped,
@@ -5205,7 +5222,9 @@ describe("IosSimctlDriver device set", () => {
         { signal: new AbortController().signal },
       );
 
-      expect(runner.calls.map((call) => call.args)).toEqual(steps.map(argvOf));
+      expect(
+        runner.calls.filter((call) => call.command === "xcrun").map((call) => call.args),
+      ).toEqual(steps.map(argvOf));
     },
   );
 

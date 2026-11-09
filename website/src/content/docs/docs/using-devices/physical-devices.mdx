@@ -28,7 +28,7 @@ When a physical lease ends, Simlock uninstalls every app that wasn't on the devi
 An agent can find them too:
 
 - **Over MCP**, `list_devices` returns them as `physicalDevices`.
-- **Over HTTP**, read `GET /v1/status` and keep the devices with `physical: true` and a state other than `deleted` (a removed phone stays in the answer). Through a gateway, also keep only those on a worker that is connected and not drained.
+- **Over HTTP**, read `GET /v1/status` and keep the devices with `physical: true` and a state other than `deleted` (a removed phone stays in the answer for `devices.deletedRetentionMs`, one hour unless you change it). Through a gateway, also keep only those on a worker that is connected and not drained.
 
 Neither says who holds a leased phone, and the list can be out of date a moment later. Whether you get a device is decided when you lease.
 

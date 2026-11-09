@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DaemonServer } from "./server.js";
 
 export const runningDaemons: DaemonServer[] = [];
@@ -22,36 +22,42 @@ export async function start(
   overrides: Partial<Omit<StartDaemonOptions, "deviceDataTables" | "drivers">> & {
     readonly deviceDataTables?: StartDaemonOptions["deviceDataTables"] | undefined;
     readonly drivers?: StartDaemonOptions["drivers"] | undefined;
+    // why: a test that calls its worker over HTTP asks for the port the start picked, so a retry on a taken port moves the port the test reads too.
+    readonly withHttp?: boolean;
   } = {},
 ) {
-  const { configOverrides, ...rest } = overrides;
+  const { configOverrides, withHttp, ...rest } = overrides;
   const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
   const clock = new FakeClock(1_000);
   const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-  // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
-  const gatewayDefaults =
-    overrides.role === "gateway"
-      ? { http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() } }
-      : {};
-  const daemon = await startDaemon({
-    clock,
-    dataDirectory: directory,
-    drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-    deviceDataTables: fakeDeviceDataTables,
-    filesystem: new MemoryFilesystem(),
-    hostLoadProbe: null,
-    logger,
-    version: "1.2.3",
-    ...rest,
-    configOverrides:
-      overrides.role === "gateway"
-        ? { ...gatewayDefaults, ...configOverrides }
-        : { ...STANDALONE_OFF, ...configOverrides },
-  } as StartDaemonOptions);
+  const { port, started: daemon } = await startOnFreePort((port) =>
+    startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      deviceDataTables: fakeDeviceDataTables,
+      filesystem: new MemoryFilesystem(),
+      hostLoadProbe: null,
+      logger,
+      version: "1.2.3",
+      ...rest,
+      configOverrides:
+        overrides.role === "gateway"
+          ? // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+            { http: { enabled: true, host: "127.0.0.1", port }, ...configOverrides }
+          : withHttp === true
+            ? {
+                capabilities: STANDALONE_OFF.capabilities,
+                http: { enabled: true, host: "127.0.0.1", port },
+                ...configOverrides,
+              }
+            : { ...STANDALONE_OFF, ...configOverrides },
+    } as StartDaemonOptions),
+  );
   runningDaemons.push(daemon);
-  return { daemon, directory, sink };
+  return { daemon, directory, port, sink };
 }
 
 // why: a drivers module must export the device-data tables of its platforms, and the module file
@@ -179,19 +185,19 @@ export async function startGateway(
   const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-load-")));
   if (given === undefined) temporaryDirectories.push(directory);
   const clock = new FakeClock(1_000);
-  const daemon = await startDaemon({
-    clock,
-    configOverrides: {
-      http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-    },
-    role: "gateway",
-    dataDirectory: directory,
-    drivers: [],
-    filesystem: new MemoryFilesystem(),
-    logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-    version: "1.2.3",
-    ...rest,
-  } as StartDaemonOptions);
+  const { started: daemon } = await startOnFreePort((port) =>
+    startDaemon({
+      clock,
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
+      dataDirectory: directory,
+      drivers: [],
+      filesystem: new MemoryFilesystem(),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      version: "1.2.3",
+      ...rest,
+    } as StartDaemonOptions),
+  );
   runningDaemons.push(daemon);
   return { clock, daemon, directory };
 }

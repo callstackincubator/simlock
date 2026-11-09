@@ -441,4 +441,76 @@ describe("Registry: state.db rows", () => {
       expect(view.snapshot.devices.map((device) => device.state)).toEqual(["shutdown", "shutdown"]);
     }
   });
+
+  it("a deleted record older than devices.deletedRetentionMs is gone from memory and state.db after the next device.deleted or startup, a younger one is still listed", async () => {
+    const MINUTE = 60_000;
+    const { clock, open, readyDevice, registry, state } = await world();
+    const t0 = clock.now();
+    const first = await readyDevice("deleted-1");
+    const second = await readyDevice("deleted-2");
+    const third = await readyDevice("deleted-3");
+    const live = await readyDevice("live");
+    const phone = await registry.enrollPhysical({
+      apps: ["com.a", "com.b"],
+      class: "phone",
+      driverDeviceId: "udid-gone",
+      model: "iPhone 15",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+    await registry.createLeaseRequest({
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    const lease = await registry.createLease({
+      deviceId: first.id,
+      ownerId: "agent-1",
+      request: {
+        environment: {},
+        id: "req_1",
+        timing: {
+          estimatedBootMs: 0,
+          estimatedProvisionMs: 0,
+          estimatedReadyMs: 0,
+          estimatedReclaimMs: 0,
+        },
+      },
+      requesterId: "agent-1",
+      ttlDeadline: 5_000,
+      ttlMs: 4_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.markDeviceMissing(first.id, "doctor");
+    await registry.unenrollPhysical(phone.id);
+    clock.advance(30 * MINUTE);
+    await registry.markDeviceMissing(second.id, "doctor");
+    clock.advance(40 * MINUTE);
+    await registry.markDeviceMissing(third.id, "doctor");
+
+    const listedIds = (view: Registry) => view.snapshot.devices.map((device) => device.id).sort();
+    const storedIds = () =>
+      state.database
+        .prepare("SELECT id FROM devices ORDER BY id")
+        .all()
+        .map((row) => String(row.id));
+    expect(listedIds(registry)).toEqual([second.id, third.id, live.id].sort());
+    expect(storedIds()).toEqual([second.id, third.id, live.id].sort());
+    expect(state.database.prepare("SELECT COUNT(*) AS n FROM lease_grants").get()?.n).toBe(0);
+    expect(state.database.prepare("SELECT COUNT(*) AS n FROM device_enrolled_apps").get()?.n).toBe(
+      0,
+    );
+
+    clock.advance(20 * MINUTE);
+    expect(clock.now()).toBe(t0 + 90 * MINUTE);
+    const restarted = await open({ generate: () => "unused" });
+    expect(listedIds(restarted)).toEqual([second.id, third.id, live.id].sort());
+    expect(storedIds()).toEqual([second.id, third.id, live.id].sort());
+
+    clock.advance(10 * MINUTE);
+    const restartedLater = await open({ generate: () => "unused" });
+    expect(listedIds(restartedLater)).toEqual([third.id, live.id].sort());
+    expect(storedIds()).toEqual([third.id, live.id].sort());
+  });
 });

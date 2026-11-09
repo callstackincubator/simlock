@@ -13,7 +13,7 @@ reference a finding cites.
 
 | Role                            | Reads on every run                                                                                                                                                  |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Orchestrator (`deliver`)        | its skill; [delivery.md](docs/internal/agent-rules/delivery.md) rules 1, 2, 3, 9, 14, 15, 16, 17                                                                    |
+| Orchestrator (`deliver`)        | its skill; [delivery.md](docs/internal/agent-rules/delivery.md) rules 1, 2, 3, 9, 14, 15, 16, 17, 18                                                                |
 | Implementer (build, audit, fix) | `implementer.md` (its checklist is inline); the mode brief, pasted into its prompt; the rules the brief names; the manual of every module on its path               |
 | Reviewer (coordinator)          | `reviewer.md`; [REVIEW.md](docs/internal/REVIEW.md), pasted into its prompt                                                                                         |
 | Spec, code and claims lenses    | the brief and `calibration.md`, pasted into the prompt from the pinned inputs                                                                                       |

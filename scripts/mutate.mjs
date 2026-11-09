@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// `pnpm mutate [base] [--max-lines <n>]`: mutation-test only the source lines this branch changed
-// against base (default origin/main), with the unit suite, and print each mutant the suite let live.
+// `pnpm mutate [base] [--max-lines <n>] [--touched-by <ref>]`: mutation-test only the source lines
+// this branch changed against base (default origin/main), with the unit suite, and print each
+// mutant the suite let live. With --touched-by, the lines are instead those of HEAD's sources that
+// <ref> moves or changes: a refactor's pin commit, mutated before the refactor (delivery rule 18).
 // A near pass runs only the unit test files that import a mutated file directly and those the
 // branch changed; a wide pass gives each mutant the near pass left alive every unit test file
 // Vitest finds related to its file, through any depth of imports.
@@ -38,17 +40,34 @@ if (maxLines !== null && !(Number.isInteger(maxLines) && maxLines > 0)) {
   console.error("--max-lines takes a whole number of lines above 0.");
   process.exit(2);
 }
+const touchedAt = args.indexOf("--touched-by");
+const touchedBy = touchedAt === -1 ? null : args[touchedAt + 1];
+if (touchedAt !== -1) args.splice(touchedAt, 2);
+if (touchedAt !== -1 && (touchedBy === undefined || touchedBy.startsWith("-"))) {
+  console.error("--touched-by takes the ref of the refactor's head.");
+  process.exit(2);
+}
 const base = args[0] ?? "origin/main";
 const git = (...argv) => execFileSync("git", argv, { encoding: "utf8" });
 
 const mergeBase = git("merge-base", base, "HEAD").trim();
-const diff = git("diff", "-U0", "--no-color", mergeBase, "--", ...SOURCES);
+// why: with --touched-by the lines live at HEAD and the diff runs from HEAD, so a hunk's old
+// side (`---`, `-start,count`) names them; with renames off a moved or renamed file reads as
+// deleted, so every line it had counts as touched.
+const diff =
+  touchedBy === null
+    ? git("diff", "-U0", "--no-color", mergeBase, "--", ...SOURCES)
+    : git("diff", "-U0", "--no-color", "--no-renames", "HEAD", touchedBy, "--", ...SOURCES);
+const side = touchedBy === null ? "+++ " : "--- ";
 
 const changed = new Map();
 let file = null;
 for (const line of diff.split("\n")) {
-  if (line.startsWith("+++ ")) file = line === "+++ /dev/null" ? null : line.slice(6);
-  const hunk = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/.exec(line);
+  if (line.startsWith(side)) file = line === `${side}/dev/null` ? null : line.slice(6);
+  const hunk =
+    touchedBy === null
+      ? /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/.exec(line)
+      : /^@@ -(\d+)(?:,(\d+))? \+\S+ @@/.exec(line);
   if (file !== null && hunk !== null) {
     const start = Number(hunk[1]);
     const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
@@ -57,7 +76,11 @@ for (const line of diff.split("\n")) {
 }
 
 if (changed.size === 0) {
-  console.log(`No changed source lines under src/ or ui/src/ since ${base}; nothing to mutate.`);
+  console.log(
+    touchedBy === null
+      ? `No changed source lines under src/ or ui/src/ since ${base}; nothing to mutate.`
+      : `${touchedBy} touches no source line under src/ or ui/src/ of HEAD; nothing to mutate.`,
+  );
   process.exit(0);
 }
 
@@ -96,11 +119,13 @@ mkdirSync(cache, { recursive: true });
 for (const name of readdirSync(cache)) {
   if (Date.now() - statSync(join(cache, name)).mtimeMs > KEEP_MS) rmSync(join(cache, name));
 }
-// Keyed by the branch's first commit, not its name: fix runs push the branch from local
+// why: keyed by the branch's first commit, not its name: fix runs push the branch from local
 // branches of other names.
+// why: a refactor with no pin commit runs on the base itself, which has no commit of its own.
 const branch = join(
   cache,
-  git("rev-list", "--reverse", "--first-parent", `${mergeBase}..HEAD`).split("\n")[0],
+  git("rev-list", "--reverse", "--first-parent", `${mergeBase}..HEAD`).split("\n")[0] ||
+    `at-${git("rev-parse", "HEAD").trim()}`,
 );
 const sources = git("ls-tree", "HEAD", "--", "src", "ui/src");
 const clean = git("status", "--porcelain", "--", "src", "ui/src").trim() === "";

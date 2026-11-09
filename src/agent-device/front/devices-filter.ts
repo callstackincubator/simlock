@@ -33,7 +33,7 @@ export async function filterDevices(
     held = new Set((await tokenDevices(context, identity)).map((device) => device.address));
   } catch (error) {
     if (!(error instanceof LeaseCheckFailed)) throw error;
-    return frontReply(failure(error.message), rpc);
+    return frontReply(failure(error.message, 502, true), rpc);
   }
   const kept = devices.filter((device) => held.has(String(asRecord(device)?.["id"])));
   const body = JSON.parse(text) as { result: { data: Record<string, unknown> } };
@@ -110,7 +110,7 @@ export async function devicesThroughGateway(
     held = await tokenDevices(context, identity);
   } catch (error) {
     if (!(error instanceof LeaseCheckFailed)) throw error;
-    return frontReply(failure(error.message), read);
+    return frontReply(failure(error.message, 502, true), read);
   }
   if (held.length === 0) return emptyList(read);
   if (await anyUnreachable(context, identity, held)) return frontReply(workerUnreachable(), read);

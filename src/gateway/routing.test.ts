@@ -7,6 +7,7 @@ import {
   freeSlot,
   healthy,
   idleQueue,
+  memoryPressure,
   ramBudget,
   takesRequests,
   warmHit,
@@ -203,6 +204,42 @@ describe("the registered warm-then-free policy", () => {
     expect(policy.select(REQUEST, [full])).toMatchObject({ workerId: "wrk_b" });
   });
 
+  it("ranks a worker whose new devices are paused below one that is not, still picks it for a warm device or when every worker is paused, explains it as memory-pressure, and ranks warming-paused as calm", () => {
+    const paused = (
+      id: string,
+      step: "none" | "warming-paused" | "new-devices-paused",
+      maxRunning: number,
+      devices: WorkerView["devices"] = [],
+    ) =>
+      view(id, {
+        capacity: { ...withIos({ maxRunning }), memoryPressure: { step } },
+        devices,
+      });
+    // why: wrk_a has more free capacity, so only the pressure rank can prefer wrk_b over it.
+    const pausedRoomy = paused("wrk_a", "new-devices-paused", 5);
+    const calm = paused("wrk_b", "none", 1);
+
+    expect(policy.select(REQUEST, [pausedRoomy, calm])).toMatchObject({ workerId: "wrk_b" });
+    expect(
+      policy.select(REQUEST, [
+        paused("wrk_a", "new-devices-paused", 5, [deviceFixture("dev_1", "ready")]),
+        calm,
+      ]),
+    ).toMatchObject({ reason: "warm-hit", workerId: "wrk_a" });
+    expect(
+      policy.select(REQUEST, [pausedRoomy, paused("wrk_b", "new-devices-paused", 1)]),
+    ).toMatchObject({
+      workerId: "wrk_a",
+    });
+    expect(policy.explain(REQUEST, [pausedRoomy, calm])).toMatchObject([
+      { workerId: "wrk_a", zero: { capacityReason: "memory-pressure", reason: "full" } },
+      { workerId: "wrk_b" },
+    ]);
+    expect(policy.select(REQUEST, [paused("wrk_a", "warming-paused", 5), calm])).toMatchObject({
+      workerId: "wrk_a",
+    });
+  });
+
   it("still picks a worker at its RAM budget for a warm device it holds", () => {
     const capacity = withIos({ maxRunning: 1 });
     const atBudget = view("wrk_a", {
@@ -375,7 +412,7 @@ describe("the warm-then-free policy for a physical request", () => {
     expect(policy.select(REQUEST, [queued])).toBeUndefined();
   });
 
-  it("picks, for a physical request, a worker that idle-queue and free-slot would drop and ram-budget would demote, by warm-hit; the four stages are the ones that skip a physical request", () => {
+  it("picks, for a physical request, a worker that idle-queue and free-slot would drop and ram-budget would demote, by warm-hit; the five stages are the ones that skip a physical request", () => {
     const blocked = view("wrk_a", {
       capacity: withIos({ atRamBudget: true, maxRunning: 0 }),
       devices: [iphone()],
@@ -399,6 +436,7 @@ describe("the warm-then-free policy for a physical request", () => {
       freeSlot,
       healthy,
       idleQueue,
+      memoryPressure,
       ramBudget,
       takesRequests,
       warmHit,
@@ -407,7 +445,13 @@ describe("the warm-then-free policy for a physical request", () => {
       .filter(([, stage]) => (stage as { appliesToPhysical?: boolean }).appliesToPhysical === false)
       .map(([name]) => name)
       .sort();
-    expect(skipped).toEqual(["freeCapacity", "freeSlot", "idleQueue", "ramBudget"]);
+    expect(skipped).toEqual([
+      "freeCapacity",
+      "freeSlot",
+      "idleQueue",
+      "memoryPressure",
+      "ramBudget",
+    ]);
   });
 
   it("gives a virtual request the same pick, reason and stage with and without a ready physical device of its model in the views", () => {

@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
 import { FAKE_LEASE_ENVIRONMENT } from "./fake-driver/fake-driver.js";
-import { withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -104,6 +106,66 @@ describe("reaching a leased device", () => {
     },
   );
 
+  it("forwards SIGINT and SIGTERM to a local passthrough tool and waits for its exit", async () => {
+    const env = await withDaemon();
+    const preload = join(env.home, "passthrough-signals.cjs");
+    await writeFile(
+      preload,
+      `
+        if (process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM) {
+          const fs = require('node:fs');
+          const finish = process.env.SIMLOCK_TEST_FINISH;
+          const watcher = fs.watch(process.env.SIMLOCK_HOME, (_event, name) => {
+            if (name !== finish || !fs.existsSync(process.env.SIMLOCK_HOME + '/' + finish)) return;
+            watcher.close();
+            process.stdout.write('flushed\\n');
+            process.exitCode = 23;
+          });
+          for (const signal of ['SIGINT', 'SIGTERM']) {
+            process.on(signal, () => process.stdout.write('received ' + signal + '\\n'));
+          }
+          process.stdout.write(JSON.stringify({ pid: process.pid }) + '\\n');
+        }
+      `,
+    );
+
+    for (const tool of ["simctl", "adb"]) {
+      for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        const finish = `finish-${tool}-${signal}`;
+        const command = env.cliBackground([tool, "--fake-exec-silent"], {
+          env: {
+            NODE_OPTIONS: `--require=${preload}`,
+            SIMLOCK_TEST_FINISH: finish,
+          },
+        });
+        const { pid: toolPid } = JSON.parse(await command.firstStdoutLine()) as { pid: number };
+        const cliPid = command.pid;
+        expect(cliPid).toEqual(expect.any(Number));
+        try {
+          command.kill(signal);
+          // why: the broken CLI dies while the tool keeps its inherited pipes open, so close never arrives; parent death ends the probe without a timeout being the failure.
+          // why: a CLI that stays alive without forwarding must fail the named assertions below, not this wait, so the wait's timeout is swallowed.
+          await waitFor(
+            () => command.stdoutSoFar().includes(`received ${signal}\n`) || !processExists(cliPid!),
+            { label: "tool received the signal or the CLI exited", timeout: 10_000 },
+          ).catch(() => undefined);
+          expect
+            .soft(command.stdoutSoFar(), `${tool} receives ${signal}`)
+            .toContain(`received ${signal}\n`);
+          expect.soft(processExists(cliPid!), "CLI waits while the tool is flushing").toBe(true);
+          await writeFile(join(env.home, finish), "finish");
+          const result = await command.waitForExit();
+          expect(result.stdout).toContain("flushed\n");
+          expect.soft(result.code, "CLI returns the tool's post-flush exit code").toBe(23);
+        } finally {
+          if (processExists(toolPid)) process.kill(toolPid, "SIGKILL");
+          command.kill("SIGKILL");
+          await command.waitForExit();
+        }
+      }
+    }
+  });
+
   // One verb is enough: which verbs are refused is each driver's decision, tested with the
   // drivers. What only separate processes show is the refusal reaching the shell as exit 2.
   it("refuses a destructive passthrough with a usage error naming what to run instead", async () => {
@@ -118,3 +180,13 @@ describe("reaching a leased device", () => {
     expect(refusal.stdout).toBe("");
   });
 });
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}

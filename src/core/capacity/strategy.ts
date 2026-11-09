@@ -30,6 +30,7 @@ export interface RamBudget {
 export type CapacityRefusalReason =
   | "device-limit"
   | "ram-budget"
+  | "memory-pressure"
   | "global-running-limit"
   | "platform-running-limit";
 
