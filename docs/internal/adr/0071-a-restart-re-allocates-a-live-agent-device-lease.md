@@ -9,7 +9,7 @@
   the Consequences line "the leases survive and end on their next
   heartbeat or at their TTL".
 - **Narrows:** [ADR 0070](0070-test-runners-drive-a-lease-through-the-agent-device-front.md)
-  §2: after a worker restart, a re-allocated lease does not carry
+  §2: a lease re-allocated from a rebuilt entry does not carry
   `retainOnClose`.
 
 ## Context
@@ -53,8 +53,7 @@ sequenceDiagram
 
 When agent-device answers a heartbeat with `LEASE_NOT_FOUND`, the front
 asks simlock whether the caller still holds the lease: leasing's
-`lease.list` on a worker, the gateway's lease index on a gateway. If it
-does, and agent-device did not end the lease itself (`endedLeases`), the
+`lease.list` names it, on a worker or a gateway. If it does, and agent-device did not end the lease itself (`endedLeases`), the
 front:
 
 1. sends `agent_device.lease.allocate` with the same lease id, the lease's
@@ -66,9 +65,9 @@ The re-allocate keeps the heartbeat's `deviceKey`, which a first allocate
 drops: agent-device refuses a later heartbeat whose key the lease lacks.
 
 The agent keeps the same simlock lease, the same device and the same app
-data. Its agent-device session does not survive: the next command gets
-agent-device's no-session answer (e.g. `No active session. Run open
-first.`), and `open` works on the same device.
+data. Its agent-device session does not survive (simlock empties the
+daemon's sessions folder at start), so the agent may need `open` again;
+`open` works on the same device.
 Commands, recordings and session state that the restart interrupted are not
 recovered.
 
@@ -138,7 +137,8 @@ phone daemon as a first allocate does.
   restart (measured by the reporter at about 7 s on Android and 28 s on iOS),
   then `open` again.
 - `retainOnClose` (ADR 0070 §2) is in neither leasing's record nor the
-  heartbeat. After a worker restart, a re-allocated lease does not carry it,
+  heartbeat. A rebuilt entry (a standalone worker restart, or a gateway
+  restart followed by a worker restart) does not carry it,
   so a close after that ends the lease. A worker restart already breaks
   that test run. Tracked as its own issue.
 - A lease whose re-allocate keeps failing holds its device until its TTL,
