@@ -32,6 +32,7 @@ export interface HeldView extends DeviceFacts {
   readonly identity: Identity;
   readonly address: string;
   readonly ttlMs: number;
+  readonly deadline: number;
   readonly endedAt?: number;
   readonly endedBy?: EndedBy;
   readonly releasing?: boolean;

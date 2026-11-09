@@ -160,9 +160,14 @@ async function stillHeld(
   context: FrontContext,
   identity: Identity,
   leaseId: string,
+  deadline: number,
 ): Promise<boolean | undefined> {
   try {
-    return (await listLeases(context, identity)).some((lease) => lease.id === leaseId);
+    const listed = (await listLeases(context, identity)).some((lease) => lease.id === leaseId);
+    if (listed) return true;
+    // why: a gateway's list trails a worker that is still starting, so a lease its index holds is not gone; one past its deadline is, whatever the index still says.
+    const indexed = context.link.stillHeld?.(leaseId) === true;
+    return indexed && deadline > context.clock.now() ? undefined : false;
   } catch {
     return undefined;
   }
@@ -177,7 +182,7 @@ async function restoreLease(
 ): Promise<Restore> {
   const { request, identity, call, leaseMaxTtlMs } = arguments_;
   if (entry.platform === undefined || entry.releasing === true) return { kind: "ended" };
-  const held = await stillHeld(context, identity, leaseId);
+  const held = await stillHeld(context, identity, leaseId, entry.deadline);
   if (held === undefined) return { kind: "retry" };
   if (!held) return { kind: "ended" };
   const allocated = await allocateAgain(
