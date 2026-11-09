@@ -17,7 +17,12 @@ const STILLS = [
   "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYxLjE5LjEwMAD/2wBDAAg8PEc8R1JSUlJSUmFaYWVlZWFhYWFlZWVsbGx/f39sbGxlZWxseHh/f4qOioODf4OOjpaWlrS0rKzS0tn/////xABNAAEBAAAAAAAAAAAAAAAAAAAABwEBAQEAAAAAAAAAAAAAAAAAAAUHEAEAAAAAAAAAAAAAAAAAAAAAEQEAAAAAAAAAAAAAAAAAAAAA/8AAEQgA8AB4AwEiAAIRAAMRAP/aAAwDAQACEQMRAD8AjgDf0sAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB/9k=",
 ];
 
-export async function writeCaptureProgram(dir: string): Promise<string> {
+// why: the size the meta frame names, which is the size the console draws the picture at; a test of a
+// source that is not a phone's (a landscape one) names its own.
+export async function writeCaptureProgram(
+  dir: string,
+  size: { readonly width: number; readonly height: number } = { height: 240, width: 120 },
+): Promise<string> {
   const path = join(dir, "mjpeg-capture.mjs");
   await writeFile(
     path,
@@ -40,7 +45,7 @@ function envelope(tag, payload) {
 }
 
 const meta = Buffer.from(
-  JSON.stringify({ udid: address, codec: "mjpeg", width: 120, height: 240, fps: 5, deviceSet: "lane" }),
+  JSON.stringify({ udid: address, codec: "mjpeg", width: ${size.width}, height: ${size.height}, fps: 5, deviceSet: "lane" }),
 );
 
 appendFileSync(LOG, \`opened \${JSON.stringify(args)}\\n\`);

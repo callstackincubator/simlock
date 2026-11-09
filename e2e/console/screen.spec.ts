@@ -29,9 +29,11 @@ interface StreamingHost {
   readonly host: RunningDaemon;
 }
 
-async function streamingHost(): Promise<StreamingHost> {
+async function streamingHost(
+  size?: Parameters<typeof writeCaptureProgram>[1],
+): Promise<StreamingHost> {
   const dir = await mkdtemp(join(tmpdir(), "simlock-screen-"));
-  const command = await writeCaptureProgram(dir);
+  const command = await writeCaptureProgram(dir, size);
   let host: RunningDaemon | undefined;
   try {
     host = await startDaemon("worker", {
@@ -242,6 +244,32 @@ test.describe("the device's streaming page", () => {
     } finally {
       if (fleet !== undefined) await disposeFleet(fleet);
       await rm(fleetDir, { force: true, recursive: true });
+      await cleanup(started);
+    }
+  });
+
+  test("draws a landscape source in a frame of the picture's own shape", async ({ page }) => {
+    const started = await streamingHost({ height: 180, width: 320 });
+    try {
+      const { host } = started;
+      const target = {
+        deviceId: await warmDevice(host),
+        origin: host.url,
+        token: host.tokens.operator,
+        workerId: await workerIdOn(host),
+      };
+
+      await openStream(page, target);
+      await expect(screen(page)).toBeVisible();
+
+      const ratio = async (selector: string) =>
+        page.locator(selector).evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return box.width / box.height;
+        });
+      await expect.poll(() => ratio(".phone")).toBeCloseTo(320 / 180, 1);
+      expect(await ratio(".phone-canvas")).toBeCloseTo(320 / 180, 1);
+    } finally {
       await cleanup(started);
     }
   });
