@@ -251,6 +251,8 @@ export class Dispatcher {
    */
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
   readonly #unsubscribe: (() => void)[] = [];
+  // why: a `lease.cancel` that overtakes its own `lease.request` (still awaiting capabilities and the lock) would answer `not-found` for a request about to queue; per requester, one promise per request not yet admitted, which the cancel waits on first.
+  readonly #unadmitted = new Map<string, Set<Promise<void>>>();
 
   readonly #usage: UsageReader;
 
@@ -500,11 +502,46 @@ export class Dispatcher {
     );
   }
 
-  // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
     const requesterId = input.requesterId ?? principalAsRequester(session.principal);
+    const admitted = this.#awaitAdmission(requesterId);
+    try {
+      return await this.#admitLeaseRequest(input, session, request, requesterId, admitted.admit);
+    } finally {
+      admitted.admit();
+      admitted.forget();
+    }
+  };
+
+  #awaitAdmission(requesterId: string): { admit: () => void; forget: () => void } {
+    let admit!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
+    const set = this.#unadmitted.get(requesterId) ?? new Set<Promise<void>>();
+    set.add(pending);
+    this.#unadmitted.set(requesterId, set);
+    return {
+      admit,
+      forget: () => {
+        set.delete(pending);
+        if (set.size === 0 && this.#unadmitted.get(requesterId) === set) {
+          this.#unadmitted.delete(requesterId);
+        }
+      },
+    };
+  }
+
+  // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
+  async #admitLeaseRequest(
+    input: Parameters<Handler<"lease.request">>[0],
+    session: DispatchSession,
+    request: DeviceRequest,
+    requesterId: string,
+    admit: () => void,
+  ): Promise<unknown> {
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
@@ -539,9 +576,10 @@ export class Dispatcher {
         ownerId,
         requesterId,
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
-        ...(session.onRequestAdmitted === undefined
-          ? {}
-          : { onAdmitted: session.onRequestAdmitted }),
+        onAdmitted: (requestId, replayed) => {
+          admit();
+          session.onRequestAdmitted?.(requestId, replayed);
+        },
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
         ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
@@ -589,10 +627,11 @@ export class Dispatcher {
       }
       throw error;
     }
-  };
+  }
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
+    await Promise.all(this.#unadmitted.get(requesterId) ?? []);
     const result = await this.options.queue.cancelPending(requesterId, input.platform);
     return { result };
   };

@@ -783,8 +783,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Only a `queued` waiter is safe to reject: `processing` means device work already claimed it,
-   * which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
+   * why: a `new` or `queued` waiter is safe to reject: `new` is still resolving its spec, with no device
+   * work, and `#nextPlan` skips a rejected waiter. `processing` means device work already claimed
+   * it, which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
    * read, so it is cancellable in any live state.
    */
   async cancelPending(
@@ -796,7 +797,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         | AcquisitionWaiter
         | undefined;
       if (waiter === undefined) return "not-found";
-      if (waiter.state !== "queued" && waiter.request.physical !== true) return "not-cancellable";
+      if (waiter.state === "processing" && waiter.request.physical !== true) {
+        return "not-cancellable";
+      }
       const holdsClaim = waiter.state === "processing";
       this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
       // why: a waiter mid presence read holds a grant claim, and its own wake follows the release.
