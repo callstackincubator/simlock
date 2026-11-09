@@ -2437,6 +2437,26 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
+  it("two heartbeats at once after a restart send one re-allocate, and both succeed", async () => {
+    const rig: Rig = await setUp();
+    await granted(rig, 1);
+    rig.fake.restart();
+    rig.fake.holdAllocate();
+
+    const both = Promise.all([heartbeat(rig, 1), heartbeat(rig, 1)]);
+    await expect.poll(() => allocatesReceived(rig, 1)).toHaveLength(2);
+    await sleep(50);
+    rig.fake.letAllocateGo();
+    const answers = await Promise.all((await both).map((response) => envelopeOf(response)));
+
+    expect(answers.map((answer) => answer.error)).toEqual([undefined, undefined]);
+    expect(answers.map((answer) => answer.result)).toEqual([
+      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: true }),
+    ]);
+    expect(allocatesReceived(rig, 1)).toHaveLength(2);
+  });
+
   it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {
     const first = await setUp();
     await granted(first, 1);
