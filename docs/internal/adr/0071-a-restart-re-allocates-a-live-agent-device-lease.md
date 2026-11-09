@@ -26,8 +26,10 @@ The agent-device CLI heartbeats before each command and sends its lease
 scope with it: `runId`, `clientId`, `leaseProvider`, `leaseBackend` and
 `deviceKey` (agent-device v0.21.35,
 `src/cli/commands/connection-runtime.ts:892-941`). agent-device accepts an
-allocate with a lease id the caller chooses
-(`packages/daemon/src/resources/lease-registry-scope.ts:126-138`). So the
+allocate with a lease id the caller chooses, unless that daemon already
+issued the id (`LEASE_ID_IN_USE`,
+`packages/daemon/src/resources/lease-registry.ts:81-98`). The issued ids
+live in memory, so a restarted daemon accepts it. So the
 front has what it needs to allocate the same lease again, as long as it
 knows the device.
 
@@ -60,9 +62,13 @@ front:
    a first allocate gets;
 2. sends the heartbeat again and answers with its reply.
 
+The re-allocate keeps the heartbeat's `deviceKey`, which a first allocate
+drops: agent-device refuses a later heartbeat whose key the lease lacks.
+
 The agent keeps the same simlock lease, the same device and the same app
-data. Its agent-device session does not survive: the next command answers
-`No active session. Run open first.`, and `open` works on the same device.
+data. Its agent-device session does not survive: the next command gets
+agent-device's no-session answer (e.g. `No active session. Run open
+first.`), and `open` works on the same device.
 Commands, recordings and session state that the restart interrupted are not
 recovered.
 
@@ -99,9 +105,11 @@ while one runs waits for it.
 
 ### 3. A failed re-allocate keeps the simlock lease
 
-If agent-device is not running yet, refuses the allocate or does not
-answer, the front answers with a retryable error and does not release the
-simlock lease. The next heartbeat tries again. The lease ends only by
+If agent-device refuses the allocate (for example `LEASE_ID_IN_USE` on a
+daemon that did not restart) or does not answer, the front answers with a retryable error and does not release the
+simlock lease. The next heartbeat tries again. While agent-device is
+still starting, the heartbeat itself gets `…: starting`, as today, and no
+re-allocate is sent. The lease ends only by
 release or at its TTL, as any simlock lease does.
 
 On a gateway, a lease the worker's list leaves out for a moment while the
@@ -115,9 +123,10 @@ retryable answer, not a release.
   worker's lease list after a gateway restart, as today. A worker restart,
   a gateway restart, or both in either order are covered.
 - **Standalone worker restarted:** its map is empty. The worker's front
-  rebuilds entries the way the gateway does (`adoptable`): from leasing's
-  `lease.list` (a lease whose `requesterId` is its own id) and the device
-  registry (address, platform, model, physical). Nothing new is stored.
+  rebuilds entries the way the gateway does (`adoptable`): from the
+  registry snapshot the module already reads, its leases (one whose
+  `requesterId` is its own id and whose `ownerId` is the caller) and their
+  devices (address, platform, model, physical). Nothing new is stored.
 
 A phone lease's re-allocate names the phone's serial, so it goes to the
 phone daemon as a first allocate does.
