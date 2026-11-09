@@ -9,8 +9,9 @@
   the Consequences line "the leases survive and end on their next
   heartbeat or at their TTL".
 - **Narrows:** [ADR 0070](0070-test-runners-drive-a-lease-through-the-agent-device-front.md)
-  §2: a lease re-allocated from a rebuilt entry does not carry
-  `retainOnClose`.
+  §2: a lease re-allocated from an entry rebuilt after a worker restart
+  does not carry `retainOnClose`; one re-allocated from a surviving entry
+  does.
 
 ## Context
 
@@ -63,6 +64,10 @@ front:
 
 The re-allocate keeps the heartbeat's `deviceKey`, which a first allocate
 drops: agent-device refuses a later heartbeat whose key the lease lacks.
+It also keeps `retainOnClose` (ADR 0070 §2) when the front's map entry
+stores it: the entry records it when the lease is allocated, so a
+re-allocate from a surviving entry carries it. An entry rebuilt after a
+standalone worker restart has none (§4).
 
 The agent keeps the same simlock lease, the same device and the same app
 data. Its agent-device session does not survive (simlock empties the
@@ -136,10 +141,12 @@ phone daemon as a first allocate does.
   agent-device lease on the worker. Agents see retryable errors for the
   restart (measured by the reporter at about 7 s on Android and 28 s on iOS),
   then `open` again.
-- `retainOnClose` (ADR 0070 §2) is in neither leasing's record nor the
-  heartbeat. A rebuilt entry (a standalone worker restart, or a gateway
-  restart followed by a worker restart) does not carry it,
-  so a close after that ends the lease. A worker restart already breaks
+- `retainOnClose` (ADR 0070 §2) is stored on the front's map entry when
+  the lease is allocated, so an agent-device restart alone keeps it. It is
+  in neither leasing's record nor the heartbeat, so an entry rebuilt from
+  leasing (a standalone worker restart, or a gateway restart followed by
+  a worker restart) does not carry it, and a close after that ends the
+  lease. A worker restart already breaks
   that test run. Tracked as its own issue.
 - A lease whose re-allocate keeps failing holds its device until its TTL,
   not until the next heartbeat.
