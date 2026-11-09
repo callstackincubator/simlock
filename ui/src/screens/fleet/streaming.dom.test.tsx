@@ -308,7 +308,7 @@ describe("the streaming page's holder actions", () => {
       { writeText: () => Promise.reject(new DOMException("no", "NotAllowedError")) },
     ],
   ])(
-    "when the Clipboard API %s, Copy lease id says so, shows no success and keeps focus",
+    "when the Clipboard API %s, Copy lease id says so, shows no success, keeps focus and leaves the whole id to select",
     async (_name, clipboard) => {
       const { holder, view } = await holderCard();
       setClipboard(clipboard);
@@ -319,6 +319,7 @@ describe("the streaming page's holder actions", () => {
       expect(await notifications().findByText(FAILURE)).toBeVisible();
       expect(screen.queryByText("Copied lease id")).not.toBeInTheDocument();
       expect(copy).toHaveFocus();
+      expect(within(holder).getByText("lse_1")).toBeVisible();
     },
   );
 

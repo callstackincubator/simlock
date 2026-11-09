@@ -132,6 +132,12 @@ function HolderCard(props: { readonly leaseId: string; readonly to: string }) {
         </div>
       </div>
       <Countdown lease={lease} />
+      <p className="stream-lease-id">
+        <span className="stream-label">Lease id</span>
+        <span className="mono" title={lease.id}>
+          {lease.id}
+        </span>
+      </p>
       <div className="stream-holder-actions">
         <Button onClick={() => copy(lease.id)}>Copy lease id</Button>
         <Link className="button button-secondary" to={props.to}>

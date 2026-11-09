@@ -421,7 +421,7 @@ test.describe("the events feed", () => {
     expect((await firstInView(page)).n).toBe("1000");
   });
 
-  test("a worker's Events tab scrolls back through that worker's history to its start, asking for that worker's events only", async ({
+  test("the Events on this worker list scrolls back through that worker's history to its start, asking for that worker's events only", async ({
     page,
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);

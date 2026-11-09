@@ -243,3 +243,15 @@
     padding-top: 44px;
   }
 }
+
+/* why: after a failed copy the toast asks the reader to select the id, so the whole id is on the page
+ * and selectable, wrapping rather than cut. */
+.stream-lease-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
