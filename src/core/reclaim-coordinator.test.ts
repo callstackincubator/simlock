@@ -444,6 +444,43 @@ describe("ReclaimCoordinator", () => {
       },
     );
 
+    it("destroys a release-only device exactly once without calling shutdown", async () => {
+      const harness = await freshHarness("reclaiming");
+      Object.assign(harness.driver, { supportsShutdown: false });
+      const ended = released(harness.target);
+
+      await harness.coordinator.reclaim(ended);
+
+      const operations = harness.operations();
+      expect(operations).toEqual(["destroy"]);
+      expect(harness.registry.snapshot.virtualDevices).toMatchObject([
+        { id: harness.target.id, state: "deleted" },
+      ]);
+      expect(harness.quarantined).toEqual([]);
+    });
+
+    it("quarantines a failed release-only disposal as a failed delete", async () => {
+      const harness = await freshHarness("reclaiming");
+      Object.assign(harness.driver, { supportsShutdown: false });
+      harness.driver.failOn("destroy", 1, new Error("provider release refused"));
+      const ended = released(harness.target);
+
+      await harness.coordinator.reclaim(ended);
+
+      const operations = harness.operations();
+      expect(operations).toEqual(["destroy"]);
+      expect(harness.registry.snapshot.virtualDevices).toMatchObject([
+        { id: harness.target.id, state: "reclaiming" },
+      ]);
+      expect(harness.quarantined).toMatchObject([
+        {
+          attemptedStrategy: "delete",
+          error: "Error: provider release refused",
+          kind: "delete-failed",
+        },
+      ]);
+    });
+
     it("hands a failed delete to quarantine with strategy delete, after the shutdown commit", async () => {
       const harness = await freshHarness("reclaiming");
       harness.driver.failOn("destroy", 1, new Error("delete exploded"));

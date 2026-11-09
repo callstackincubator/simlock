@@ -1088,7 +1088,15 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#wakeQueue();
     } catch (error: unknown) {
       this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
-      this.#defer(waiter, "waiting-for-device");
+      if (error instanceof BadDeviceRequestError) {
+        this.#reject(waiter, error, "unresolvable-spec");
+        if (plan.device.physical === false) {
+          const cleanup = this.#disposeRefused(waiter, plan.device);
+          this.#track(cleanup);
+        }
+      } else {
+        this.#defer(waiter, "waiting-for-device");
+      }
     }
     return undefined;
   }
@@ -1433,6 +1441,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
     let superseded = false;
+    let refused = false;
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
@@ -1455,14 +1464,34 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           "grant",
           error,
         );
-        this.#defer(waiter, "waiting-for-device");
+        if (error instanceof BadDeviceRequestError) {
+          refused = true;
+          this.#reject(waiter, error, "unresolvable-spec");
+        } else {
+          this.#defer(waiter, "waiting-for-device");
+        }
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
       }
     });
     if (superseded) await this.#discardSuperseded(waiter, handoff);
+    if (refused) await this.#disposeRefused(waiter, handoff.device);
     this.#wakeQueue();
+  }
+
+  async #disposeRefused(waiter: AcquisitionWaiter, device: VirtualDevice): Promise<void> {
+    try {
+      await this.options.lifecycle.dispose(device, "lease-refused", "cleanup");
+    } catch (error: unknown) {
+      this.#logFailure("disposing a refused lease device failed", waiter, device, "destroy", error);
+      const current = this.options.registry.snapshot.devices.find(
+        (candidate) => candidate.id === device.id,
+      );
+      if (current?.state === "ready" || current?.state === "shutdown") {
+        await this.options.quarantine.enterFromStalledTransition(current.id, current.state);
+      }
+    }
   }
 
   /** why: a copy of a version that a save replaced while it was being made is never granted. */

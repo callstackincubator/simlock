@@ -21,6 +21,9 @@ import {
   type AndroidDriverConfig,
   androidDeviceDataTable,
   androidPrerequisites,
+  createCloudAndroidDriver,
+  cloudDeviceDataTable,
+  cloudAndroidPrerequisites,
 } from "../drivers/android/index.js";
 import {
   IOS_PASSTHROUGH_TOOLS,
@@ -38,6 +41,8 @@ import {
   NodeBytePipeLauncher,
   NodeTcpListenerFactory,
   NodeTcpStreamConnector,
+  FetchHttpJsonRequester,
+  NodeWebSocketClientConnector,
   type ProcessRunner,
   type ProcessSupervisor,
   type TcpProbe,
@@ -94,9 +99,12 @@ export interface DriverDiscovery {
 }
 
 /** why: both tables whatever the host's platform, so a device whose driver was refused still loads. */
-export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTable> {
+export function productionDeviceDataTables(
+  driversConfig: Config["drivers"] = {},
+): ReadonlyMap<Platform, DeviceDataTable> {
+  const cloud = driversConfig.android?.backend === "adc";
   return new Map([
-    ["android", androidDeviceDataTable],
+    ["android", cloud ? cloudDeviceDataTable : androidDeviceDataTable],
     ["ios", iosDeviceDataTable],
   ]);
 }
@@ -106,12 +114,15 @@ export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTa
  * `deviceDataTables` export, else the production tables -- so the state open and `Registry.load`
  * always see the same one.
  */
-export async function resolveDeviceDataTables(options: {
-  readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable> | undefined;
-}): Promise<ReadonlyMap<Platform, DeviceDataTable>> {
+export async function resolveDeviceDataTables(
+  options: {
+    readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable> | undefined;
+  },
+  driversConfig?: Config["drivers"],
+): Promise<ReadonlyMap<Platform, DeviceDataTable>> {
   if (options.deviceDataTables !== undefined) return options.deviceDataTables;
   const modulePath = process.env.SIMLOCK_DRIVERS_MODULE;
-  if (modulePath === undefined) return productionDeviceDataTables();
+  if (modulePath === undefined) return productionDeviceDataTables(driversConfig);
   const imported = (await import(pathToFileURL(resolve(modulePath)).href)) as {
     deviceDataTables?: unknown;
   };
@@ -145,6 +156,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
   return {
     drivers,
     prerequisiteChecks: platformPrerequisiteChecks({
+      driversConfig: options.driversConfig,
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),
@@ -156,6 +168,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
 }
 
 function platformPrerequisiteChecks(options: {
+  readonly driversConfig: Config["drivers"];
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
@@ -166,14 +179,23 @@ function platformPrerequisiteChecks(options: {
   if (options.hostPlatform === "darwin") {
     checks.push(iosPrerequisites({ processRunner: options.processRunner }));
   }
-  checks.push(
-    androidPrerequisites({
+  const androidSettings = options.driversConfig.android ?? {};
+  if (androidSettings.backend === "adc") {
+    const prerequisites = cloudAndroidPrerequisites({
+      driverConfig: androidSettings,
+      env: options.env,
+      processRunner: options.processRunner,
+    });
+    checks.push(prerequisites);
+  } else {
+    const prerequisites = androidPrerequisites({
       env: options.env,
       filesystem: options.filesystem,
       homeDirectory: options.homeDirectory,
       processRunner: options.processRunner,
-    }),
-  );
+    });
+    checks.push(prerequisites);
+  }
   return checks;
 }
 
@@ -267,6 +289,39 @@ async function discoverAndroidDriver(
   logger: Logger,
 ): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
   try {
+    const settings = options.driversConfig.android ?? {};
+    if (
+      settings.backend !== undefined &&
+      settings.backend !== "local" &&
+      settings.backend !== "adc"
+    ) {
+      throw new Error('drivers.android.backend must be "local" or "adc"');
+    }
+    if (settings.backend === "adc") {
+      const driver = await createCloudAndroidDriver({
+        clock: options.clock,
+        database: options.database,
+        driverConfig: settings,
+        env: process.env,
+        filesystem: options.filesystem,
+        http: new FetchHttpJsonRequester(),
+        idGenerator: options.idGenerator,
+        instanceId: options.instanceId,
+        logger: logger.child("android-cloud"),
+        processRunner: options.processRunner,
+        processSupervisor: options.processSupervisor,
+        scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
+        simlockHome: options.simlockHome,
+        tcpListener: new NodeTcpListenerFactory(),
+        tcpProbe: options.tcpProbe,
+        tcpStreamConnector: new NodeTcpStreamConnector(),
+        webSockets: new NodeWebSocketClientConnector(),
+        ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+        pid: process.pid,
+      });
+      logger.info("Discovered cloud driver", { platform: "android" });
+      return { driver };
+    }
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,

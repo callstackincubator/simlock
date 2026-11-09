@@ -34,6 +34,7 @@ describe("transition", () => {
     ["provisioning", "quarantined"],
     ["ready", "leased"],
     ["ready", "shutdown"],
+    ["ready", "quarantined"],
     ["leased", "reclaiming"],
     ["reclaiming", "ready"],
     ["reclaiming", "shutdown"],

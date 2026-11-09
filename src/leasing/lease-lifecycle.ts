@@ -6,6 +6,10 @@ import {
   type LeaseGrant,
   type LeaseRecord,
   type ReleasedLease,
+  type DriverCatalog,
+  BadDeviceRequestError,
+  toDriverDevice,
+  UnknownLeaseError,
 } from "../core/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 
@@ -47,12 +51,20 @@ export interface LeaseLifecycleRegistry {
 
 type LeaseEndReason = "explicit" | "killed" | "expired" | "device-lost";
 
+export class ProviderLeaseDeadlineError extends BadDeviceRequestError {
+  constructor(readonly confirmedDeadline: number) {
+    super("The device provider could not extend the lease to the requested deadline");
+    this.name = "ProviderLeaseDeadlineError";
+  }
+}
+
 export interface LeaseLifecycleOptions {
   readonly clock: Clock;
   readonly eventBus: EventBus;
   readonly expiryScheduler: LeaseExpiryScheduler;
   readonly registry: LeaseLifecycleRegistry;
   readonly ttl: { readonly defaultMs: number };
+  readonly drivers?: Pick<DriverCatalog, "get">;
 }
 
 export class LeaseLifecycle {
@@ -87,11 +99,13 @@ export class LeaseLifecycle {
   }): Promise<LeaseGrant> {
     const { ttlMs, requestId, environment, timing, source, fleetRequestId, ...createInput } = input;
     const effectiveTtlMs = ttlMs ?? this.options.ttl.defaultMs;
+    const ttlDeadline = this.options.clock.now() + effectiveTtlMs;
+    this.#checkDeadline(input.deviceId, ttlDeadline);
     const lease = await this.options.registry.createLease({
       ...createInput,
       request: { environment, id: requestId, timing },
       ttlMs: effectiveTtlMs,
-      ttlDeadline: this.options.clock.now() + effectiveTtlMs,
+      ttlDeadline,
     });
     const device = this.options.registry.snapshot.devices.find(
       (candidate) => candidate.id === lease.deviceId,
@@ -128,15 +142,32 @@ export class LeaseLifecycle {
    * The fallback to `defaultMs` is unreachable for a live lease -- it only covers a lease the
    * snapshot no longer has, whose `renewLease` below is about to throw `UnknownLeaseError`.
    */
-  async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
+  async prepareRenewal(leaseId: string, ttlMs?: number): Promise<number> {
+    const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
+    if (current === undefined) throw new UnknownLeaseError(leaseId);
+    const effectiveTtlMs = ttlMs ?? current.ttlMs;
+    const requestedDeadline = this.options.clock.now() + effectiveTtlMs;
+    const device = this.#device(current.deviceId);
+    const driver = this.options.drivers?.get(device.spec.platform);
+    if (driver?.renewLease === undefined) {
+      this.#checkDeadline(current.deviceId, requestedDeadline);
+      return requestedDeadline;
+    }
+    const target = toDriverDevice(device);
+    const confirmedDeadline = await driver.renewLease(target, requestedDeadline);
+    if (confirmedDeadline < requestedDeadline) {
+      throw new ProviderLeaseDeadlineError(confirmedDeadline);
+    }
+    return requestedDeadline;
+  }
+
+  async renew(leaseId: string, ttlMs?: number, confirmedDeadline?: number): Promise<LeaseRecord> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
     const effectiveTtlMs = ttlMs ?? current?.ttlMs ?? this.options.ttl.defaultMs;
+    const ttlDeadline = confirmedDeadline ?? this.options.clock.now() + effectiveTtlMs;
+    if (current !== undefined) this.#checkDeadline(current.deviceId, ttlDeadline);
 
-    const renewed = await this.options.registry.renewLease(
-      leaseId,
-      this.options.clock.now() + effectiveTtlMs,
-      effectiveTtlMs,
-    );
+    const renewed = await this.options.registry.renewLease(leaseId, ttlDeadline, effectiveTtlMs);
     this.options.eventBus.emit(
       "lease.renewed",
       { leaseId: renewed.id, newDeadline: renewed.ttlDeadline },
@@ -144,6 +175,26 @@ export class LeaseLifecycle {
     );
     this.options.expiryScheduler.replace(renewed);
     return renewed;
+  }
+
+  #device(deviceId: string): DeviceRecord {
+    const device = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === deviceId,
+    );
+    if (device === undefined) throw new Error(`Lease device is missing: ${deviceId}`);
+    return device;
+  }
+
+  #checkDeadline(deviceId: string, ttlDeadline: number): void {
+    const device = this.#device(deviceId);
+    const driver = this.options.drivers?.get(device.spec.platform);
+    const target = toDriverDevice(device);
+    const maximum = driver?.maximumLeaseDeadline?.(target);
+    if (maximum !== undefined && ttlDeadline > maximum) {
+      throw new BadDeviceRequestError(
+        "The requested lease exceeds the device provider's remaining lifetime",
+      );
+    }
   }
 
   /**

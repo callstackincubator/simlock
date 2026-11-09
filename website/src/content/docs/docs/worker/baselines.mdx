@@ -11,6 +11,7 @@ Before you start:
 
 - Saving and removing a baseline needs the admin role. Any session can list baselines; an agent session that tries to save or remove gets `FORBIDDEN`.
 - Only simulators and emulators can be saved. A lease on a physical device is refused with `BAD_REQUEST`.
+- The [AgentDeviceCloud backend](/simlock/docs/worker/agent-device-cloud) does not support saving baselines or leasing saved copies.
 - A baseline lives on the worker that saved it. Through a gateway, see [Baselines through a gateway](/simlock/docs/gateway/managing-workers#baselines-through-a-gateway).
 
 ## Save a baseline

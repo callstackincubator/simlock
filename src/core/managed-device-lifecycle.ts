@@ -269,8 +269,16 @@ export class ManagedDeviceLifecycle {
 
     try {
       let current = claimed.device;
+      const driver = this.catalog.get(current.spec.platform);
+      let destroyed = false;
       if (current.state === "ready") {
-        await this.catalog.get(current.spec.platform).shutdown(toDriverDevice(current));
+        const target = toDriverDevice(current);
+        if (driver.supportsShutdown === false) {
+          await driver.destroy(target);
+          destroyed = true;
+        } else {
+          await driver.shutdown(target);
+        }
         const shutdown = await this.#commitWithoutRelease(claimed, ["ready"], "shutdown", {
           event: "device.shutdown",
           payload: { deviceId: current.id, initiator },
@@ -282,7 +290,10 @@ export class ManagedDeviceLifecycle {
         current = shutdown;
       }
 
-      await this.catalog.get(current.spec.platform).destroy(toDriverDevice(current));
+      if (destroyed === false) {
+        const target = toDriverDevice(current);
+        await driver.destroy(target);
+      }
       return this.#commit(claimed, ["shutdown"], "deleted", {
         event: "device.deleted",
         payload: { deviceId: current.id, initiator },

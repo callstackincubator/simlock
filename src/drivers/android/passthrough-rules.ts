@@ -4,6 +4,7 @@ import {
   PassthroughRefusedError,
   type PhysicalDriverDevice,
   type VirtualDriverDevice,
+  type DriverDevice,
   isPhysicalDriverDevice,
 } from "../../core/index.js";
 import type { ProcessResult, ProcessRunner } from "../../ports/index.js";
@@ -276,7 +277,9 @@ function refusedSequenceMessage(args: readonly string[]): string | undefined {
 export interface PassthroughRulesOptions {
   readonly adb: string;
   readonly adbServerPort: number;
-  readonly adbTools: AdbTools;
+  readonly adbTools: Pick<AdbTools, "env"> & {
+    dataFor(device: DriverDevice): { readonly serial: string };
+  };
   readonly platform: string;
   /** why: a phone's handler is built with this part's `isBareShell`, so the part reaches it through callbacks rather than owning it. */
   readonly physical: {

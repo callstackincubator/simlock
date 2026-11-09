@@ -41,7 +41,7 @@ Devices:
 
 Reclaim and quarantine:
 
-- Reclaim runs after leasing's lease-end commit. A virtual device: shutdown → destroy → `deleted`. A physical device: commit what `driver.reclaim` returns.
+- Reclaim runs after leasing's lease-end commit. A virtual device: shutdown → destroy → `deleted`; a release-only provider destroys directly. A physical device: commit what `driver.reclaim` returns.
 - A failed reclaim quarantines. A physical device that is not present goes `absent` instead, and its reclaim runs again when it is back.
 - Quarantine retries run under the `reclaim` claim: a virtual device is destroyed, a physical one reclaimed. A physical device not present waits `health.probeIntervalMs`, and that try is not counted.
 - Out of retries, a virtual device is destroyed and a physical one unenrolled (`device.quarantine-abandoned`). A destroy that fails leaves the device quarantined, with its capacity slot and no further retry (`device.quarantine-stranded`).
@@ -57,6 +57,7 @@ Components:
 Baselines (ADR 0061 §4):
 
 - One save or remove at a time. A save: leasing's `releaseToSave` ends the lease, then `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim. A driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`.
+- A provider that cannot save baselines is refused before ending the lease.
 - A replace keeps the leased devices of older versions. An older version is dropped only when no device record and no provision (`hold`) has it; that is checked after a save, on every `device.deleted` and at startup.
 - `remove` refuses a baseline a lease uses, and destroys each source before its row. `removeAll` (nuke) deletes rows first.
 - `checkStale` runs before `list` and `doctor` and after `component.removed`.

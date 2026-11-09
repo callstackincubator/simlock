@@ -279,7 +279,7 @@ async function composeDaemon(
     eventBus,
     logger,
   });
-  const deviceDataTables = await resolveDeviceDataTables(options);
+  const deviceDataTables = await resolveDeviceDataTables(options, config.drivers);
   await refuseWhenDaemonAnswers({ connector: ipc, endpoint: socketPath });
   const state = await openStateDatabase({
     dataDirectory,

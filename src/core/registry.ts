@@ -356,11 +356,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (
       device.state !== "reclaiming" &&
       device.state !== "provisioning" &&
-      device.state !== "shutdown"
+      device.state !== "shutdown" &&
+      (device.physical || device.state !== "ready")
     ) {
-      throw new RegistryEventError(
-        `Device is not reclaiming, provisioning, or shutdown: ${deviceId}`,
-      );
+      throw new RegistryEventError(`Device is not eligible for quarantine: ${deviceId}`);
     }
     const updated: DeviceRecord = {
       ...this.#transitioned(device, "quarantined"),

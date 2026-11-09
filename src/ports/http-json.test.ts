@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FetchHttpJsonClient } from "./http-json.js";
+import { FetchHttpJsonClient, FetchHttpJsonRequester } from "./http-json.js";
 
 const servers: Server[] = [];
 
@@ -19,6 +19,55 @@ afterEach(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+// why: the requester adapter is proven against a real HTTP server, so request framing and fetch's redirect policy are observed beyond the fake port.
+describe("FetchHttpJsonRequester", () => {
+  it("sends authenticated JSON writes and bodyless reads and deletes", async () => {
+    const received: {
+      method: string | undefined;
+      authorization: string | undefined;
+      body: string;
+      contentType: string | undefined;
+    }[] = [];
+    const base = await serve((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        received.push({
+          method: request.method,
+          authorization: request.headers.authorization,
+          body,
+          contentType: request.headers["content-type"],
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"accepted":true}');
+      });
+    });
+    const client = new FetchHttpJsonRequester();
+    const created = await client.request({
+      method: "POST",
+      url: base,
+      token: "adc_secret",
+      body: { ttl_seconds: 1800 },
+    });
+    expect(created).toEqual({ status: 200, body: { accepted: true } });
+    await client.request({ method: "GET", url: base, token: "adc_secret" });
+    await client.request({ method: "DELETE", url: base, token: "adc_secret" });
+    expect(received).toEqual([
+      {
+        method: "POST",
+        authorization: "Bearer adc_secret",
+        body: '{"ttl_seconds":1800}',
+        contentType: "application/json",
+      },
+      { method: "GET", authorization: "Bearer adc_secret", body: "", contentType: undefined },
+      { method: "DELETE", authorization: "Bearer adc_secret", body: "", contentType: undefined },
+    ]);
+  });
 });
 
 // why: an adapter over fetch, proven by what a real HTTP server does with the bearer token, the body cap and a redirect, which the fake cannot show.

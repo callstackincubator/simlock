@@ -1,0 +1,108 @@
+---
+title: AgentDeviceCloud
+description: Run a worker backed by disposable Android devices from AgentDeviceCloud.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A worker can lease Android devices from [AgentDeviceCloud](https://agentdevicecloud.xyz) instead of starting Android emulators on its own machine. Agents keep using Simlock's leases, ADB commands, and gateway. The worker provisions a cloud device and connects it through an authenticated ADB bridge.
+
+<Aside type="caution">
+This backend is a prototype for trusted internal workloads. Devices run ReDroid, and the service does not establish isolation for hostile apps or tenants. Use a separate worker data directory when trying it. Only one Simlock worker may run per OS user: stop an existing worker first, or use another user or machine.
+</Aside>
+
+## Configure a cloud worker
+
+Install Android platform-tools so `adb` is on the worker's `PATH`. The cloud backend does not need the Android emulator, local system images, or `avdmanager`.
+
+Create an AgentDeviceCloud account API key. Keep it in the environment of the process that starts the worker:
+
+```sh
+export ADC_API_KEY='<your-account-api-key>'
+export SIMLOCK_HOME="$HOME/.simlock-adc"
+mkdir -p "$SIMLOCK_HOME"
+```
+
+Create `$SIMLOCK_HOME/config.json`:
+
+```json
+{
+  "drivers": {
+    "android": {
+      "backend": "adc",
+      "apiUrl": "https://api.agentdevicecloud.xyz",
+      "apiKeyEnv": "ADC_API_KEY",
+      "provisionTimeoutMs": 600000
+    }
+  },
+  "capacity": {
+    "strategy": "fixed",
+    "config": {
+      "maxRunning": 2,
+      "android": { "maxRunning": 2, "maxDevices": 2 }
+    }
+  },
+  "warmPool": { "enabled": false },
+  "memoryPressure": { "enabled": false }
+}
+```
+
+Then start the worker and inspect its catalog:
+
+```sh
+simlock daemon start
+simlock catalog --platform android
+```
+
+`apiKeyEnv` names the environment variable containing the API key; it does not contain the key itself. The worker needs that variable every time it starts. Changing a setting requires a daemon restart. Changing `backend` does not migrate existing local or cloud devices.
+
+Start this prototype from the configured shell. An installed login service does not capture arbitrary API-key environment variables; arrange its secret environment separately before relying on automatic startup.
+
+Use fixed capacity because the Android devices run remotely. Choose limits within the account's available concurrency. Keep the warm pool off while evaluating the backend: a spare cloud device holds a billable ADC lease. Disabling local memory-pressure admission prevents the worker's own RAM readings from pausing remote device creation.
+
+A worker uses one Android backend. To offer local Android emulators and cloud devices in one fleet, run separate workers on different machines or OS users and [join them to a gateway](/simlock/docs/gateway/joining-workers).
+
+## Lease and use a device
+
+The cloud catalog offers `ReDroid`, a phone profile running Android 14, represented by API level `34`:
+
+```sh
+simlock lease --platform android --device ReDroid --os 34 --ttl 15m --detach
+```
+
+Note `lease.id` and `device.address` in the grant. The address is a local TCP ADB serial, such as `127.0.0.1:49152`; use the actual returned address. The worker saves that allocation's bridge port and reuses it after a restart.
+
+Run commands through Simlock:
+
+```sh
+simlock adb -s "$SERIAL" install app-debug.apk
+simlock adb -s "$SERIAL" shell am start -n com.example.myapp/.MainActivity
+simlock adb -s "$SERIAL" exec-out screencap -p > screen.png
+```
+
+On the worker, tools that call ADB directly need `ANDROID_ADB_SERVER_PORT` from the grant's `environment`, along with `device.address` as their serial. The worker's bridge and all device tools share one ADB connection to each cloud lease. Do not run a separate `adc connect` for the same lease.
+
+Release the device when finished:
+
+```sh
+simlock release "$LEASE_ID"
+```
+
+Release or expiry ends the ADC lease and discards its app data. A later lease gets a fresh device; the backend does not keep a stopped device for resumption.
+
+## Lifetime and recovery
+
+Simlock renewals keep the ADC lease in sync. An ADC device has an absolute lifetime of eight hours from activation; a renewal cannot move the Simlock deadline past that limit. Finish work and request a new device before reaching it.
+
+For a recorded device, the worker reconnects to the same active cloud lease after a restart. It cannot recover a device that ADC has already released or expired. If the worker is stopped or unreachable, its backing ADC lease can remain active until the service's eight-hour limit; release devices before stopping a worker for a long time.
+
+## Current limits
+
+- The service provides one Android 14 phone profile. Requests do not select a Pixel model, another API level, an image tag, region, or CPU architecture. Check APK compatibility with the device you receive.
+- Local runtime installation, saved baselines, snapshots, and persistent device storage are unavailable.
+- The raw `emulator adb` tunnel is unavailable. The worker already owns the device's one upstream ADB transport. Use Simlock's ADB commands, agent-device, or an ordinary device-port tunnel; reverse tunnels can connect the device to Metro on your machine.
+- Provisioning is not crash-safe yet. If ADC accepts a creation request but the worker stops or loses the response before recording the returned cloud lease ID, the worker cannot discover that allocation on restart. ADC has no lookup by the request's idempotency key. The orphaned lease can remain billable until its eight-hour expiry; inspect the ADC account's lease list and release it there.
+- Provisioning can wait for cloud capacity. `drivers.android.provisionTimeoutMs` bounds how long this worker waits, and a timed-out request releases its queued ADC lease.
+- The API key stays on the worker. Agents using a gateway need their Simlock credentials, rather than an ADC API key.
+
+For the available keys, see the [configuration reference](/simlock/docs/reference/configuration#devices-and-drivers).

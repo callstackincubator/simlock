@@ -190,7 +190,15 @@ export {
   type WebSocketClient,
   type WebSocketClientConnector,
 } from "./websocket-client.js";
-export { FakeHttpJsonClient, FetchHttpJsonClient, type HttpJsonClient } from "./http-json.js";
+export {
+  FakeHttpJsonClient,
+  FetchHttpJsonClient,
+  FakeHttpJsonRequester,
+  FetchHttpJsonRequester,
+  type HttpJsonClient,
+  type HttpJsonRequester,
+  type HttpJsonRequest,
+} from "./http-json.js";
 export {
   defaultWorkerLockPath,
   NodeWorkerLock,

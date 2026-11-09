@@ -3,7 +3,7 @@ import type { BaselineEntry } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import { assertVirtual, type Platform, type VirtualDevice } from "./domain.js";
-import type { Driver, DriverSource } from "./driver.js";
+import { BadDeviceRequestError, type Driver, type DriverSource } from "./driver.js";
 import { NoDriverError } from "./driver-catalog.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { Registry, ReleasedLease } from "./registry.js";
@@ -93,7 +93,9 @@ export interface BaselineRemoveResult {
 
 export interface BaselineServiceOptions {
   readonly clock: Clock;
-  readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource" | "listSources"> };
+  readonly drivers: {
+    get(platform: Platform): Pick<Driver, "destroySource" | "listSources" | "supportsBaselines">;
+  };
   readonly leaseSave: () => {
     releaseToSave<Result>(
       leaseId: string,
@@ -135,6 +137,18 @@ export class BaselineService {
   }
 
   async #save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+    const lease = this.options.registry.snapshot.leases.find(
+      (current) => current.id === request.leaseId,
+    );
+    const device = this.options.registry.snapshot.virtualDevices.find(
+      (current) => current.id === lease?.deviceId,
+    );
+    if (device !== undefined) {
+      const driver = this.options.drivers.get(device.spec.platform);
+      if (driver.supportsBaselines === false) {
+        throw new BadDeviceRequestError("This device provider does not support saved baselines");
+      }
+    }
     const baseline = await this.options
       .leaseSave()
       .releaseToSave(request.leaseId, async (released) => {

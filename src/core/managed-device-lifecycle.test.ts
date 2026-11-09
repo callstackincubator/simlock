@@ -240,6 +240,31 @@ describe("ManagedDeviceLifecycle", () => {
     expect(harness.eventBus.replay().map((event) => event.event)).toContain("device.deleted");
   });
 
+  it("disposes a release-only ready device once while keeping leased devices untouched", async () => {
+    const harness = await createHarness();
+    Object.assign(harness.driver, { supportsShutdown: false });
+    const ready = await readyDevice(harness);
+    const disposed = await harness.lifecycle.dispose(ready, "test", "cleanup");
+    expect(disposed).toMatchObject({ state: "deleted" });
+    const operations = harness.driver.calls.map((call) => call.operation);
+    expect(operations).toEqual(["provision", "makeReady", "destroy"]);
+
+    const held = await createHarness();
+    Object.assign(held.driver, { supportsShutdown: false });
+    const leasedDevice = await readyDevice(held);
+    await held.registry.createLease({
+      deviceId: leasedDevice.id,
+      requesterId: "agent",
+      ownerId: "agent",
+      ttlMs: 100,
+      ttlDeadline: 1_100,
+    });
+    const refused = await held.lifecycle.dispose(leasedDevice, "test", "cleanup");
+    expect(refused).toBeUndefined();
+    const heldOperations = held.driver.calls.map((call) => call.operation);
+    expect(heldOperations).toEqual(["provision", "makeReady"]);
+  });
+
   it("does not touch leased devices and releases claims after driver failures", async () => {
     const harness = await createHarness();
     const ready = await readyDevice(harness);

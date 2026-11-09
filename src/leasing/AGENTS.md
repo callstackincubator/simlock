@@ -12,6 +12,7 @@ The lock:
 - One `SerializedDecision` per core, shared with core's reclaim, warm pool and registry writers. Read-decide-commit runs under it; driver I/O never does.
 - Admit, plan and grant run under the lock. Resolve and perform (provision, boot, evict) run outside it, and a new plan follows every perform.
 - A grant is one registry commit: device `leased`, lease and request together.
+- A provider's recorded deadline bounds the grant. Provider renewal runs outside the decision gate before the local renewal commits; renewals of one lease run in order, and a released lease cannot be revived by a late provider answer.
 - Events go out after the commit that made them true.
 - A physical device's presence is read outside the lock and checked again inside it before the grant.
 

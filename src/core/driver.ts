@@ -250,6 +250,13 @@ export interface DriverSource {
 
 export interface Driver {
   readonly rebootReadyBeforeGrant?: boolean;
+  readonly supportsShutdown?: boolean;
+  readonly supportsBaselines?: boolean;
+  maximumLeaseDeadline?(device: VirtualDriverDevice | PhysicalDriverDevice): number;
+  renewLease?(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    ttlDeadline: number,
+  ): Promise<number>;
   readonly platform: Platform;
   readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
   readonly deviceRoot: string;

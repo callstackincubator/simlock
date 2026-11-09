@@ -7,6 +7,7 @@ import {
   capacityDevice,
   capacityDevices,
   DriverCrashError,
+  BadDeviceRequestError,
   type DeviceMode,
   type VirtualSpec,
   specMode,
@@ -63,6 +64,57 @@ function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogS
 
 // why: drives the coordinator on its own, so a test can interleave its lifecycle, queue and clock in orders the leasing surface cannot force.
 describe("LeaseAcquisitionCoordinator", () => {
+  it("rejects an overlong provider lease once and destroys its prepared device", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", availableOsVersions: ["26.5"] });
+    Object.assign(driver, { supportsShutdown: false, maximumLeaseDeadline: () => 1_050 });
+    const harness = await createHarness({ drivers: [driver] });
+    const acquiring = harness.coordinator.request(request, {
+      ownerId: "agent",
+      requesterId: "agent",
+    });
+    const observed = promiseState(acquiring);
+    await settle();
+    expect(observed.state).toBe("rejected");
+    await expect(acquiring).rejects.toBeInstanceOf(BadDeviceRequestError);
+    expect(harness.registry.snapshot.leases).toEqual([]);
+    expect(harness.registry.snapshot.virtualDevices).toMatchObject([{ state: "deleted" }]);
+    const provisions = driver.calls.filter((call) => call.operation === "provision");
+    expect(provisions).toHaveLength(1);
+    const destructions = driver.calls.filter((call) => call.operation === "destroy");
+    expect(destructions).toHaveLength(1);
+  });
+
+  it("quarantines a refused provider device when disposal fails instead of granting it again", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", availableOsVersions: ["26.5"] });
+    Object.assign(driver, { supportsShutdown: false, maximumLeaseDeadline: () => 1_050 });
+    driver.failOn("destroy", 1, new Error("provider release unreachable"));
+    const harness = await createHarness({ drivers: [driver] });
+    const acquiring = harness.coordinator.request(request, {
+      ownerId: "agent",
+      requesterId: "agent",
+    });
+    const observed = promiseState(acquiring);
+    await settle();
+    expect(observed.state).toBe("rejected");
+    await expect(acquiring).rejects.toBeInstanceOf(BadDeviceRequestError);
+    expect(harness.registry.snapshot.virtualDevices).toMatchObject([{ state: "quarantined" }]);
+    const shorter = harness.coordinator.request(request, {
+      ownerId: "another",
+      requesterId: "another",
+      ttlMs: 25,
+      noWait: true,
+    });
+    const shorterState = promiseState(shorter);
+    await settle();
+    expect(shorterState.state).toBe("rejected");
+    await expect(shorter).rejects.toBeInstanceOf(NoCapacityError);
+    expect(harness.registry.snapshot.leases).toEqual([]);
+    const provisions = driver.calls.filter((call) => call.operation === "provision");
+    expect(provisions).toHaveLength(1);
+  });
+
   it("prepares a warm device before granting when its driver requires it", async () => {
     const harness = await createHarness();
     const device = await seedReady(harness);

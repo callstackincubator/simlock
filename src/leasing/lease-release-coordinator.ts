@@ -8,6 +8,7 @@ import {
   type ReclaimCoordinator,
 } from "../core/index.js";
 import type { EndedLease, LeaseEndParticipant } from "./lease-ports.js";
+import { ProviderLeaseDeadlineError } from "./lease-lifecycle.js";
 
 export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
 
@@ -46,7 +47,8 @@ export interface LeaseReleaseLifecycle {
   ): Promise<ReleasedLease>;
   endForMissingDevice(leaseId: string, reason: "expired" | "device-lost"): Promise<ReleasedLease>;
   endForAbsentDevice(leaseId: string, absentReason: AbsentReason): Promise<ReleasedLease>;
-  renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
+  prepareRenewal?(leaseId: string, ttlMs?: number): Promise<number>;
+  renew(leaseId: string, ttlMs?: number, confirmedDeadline?: number): Promise<LeaseRecord>;
 }
 
 export interface LeaseReleaseRegistry {
@@ -87,6 +89,7 @@ export class LeaseReleaseCoordinator
   readonly #logger: Logger;
   readonly #maintenanceWaiters: (() => void)[] = [];
   readonly #participantCalls = new Set<ParticipantCalls>();
+  readonly #renewals = new Map<string, Promise<LeaseRecord>>();
   #disposed = false;
   #maintenanceDepth = 0;
   #stopping = false;
@@ -241,9 +244,37 @@ export class LeaseReleaseCoordinator
   }
 
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
-    return this.#runNormal(() =>
-      this.options.decisions.run(() => this.options.lifecycle.renew(leaseId, ttlMs)),
-    );
+    const previous = this.#renewals.get(leaseId);
+    const work = this.#runNormal(async () => {
+      if (previous !== undefined) {
+        await previous.catch(() => undefined);
+      }
+      let confirmedDeadline: number | undefined;
+      try {
+        confirmedDeadline = await this.options.lifecycle.prepareRenewal?.(leaseId, ttlMs);
+      } catch (error: unknown) {
+        if (error instanceof ProviderLeaseDeadlineError) {
+          await this.options.decisions.run(async () => {
+            const current = this.options.registry.snapshot.leases.find(
+              (lease) => lease.id === leaseId,
+            );
+            if (current !== undefined && error.confirmedDeadline < current.ttlDeadline) {
+              await this.options.lifecycle.renew(leaseId, current.ttlMs, error.confirmedDeadline);
+            }
+          });
+        }
+        throw error;
+      }
+      return this.options.decisions.run(() =>
+        this.options.lifecycle.renew(leaseId, ttlMs, confirmedDeadline),
+      );
+    });
+    this.#renewals.set(leaseId, work);
+    try {
+      return await work;
+    } finally {
+      if (this.#renewals.get(leaseId) === work) this.#renewals.delete(leaseId);
+    }
   }
 
   async beginMaintenance(): Promise<void> {

@@ -9,8 +9,11 @@ import {
   UnknownLeaseError,
   type ReleasedLease,
   SerializedDecision,
+  DriverCatalog,
+  type Driver,
+  BadDeviceRequestError,
 } from "../core/index.js";
-import { loadTestRegistry } from "../core/testing.js";
+import { FakeDriver, loadTestRegistry } from "../core/testing.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
@@ -28,7 +31,7 @@ async function flush(): Promise<void> {
   }
 }
 
-async function createHarness() {
+async function createHarness(driver?: Driver) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   let nextId = 0;
@@ -44,6 +47,7 @@ async function createHarness() {
     expiryScheduler: scheduler,
     registry,
     ttl: { defaultMs: 20 },
+    ...(driver === undefined ? {} : { drivers: new DriverCatalog([driver]) }),
   });
   const reclaims: ReleasedLease[] = [];
   const reclaim = {
@@ -109,6 +113,126 @@ async function grant(
 }
 
 describe("LeaseReleaseCoordinator", () => {
+  it("reduces the recorded deadline when the provider quota shortens an existing backing lease", async () => {
+    const clock = new FakeClock(1_000);
+    const driver: Driver = new FakeDriver({ clock, platform: "ios" });
+    let maximum = 2_000;
+    driver.maximumLeaseDeadline = () => maximum;
+    driver.renewLease = async () => {
+      maximum = 1_010;
+      return maximum;
+    };
+    const harness = await createHarness(driver);
+    const granted = await grant(harness);
+    const renewal = harness.coordinator.renew(granted.lease.id, 40);
+    await expect(renewal).rejects.toBeInstanceOf(BadDeviceRequestError);
+    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_010 }]);
+    const facts = harness.eventBus.replay().filter((event) => event.event === "lease.renewed");
+    expect(facts).toMatchObject([{ payload: { leaseId: granted.lease.id, newDeadline: 1_010 } }]);
+  });
+  it("commits a renewal only after the provider confirms the full requested lifetime", async () => {
+    const clock = new FakeClock(1_000);
+    const driver: Driver = new FakeDriver({ clock, platform: "ios" });
+    driver.renewLease = async () => {
+      throw new Error("provider unreachable");
+    };
+    const harness = await createHarness(driver);
+    const granted = await grant(harness);
+    harness.clock.advance(5);
+
+    const failed = harness.coordinator.renew(granted.lease.id, 40);
+    await expect(failed).rejects.toThrow("provider unreachable");
+    expect(harness.registry.snapshot.leases).toMatchObject([
+      { ttlMs: 20, ttlDeadline: 1_020, lastRenewedAt: 1_000 },
+    ]);
+    const failedFacts = harness.eventBus
+      .replay()
+      .filter((event) => event.event === "lease.renewed");
+    expect(failedFacts).toEqual([]);
+
+    driver.renewLease = async (_device, deadline) => deadline - 1;
+    const shortened = harness.coordinator.renew(granted.lease.id, 40);
+    await expect(shortened).rejects.toBeInstanceOf(BadDeviceRequestError);
+    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlMs: 20, ttlDeadline: 1_020 }]);
+
+    driver.renewLease = async (_device, deadline) => deadline;
+    const renewed = await harness.coordinator.renew(granted.lease.id, 40);
+    expect(renewed).toMatchObject({ ttlMs: 40, ttlDeadline: 1_045, lastRenewedAt: 1_005 });
+    const renewedFacts = harness.eventBus
+      .replay()
+      .filter((event) => event.event === "lease.renewed");
+    expect(renewedFacts).toMatchObject([
+      { payload: { leaseId: granted.lease.id, newDeadline: 1_045 } },
+    ]);
+  });
+
+  it("releases during provider renewal and never restores the ended lease", async () => {
+    const clock = new FakeClock(1_000);
+    const driver: Driver = new FakeDriver({ clock, platform: "ios" });
+    let confirm!: (deadline: number) => void;
+    const confirmation = new Promise<number>((resolve) => {
+      confirm = resolve;
+    });
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    driver.renewLease = async () => {
+      signalStarted();
+      return confirmation;
+    };
+    const harness = await createHarness(driver);
+    const granted = await grant(harness);
+    const renewing = harness.coordinator.renew(granted.lease.id, 40);
+    const renewalOutcome = renewing.catch((error: unknown) => error);
+    await started;
+    let releaseFinished = false;
+    const released = harness.coordinator.release(granted.lease.id, "explicit").then(() => {
+      releaseFinished = true;
+    });
+    await flush();
+    const releasedBeforeConfirmation = releaseFinished;
+    confirm(1_040);
+    await released;
+    const failure = await renewalOutcome;
+    expect(releasedBeforeConfirmation).toBe(true);
+    expect(failure).toBeInstanceOf(UnknownLeaseError);
+    expect(harness.registry.snapshot.leases).toEqual([]);
+    await harness.coordinator.settleBackgroundReclaims();
+    expect(harness.reclaims).toMatchObject([{ lease: { id: granted.lease.id } }]);
+    const renewedFacts = harness.eventBus
+      .replay()
+      .filter((event) => event.event === "lease.renewed");
+    expect(renewedFacts).toEqual([]);
+  });
+
+  it("serializes provider renewals for one lease before committing each confirmed deadline", async () => {
+    const clock = new FakeClock(1_000);
+    const driver: Driver = new FakeDriver({ clock, platform: "ios" });
+    let confirm!: (deadline: number) => void;
+    const confirmation = new Promise<number>((resolve) => {
+      confirm = resolve;
+    });
+    const requested: number[] = [];
+    driver.renewLease = async (_device, deadline) => {
+      requested.push(deadline);
+      return requested.length === 1 ? confirmation : deadline;
+    };
+    const harness = await createHarness(driver);
+    const granted = await grant(harness);
+    const first = harness.coordinator.renew(granted.lease.id, 40);
+    const second = harness.coordinator.renew(granted.lease.id, 60);
+    await flush();
+    const requestsBeforeConfirmation = [...requested];
+    confirm(1_040);
+    const firstLease = await first;
+    const secondLease = await second;
+    expect(requestsBeforeConfirmation).toEqual([1_040]);
+    expect(firstLease.ttlDeadline).toBe(1_040);
+    expect(secondLease.ttlDeadline).toBe(1_060);
+    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_060 }]);
+  });
+
   it.each([
     ["explicit", "lease.released"],
     ["killed", "lease.released"],

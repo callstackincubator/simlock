@@ -317,15 +317,20 @@ export class ReclaimCoordinator {
   }): Promise<void> {
     const driver = this.options.drivers.get(released.device.spec.platform);
     const startedAt = this.options.clock.now();
+    const target = toDriverDevice(released.device);
     try {
-      await driver.shutdown(toDriverDevice(released.device));
+      if (driver.supportsShutdown === false) {
+        await driver.destroy(target);
+      } else {
+        await driver.shutdown(target);
+      }
     } catch (error: unknown) {
       await this.#recoverPurgeFailure(
         released.device.id,
         released.lease.id,
         startedAt,
         "delete",
-        "shutdown-failed",
+        driver.supportsShutdown === false ? "delete-failed" : "shutdown-failed",
         error,
       );
       return;
@@ -337,7 +342,7 @@ export class ReclaimCoordinator {
     this.options.notifyAvailability();
 
     try {
-      await this.#deleteSpent(shutdown);
+      await this.#deleteSpent(shutdown, "lease-end", driver.supportsShutdown === false);
     } catch (error: unknown) {
       await this.#recoverPurgeFailure(
         released.device.id,
@@ -351,8 +356,16 @@ export class ReclaimCoordinator {
   }
 
   /** Destroys a spent device and commits `shutdown -> deleted`, if it is still that device. */
-  async #deleteSpent(device: VirtualDevice, initiator = "lease-end"): Promise<boolean> {
-    await this.options.drivers.get(device.spec.platform).destroy(toDriverDevice(device));
+  async #deleteSpent(
+    device: VirtualDevice,
+    initiator = "lease-end",
+    destroyed = false,
+  ): Promise<boolean> {
+    if (destroyed === false) {
+      const driver = this.options.drivers.get(device.spec.platform);
+      const target = toDriverDevice(device);
+      await driver.destroy(target);
+    }
     const deleted = await this.options.decisions.run(async () => {
       if (this.#unleasedDevice(device.id, "shutdown") === undefined) return false;
       await this.options.registry.transitionDevice(device.id, "deleted", {

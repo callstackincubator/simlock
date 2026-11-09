@@ -11,6 +11,17 @@ export interface HttpJsonClient {
   get(url: string, token: string): Promise<HttpJsonAnswer>;
 }
 
+export interface HttpJsonRequest {
+  readonly method: "GET" | "POST" | "DELETE";
+  readonly url: string;
+  readonly token: string;
+  readonly body?: unknown;
+}
+
+export interface HttpJsonRequester {
+  request(input: HttpJsonRequest): Promise<HttpJsonAnswer>;
+}
+
 async function readCapped(response: Response): Promise<string> {
   const reader = response.body?.getReader();
   if (reader === undefined) return "";
@@ -30,20 +41,10 @@ async function readCapped(response: Response): Promise<string> {
 }
 
 export class FetchHttpJsonClient implements HttpJsonClient {
+  readonly #requester = new FetchHttpJsonRequester();
+
   async get(url: string, token: string): Promise<HttpJsonAnswer> {
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${token}` },
-      redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const text = await readCapped(response);
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = undefined;
-    }
-    return { body, status: response.status };
+    return await this.#requester.request({ method: "GET", url, token });
   }
 }
 
@@ -56,6 +57,46 @@ export class FakeHttpJsonClient implements HttpJsonClient {
     this.requests.push({ token, url });
     const answer = this.answers.get(url);
     if (answer === undefined) throw new Error(`no answer scripted for ${url}`);
+    return answer;
+  }
+}
+
+export class FetchHttpJsonRequester implements HttpJsonRequester {
+  async request(input: HttpJsonRequest): Promise<HttpJsonAnswer> {
+    const headers: Record<string, string> = { authorization: `Bearer ${input.token}` };
+    let body: string | undefined;
+    if (input.body !== undefined) {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify(input.body);
+    }
+    const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const response = await fetch(input.url, {
+      method: input.method,
+      headers,
+      ...(body === undefined ? {} : { body }),
+      redirect: "error",
+      signal,
+    });
+    const text = await readCapped(response);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = undefined;
+    }
+    return { body: parsed, status: response.status };
+  }
+}
+
+export class FakeHttpJsonRequester implements HttpJsonRequester {
+  readonly requests: HttpJsonRequest[] = [];
+  readonly answers = new Map<string, HttpJsonAnswer>();
+
+  async request(input: HttpJsonRequest): Promise<HttpJsonAnswer> {
+    this.requests.push(input);
+    const key = `${input.method} ${input.url}`;
+    const answer = this.answers.get(key);
+    if (answer === undefined) throw new Error(`no answer scripted for ${key}`);
     return answer;
   }
 }

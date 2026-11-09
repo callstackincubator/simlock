@@ -159,6 +159,7 @@ export async function createHarness(
     expiryScheduler: expiry,
     registry,
     ttl: { defaultMs: 100 },
+    drivers: catalog,
   });
   let coordinator: LeaseAcquisitionCoordinator | undefined;
   const requestIds: string[] = [];

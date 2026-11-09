@@ -7,6 +7,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 Every iOS simulator needs an iOS runtime on the machine, and every Android emulator needs a system image. Simlock calls both **components**. They are several gigabytes each, so install the ones your agents use ahead of time: otherwise the first lease that needs one waits for the download, or fails.
 
+The [AgentDeviceCloud backend](/simlock/docs/worker/agent-device-cloud) gets its Android runtime
+from the service. It does not install or remove local Android system images.
+
 Installing and removing components needs an admin session, such as your own terminal on the worker. An agent session gets `FORBIDDEN`. Anyone can list them.
 
 ## See what agents can lease

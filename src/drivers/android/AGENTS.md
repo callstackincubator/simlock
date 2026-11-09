@@ -1,11 +1,19 @@
 # Android driver
 
-Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server.
+Does: local emulators or AgentDeviceCloud Android devices behind a private adb server, and local USB phones on the default server.
 Flows: [device selection](../../../docs/internal/flows/device-selection.md), [drivers](../AGENTS.md), [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
 ## Rules
 
-Containment:
+AgentDeviceCloud:
+
+- The selected backend never changes after a cloud failure. Cloud ownership comes from the journaled allocation and API origin, not an AVD path or an account-wide listing.
+- Every tool shares the worker's one ADB transport per cloud lease. A raw emulator ADB tunnel would open a second transport and is unsupported.
+- Recovery reconnects the same active cloud lease on its persisted local port. It never creates a replacement device under an existing lease.
+- A worker stop disconnects transports but does not release cloud leases. Reconciliation must preserve unreadable provider state rather than declaring the devices gone.
+- A crash after remote creation and before journaling its response can leave an allocation with no remote ID. Do not re-provision such an intent during startup: the API cannot look it up without possibly creating another device.
+
+Local containment:
 
 - Ownership is root membership, proven at boot and in running observations by `emu avd path` against the device's own folder, never a name. Every copy's AVD is named `simlock`, so the name is never evidence.
 - The gate (`ownership.ts`): before any `emu kill`, `adb emu avd path` must name this device's own AVD folder. It is asked every time, never cached; unreachable, timed out or another path sends nothing.

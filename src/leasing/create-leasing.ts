@@ -114,6 +114,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
   );
   const leases = new LeaseLifecycle({
     clock: options.clock,
+    drivers: core.drivers,
     eventBus: options.eventBus,
     expiryScheduler: expiry,
     registry,

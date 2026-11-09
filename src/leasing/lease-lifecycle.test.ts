@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock } from "../ports/index.js";
-import { loadTestRegistry, openTestState } from "../core/testing.js";
+import { BadDeviceRequestError, DriverCatalog, type Driver } from "../core/index.js";
+import { FakeDriver, loadTestRegistry, openTestState } from "../core/testing.js";
 import type { StateDatabase } from "../state/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
@@ -15,7 +16,11 @@ const noTiming = {
 };
 
 async function createHarness(
-  options: { readonly state?: StateDatabase; readonly platform?: "ios" | "android" } = {},
+  options: {
+    readonly state?: StateDatabase;
+    readonly platform?: "ios" | "android";
+    readonly driver?: Driver;
+  } = {},
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -50,11 +55,37 @@ async function createHarness(
     expiryScheduler,
     registry,
     ttl: { defaultMs: 20 },
+    ...(options.driver === undefined ? {} : { drivers: new DriverCatalog([options.driver]) }),
   });
   return { clock, device, eventBus, expiryScheduler, lifecycle, registry };
 }
 
 describe("LeaseLifecycle", () => {
+  it("refuses a grant past the provider's lifetime and accepts its exact boundary", async () => {
+    const clock = new FakeClock(1_000);
+    const driver: Driver = new FakeDriver({ clock, platform: "ios" });
+    driver.maximumLeaseDeadline = () => 1_015;
+    const harness = await createHarness({ driver });
+    const request = {
+      environment: {},
+      timing: noTiming,
+      requestId: "req_1",
+      source: "warm" as const,
+      deviceId: harness.device.id,
+      requesterId: "agent",
+      ownerId: "agent",
+    };
+    const refused = harness.lifecycle.grant(request);
+    await expect(refused).rejects.toBeInstanceOf(BadDeviceRequestError);
+    expect(harness.registry.snapshot.leases).toEqual([]);
+    const grantedFacts = harness.eventBus
+      .replay()
+      .filter((event) => event.event === "lease.granted");
+    expect(grantedFacts).toEqual([]);
+    const grant = await harness.lifecycle.grant({ ...request, ttlMs: 15 });
+    expect(grant.lease.ttlDeadline).toBe(1_015);
+  });
+
   it("grants a lease at lease.defaultTtlMs, storing that width and lastRenewedAt", async () => {
     const harness = await createHarness();
     const grant = await harness.lifecycle.grant({

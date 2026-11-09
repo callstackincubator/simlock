@@ -517,7 +517,7 @@ export function isSettled(record: Pick<LeaseRequestRecord<unknown>, "state">): b
  */
 const legalTransitions: Readonly<Record<VirtualState, readonly VirtualState[]>> = {
   provisioning: ["ready", "deleted", "quarantined"],
-  ready: ["leased", "shutdown"],
+  ready: ["leased", "shutdown", "quarantined"],
   leased: ["reclaiming"],
   reclaiming: ["ready", "shutdown", "quarantined"],
   quarantined: ["ready", "shutdown", "deleted"],
