@@ -531,6 +531,27 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await client.close();
   });
 
+  it("a lease.cancel sent while the same requester's lease.request is refused before admission answers once it is refused, instead of waiting forever", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const refused = client.request("lease.request", {
+      requesterId: "waiter",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      requires: ["no-such-capability"],
+    });
+    const cancel = client.request("lease.cancel", { requesterId: "waiter", platform: "ios" });
+    const state = promiseState(cancel);
+    await waitFor(() => state.state !== "pending");
+
+    expect(state.state).toBe("fulfilled");
+    expect(await refused).toMatchObject({ ok: false, error: { code: "CAPABILITY_MISSING" } });
+    expect(await cancel).toMatchObject({ ok: true });
+    await client.close();
+  });
+
   it("pushes lease-lost to every live connection sharing the lease's owner, including a detached holder on another connection (ADR 0003 §8)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const requester = await createClient(harness.socketPath);
