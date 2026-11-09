@@ -72,7 +72,13 @@ Local profile ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serve
 7. A lease the index dropped is still routed for the gateway's `lease.maxTtlMs`. For `START_WINDOW_MS` (`front/relay-host-link.ts`) after a gateway start an unknown lease is unreachable, not refused.
 8. After a gateway restart the front's map is empty: the token's `adoptable` leases are rebuilt into it before any rule reads it.
 
+## Flow: a standalone worker restarts
+
+1. The worker's front map is empty; agent-device's daemons forget their leases.
+2. The agent's next request reaches the front, which rebuilds an entry per lease of the token from the registry snapshot (`RoutedHostLink.adoptable`): the lease's requester id is its id, the front did not ask for it in this process, and its device has an address. The entry's target is `mobile`.
+3. The heartbeat takes the re-allocate path above. A lease that had `retainOnClose` loses it.
+
 ## Known gaps
 
-- **A standalone worker's own restart ends its agent-device leases.** Its next heartbeat answers ended by simlock (#1465). A call on a phone lease drops the client's instance pins too (`front/host-link.ts`), since they name the simulator daemon.
+- **A call on a phone lease drops the client's instance pins too** (`front/host-link.ts`), since they name the simulator daemon.
 - **Calls that name no lease share the token's tenant**: `session list` and an upload with no lease header see what every run of the token left under it.

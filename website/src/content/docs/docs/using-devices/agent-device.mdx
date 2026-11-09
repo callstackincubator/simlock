@@ -204,7 +204,7 @@ lease ended by simlock; run disconnect, then open
 Run `agent-device disconnect`, then `open` again. You get a new, clean device; anything on the old one is gone.
 
 <Aside type="caution">
-If agent-device restarts, Simlock keeps your lease, your device and its apps: your next heartbeat succeeds. Agent-device's own session is gone, so you may need `open` again. The same holds when a worker or the gateway restarts behind a gateway. While Simlock restores the lease, a heartbeat can answer `agent-device is not available on this simlock: the lease is being restored after an agent-device restart; try again`. Retry it; the lease stays. Restarting a standalone worker's own daemon still ends every agent-device lease on that worker, even though ordinary Simlock leases survive a restart.
+If agent-device restarts, Simlock keeps your lease, your device and its apps: your next heartbeat succeeds. Agent-device's own session is gone, so you may need `open` again. The same holds when a worker or the gateway restarts behind a gateway. While Simlock restores the lease, a heartbeat can answer `agent-device is not available on this simlock: the lease is being restored after an agent-device restart; try again`. Retry it; the lease stays. The same holds when a standalone worker's own daemon restarts: your next heartbeat succeeds on the same device. A lease made with `retainOnClose` loses that flag across such a restart.
 </Aside>
 
 ## Error reasons
