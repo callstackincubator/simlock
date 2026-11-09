@@ -836,7 +836,7 @@ describe("the agent-device front's request rules", () => {
       expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([idOf(rig, 2)]);
     });
 
-    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer `could not read the device list from the worker holding lease <id>`; `devices` with `meta.requestProgress` is refused", async () => {
+    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer `could not read the device list from the worker holding lease <id>`", async () => {
       const rig: Rig = await setUp();
       await granted(rig, 1);
       rig.fake.listDevices([{ id: idOf(rig, 1) }]);
@@ -880,11 +880,29 @@ describe("the agent-device front's request rules", () => {
           },
         });
       }
-      await refused(
-        rig,
-        () => runCommand(rig, "devices", 1, { meta: { requestProgress: true } }),
-        "refused: devices does not stream through simlock",
-      );
+    });
+
+    // why: the agent-device CLI sets `meta.requestProgress: "command"` on every command it sends without `--json`.
+    it("`devices` sent as the agent-device CLI sends it, with `meta.requestProgress`, answers an empty list before open and only the leased device after, without agent B's, and reaches agent-device without `requestProgress`", async () => {
+      const rig = await setUp();
+      await granted(rig, 2, {}, { token: secrets.two });
+      const asTheCli = { meta: { requestProgress: "command" } };
+      rig.fake.listDevices([...three, { id: idOf(rig, 2) }]);
+
+      expect(await listedIds(await runCommand(rig, "devices", undefined, asTheCli))).toEqual([]);
+      await granted(rig, 1);
+      rig.fake.listDevices([...three, { id: idOf(rig, 2) }, { id: idOf(rig, 1) }]);
+      const before = commandsReceived(rig).length;
+
+      expect(await listedIds(await runCommand(rig, "devices", 1, asTheCli))).toEqual([
+        idOf(rig, 1),
+      ]);
+      const sent = commandsReceived(rig)
+        .slice(before)
+        .map(
+          (r) => (r.params?.["meta"] as Record<string, unknown> | undefined)?.["requestProgress"],
+        );
+      expect(sent).toEqual([undefined]);
     });
   });
 
