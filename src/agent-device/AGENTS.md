@@ -37,6 +37,7 @@ Front:
 - A heartbeat is forwarded with `ttlMs` raised to the ceiling (`agentDeviceLeaseMaxTtlMs`), then renews the simlock lease (`lease.renew` only when it moves the deadline). On `LEASE_NOT_FOUND` for a lease simlock still holds, the front allocates it again on the same device, one at a time per lease and within a bound, and answers the heartbeat again; a failed re-allocate is a retryable reply that keeps the simlock lease. `LEASE_EXPIRED`, `LEASE_REVOKED`, a lease agent-device ended itself, and a lease simlock no longer holds release the simlock lease: "ended by simlock".
 - On a gateway, a lease `lease.list` omits is ended only when the index lost it (`HostLink.stillHeld`); a worker's list is final.
 - A release goes to agent-device first, then `lease.release`.
+- After a standalone worker restarts, the token's leases the front made are rebuilt into its map (`adoptable`, `front/host-link.ts`), so a live lease keeps working.
 - A command on a lease runs through `Renewals`, renewing the simlock lease until it ends, never past `lease.maxTtlMs`; standalone `boot` checks liveness without renewing.
 - A reply naming `endedLeases` ends each simlock lease this token holds, as a release does: agent-device sends no release of its own for a lease it ended.
 - Standalone `boot` on a leased device is answered by the front; in a batch, agent-device's policy refuses the step.

@@ -5,6 +5,7 @@ import {
   setUpWithPhone,
   advance,
   listed,
+  devices,
   release,
   tapDispatch,
   track,
@@ -21,7 +22,9 @@ import {
   allocatesReceived,
   runCommand,
   leases,
+  principals,
   secrets,
+  sessionFor,
 } from "./test-support.js";
 
 describe("the agent-device front, through the whole worker daemon: after agent-device restarts", () => {
@@ -293,5 +296,27 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
     expect(answer.result).not.toMatchObject({ ok: true });
     expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
     expect(await listed(rig)).toEqual([hex(2)]);
+  });
+
+  it("after a standalone worker restarts, a lease whose requester id is not its id is not adopted: the token's devices answer leaves its device out", async () => {
+    const first = await setUpWithPhone();
+    const outside = await first.daemon.dispatch(
+      "lease.request",
+      { platform: "android", requesterId: "made-outside-the-front" },
+      sessionFor(principals.one),
+    );
+    const rig = await first.restart(() => {
+      first.fake.restart();
+      first.phone.restart();
+    });
+    const device = (await devices(rig)).find(
+      (candidate) => candidate.id === (outside.lease as { deviceId: string }).deviceId,
+    );
+    rig.fake.listDevices([{ id: String(device?.address) }]);
+
+    const answer = await envelopeOf(await runCommand(rig, "devices", undefined));
+
+    expect(device?.address).toBeDefined();
+    expect(answer.result?.["data"]).toEqual({ devices: [] });
   });
 });

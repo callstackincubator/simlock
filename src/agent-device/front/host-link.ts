@@ -106,25 +106,33 @@ export class RoutedHostLink implements HostLink {
       ) {
         return [];
       }
-      const device = devices.find((candidate) => candidate.id === lease.deviceId);
-      if (device === undefined) return [];
-      const { spec } = device;
-      const address = spec.physical ? device.driverDeviceId : device.address;
-      if (address === undefined || address === "") return [];
-      if (spec.physical) this.#roles.set(lease.id, "phones");
-      return [
-        {
-          address,
-          leaseId: lease.id,
-          model: spec.model,
-          platform: spec.platform,
-          ...(spec.physical ? { physical: true } : {}),
-          target: "mobile",
-          ttlDeadline: lease.ttlDeadline,
-          ttlMs: lease.ttlMs,
-        },
-      ];
+      const adopted = this.#adopted(
+        lease,
+        devices.find((candidate) => candidate.id === lease.deviceId),
+      );
+      return adopted === undefined ? [] : [adopted];
     });
+  }
+
+  #adopted(
+    lease: ModuleRegistryView["snapshot"]["leases"][number],
+    device: ModuleRegistryView["snapshot"]["devices"][number] | undefined,
+  ): AdoptableLease | undefined {
+    if (device === undefined) return undefined;
+    const { spec } = device;
+    const address = spec.physical ? device.driverDeviceId : device.address;
+    if (address === undefined || address === "") return undefined;
+    if (spec.physical) this.#roles.set(lease.id, "phones");
+    return {
+      address,
+      leaseId: lease.id,
+      model: spec.model,
+      platform: spec.platform,
+      ...(spec.physical ? { physical: true } : {}),
+      target: "mobile",
+      ttlDeadline: lease.ttlDeadline,
+      ttlMs: lease.ttlMs,
+    };
   }
 
   // why: a lease that ended no longer needs its daemon remembered, and the map holds only live phone leases.
