@@ -21,11 +21,7 @@ import {
   allocatesReceived,
   runCommand,
   leases,
-  principals,
-  scope,
   secrets,
-  sessionFor,
-  rpc,
 } from "./test-support.js";
 
 describe("the agent-device front, through the whole worker daemon: after agent-device restarts", () => {
@@ -283,42 +279,19 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
     },
   );
 
-  it("after a standalone worker restarts, a lease of another token and a lease whose requester id is not its id are not adopted, so their heartbeats answer as before the change", async () => {
+  it("after a standalone worker restarts, a lease of another token is not adopted: standalone boot naming it is refused as not the token's device", async () => {
     const first = await setUpWithPhone();
     await granted(first, 2, { platform: "android" }, { token: secrets.two });
-    const outside = await first.daemon.dispatch(
-      "lease.request",
-      { platform: "android", requesterId: "made-outside-the-front" },
-      sessionFor(principals.one),
-    );
     const rig = await first.restart(() => {
       first.fake.restart();
       first.phone.restart();
     });
 
-    const other = await envelopeOf(await heartbeat(rig, 2));
-    expect(other.result).toBeUndefined();
-    expect(other.error).toMatchObject({
-      data: {
-        code: "UNAUTHORIZED",
-        details: { reason: "LEASE_ENDED_BY_HOST" },
-        message: "lease ended by simlock; run disconnect, then open",
-        retriable: false,
-      },
-    });
-    const outsideAnswer = await envelopeOf(
-      await rpc(rig, "agent_device.lease.heartbeat", { ...scope, leaseId: outside.lease.id }),
-    );
+    const answer = await envelopeOf(await runCommand(rig, "boot", 2));
 
-    expect(outsideAnswer.error).toMatchObject({
-      data: { code: "UNAUTHORIZED", details: { reason: "LEASE_NOT_FOUND" } },
-    });
-    expect(allocatesReceived(rig, 2)).toHaveLength(1);
-    expect(
-      rig.fake
-        .rpcRequests("agent_device.lease.allocate")
-        .filter((request) => request.params?.["leaseId"] === outside.lease.id),
-    ).toEqual([]);
-    expect(await listed(rig)).toEqual([hex(2), outside.lease.id].sort());
+    expect(JSON.stringify(answer)).toContain("refused: simlock picks the device");
+    expect(answer.result).not.toMatchObject({ ok: true });
+    expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+    expect(await listed(rig)).toEqual([hex(2)]);
   });
 });
