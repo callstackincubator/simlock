@@ -46,7 +46,6 @@
     "docs/internal/console-redesign/prototype/build.mjs"
   ],
   "dynamicallyLoaded": [
-    "e2e/console/render-cases/*.ts",
     "docs/internal/console-redesign/prototype/d.mjs",
     "e2e/fake-driver/index.ts",
     // The command tree names its modules in an `import("./commands/<name>.js")` thunk, so
@@ -68,7 +67,7 @@
     "@tanstack/react-virtual",
     // Recharts' peer dependency: installed for it, never imported by the console itself.
     "react-is",
-    // why: the render harness imports these from a shared Playwright helper, not production code.
+    // why: the console test refactor's screenshot tooling, later in this stack, uses these.
     "pixelmatch",
     "pngjs",
     // The update e2e (e2e/update/update.e2e.test.ts) runs its binary as a local npm registry.

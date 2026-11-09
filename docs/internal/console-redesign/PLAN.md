@@ -49,11 +49,9 @@ maintainer accepts or adjusts them from a screenshot.
 
 ## How an agent verifies a stage
 
-1. Build the console and run the render harness (stage 0 adds it):
-   `pnpm test:console --project=chromium e2e/console/renders.spec.ts`. It
-   signs in against the stubbed daemon, sets the window to 1440×900, opens
-   each page with the fixture data, and writes `current/<page>.png` beside
-   this file.
+1. Build the console and capture each page with the fixture data at
+   1440×900 into `current/<page>.png` beside this file (the console test
+   refactor in this stack adds the screenshot script that does it).
 2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
    record the explicit Fleet, Baselines, sidebar-control and WCAG-AA amendments, then
    list every other difference that is not data: a missing element, a wrong
@@ -113,13 +111,13 @@ One agent; everything else waits for it.
   characters, and `agentKind(id)` for the chip; unit tests for ids of every
   form in `src/agent-identity/` (tool-prefixed session ids, token labels,
   `mcp:<pid>`, 256-character free-form).
-- The render harness `e2e/console/renders.spec.ts` with fixture data close
-  to the mock data's shape: 8 workers (one with 20 slots, one with a
-  `.local` hostname, one disconnected, one drained, one at 91% disk), 14
-  leases with holders of every form, 9 baselines (ready and stale only; a ready row substitutes for the
-  reference building row as a DATA difference with identical row/pill geometry),
-  an hour of events. Screenshots to `docs/internal/console-redesign/current/`
-  (gitignored).
+- Fixture data for the captures, close to the mock data's shape: 8 workers
+  (one with 20 slots, one with a `.local` hostname, one disconnected, one
+  drained, one at 91% disk), 14 leases with holders of every form, 9
+  baselines (ready and stale only), an hour of events. The render harness
+  that first held it is removed by the maintainer's decision: a pixel
+  comparison of a live page cannot be stable in CI, so captures are a
+  review aid, not a test.
 - Verify: the shell (sidebar, header, one card) against the top-left of
   `1-overview.png`; every existing page still renders with the new
   primitives, even if its layout is still the old one.
