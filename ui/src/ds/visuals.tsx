@@ -1,6 +1,6 @@
 import "./visuals.css";
 
-import type { CSSProperties, ReactNode } from "react";
+import { type CSSProperties, isValidElement, type ReactNode } from "react";
 
 import type { Tone } from "./status";
 
@@ -72,6 +72,18 @@ export function Ring({
   );
 }
 
+// why: a part of a row cut with an ellipsis carries its whole text as its title; a part given as an
+// element (a link) gives the text inside it.
+function textOf(node: ReactNode): string | undefined {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) {
+    const text = node.map(textOf).filter(Boolean).join("");
+    return text === "" ? undefined : text;
+  }
+  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+  return undefined;
+}
+
 export function LogRow({
   time,
   status,
@@ -89,11 +101,11 @@ export function LogRow({
 }) {
   return (
     <div className={`visual-log${tone ? ` visual-log-${tone}` : ""}`}>
-      <span>{time}</span>
-      <span>{status}</span>
-      <span>{event}</span>
-      <span>{subject}</span>
-      <span>{detail}</span>
+      <span title={textOf(time)}>{time}</span>
+      <span title={textOf(status)}>{status}</span>
+      <span title={textOf(event)}>{event}</span>
+      <span title={textOf(subject)}>{subject}</span>
+      <span title={textOf(detail)}>{detail}</span>
     </div>
   );
 }
@@ -124,7 +136,10 @@ export function FeedRow({
       >
         {icon}
       </span>
-      <span className="visual-feed-content">
+      <span
+        className="visual-feed-content"
+        title={[event, subject, detail, worker].map(textOf).filter(Boolean).join(" ") || undefined}
+      >
         <span className="visual-feed-event">{event}</span> <span>{subject}</span>{" "}
         <span>{detail}</span> <span className="visual-feed-worker">{worker}</span>
       </span>

@@ -78,7 +78,14 @@ export function OverviewBody(props: {
           count={banner.count}
           title={banner.title}
           detail={
-            <span className="overview-banner-detail">
+            <span
+              className="overview-banner-detail"
+              title={
+                banner.more === 0
+                  ? banner.first.text
+                  : `${banner.first.text} · and ${banner.more} more`
+              }
+            >
               <Link to={banner.first.to}>{banner.first.text}</Link>
               {banner.more === 0 ? "" : ` · and ${banner.more} more`}
             </span>

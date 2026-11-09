@@ -107,7 +107,9 @@ export function InboxBody(props: {
                   <Link to={row.to} className="inbox-row">
                     <StatusDot tone={row.tone} label={row.word} />
                     <span className="inbox-word">{row.word}</span>
-                    <span className="inbox-subject">{row.subject}</span>
+                    <span className="inbox-subject" title={row.subject}>
+                      {row.subject}
+                    </span>
                   </Link>
                   {actionsOf === undefined ? null : (
                     <InboxActions row={row} actions={actionsOf(row)} />
@@ -170,10 +172,15 @@ function EventList({ events }: { readonly events: readonly InboxEvent[] }) {
         <li key={event.key}>
           <Link to={event.to} className="inbox-event">
             <span className="mono muted">{event.time}</span>
-            <span className={event.tone === undefined ? "mono" : `mono inbox-event-${event.tone}`}>
+            <span
+              className={event.tone === undefined ? "mono" : `mono inbox-event-${event.tone}`}
+              title={event.name}
+            >
               {event.name}
             </span>
-            <span className="inbox-event-text">{event.text}</span>
+            <span className="inbox-event-text" title={event.text}>
+              {event.text}
+            </span>
           </Link>
         </li>
       ))}

@@ -65,7 +65,9 @@ export function LeaseSummaryPane({ summary }: { readonly summary: LeaseSummary }
                 <div className="mono lease-ellipsis" title={row.holderTitle}>
                   {row.holderDisplay}
                 </div>
-                <div className="muted lease-ellipsis lease-list-sub">{row.sub}</div>
+                <div className="muted lease-ellipsis lease-list-sub" title={row.sub}>
+                  {row.sub}
+                </div>
               </div>
               <Countdown row={row} />
             </li>

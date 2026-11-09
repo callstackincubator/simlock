@@ -177,7 +177,7 @@ export function Page(props: {
 }) {
   const { actions, children, crumb, status, title } = props;
   const heading = (
-    <h1 tabIndex={-1}>
+    <h1 tabIndex={-1} title={crumb === undefined ? title : `${crumb.label} / ${title}`}>
       {crumb === undefined ? null : (
         <>
           <Link className="page-crumb" to={crumb.to}>

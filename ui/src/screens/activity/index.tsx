@@ -316,8 +316,13 @@ function Row({ row, selected }: { readonly row: ActivityRow; readonly selected: 
         >
           <Icon name={KIND_ICONS[row.kind]} />
         </span>
-        <span className="event-name mono">{row.name}</span>
-        <span className="event-subject">
+        <span className="event-name mono" title={row.name}>
+          {row.name}
+        </span>
+        <span
+          className="event-subject"
+          title={row.detail === "" ? row.subject : `${row.subject} · ${row.detail}`}
+        >
           {row.subject}
           {row.detail === "" ? null : <span className="muted"> · {row.detail}</span>}
         </span>

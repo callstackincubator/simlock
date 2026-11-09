@@ -145,7 +145,7 @@ function Gauges({ page }: { readonly page: WorkerPageView }) {
         <div className="worker-gauge">
           <div className="worker-gauge-text">
             <span className="fleet-label">Load</span>
-            <strong>{overview.loadNote}</strong>
+            <strong title={overview.loadNote}>{overview.loadNote}</strong>
           </div>
         </div>
       )}
@@ -441,9 +441,25 @@ const WARM_COLUMNS: readonly Column<WarmRow>[] = [
     header: "Model",
     width: "200px",
   },
-  { cell: (target) => target.runtime, drop: 3, header: "Runtime", mono: true, width: "90px" },
-  { cell: (target) => target.mode, drop: 2, header: "Mode", width: "90px" },
-  { cell: (target) => target.origin, drop: 1, header: "Origin", width: "110px" },
+  {
+    cell: (target) => <span title={target.runtime}>{target.runtime}</span>,
+    drop: 3,
+    header: "Runtime",
+    mono: true,
+    width: "90px",
+  },
+  {
+    cell: (target) => <span title={target.mode}>{target.mode}</span>,
+    drop: 2,
+    header: "Mode",
+    width: "90px",
+  },
+  {
+    cell: (target) => <span title={target.origin}>{target.origin}</span>,
+    drop: 1,
+    header: "Origin",
+    width: "110px",
+  },
   { cell: (target) => target.wanted, header: "Wanted", numeric: true, width: "90px" },
   { cell: (target) => target.ready, header: "Ready", numeric: true, width: "90px" },
   { cell: (target) => target.booting, drop: 4, header: "Booting", numeric: true, width: "90px" },
