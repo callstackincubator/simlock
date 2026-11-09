@@ -2327,21 +2327,55 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(rig)).toEqual([hex(2)]);
   });
 
-  it("after agent-device restarts on a worker, an agent's next heartbeat succeeds and the simlock lease is kept on the same device", async () => {
-    const rig: Rig = await setUp();
-    await granted(rig, 1);
-    const address = rig.fake.leases.get(hex(1))?.address;
-    expect(address).toBeDefined();
-    rig.fake.restart();
-    expect(rig.fake.leases.has(hex(1))).toBe(false);
+  it.each([
+    ["a simulator lease", "simulator", { platform: "android" }, {}],
+    [
+      "a phone lease, whose allocate reaches the phone daemon",
+      "phone",
+      { platform: "android", physical: true },
+      {},
+    ],
+    [
+      "an entry allocated with retainOnClose, whose re-allocate carries it",
+      "simulator",
+      { platform: "android", retainOnClose: true },
+      {},
+    ],
+    [
+      "a heartbeat carrying deviceKey, clientId and runId, whose re-allocate carries all three",
+      "simulator",
+      { platform: "android" },
+      { deviceKey: "ios:mobile:00008110-001A2B3C4D5E" },
+    ],
+  ] as const)(
+    "after agent-device restarts on a worker, an agent's next heartbeat succeeds and the simlock lease is kept on the same device: %s",
+    async (_case, daemon, allocateExtra, heartbeatExtra) => {
+      const rig: Rig = await setUpWithPhone();
+      const fake = daemon === "phone" ? rig.phone : rig.fake;
+      if ("deviceKey" in heartbeatExtra) fake.nameDeviceKeyInNextReply(heartbeatExtra.deviceKey);
+      await granted(rig, 1, allocateExtra);
+      const before = fake.leases.get(hex(1));
+      expect(before).toBeDefined();
+      fake.restart();
+      expect(fake.leases.has(hex(1))).toBe(false);
 
-    const answer = await envelopeOf(await heartbeat(rig, 1));
+      const answer = await envelopeOf(await heartbeat(rig, 1, heartbeatExtra));
+      expect(answer.error).toBeUndefined();
+      expect(answer.result).toMatchObject({ ok: true });
+      const after = fake.leases.get(hex(1));
+      expect(after?.address).toBe(before?.address);
+      expect(after?.retainOnClose).toBe(before?.retainOnClose);
+      expect(await listed(rig)).toEqual([hex(1)]);
 
-    expect(answer.error).toBeUndefined();
-    expect(answer.result).toMatchObject({ ok: true });
-    expect(rig.fake.leases.get(hex(1))?.address).toBe(address);
-    expect(await listed(rig)).toEqual([hex(1)]);
-  });
+      expect((await envelopeOf(await heartbeat(rig, 1, heartbeatExtra))).error).toBeUndefined();
+      const opened = await envelopeOf(await runCommand(rig, "open", 1));
+      expect(opened.error).toBeUndefined();
+      expect(opened.result).toMatchObject({ ok: true });
+      expect(fake.rpcRequests("agent_device.command").at(-1)?.tenant).toBe(
+        fake.leases.get(hex(1))?.tenant,
+      );
+    },
+  );
 
   it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {
     const first = await setUp();

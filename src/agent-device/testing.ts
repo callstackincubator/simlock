@@ -567,6 +567,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         message: reason.toLowerCase().replaceAll("_", " "),
       });
     }
+    const keys = ["runId", "leaseProvider", "clientId", "deviceKey"] as const;
+    if (keys.some((key) => present(params[key]) && lease.scope[key] !== params[key])) {
+      return errorEnvelope(id, {
+        code: "UNAUTHORIZED",
+        details: { reason: "LEASE_SCOPE_MISMATCH" },
+        message: "lease scope mismatch",
+      });
+    }
     return envelope(id, { data: { lease: params }, ok: true });
   }
 
