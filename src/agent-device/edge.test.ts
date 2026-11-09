@@ -153,6 +153,23 @@ function expectEndedBySimlock(answer: Envelope): void {
   });
 }
 
+// why: a lease the front asked for in this process, whose CLI hung up and whose agent-device release failed, stays in simlock with agent-device still holding it, and the front map has no entry for it.
+async function keptWhileAgentDeviceHolds(rig: Rig, n: number): Promise<void> {
+  const releases = rig.fake.rpcRequests("agent_device.lease.release").length;
+  rig.fake.holdAllocate();
+  rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" });
+  const hangUp = new AbortController();
+  const pending = track(allocate(rig, n, { ttlMs: 60_000 }, { signal: hangUp.signal }));
+  await expect.poll(() => allocatesReceived(rig, n).length).toBe(1);
+  hangUp.abort();
+  await pending.promise.catch(() => undefined);
+  await sleep(50);
+  rig.fake.letAllocateGo();
+  await expect
+    .poll(() => rig.fake.rpcRequests("agent_device.lease.release").length)
+    .toBe(releases + 1);
+}
+
 function expectLeaseGone(answer: Envelope, reason: string): void {
   expect(answer.error).toMatchObject({
     data: { code: "UNAUTHORIZED", details: { reason } },
@@ -1908,16 +1925,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
     },
   );
 
-  it("a heartbeat naming a lease ID the front map lacks, which simlock holds for this token's principal: when agent-device answers a lease-gone reason, the simlock lease is released; when agent-device still holds the lease, it is released with the heartbeat's scope first, then the simlock lease; when agent-device is unreachable, neither lease is touched; each answers as in the table", async () => {
-    const first = await setUp();
-    await granted(first, 1);
-    await granted(first, 2);
-    await granted(first, 3);
-    const rig: Rig = await first.restart();
-    expect(await listed(rig)).toEqual([hex(1), hex(2), hex(3)]);
-
-    rig.fake.loseLease(hex(1), "LEASE_EXPIRED");
-    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+  it("a heartbeat naming a lease ID the front map lacks, which simlock kept while agent-device still holds it: it is released with the heartbeat's scope first, then the simlock lease; when agent-device is unreachable, neither lease is touched; each answers as in the table", async () => {
+    const rig: Rig = await setUp();
+    await keptWhileAgentDeviceHolds(rig, 2);
+    await keptWhileAgentDeviceHolds(rig, 3);
     expect(await listed(rig)).toEqual([hex(2), hex(3)]);
 
     let heldAtDaemonRelease: readonly string[] = [];
@@ -1965,9 +1976,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a heartbeat naming a lease ID the front map lacks, when the agent-device daemon fails to release its lease, answers that error and leaves the simlock lease in place", async () => {
-    const first = await setUp();
-    await granted(first, 1);
-    const rig = await first.restart();
+    const rig: Rig = await setUp();
+    await keptWhileAgentDeviceHolds(rig, 1);
     rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "daemon cannot release" });
 
     const failed = await envelopeOf(await heartbeat(rig, 1));
@@ -2316,19 +2326,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(rig)).toEqual([]);
     await granted(rig, 2);
     expect(await listed(rig)).toEqual([hex(2)]);
-  });
-
-  it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {
-    const first = await setUp();
-    await granted(first, 1);
-    const rig = await first.restart();
-    expect(await listed(rig)).toEqual([hex(1)]);
-
-    const answer = await envelopeOf(await runCommand(rig, "snapshot", 1));
-    // why: a worker has no map entry for the old lease and adopts nothing, so the command is forwarded as before and the heartbeat still ends the lease.
-    expect(answer.error).toBeUndefined();
-    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
-    expect(await listed(rig)).toEqual([]);
   });
 
   it("after the same restart (same `FakeDriver`, lease still listed), a release for a lease made before the restart answers the agent-device daemon's reply as a success and releases that simlock lease", async () => {

@@ -5,6 +5,7 @@ import {
   setUpWithPhone,
   advance,
   listed,
+  devices,
   release,
   tapDispatch,
   track,
@@ -21,6 +22,9 @@ import {
   allocatesReceived,
   runCommand,
   leases,
+  principals,
+  secrets,
+  sessionFor,
 } from "./test-support.js";
 
 describe("the agent-device front, through the whole worker daemon: after agent-device restarts", () => {
@@ -218,5 +222,101 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
       await granted(rig, 1);
       await check(rig);
     }
+  });
+
+  it.each([
+    ["a simulator lease", "simulator"],
+    ["a phone lease, whose re-allocate reaches the phone daemon", "phone"],
+  ] as const)(
+    "after a standalone worker restarts, the agent's next heartbeat succeeds on the same device: %s",
+    async (_case, daemon) => {
+      const first = await setUpWithPhone();
+      const fake = daemon === "phone" ? first.phone : first.fake;
+      await granted(
+        first,
+        1,
+        daemon === "phone" ? { physical: true, platform: "android" } : { platform: "android" },
+      );
+      const before = fake.leases.get(hex(1));
+      const rig = await first.restart(() => {
+        first.fake.restart();
+        first.phone.restart();
+      });
+      expect(fake.leases.has(hex(1))).toBe(false);
+
+      const answer = await envelopeOf(await heartbeat(rig, 1));
+
+      expect(answer.error).toBeUndefined();
+      expect(answer.result).toMatchObject({ ok: true });
+      expect(fake.leases.get(hex(1))?.address).toBe(before?.address);
+      expect(await listed(rig)).toEqual([hex(1)]);
+      const opened = await envelopeOf(await runCommand(rig, "open", 1));
+      expect(opened.result).toMatchObject({ ok: true });
+    },
+  );
+
+  it.each([
+    ["a phone lease's first call, snapshot, reaches the phone daemon", "snapshot"],
+    ["standalone boot is answered by the front with the lease's mobile target", "boot"],
+  ] as const)(
+    "after a standalone worker restarts, an adopted lease's first call that is not a heartbeat is routed as before the restart: %s",
+    async (_case, name) => {
+      const first = await setUpWithPhone();
+      await granted(first, 1, { physical: true, platform: "android" });
+      const rig = await first.restart(() => {
+        first.fake.restart();
+        first.phone.restart();
+      });
+
+      const answer = await envelopeOf(await runCommand(rig, name, 1));
+
+      if (name === "snapshot") {
+        expect(answer.result).toMatchObject({ command: "snapshot", ok: true });
+        expect(rig.phone.rpcRequests("agent_device.command")).toHaveLength(1);
+        expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+      } else {
+        expect(answer.result).toMatchObject({ ok: true, data: { target: "mobile", booted: true } });
+        expect(rig.phone.rpcRequests("agent_device.command")).toEqual([]);
+        expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+      }
+    },
+  );
+
+  it("after a standalone worker restarts, a lease of another token is not adopted: standalone boot naming it is refused as not the token's device", async () => {
+    const first = await setUpWithPhone();
+    await granted(first, 2, { platform: "android" }, { token: secrets.two });
+    const rig = await first.restart(() => {
+      first.fake.restart();
+      first.phone.restart();
+    });
+
+    const answer = await envelopeOf(await runCommand(rig, "boot", 2));
+
+    expect(JSON.stringify(answer)).toContain("refused: simlock picks the device");
+    expect(answer.result).not.toMatchObject({ ok: true });
+    expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+    expect(await listed(rig)).toEqual([hex(2)]);
+  });
+
+  it("after a standalone worker restarts, a lease whose requester id is not its id is not adopted: the token's devices answer leaves its device out", async () => {
+    const first = await setUpWithPhone();
+    const outside = await first.daemon.dispatch(
+      "lease.request",
+      { platform: "android", requesterId: "made-outside-the-front" },
+      sessionFor(principals.one),
+    );
+    const rig = await first.restart(() => {
+      first.fake.restart();
+      first.phone.restart();
+    });
+    const device = (await devices(rig)).find(
+      (candidate) => candidate.id === (outside.lease as { deviceId: string }).deviceId,
+    );
+    rig.fake.listDevices([{ id: String(device?.address) }]);
+
+    const answer = await envelopeOf(await runCommand(rig, "devices", undefined));
+
+    expect(device?.address).toBeDefined();
+    expect(answer.result?.["data"]).toEqual({ devices: [] });
   });
 });
