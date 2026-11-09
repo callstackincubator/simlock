@@ -513,4 +513,22 @@ describe("Registry: state.db rows", () => {
     expect(listedIds(restartedLater)).toEqual([third.id, live.id].sort());
     expect(storedIds()).toEqual([third.id, live.id].sort());
   });
+
+  it("a deleted record leaves the snapshot once older than devices.deletedRetentionMs with no commit after it, a younger one is still listed", async () => {
+    const MINUTE = 60_000;
+    const { clock, readyDevice, registry } = await world();
+    const older = await readyDevice("deleted-older");
+    const younger = await readyDevice("deleted-younger");
+    const live = await readyDevice("live");
+    await registry.markDeviceMissing(older.id, "doctor");
+    clock.advance(30 * MINUTE);
+    await registry.markDeviceMissing(younger.id, "doctor");
+    const listedIds = () => registry.snapshot.devices.map((device) => device.id).sort();
+
+    clock.advance(30 * MINUTE);
+    expect(listedIds()).toEqual([older.id, younger.id, live.id].sort());
+
+    clock.advance(1);
+    expect(listedIds()).toEqual([younger.id, live.id].sort());
+  });
 });
