@@ -7312,6 +7312,61 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     expect(output.stdout).toBe("");
   });
 
+  it.each([
+    { trigger: "SIGINT", act: (signals: EventEmitter) => signals.emit("SIGINT") },
+    { trigger: "SIGTERM", act: (signals: EventEmitter) => signals.emit("SIGTERM") },
+    {
+      trigger: "the exit of the --bind-pid process",
+      act: (_signals: EventEmitter, parentWatch: FakeParentWatch) => parentWatch.exit(9876),
+    },
+  ])("sends no lease request and exits 0 on $trigger while it connects", async ({ act }) => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const parentWatch = new FakeParentWatch();
+    let sentRequests = 0;
+    const cancelled = () =>
+      new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {});
+    const client = fakeClient({
+      // why: The client's documented abort (ADR 0003 §10): a signal aborted before the call
+      // rejects CANCELLED with nothing sent; any other call puts the request on the wire, where
+      // only a later `lease.cancel` can reach it.
+      requestLease: (_input, options) => {
+        if (options?.signal?.aborted === true) return Promise.reject(cancelled());
+        sentRequests += 1;
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(cancelled()));
+        });
+      },
+    });
+    let connected!: () => void;
+    const connecting = new Promise<void>((resolve) => {
+      connected = resolve;
+    });
+    let connectStarted = false;
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "9876"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connectStarted = true;
+          await connecting;
+          return client;
+        },
+        parentPid: 4321,
+        parentWatch,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await vi.waitFor(() => expect(connectStarted).toBe(true));
+
+    act(signals, parentWatch);
+    await settle();
+    connected();
+
+    expect(await run).toBe(0);
+    expect(sentRequests).toBe(0);
+    expect(output.stdout).toBe("");
+  });
+
   it("reports a failed renewal on stderr and keeps holding the lease", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();
