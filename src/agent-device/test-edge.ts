@@ -149,3 +149,12 @@ export function idOf(rig: Rig, n: number): string {
 export function batch(rig: Rig, n: number | undefined, steps: readonly Record<string, unknown>[]) {
   return runCommand(rig, "batch", n, { flags: { batchSteps: steps } });
 }
+
+export function heartbeat(
+  rig: Rig,
+  n: number,
+  extra: Record<string, unknown> = {},
+  options: Omit<SendOptions, "body"> = {},
+): Promise<Response> {
+  return rpc(rig, "agent_device.lease.heartbeat", { ...scope, leaseId: hex(n), ...extra }, options);
+}
