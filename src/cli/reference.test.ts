@@ -30,4 +30,27 @@ describe("the website's CLI reference", () => {
     expect(all).toEqual(expect.arrayContaining(["lease renew", "daemon install", "alerts test"]));
     expect(all.filter((path) => !new RegExp(`simlock ${path}(?![\\w-])`).test(page))).toEqual([]);
   });
+
+  it("gives `USAGE` (exit 2) as the code a refused `simlock simctl` or `simlock adb` command prints", () => {
+    const page = readFileSync(PAGE, "utf8");
+    const refusal = (command: string): string | undefined =>
+      page
+        .split(/^## /m)
+        .find((section) => section.startsWith(`simlock ${command}\n`))
+        ?.split("\n")
+        .find((line) => line.includes("Simlock refuses"))
+        ?.match(/Simlock refuses .*?, with `[A-Z_]+` \(exit \d+\)/)?.[0];
+
+    expect(
+      ["simctl", "adb"].map((command) => ({
+        command,
+        code: refusal(command)
+          ?.match(/, with `([A-Z_]+)` \(exit (\d+)\)$/)
+          ?.slice(1),
+      })),
+    ).toEqual([
+      { command: "simctl", code: ["USAGE", "2"] },
+      { command: "adb", code: ["USAGE", "2"] },
+    ]);
+  });
 });
