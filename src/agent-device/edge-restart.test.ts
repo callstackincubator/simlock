@@ -88,9 +88,9 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
           await advance(rig, 9_000);
           expect(pending.done()).toBe(false);
           await advance(rig, 1_000);
-          const response = await pending.promise;
+          await expect.poll(() => pending.done(), { timeout: 2_000 }).toBe(true);
           rig.fake.letAllocateGo();
-          return response;
+          return pending.promise;
         },
         `${notAvailable}${restoring}`,
       ],
