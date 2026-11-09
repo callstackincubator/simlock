@@ -9,7 +9,7 @@ The console can show the live screen of any running device, leased or not: an iO
 
 Your own tools can do more over HTTP: [stream a lease's screen](#stream-from-your-own-tool) and [send it taps and keys](#send-input-to-your-own-lease).
 
-Nothing is captured until someone opens a device's **Screen** tab. Capture stops when they leave the tab, close the drawer, or the device stops running.
+Nothing is captured until someone opens a device's streaming page. Capture stops when they select **Stop watching**, leave the page, or the device stops running.
 
 ## Before you start
 
@@ -60,20 +60,20 @@ To turn streaming off, set `capabilities.stream.enabled` to `false` and restart 
 
 1. Open the console, go to **Fleet** and select the worker that holds the device.
 2. Select the device.
-3. Open the **Screen** tab.
+3. Select **Watch** in the drawer.
 
 </Steps>
 
-The picture starts by itself. The **Stream details** button (ⓘ) shows its size, codec, frame rate and bandwidth. Someone taking a lease on the device while you watch doesn't interrupt the picture.
+The picture starts by itself. Two pills over the picture show its frame rate, codec, size and bandwidth. Someone taking a lease on the device while you watch doesn't interrupt the picture.
 
-A device that isn't running has no picture, and the tab says why: shut down, starting, being reset, quarantined or not connected. The picture starts by itself once the device is `ready` again.
+A device that isn't running has no picture, and the page says why: shut down, starting, being reset, quarantined or not connected. The picture starts by itself once the device is `ready` again.
 
 ## What to expect
 
 - **The first picture can take a while.** A simulator usually shows within seconds. A physical Android phone takes longer. The console waits up to 200 seconds.
 - **A phone with its screen off is woken first.** If it doesn't wake, you are told to turn it on. While a phone streams and is charging, it is kept awake. Its setting is put back when the stream ends.
-- **The picture ends when the device stops or is handed back.** When the device shuts down, loses its connection, is quarantined or deleted, or its lease ends, the stream stops. So nobody can watch a device after it is handed back or reset. When a lease end stops it, the tab says why: "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost."
-- **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the tab opens it again.
+- **The picture ends when the device stops or is handed back.** When the device shuts down, loses its connection, is quarantined or deleted, or its lease ends, the stream stops. So nobody can watch a device after it is handed back or reset. When a lease end stops it, the page says why: "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost."
+- **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the page opens it again.
 - **A frozen device doesn't look live.** A stream that gets no new frames for 30 seconds ends with an error.
 - **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
 - **Rotation.** A rotated iOS simulator or iPhone keeps the scale of the first picture. An Android device's picture follows the rotation.
@@ -84,9 +84,9 @@ A device that isn't running has no picture, and the tab says why: shut down, sta
 | --- | --- | --- |
 | "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` isn't `true` on that worker. | Turn it on and restart the worker's daemon. |
 | The panel says the screen can't be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker on Xcode older than 27. | Update the iPhone or the worker's Xcode. |
-| "The phone's screen is off and did not turn on." | The phone didn't wake. | Unlock the phone, then leave the **Screen** tab and open it again. |
-| The tab gives up waiting for the first picture | The device showed nothing for 30 seconds. | Leave the **Screen** tab and open it again. |
-| The picture stops on a device that is still running | The device stopped sending frames. | Leave the **Screen** tab and open it again. |
+| "The phone's screen is off and did not turn on." | The phone didn't wake. | Unlock the phone, then select **Stop watching** and **Watch** again. |
+| The page gives up waiting for the first picture | The device showed nothing for 30 seconds. | Select **Stop watching**, then **Watch** again. |
+| The picture stops on a device that is still running | The device stopped sending frames. | Select **Stop watching**, then **Watch** again. |
 
 A physical iPhone that can't stream says why in the panel, for example:
 

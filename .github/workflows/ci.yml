@@ -182,7 +182,7 @@ jobs:
           fi
 
   console-lane:
-    name: Console (${{ matrix.shard }}/4)
+    name: Console (${{ matrix.shard }}/2)
     needs: changes
     # Runs unless Changes said there is nothing to test, so a broken Changes job runs the lane.
     if: ${{ !cancelled() && needs.changes.outputs.console != 'false' }}
@@ -194,7 +194,7 @@ jobs:
       # why: one red shard must not cancel the others, or their failures go unreported.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -213,7 +213,7 @@ jobs:
       - name: Browser lane
         env:
           SHARD: ${{ matrix.shard }}
-        run: pnpm test:console --project=chromium --shard="$SHARD/4"
+        run: pnpm test:console --project=chromium --shard="$SHARD/2"
 
   # why: branch protection requires the check named Console, so this job stands for the sharded
   # lane. `always()` makes it report a failure when a shard fails, where a job skipped by a failed

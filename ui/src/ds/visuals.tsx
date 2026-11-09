@@ -1,9 +1,7 @@
 import "./visuals.css";
 
-import type { ReactNode } from "react";
+import { type CSSProperties, isValidElement, type ReactNode } from "react";
 
-import { Link } from "./link";
-import { Meter } from "./meter";
 import type { Tone } from "./status";
 
 export function Pill({
@@ -28,21 +26,32 @@ export function Ring({
   label,
   size = 54,
   tone = "neutral",
+  bare = false,
+  stroke = 5,
+  showNumber = true,
 }: {
-  readonly percent?: number;
-  readonly label: string;
+  readonly percent?: number | undefined;
+  readonly label?: string;
   readonly size?: number;
   readonly tone?: Tone | "neutral";
+  // why: a ring beside its own caption keeps the label for a screen reader only.
+  readonly bare?: boolean;
+  // why: a ring beside its own figure (a countdown) draws a thicker line and leaves the number out.
+  readonly stroke?: number;
+  readonly showNumber?: boolean;
 }) {
   const known = percent !== undefined && Number.isFinite(percent);
   const value = known ? `${percent}%` : "—";
   const width = Math.max(46, size);
-  const radius = (width - 5) / 2;
+  const radius = (width - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const fraction = known ? Math.max(0, Math.min(100, percent)) / 100 : 0;
   return (
     <span className="ring-figure">
-      <span className={`ring-box ring-${tone}`}>
+      <span
+        className={`ring-box ring-${tone}`}
+        style={{ "--ring-stroke": `${stroke}px` } as CSSProperties}
+      >
         <svg width={width} height={width} aria-hidden="true">
           <circle className="ring-track" cx={width / 2} cy={width / 2} r={radius} />
           <circle
@@ -54,11 +63,25 @@ export function Ring({
             transform={`rotate(-90 ${width / 2} ${width / 2})`}
           />
         </svg>
-        <span className="ring-number">{value}</span>
+        {showNumber ? <span className="ring-number">{value}</span> : null}
       </span>
-      <span className="ring-label">{label}</span>
+      {label === undefined ? null : (
+        <span className={bare ? "ring-label visually-hidden" : "ring-label"}>{label}</span>
+      )}
     </span>
   );
+}
+
+// why: a part of a row cut with an ellipsis carries its whole text as its title; a part given as an
+// element (a link) gives the text inside it.
+function textOf(node: ReactNode): string | undefined {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) {
+    const text = node.map(textOf).filter(Boolean).join("");
+    return text === "" ? undefined : text;
+  }
+  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+  return undefined;
 }
 
 export function LogRow({
@@ -78,11 +101,11 @@ export function LogRow({
 }) {
   return (
     <div className={`visual-log${tone ? ` visual-log-${tone}` : ""}`}>
-      <span>{time}</span>
-      <span>{status}</span>
-      <span>{event}</span>
-      <span>{subject}</span>
-      <span>{detail}</span>
+      <span title={textOf(time)}>{time}</span>
+      <span title={textOf(status)}>{status}</span>
+      <span title={textOf(event)}>{event}</span>
+      <span title={textOf(subject)}>{subject}</span>
+      <span title={textOf(detail)}>{detail}</span>
     </div>
   );
 }
@@ -94,7 +117,9 @@ export function FeedRow({
   detail,
   worker,
   time,
+  tone,
 }: {
+  readonly tone?: Tone | undefined;
   readonly icon: ReactNode;
   readonly event: ReactNode;
   readonly subject: ReactNode;
@@ -104,8 +129,17 @@ export function FeedRow({
 }) {
   return (
     <div className="visual-feed">
-      <span className="visual-feed-icon">{icon}</span>
-      <span className="visual-feed-content">
+      <span
+        className={
+          tone === undefined ? "visual-feed-icon" : `visual-feed-icon visual-feed-icon-${tone}`
+        }
+      >
+        {icon}
+      </span>
+      <span
+        className="visual-feed-content"
+        title={[event, subject, detail, worker].map(textOf).filter(Boolean).join(" ") || undefined}
+      >
         <span className="visual-feed-event">{event}</span> <span>{subject}</span>{" "}
         <span>{detail}</span> <span className="visual-feed-worker">{worker}</span>
       </span>
@@ -148,79 +182,6 @@ export function Banner({
         <span>{detail}</span>
       </span>
       {action}
-    </div>
-  );
-}
-
-export function WorkerTile({
-  name,
-  title,
-  to,
-  pill,
-  ios,
-  android,
-  leased,
-  cpu,
-  memory,
-  disk,
-  cpuTone = "neutral",
-  memoryTone = "neutral",
-  diskTone = "neutral",
-}: {
-  readonly name: string;
-  readonly title: string;
-  readonly to: string;
-  readonly pill?: ReactNode;
-  readonly ios: ReactNode;
-  readonly android: ReactNode;
-  readonly leased: ReactNode;
-  readonly cpu?: number;
-  readonly memory?: number;
-  readonly disk?: number;
-  readonly cpuTone?: Tone | "neutral";
-  readonly memoryTone?: Tone | "neutral";
-  readonly diskTone?: Tone | "neutral";
-}) {
-  return (
-    <div className="worker-tile">
-      <Link className="worker-tile-name" to={to} title={title}>
-        {name}
-      </Link>
-      {pill === undefined ? null : <div>{pill}</div>}
-      <div className="worker-tile-slots">
-        <span>{ios}</span>
-        <span className="worker-tile-divider" aria-hidden="true" />
-        <span>{android}</span>
-        <span className="worker-tile-fraction">{leased}</span>
-      </div>
-      <div className="worker-tile-metrics">
-        <WorkerMetric label="CPU" percent={cpu} tone={cpuTone} />
-        <WorkerMetric label="MEM" percent={memory} tone={memoryTone} />
-        <WorkerMetric label="DISK" percent={disk} tone={diskTone} />
-      </div>
-    </div>
-  );
-}
-
-function WorkerMetric({
-  label,
-  percent,
-  tone,
-}: {
-  readonly label: string;
-  readonly percent: number | undefined;
-  readonly tone: Tone | "neutral";
-}) {
-  const known = percent !== undefined && Number.isFinite(percent);
-  return (
-    <div className="worker-metric">
-      <span>{label}</span>
-      {known ? (
-        <Meter percent={percent} tone={tone} size="thin" />
-      ) : (
-        <span className="worker-metric-empty" />
-      )}
-      <span>{known ? `${percent}%` : "—"}</span>
     </div>
   );
 }

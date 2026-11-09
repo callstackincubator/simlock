@@ -55,7 +55,9 @@ Look:
 
 Tests:
 
-- Unit tests run in Node with no DOM: test `src/model/` and `src/data/` directly, and a screen or a `ds` component with `renderToStaticMarkup`. The browser lane (`e2e/console/` at the repo root) covers the rest.
+- Unit tests run in Node with no DOM: test `src/model/` and `src/data/` directly, and a screen or a `ds` component with `renderToStaticMarkup`.
+- What a page does is a DOM test (`*.dom.test.tsx`): the whole `App` through `src/test/console.tsx`, a route table for the daemon, `events` for its stream, a fixed `Date`, answers from `src/test/fixtures.ts`. Assert roles, names, text, the URL.
+- happy-dom lays nothing out: geometry, overflow, colour, Base UI focus, CSP, axe and the virtual feed stay in the browser lane (`e2e/console/` at the repo root), which keeps only what needs a real daemon or browser engine. `pnpm console:screenshots` writes pictures; it is not a test.
 - Console browser stubs fetch through the repo root's `e2e/console/full-fetch.ts`, which drops `If-None-Match`: a stub that edits the daemon's answer would otherwise be handed a `304` with no body to edit.
 
 ## Adding a page

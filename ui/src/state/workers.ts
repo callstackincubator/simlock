@@ -11,41 +11,36 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
-  readDrawerTab,
+  fleetGroups,
+  type FleetRow,
   readFilter,
   searchWorkers,
-  upMeta,
   type WorkerFilter,
   writeDrawerTab,
   writeFilter,
-  type DeviceDrawerTab,
   type DeviceRow,
   type WorkerPage,
   type WorkerRow,
   type WorkerTab,
   workerPageOf,
-  workerRow,
   writeWorkerTab,
 } from "../model/worker-page";
-import { type StreamOffer, streamOffer } from "../model/screen";
 import { type WorkerList, workerPath } from "../model/workers";
-import { type EventRow, eventRows } from "../model/event-list";
+import { type LogEventRow, logRows } from "../model/event-list";
 import { eventsOfWorker, type HistoryEnd, historyEnd } from "../model/events";
 import { useActions } from "./actions";
 import { useDaemonMode, useLiveEvents, useRouteQuery, useNow, useStreamOpened } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
+import { streamPath } from "./navigation";
 import { navigate, setSearch, usePath, useSearch } from "./router";
 import { useApi } from "./services";
 
-export type { EventRow } from "../model/event-list";
+export type { LogEventRow } from "../model/event-list";
 export type {
-  CapabilityRow,
-  DeviceDrawerTab,
+  FleetRow,
   DeviceRow,
-  FigureCard,
   InstallRow,
-  PlatformCard,
   WarmRow,
   WorkerFilter,
   WorkerPage,
@@ -54,7 +49,7 @@ export type {
 } from "../model/worker-page";
 // why: a screen's test builds the view model the same way the hook does, and a screen may import
 // no model, so the builders pass through here.
-export { WORKER_FILTERS, workerPageOf, workerRow } from "../model/worker-page";
+export { fleetRow, WORKER_FILTERS, workerPageOf } from "../model/worker-page";
 export type { WorkerView } from "../model/workers";
 
 // why: the row's ⋯ menu reads the one list of actions a worker offers (ADR 0037 §3); on a single host
@@ -62,7 +57,22 @@ export type { WorkerView } from "../model/workers";
 export function useWorkerMenu(): (row: WorkerRow) => readonly MenuEntry[] {
   const { entries } = useActions();
   const mode = useDaemonMode();
-  return (row) => entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
+  return (row) => {
+    const own = entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
+    // why: a worker that is gone holds leases that still need an owner's eye, so its menu opens on the
+    // way to them, before any action.
+    if (row.connection !== "disconnected") return own;
+    return [
+      {
+        danger: false,
+        disabled: false,
+        key: "view-leases",
+        label: "View leases",
+        onSelect: () => navigate("/leases"),
+      },
+      ...own,
+    ];
+  };
 }
 
 // why: the worker page's header reads the same list of actions as the Fleet row (ADR 0037 §3).
@@ -86,19 +96,20 @@ export function useWorkerPageMenu(page: WorkerPage): readonly MenuEntry[] {
 export interface WorkerPageView extends WorkerPage {
   readonly back: string;
   readonly chooseTab: (tab: WorkerTab) => void;
-  readonly devicesPaging: Paging;
   readonly warmPaging: Paging;
+  // why: the tile's Watch link and the page's own address are built from the route's paths.
+  readonly streamTo: (deviceId: string) => string;
 }
 
 export interface FleetPage {
-  readonly meta: string;
   readonly empty: boolean;
   readonly filter: WorkerFilter;
   readonly setFilter: (filter: WorkerFilter) => void;
   readonly query: string;
   readonly search: (query: string) => void;
-  readonly rows: readonly WorkerRow[];
-  readonly paging: Paging;
+  // why: a worker with anything wrong shows as a card of its own, the rest as compact tiles.
+  readonly attention: readonly FleetRow[];
+  readonly healthy: readonly FleetRow[];
 }
 
 // why: the address names the worker whose page is open, and the device whose drawer is open on it;
@@ -113,23 +124,24 @@ export function useFleet(): LoadView<FleetPage> {
   const filter = readFilter(search);
   const ready = workers.kind === "ready";
   const query = readQuery(search);
+  const now = useNow();
   const shown = searchWorkers(filterWorkers(ready ? workers.data.workers : [], filter), query);
-  const paging = usePaging({ sizes: TABLE_SIZES, total: ready ? shown.length : undefined });
   const keep = listSearch(search);
 
-  // why: the table cuts the page out of every row it is given.
-  return mapView(workers, (list) => ({
-    empty: list.workers.length === 0,
-    filter,
-    meta: upMeta(list.workers),
-    paging,
-    query,
-    rows: shown.map((worker) => workerRow(worker, keep)),
-    // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
-    // letter of the search.
-    search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
-    setFilter: (next) => setSearch(writeFilter(window.location.search, next), { replace: true }),
-  }));
+  return mapView(workers, (list) => {
+    const { attention, healthy } = fleetGroups(shown, keep, now.server);
+    return {
+      attention,
+      empty: list.workers.length === 0,
+      filter,
+      healthy,
+      query,
+      // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
+      // letter of the search.
+      search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
+      setFilter: (next) => setSearch(writeFilter(window.location.search, next), { replace: true }),
+    };
+  });
 }
 
 // why: the holders' labels come from the token records and their lease links from the lease list;
@@ -143,11 +155,6 @@ export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> 
   const search = useSearch();
   const chosen =
     workers.kind === "ready" ? workers.data.workers.find((worker) => worker.id === id) : undefined;
-  const devicesPaging = usePaging({
-    name: "devices",
-    sizes: TABLE_SIZES,
-    total: chosen === undefined ? undefined : (chosen.devices?.length ?? 0),
-  });
   const warmPaging = usePaging({
     name: "warm-pool",
     sizes: TABLE_SIZES,
@@ -162,7 +169,7 @@ export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> 
       // why: each choice replaces the entry rather than adding one, so Back leaves the page, not
       // the last tab.
       chooseTab: (tab) => setSearch(writeWorkerTab(window.location.search, tab), { replace: true }),
-      devicesPaging,
+      streamTo: (deviceId) => streamPath(id, deviceId),
       warmPaging,
     };
   });
@@ -176,22 +183,14 @@ export function useDeviceDrawer(
 ): {
   readonly view: LoadView<DeviceRow | undefined>;
   readonly close: () => void;
-  readonly tab: DeviceDrawerTab;
-  readonly chooseTab: (tab: DeviceDrawerTab) => void;
-  readonly stream: StreamOffer;
 } {
   const page = useWorkerPage(workerId);
   const search = useSearch();
-  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers;
   return {
-    // why: each choice replaces the entry rather than adding one, as the worker page's tabs do.
-    chooseTab: (tab) => setSearch(writeDrawerTab(search, tab), { replace: true }),
     // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept; the
     // drawer's own tab belongs to one open drawer, so it goes.
     close: () =>
       navigate(`${workerPath(workerId)}${writeDrawerTab(search, "details")}`, { replace: true }),
-    stream: streamOffer(workers?.find((worker) => worker.id === workerId)),
-    tab: readDrawerTab(search),
     view: mapView(page, (shown) => shown?.overview.devices?.find((row) => row.id === deviceId)),
   };
 }
@@ -204,7 +203,7 @@ export function useLeaseUdid(leaseId: string): string | undefined {
 }
 
 export interface WorkerEventsPage {
-  readonly rows: readonly EventRow[];
+  readonly rows: readonly LogEventRow[];
   readonly loadOlder: () => void;
   // why: the last row says why the list stops; none while more may still load.
   readonly end: HistoryEnd | undefined;
@@ -235,6 +234,20 @@ export function useWorkerEvents(workerId: string): LoadView<WorkerEventsPage> {
   return mapView(loadView(state), (held) => ({
     end: historyEnd(history, held, "No events for this worker yet."),
     loadOlder: feed.loadOlder,
-    rows: eventRows(held, workers, "all"),
+    rows: logRows(held, workers, "all"),
   }));
+}
+
+// why: the Fleet page's log holds the workers' own events, from the last hour and then the stream
+// while the page is on screen; unlike a worker's feed it asks the daemon for no worker in particular and
+// no older history.
+export function useFleetEvents(): LoadView<{ readonly rows: readonly LogEventRow[] }> {
+  const api = useApi();
+  const [feed] = useState(() => new EventFeed((path) => api.getJson(path), browserClock));
+  useLiveEvents(feed.streamEvent);
+  useStreamOpened(feed.streamOpened);
+  useEffect(() => feed.start(), [feed]);
+  const state = useSyncExternalStore(feed.subscribe, feed.snapshot);
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(state), (held) => ({ rows: logRows(held, workers, "worker") }));
 }

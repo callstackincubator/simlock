@@ -45,7 +45,10 @@ it shows with numbers, statuses and shape, not with sentences about them.
 
 Every colour is a custom property on `:root`. Dark is the designed theme and
 the one the renders show. The light theme keeps the same structure with its
-own values; a change to it ships without a render until one exists.
+own values (an off-white page, near-white cards, the same accent) and is
+captured at 1440×900 in `docs/internal/console-redesign/current/light/` by
+`pnpm console:screenshots`;
+the axe check in `browser-checks.spec.ts` runs in both.
 
 | Token             | Dark      | Use                                                       |
 | ----------------- | --------- | --------------------------------------------------------- |
@@ -53,7 +56,8 @@ own values; a change to it ships without a render until one exists.
 | `--surface`       | `#141416` | cards, the sidebar                                        |
 | `--surface-2`     | `#1b1b1f` | table headers, group rows, a filter group's track, a box inside a card |
 | `--border`        | `#232327` | card edges, dividers, grid lines                          |
-| `--border-strong` | `#75757d` | a button's or `kbd`'s edge, a free slot's dashed outline  |
+| `--border-strong` | `#75757d` | a button's edge, a free slot's dashed outline             |
+| `--kbd-border`    | `#3a3a41` | a `kbd`'s edge                                            |
 | `--text`          | `#ececea` | text                                                      |
 | `--text-muted`    | `#8e8e97` | units, second lines, labels, inactive links and tabs      |
 | `--accent`        | `#ff7a1a` | orange fills: wordmark block, primary button, tab underline, selected row's bar, a chart's line and its hot bar, a checked facet |
@@ -103,10 +107,12 @@ edges); the browser lane checks it with axe.
 Designed at 1440×900, where every page fits with no page scroll: a page is a
 column of cards, and the last row takes the rest (`flex: 1`). Only lists and
 feeds scroll, inside their card. Below 1440px the grids give first: six KPI
-tiles become three by two, five healthy tiles four then three columns, the
-Overview's right column drops under the charts, the Leases inspector becomes
-a drawer. Under 768px the sidebar is a top bar with a menu and tables stack
-into blocks, as before.
+tiles become three by two, the
+Overview's right column drops under the charts, and the Leases inspector
+becomes a drawer strictly below 1280px (1279 is a drawer, 1280 a pane). Under
+768px the sidebar is a top bar with a menu and tables stack into blocks, as
+before. No page scrolls sideways at 1280×800, 1024×768, 768×1024, 390×844 or
+360 wide; `e2e/console/breakpoints.spec.ts` checks every page at each.
 
 Rules that keep text from overflowing:
 
@@ -115,8 +121,11 @@ Rules that keep text from overflowing:
   ellipsis above 34 characters (`claude-code:3f2a9c…7f91c4`), since its
   tail tells sessions apart. One helper in `ui/src/model/` does it.
 - A status pill never shares a line with a name that can grow: it goes
-  under the name (worker tiles) or beside the runtime (device tiles).
-- Slot squares stop at ten; above that a meter and the fraction (`10 / 20`).
+  next to the name (the list row under 1100px) or in its own State column (Fleet and
+  device tables).
+- Slots are a meter and the fraction (`10 / 20`) in every table and tile. Squares
+  are drawn only where a caller asks for them (a worker page's Slots card) and
+  only up to ten slots; 100 slots never draw 100 squares.
 - A page title ellipsises; its action buttons never shrink.
 - A free-text reason clamps to two lines. A long id in facts wraps.
 - Counts live in one place: the page header or a group header, never on a
@@ -132,16 +141,21 @@ own that one of them draws. Named sizes and colours are above.
   then the links (icon 16px, label 500, muted; current one `--accent-text`
   on `--nav-current`, `aria-current="page"`) in a fixed order: Overview,
   Inbox, then **Operate**: Fleet, Leases, Queue, Baselines; then
-  **Observe**: Activity, Usage, each group under a label. Inbox carries its
+  **Observe**: Activity, Usage; then **Settings**: Settings (a gear icon), each
+  group under a label. Inbox carries its
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the
-  connection as `● connected` in `--status-ok`, and a sign-out icon.
-  The preserved desktop collapse/expand control sits in the wordmark row,
-  not beneath the account; the phone retains its separate menu control.
+  connection as `● connected` in `--status-ok`, and a sign-out icon; in the
+  collapsed rail the connection is a 10px dot on the avatar's top-right corner
+  (green, amber or red), with no row of its own. Nav links are 2px apart, in the
+  rail too. The Settings link's icon is a cog with teeth.
+  The desktop collapse/expand control is a quiet 30px square icon button (16px
+  icon) at the foot of the sidebar, just above the account box and centred in the
+  collapsed rail; the phone has no such control, its top bar is the wordmark on the
+  left and the menu button on the right, 8px from the top.
 - **Page header.** Title 21px with its breadcrumb in muted 500
-  (`Fleet / mac-studio-01`), an optional one-line muted subtitle that holds
-  figures only (`updated 18:18:04`, `49.5 GB on 4 workers`), never a
-  sentence; a status pill may follow the title. Actions on the right: at most
+  (`Fleet / mac-studio-01`) and no subtitle; a status pill may follow the
+  title. Actions on the right: at most
   one primary, secondaries, then a square `⋯` menu button.
 - **Card.** `--surface`, 1px border, 10px radius, clips its content. Its
   header: a label on the left, pills next, then right-aligned mono muted text
@@ -174,17 +188,44 @@ own that one of them draws. Named sizes and colours are above.
   `--surface-2` with labels; rows 40px, 12.5px, a 1px line between. A name
   cell is a 26px chip or icon then a bold line and a muted second line. Mono
   for ids, hostnames, durations. The selected row is `--row-selected` with a
-  2px `--accent` bar inset at its left. Group rows (`iOS · 4 baselines ·
-  25.4 GB`) are 28px labels on `--surface-2`. A footer line holds the row
-  count only (`1–14 of 19`). Every row ends in a `⋯` menu button.
-- **Worker tile.** In the Overview's wall (a 4-column grid with 1px
-  `--border` gaps) and the Fleet's Healthy row: mono name, its pill under it
-  when not healthy, the slot squares (iOS, a 1px divider, Android) or the
-  capped meter, then three meters CPU / MEM / DISK with 10px mono labels
-  and the figure in muted mono at the right. Fleet's attention cards are
-  bigger: name and OS line, pill at the right, a two-line reason, labelled
-  slot rows, meters, then action buttons and the lease count.
-- **Slots.** 12px squares (16px in attention cards), 3px apart: leased
+  2px `--accent` bar inset at its left. Group rows (`iOS · 4 baselines`) are
+  28px labels on `--surface-2`. A footer line holds the row
+  count only (`1–14 of 19`). Every row ends in a `⋯` menu button. A header
+  never breaks inside a word: one line, an ellipsis when it is too narrow.
+  A table of one-line rows (`table-lines`: Fleet, a worker's devices and
+  warm pool) also keeps each cell to one line, cut with an ellipsis and the
+  whole value in `title`; its second line is muted.
+- **Fleet table.** The Fleet page is one table grouped by Needs attention
+  N, then Healthy N (an empty group is left out), one row per worker:
+  Worker (mono name linking to the worker page, muted `macOS <v> · simlock
+  <v>`; the whole row opens the worker page, as other clickable rows do,
+  through the table's `rowTo`), State (the pill alone; the reason, such as `905.3 GiB used of 926.4
+  GiB`, shows in a popover on hover and keyboard focus of the pill), Slots
+  (meter and fraction), CPU / Mem / Disk (thin meter and a mono
+  figure), Leases and `⋯`, whose first entries are Undrain (confirmed) or View
+  leases (a worker that is gone), then the other actions. An attention
+  row is tinted `--row-warn` (`#17140c`) or `--row-error` (`#19100f`).
+  Below 1100px (a phone, and the collapsed-sidebar layout) the table gives way to
+  a list: a worker is a mono name and its pill, one muted line `slots n/m · CPU
+  x% · Mem y% · Disk z% · N leases`, and `⋯` at the right; no labelled blocks and
+  no quick-action row. Its group headers are the table's group rows: a
+  `--surface-2` band in the label style, with no box or other fill around it.
+- **Worker devices table.** A worker page's Devices tab is a table: Device
+  (model, mono runtime beneath), State, Held by (agent chip, shortened
+  holder), Expires in (clock and meter), Since (`granted 18:10`), a small
+  Watch button and `⋯`. Its warm pool tab's columns have fixed widths.
+- **Capabilities.** The worker page's left card lists them under their own
+  label after Host: one row each, the name and a pill (`on` ok, `off` idle,
+  `unavailable` warn with its reason beneath).
+- **Worker table.** One `ds` component, `WorkerTable`, draws workers on the Fleet
+  page and in the Overview's Fleet card, where a whole row opens the worker page too:
+  grouped rows (Needs attention, Healthy), the
+  State pill with its reason on hover, a Slots meter and fraction, CPU / Mem / Disk
+  meters, Leases and `⋯`; under 1100px a two-line list row. The Overview card shows
+  the first eight rows of the Fleet page's grouping (a worker with an issue first); a
+  longer list ends in "8 of N", the card's Open fleet button opens the rest. There is
+  no tile wall and no slot legend.
+- **Slots.** 12px squares, 3px apart: leased
   `--slot-leased`, ready `--status-ok`, booting `--status-idle`, quarantined
   `--status-error`, absent `--status-warn`, free a dashed `--border-strong`
   outline. The group's counts are its accessible name.
@@ -223,8 +264,13 @@ own that one of them draws. Named sizes and colours are above.
   glow, two overlay pills at its corners (`● LIVE · 30 fps`, `h264 ·
   720×1560 · 1.4 Mb/s`); at the right the Holder card (chip, wrapped id,
   ring + countdown, Copy lease id / Lease details / Release), Device facts,
-  Recent events. Header actions: Stop watching and `⋯`. The same stream
-  component as today's drawer Screen tab; view only.
+  Recent events. The countdown is 24px mono and, as on the Leases inspector,
+  reads `mm:ss` (`h:mm:ss` past an hour) from one helper. Header actions: Stop
+  watching and `⋯`; no state pill by the device name (the facts show the state).
+  The frame stays centred in its card whatever the state: a refusal or notice is
+  drawn inside the phone's screen, centred, wrapping and muted, as the daemon's
+  sentence without its transport prefix (`The daemon answered 404 ...`). View only. The device drawer has no Screen tab; an old
+  `?drawer=screen` link redirects here.
 - **Chart.** Recharts. Line and area in `--accent` with a 9% fill, bars in
   `--slot-leased` at 55% with the current bucket in `--accent`, grid lines
   `--border`, axis labels 10px mono muted. Height fixed by its card. No
@@ -246,10 +292,30 @@ subtitles that explain, no key-hint decoration, an empty page says so in one
 line.
 
 
+## Settings page
+
+`/settings`, last in the sidebar under its own **Settings** group. Two
+cards under a title with no actions or subtitle:
+
+- **Console**: each preference is a label and a filter group (theme System,
+  Light, Dark; sidebar Expanded, Collapsed; default range 1 h, 6 h, 24 h,
+  7 d; rows per page 25, 50, 100; holder ids Short, Full). They live in the
+  browser's `localStorage`, apply at once, and the sidebar choice is the
+  same stored choice as the sidebar's own toggle. The theme sets
+  `data-theme` on `<html>`, which `foundation.css` honours beside the
+  system preference. A default range and rows per page only fill in what
+  the URL leaves out.
+- **Daemon**: read-only. The daemon's live `config.get` answer (`GET
+  /v1/config`, admin), as one `DataTable` grouped by top-level section, one
+  row per key: Key and Value in mono and a small Copy button for
+  `simlock config set <key> <value>`; a masked secret has no button. A token
+  that may not read it gets one muted line. A gateway shows its own config,
+  not its workers'.
+
 ## Sidebar and contrast reference amendments
 
-The desktop collapse/expand button in the wordmark row preserves the existing
-action and is an addition to the render; the account remains at the bottom.
+The desktop collapse/expand button, at the sidebar's foot above the account,
+preserves the existing action and is an addition to the render.
 Stage 0 and stage 7 paired images must show this exception. Where a reference
 foreground or essential stroke fails WCAG AA, change only that colour, keeping
 the reference geometry, typography and fills. Record the selector, colours,
@@ -258,9 +324,16 @@ ratios and paired images; this does not exempt other visual differences.
 For `.nav-group-label` on `--surface` (`#141416`), the reference's `#6f6f79`
 is 3.702:1; `--text-muted` (`#8e8e97`) is 5.665:1. Both-theme axe must
 evaluate `color-contrast`, not suppress it. The original renders stay intact.
+
+Agent chips, pills and buttons keep 4.5:1 or more in both themes; the
+chips' text is darker on its light tint and lighter on its dark tint than the
+reference, and `ui/src/ds/contrast.test.ts` computes every pair from the tokens.
 (decided in delivery, pending the maintainer)
 
 ## Fleet reference amendment
+
+The Fleet page is a grouped table, not the reference's cards and tiles (see
+Fleet table above); the Worker page's devices are a table too.
 
 The reference's **Add worker** is a link to the existing
 [joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
@@ -281,6 +354,6 @@ held lease (`src/http/admin-declarations.ts:158-174`); this presentation adds
 no save workflow or progress field. Keep original render files unchanged.
 The stage-5 PR records the DATA substitution and filter/link amendment with
 paired images; every other reference geometry requirement still applies.
-`e2e/console/baselines.spec.ts` covers All/Stale/Ready, search/paging and the
-keyboard-accessible preparation link without a save request; the render
-harness covers ready/stale rows. (decided in delivery, pending the maintainer)
+`ui/src/screens/baselines/baselines.dom.test.tsx` covers All/Stale/Ready,
+search/paging (`:143`) and the preparation link without a save request
+(`:185`); the render harness covers ready/stale rows. (decided in delivery, pending the maintainer)

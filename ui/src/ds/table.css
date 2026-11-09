@@ -13,6 +13,7 @@
 /* A table and its pager sit on a card. Outside a panel the card is drawn; as a page's last part it
  * fills the page's height, so one row still reads as a list. In a panel the panel is the card. */
 .table-card {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -43,6 +44,48 @@
   overflow-wrap: break-word;
 }
 
+/* A header is a label, never broken inside a word: one line, cut with an ellipsis when its column is
+ * too narrow. */
+.table th {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A table of one-line rows (Fleet, devices, warm pool): a cell is one line, cut with an ellipsis,
+ * and a cell's own text lines (a name and its muted second line) are blocks that do the same. */
+.table-lines td {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-lines td > .cell-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-lines td > .cell-line + .cell-line {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.table-lines .mono {
+  overflow-wrap: normal;
+}
+
+.table .row-warn {
+  background: var(--row-warn);
+}
+
+.table .row-error {
+  background: var(--row-error);
+}
+
 .table th:first-child,
 .table td:first-child {
   padding-left: 14px;
@@ -69,7 +112,15 @@
 }
 
 .table td {
-  height: 40px;
+  height: 48px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+/* why: an overlay rather than a fill, so a tinted row (a worker that needs attention) still shows
+ * its tint under the hover. */
+.table tbody tr:not(.table-group):hover td {
+  background-image: linear-gradient(var(--row-hover), var(--row-hover));
 }
 
 .table .num {
@@ -146,6 +197,11 @@
   .table-wide .table-group td {
     display: block;
   }
+
+  .table-wide.table-lines td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 @media (max-width: 767.98px) {
@@ -210,6 +266,11 @@
   .table .table-group td {
     display: block;
   }
+
+  .table.table-lines td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .table th {
@@ -224,7 +285,7 @@
 }
 
 .table-row-link:hover {
-  background: var(--surface);
+  background: transparent;
 }
 
 /* The selected row is its own fill with the accent bar inset at its left, so a page that shows one
@@ -247,12 +308,20 @@
   text-transform: uppercase;
 }
 
+/* A group heading is a slim band, shorter than a row of data. */
+.table .table-group td {
+  height: 28px;
+}
+
 /* The count line a table shows in place of its pager: the rows on screen, and nothing else. */
 .table-count {
-  margin: 0;
-  padding: var(--space-3) var(--space-6);
+  display: flex;
+  align-items: center;
+  height: 34px;
+  margin: auto 0 0;
+  padding: 0 14px;
   border-top: 1px solid var(--border);
-  font-size: var(--text-sm);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -279,4 +348,23 @@
 .table-empty {
   margin: 0;
   padding: var(--space-4) var(--space-6);
+}
+
+/* A group heading stays a full-width band when rows stack: no row padding or border around it. */
+@media (max-width: 1099.98px) {
+  .table-wide tr.table-group {
+    padding: 0;
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .table tr.table-group {
+    padding: 0;
+    border-bottom: 0;
+  }
+}
+
+.table .table-group td {
+  padding-left: 14px;
 }

@@ -26,6 +26,17 @@
   height: 12px;
 }
 
+.slots-md {
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+}
+
+.slots-md .slot {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
 .slots-lg {
   display: grid;
   grid-template-columns: repeat(8, 16px);
@@ -82,44 +93,12 @@
   border: 1px dashed var(--border-strong);
 }
 
-.slot-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.slots-fraction {
   color: var(--text-muted);
   font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
-.slot-legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.slot-legend .slot {
-  width: 8px;
-  height: 8px;
-}
-
-.share-bar {
-  display: flex;
-  gap: 2px;
-  height: 10px;
-  background: var(--track);
-}
-
-.share {
-  display: block;
-  flex: none;
-  width: var(--share, 0%);
-  transition: width var(--duration-move) var(--ease);
-}
-
-/* Free room is the bar's own field showing through, not a dashed box. */
-.share.slot-free {
-  border: 0;
-  background: transparent;
+.slots-meter .slots-fraction {
+  color: inherit;
 }

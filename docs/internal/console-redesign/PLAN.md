@@ -28,8 +28,8 @@ not component code: copy its values, not its markup.
 Foundation captures the existing pages, not the later redesigned states.
 `current/1-overview.png`, `2-fleet.png`, `3-worker.png`, `5-leases.png`
 and `8-activity.png` map to their numbered references. The baseline for
-`4-streaming.png` is `current/4-device-screen-drawer.png`, with the existing
-Screen tab; `6-leases-selected.png` maps to `current/6-lease-drawer.png`;
+`4-streaming.png` is `current/4-streaming.png`
+(`e2e/console/render-cases/screen.ts:1`), with the existing Screen tab; `6-leases-selected.png` maps to `current/6-lease-drawer.png`;
 `7-baselines.png` maps to the existing ready/stale table in
 `current/7-baselines.png`. These drawer and table images are baseline evidence,
 not approval of the later page geometry. Stages 3, 4 and 5 replace their own
@@ -49,9 +49,11 @@ maintainer accepts or adjusts them from a screenshot.
 
 ## How an agent verifies a stage
 
-1. Build the console and capture each page with the fixture data at
-   1440×900 into `current/<page>.png` beside this file (the console test
-   refactor in this stack adds the screenshot script that does it).
+1. Run `pnpm console:screenshots` (it builds the console first). It signs
+   in against the stubbed daemon, opens each page with the fixture data in
+   `e2e/console/render-fixtures.ts` at 1440×900, 1280×800 and 390×844, and
+   writes `current/<page>.png` beside this file (and `current/light/` at
+   1440×900). It compares nothing: a person or an agent looks.
 2. Open `current/<page>.png` and `renders/<n>-<page>.png` side by side and
    record the explicit Fleet, Baselines, sidebar-control and WCAG-AA amendments, then
    list every other difference that is not data: a missing element, a wrong
@@ -91,7 +93,7 @@ One agent; everything else waits for it.
 - Restyle the `ds` primitives every page shares, to the renders' sidebar,
   page header and cards: `sidebar` (floating card, search box, group
   labels, account box, red Inbox badge), the page header (title with
-  breadcrumb, subtitle for figures, actions), `panel` (card with the 38px
+  breadcrumb, no subtitle, actions), `panel` (card with the 38px
   header), `button` (30/26px, primary/secondary/danger/icon), `choice`
   (filter group), `search-field`, `table` (34px header on `--surface-2`,
   40px rows, selected row bar, group rows, footer with the count only),
@@ -103,21 +105,21 @@ One agent; everything else waits for it.
   headings across page boundaries without counting them as data rows;
   `selectedId` marks only its row; `footer="count"` hides pager controls
   while retaining supplied paging/range/count. Omitted props retain existing
-  paging and row/menu behavior. Extend `e2e/console/long-lists.spec.ts` for
-  existing pager controls and URL state. (decided in delivery, pending the maintainer)
+  paging and row/menu behavior. Existing pager controls and URL state are
+  proved in `ui/src/screens/leases/leases-paging.dom.test.tsx` (`:73`, `:106`). (decided in delivery, pending the maintainer)
 - New primitives: `pill`, `chip` (agent chip with the known-prefix rule),
   `ring`, `log-row`, `list-row`, `feed-row`, `group-header`, `banner`.
 - `ui/src/model/holder.ts`: `shortHolder(id)` middle ellipsis above 34
   characters, and `agentKind(id)` for the chip; unit tests for ids of every
   form in `src/agent-identity/` (tool-prefixed session ids, token labels,
   `mcp:<pid>`, 256-character free-form).
-- Fixture data for the captures, close to the mock data's shape: 8 workers
-  (one with 20 slots, one with a `.local` hostname, one disconnected, one
-  drained, one at 91% disk), 14 leases with holders of every form, 9
-  baselines (ready and stale only), an hour of events. The render harness
-  that first held it is removed by the maintainer's decision: a pixel
-  comparison of a live page cannot be stable in CI, so captures are a
-  review aid, not a test.
+- The render harness (now `pnpm console:screenshots`) with fixture data close
+  to the mock data's shape: 8 workers (one with 20 slots, one with a
+  `.local` hostname, one disconnected, one drained, one at 91% disk), 14
+  leases with holders of every form, 9 baselines (ready and stale only; a ready row substitutes for the
+  reference building row as a DATA difference with identical row/pill geometry),
+  an hour of events. Screenshots to `docs/internal/console-redesign/current/`
+  (gitignored).
 - Verify: the shell (sidebar, header, one card) against the top-left of
   `1-overview.png`; every existing page still renders with the new
   primitives, even if its layout is still the old one.
@@ -127,16 +129,16 @@ One agent; everything else waits for it.
   labels, `#6f6f79` on `#141416` is 3.702:1; `#8e8e97` is 5.665:1.
   Record every other necessary foreground or stroke change with selector,
   before/after colours, ratios and paired images. Never change original PNGs.
-  Stage 7 removes the temporary `ui/src/state/navigation.ts` Fallow entry
-  after real page imports reach the facade. (decided in delivery, pending the maintainer)
+  The temporary `ui/src/state/navigation.ts` Fallow entry is gone: real page
+  imports reach the facade (`ui/src/screens/fleet/device-drawer.tsx:5`), and
+  `.fallowrc.json:30` lists no such entry. (decided in delivery, pending the maintainer)
 
 ### 1. Overview — `1-overview.png`
 
 Banner (count, first issue, "and N more", Open Inbox), six KPI tiles, the
 worker wall (4 columns, 1px gaps, pill under the name, capped slots, three
 meters), Leases held area chart, Capacity rings, Queue and Ending soon lists,
-Requests waiting bars. Range filter in the header. Subtitle is
-`updated <time>` only.
+Requests waiting bars. Range filter in the header. No subtitle.
 
 ### 2. Fleet and the worker page — `2-fleet.png`, `3-worker.png`
 
@@ -182,11 +184,11 @@ stays unused.
 
 ### 5. Baselines — `7-baselines.png`
 
-All / Stale / Ready filter group and search; a grouped table (iOS, Android group rows with count
-and size) of Baseline (name, model · runtime), Size as text, Worker, Built,
-State (pill, and a stale reason as a muted second line), `⋯`; under it one
-"Disk used by baselines" card, two columns of worker meters relative to each
-disk. No builds chart, no "runtimes without a baseline".
+All / Stale / Ready filter group and search; a grouped table (iOS, Android group rows with the
+count only) of Baseline (name, model · runtime), Size as text, Worker, Built,
+State (pill; a stale one's reason is a popover on the pill), `⋯`. No disk card,
+no builds chart, no "runtimes without a baseline" (removed at the maintainer's
+request).
 
 Explicit reference amendment: replace Building with Ready, and the toolbar's
 Build baseline with an equally styled **Prepare baseline** link to the existing
@@ -200,9 +202,9 @@ ends it (`src/contract/operations.ts:711-725`,
 or progress wire field. Preserve original render files. Stage 5's PR records
 the DATA substitution and explicit filter/link differences alongside paired
 images; all other reference geometry remains required. Tests in
-`e2e/console/baselines.spec.ts` cover All/Stale/Ready with search and paging,
-the real keyboard-accessible documentation link and absence of a save request;
-the render harness covers the ready/stale substitution. (decided in delivery, pending the maintainer)
+`ui/src/screens/baselines/baselines.dom.test.tsx` cover All/Stale/Ready with search and paging,
+the documentation link and absence of a save request;
+the screenshots show the ready/stale substitution. (decided in delivery, pending the maintainer)
 
 ### 6. Activity and the pages without a render — `8-activity.png`
 

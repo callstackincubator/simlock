@@ -83,6 +83,7 @@ export const CORE_ROUTE_SEGMENTS: readonly string[] = [
   "baselines",
   "catalog",
   "components",
+  "config",
   "devices",
   "events",
   "healthz",

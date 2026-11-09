@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { listSearch } from "./paging";
 import {
   filterWorkers,
+  fleetRow,
   readDrawerTab,
   readFilter,
-  upMeta,
   type WorkerPage,
   workerPageOf,
   workerRow,
@@ -291,10 +291,43 @@ describe("the list's filters and header", () => {
     expect(filterWorkers([at(3)], "busy")).toHaveLength(1);
     expect(filterWorkers([at(2)], "busy")).toHaveLength(0);
   });
+});
 
-  it("reads how many workers are up of all", () => {
-    expect(upMeta(all)).toBe("2 / 3 up");
-    expect(upMeta([])).toBe("0 / 0 up");
+describe("a worker's row on the Fleet cards", () => {
+  it("says why a worker needs attention in the daemon's own facts", () => {
+    expect(
+      fleetRow(worker({ connection: "disconnected", lastSeenAt: NOW - 14 * 60_000 }), "", NOW)
+        .reason,
+    ).toBe("last seen 14 min ago");
+    expect(fleetRow(worker({ drained: true }), "", NOW).reason).toBe("accepts no new requests");
+    expect(
+      fleetRow(
+        worker({ load: { ...LOAD, disk: { freeBytes: 10 * GIB, totalBytes: 100 * GIB } } }),
+        "",
+        NOW,
+      ).reason,
+    ).toBe("90.0 GiB used of 100.0 GiB");
+  });
+
+  it("counts the leased slots of both platforms and splits the slots by platform", () => {
+    const android = { model: "Pixel 9", osVersion: "15", physical: false, platform: "android" };
+    const row = fleetRow(
+      worker({
+        devices: [
+          device({ id: "ios_leased", state: "leased" }),
+          device({ id: "ios_ready", state: "ready" }),
+          device({ id: "android_leased", spec: android, state: "leased" }),
+        ],
+      }),
+      "",
+      NOW,
+    );
+
+    expect(row.slotsLeased).toBe(2);
+    expect(row.ios.map((slot) => slot.kind)).toEqual(["leased", "ready", "free", "free"]);
+    expect(row.android.map((slot) => slot.kind)).toEqual(["leased", "free", "free", "free"]);
+    expect(row.iosLabel).toBe("1 leased, 1 ready, 2 free");
+    expect(row.androidLabel).toBe("1 leased, 3 free");
   });
 });
 
@@ -482,7 +515,7 @@ describe("a worker's capacity and leases", () => {
     expect(inspector.overview.devices).toBeUndefined();
     expect(inspector.overview.leases).toBeUndefined();
     expect(inspector.warm).toBeUndefined();
-    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["devices", "host", "events"]);
+    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["devices"]);
     expect(inspector.host.capabilities).toBeUndefined();
     expect(inspector.health).toEqual({ tone: "warn", word: "starting" });
   });
@@ -827,8 +860,8 @@ describe("a worker page's tab", () => {
     workerPageOf({ now: NOW, search, tokens: [], worker: view }).tab;
 
   it("is the one ?tab= names, and Devices for a value the page does not offer", () => {
-    expect(tabOf("?tab=host")).toBe("host");
-    expect(tabOf("?tab=events&page=2")).toBe("events");
+    expect(tabOf("?tab=host")).toBe("devices");
+    expect(tabOf("?tab=events&page=2")).toBe("devices");
     expect(tabOf("")).toBe("devices");
     expect(tabOf("?tab=overview")).toBe("devices");
     expect(tabOf("?tab=")).toBe("devices");
@@ -839,7 +872,7 @@ describe("a worker page's tab", () => {
 
     expect(tabOf("?tab=warm-pool")).toBe("warm-pool");
     expect(tabOf("?tab=warm-pool", starting)).toBe("devices");
-    expect(tabOf("?tab=host", starting)).toBe("host");
+    expect(tabOf("?tab=host", starting)).toBe("devices");
   });
 });
 

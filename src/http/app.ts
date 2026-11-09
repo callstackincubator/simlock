@@ -30,6 +30,7 @@ import {
   updateRoute,
   workerDrainRoute,
   inboxRoute,
+  configRoute,
   workerListRoute,
   workerRemoveRoute,
   workerUndrainRoute,
@@ -714,6 +715,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
 
   app.openapi({ ...inboxRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("inbox.get", {}, buildHttpSession(c.get("identity"))), 200),
+  );
+
+  app.openapi({ ...configRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("config.get", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
   app.openapi({ ...updateRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {

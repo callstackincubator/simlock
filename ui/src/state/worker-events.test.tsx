@@ -56,7 +56,7 @@ function streamed(id: string, seq: number): string {
   return `event: lease.renewed\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-describe("a worker's Events tab", () => {
+describe("the Events on this worker list", () => {
   it("follows the daemon mode as it arrives: a single host's streamed event, which names no worker, shows once the mode is known to be a worker's", async () => {
     vi.stubGlobal("window", { location: { pathname: "/workers/w1", search: "?tab=events" } });
     const { connection, daemon, visibility } = connect();

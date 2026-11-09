@@ -1,27 +1,303 @@
-/* The events page: a small column chart over the filter, then the feed. */
+/* The events page: a card of facets beside a card of the feed, with the per-minute bars at its top. */
 
-.events-chart {
-  min-width: 0;
+.activity-grid {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
 }
 
-.events-chart .chart-summary {
+.activity-card {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.activity-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+/* From a desktop width the page is one screen tall and the two cards scroll inside themselves. */
+@media (min-width: 1024px) {
+  .page:has(> .activity-grid) {
+    height: 100vh;
+    max-height: 100vh;
+  }
+
+  .activity-facets {
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 1023.98px) {
+  .activity-grid {
+    grid-template-columns: minmax(0, 1fr);
+    flex: none;
+  }
+}
+
+.page-actions .search-field-wrap {
+  width: 280px;
+}
+
+@media (max-width: 767.98px) {
+  .facet-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .page-actions .search-field-wrap {
+    flex: 1;
+    width: auto;
+    min-width: 12rem;
+  }
+}
+
+/* Facets: a header, then a checkbox, a name and a count in each row. */
+
+.facet-title {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.facet-group + .facet-group .facet-title {
+  border-top: 1px solid var(--border);
+}
+
+.facet-list {
+  padding: 6px 0;
+}
+
+.facet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  min-width: 0;
+  padding: 0 14px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
+.facet input {
+  display: inline-flex;
+  position: relative;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-height: 0;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border-color: var(--border-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.facet input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.facet input:checked::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--on-accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.facet input:focus-visible {
+  outline: var(--focus-width) solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.facet-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facet-name.mono {
+  font-size: 12px;
+}
+
+.facet-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* The feed card: the bars on top, the rows below. */
+
+.activity-chart {
+  flex: none;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.activity-figures {
+  margin: 0 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.activity-note {
+  margin: 0;
+  padding: var(--space-4);
+}
+
+.activity-feed .feed {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.activity-feed .feed-box {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 20rem;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: 26px 190px minmax(0, 1fr) 140px 70px;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+  padding: 0 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, var(--surface));
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.event-row:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.event-row[aria-current="page"] {
+  background: var(--row-selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.event-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--pill-plain-bg);
+  color: var(--pill-plain-text);
+}
+
+.event-icon .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.event-icon-ok {
+  background: var(--pill-ok-bg);
+  color: var(--pill-ok-text);
+}
+
+.event-icon-warn {
+  background: var(--pill-warn-bg);
+  color: var(--pill-warn-text);
+}
+
+.event-icon-error {
+  background: var(--pill-error-bg);
+  color: var(--pill-error-text);
+}
+
+.event-name {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.event-subject,
+.event-worker {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.event-worker,
+.event-time {
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
 
 .event-time {
-  margin-right: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  font-weight: 400;
+  text-align: right;
 }
 
-.event-warn {
-  color: var(--status-warn);
+@media (max-width: 1100px) {
+  .event-row {
+    grid-template-columns: 26px 190px minmax(0, 1fr) 70px;
+  }
+
+  .event-worker {
+    display: none;
+  }
 }
 
-.event-error {
-  color: var(--status-error);
+@media (max-width: 640px) {
+  .event-row {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+  }
+
+  .event-subject {
+    display: none;
+  }
 }
 
 .event-drawer-body {

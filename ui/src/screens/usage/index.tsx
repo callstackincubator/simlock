@@ -122,7 +122,11 @@ export function UsageBody(props: {
         start={
           <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
         }
-        end={ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
+        end={
+          ready?.data.note === undefined ? null : (
+            <p className="visually-hidden">{ready.data.note}</p>
+          )
+        }
       />
       {state.kind === "loading" ? <p className="muted loaded-note">Loading…</p> : null}
       {state.kind === "refused" ? <Refusal message={state.message} /> : null}

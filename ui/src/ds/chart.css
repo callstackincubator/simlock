@@ -25,7 +25,7 @@
 
 .chart-area .recharts-area-curve {
   stroke: var(--accent);
-  stroke-width: 2px;
+  stroke-width: 1.5px;
 }
 
 .chart-area .recharts-area-area {
@@ -83,4 +83,37 @@
 .chart-summary strong {
   font-family: var(--font-mono);
   font-weight: 600;
+}
+
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 44px;
+}
+
+.bar {
+  flex: 1;
+  min-width: 0;
+  height: var(--bar, 2%);
+  background: color-mix(in srgb, var(--slot-leased) 55%, transparent);
+}
+
+.bar-now {
+  background: var(--accent);
+}
+
+/* A strip of grey columns whose newest is orange, as in a card's header. */
+.chart-compact {
+  margin: 0;
+}
+
+.chart-compact.chart-columns .recharts-bar-rectangle path {
+  fill: var(--slot-leased);
+  fill-opacity: 0.55;
+}
+
+.chart-compact.chart-columns .recharts-bar-rectangle:last-child path {
+  fill: var(--accent);
+  fill-opacity: 1;
 }

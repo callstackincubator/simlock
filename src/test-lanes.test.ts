@@ -163,12 +163,12 @@ function ciJobs(ci: string): ReadonlyMap<string, string> {
   return jobs;
 }
 
-// why: main's console lane needs about 33 minutes of one runner's two workers (#852), so each
-// of four shards runs about 8 inside the 15-minute job timeout.
-const CONSOLE_SHARDS_AT_LEAST = 4;
+// why: the lane holds only what needs a real daemon or a real browser engine, about four
+// minutes of one runner's two workers, so two shards keep each well inside the job timeout.
+const CONSOLE_SHARDS_AT_LEAST = 2;
 
 describe("the console lane in CI (.github/workflows/ci.yml)", () => {
-  it("runs the console lane over a matrix of at least four Chromium-only shards, and the required `Console` check needs that job and fails when it does not pass", () => {
+  it("runs the console lane over a matrix of at least two Chromium-only shards, and the required `Console` check needs that job and fails when it does not pass", () => {
     const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
     const jobs = [...ciJobs(ci)];
     const lanes = jobs.filter(([, job]) => job.includes("pnpm test:console"));

@@ -72,14 +72,16 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar floats beside the page in its own card. Use the button beside the Simlock name to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
+The sidebar floats beside the page in its own card. Use the button at the foot of the sidebar, above the account box, to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**, and **Settings** at the bottom. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
 
 <picture>
   <source srcSet="/simlock/console-shell-dark.png" media="(prefers-color-scheme: dark)" />
   <img src="/simlock/console-shell-light.png" alt="The Overview page with navigation and the signed-in account in the sidebar" />
 </picture>
 
-On **Leases**, **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Fleet**, a worker opens as its own page. Lists show 25 rows at a time, with a pager for 50 or 100.
+On **Queue**, **Inbox** and **Activity**, the item you select opens in a panel over the list. On **Leases**, it opens in a pane beside the table. On **Fleet**, a worker opens as its own page, and a device opens its streaming page. Lists show 25 rows at a time, with a pager for 50 or 100.
+
+The console follows your system's light or dark setting, unless you pick one in [Settings](#settings), and fits the window it is in. It is laid out for a 1440 pixel wide window, where each page fits without scrolling. In a narrower window the Overview's right-hand cards move under its chart. Below 1280 pixels a lease opens as a panel over the list, and below 768 the sidebar becomes a bar at the top with a menu button and tables stack into blocks (Fleet and the worker's tables already below 1100). No page scrolls sideways, down to a 360 pixel wide phone.
 
 Pages update by themselves: a new lease or a booting device shows within about a second, and readings such as CPU load within 15 seconds. The bottom of the sidebar shows the connection:
 
@@ -91,20 +93,24 @@ Pages update by themselves: a new lease or a booting device shows within about a
 
 ## Overview
 
-The console opens on **Overview**, the worker on one page.
+The console opens on **Overview**, the worker on one page. The **Fleet** card is a table; the rest are tiles, charts and lists.
 
-- **Range**: **1 hour**, **6 hours**, **24 hours** or **7 days**. It sets the figures and charts below.
-- **Tiles**: **Leased** (leases held, of the devices running, and how many are ready), **Waiting** (with the longest wait), **Workers** connected, **Wait p95** for the range (how long the slowest 1 in 20 requests waited), and **Ending soon** (leases with under 5 minutes left).
-- **Needs you**: the problems from **Inbox**, or "Nothing needs you".
-- **Capacity · all workers**: per platform, the devices split into leased, ready, booting and the rest.
-- **Charts**: **Leases held** and **Requests in the queue** over the range, each with a table of the numbers under it. **Device slots in use** is on **Usage**.
-- **Workers**: a short version of **Fleet**, with **Open Fleet** to see all of it.
+- **Range**: **1 h**, **6 h**, **24 h** or **7 d**, at the top right. It sets the figures and charts below.
+- **Banner**: when something needs you, a line counts the problems from **Inbox**, links the first one and says how many more there are. **Open Inbox** goes to the list. With nothing to do, there is no banner.
+- **Tiles**: each one opens its page. **Leased** (leases held, of the devices running) and **Ready** (devices ready to lease) open **Leases** and **Fleet**; **Waiting** (with the longest wait) opens **Queue**; **Wait p95** for the range (how long the slowest 1 in 20 requests waited) opens **Usage** on the same range; **Ending soon** (leases with under 5 minutes left) opens **Leases**; **Workers** connected opens **Fleet**. A figure the daemon could not read shows a dash, never zero.
+- **Fleet**: the same table as the Fleet page, for up to eight workers, those that need attention first: each with its status in a pill, its slots as a meter and the leased/total fraction, and its CPU, memory and disk. A row opens the worker. **Open fleet** shows all of it.
+- **Leases held**: a chart over the range, with the current and the highest figure. A table of the numbers is there for screen readers.
+- **Capacity**: per platform, how much of the room your workers may run is leased.
+- **Queue**: the three longest waiting requests, and **Ending soon**: the two leases that end first. Each row opens its request or lease. If the queue cannot be read, the card says so instead of showing it empty.
+- **Requests waiting**: a bar for each period of the range. **Device slots in use** is on **Usage**.
 
 ## Fleet
 
-**Fleet** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status, the worker's name, and its devices running of its limit.
+**Fleet** shows the workers the daemon knows. On a worker that is one row: this machine. **Add worker** at the top links to [Join workers](/simlock/docs/gateway/joining-workers); it changes nothing in the console.
 
-The status shows the worst thing wrong with the worker, with a word and a colour:
+**All**, **Issues** and **Busy** narrow the list, and the search box beside them matches a worker's name, id or system. **Issues** shows workers with something wrong. **Busy** shows workers using three quarters of their device slots or more.
+
+Fleet is one list of workers in two groups, with one row for each worker. A worker with something wrong sits under **Needs attention**, on a tinted row. The row has the name and system, and a word and a colour for the worst thing wrong; hover over or focus the word to see why (for example how long a lost worker has been gone, or how full its disk is):
 
 | Colour | When |
 | --- | --- |
@@ -112,29 +118,39 @@ The status shows the worst thing wrong with the worker, with a word and a colour
 | Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, it has `warming paused`, or a figure is 85% full or more. |
 | Green | Nothing is wrong. The word is `connected`. |
 
-**Issues** shows only workers whose status is not green. **Busy** shows workers using three quarters of their device slots or more.
+Every row shows the iOS and Android slots together, CPU, memory and disk with a bar each, and how many leases the worker holds. A click anywhere on the row opens the worker's page; **⋯** holds its actions, with **Undrain** first on a drained worker and **View leases**, a link to [Leases](#leases), first on a disconnected one. The slots show as a meter with the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is shown as `—`, never as zero. Every cell is one line; a long value is cut with an ellipsis and shows in full on hover.
 
-Select the worker to see its CPU, memory and disk, each with a bar, how many leases it holds, and device slots for iOS and Android (leased, ready, booting, quarantined or free). Up to ten slots appear as squares; above ten, a meter shows the leased/total fraction. Slot state counts are available to screen readers. Unavailable load is not shown as zero. Under them are four tabs:
+Every other worker sits under **Healthy**, in the same columns. Under both groups, **Worker events** lists the workers' own events of the last hour, and new ones appear at the top.
 
-- **Devices**: every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
-- **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
+Select anywhere on a worker's row to open its page. Its title reads **Fleet / name**, with the worker's status beside it. At the top right are the worker's first action, for example **Drain**, and **⋯** for the rest. Four rings show CPU, memory, disk and slots, each with its figure and a line of context. Unavailable load is not shown as zero. Below them, the card on the left shows:
+
+- **Slots**: the iOS and Android slots, leased over total, as a square for each slot up to ten and a meter above ten.
+- **Host**: the operating system, the version of each platform tool, the simlock version, the devices kept warm and the worker's id.
+- **Capabilities**: each optional module (such as screen streaming) as `on` or `off`, or `unavailable` with its reason.
+- **Baselines here**: the baselines saved on this worker, with their sizes.
+
+The card on the right has two tabs:
+
+- **Devices**: a row for every device with its model, runtime and state. A leased device shows its holder, the time left on the lease and when it was granted; a device that is ready shows when it booted. **Watch** opens the device's screen.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
-- **Events**: this worker's events, newest first. Older events load as you scroll down, and new ones appear at the top.
+
+Under the tabs, **Events on this worker** lists this worker's events, newest first. Older events load as you scroll down, and new ones appear at the top.
 
 ### Open a device
 
-Select a device on the worker to open its drawer, which has two tabs:
+Select a device on the worker to open its drawer. It shows the model, runtime, state, the baseline and version the device was copied from (a device made from a baseline only), holder, lease and UDID, and a **Watch** link.
 
-- **Details**: the model, runtime, state, the baseline and version the device was copied from (a device made from a baseline only), holder, lease and UDID. The drawer opens here.
-- **Screen**: the device's live screen, whether or not it is leased. It plays while the tab is open. The **Stream details** button (ⓘ) shows the picture size, frame rate, bandwidth and dropped frames. A device that is not running says why instead, for example "The device is shut down. Its screen shows while it runs.", and the picture starts by itself once the device is `ready` again. If screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watch the screen](/simlock/docs/using-devices/watching-the-screen).
+**Watch** opens the device's streaming page, at `/fleet/<worker>/devices/<device>/`, so a pasted link or a reload opens it too. The live screen plays in a phone-shaped frame, whether or not the device is leased. Two pills over it show the stream's own figures: `LIVE` with the frame rate, and the codec, picture size and bandwidth. At the right are the **Holder** card (the agent, the lease id, the time left and when it was renewed, with **Copy lease id**, **Lease details** and **Release**), the device's facts and its recent events. A device with no lease has no Holder card. The page only watches: it does not send taps or keys.
 
-The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens it. On a gateway the drawer works the same, for a device on any connected worker.
+**Stop watching** closes the stream and returns to the worker's page; leaving the page any other way closes it too. A device that is not running says why instead of showing a picture, for example "The device is shut down. Its screen shows while it runs.", and the picture starts by itself once the device is `ready` again. If screen streaming is off for the worker, the page says "Streaming is off on" and the worker's name. See [Watch the screen](/simlock/docs/using-devices/watching-the-screen).
+
+An older link that ends in `?drawer=screen` opens the streaming page. On a gateway it works the same, for a device on any connected worker.
 
 ### Update a worker
 
-On a gateway, a worker that runs an older version than the gateway knows of shows `simlock 0.3.0 · 0.4.0 available` beside its name. Its **⋯** menu, and the search (⌘K), offer **Update…**. The dialog says how many leases the worker holds: with none it installs at once; otherwise it takes no new leases and waits for them to end, then restarts by itself. Confirm with **Update** and a toast says `Updating <name> to <version>`; if the worker already updates you see `<name> is already updating to <version>`, and if it already runs the version, `<name> already runs <version>`.
+On a gateway, a worker that runs an older version than the gateway knows of shows `simlock 0.3.0 · 0.4.0 available` under its name on its card and on its page. The worker page's **⋯** menu, and the search (⌘K), offer **Update…**. The dialog says how many leases the worker holds: with none it installs at once; otherwise it takes no new leases and waits for them to end, then restarts by itself. Confirm with **Update** and a toast says `Updating <name> to <version>`; if the worker already updates you see `<name> is already updating to <version>`, and if it already runs the version, `<name> already runs <version>`.
 
-While an update runs, the worker's state reads `updating` and the row says its stage: `waiting for 2 leases`, `installing` or `restarting`. A worker that waits for leases also offers **Update now**, which asks `Install <version> on <name> now?`; **Install now** restarts it at once, and its leases keep running through the restart. A disconnected worker offers no **Update now**. An incompatible worker, one that cannot talk to the gateway until it is updated, offers **Update…** whatever the latest version, and **Update now** once its update is waiting for leases.
+While an update runs, the worker's state reads `updating` and its card says its stage: `waiting for 2 leases`, `installing` or `restarting`. A worker that waits for leases also offers **Update now**, which asks `Install <version> on <name> now?`; **Install now** restarts it at once, and its leases keep running through the restart. A disconnected worker offers no **Update now**. An incompatible worker, one that cannot talk to the gateway until it is updated, offers **Update…** whatever the latest version, and **Update now** once its update is waiting for leases.
 
 If an update fails, the worker's page shows a red banner, `Update to 0.4.0 failed (installing): <message>`, with an **Update again** button, and the [Inbox](#inbox) lists it. The worker runs its old version again.
 
@@ -142,7 +158,7 @@ While the daemon is still starting, devices, capacity and the warm pool are left
 
 ## Leases
 
-**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder, the time left, the device, and a bar of the time left. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list.
+**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder (**Held by**), the device and its runtime, the worker, and the time left (**Expires in**) as a countdown with a bar. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list, and the box beside them searches by holder, device and worker. Under the table, a line counts the rows shown; a list longer than one page gets a pager.
 
 The holder is the identity that took the lease. A lease taken over the HTTP API shows the label of the token that took it, so give each agent's token a label:
 
@@ -153,16 +169,18 @@ simlock token create --role agent --label ci-runner-3
 A lease taken with the CLI or MCP server on this machine shows the agent identity it was taken with.
 Long holder names are shortened in the middle; hover over the holder link to see the complete requester identity. A chip identifies a known agent tool, or shows a dot when the tool is unknown.
 
-Select a lease to see:
+Beside the table, a pane of fixed width summarises every lease, whatever the filter or search leaves in the table:
 
-- **Expires in**: the time left, how long it has been held, when it was last renewed, and when it was granted.
-- **Device**: the model, runtime, mode, the baseline and version the device was copied from (a lease made from a baseline only), image tag, physical or virtual, the worker, the device id and the UDID.
-- **Lease**: the lease id, the request it came from, and the holder.
-- **Events** (its own tab): the events of the last hour about the lease.
+- **By holder**: how many leases each holder has.
+- **By platform**: how many of the iOS and Android slots are leased.
+- **Ending in 5 min**: the leases that end soonest, with their countdowns.
+- **Longest held**: the leases held the longest.
 
-To watch the device's screen, open the device from its worker's page; see [Open a device](#open-a-device).
+Select a lease and the pane shows that lease instead, and the table does not move. It has the holder, a ring and countdown with the lease's original time, **Watch**, **Copy id** and **Release**, the device, worker, when it was granted, the token, the lease id, the device id and the baseline (only for a lease made from a baseline), and the **Recent events** about the lease from the last hour. **Watch** opens the device's streaming page and is offered only while the worker streams the device. **Copy id** copies the complete lease id; if the browser cannot copy, a message says so and the id stays on screen to select. **Release** asks for confirmation before it releases the lease. Close the pane to see the summary again.
 
-A lease that was released or has expired says "Lease not found."
+In a window narrower than 1280 pixels the lease opens as a panel over the page instead, and the summary sits under the table.
+
+A lease that was released or has expired says "This lease is not held."
 
 ## Queue
 
@@ -187,7 +205,9 @@ A request leaves the list as soon as it gets its device, fails or is cancelled. 
 
 ## Baselines
 
-**Baselines** lists every baseline the worker holds: its name, version, platform, model, OS version, mode, note, size, when it was saved, and whether it is stale. A stale baseline shows its reason, for example `stale · runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed`.
+**Baselines** lists every baseline the worker holds, grouped by platform. A group's heading gives its baseline count. Each row shows the baseline's name, the model and runtime it was saved on, its size, when it was built, and a `ready` or `stale` state. Hover or focus a `stale` state to read its reason, word for word. Use **All**, **Stale** and **Ready** to narrow the list, and the search box to find a baseline by name, model, runtime or worker. The group counts follow the filter and the search.
+
+**Prepare baseline**, above the page, opens the guide to preparing one. The console does not save baselines itself.
 
 To save or remove a baseline, use `simlock baseline save` and `simlock baseline remove` on the command line; see [Baselines](/simlock/docs/worker/baselines).
 
@@ -207,10 +227,18 @@ Select an item to see the facts that matter for it, such as how much RAM the wor
 
 ## Activity
 
-**Activity** lists events newest first, starting with the last hour. New events appear at the top as they happen, and older ones load as you scroll down. A chart above the list counts events per minute, and a filter narrows the list to **Leases**, **Devices**, **Workers**, **Components** or **Other**.
+**Activity** lists events newest first, starting with the last hour. New events appear at the top as they happen, and older ones load as you scroll down. Each row shows the event's name, what it is about, the worker and the time. The search box and the range (**1 h**, **6 h**, **24 h** or **7 d**) are in the page header. If the events loaded do not reach back as far as the range, the page says so, and **Load older events** fetches more.
+
+A card on the left filters the list by **Kind** (**Leases**, **Queue**, **Devices**, **Workers**, **Baselines** or **Other**), by state (**Problems only**) and by **Worker**. Each option shows how many events it would show. Tick several options in a group to see all of them; tick none to see everything. Events with no worker are under **Other** in the Worker group. Above the list, a chart counts the events shown per minute over the last hour.
 
 Select an event to see its whole payload and a link to the lease, worker, request or Inbox item it is about. For what each event means, see [Events](/simlock/docs/reference/events).
 
 ## Usage
 
 **Usage** shows the figures for a range, the same numbers `simlock stats` gives: requests, grants, rejections, the wait and hold times, grants by source (warm, booted or provisioned), rejections by reason, device incidents, and the figures per platform and per requester. Pick **1 hour**, **6 hours**, **24 hours** or **7 days**. See [Monitoring](/simlock/docs/worker/monitoring).
+
+## Settings
+
+**Settings** has two cards. **Console** holds your preferences for this browser: the theme (**System**, **Light** or **Dark**), the sidebar (**Expanded** or **Collapsed**, the same choice as the button at the foot of the sidebar; a phone's menu ignores it), the default range for **Overview** and **Activity** when the address has none, the rows per page for tables, and whether holder ids are **Short** (cut in the middle) or **Full**. A change applies at once and stays in this browser.
+
+**Daemon** shows the daemon's live configuration, grouped by section, with secrets masked. It is read-only: change a value with `simlock config set <key> <value>` on the daemon's machine. The **Copy** button next to a key copies that command. It needs an admin token; with another token, the card says your token cannot read this daemon's settings, and a daemon too old to report them is said so. On a gateway it shows the gateway's own configuration, not its workers'.

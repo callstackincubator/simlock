@@ -26,6 +26,9 @@ export interface FigureChart {
   readonly bucketMs: number;
   readonly points: readonly ChartPoint[];
   readonly summary: string;
+  // why: the Overview's chart header prints the newest figure and the highest one beside the chart.
+  readonly now?: string;
+  readonly peak?: string;
 }
 
 export type FiguresState =
@@ -113,6 +116,10 @@ function chartOf(
     summary,
     title: `${spec.title}, ${unit}`,
     unit: spec.noun,
+    ...(current === undefined ? {} : { now: `now ${current.count}` }),
+    ...(range === undefined
+      ? {}
+      : { peak: `peak ${range.highest.count} at ${range.highest.label}` }),
   };
 }
 

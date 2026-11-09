@@ -1,7 +1,5 @@
 import "./slots.css";
 
-import type { CSSProperties } from "react";
-
 import { Meter } from "./meter";
 
 export type SlotKind = "leased" | "ready" | "busy" | "broken" | "absent" | "free";
@@ -11,21 +9,32 @@ export interface Slot {
   readonly label: string;
 }
 
+// why: squares are drawn one per slot, so 100 slots would be 100 squares. A table cell, and any
+// place that does not ask for squares, always shows the meter and the `n / m` fraction; a caller that
+// asks for squares gets them only up to this many slots, and the meter above it.
+const SLOT_SQUARES_MAX = 10;
+
 // why: the group name carries the state counts even when the meter replaces individual tooltips.
 export function Slots(props: {
   readonly slots: readonly Slot[];
   readonly label: string;
-  readonly size?: "sm" | "lg";
+  readonly size?: "sm" | "md" | "lg";
+  readonly squares?: boolean;
+  // why: with squares, the `n / m` figure beside them; the meter always carries its own.
+  readonly fraction?: boolean;
 }) {
-  const { label, size = "sm", slots } = props;
-  if (slots.length > 10) {
-    const leased = slots.filter((slot) => slot.kind === "leased").length;
+  const { fraction = false, label, size = "sm", slots, squares = false } = props;
+  const leased = slots.filter((slot) => slot.kind === "leased").length;
+  const figure = (
+    <span className="slots-fraction mono">
+      {leased} / {slots.length}
+    </span>
+  );
+  if (!squares || slots.length > SLOT_SQUARES_MAX) {
     return (
       <span className="slots slots-meter" role="img" aria-label={label}>
-        <Meter percent={(leased / slots.length) * 100} tone="neutral" />
-        <span>
-          {leased} / {slots.length}
-        </span>
+        <Meter percent={slots.length === 0 ? 0 : (leased / slots.length) * 100} tone="neutral" />
+        {figure}
       </span>
     );
   }
@@ -34,50 +43,7 @@ export function Slots(props: {
       {slots.map((slot, index) => (
         <span key={index} className={`slot slot-${slot.kind}`} title={slot.label} />
       ))}
-    </span>
-  );
-}
-
-const LEGEND: readonly { readonly kind: SlotKind; readonly word: string }[] = [
-  { kind: "leased", word: "leased" },
-  { kind: "ready", word: "ready" },
-  { kind: "busy", word: "booting" },
-  { kind: "broken", word: "quarantined" },
-  { kind: "free", word: "free" },
-];
-
-export function SlotLegend() {
-  return (
-    <ul className="slot-legend" aria-hidden="true">
-      {LEGEND.map((entry) => (
-        <li key={entry.kind}>
-          <span className={`slot slot-${entry.kind}`} />
-          {entry.word}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export type ShareKind = SlotKind | "drained" | "shutdown" | "offline";
-
-export interface Share {
-  readonly kind: ShareKind;
-  readonly percent: number;
-}
-
-// why: the bar repeats figures printed beside it, so it is hidden from a screen reader; each share's
-// width arrives as a custom property, which the CSP allows where a style attribute is not.
-export function ShareBar({ shares }: { readonly shares: readonly Share[] }) {
-  return (
-    <span className="share-bar" aria-hidden="true">
-      {shares.map((share) => (
-        <span
-          key={share.kind}
-          className={`share slot-${share.kind}`}
-          style={{ "--share": `${Math.max(0, Math.min(100, share.percent))}%` } as CSSProperties}
-        />
-      ))}
+      {fraction ? figure : null}
     </span>
   );
 }

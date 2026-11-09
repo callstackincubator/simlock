@@ -102,7 +102,7 @@
 .sidebar-list {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -272,22 +272,68 @@
   padding: 0;
 }
 
+/* The wordmark sits alone in the rail's top; the collapse control is at the bottom, centred. */
+.sidebar-collapsed .sidebar-top {
+  justify-content: center;
+}
+
+/* A quiet 30px square at the foot, just above the account box. */
 .sidebar-toggle {
+  display: inline-flex;
   flex: none;
-  width: 24px;
-  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: 30px;
+  height: 30px;
   padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .sidebar-collapsed .sidebar-toggle {
-  width: 22px;
-  min-height: 24px;
+  align-self: center;
+}
+
+.account-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/* The connection as a dot on the avatar's top-right corner. */
+.account-avatar-wrap .status-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  box-sizing: border-box;
 }
 
 .sidebar-collapsed .sidebar-account {
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 4px;
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.sidebar-collapsed .account-detail {
+  display: flex;
+  flex: none;
+  justify-content: center;
 }
 
 .sidebar-collapsed .nav-item {
@@ -304,12 +350,14 @@
 
 .sidebar-collapsed .nav-count {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: 2px;
+  right: 6px;
+  min-width: 14px;
+  height: 14px;
+  margin: 0;
   padding: 0 3px;
-  background: var(--bg);
-  font-size: 10px;
-  line-height: 13px;
+  font-size: 9px;
+  line-height: 14px;
 }
 
 .sidebar-collapsed .nav-count:not(.nav-count-alert) {
@@ -334,8 +382,8 @@
     top: 0;
     width: calc(100% - 24px);
     height: auto;
-    margin: 12px;
-    padding: var(--space-3) var(--space-4);
+    margin: 8px 12px 4px;
+    padding: var(--space-2) var(--space-4);
     gap: var(--space-3);
     border-right: 0;
     border-bottom: 1px solid var(--border);
@@ -359,9 +407,11 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
+    margin-left: auto;
     border: 1px solid var(--border-strong);
+    border-radius: 8px;
     background: transparent;
     color: var(--text);
     cursor: pointer;
@@ -375,6 +425,15 @@
   .sidebar-open .sidebar-nav,
   .sidebar-open .sidebar-foot {
     display: flex;
+  }
+
+  .sidebar-open .sidebar-foot {
+    margin-top: var(--space-3);
+    padding: var(--space-3) 0 var(--space-1);
+  }
+
+  .sidebar-open .sidebar-account {
+    padding: var(--space-3);
   }
 
   .sidebar-toggle {
@@ -440,12 +499,30 @@
 
 .page-title h1 {
   flex: none;
+  line-height: 1.45;
   max-width: 100%;
+  line-height: 1.45;
 }
 
-.page-note {
+.page-title-row {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.page-title-row h1 {
+  flex: 0 1 auto;
+  line-height: 1.45;
+}
+
+.page-crumb,
+.page-crumb:hover {
   color: var(--text-muted);
-  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
 }
 
 .page-actions {
@@ -542,19 +619,13 @@
   align-items: center;
   height: 18px;
   padding: 0 5px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--kbd-border);
   border-radius: 4px;
   font: 500 var(--text-2xs)/1 var(--font-mono);
 }
 
 .sidebar-search kbd::before {
   content: "⌘K";
-}
-
-@media (prefers-color-scheme: dark) {
-  .sidebar-search kbd {
-    border-color: #3a3a41;
-  }
 }
 
 .sidebar-collapsed .sidebar-search kbd {

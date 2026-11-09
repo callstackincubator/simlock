@@ -109,6 +109,7 @@ describe("the routes createHttpApp registers", () => {
         "baselines",
         "catalog",
         "components",
+        "config",
         "devices",
         "events",
         "healthz",

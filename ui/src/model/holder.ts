@@ -6,8 +6,16 @@ const MAX_HOLDER_UNITS = 34;
 const HOLDER_HEAD_UNITS = 25;
 const HOLDER_TAIL_UNITS = 6;
 
+// why: the operator may ask for whole ids (Settings). The pages build their rows from the style in
+// force when they mount, and the setting is changed on a page that shows no holder.
+let wholeIds = false;
+
+export function setHolderStyle(style: "short" | "full"): void {
+  wholeIds = style === "full";
+}
+
 export function shortHolder(id: string): string {
-  if (id.length <= MAX_HOLDER_UNITS) return id;
+  if (wholeIds || id.length <= MAX_HOLDER_UNITS) return id;
   return `${id.slice(0, HOLDER_HEAD_UNITS)}\u2026${id.slice(-HOLDER_TAIL_UNITS)}`;
 }
 

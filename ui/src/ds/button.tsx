@@ -4,17 +4,21 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import { Link } from "./link";
 
-export type ButtonVariant = "primary" | "secondary" | "quiet";
+export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
 
-function classOf(variant: ButtonVariant): string {
-  return variant === "primary" ? "button" : `button button-${variant}`;
+function classOf(variant: ButtonVariant, small = false): string {
+  const base = variant === "primary" ? "button" : `button button-${variant}`;
+  return small ? `${base} button-sm` : base;
 }
 
 export function Button(
-  props: ButtonHTMLAttributes<HTMLButtonElement> & { readonly variant?: ButtonVariant },
+  props: ButtonHTMLAttributes<HTMLButtonElement> & {
+    readonly variant?: ButtonVariant;
+    readonly small?: boolean;
+  },
 ) {
-  const { variant = "secondary", type = "button", className, ...rest } = props;
-  const base = classOf(variant);
+  const { variant = "secondary", small = false, type = "button", className, ...rest } = props;
+  const base = classOf(variant, small);
   return (
     <button
       {...rest}
@@ -37,14 +41,26 @@ export function IconButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
   );
 }
 
+// why: a link to another site opens in a tab of its own and never goes through the console's router.
 export function ButtonLink(props: {
   readonly to: string;
   readonly variant?: ButtonVariant;
+  readonly small?: boolean;
+  readonly className?: string;
   readonly children: ReactNode;
 }) {
-  const { children, to, variant = "secondary" } = props;
+  const { children, className, small = false, to, variant = "secondary" } = props;
+  const classes =
+    className === undefined ? classOf(variant, small) : `${classOf(variant, small)} ${className}`;
+  if (/^https?:\/\//.test(to)) {
+    return (
+      <a href={to} className={classes} target="_blank" rel="noreferrer noopener">
+        {children}
+      </a>
+    );
+  }
   return (
-    <Link to={to} className={classOf(variant)}>
+    <Link to={to} className={classes}>
       {children}
     </Link>
   );

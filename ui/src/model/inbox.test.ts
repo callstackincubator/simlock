@@ -405,9 +405,7 @@ describe("the Inbox page", () => {
   it("gives a disconnected worker the time since it was last seen", () => {
     const w = worker({ connection: "disconnected", lastSeenAt: NOW - 100_000 });
 
-    expect(factsOf(w, "wrk_1/disconnected")).toEqual([
-      { label: "Last seen", value: "1 min 40 s ago" },
-    ]);
+    expect(factsOf(w, "wrk_1/disconnected")).toEqual([{ label: "Last seen", value: "1 min ago" }]);
   });
 
   it("gives an incompatible worker both protocol ranges", () => {

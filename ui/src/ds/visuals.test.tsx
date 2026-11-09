@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 
-import { Banner, FeedRow, GroupHeader, LogRow, Pill, Ring, WorkerTile } from "./index";
+import { Banner, FeedRow, GroupHeader, LogRow, Page, Pill, Ring } from "./index";
 
 it("shows supplied labels, values and unavailable states in shared visual primitives", () => {
   const status = renderToStaticMarkup(<Pill tone="warn">drained</Pill>);
@@ -82,34 +82,41 @@ it("shows supplied labels, values and unavailable states in shared visual primit
   );
   expect(nodeBanner).toContain("<strong>Node title</strong>");
   expect(nodeBanner).toContain("<em>Node detail</em>");
+});
 
-  const tile = renderToStaticMarkup(
-    <WorkerTile
-      name="mac-01"
-      title="mac-01.local"
-      to="/fleet/mac-01"
-      pill={<Pill tone="warn">drained</Pill>}
-      ios={<span>iOS slots</span>}
-      android={<span>Android slots</span>}
-      leased="2 / 20"
-      cpu={0}
-      memory={42}
+it("a log row and a feed row carry each cut part's whole text in a title, the text inside a link included", () => {
+  const log = renderToStaticMarkup(
+    <LogRow
+      time="18:20"
+      status={null}
+      event={<a href="/fleet/w">worker.drained</a>}
+      subject="mac-studio-with-a-very-long-hostname"
+      detail={["iPhone 16", " · ", "agent-7"]}
     />,
   );
-  for (const value of [
-    'title="mac-01.local"',
-    'href="/fleet/mac-01"',
-    ">mac-01</a>",
-    "drained",
-    "iOS slots",
-    "Android slots",
-    "2 / 20",
-    "CPU",
-    "0%",
-    "MEM",
-    "42%",
-    "DISK",
-    "—",
-  ])
-    expect(tile).toContain(value);
+  const feed = renderToStaticMarkup(
+    <FeedRow
+      icon={null}
+      event={<a href="/leases/l">lease.granted</a>}
+      subject="agent-with-a-long-id"
+      detail={<span className="muted">· iPhone 16</span>}
+      worker="mac-1"
+      time="18:20"
+    />,
+  );
+
+  expect(log).toContain('title="worker.drained"');
+  expect(log).toContain('title="mac-studio-with-a-very-long-hostname"');
+  expect(log).toContain('title="iPhone 16 · agent-7"');
+  expect(feed).toContain('title="lease.granted agent-with-a-long-id · iPhone 16 mac-1"');
+});
+
+it("a page title, cut on one line, carries its whole text with its parent in a title", () => {
+  const page = renderToStaticMarkup(
+    <Page title="mac-studio-with-a-very-long-hostname" crumb={{ label: "Fleet", to: "/fleet" }}>
+      {null}
+    </Page>,
+  );
+
+  expect(page).toContain('title="Fleet / mac-studio-with-a-very-long-hostname"');
 });

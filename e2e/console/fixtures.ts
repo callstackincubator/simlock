@@ -444,7 +444,7 @@ export interface Fleet {
 }
 
 /** why: a gateway pins a join token to the first worker that joins with it, so each worker needs its own. */
-export async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
+async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);
   return (minted.json as { secret: string }).secret;
@@ -523,7 +523,7 @@ export async function disposeFleet(
   await fleet.gateway.dispose(options);
 }
 
-export const OLD_PROTOCOL = { max: 3, min: 1 } as const;
+const OLD_PROTOCOL = { max: 3, min: 1 } as const;
 
 export async function joinOldWorker(
   gateway: RunningDaemon,
@@ -586,6 +586,8 @@ export interface ProxiedDaemon {
   readonly signedOutUrl: string;
   readonly daemon: RunningDaemon;
   setMode(mode: ProxyMode): void;
+  // why: the proxy's session ends: every request but the daemon's health check goes to its login page.
+  endSession(): void;
   holdIdentity(): () => void;
   reset(): void;
   dispose(): Promise<void>;
@@ -696,6 +698,7 @@ export async function startProxiedDaemon(
       await Promise.all([close(proxy), close(idp)]);
       await daemon.dispose();
     },
+    endSession: () => void (mode = "redirect"),
     holdIdentity() {
       let release: () => void = () => {};
       held = new Promise<void>((resolve) => (release = resolve));
@@ -715,10 +718,7 @@ export async function startProxiedDaemon(
   };
 }
 
-export const test = base.extend<
-  { proxied: ProxiedDaemon },
-  { daemon: RunningDaemon; gateway: RunningDaemon; proxiedDaemon: ProxiedDaemon }
->({
+export const test = base.extend<object, { daemon: RunningDaemon; gateway: RunningDaemon }>({
   page: async ({ context }, use) => {
     const page = await context.newPage();
     activePages.add(page);
@@ -728,19 +728,6 @@ export const test = base.extend<
       activePages.delete(page);
       await page.close();
     }
-  },
-  proxiedDaemon: [
-    // oxlint-disable-next-line no-empty-pattern -- as below.
-    async ({}, use) => {
-      const proxied = await startProxiedDaemon();
-      await use(proxied);
-      await proxied.dispose();
-    },
-    { scope: "worker", timeout: 60_000 },
-  ],
-  proxied: async ({ proxiedDaemon }, use) => {
-    proxiedDaemon.reset();
-    await use(proxiedDaemon);
   },
   daemon: [
     // oxlint-disable-next-line no-empty-pattern -- Playwright requires a destructuring pattern here, even an empty one.
@@ -794,11 +781,7 @@ export const NAV = [
   { label: "Baselines", path: "/baselines" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
-] as const;
-
-export const NAV_GROUPS = [
-  { label: "Operate", links: ["Fleet", "Leases", "Queue", "Baselines"] },
-  { label: "Observe", links: ["Activity", "Usage"] },
+  { label: "Settings", path: "/settings" },
 ] as const;
 
 export const NAV_LABELS = NAV.map((entry) => entry.label);
@@ -819,62 +802,4 @@ export async function openFromNav(page: Page, label: string): Promise<void> {
     await nav.getByRole("button", { name: "Open menu" }).click();
   }
   await nav.getByRole("link", { name: label, exact: true }).click();
-}
-
-// why: a host with one lease held by `surface-agent`, for checks that need the console's menu,
-// dialog and toast open.
-export async function startHostWithLease(): Promise<RunningDaemon> {
-  const host = await startDaemon("worker", {
-    driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-  });
-  const granted = await host.cli([
-    "lease",
-    "--platform",
-    "ios",
-    "--device",
-    "iPhone 16",
-    "--os",
-    "18.4",
-    "--agent-id",
-    "surface-agent",
-    "--detach",
-  ]);
-  expect(granted.code, granted.stderr).toBe(0);
-  return host;
-}
-
-// why: signs in on Leases and opens, in turn, an error toast (a release the daemon never answers),
-// the row's menu over it, and the release dialog over it, calling `check` with each open.
-export async function withActionSurfaces(
-  page: Page,
-  host: RunningDaemon,
-  check: (surface: "toast" | "menu" | "dialog") => Promise<void>,
-): Promise<void> {
-  await page.goto(new URL("/leases", host.url).toString());
-  await signIn(page, host.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-  const row = page.locator("main tbody tr").filter({ hasText: "surface-agent" });
-  const menuButton = row.getByRole("button", { name: "Actions for surface-agent" });
-  const dialog = page.getByRole("alertdialog", { name: "Release surface-agent's lease?" });
-  await page.route("**/v1/leases/*", (route) =>
-    route.request().method() === "DELETE" ? route.abort() : route.continue(),
-  );
-  await menuButton.click();
-  await page.getByRole("menuitem", { name: "Release lease" }).click();
-  await dialog.getByRole("button", { name: "Release lease" }).click();
-  await expect(
-    page.getByRole("region", { name: "Notifications" }).getByText("The daemon did not answer."),
-  ).toBeVisible();
-  await settled(page);
-  await check("toast");
-
-  await menuButton.click();
-  await expect(page.getByRole("menuitem", { name: "Release lease" })).toBeVisible();
-  await settled(page);
-  await check("menu");
-
-  await page.getByRole("menuitem", { name: "Release lease" }).click();
-  await expect(dialog).toBeVisible();
-  await settled(page);
-  await check("dialog");
 }
