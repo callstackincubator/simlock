@@ -27,7 +27,7 @@ Holding a lease:
 
 - The connection holds nothing: a lease ends by release or TTL. A lost connection is `DAEMON_CONNECTION_LOST`, and the lease runs to its deadline.
 - Renewal stops before the release; no timer outlives a command.
-- A signal or a parent exit during the request aborts it (the client cancels the queued request) and exits 0.
+- A signal or a parent exit while the command connects sends no request; during the request it aborts it (the client cancels the queued request). Either way it exits 0.
 
 Passthrough and tunnel:
 
