@@ -46,6 +46,15 @@ describe("the Activity view", () => {
 
   it("matches within a facet by OR and between facets by AND, and Problems only keeps warn and error", () => {
     expect(view({ ...NO_FILTER, kinds: ["lease", "queue"] }).rows).toHaveLength(2);
+    const problems = activityView({
+      events: [...EVENTS, event(7, "lease.expired", 6, "wrk_a")],
+      filter: { ...NO_FILTER, problems: true },
+      now: NOW,
+      range: "1h",
+      search: "",
+      workers: [],
+    });
+    expect(problems.rows.map((row) => row.name)).toEqual(["device.quarantined", "lease.expired"]);
     expect(view({ kinds: ["lease", "device"], problems: true, workers: [] }).rows).toHaveLength(1);
     expect(view({ ...NO_FILTER, workers: [OTHER_WORKER] }).rows.map((row) => row.name)).toEqual([
       "queue.changed",

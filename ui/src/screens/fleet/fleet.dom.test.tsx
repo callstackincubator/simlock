@@ -254,7 +254,7 @@ describe("Fleet worker actions", () => {
     expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
   });
 
-  it("a worker is drained from Fleet with no dialog, and Undo undrains it", async () => {
+  it("a worker is drained from Fleet with no dialog, its menu then offers Undrain in place of Drain, and Undo undrains it", async () => {
     let drained = false;
     const view = renderConsole({
       path: "/fleet",
@@ -284,6 +284,11 @@ describe("Fleet worker actions", () => {
     expect(screen.queryByRole("alertdialog", { name: /\?$/ })).not.toBeInTheDocument();
     announce(view, "worker.drain-started");
     await waitFor(() => expect(rowOf("drain-a")).toHaveTextContent("drained"));
+    await view.user.click(screen.getByRole("button", { name: "Actions for drain-a" }));
+    expect(screen.getByRole("menuitem", { name: "Undrain" })).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "Drain" })).not.toBeInTheDocument();
+    await view.user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 
     await view.user.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByText("drain-a takes leases again")).toBeVisible();

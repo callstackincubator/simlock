@@ -285,7 +285,7 @@ describe("the worker page", () => {
     }
   });
 
-  describe("the Events tab", () => {
+  describe("the worker page's Events on this worker", () => {
     // why: happy-dom lays nothing out, so the virtual list sees a box of zero height and draws no
     // row; the box is given the height the feed itself assumes before it is measured.
     const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
@@ -301,12 +301,12 @@ describe("the worker page", () => {
       }
     });
 
-    it("on a gateway the Events tab lists only that worker's events and shows its new events at the top", async () => {
+    it("on a gateway lists only that worker's events and shows its new events at the top", async () => {
       const granted = event("lease.granted", { requesterId: "console-e2e", workerId: "wrk_a" });
       const drain = event("worker.drain-started", { workerId: "wrk_b" });
       const view = ofWorkers(
         [worker({ id: "wrk_a", label: "worker-a" }), worker({ id: "wrk_b", label: "worker-b" })],
-        "/fleet/wrk_a?tab=events",
+        "/fleet/wrk_a",
         {
           "/v1/events": (call) => {
             const asked = new URLSearchParams(call.search).get("worker");
@@ -343,7 +343,7 @@ describe("the worker page", () => {
 
       view.unmount();
       renderConsole({
-        path: "/fleet/wrk_b?tab=events",
+        path: "/fleet/wrk_b",
         routes: {
           "/v1/events": (call) => ({
             body: {
@@ -371,16 +371,16 @@ describe("the worker page", () => {
       expect(forB.queryByText("lease.granted")).not.toBeInTheDocument();
     });
 
-    it("with no events the Events tab says No events for this worker yet.", async () => {
-      ofWorkers([HOST], "/fleet/wrk_host?tab=events", { "/v1/events": { body: { events: [] } } });
+    it("with no events says No events for this worker yet.", async () => {
+      ofWorkers([HOST], "/fleet/wrk_host", { "/v1/events": { body: { events: [] } } });
 
       expect(await screen.findByText("No events for this worker yet.")).toBeVisible();
     });
 
-    it("on a single host the Events tab lists all the events, which name no worker", async () => {
+    it("on a single host lists every event, also one that names no worker", async () => {
       renderConsole({
         mode: "worker",
-        path: "/fleet/wrk_host?tab=events",
+        path: "/fleet/wrk_host",
         routes: {
           "/v1/events": {
             body: { events: [event("lease.granted", { requesterId: "console-e2e-host" })] },
@@ -395,7 +395,7 @@ describe("the worker page", () => {
     });
   });
 
-  it("shows its host facts and the two tabs, sets ?tab=, survives a reload, and lands ?tab=host on Devices", async () => {
+  it("shows its host facts and the two tabs, sets ?tab=, survives a reload, and lands the retired ?tab=host and ?tab=events on Devices", async () => {
     const host = worker({
       ...HOST,
       installs: [
@@ -546,7 +546,7 @@ describe("the worker page", () => {
 
   it.each([
     { limit: 10, squares: 10, shown: "2 / 10", meter: 0 },
-    { limit: 20, squares: 0, shown: "2 / 20", meter: 1 },
+    { limit: 11, squares: 0, shown: "2 / 11", meter: 1 },
   ])(
     "its side card draws $limit slots as $squares squares and $meter meter, with $shown beside them",
     async ({ limit, meter, shown, squares }) => {

@@ -20,7 +20,7 @@ import {
   startWorld,
   visit,
 } from "./pages.js";
-import { endingItem, leases, stubJson, waitingItem } from "./stubs.js";
+import { leases, staticWorker, stubJson } from "./stubs.js";
 
 // why: Base UI moves focus into and out of menus, dialogs and drawers itself, and which control a
 // Tab reaches next is the browser's: a simulated DOM can say neither, so both are looked at in a
@@ -279,26 +279,24 @@ test.describe("keyboard and focus in a real browser", () => {
       const { host } = world;
       await openSignedIn(page, host);
 
-      await stubJson(page, "/v1/inbox", () => ({
-        items: [
-          waitingItem("req_busy", 125_000),
-          endingItem("lse_busy", 60_000, {
-            holder: "tok_busy",
-            model: "dev_busy",
-          }),
-        ],
+      // why: a worker the gateway has lost has three entries in its menu, so the arrow keys have
+      // somewhere to go.
+      await stubJson(page, "/v1/workers", () => ({
+        workers: [staticWorker({ connection: "disconnected", id: "wrk_gone", label: "gone-a" })],
       }));
-      await visit(page, host, "/inbox");
-      const trigger = page.getByRole("button", { name: /^Actions for/ }).first();
+      await visit(page, host, "/fleet");
+      const trigger = page.getByRole("button", { name: "Actions for gone-a" }).first();
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.getByRole("menu");
       await expect(menu).toBeVisible();
-      await expect(menu.getByRole("menuitem").first()).toBeFocused();
-      if ((await menu.getByRole("menuitem").count()) > 1) {
-        await page.keyboard.press("ArrowDown");
-        await expect(menu.getByRole("menuitem").nth(1)).toBeFocused();
-      }
+      const items = menu.getByRole("menuitem");
+      await expect(items).toHaveText(["View leases", "Drain", "Remove worker"]);
+      await expect(items.nth(0)).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      await expect(items.nth(1)).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      await expect(items.nth(2)).toBeFocused();
       await page.keyboard.press("Escape");
       await expect(menu).toHaveCount(0);
       await expect(trigger).toBeFocused();

@@ -310,10 +310,24 @@ describe("a worker's row on the Fleet cards", () => {
   });
 
   it("counts the leased slots of both platforms and splits the slots by platform", () => {
-    const row = fleetRow(worker({ devices: [device()] }), "", NOW);
+    const android = { model: "Pixel 9", osVersion: "15", physical: false, platform: "android" };
+    const row = fleetRow(
+      worker({
+        devices: [
+          device({ id: "ios_leased", state: "leased" }),
+          device({ id: "ios_ready", state: "ready" }),
+          device({ id: "android_leased", spec: android, state: "leased" }),
+        ],
+      }),
+      "",
+      NOW,
+    );
 
-    expect(row.slotsLeased).toBe(row.slots.filter((slot) => slot.kind === "leased").length);
-    expect(row.ios.length + row.android.length).toBe(row.slots.length);
+    expect(row.slotsLeased).toBe(2);
+    expect(row.ios.map((slot) => slot.kind)).toEqual(["leased", "ready", "free", "free"]);
+    expect(row.android.map((slot) => slot.kind)).toEqual(["leased", "free", "free", "free"]);
+    expect(row.iosLabel).toBe("1 leased, 1 ready, 2 free");
+    expect(row.androidLabel).toBe("1 leased, 3 free");
   });
 });
 

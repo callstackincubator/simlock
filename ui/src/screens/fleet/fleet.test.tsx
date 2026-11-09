@@ -216,20 +216,6 @@ describe("the fleet", () => {
     expect(markup).toContain('title="worker-b"');
   });
 
-  it("offers View leases as a plain link for a disconnected worker, and the drained worker's Undrain only on a gateway", () => {
-    const gone = fleetHtml([GONE]);
-    const drained = fleetHtml([DRAINED]);
-
-    // why: both actions sit in the row's menu, which is drawn only when opened.
-    expect(gone).not.toContain("View leases");
-    expect(gone).not.toContain("<form");
-    expect(drained).toContain('href="/fleet/wrk_2"');
-    expect(drained).not.toContain("Undrain");
-    const onGateway = inConsole(<FleetBody page={fleet([DRAINED])} log={NO_LOG} />, GATEWAY);
-    expect(onGateway).toContain('aria-label="Actions for worker-b"');
-    expect(onGateway).not.toContain("button-sm");
-  });
-
   it("gives a narrow screen one muted line of figures per worker, and the wide table a meter and fraction for slots", () => {
     const markup = fleetHtml([DRAINED]);
 
