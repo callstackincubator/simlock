@@ -11,14 +11,27 @@ function tokens(block: string): Map<string, string> {
   );
 }
 
+// why: every colour a palette block sets, written as hex or as rgb()/rgba(), so a token missing from
+// one block is seen whatever its notation.
+function colours(block: string): Map<string, string> {
+  return new Map(
+    [...block.matchAll(/(--[\w-]+):\s*(#[0-9a-fA-F]{3,8}|rgba?\([^;)]*\))\s*;/g)].map((m) => [
+      m[1]!,
+      m[2]!,
+    ]),
+  );
+}
+
 function between(start: string, end: string): string {
   const from = css.indexOf(start);
   return css.slice(from, css.indexOf(end, from));
 }
 
-const light = tokens(between("  /* Light theme. */", "/* The operator's own theme"));
-const dark = tokens(between("@media (prefers-color-scheme: dark)", ':root[data-theme="dark"]'));
-const chosenDark = tokens(between(':root[data-theme="dark"] {', "*,"));
+const LIGHT = between("  /* Light theme. */", "/* The operator's own theme");
+const DARK = between("@media (prefers-color-scheme: dark)", ':root[data-theme="dark"]');
+const CHOSEN_DARK = between(':root[data-theme="dark"] {', "*,");
+const light = tokens(LIGHT);
+const dark = tokens(DARK);
 
 function channel(hex: string, at: number): number {
   const value = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
@@ -84,7 +97,9 @@ describe("the Settings theme", () => {
     );
 
     expect(schemeBlocks).toEqual([`ds/foundation.css: dark :root:not([data-theme="light"])`]);
-    expect([...dark.keys()].filter((token) => !light.has(token))).toEqual([]);
-    expect(Object.fromEntries(chosenDark)).toEqual(Object.fromEntries(dark));
+    const [lightColours, darkColours] = [colours(LIGHT), colours(DARK)];
+    expect(darkColours.get("--row-hover")).toMatch(/^rgba\(/);
+    expect([...darkColours.keys()].filter((token) => !lightColours.has(token))).toEqual([]);
+    expect(Object.fromEntries(colours(CHOSEN_DARK))).toEqual(Object.fromEntries(darkColours));
   });
 });

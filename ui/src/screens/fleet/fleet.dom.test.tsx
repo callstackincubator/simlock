@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 
 import type { WorkerView } from "../../model/workers";
 import { type Answer, renderConsole, type Routes } from "../../test/console";
@@ -153,14 +153,42 @@ describe("the Fleet page", () => {
     for (const row of [a, b]) expect(within(row).getAllByRole("img").length).toBeGreaterThan(0);
   });
 
-  it("a click anywhere on a worker's row, not only its name, opens that worker's page", async () => {
-    const view = ofWorkers([
-      worker({ host: MAC, id: "wrk_a", label: "worker-a", leases: [], load: load(12, 50, 40) }),
-    ]);
-    const row = (await screen.findAllByRole("row")).find((r) => within(r).queryByText("worker-a"));
-    await view.user.click(within(row!).getAllByRole("cell")[2]!);
-    await waitFor(() => expect(window.location.pathname).toMatch(/^\/fleet\/wrk_a\/?$/));
-  });
+  it.each([
+    {
+      layout: "the wide table's row",
+      width: 1_440,
+      spot: async () => {
+        const row = (await screen.findAllByRole("row")).find((r) =>
+          within(r).queryByText("worker-a"),
+        );
+        return within(row!).getAllByRole("cell")[2]!;
+      },
+    },
+    {
+      // why: under 1100px the worker is a list row; its line of figures is not a link.
+      layout: "the narrow list's row",
+      width: 1_000,
+      spot: async () => {
+        const list = within(await screen.findByRole("list", { name: "Workers" }));
+        return within(list.getByRole("listitem")).getByText(/^slots /);
+      },
+    },
+  ])(
+    "a click anywhere on $layout, not only the worker's name, opens that worker's page",
+    async ({ spot, width }) => {
+      // why: happy-dom applies the page's media queries to the size it is given.
+      const happy = (window as unknown as { happyDOM?: { setViewport(size: object): void } })
+        .happyDOM;
+      const shown = { height: window.innerHeight, width: window.innerWidth };
+      happy?.setViewport({ height: 900, width });
+      onTestFinished(() => happy?.setViewport(shown));
+      const view = ofWorkers([
+        worker({ host: MAC, id: "wrk_a", label: "worker-a", leases: [], load: load(12, 50, 40) }),
+      ]);
+      await view.user.click(await spot());
+      await waitFor(() => expect(window.location.pathname).toMatch(/^\/fleet\/wrk_a\/?$/));
+    },
+  );
 
   it("the Issues and Busy filters keep the workers they name", async () => {
     const view = ofWorkers([

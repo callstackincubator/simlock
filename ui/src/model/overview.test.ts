@@ -220,7 +220,7 @@ describe("the overview", () => {
     expect(cut.healthy).toHaveLength(7);
   });
 
-  it("leaves the fleet's lease figure unknown, not zero, while a connected worker is starting", () => {
+  it("leaves the fleet's lease figure unknown, not zero, while a connected worker is starting, alone or beside one that reports", () => {
     const alone = overviewOf({ now: NOW, requests: [], workers: [unread("mini-3")] });
 
     expect(alone.tiles.map((tile) => [tile.label, tile.value])).toEqual([
@@ -234,6 +234,28 @@ describe("the overview", () => {
     expect(alone.capacity.map((p) => [p.name, p.notRead, p.parts.length])).toEqual([
       ["iOS", 1, 0],
       ["Android", 1, 0],
+    ]);
+
+    const reporting = worker("mini-1", [device("a", "leased", "ios"), device("b", "ready", "ios")]);
+    const mixed = overviewOf({ now: NOW, requests: [], workers: [reporting, unread("mini-3")] });
+
+    expect(mixed.tiles.map((tile) => [tile.label, tile.value])).toEqual([
+      ["Leased", "—"],
+      ["Ready", "1"],
+      ["Waiting", "0"],
+      ["Wait p95", "—"],
+      ["Ending soon", "—"],
+      ["Workers", "2"],
+    ]);
+    expect(mixed.capacity.map((p) => [p.name, p.notRead])).toEqual([
+      ["iOS", 1],
+      ["Android", 1],
+    ]);
+    expect(
+      [...mixed.fleet.attention, ...mixed.fleet.healthy].map((row) => [row.name, row.slotsLabel]),
+    ).toEqual([
+      ["mini-3", "No devices"],
+      ["mini-1", "1 leased, 1 ready, 4 free"],
     ]);
   });
 
