@@ -93,7 +93,7 @@ One agent; everything else waits for it.
 - Restyle the `ds` primitives every page shares, to the renders' sidebar,
   page header and cards: `sidebar` (floating card, search box, group
   labels, account box, red Inbox badge), the page header (title with
-  breadcrumb, subtitle for figures, actions), `panel` (card with the 38px
+  breadcrumb, no subtitle, actions), `panel` (card with the 38px
   header), `button` (30/26px, primary/secondary/danger/icon), `choice`
   (filter group), `search-field`, `table` (34px header on `--surface-2`,
   40px rows, selected row bar, group rows, footer with the count only),
@@ -138,8 +138,7 @@ One agent; everything else waits for it.
 Banner (count, first issue, "and N more", Open Inbox), six KPI tiles, the
 worker wall (4 columns, 1px gaps, pill under the name, capped slots, three
 meters), Leases held area chart, Capacity rings, Queue and Ending soon lists,
-Requests waiting bars. Range filter in the header. Subtitle is
-`updated <time>` only.
+Requests waiting bars. Range filter in the header. No subtitle.
 
 ### 2. Fleet and the worker page — `2-fleet.png`, `3-worker.png`
 
@@ -185,11 +184,11 @@ stays unused.
 
 ### 5. Baselines — `7-baselines.png`
 
-All / Stale / Ready filter group and search; a grouped table (iOS, Android group rows with count
-and size) of Baseline (name, model · runtime), Size as text, Worker, Built,
-State (pill, and a stale reason as a muted second line), `⋯`; under it one
-"Disk used by baselines" card, two columns of worker meters relative to each
-disk. No builds chart, no "runtimes without a baseline".
+All / Stale / Ready filter group and search; a grouped table (iOS, Android group rows with the
+count only) of Baseline (name, model · runtime), Size as text, Worker, Built,
+State (pill; a stale one's reason is a popover on the pill), `⋯`. No disk card,
+no builds chart, no "runtimes without a baseline" (removed at the maintainer's
+request).
 
 Explicit reference amendment: replace Building with Ready, and the toolbar's
 Build baseline with an equally styled **Prepare baseline** link to the existing

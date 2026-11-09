@@ -7,8 +7,9 @@ export const RANGE_CHOICES: readonly { readonly value: ConsoleRange; readonly la
   { label: "7 days", value: "7d" },
 ];
 
-// why: the range lives in the URL as `?range=`, so a reload or a shared link shows the same figures;
-// a value this console does not know is the default hour.
+// why: the range lives in the URL as `?range=`, so a reload shows the same figures. A range equal to
+// the operator's own default (Settings) is left out of the URL, so a shared link opens on the
+// reader's default instead; a value this console does not know is the fallback.
 export function readRange(search: string, fallback: ConsoleRange = "1h"): ConsoleRange {
   const asked = new URLSearchParams(search).get("range");
   return RANGE_CHOICES.find((choice) => choice.value === asked)?.value ?? fallback;

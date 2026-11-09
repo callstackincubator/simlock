@@ -56,7 +56,8 @@ the axe check in `browser-checks.spec.ts` runs in both.
 | `--surface`       | `#141416` | cards, the sidebar                                        |
 | `--surface-2`     | `#1b1b1f` | table headers, group rows, a filter group's track, a box inside a card |
 | `--border`        | `#232327` | card edges, dividers, grid lines                          |
-| `--border-strong` | `#75757d` | a button's or `kbd`'s edge, a free slot's dashed outline  |
+| `--border-strong` | `#75757d` | a button's edge, a free slot's dashed outline             |
+| `--kbd-border`    | `#3a3a41` | a `kbd`'s edge                                            |
 | `--text`          | `#ececea` | text                                                      |
 | `--text-muted`    | `#8e8e97` | units, second lines, labels, inactive links and tabs      |
 | `--accent`        | `#ff7a1a` | orange fills: wordmark block, primary button, tab underline, selected row's bar, a chart's line and its hot bar, a checked facet |
@@ -187,8 +188,8 @@ own that one of them draws. Named sizes and colours are above.
   `--surface-2` with labels; rows 40px, 12.5px, a 1px line between. A name
   cell is a 26px chip or icon then a bold line and a muted second line. Mono
   for ids, hostnames, durations. The selected row is `--row-selected` with a
-  2px `--accent` bar inset at its left. Group rows (`iOS · 4 baselines ·
-  25.4 GB`) are 28px labels on `--surface-2`. A footer line holds the row
+  2px `--accent` bar inset at its left. Group rows (`iOS · 4 baselines`) are
+  28px labels on `--surface-2`. A footer line holds the row
   count only (`1–14 of 19`). Every row ends in a `⋯` menu button. A header
   never breaks inside a word: one line, an ellipsis when it is too narrow.
   A table of one-line rows (`table-lines`: Fleet, a worker's devices and
