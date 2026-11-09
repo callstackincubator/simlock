@@ -53,7 +53,7 @@ interface RoutedHosts {
 
 type Role = keyof RoutedHosts;
 
-// why: a client reads `/health` before it names a lease, so it pins the simulator daemon's proxy and daemon ids; the phone daemon's differ and would refuse every phone call, so a phone call carries no pin and a phone-daemon restart ends the lease at its next heartbeat, as a simulator-daemon restart does.
+// why: a client reads `/health` before it names a lease, so it pins the simulator daemon's proxy and daemon ids; the phone daemon's differ and would refuse every phone call, so a phone call carries no pin.
 function dropInstancePins(request: Request): void {
   request.headers.delete("x-agent-device-instance");
   request.headers.delete("x-agent-device-upstream-instance");
