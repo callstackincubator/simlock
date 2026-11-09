@@ -75,7 +75,8 @@ describe("toasts", () => {
     await drain(user, "toast-a");
     await waitFor(() => expect(toastOf("toast-a drained")).toBeDefined());
     const drained = toastOf("toast-a drained")!;
-    await vi.advanceTimersByTimeAsync(5_500);
+    // why: the toast appeared during drain's click, so drain's own 500 ms already ran on its 6 s.
+    await vi.advanceTimersByTimeAsync(5_000);
     // why: a closing toast stays in the document until its exit animation ends on the real clock,
     // so only the attribute says, every run, whether the 6 s have run out.
     expect(drained).not.toHaveAttribute("data-ending-style");
