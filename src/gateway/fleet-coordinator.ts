@@ -289,7 +289,8 @@ export class FleetLeaseCoordinator {
       return { promise: started.promise, waiter: created };
     });
     if ("replay" in admitted) return admitted.replay;
-    this.#admit(admitted.waiter);
+    // why: a `lease.cancel` serialized between admission and this walk (#1492) already rejected the waiter.
+    if (admitted.waiter.state !== "rejected") this.#admit(admitted.waiter);
     return admitted.promise;
   }
 
@@ -383,6 +384,10 @@ export class FleetLeaseCoordinator {
     throw leaseIdTaken(leaseId);
   }
 
+  /**
+   * why: a `new` waiter is admitted but not yet walked: no worker was asked, so it is as safe to reject as
+   * a `queued` one (#1492). Only `processing` means a worker already has the request.
+   */
   async cancelPending(
     requesterId: string,
     platform?: Platform,
@@ -390,7 +395,7 @@ export class FleetLeaseCoordinator {
     return this.#decisions.run(async () => {
       const waiter = this.#queue.findPendingWaiter(requesterId, platform);
       if (waiter === undefined) return "not-found";
-      if (waiter.state !== "queued") return "not-cancellable";
+      if (waiter.state === "processing") return "not-cancellable";
       if (this.#queue.reject(waiter, new RequestCancelledError(waiter.id))) {
         this.#emitRejected(waiter, "cancelled");
       }
