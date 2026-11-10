@@ -428,7 +428,7 @@ simlock config set <key> <value>
 
 | Subcommand | What it does |
 | --- | --- |
-| (none) | Print the daemon's whole effective configuration as one JSON line. `gateway.token` and every alert destination's `url` and `secret` read `[redacted]`. Needs the admin role. |
+| (none) | Print the daemon's whole effective configuration as one JSON line. `gateway.token`, every `gateway.headers` value and every alert destination's `url` and `secret` read `[redacted]`. Needs the admin role. |
 | `get <key>` | Print one value, with the same secrets redacted. `<key>` is a dotted path, such as `lease.defaultTtlMs`. A key you have not set prints its default, `drivers.*` keys included; `drivers.ios.screenCaptureCommand` and `drivers.ios.deviceCaptureCommand` print only when set, and under `drivers.ios.deviceSet: default` `drivers.ios.deviceRoot` has no value (Xcode's own set uses no device root), so asking for it is a usage error. An unknown key is a usage error. Needs the admin role. |
 | `set <key> <value>` | Write one value to `config.json` in the daemon's data folder. `<value>` is read as JSON when it parses (`900000`, `true`, `["ios"]`), else as a string. Does not contact the daemon. |
 
@@ -436,7 +436,7 @@ simlock config set <key> <value>
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--show-secrets` | `config` and `config get` only: print `gateway.token` and the alert destinations' `url` and `secret` as written instead of `[redacted]`. | Off |
+| `--show-secrets` | `config` and `config get` only: print `gateway.token`, the `gateway.headers` values and the alert destinations' `url` and `secret` as written instead of `[redacted]`. | Off |
 
 ## simlock doctor
 
