@@ -7,7 +7,7 @@ import {
   type ReplyReading,
   type RpcRead,
 } from "../shared/rpc.js";
-import { addressField } from "../shared/selectors.js";
+import { addressField, leaseBackend } from "../shared/selectors.js";
 import {
   REPLY_SCOPE_KEYS,
   exchange,
@@ -119,6 +119,7 @@ async function allocateAgain(
 ): Promise<Exchange> {
   const params = {
     ...call.params,
+    backend: leaseBackend(entry.platform),
     leaseId,
     ttlMs: leaseMaxTtlMs ?? entry.ttlMs,
     ...(entry.retainOnClose === true ? { retainOnClose: true } : {}),

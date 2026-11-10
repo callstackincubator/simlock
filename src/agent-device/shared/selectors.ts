@@ -8,6 +8,15 @@ export function asRecord(value: unknown): Fields | undefined {
 
 export const present = (value: unknown): boolean => value !== undefined && value !== null;
 
+const BACKEND_OF_PLATFORM: Readonly<Record<string, string>> = {
+  android: "android-instance",
+  ios: "ios-instance",
+};
+
+export function leaseBackend(platform: string | undefined): string | undefined {
+  return platform === undefined ? undefined : BACKEND_OF_PLATFORM[platform];
+}
+
 const STRING_FIELDS = [
   "platform",
   "target",

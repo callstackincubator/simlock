@@ -15,7 +15,7 @@ import {
 } from "../shared/replies.js";
 import { validDeviceKey } from "../shared/release-scope.js";
 import { leaseCallFields, leaseIdOf, replyData, type RpcRead } from "../shared/rpc.js";
-import { addressField, asRecord } from "../shared/selectors.js";
+import { addressField, asRecord, leaseBackend } from "../shared/selectors.js";
 import {
   ALLOCATE_SCOPE_KEYS,
   REPLY_SCOPE_KEYS,
@@ -60,17 +60,11 @@ interface Plan {
   readonly ttlMs?: number;
 }
 
-// why: connect proxy names the backend that rents the platform (ios-instance, android-instance) on every allocate; any other backend is a different kind of device.
-const BACKEND_OF_PLATFORM: Record<string, string> = {
-  android: "android-instance",
-  ios: "ios-instance",
-};
-
 function foreignBackend(params: Record<string, unknown>): boolean {
   const backend = params["backend"];
   if (!present(backend)) return false;
   const platform = params["platform"];
-  return typeof platform !== "string" || BACKEND_OF_PLATFORM[platform] !== backend;
+  return typeof platform !== "string" || leaseBackend(platform) !== backend;
 }
 
 function notPlain(params: Record<string, unknown>): boolean {

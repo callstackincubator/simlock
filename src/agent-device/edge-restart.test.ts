@@ -29,32 +29,36 @@ import {
 
 describe("the agent-device front, through the whole worker daemon: after agent-device restarts", () => {
   it.each([
-    ["a simulator lease", "simulator", { platform: "android" }, {}],
+    ["an Android simulator lease", "simulator", { platform: "android" }, {}, "android-instance"],
+    ["an iOS simulator lease", "simulator", { platform: "ios" }, {}, "ios-instance"],
     [
       "a phone lease, whose allocate reaches the phone daemon",
       "phone",
       { platform: "android", physical: true },
       {},
+      "android-instance",
     ],
     [
       "an entry allocated with retainOnClose, whose re-allocate carries it",
       "simulator",
       { platform: "android", retainOnClose: true },
       {},
+      "android-instance",
     ],
     [
       "a heartbeat carrying deviceKey, clientId and runId, whose re-allocate carries all three",
       "simulator",
       { platform: "android" },
       { deviceKey: "ios:mobile:00008110-001A2B3C4D5E" },
+      "android-instance",
     ],
   ] as const)(
-    "after agent-device restarts on a worker, an agent's next heartbeat succeeds and the simlock lease is kept on the same device: %s",
-    async (_case, daemon, allocateExtra, heartbeatExtra) => {
-      const rig: Rig = await setUpWithPhone();
+    "after agent-device restarts on a worker, a heartbeat without a backend restores the same device and platform backend: %s",
+    async (_case, daemon, allocateExtra, heartbeatExtra, backend) => {
+      const rig: Rig = allocateExtra.platform === "ios" ? await setUp() : await setUpWithPhone();
       const fake = daemon === "phone" ? rig.phone : rig.fake;
       if ("deviceKey" in heartbeatExtra) fake.nameDeviceKeyInNextReply(heartbeatExtra.deviceKey);
-      await granted(rig, 1, allocateExtra);
+      await granted(rig, 1, { ...allocateExtra, backend });
       const before = fake.leases.get(hex(1));
       expect(before).toBeDefined();
       fake.restart();
@@ -63,6 +67,8 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
       const answer = await envelopeOf(await heartbeat(rig, 1, heartbeatExtra));
       expect(answer.error).toBeUndefined();
       expect(answer.result).toMatchObject({ ok: true });
+      const restored = fake.rpcRequests("agent_device.lease.allocate").at(-1);
+      expect(restored?.params?.["backend"]).toBe(backend);
       const after = fake.leases.get(hex(1));
       expect(after?.address).toBe(before?.address);
       expect(after?.retainOnClose).toBe(before?.retainOnClose);
