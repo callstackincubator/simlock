@@ -84,7 +84,7 @@ import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
-import type { IosDriverConfig } from "./definition.js";
+import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
   overridesFor,
   resolveSlimCategories,
@@ -2244,7 +2244,7 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
     );
   }
 
-  return configured ?? join(options.simlockHome, "devices", "ios");
+  return configured ?? defaultIosDeviceRoot(options.simlockHome);
 }
 
 function runtimeMountsAsset(runtime: Runtime, asset: RuntimeAsset): boolean {

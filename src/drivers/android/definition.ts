@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import {
   booleanValue,
   type DriverConfigEntry,
@@ -26,8 +28,18 @@ export interface AndroidDriverConfig {
   readonly emulator: AndroidEmulatorLaunchOptions;
 }
 
+export const DEFAULT_ADB_SERVER_PORT = 5038;
+
+export function defaultAndroidDeviceRoot(simlockHome: string): string {
+  return join(simlockHome, "devices", "android");
+}
+
 export const androidDriverConfig: DriverConfigEntry<AndroidDriverConfig> = {
   platform: "android",
+  settingDefaults: (simlockHome) => ({
+    adbServerPort: DEFAULT_ADB_SERVER_PORT,
+    deviceRoot: defaultAndroidDeviceRoot(simlockHome),
+  }),
   defaults: {
     bootTimeoutMs: 300_000,
     emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },

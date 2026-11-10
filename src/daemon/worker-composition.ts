@@ -75,6 +75,7 @@ import { execBaseEnvironment } from "./exec-env.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 import type { RelayTargets, TwoWayRelayTargets } from "./relay.js";
 import { discoverDrivers } from "./driver-discovery.js";
+import { driversWithDefaults } from "../driver-registry/index.js";
 import {
   updateOptionsFor,
   errorMessage,
@@ -505,7 +506,8 @@ export async function composeWorker(
     deviceModes: leasing,
     clock,
     components,
-    config,
+    // why: the server only shows `drivers` (`config.get`, `daemon.started`), so it shows the values in use; the drivers above read config.json's own keys.
+    config: { ...config, drivers: driversWithDefaults(config.drivers, dataDirectory) },
     doctor: core.doctor,
     driverRejections: rejections,
     defaultRequesterId:

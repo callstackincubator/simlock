@@ -373,6 +373,11 @@ export interface DriverConfigEntry<Section = unknown> {
   readonly platform: Platform;
   readonly validators: Readonly<Record<string, Validator>>;
   readonly defaults: Section;
+  // why: the values the driver uses for the `drivers.<platform>.*` keys config.json leaves unset, which depend on the data directory and on the keys that are set; `config.get` shows them, so `config get` reads a key at its default.
+  readonly settingDefaults?: (
+    simlockHome: string,
+    settings: Readonly<Record<string, string | number | boolean>>,
+  ) => Readonly<Record<string, string | number | boolean>>;
 }
 
 // why: typed by the entry the loader validated the section with; a config loaded without that entry holds none of its keys.
