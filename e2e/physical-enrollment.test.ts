@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it } from "vitest";
 
 import { PROTOCOL_VERSION_RANGE } from "../src/contract/index.js";
@@ -5,6 +7,7 @@ import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
 import type { FakeDriverRefusalReason, ScriptedPhysicalDevice } from "./fake-driver/types.js";
 import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import { observeFor } from "./helpers/physical-state.js";
 import { readEnrolledApps } from "./helpers/state-db.js";
 
 const UDID = "00008110-001A2B3C4D5E";
@@ -689,6 +692,22 @@ async function plug(
   await env.driverScript.merge({ [platform]: { physicalDevices: devices } });
 }
 
+async function autoEnrollLog(env: TestEnv): Promise<string[]> {
+  const text = await readFile(env.logPath, "utf8").catch(() => "");
+  return text
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => (JSON.parse(line) as { message: string }).message)
+    .filter((message) => message.startsWith("auto-enroll:"));
+}
+
+function refused(
+  device: ScriptedPhysicalDevice,
+  reason: FakeDriverRefusalReason,
+): ScriptedPhysicalDevice {
+  return { ...device, refusal: { message: `scripted ${reason} for ${device.ids[0]}`, reason } };
+}
+
 describe("devices.autoEnroll", () => {
   it("enrols a phone plugged in, an iPhone, an Android phone and a phone attached before the daemon starts, each with one device.enrolled initiator auto and its installed apps as kept apps", async () => {
     const env = await autoDaemon({ ios: { physicalDevices: [IPHONE] } });
@@ -718,5 +737,53 @@ describe("devices.autoEnroll", () => {
         .sort(),
     ).toEqual([1, 1, 12]);
     expect((await rows(env)).map((row) => row.state)).toEqual(["ready", "ready", "ready"]);
+  });
+
+  it("retries a phone that cannot be enrolled and logs one auto-enroll line each time its reason changes, word for word, then enrols it once unlocked", async () => {
+    const env = await autoDaemon();
+    const [a, b, c] = [IPHONE, { ...IPHONE, ids: ["PHONE-B"] }, IPHONE_TWO];
+    const line = (device: ScriptedPhysicalDevice, reason: FakeDriverRefusalReason) =>
+      `auto-enroll: ios ${device.ids[0]} not enrolled: scripted ${reason} for ${device.ids[0]}`;
+
+    await plug(env, "ios", [
+      refused(a, "locked"),
+      refused(b, "untrusted"),
+      refused(c, "untrusted"),
+    ]);
+    await waitFor(async () => (await autoEnrollLog(env)).length === 3, { label: "three lines" });
+    await observeFor(700, async () => {
+      expect(await autoEnrollLog(env), "three runs at one reason write one line").toHaveLength(3);
+    });
+    await plug(env, "ios", [refused(a, "locked"), refused(b, "untrusted"), refused(c, "locked")]);
+    await waitFor(async () => (await autoEnrollLog(env)).length === 4, { label: "locked line" });
+    await plug(env, "ios", [
+      refused(a, "locked"),
+      refused(b, "untrusted"),
+      refused(c, "untrusted"),
+    ]);
+    await waitFor(async () => (await autoEnrollLog(env)).length === 5, {
+      label: "untrusted again",
+    });
+    await observeFor(700, async () => {
+      expect(await autoEnrollLog(env)).toHaveLength(5);
+    });
+    await plug(env, "ios", [a, refused(b, "untrusted"), refused(c, "untrusted")]);
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 1, {
+      label: "the unlocked phone is enrolled",
+    });
+
+    const lines = await autoEnrollLog(env);
+    expect(lines).toEqual(
+      expect.arrayContaining([line(a, "locked"), line(b, "untrusted"), line(c, "untrusted")]),
+    );
+    expect(lines.filter((entry) => entry.includes(String(c.ids[0])))).toEqual([
+      line(c, "untrusted"),
+      line(c, "locked"),
+      line(c, "untrusted"),
+    ]);
+    expect(lines.filter((entry) => entry.includes(UDID))).toEqual([line(a, "locked")]);
+    expect((await named(env, "device.enrolled")).map((entry) => entry.payload)).toEqual([
+      expect.objectContaining({ driverDeviceId: UDID, initiator: "auto" }),
+    ]);
   });
 });
