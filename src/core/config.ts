@@ -988,6 +988,8 @@ const SIMLOCK_HEADER_NAMES: ReadonlySet<string> = new Set([
   "origin",
 ]);
 
+type HeaderEntry = [name: string, text: string];
+
 /**
  * why: Node throws on a header name or value it cannot send, so every such entry is refused
  * here at load, where the operator sees the key, rather than on each dial.
@@ -998,8 +1000,23 @@ function headersValidator(value: unknown, path: string): Readonly<Record<string,
     throw invalidValue(path, shape);
   }
   const entries = Object.entries(value);
-  if (entries.some(([, text]) => typeof text !== "string")) throw invalidValue(path, shape);
+  if (!entries.every((entry): entry is HeaderEntry => typeof entry[1] === "string")) {
+    throw invalidValue(path, shape);
+  }
   if (entries.length > MAX_HEADERS) throw invalidValue(path, "at most 16 headers");
+  checkHeaderNames(entries, path);
+  checkHeaderValues(entries, path);
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (SIMLOCK_HEADER_NAMES.has(lower) || lower.startsWith("sec-websocket-")) {
+      throw invalidValue(path, `no header Simlock sets itself (${name})`);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+
+function checkHeaderNames(entries: readonly HeaderEntry[], path: string): void {
+  const seen = new Set<string>();
   for (const [name] of entries) {
     if (!HEADER_NAME_PATTERN.test(name)) {
       throw invalidValue(
@@ -1008,14 +1025,16 @@ function headersValidator(value: unknown, path: string): Readonly<Record<string,
       );
     }
   }
-  const seen = new Set<string>();
   for (const [name] of entries) {
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw invalidValue(path, `each header name once (got ${name} twice)`);
     seen.add(lower);
   }
+}
+
+function checkHeaderValues(entries: readonly HeaderEntry[], path: string): void {
   let total = 0;
-  for (const [name, text] of entries as [string, string][]) {
+  for (const [name, text] of entries) {
     if (text.length > MAX_HEADER_VALUE_LENGTH || !HEADER_VALUE_PATTERN.test(text)) {
       throw invalidValue(
         path,
@@ -1027,13 +1046,6 @@ function headersValidator(value: unknown, path: string): Readonly<Record<string,
   if (total > MAX_HEADER_CHARACTERS) {
     throw invalidValue(path, "at most 8192 characters of header names and values in all");
   }
-  for (const [name] of entries) {
-    const lower = name.toLowerCase();
-    if (SIMLOCK_HEADER_NAMES.has(lower) || lower.startsWith("sec-websocket-")) {
-      throw invalidValue(path, `no header Simlock sets itself (${name})`);
-    }
-  }
-  return Object.fromEntries(entries as [string, string][]);
 }
 
 /**
