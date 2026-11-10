@@ -8,6 +8,7 @@ const device = (
   state: "ready" | "leased" | "reclaiming" | "shutdown",
   lastLeaseEndedAt: number,
 ) => ({
+  backend: "local",
   physical: false as const,
   createdAt: 0,
   driverData: {},

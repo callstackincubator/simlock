@@ -167,6 +167,7 @@ describe("Doctor", () => {
         idGenerator: sequence(),
       });
       const registered = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "missing" },
         driverDeviceId: "missing",
         provisionDuration: 0,

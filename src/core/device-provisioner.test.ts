@@ -529,7 +529,11 @@ describe("DeviceProvisioner copying a baseline", () => {
       harness.clock.advance(50);
       const driverDevice = await providing;
       harness.driver.writeDeviceFile(driverDevice.deviceId, "data/version.txt", `v${version}`);
-      const { sourceId } = await harness.driver.saveSource({ ...driverDevice, physical: false });
+      const { sourceId } = await harness.driver.saveSource({
+        backend: "local",
+        ...driverDevice,
+        physical: false,
+      });
       return {
         mode: "full",
         model: spec.model,

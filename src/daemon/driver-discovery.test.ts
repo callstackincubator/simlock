@@ -239,6 +239,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     await expect(
       android?.makeReady(
         {
+          backend: "local",
           physical: false,
           address: "emulator-5586",
           deviceId: "simlock_one",
@@ -393,6 +394,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         {
           address: udid,
           deviceId: udid,
+          backend: "local",
           physical: false,
           driverData: {
             deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
@@ -441,6 +443,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         {
           address: "emulator-5586",
           deviceId: "device-1",
+          backend: "local",
           physical: false,
           driverData: {
             avdHome,

@@ -541,6 +541,7 @@ describe("GET /v1/lease-requests/:id across a daemon restart", () => {
       });
     const before = await load();
     const device = await before.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "fake-1",
       provisionDuration: 0,
@@ -795,6 +796,7 @@ describe("lease routes", () => {
     const { app, registry } = buildHarness();
     registry.devices = [
       {
+        backend: "local",
         createdAt: 0,
         driverData: undefined,
         driverDeviceId: "00008110-001A2B3C4D5E",

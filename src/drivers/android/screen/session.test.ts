@@ -34,12 +34,14 @@ const SETTINGS = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 const SCREEN_READ_MS = 10_000;
 const WAKE_MS = 10_000;
 const DEVICE: VirtualDriverDevice = {
+  backend: "local",
   address: SERIAL,
   deviceId: "simlock_1",
   driverData: {},
   physical: false,
 };
 const PHONE: PhysicalDriverDevice = {
+  backend: "local",
   address: PHONE_SERIAL,
   deviceId: PHONE_SERIAL,
   driverData: {},

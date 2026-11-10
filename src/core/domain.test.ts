@@ -18,6 +18,7 @@ import {
 } from "./domain.js";
 
 const baseDevice: Omit<VirtualDevice, "state"> = {
+  backend: "local",
   physical: false,
   createdAt: 1_000,
   driverData: { opaque: true },
@@ -271,6 +272,7 @@ const physicalSpec: PhysicalSpec = {
 };
 
 const physicalDevice: Omit<PhysicalDevice, "state"> = {
+  backend: "local",
   createdAt: 1_000,
   driverData: {},
   driverDeviceId: "00008110-001A2B3C4D5E",

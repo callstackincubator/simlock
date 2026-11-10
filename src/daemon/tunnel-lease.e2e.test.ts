@@ -11,6 +11,7 @@ import {
   FakeDeviceTcp,
   FakeDriver,
   FakeInputFactory,
+  fakeDeviceDataTable,
   fakeDeviceDataTables,
 } from "../core/testing.js";
 import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
@@ -542,18 +543,21 @@ describe("a lease's tunnel socket", () => {
   );
 
   it(
-    "sweeps each platform's driver at start with its devices, a leased one marked leased, before any request is served",
+    "sweeps only each backend's devices at start, a leased one marked leased, before any request is served",
     { timeout: 120_000 },
     async () => {
       const path = await mkdtemp(join(tmpdir(), "simlock-e2e-sweep-"));
       directories.push(path);
-      const start = async (deviceTcp: FakeDeviceTcp): Promise<DaemonServer> =>
+      const tables = new Map(fakeDeviceDataTables);
+      tables.set("android:remote", fakeDeviceDataTable);
+      const start = async (deviceTcp: FakeDeviceTcp, backend = "local"): Promise<DaemonServer> =>
         await startDaemon({
           configOverrides: { http: { enabled: false } },
           dataDirectory: path,
-          deviceDataTables: fakeDeviceDataTables,
+          deviceDataTables: tables,
           drivers: [
             new FakeDriver({
+              backend,
               availableOsVersions: ["18.0"],
               clock: new SystemClock(),
               deviceTcp,
@@ -585,6 +589,11 @@ describe("a lease's tunnel socket", () => {
         { device: expect.objectContaining({ physical: false }), leased: true },
       ]);
       await second.stop("test");
+
+      const foreign = new FakeDeviceTcp();
+      const otherBackend = await start(foreign, "remote");
+      expect(foreign.sweeps).toEqual([[]]);
+      await otherBackend.stop("test");
 
       const idle = new FakeDeviceTcp();
       let releaseSweep: () => void = () => undefined;

@@ -44,21 +44,41 @@ flowchart LR
 
 Local Android and iOS use the explicit id `local`. Omitting the backend setting
 selects that definition. One backend per platform is active on a worker.
-Only the local implementations are registered in the first step.
+Selecting a different backend requires a restart and does not migrate devices
+between providers.
+
+### Device records retain their backend
+
+Each device record stores its backend id. Existing published records migrate to
+`local`. Device-data readers are keyed by both platform and backend; every
+registered backend's table is opened even when that backend is not selected.
+
+A device whose backend is unavailable remains readable and visible. Device
+operations, observations, cleanup and acquisition check the recorded backend
+before dispatching to a driver. They never reinterpret it using the currently
+selected implementation. Old backend devices remain owned resources and are
+not silently forgotten.
+
+Startup tunnel cleanup receives only the selected backend's devices.
+
+The backend field is carried by device grants and views, so the daemon protocol
+version advances with this change. Existing operator configuration keys keep
+their meaning; `drivers.<platform>.backend` defaults to `local`.
 
 ### Implementation sequence
 
-The registry change registers only local Android and iOS. It extracts their
-existing factories and keeps device records, table keys and the daemon protocol
-unchanged. Capabilities are metadata in this step.
+The registry extraction registers local Android and iOS without changing device
+records or the daemon protocol. This step adds recorded device ownership and
+its wire migration. Capabilities remain metadata.
 
-Before another backend is registered, follow-up changes must preserve device
-ownership across backend selection, then preserve baseline/source ownership and
-enforce capabilities at common admission paths. Those changes need their own
-state migrations and tests; they are not implemented by the registry extraction.
+Before another backend is registered, a follow-up must preserve saved-baseline
+and source ownership and enforce capabilities at common admission paths. That
+change needs its own state migration and tests; source ownership and capability
+admission are not implemented by the device ownership step.
 
 This decision adds no provider deadline or renewal mechanism. Simlock's
-TTL-first agent lease remains governed by ADR 0004.
+TTL-first agent lease remains governed by ADR 0004. A backend that needs an
+additional lifetime contract requires a separate decision.
 
 ## Consequences
 
@@ -70,3 +90,7 @@ TTL-first agent lease remains governed by ADR 0004.
   entry points. Definitions remain separate light entry points.
 - Shared backend context carries ports, host facts, capture artifacts, logging
   and diagnostic callbacks. Drivers do not depend on the daemon or event bus.
+- USB devices remain tied to the selected backend in this version. Supporting
+  local phones alongside another virtual backend requires explicit routing.
+- The unpublished ADC prototype uses a separate data directory. Its old records
+  are not part of the published registry migration.

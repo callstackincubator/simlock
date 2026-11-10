@@ -661,6 +661,7 @@ describe("warm pool targets", () => {
   };
   const kind = { model: "iPhone 17", osVersion: "26.0", physical: false, platform: "ios" } as const;
   const ofKind = (id: string, state: VirtualDevice["state"], createdAt = 1): VirtualDevice => ({
+    backend: "local",
     physical: false,
     createdAt,
     driverData: {},

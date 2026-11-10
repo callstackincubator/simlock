@@ -8,6 +8,51 @@ import { type DeviceDataTable, type Platform, Registry, RegistryLoadError } from
 import { spec, totalChanges } from "./test-registry.js";
 
 describe("Registry: state.db rows", () => {
+  it("loads each device through its stored backend when both backend tables are registered", async () => {
+    const { clock, state } = await world();
+    const reads: string[] = [];
+    const tableFor = (backend: string): DeviceDataTable => ({
+      ...fakeDeviceDataTable,
+      read(database, id) {
+        reads.push(backend);
+        return fakeDeviceDataTable.read(database, id);
+      },
+    });
+    const tables = new Map([
+      ["ios:local", tableFor("local")],
+      ["ios:remote", tableFor("remote")],
+    ]);
+    const open = () =>
+      Registry.load({
+        clock,
+        state,
+        deviceData: tables,
+        eventBus: new EventBus(clock),
+        idGenerator: { generate: () => String(clock.now()) },
+      });
+    const registry = await open();
+    for (const backend of ["local", "remote"]) {
+      clock.advance(1);
+      await registry.registerDevice({
+        backend,
+        driverDeviceId: `driver-${backend}`,
+        driverData: { fakeDeviceId: backend },
+        provisionDuration: 0,
+        spec,
+      });
+    }
+
+    const restarted = await open();
+
+    expect(reads).toEqual(["local", "remote"]);
+    expect(restarted.snapshot.devices.map((device) => [device.backend, device.driverData])).toEqual(
+      [
+        ["local", { fakeDeviceId: "local" }],
+        ["remote", { fakeDeviceId: "remote" }],
+      ],
+    );
+  });
+
   async function world(
     options: { readonly leaseRequestLimits?: { maxRecords: number; retentionMs: number } } = {},
   ) {
@@ -27,6 +72,7 @@ describe("Registry: state.db rows", () => {
     const registry: Registry = await open({ generate: () => String((next += 1)) });
     const readyDevice = async (fakeDeviceId: string) => {
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId },
         driverDeviceId: `drv-${fakeDeviceId}`,
         provisionDuration: 0,
@@ -165,12 +211,13 @@ describe("Registry: state.db rows", () => {
     };
     const registry = await Registry.load({
       clock,
-      deviceData: new Map([["ios", failing]]),
+      deviceData: new Map([["ios:local", failing]]),
       eventBus: new EventBus(clock),
       idGenerator: { generate: () => "x" },
       state,
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fk-grant" },
       driverDeviceId: "drv-grant",
       provisionDuration: 0,
@@ -203,7 +250,7 @@ describe("Registry: state.db rows", () => {
 
     const restarted = await Registry.load({
       clock,
-      deviceData: new Map([["ios", fakeDeviceDataTable]]),
+      deviceData: new Map([["ios:local", fakeDeviceDataTable]]),
       eventBus: new EventBus(clock),
       idGenerator: { generate: () => "y" },
       state,
@@ -328,7 +375,9 @@ describe("Registry: state.db rows", () => {
     const reload = (state: StateDatabase, platforms: readonly Platform[] = ["ios", "android"]) =>
       Registry.load({
         clock: new FakeClock(1_000),
-        deviceData: new Map(platforms.map((platform) => [platform, fakeDeviceDataTable])),
+        deviceData: new Map(
+          platforms.map((platform) => [`${platform}:local`, fakeDeviceDataTable]),
+        ),
         eventBus: new EventBus(new FakeClock(1_000)),
         idGenerator: { generate: () => "z" },
         state,
@@ -405,6 +454,7 @@ describe("Registry: state.db rows", () => {
     const { open, readyDevice, registry, state } = await world();
     const virtual = await readyDevice("fk-virtual");
     const physical = await registry.enrollPhysical({
+      backend: "local",
       apps: ["com.a"],
       class: "phone",
       driverDeviceId: "udid-1",
@@ -451,6 +501,7 @@ describe("Registry: state.db rows", () => {
     const third = await readyDevice("deleted-3");
     const live = await readyDevice("live");
     const phone = await registry.enrollPhysical({
+      backend: "local",
       apps: ["com.a", "com.b"],
       class: "phone",
       driverDeviceId: "udid-gone",

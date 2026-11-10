@@ -27,6 +27,7 @@ async function createHarness(
     state: options.state,
   });
   const device = await registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: "driver_1" },
     driverDeviceId: "driver_1",
     provisionDuration: 0,

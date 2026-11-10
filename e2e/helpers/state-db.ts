@@ -5,6 +5,7 @@ import { e2eFakeDeviceDataTable } from "../fake-driver/device-data.js";
 import type { TestEnv } from "./env.js";
 
 const PHYSICAL_COLUMNS = {
+  backend: "backend",
   absentReason: "absent_reason",
   address: "address",
   class: "class",

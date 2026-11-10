@@ -134,7 +134,14 @@ ALTER TABLE devices ADD COLUMN deleted_at INTEGER;
 `;
 
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4, REGISTRY_V5],
+  migrations: [
+    REGISTRY_V1,
+    REGISTRY_V2,
+    REGISTRY_V3,
+    REGISTRY_V4,
+    REGISTRY_V5,
+    "ALTER TABLE devices ADD COLUMN backend TEXT NOT NULL DEFAULT 'local';",
+  ],
   name: "registry",
-  version: 5,
+  version: 6,
 };

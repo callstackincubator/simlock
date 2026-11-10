@@ -78,11 +78,12 @@ export interface DriverDiscovery {
   readonly rejections: readonly DriverRejection[];
 }
 
-/** why: both local tables stay registered even when the host cannot start a platform's driver. */
-export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTable> {
-  const tables = new Map<Platform, DeviceDataTable>();
+/** why: every backend table stays registered so devices remain readable after a backend is deselected or refused. */
+export function productionDeviceDataTables(): ReadonlyMap<string, DeviceDataTable> {
+  const tables = new Map<string, DeviceDataTable>();
   for (const backend of backendModules) {
-    tables.set(backend.definition.platform, backend.deviceDataTable);
+    const key = backendKey(backend.definition.platform, backend.definition.id);
+    tables.set(key, backend.deviceDataTable);
   }
   return tables;
 }
@@ -93,8 +94,8 @@ export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTa
  * always see the same one.
  */
 export async function resolveDeviceDataTables(options: {
-  readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable> | undefined;
-}): Promise<ReadonlyMap<Platform, DeviceDataTable>> {
+  readonly deviceDataTables?: ReadonlyMap<string, DeviceDataTable> | undefined;
+}): Promise<ReadonlyMap<string, DeviceDataTable>> {
   if (options.deviceDataTables !== undefined) return options.deviceDataTables;
   const modulePath = process.env.SIMLOCK_DRIVERS_MODULE;
   if (modulePath === undefined) return productionDeviceDataTables();
@@ -103,10 +104,10 @@ export async function resolveDeviceDataTables(options: {
   };
   if (!(imported.deviceDataTables instanceof Map)) {
     throw new Error(
-      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
+      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from backend key to its device-data table`,
     );
   }
-  return imported.deviceDataTables as ReadonlyMap<Platform, DeviceDataTable>;
+  return imported.deviceDataTables as ReadonlyMap<string, DeviceDataTable>;
 }
 
 export async function discoverDrivers(options: DriverDiscoveryContext): Promise<DriverDiscovery> {

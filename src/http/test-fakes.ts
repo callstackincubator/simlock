@@ -34,6 +34,7 @@ export function sequenceIdGenerator(prefix = "id"): IdGenerator {
 
 export function makeDevice(overrides: Partial<VirtualDevice> = {}): VirtualDevice {
   return {
+    backend: "local",
     createdAt: 0,
     driverData: undefined,
     driverDeviceId: "ABCD-1234",

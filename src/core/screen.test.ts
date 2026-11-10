@@ -12,7 +12,13 @@ import {
 } from "./screen.js";
 
 const settings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
-const device = { address: "a", deviceId: "d", driverData: {}, physical: false } as const;
+const device = {
+  backend: "local",
+  address: "a",
+  deviceId: "d",
+  driverData: {},
+  physical: false,
+} as const;
 
 describe("encodeScreenFrame", () => {
   it("prefixes the payload with a big-endian length that counts the tag byte", () => {

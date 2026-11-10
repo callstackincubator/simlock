@@ -62,6 +62,7 @@ function device(
   options: DeviceOptions = {},
 ): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     createdAt: options.createdAt ?? (options.endedAgo === undefined ? 1 : now - options.endedAgo),
     ...readyStamp(options),

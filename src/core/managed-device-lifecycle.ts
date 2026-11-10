@@ -110,7 +110,7 @@ export class ManagedDeviceLifecycle {
   ): Promise<ReadyDeviceHandoff | undefined> {
     const claimed = await this.#claim(target, ["ready"], "boot", claim);
     if (claimed === undefined) return undefined;
-    const driver = this.catalog.get(claimed.device.spec.platform);
+    const driver = this.catalog.forDevice(claimed.device);
     let ready: DriverDevice;
     try {
       await driver.shutdown(toDriverDevice(claimed.device));
@@ -175,7 +175,7 @@ export class ManagedDeviceLifecycle {
     if (claimed === undefined) return undefined;
 
     try {
-      await this.catalog.get(claimed.device.spec.platform).shutdown(toDriverDevice(claimed.device));
+      await this.catalog.forDevice(claimed.device).shutdown(toDriverDevice(claimed.device));
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;
@@ -197,7 +197,7 @@ export class ManagedDeviceLifecycle {
     if (claimed === undefined) return undefined;
 
     try {
-      await this.catalog.get(claimed.device.spec.platform).destroy(toDriverDevice(claimed.device));
+      await this.catalog.forDevice(claimed.device).destroy(toDriverDevice(claimed.device));
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;
@@ -234,12 +234,10 @@ export class ManagedDeviceLifecycle {
       // Android reuses the console port already in the device's driver data. A driver that
       // ever does move it would need this to persist the new value, because the holder is
       // still using the address from its original grant.
-      await this.catalog
-        .get(claimed.device.spec.platform)
-        .makeReady(toDriverDevice(claimed.device), {
-          mode: specMode(claimed.device.spec),
-          purpose: "recover",
-        });
+      await this.catalog.forDevice(claimed.device).makeReady(toDriverDevice(claimed.device), {
+        mode: specMode(claimed.device.spec),
+        purpose: "recover",
+      });
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;
@@ -270,7 +268,7 @@ export class ManagedDeviceLifecycle {
     try {
       let current = claimed.device;
       if (current.state === "ready") {
-        await this.catalog.get(current.spec.platform).shutdown(toDriverDevice(current));
+        await this.catalog.forDevice(current).shutdown(toDriverDevice(current));
         const shutdown = await this.#commitWithoutRelease(claimed, ["ready"], "shutdown", {
           event: "device.shutdown",
           payload: { deviceId: current.id, initiator },
@@ -282,7 +280,7 @@ export class ManagedDeviceLifecycle {
         current = shutdown;
       }
 
-      await this.catalog.get(current.spec.platform).destroy(toDriverDevice(current));
+      await this.catalog.forDevice(current).destroy(toDriverDevice(current));
       return this.#commit(claimed, ["shutdown"], "deleted", {
         event: "device.deleted",
         payload: { deviceId: current.id, initiator },
@@ -305,7 +303,7 @@ export class ManagedDeviceLifecycle {
     let ready: DriverDevice;
     try {
       ready = await this.catalog
-        .get(claimed.device.spec.platform)
+        .forDevice(claimed.device)
         .makeReady(toDriverDevice(claimed.device), {
           mode: specMode(claimed.device.spec),
           purpose: "prepare",

@@ -34,6 +34,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const registered = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "missing" },
       driverDeviceId: "missing",
       provisionDuration: 0,
@@ -211,6 +212,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const stale = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-stale" },
       driverDeviceId: "simlock-stale",
       provisionDuration: 0,
@@ -260,6 +262,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-drift" },
       driverDeviceId: "simlock-drift",
       provisionDuration: 0,
@@ -330,6 +333,7 @@ describe("Doctor", () => {
         idGenerator: sequence(),
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-marked" },
         driverDeviceId: "simlock-marked",
         provisionDuration: 0,
@@ -393,6 +397,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-both" },
       driverDeviceId: "simlock-both",
       provisionDuration: 0,
@@ -444,6 +449,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-reclaiming" },
       driverDeviceId: "simlock-reclaiming",
       provisionDuration: 0,
@@ -498,6 +504,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const missing = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "missing" },
       driverDeviceId: "missing",
       provisionDuration: 0,
@@ -570,6 +577,7 @@ describe("Doctor", () => {
     const ids: string[] = [];
     for (const name of ["live", "gone"]) {
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: name },
         driverDeviceId: name,
         provisionDuration: 0,
@@ -622,6 +630,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "live" },
       driverDeviceId: "live",
       provisionDuration: 0,
@@ -898,6 +907,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
     });
     await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-provisioning" },
       driverDeviceId: "simlock-provisioning",
       provisionDuration: 0,
@@ -1094,6 +1104,7 @@ describe("Doctor", () => {
       leaseIdentity: { android: "reusable", ios: "fresh" },
     });
     const spent = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-spent" },
       driverDeviceId: "simlock-spent",
       provisionDuration: 0,
@@ -1542,6 +1553,7 @@ async function legacyDeviceSetup() {
 
 function driverDevice(deviceId: string) {
   return {
+    backend: "local",
     physical: false,
     address: `${deviceId}-address`,
     deviceId,
@@ -1580,6 +1592,7 @@ describe("Doctor and physical devices (ADR 0022 §4)", () => {
     });
     for (const state of states) {
       const device = await registry.enrollPhysical({
+        backend: "local",
         apps: [],
         class: "phone",
         driverDeviceId: `00008110-${state}`,
@@ -1746,6 +1759,7 @@ describe("Doctor and a physical reclaim in flight (ADR 0022 §7, §8)", () => {
 
   async function enrollReclaiming(registry: Registry, name: string) {
     const device = await registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: `00008110-${name}`,

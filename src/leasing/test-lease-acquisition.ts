@@ -248,6 +248,7 @@ export async function seedReady(
 ) {
   const driverDevice = await harness.driver.provision(spec);
   const provisioned = await harness.registry.registerDevice({
+    backend: "local",
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,

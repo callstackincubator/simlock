@@ -45,7 +45,9 @@ export class StartupConverger {
     // A `quarantined` device already finished its release-time reclaim, so re-arming its retry
     // timer never races the reclaim recovery below. A device on a platform the read could not
     // list is skipped: a retry that is already due would drive that platform's driver now.
-    this.options.quarantineRestore.restore((device) => read.isReadable(device.spec.platform));
+    this.options.quarantineRestore.restore((device) =>
+      read.isReadable(device.spec.platform, device.backend),
+    );
     await this.#recoverInterruptedReclaims(read);
     // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
     // down there, and is deleted here along with any the previous process left `shutdown`.
@@ -81,7 +83,7 @@ export class StartupConverger {
     return snapshot.virtualDevices.filter(
       (device) =>
         device.state === state &&
-        read.isReadable(device.spec.platform) &&
+        read.isReadable(device.spec.platform, device.backend) &&
         !leasedDeviceIds.has(device.id) &&
         !this.options.claims.isClaimed(device.id),
     );

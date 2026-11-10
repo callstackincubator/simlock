@@ -20,6 +20,7 @@ describe("Doctor", () => {
       const clock = new FakeClock(10_000);
       const registry = await loadRegistry(clock, new EventBus(clock));
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
@@ -47,6 +48,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const provisioning = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
@@ -120,6 +122,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-claimed" },
         driverDeviceId: "simlock-claimed",
         provisionDuration: 0,
@@ -264,6 +267,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
@@ -307,6 +311,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
@@ -368,6 +373,7 @@ describe("Doctor", () => {
         state,
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
@@ -424,6 +430,7 @@ describe("Doctor", () => {
         idGenerator: sequence(),
       });
       const registered = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "gone" },
         driverDeviceId: "gone",
         provisionDuration: 0,
@@ -447,7 +454,7 @@ describe("Doctor", () => {
 
     it("is reconciled against instead of calling listManaged again", async () => {
       const { doctor, driver, registered } = await setup();
-      const read = new StartupRead(new Map([["ios", { devices: [], processes: [] }]]));
+      const read = new StartupRead(new Map([["ios:local", { devices: [], processes: [] }]]));
 
       const report = await doctor.reconcile({ read });
 

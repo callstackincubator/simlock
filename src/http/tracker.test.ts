@@ -375,6 +375,7 @@ describe("LeaseRequestTracker granted lease payload", () => {
     dispatcher.calls[callIndex]?.resolve({
       ...makeGrant(),
       device: {
+        backend: "local",
         createdAt: 0,
         driverData: undefined,
         driverDeviceId: "00008110-001A2B3C4D5E",

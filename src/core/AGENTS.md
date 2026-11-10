@@ -20,7 +20,7 @@ Lock, claims and commits:
 - Only `Registry` writes the `registry` tables, inside `SerializedDecision.run`. A commit is one `state.db` transaction, then memory, then `onCommit`, then the event. A throw rolls back and leaves memory as it was.
 - A transition without the one event its edge calls for throws `RegistryEventError`.
 - A virtual device record is created only by `DeviceProvisioner`. Every driver verb on a registered device goes through `ManagedDeviceLifecycle`.
-- A driver keeps its own `DeviceDataTable` (`driver.ts`) for a virtual device's `driverData`; a physical device has none.
+- Virtual `driverData` uses its recorded platform/backend table, even when unselected; physical devices have none. Device-targeted driver calls must check that backend before acting.
 - A granted request's `grant.device` is read as the device is now.
 
 Devices:

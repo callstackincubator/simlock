@@ -232,7 +232,14 @@ export class Doctor {
       ),
     );
     const registryDeviceKeys = new Set(
-      snapshot.devices.map((device) => key(device.spec.platform, device.driverDeviceId)),
+      snapshot.devices
+        .filter((device) =>
+          this.options.drivers.some(
+            (driver) =>
+              driver.platform === device.spec.platform && driver.backend.id === device.backend,
+          ),
+        )
+        .map((device) => key(device.spec.platform, device.driverDeviceId)),
     );
     const driversByPlatform = new Map(
       this.options.drivers.map((driver) => [driver.platform, driver]),
@@ -247,7 +254,14 @@ export class Doctor {
         realDeviceKeys,
       })),
     );
-    findings.push(...this.#stalledFindings(snapshot.devices, driversByPlatform));
+    findings.push(
+      ...this.#stalledFindings(
+        snapshot.devices.filter(
+          (device) => driversByPlatform.get(device.spec.platform)?.backend.id === device.backend,
+        ),
+        driversByPlatform,
+      ),
+    );
     findings.push(...driverUnavailableFindings(this.options.driverRejections ?? []));
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
@@ -287,7 +301,8 @@ export class Doctor {
     const lists = await Promise.all(
       this.options.drivers.map(async (driver) => {
         try {
-          const listed = this.#named(await driver.listSources());
+          const sources = await driver.listSources();
+          const listed = this.#named(sources);
           const kept: DriverSource[] = [];
           for (const source of listed) {
             if (
@@ -355,7 +370,7 @@ export class Doctor {
       );
     }
     return this.options.drivers.flatMap((driver) => {
-      const reality = read.reality(driver.platform);
+      const reality = read.reality(driver.platform, driver.backend.id);
       return reality === undefined ? [] : [{ driver, reality }];
     });
   }
@@ -390,7 +405,7 @@ export class Doctor {
       const driver = driversByPlatform.get(orphan.platform);
       if (driver === undefined) continue;
       try {
-        await driver.destroy(virtualDriverDevice(orphan.device));
+        await driver.destroy(virtualDriverDevice(orphan.device, driver.backend.id));
       } catch (error: unknown) {
         this.#logger.error("Could not purge orphan device", {
           deviceId: orphan.device.deviceId,
@@ -476,6 +491,8 @@ export class Doctor {
     const findings: DoctorFinding[] = [];
     for (const device of devices) {
       if (!reality.observedPlatforms.has(device.spec.platform)) continue;
+      if (reality.driversByPlatform.get(device.spec.platform)?.backend.id !== device.backend)
+        continue;
       const deviceFindings = await this.#withLegacyDevice(
         device,
         registryDriftFindings(
@@ -856,13 +873,13 @@ export class Doctor {
     driver: Driver | undefined,
   ): Promise<void> {
     const destroyLegacy = driver?.destroyLegacy?.bind(driver);
-    if (destroyLegacy === undefined) return;
+    if (destroyLegacy === undefined || driver === undefined) return;
     const snapshot = this.options.registry.snapshot;
     if (snapshot.leases.some((lease) => lease.deviceId === finding.deviceId)) {
       return;
     }
     try {
-      await destroyLegacy(virtualDriverDevice(finding.device));
+      await destroyLegacy(virtualDriverDevice(finding.device, driver.backend.id));
     } catch (error: unknown) {
       this.#logger.error("Could not destroy a pre-root device", {
         deviceId: finding.deviceId,

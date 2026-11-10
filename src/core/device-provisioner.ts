@@ -17,6 +17,7 @@ export type ProvisionProgress = Extract<
 
 export interface DeviceProvisionerRegistry {
   registerDevice(input: {
+    readonly backend: string;
     readonly driverDeviceId: string;
     readonly spec: VirtualSpec;
     readonly driverData: unknown;
@@ -92,6 +93,7 @@ export class DeviceProvisioner {
     return this.options.decisions.run(async () => {
       try {
         const device = await this.options.registry.registerDevice({
+          backend: this.options.catalog.get(spec.platform).backend.id,
           driverData: driverDevice.driverData,
           driverDeviceId: driverDevice.deviceId,
           provisionDuration: this.options.clock.now() - startedAt,

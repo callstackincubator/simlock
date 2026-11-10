@@ -82,6 +82,7 @@ import {
   type PhysicalPlanInput,
   type WaitingReason,
 } from "./acquisition-planner.js";
+import { backendSnapshot } from "./backend-policy.js";
 import { emitLeaseRefusal } from "./lease-refusal.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
@@ -891,7 +892,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     absent: ReadonlySet<string>,
   ): Extract<AcquisitionPlan, { readonly kind: "grant-physical" }> | undefined {
     const request = physicalRequestOf(waiter.request);
-    const enrolled = this.options.registry.snapshot.devices;
+    const enrolled = backendSnapshot(this.options, waiter.request.platform).devices;
     if (
       !enrolled.some(
         (device) => device.physical && device.state !== "deleted" && fitsPhysical(device, request),
@@ -906,7 +907,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       noWait: waiter.options.noWait ?? false,
       owner: waiter.id,
       request,
-      snapshot: this.options.registry.snapshot,
+      snapshot: backendSnapshot(this.options, waiter.request.platform),
     });
     if (plan.kind !== "grant-physical") {
       this.#defer(waiter, blockedReason(plan));
@@ -938,9 +939,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const { claim, device } = plan;
     let present = false;
     try {
-      const reads = await readPhysicalPresence(this.options.drivers.get(device.spec.platform), [
-        device.driverDeviceId,
-      ]);
+      const reads = await readPhysicalPresence(
+        this.options.drivers.get(device.spec.platform, device.backend),
+        [device.driverDeviceId],
+      );
       present = reads.get(device.driverDeviceId) === true;
     } catch (error: unknown) {
       this.#logFailure(
@@ -989,7 +991,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     if (action.kind === "boot-shutdown") {
       waiter.timing = await estimatedBootTiming(
-        this.options.drivers.get(action.device.spec.platform),
+        this.options.drivers.get(action.device.spec.platform, action.device.backend),
         action.device,
       );
       await this.#bootShutdown(waiter, action.device, action.capacityReservation, action.claim);
@@ -997,7 +999,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     if (action.kind === "reboot-ready") {
       waiter.timing = await estimatedBootTiming(
-        this.options.drivers.get(action.device.spec.platform),
+        this.options.drivers.get(action.device.spec.platform, action.device.backend),
         action.device,
       );
       await this.#rebootReady(waiter, action.device, action.claim);
@@ -1076,7 +1078,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     plan: Extract<AcquisitionPlan, { kind: "grant-ready" }>,
   ): Promise<undefined> {
     waiter.timing = grantReadyTiming(
-      this.options.drivers.get(plan.device.spec.platform),
+      this.options.drivers.get(plan.device.spec.platform, plan.device.backend),
       plan.device.spec,
     );
     // why: the queue's own rule is that a timeout firing mid-attempt does not reject
@@ -1111,7 +1113,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.planner.plan({
       noWait: waiter.options.noWait ?? false,
       owner: waiter.id,
-      snapshot: this.options.registry.snapshot,
+      snapshot: backendSnapshot(this.options, waiter.spec.platform),
       spec: waiter.spec,
       requirement: waiter.requirement,
       classOf: waiter.classOf,
@@ -1138,7 +1140,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const granted = await this.options.leases.grant({
       deviceId: device.id,
       environment: this.options.drivers
-        .get(device.spec.platform)
+        .get(device.spec.platform, device.backend)
         .leaseEnvironment(toDriverDevice(device)),
       ownerId: waiter.options.ownerId,
       requestId: waiter.id,

@@ -94,7 +94,9 @@ export interface BaselineRemoveResult {
 
 export interface BaselineServiceOptions {
   readonly clock: Clock;
-  readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource" | "listSources"> };
+  readonly drivers: {
+    get(platform: Platform, backend?: string): Pick<Driver, "destroySource" | "listSources">;
+  };
   readonly leaseSave: () => {
     releaseToSave<Result>(
       leaseId: string,
@@ -136,6 +138,15 @@ export class BaselineService {
   }
 
   async #save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+    const lease = this.options.registry.snapshot.leases.find(
+      (current) => current.id === request.leaseId,
+    );
+    const device = this.options.registry.snapshot.virtualDevices.find(
+      (current) => current.id === lease?.deviceId,
+    );
+    if (device !== undefined) {
+      this.options.drivers.get(device.spec.platform, device.backend);
+    }
     const baseline = await this.options
       .leaseSave()
       .releaseToSave(request.leaseId, async (released) => {
@@ -199,6 +210,12 @@ export class BaselineService {
         const made = device.spec.baseline;
         if (made?.name !== name || made.version >= version || device.state === "deleted") continue;
         if (leases.some((lease) => lease.deviceId === device.id)) continue;
+        try {
+          this.options.drivers.get(device.spec.platform, device.backend);
+        } catch (error: unknown) {
+          if (error instanceof NoDriverError) continue;
+          throw error;
+        }
         const claim = this.options.claims.tryClaim(device.id, "cleanup");
         if (claim !== undefined) taken.push({ claim, device });
       }
@@ -425,6 +442,7 @@ export class BaselineService {
       (device) => device.spec.baseline?.name === name && device.state !== "deleted",
     );
     for (const device of made) {
+      this.options.drivers.get(device.spec.platform, device.backend);
       const lease = leases.find((candidate) => candidate.deviceId === device.id);
       if (lease !== undefined) throw new BaselineInUseError(name, lease.id);
     }

@@ -1,3 +1,4 @@
+import { backendKey } from "./backend-key.js";
 import { type Clock, type Logger, type TimerHandle } from "../ports/index.js";
 import type { Platform } from "./domain.js";
 import type { Driver, DriverReality } from "./driver.js";
@@ -12,15 +13,15 @@ export const STARTUP_READ_LIMIT_MS = 60_000;
  * threw or passed the limit. "I could not look" is not "the device is gone".
  */
 export class StartupRead {
-  constructor(private readonly realities: ReadonlyMap<Platform, DriverReality> = new Map()) {}
+  constructor(private readonly realities: ReadonlyMap<string, DriverReality> = new Map()) {}
 
   /** What the platform's driver listed, or undefined when the platform is unreadable. */
-  reality(platform: Platform): DriverReality | undefined {
-    return this.realities.get(platform);
+  reality(platform: Platform, backend: string): DriverReality | undefined {
+    return this.realities.get(backendKey(platform, backend));
   }
 
-  isReadable(platform: Platform): boolean {
-    return this.realities.has(platform);
+  isReadable(platform: Platform, backend: string): boolean {
+    return this.realities.has(backendKey(platform, backend));
   }
 }
 
@@ -38,14 +39,14 @@ export interface StartupReadOptions {
 export async function readStartup(options: StartupReadOptions): Promise<StartupRead> {
   const listed = await Promise.all(
     options.drivers.map(async (driver) => ({
-      platform: driver.platform,
+      key: backendKey(driver.platform, driver.backend.id),
       reality: await readOne(driver, options),
     })),
   );
   return new StartupRead(
     new Map(
-      listed.flatMap(({ platform, reality }) =>
-        reality === undefined ? [] : [[platform, reality] as const],
+      listed.flatMap(({ key, reality }) =>
+        reality === undefined ? [] : [[key, reality] as const],
       ),
     ),
   );

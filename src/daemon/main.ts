@@ -16,7 +16,6 @@ import {
   type ConfigOverrides,
   type DaemonMode,
   type DeviceDataTable,
-  type Platform,
   type ServiceCheck,
   loadConfigWithDefaults,
   loadInstanceId,
@@ -128,7 +127,7 @@ export interface StartDaemonOptions extends WorkerOptions {
   readonly configOverrides?: ConfigOverrides;
   readonly configPath?: string;
   readonly dataDirectory?: string;
-  readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable>;
+  readonly deviceDataTables?: ReadonlyMap<string, DeviceDataTable>;
   /** why: test-only, a gateway's silence bound on a relayed file upload, so a rig reaches 408 without waiting 330 s. */
   readonly fileSilenceMs?: number;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
@@ -193,7 +192,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 // why: the schema owners each role's state.db opens, one place so a test reads the list the daemon uses.
 export function stateOwners(
   role: DaemonMode,
-  deviceDataTables: ReadonlyMap<Platform, DeviceDataTable>,
+  deviceDataTables: ReadonlyMap<string, DeviceDataTable>,
 ): readonly SqliteSchemaOwner[] {
   return role === "gateway"
     ? [tokensOwner, drainedWorkersOwner]

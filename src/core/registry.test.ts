@@ -11,7 +11,6 @@ import { fakeDeviceDataTable, loadTestRegistry, openTestState } from "./testing.
 import {
   type DeviceDataTable,
   type DeviceTransitionUpdate,
-  type Platform,
   type VirtualSpec,
   Registry,
   registryOwner,
@@ -32,6 +31,7 @@ async function loadAfterCorruptingDevice(assignment: string): Promise<Registry> 
     state,
   });
   await registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: "fake-1" },
     driverDeviceId: "driver_stored",
     provisionDuration: 0,
@@ -140,6 +140,7 @@ describe("Registry", () => {
     });
 
     await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 25,
@@ -149,6 +150,7 @@ describe("Registry", () => {
     expect(storedAtEvent).toEqual([[{ id: "dev_test" }]]);
     expect(registry.snapshot.devices).toEqual([
       {
+        backend: "local",
         physical: false,
         createdAt: 1_000,
         driverData: { fakeDeviceId: "fake-1" },
@@ -162,13 +164,97 @@ describe("Registry", () => {
     ]);
   });
 
+  it("a version 5 state.db migrates devices to the local backend without changing driver data or an active lease", async () => {
+    const temporaryRoot = tmpdir();
+    const template = join(temporaryRoot, "simlock-registry-backend-");
+    const directory = await mkdtemp(template);
+    try {
+      const openState = (owner: typeof registryOwner) =>
+        openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [owner, fakeDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+      const legacyOwner = {
+        ...registryOwner,
+        version: 5,
+        migrations: registryOwner.migrations.slice(0, 5),
+      };
+      const legacy = await openState(legacyOwner);
+      const insertDevice = legacy.database.prepare(
+        "INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version, mode, lease_identity, created_at, address) VALUES (?, 'ios', 0, ?, 'leased', 'iPhone 16', '18.4', 'full', 'reusable', 10, ?)",
+      );
+      insertDevice.run("dev_legacy", "driver_legacy", "legacy-address");
+      const driverData = { fakeDeviceId: "opaque-legacy-driver" };
+      fakeDeviceDataTable.write(legacy.database, "dev_legacy", driverData);
+      const insertLease = legacy.database.prepare(
+        "INSERT INTO leases (id, device_id, requester_id, owner_id, granted_at, ttl_ms, ttl_deadline, last_renewed_at, id_chosen_by_requester) VALUES (?, ?, 'legacy-requester', 'legacy-owner', 500, 900000, 900500, 500, 1)",
+      );
+      insertLease.run("lease_legacy", "dev_legacy");
+      legacy.close();
+
+      const state = await openState(registryOwner);
+      try {
+        const clock = new FakeClock(1_000);
+        const tables = new Map([
+          ["ios:local", fakeDeviceDataTable],
+          ["ios:remote", fakeDeviceDataTable],
+        ]);
+        const registry = await Registry.load({
+          clock,
+          state,
+          deviceData: tables,
+          eventBus: new EventBus(clock),
+          idGenerator: { generate: () => "unused" },
+        });
+
+        expect(registry.snapshot.devices).toEqual([
+          {
+            backend: "local",
+            id: "dev_legacy",
+            driverDeviceId: "driver_legacy",
+            driverData,
+            address: "legacy-address",
+            createdAt: 10,
+            leaseIdentity: "reusable",
+            mode: "full",
+            physical: false,
+            spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+            state: "leased",
+          },
+        ]);
+        expect(registry.snapshot.leases).toEqual([
+          {
+            id: "lease_legacy",
+            deviceId: "dev_legacy",
+            ownerId: "legacy-owner",
+            requesterId: "legacy-requester",
+            grantedAt: 500,
+            ttlMs: 900000,
+            ttlDeadline: 900500,
+            lastRenewedAt: 500,
+            idChosenByRequester: true,
+          },
+        ]);
+      } finally {
+        state.close();
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("a state.db at registry version 2 migrates to 3, keeps its requests, and then stores a request's baseline", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
     try {
       const clock = new FakeClock(1_000);
-      const deviceData = new Map<Platform, DeviceDataTable>([
-        ["android", fakeDeviceDataTable],
-        ["ios", fakeDeviceDataTable],
+      const deviceData = new Map<string, DeviceDataTable>([
+        ["android:local", fakeDeviceDataTable],
+        ["ios:local", fakeDeviceDataTable],
       ]);
       const openState = (owner: typeof registryOwner) =>
         openStateDatabase({
@@ -229,9 +315,9 @@ describe("Registry", () => {
     try {
       // why: created_at 5 is two hours old at the first start, so a stamp taken from it would drop the rows at once.
       const clock = new FakeClock(120 * MINUTE);
-      const deviceData = new Map<Platform, DeviceDataTable>([
-        ["android", fakeDeviceDataTable],
-        ["ios", fakeDeviceDataTable],
+      const deviceData = new Map<string, DeviceDataTable>([
+        ["android:local", fakeDeviceDataTable],
+        ["ios:local", fakeDeviceDataTable],
       ]);
       const openState = (owner: typeof registryOwner) =>
         openStateDatabase({
@@ -286,9 +372,9 @@ describe("Registry", () => {
     try {
       const clock = new FakeClock(1_000);
       let next = 0;
-      const deviceData = new Map<Platform, DeviceDataTable>([
-        ["android", fakeDeviceDataTable],
-        ["ios", fakeDeviceDataTable],
+      const deviceData = new Map<string, DeviceDataTable>([
+        ["android:local", fakeDeviceDataTable],
+        ["ios:local", fakeDeviceDataTable],
       ]);
       const openState = () =>
         openStateDatabase({
@@ -316,6 +402,7 @@ describe("Registry", () => {
       };
       const register = (driverDeviceId: string, deviceSpec: VirtualSpec, fakeDeviceId: string) =>
         registry.registerDevice({
+          backend: "local",
           driverData: { fakeDeviceId },
           driverDeviceId,
           provisionDuration: 5,
@@ -364,6 +451,7 @@ describe("Registry", () => {
 
       const apps = ["com.b", "com.a", "com.c"];
       const physicalInput = {
+        backend: "local",
         apps,
         class: "tablet",
         driverDeviceId: "udid-1",
@@ -372,7 +460,10 @@ describe("Registry", () => {
         platform: "ios",
       } as const;
       const physical = await registry.enrollPhysical(physicalInput);
-      const absent = await registry.enrollPhysical({ ...physicalInput, driverDeviceId: "udid-2" });
+      const absent = await registry.enrollPhysical({
+        ...physicalInput,
+        driverDeviceId: "udid-2",
+      });
       await registry.transitionDevice(
         absent.id,
         "absent",
@@ -476,6 +567,7 @@ describe("Registry", () => {
       expect(reloaded.snapshot).toEqual(registry.snapshot);
       expect(reloaded.leaseRequests()).toEqual(registry.leaseRequests());
       expect(reloaded.snapshot.devices.find((device) => device.id === plain.id)).toEqual({
+        backend: "local",
         createdAt: 1_000,
         driverData: { fakeDeviceId: "fk-plain" },
         driverDeviceId: "drv-plain",
@@ -487,6 +579,7 @@ describe("Registry", () => {
         state: "provisioning",
       });
       expect(reloaded.snapshot.devices.find((device) => device.id === full.id)).toEqual({
+        backend: "local",
         address: "127.0.0.1:5554",
         createdAt: 1_000,
         driverData: { fakeDeviceId: "fk-full-booted" },
@@ -567,12 +660,14 @@ describe("Registry", () => {
       state,
     });
     const ios = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_ios",
       provisionDuration: 0,
       spec,
     });
     const android = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_android",
       provisionDuration: 0,
@@ -609,6 +704,7 @@ describe("Registry", () => {
       state,
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -641,6 +737,7 @@ describe("Registry", () => {
         idGenerator: { generate: () => "test" },
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "fake-1" },
         driverDeviceId: "driver_test",
         provisionDuration: 0,
@@ -668,6 +765,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -697,6 +795,7 @@ describe("Registry", () => {
     };
     const registry = await loadTestRegistry(options);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_device",
       provisionDuration: 0,
@@ -744,6 +843,7 @@ describe("Registry", () => {
     };
     const registry = await loadTestRegistry(options);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_device",
       provisionDuration: 0,
@@ -801,6 +901,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "x" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_device",
       provisionDuration: 0,
@@ -853,6 +954,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -892,6 +994,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -917,6 +1020,7 @@ describe("Registry", () => {
       leaseIdentity: { android: "reusable", ios: "fresh" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -955,6 +1059,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -986,6 +1091,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1025,6 +1131,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1047,6 +1154,7 @@ describe("Registry", () => {
     const recovered = await registry.recoverFromQuarantine(device.id, "ready");
 
     expect(recovered).toEqual({
+      backend: "local",
       physical: false,
       createdAt: 1_000,
       driverData: { fakeDeviceId: "fake-1" },
@@ -1075,6 +1183,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1127,6 +1236,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1148,6 +1258,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1172,6 +1283,7 @@ describe("Registry", () => {
     };
     const registry = await loadTestRegistry(options);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1214,6 +1326,7 @@ describe("Registry", () => {
     });
 
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
@@ -1233,6 +1346,7 @@ describe("Registry", () => {
       idGenerator: { generate: () => suffixes.shift() ?? "unexpected" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_device",
       provisionDuration: 0,
@@ -1272,6 +1386,7 @@ describe("Registry", () => {
       };
       const registry = await loadTestRegistry(options);
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "fake-1" },
         driverDeviceId: "driver_test",
         provisionDuration: 0,
@@ -1340,6 +1455,7 @@ describe("Registry", () => {
         idGenerator: { generate: () => "test" },
       });
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "fake-1" },
         driverDeviceId: "driver_test",
         provisionDuration: 0,
@@ -1370,6 +1486,7 @@ describe("Registry", () => {
 
     expect(alone).toEqual(viaLease);
     expect(viaLease).toEqual({
+      backend: "local",
       physical: false,
       createdAt: 1_000,
       deletedAt: 1_000,
@@ -1395,6 +1512,7 @@ describe("Registry", () => {
     };
     const registry = await loadTestRegistry(options);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_device",
       provisionDuration: 0,
@@ -1451,6 +1569,7 @@ describe("Registry", () => {
     const registry = await loadTestRegistry(options);
     const ready = async (driverDeviceId: string) => {
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "fake-1" },
         driverDeviceId,
         provisionDuration: 0,
@@ -1493,6 +1612,7 @@ describe("Registry", () => {
     };
     const registry = await loadTestRegistry(options);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_device",
       provisionDuration: 0,
@@ -1552,6 +1672,7 @@ describe("Registry", () => {
     const leases = [];
     for (const name of ["one", "two"]) {
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "fake-1" },
         driverDeviceId: `driver_${name}`,
         provisionDuration: 0,
@@ -1631,6 +1752,7 @@ describe("Registry: the device event a transition carries", () => {
       idGenerator: { generate: () => "x" },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_x",
       provisionDuration: 0,
@@ -1774,7 +1896,10 @@ describe("Registry: quarantineCause", () => {
       [
         "reenrollPhysical",
         (r: Registry) =>
-          r.reenrollPhysical("dev_physical", { ...physicalInput, apps: ["com.example.one"] }),
+          r.reenrollPhysical("dev_physical", {
+            ...physicalInput,
+            apps: ["com.example.one"],
+          }),
       ],
       ["unenrollPhysical", (r: Registry) => r.unenrollPhysical("dev_physical")],
     ])("%s", async (_name, exit) => {

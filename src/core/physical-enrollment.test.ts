@@ -361,6 +361,7 @@ describe("PhysicalEnrollment", () => {
       platform: "ios",
     });
     const registered = await harness.registry.registerDevice({
+      backend: "local",
       driverData: provisioned.driverData,
       driverDeviceId: provisioned.deviceId,
       provisionDuration: 0,
@@ -595,6 +596,7 @@ describe("PhysicalEnrollment", () => {
       platform: "ios",
     });
     const registered = await harness.registry.registerDevice({
+      backend: "local",
       driverData: provisioned.driverData,
       driverDeviceId: UDID,
       provisionDuration: 0,
@@ -629,6 +631,7 @@ describe("PhysicalEnrollment", () => {
       platform: "ios",
     });
     const registered = await harness.registry.registerDevice({
+      backend: "local",
       driverData: provisioned.driverData,
       driverDeviceId: UDID,
       provisionDuration: 0,

@@ -29,6 +29,7 @@ describe("Registry: an except list", () => {
     const except = ["store", "other"];
     const lease = async (name: string, withExcept: boolean) => {
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: name },
         driverDeviceId: name,
         provisionDuration: 0,

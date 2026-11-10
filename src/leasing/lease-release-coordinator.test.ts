@@ -87,6 +87,7 @@ async function grant(
   harness: Awaited<ReturnType<typeof createHarness>>,
 ): Promise<{ readonly device: DeviceRecord; readonly lease: LeaseRecord }> {
   const device = await harness.registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: `driver_${harness.registry.snapshot.devices.length}` },
     driverDeviceId: `driver_${harness.registry.snapshot.devices.length}`,
     provisionDuration: 0,
@@ -647,6 +648,7 @@ describe("LeaseReleaseCoordinator", () => {
   describe("physical devices", () => {
     async function grantPhysical(harness: Awaited<ReturnType<typeof createHarness>>, id: string) {
       const device = await harness.registry.enrollPhysical({
+        backend: "local",
         apps: [],
         class: "phone",
         driverDeviceId: id,

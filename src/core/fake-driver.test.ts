@@ -12,6 +12,7 @@ import * as testing from "./testing.js";
 import { FakeClock } from "../ports/index.js";
 
 const VIRTUAL_DEVICE = {
+  backend: "local",
   address: "",
   deviceId: "device",
   driverData: {},
@@ -142,6 +143,7 @@ describe("FakeDriver", () => {
       "virtual devices are not reclaimed",
     );
     const physical: PhysicalDriverDevice = {
+      backend: "local",
       address: "",
       deviceId: "udid",
       driverData: {},
@@ -155,6 +157,7 @@ describe("FakeDriver", () => {
   it("reclaims a physical device nobody scripted, reporting every enrolled app as missing", async () => {
     const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
     const physical: PhysicalDriverDevice = {
+      backend: "local",
       address: "",
       deviceId: "udid",
       driverData: {},

@@ -35,6 +35,7 @@ function device(
   deviceSpec: VirtualSpec = spec,
 ): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     createdAt: 1,
     driverData: {},
@@ -671,6 +672,7 @@ describe("AcquisitionPlanner", () => {
 
     describe("a physical request", () => {
       const phone = (id: string, state: "ready" | "leased" = "ready"): PhysicalDevice => ({
+        backend: "local",
         physical: true,
         createdAt: 1,
         driverData: {},

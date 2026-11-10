@@ -12,6 +12,7 @@ function device(
   lastLeaseEndedAt: number,
 ): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     createdAt: lastLeaseEndedAt,
     driverData: {},
@@ -76,7 +77,7 @@ function createHarness(
     new Map(
       (["ios", "android"] as const)
         .filter((platform) => !darkPlatforms.has(platform))
-        .map((platform) => [platform, { devices: [], processes: [] }] as const),
+        .map((platform) => [`${platform}:local`, { devices: [], processes: [] }] as const),
     ),
   );
 

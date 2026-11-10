@@ -81,6 +81,7 @@ const home = ANDROID_HOME_DIRECTORY;
 const scopedOptions = { env: scopedEnv } as const;
 
 const VIRTUAL_DEVICE = {
+  backend: "local",
   address: "",
   deviceId: "device",
   driverData: {},
@@ -1272,6 +1273,7 @@ describe("AndroidDriver", () => {
 describe("AndroidDriver screen capture", () => {
   const serverPath = "/simlock/vendor/scrcpy-server-v5.0.1";
   const running = {
+    backend: "local",
     address: "emulator-5586",
     deviceId: "simlock_one",
     driverData: { avdName: "simlock_one", configHash: "h", port: 5586, serial: "emulator-5586" },
@@ -1353,6 +1355,7 @@ describe("AndroidDriver screen capture", () => {
     await filesystem.mkdirp("/simlock/vendor");
     await filesystem.writeFileAtomic(serverPath, "jar");
     const phone = {
+      backend: "local",
       address: "R58M123ABC",
       deviceId: "R58M123ABC",
       driverData: {},

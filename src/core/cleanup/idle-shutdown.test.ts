@@ -13,6 +13,7 @@ function view(now: number, targeted: readonly string[] = []): RegistryView {
     config,
     devices: [
       {
+        backend: "local",
         physical: false,
         createdAt: 0,
         driverData: {},

@@ -50,12 +50,14 @@ describe("the production device-data tables", () => {
         });
       const registry = await open();
       await registry.registerDevice({
+        backend: "local",
         driverData: iosData,
         driverDeviceId: "drv-ios",
         provisionDuration: 1,
         spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
       });
       await registry.registerDevice({
+        backend: "local",
         driverData: androidData,
         driverDeviceId: "drv-android",
         provisionDuration: 1,

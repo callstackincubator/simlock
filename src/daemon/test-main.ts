@@ -84,7 +84,7 @@ const table = {
       .run(deviceId, driverData.fakeDeviceId);
   },
 };
-export const deviceDataTables = new Map([["android", table], ["ios", table]]);
+export const deviceDataTables = new Map([["android:local", table], ["ios:local", table]]);
 `;
 
 export async function writeModule(contents: string): Promise<string> {

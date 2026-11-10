@@ -196,6 +196,7 @@ function markAbsent(database: SqliteDatabase, driverDeviceId: string, absentReas
 
 async function enrollIphone(harness: Harness, driverDeviceId: string): Promise<PhysicalDevice> {
   const device = await harness.registry.enrollPhysical({
+    backend: "local",
     apps: [],
     class: "phone",
     driverDeviceId,
@@ -423,6 +424,7 @@ describe("PhysicalDeviceWatcher counting", () => {
     const removed = await enrollIphone(harness, "UDID-B");
     await harness.registry.unenrollPhysical(removed.id);
     await harness.registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "EMU-1",
@@ -905,6 +907,7 @@ describe("PhysicalDeviceWatcher acting on a device", () => {
     const harness = await createHarness();
     const iphone = await enrollIphone(harness, "UDID-A");
     const pixel = await harness.registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "EMU-1",

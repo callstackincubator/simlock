@@ -141,6 +141,7 @@ describe("workerViewFields", () => {
 
   it("keeps a physical device's latest presence in the worker view built from list.get, and refuses a reason it does not know", () => {
     const record = {
+      backend: "local",
       address: "00008110-001A2B3C4D5E",
       class: "phone",
       createdAt: 1,

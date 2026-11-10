@@ -585,6 +585,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const { dispatcher, driver, engine } = await buildDispatcher({
       physicalDevices: [
         {
+          backend: "local",
           createdAt: 1,
           driverDeviceId: "00008110-001A2B3C4D5E",
           enrolledApps: [],
@@ -614,6 +615,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const { dispatcher, engine } = await buildDispatcher({
       physicalDevices: [
         {
+          backend: "local",
           createdAt: 1,
           driverDeviceId: "00008110-001A2B3C4D5E",
           enrolledApps: ["com.example.kept"],
@@ -651,6 +653,7 @@ describe("Dispatcher: device mode on every surface", () => {
 
   it("status.get and list.get carry the latest presence read as presence on a physical device; a virtual device, and a physical device not yet read, carry none", async () => {
     const physical = (id: string, driverDeviceId: string) => ({
+      backend: "local",
       createdAt: 1,
       driverDeviceId,
       enrolledApps: [],
@@ -704,6 +707,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const { dispatcher } = await buildDispatcher({
       physicalDevices: [
         {
+          backend: "local",
           createdAt: 1,
           driverDeviceId: "00008110-001A2B3C4D5E",
           enrolledApps: [],
@@ -805,6 +809,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
     const granted = await dispatcher.dispatch("lease.request", request, session());
     const provisioning = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver-provisioning" },
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
@@ -839,6 +844,7 @@ describe("Dispatcher: device mode on every surface", () => {
       });
       const register = (driverDeviceId: string, slim: boolean) =>
         registry.registerDevice({
+          backend: "local",
           driverData: { fakeDeviceId: driverDeviceId },
           driverDeviceId,
           provisionDuration: 0,
@@ -876,6 +882,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const leased = await dispatcher.dispatch("lease.request", request, session());
     const register = (driverDeviceId: string) =>
       registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: driverDeviceId },
         driverDeviceId,
         provisionDuration: 0,
@@ -913,6 +920,7 @@ describe("Dispatcher: device mode on every surface", () => {
       claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver-booting" },
       driverDeviceId: "driver-booting",
       provisionDuration: 0,
@@ -938,6 +946,7 @@ describe("Dispatcher: device mode on every surface", () => {
     });
     const { clock, dispatcher, registry } = await buildDispatcher({ otherStallDrivers: [android] });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver-ios-stuck" },
       driverDeviceId: "driver-ios-stuck",
       provisionDuration: 0,

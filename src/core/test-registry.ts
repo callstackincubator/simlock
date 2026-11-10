@@ -16,6 +16,7 @@ export function totalChanges(state: StateDatabase): unknown {
 }
 
 export const physicalInput = {
+  backend: "local",
   apps: ["com.example.one", "com.example.two"],
   class: "phone",
   driverDeviceId: "00008110-001A2B3C4D5E" as string,
@@ -50,6 +51,7 @@ export async function seededWorld() {
   const register = async (name: string) => {
     names.push(name);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: `fake-${name}` },
       driverDeviceId: `driver_${name}`,
       provisionDuration: 0,

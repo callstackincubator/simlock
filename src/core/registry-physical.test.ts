@@ -157,6 +157,7 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
 
   async function readyVirtual(registry: Registry, driverDeviceId: string) {
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId,
       provisionDuration: 0,
@@ -170,6 +171,7 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
   }
 
   const input = {
+    backend: "local",
     apps: ["com.example.one"],
     class: "phone",
     driverDeviceId: "00008110-001A2B3C4D5E",
@@ -248,7 +250,11 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
     });
 
     const device = await registry.enrollPhysical(input);
-    await registry.reenrollPhysical(device.id, { ...input, apps: ["a", "b"], model: "iPhone 16" });
+    await registry.reenrollPhysical(device.id, {
+      ...input,
+      apps: ["a", "b"],
+      model: "iPhone 16",
+    });
 
     expect(seen).toEqual([
       {
@@ -285,6 +291,7 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
     });
 
     expect(device).toEqual({
+      backend: "local",
       createdAt: 1_000,
       driverData: {},
       driverDeviceId: input.driverDeviceId,
@@ -310,7 +317,10 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
 
   it("keeps every other record when it rewrites or forgets one", async () => {
     const { registry } = await load();
-    const other = await registry.enrollPhysical({ ...input, driverDeviceId: "OTHER" });
+    const other = await registry.enrollPhysical({
+      ...input,
+      driverDeviceId: "OTHER",
+    });
     const device = await registry.enrollPhysical(input);
 
     await registry.reenrollPhysical(device.id, { ...input, model: "iPhone 16" });
@@ -467,6 +477,7 @@ describe("Registry: absent physical devices (ADR 0022 §2, §8)", () => {
 
   it("transitionEnteredAt of a reclaiming physical record with no reclaimingSince is its lastLeaseEndedAt", () => {
     const reclaiming = {
+      backend: "local",
       createdAt: 600,
       driverData: {},
       driverDeviceId: "00008110-001A2B3C4D5E",
@@ -620,7 +631,10 @@ describe("Registry: absent physical devices (ADR 0022 §2, §8)", () => {
     const absent = registry.snapshot.devices.find((entry) => entry.id === "dev_physical");
     const enrolled: unknown[] = [];
     bus.subscribe("device.enrolled", (envelope) => enrolled.push(envelope.payload));
-    await registry.reenrollPhysical("dev_physical", { ...physicalInput, apps: [] });
+    await registry.reenrollPhysical("dev_physical", {
+      ...physicalInput,
+      apps: [],
+    });
 
     expect(absent).not.toHaveProperty("reclaimingSince");
     expect(seen).toEqual(["device.absence-detected", "device.enrolled"]);

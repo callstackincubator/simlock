@@ -1870,6 +1870,7 @@ describe("startDaemon state.db", () => {
       state,
     });
     await previous.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fk-1" },
       driverDeviceId: "drv-1",
       provisionDuration: 0,
@@ -1906,6 +1907,7 @@ describe("startDaemon state.db", () => {
       state,
     });
     const device = await previous.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "fk-1" },
       driverDeviceId: "drv-1",
       provisionDuration: 0,
@@ -1961,7 +1963,7 @@ describe("startDaemon state.db", () => {
     await expect(
       start({
         dataDirectory: directory,
-        deviceDataTables: new Map([["ios", newerTable]]),
+        deviceDataTables: new Map([["ios:local", newerTable]]),
       }),
     ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
 
@@ -1991,7 +1993,7 @@ describe("startDaemon state.db", () => {
     await expect(
       start({ dataDirectory: directory, deviceDataTables: undefined, drivers: undefined }),
     ).rejects.toMatchObject({
-      message: `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
+      message: `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from backend key to its device-data table`,
     });
     expect(existsSync(join(directory, "state.db"))).toBe(false);
   });
@@ -2011,15 +2013,15 @@ describe("startDaemon state.db", () => {
     delete process.env.SIMLOCK_DRIVERS_MODULE;
     const production = await resolveDeviceDataTables({});
     expect(production).toEqual(productionDeviceDataTables());
-    expect(production.get("ios")).toBe(iosDeviceDataTable);
-    expect(production.get("android")).toBe(androidDeviceDataTable);
+    expect(production.get("ios:local")).toBe(iosDeviceDataTable);
+    expect(production.get("android:local")).toBe(androidDeviceDataTable);
 
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       "export function createDrivers() { return []; }",
     );
     const fromModule = await resolveDeviceDataTables({});
-    expect([...fromModule.keys()].sort()).toEqual(["android", "ios"]);
-    expect(fromModule.get("ios")?.name).toBe("fake-device-data");
+    expect([...fromModule.keys()].sort()).toEqual(["android:local", "ios:local"]);
+    expect(fromModule.get("ios:local")?.name).toBe("fake-device-data");
     expect(fromModule).not.toBe(fakeDeviceDataTables);
   });
 });

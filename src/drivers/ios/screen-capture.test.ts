@@ -6,12 +6,14 @@ import { createIosScreenCapture } from "./screen-capture.js";
 
 const settings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 const simulator = {
+  backend: "local",
   address: "UDID-1",
   deviceId: "UDID-1",
   driverData: {},
   physical: false,
 } as const;
 const physical = {
+  backend: "local",
   address: "UDID-1",
   deviceId: "UDID-1",
   driverData: {},

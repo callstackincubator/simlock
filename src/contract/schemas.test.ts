@@ -56,6 +56,7 @@ describe("leaseGrantSchema's device projection", () => {
    * payload a real `LeaseGrant` would carry into `#parseOutput`. */
   function fullCoreShapedDevice(): Record<string, unknown> {
     return {
+      backend: "local",
       physical: false,
       id: "device-1",
       driverDeviceId: "SIM-1",
@@ -163,6 +164,7 @@ describe("statusDeviceSchema's device projection", () => {
    * payload `DaemonDispatcher#statusGet`'s decoration would carry into `#parseOutput`. */
   function fullCoreShapedDevice(): Record<string, unknown> {
     return {
+      backend: "local",
       physical: false,
       id: "device-1",
       driverDeviceId: "SIM-1",
@@ -393,6 +395,7 @@ describe("statusDeviceSchema's device projection", () => {
 
   it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
     const record = {
+      backend: "local",
       physical: false,
       id: "device-1",
       driverDeviceId: "SIM-1",
@@ -421,6 +424,7 @@ describe("a device's type on the wire (ADR 0022 §1)", () => {
     platform: "ios",
   };
   const virtual = {
+    backend: "local",
     createdAt: 0,
     driverData: {},
     driverDeviceId: "SIM-1",
@@ -432,6 +436,7 @@ describe("a device's type on the wire (ADR 0022 §1)", () => {
     state: "ready",
   };
   const physical = {
+    backend: "local",
     createdAt: 0,
     driverData: {},
     driverDeviceId: "00008110-001A2B3C4D5E",
@@ -1114,6 +1119,7 @@ describe("waitingRequestSchema's workers", () => {
 describe("opaque fields stay optional on the wire", () => {
   it("accepts an answer whose opaque driverData or payload key is absent (JSON drops undefined)", () => {
     const record = {
+      backend: "local",
       physical: false,
       id: "device-1",
       driverDeviceId: "SIM-1",

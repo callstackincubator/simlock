@@ -1,6 +1,7 @@
 import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { PhysicalDevice, Platform } from "./domain.js";
 import type { Driver, DriverRefusalReason } from "./driver.js";
+import { BadDeviceRequestError } from "./driver.js";
 import type { PhysicalEnrollmentInput, RegistrySnapshot } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
@@ -80,7 +81,13 @@ export class PhysicalEnrollment {
     const claimed = await this.options.decisions.run(async () => {
       const existing = this.#enrolled(read.driverDeviceId);
       if (existing === undefined) {
-        return { created: await this.options.registry.enrollPhysical({ ...read, platform }) };
+        return {
+          created: await this.options.registry.enrollPhysical({
+            ...read,
+            backend: driver.backend.id,
+            platform,
+          }),
+        };
       }
       if (existing.spec.platform !== platform) {
         throw new DeviceNotEnrollableError(
@@ -90,6 +97,9 @@ export class PhysicalEnrollment {
           `${id} is enrolled as a ${existing.spec.platform} device`,
           read.driverDeviceId,
         );
+      }
+      if (existing.backend !== driver.backend.id) {
+        throw new BadDeviceRequestError(`Device belongs to the ${existing.backend} backend`);
       }
       this.#requireFree(existing);
       const claim = this.options.claims.tryClaim(existing.id, "enrollment");
@@ -110,7 +120,11 @@ export class PhysicalEnrollment {
         );
       }
       const device = await this.options.decisions.run(() =>
-        this.options.registry.reenrollPhysical(existing.id, { ...again, platform }),
+        this.options.registry.reenrollPhysical(existing.id, {
+          ...again,
+          backend: driver.backend.id,
+          platform,
+        }),
       );
       this.options.physicalDeviceReady?.(device.id);
       return { device, reenrolled: true };
@@ -149,7 +163,7 @@ export class PhysicalEnrollment {
     platform: Platform,
     id: string,
     canonicalId?: string,
-  ): Promise<Omit<PhysicalEnrollmentInput, "platform">> {
+  ): Promise<Omit<PhysicalEnrollmentInput, "platform" | "backend">> {
     let inspection: Awaited<ReturnType<Driver["inspectPhysical"]>>;
     try {
       inspection = await driver.inspectPhysical(canonicalId ?? id);

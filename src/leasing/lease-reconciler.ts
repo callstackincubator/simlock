@@ -57,7 +57,7 @@ export class LeaseReconciler {
 
 /** What becomes of a lease's device, or undefined when the device is running and the lease stays. */
 function deviceOutcome(device: DeviceRecord, read: StartupRead): StartupDeviceOutcome | undefined {
-  const reality = read.reality(device.spec.platform);
+  const reality = read.reality(device.spec.platform, device.backend);
   if (reality === undefined) return "wait";
   const observed: ObservedDevice | undefined = reality.devices.find(
     (candidate) => candidate.deviceId === device.driverDeviceId,

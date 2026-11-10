@@ -27,6 +27,7 @@ const SERIAL = "emulator-5586";
 const SCID = 0x1234abcd;
 const DEVICE_JAR = "/data/local/tmp/simlock-scrcpy-1234abcd.jar";
 const DEVICE: VirtualDriverDevice = {
+  backend: "local",
   address: SERIAL,
   deviceId: "simlock_1",
   driverData: {},
@@ -34,6 +35,7 @@ const DEVICE: VirtualDriverDevice = {
 };
 
 const PHONE: PhysicalDriverDevice = {
+  backend: "local",
   address: "R58M123ABC",
   deviceId: "R58M123ABC",
   driverData: {},
