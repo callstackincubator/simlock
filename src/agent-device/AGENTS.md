@@ -31,7 +31,7 @@ The two daemons:
 Front:
 
 - The front serves the `agent` role only.
-- `checkRequest` (`front/request-rules.ts`) runs before anything is forwarded: no platform but iOS and Android, no device selector but the leased one, no device set or allowlist, `install` only from an upload, `devices` alone and not streamed.
+- `checkRequest` (`front/request-rules.ts`) runs before anything is forwarded: no platform but iOS and Android, no device selector but the leased one, no device set or allowlist, `install` only from an upload, `devices` alone, forwarded without `requestProgress`.
 - A `devices` answer is cut to the token's leases.
 - The host sets the tenant and overwrites the client's. A call that names a lease gets a tenant made from the principal and the lease id (`shared/tenant.ts`), so each lease's sessions, uploads and artifacts are its own; a call naming none keeps the principal. A relayed call keeps the gateway's tenant, which names the lease already. On a worker, a non-RPC call whose lease header names a lease the token does not hold is refused 403.
 - A heartbeat is forwarded with `ttlMs` raised to the ceiling (`agentDeviceLeaseMaxTtlMs`), then renews the simlock lease (`lease.renew` only when it moves the deadline). On `LEASE_NOT_FOUND` for a lease simlock still holds, the front allocates it again on the same device, one at a time per lease and within a bound, and answers the heartbeat again; a failed re-allocate is a retryable reply that keeps the simlock lease. `LEASE_EXPIRED`, `LEASE_REVOKED`, a lease agent-device ended itself, and a lease simlock no longer holds release the simlock lease: "ended by simlock".

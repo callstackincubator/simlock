@@ -11,6 +11,7 @@ With Simlock, `agent-device open` leases a device from Simlock. Later commands u
 
 ```sh
 agent-device open --platform ios --device "iPhone 16"
+agent-device open com.example.myapp
 agent-device snapshot
 agent-device close
 ```
@@ -154,6 +155,7 @@ Each time the worker starts, it writes `agent-device-profile.json` in its data f
 ```sh
 agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1
 agent-device open --platform ios --session s1
+agent-device open com.example.myapp --session s1
 agent-device snapshot --session s1
 agent-device close --session s1
 ```
