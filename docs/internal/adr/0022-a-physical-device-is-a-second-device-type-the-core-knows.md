@@ -1,6 +1,6 @@
 # 0022. A physical device is a second device type the core knows
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-10
 - **Issue:** [#428](https://github.com/callstackincubator/simlock/issues/428)
 - **Supersedes:** nothing. Amends [ADR 0001](0001-simlock-owned-device-roots.md):
@@ -14,6 +14,9 @@
 - **Amended:** §2 on 2026-11-07, on the maintainer's decision (#1410): a
   deleted record stays for `devices.deletedRetentionMs` (default 1 h), not
   for good.
+- **Narrowed by:** [ADR 0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md)
+  §3, §5 and §6: under `devices.autoEnroll` a worker enrols the phones
+  plugged into it.
 - **Depends on:** ADR 0001, 0003, 0015, 0017, 0018, 0019.
 
 ## Context
