@@ -256,6 +256,22 @@ describe("loadConfig", () => {
     expect(accepted.eventLog.maxBytes).toBe(sixteenMiB);
   });
 
+  it("devices.autoEnroll defaults to false, accepts true and false, and refuses a non-boolean naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    expect((await loadWith({})).devices.autoEnroll).toBe(false);
+    expect((await loadWith({ devices: { autoEnroll: true } })).devices.autoEnroll).toBe(true);
+    expect((await loadWith({ devices: { autoEnroll: false } })).devices.autoEnroll).toBe(false);
+    await expect(loadWith({ devices: { autoEnroll: "yes" } })).rejects.toThrow(
+      'Invalid config value for "devices.autoEnroll": expected a boolean',
+    );
+  });
+
   it("devices.deletedRetentionMs defaults to 3600000, is accepted from lease.requestRetentionMs up, and a smaller value is refused naming both keys", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

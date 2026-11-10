@@ -217,6 +217,7 @@ describe("simlock device add", () => {
       driverDeviceId: UDID,
       model: "iPhone 15 Pro",
       osVersion: "18.4",
+      initiator: "operator",
       platform: "ios",
       reenrolled: false,
     });
@@ -984,5 +985,91 @@ describe("devices.autoEnroll", () => {
       label: "the iPhone is enrolled on a worker with no Android driver",
     });
     expect(await autoEnrollLog(iosOnly)).toEqual([]);
+  });
+
+  it("grants a waiting physical request the auto-enrolled phone within one run, with no second request, and still fails a model with no record at once", async () => {
+    const second: ScriptedPhysicalDevice = { ...PIXEL, ids: ["R58M456DEF"] };
+    const env = await autoDaemon({ android: { physicalDevices: [PIXEL] } });
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 1, {
+      label: "the first Pixel is enrolled",
+    });
+    const ask = (agent: string, model: string) => [
+      "lease",
+      "--platform",
+      "android",
+      "--physical",
+      "--device",
+      model,
+      "--agent-id",
+      agent,
+    ];
+    const first = await env.cli([...ask("agent-a", "Pixel 9"), "--detach"], { timeout: 30_000 });
+    expect(first.code, first.stderr).toBe(0);
+    const waiter = env.cliBackground(ask("agent-b", "Pixel 9"));
+    await waitFor(async () => (await named(env, "lease.queued")).length === 1, {
+      label: "the second request is queued",
+    });
+
+    await plug(env, "android", [PIXEL, second]);
+
+    const grant = JSON.parse(await waiter.firstStdoutLine(30_000)) as {
+      device: { driverDeviceId: string };
+    };
+    expect(grant.device.driverDeviceId).toBe("R58M456DEF");
+    const unknown = await env.cli(ask("agent-c", "Galaxy S99"), { timeout: 30_000 });
+    expect(unknown.error?.code).toBe("UNKNOWN_MODEL");
+  });
+
+  it("does nothing without the setting, unset or false: no device.enrolled and no inspectPhysical call after three runs", async () => {
+    for (const devices of [undefined, { autoEnroll: false }]) {
+      const env = await withDaemon({
+        ...daemonOptions({ ios: { physicalDevices: [IPHONE] } }),
+        configOverrides: {
+          health: { probeIntervalMs: 200 },
+          ...(devices === undefined ? {} : { devices }),
+        },
+      });
+      await observeFor(700, async () => {
+        expect(await named(env, "device.enrolled")).toEqual([]);
+      });
+      expect(await inspectCalls(env)).toEqual([]);
+    }
+  });
+
+  it("leaves an enrolled phone alone in the states ready, absent and leased: no device.enrolled and the kept apps unchanged", async () => {
+    const env = await autoDaemon({
+      android: { physicalDevices: [PIXEL] },
+      ios: { physicalDevices: [IPHONE] },
+    });
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 2, {
+      label: "both phones are enrolled",
+    });
+    const keptApps = readEnrolledApps(env);
+    const states = async () => (await rows(env)).map((row) => row.state).sort();
+    const stays = async (label: string) => {
+      await observeFor(700, async () => {
+        expect(await named(env, "device.enrolled"), label).toHaveLength(2);
+      });
+      expect(readEnrolledApps(env), label).toEqual(keptApps);
+    };
+
+    await stays("ready");
+    await plug(env, "ios", [{ ...IPHONE, present: false }]);
+    await waitFor(async () => (await states()).includes("absent"), {
+      label: "the iPhone is absent",
+    });
+    await stays("absent");
+    const leased = await env.cli([
+      "lease",
+      "--platform",
+      "android",
+      "--physical",
+      "--agent-id",
+      "a",
+      "--detach",
+    ]);
+    expect(leased.code, leased.stderr).toBe(0);
+    expect(await states()).toContain("leased");
+    await stays("leased");
   });
 });
