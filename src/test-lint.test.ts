@@ -37,8 +37,12 @@ function repo(before: Record<string, string>, after: Record<string, string>): st
 }
 
 function lint(dir: string, ...args: string[]) {
+  return run(dir, "--base", "base", "--head", "HEAD", ...args);
+}
+
+function run(dir: string, ...args: string[]) {
   try {
-    const stdout = execFileSync("node", [SCRIPT, "--base", "base", "--head", "HEAD", ...args], {
+    const stdout = execFileSync("node", [SCRIPT, ...args], {
       cwd: dir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -326,5 +330,50 @@ describe("test-lint.mjs", () => {
 
     expect(lint(dir, "src/a/old.test.ts")).toEqual({ status: 0, lines: [] });
     expect(lint(dir)).toEqual({ status: 1, lines: [`src/a/other.test.ts:1: ${SKIP}`] });
+  });
+
+  it("in a merge the commit hook judges only the lines the merge adds, not those the merged branch brings or the branch already committed", () => {
+    const dir = repo(
+      {
+        "src/contract/a.ts": file("export const a = 1;"),
+        "src/a/old.test.ts": file("it('old', () => {});"),
+      },
+      { "src/a/mine.test.ts": file("it('mine', () => {});") },
+    );
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        cwd: dir,
+        stdio: "pipe",
+      });
+    write(dir, {
+      "src/a/mine.test.ts": file(
+        "it('mine', () => {});",
+        "it.skip('committed on the branch', () => {});",
+      ),
+    });
+    git("commit", "-q", "-am", "branch commits its own line");
+    git("switch", "-q", "base");
+    write(dir, {
+      "src/contract/a.ts": file(
+        "export const a = 1;",
+        "export const b = z.object({ name: z.string() });",
+      ),
+      "src/a/old.test.ts": file("it('old', () => {});", "it.skip('theirs', () => {});"),
+    });
+    git("commit", "-q", "-am", "base moves on");
+    git("switch", "-q", "work");
+    git("merge", "-q", "--no-commit", "--no-ff", "base");
+    write(dir, {
+      "src/a/mine.test.ts": file(
+        "it('mine', () => {});",
+        "it.skip('committed on the branch', () => {});",
+        "it.only('merged', () => {});",
+      ),
+    });
+    git("add", "-A");
+
+    expect(
+      run(dir, "--base", "HEAD", "src/a/mine.test.ts", "src/a/old.test.ts", "src/contract/a.ts"),
+    ).toEqual({ status: 1, lines: [`src/a/mine.test.ts:3: ${SKIP}`] });
   });
 });
