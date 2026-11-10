@@ -176,7 +176,7 @@ async function runCommand(
     end();
     return response;
   }
-  releaseEndedLeases(context, identity, response);
+  releaseEndedLeases(context, identity, response, closesSession(read) ? leaseId : undefined);
   return untilBodyEnds(response, end);
 }
 
@@ -210,6 +210,19 @@ function untilBodyEnds(response: Response, end: () => void): Response {
     status: response.status,
     statusText: response.statusText,
   });
+}
+
+function closesSession(read: RpcRequest): boolean {
+  if (methodName(read.method) !== "command") return false;
+  const params = asRecord(read.params);
+  const name = commandName(params?.["command"]);
+  if (name === "close") return true;
+  const steps = asRecord(params?.["flags"])?.["batchSteps"];
+  return (
+    name === "batch" &&
+    Array.isArray(steps) &&
+    steps.some((step) => commandName(asRecord(step)?.["command"]) === "close")
+  );
 }
 
 function isDevicesCall(read: RpcRequest): boolean {

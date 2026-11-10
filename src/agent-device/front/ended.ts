@@ -34,10 +34,33 @@ function parsed(text: string): unknown {
   }
 }
 
-function endedLeaseIds(text: string): string[] {
+function frames(text: string): unknown[] {
   const whole = parsed(text);
-  if (whole !== undefined) return idsInFrame(whole);
-  return text.split("\n").flatMap((line) => idsInFrame(parsed(line)));
+  if (whole !== undefined) return [whole];
+  return text.split("\n").map((line) => parsed(line));
+}
+
+function endedLeaseIds(text: string): string[] {
+  return frames(text).flatMap((frame) => idsInFrame(frame));
+}
+
+function succeeded(text: string): boolean {
+  return frames(text).some((frame) => {
+    const line = asRecord(frame);
+    const root = line?.["type"] === "response" ? asRecord(line["response"]) : line;
+    return root?.["error"] === undefined && asRecord(root?.["result"])?.["ok"] === true;
+  });
+}
+
+// why: after a restart agent-device's session for the lease is gone, and the session a later command makes holds no lease, so its `close` names none; the lease ends as a first session's close would, unless the entry asked to keep it (ADR 0071).
+function closedLease(
+  context: FrontContext,
+  closing: string | undefined,
+  text: string,
+  ended: readonly string[],
+): readonly string[] {
+  if (closing === undefined || ended.includes(closing) || !succeeded(text)) return [];
+  return context.map.get(closing)?.retainOnClose === true ? [] : [closing];
 }
 
 // why: the daemon no longer sends a release after it ends a lease, so the front ends the simlock lease from the command's reply; a copy is read so the CLI's reply goes out untouched.
@@ -45,13 +68,15 @@ export function releaseEndedLeases(
   context: FrontContext,
   identity: Identity,
   response: Response,
+  closing?: string,
 ): void {
   if (!(response.headers.get("content-type") ?? "").includes("json")) return;
   void response
     .clone()
     .text()
     .then(async (text) => {
-      for (const leaseId of new Set(endedLeaseIds(text))) {
+      const ended = endedLeaseIds(text);
+      for (const leaseId of new Set([...ended, ...closedLease(context, closing, text, ended)])) {
         await endSimlockLease(context, identity, leaseId);
       }
     })

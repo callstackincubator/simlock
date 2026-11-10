@@ -78,6 +78,47 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
     },
   );
 
+  it.each([
+    ["agent-device restarted alone, the front's entry kept", "agent-device", {}, true],
+    ["the standalone worker restarted, the entry rebuilt", "worker", {}, true],
+    [
+      "agent-device restarted alone, an entry allocated with retainOnClose",
+      "agent-device",
+      { retainOnClose: true },
+      false,
+    ],
+  ] as const)(
+    "after a restart, a close with no open since names no ended lease; the front ends the simlock lease unless the entry keeps retainOnClose: %s",
+    async (_case, restarted, allocateExtra, ends) => {
+      const first = await setUpWithPhone();
+      await granted(first, 1, { platform: "android", ...allocateExtra });
+      const rig =
+        restarted === "worker"
+          ? await first.restart(() => {
+              first.fake.restart();
+            })
+          : (first.fake.restart(), first);
+      expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+      expect((await envelopeOf(await runCommand(rig, "snapshot", 1))).result).toMatchObject({
+        ok: true,
+      });
+
+      const closed = await envelopeOf(await runCommand(rig, "close", 1));
+
+      expect(closed.result).toMatchObject({ ok: true });
+      expect(JSON.stringify(closed)).not.toContain("endedLeases");
+      if (ends) {
+        await expect.poll(async () => listed(rig)).toEqual([]);
+        await expect.poll(() => rig.fake.rpcRequests("agent_device.lease.release").length).toBe(1);
+        expect(rig.fake.leases.has(hex(1))).toBe(false);
+      } else {
+        await sleep(50);
+        expect(await listed(rig)).toEqual([hex(1)]);
+        expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+      }
+    },
+  );
+
   it("while a re-allocate fails, the agent gets the retryable reply and the simlock lease stays listed, and a later heartbeat recovers", async () => {
     const restoring = "the lease is being restored after an agent-device restart; try again";
     const cases = [

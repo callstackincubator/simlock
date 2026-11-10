@@ -158,6 +158,9 @@ export interface FakeArtifact {
 export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly requests: FakeAgentDeviceRequest[] = [];
   readonly leases = new Map<string, FakeAgentDeviceLease>();
+  // why: agent-device's `close` ends only the lease its session was opened on; a session a command makes after a restart holds none, until `open` runs again.
+  readonly #sessionLeases = new Set<string>();
+  readonly #lostSessions = new Set<string>();
   readonly abortedCommands: string[] = [];
   readonly abortedReleases: string[] = [];
   // why: the ids of releases whose request was hung up on before the fake answered, so a test can wait until the hang-up has reached the daemon side.
@@ -402,6 +405,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.generation += 1;
     this.baseUrl = `http://127.0.0.1:${47_001 + this.#restarts}`;
     this.token = `daemon-token-${this.generation}`;
+    for (const leaseId of this.leases.keys()) this.#lostSessions.add(leaseId);
+    this.#sessionLeases.clear();
     this.leases.clear();
   }
 
@@ -537,6 +542,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#replyEdit = undefined;
     const picked = this.#replyDevice;
     this.#replyDevice = undefined;
+    if (!this.#lostSessions.has(leaseId)) this.#sessionLeases.add(leaseId);
     this.leases.set(leaseId, {
       address,
       leaseId,
@@ -689,6 +695,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         { headers: { "content-type": "application/x-ndjson" } },
       );
     }
+    if (command === "open" && typeof leaseId === "string" && this.leases.has(leaseId)) {
+      this.#sessionLeases.add(leaseId);
+    }
     const endedLeases = this.#endOnClose(command, params, leaseId);
     const failure = this.#failCommand;
     this.#failCommand = undefined;
@@ -734,10 +743,12 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     if (
       !closesLease(command, params) ||
       typeof leaseId !== "string" ||
+      !this.#sessionLeases.has(leaseId) ||
       this.leases.get(leaseId)?.retainOnClose ||
       !this.leases.delete(leaseId)
     )
       return [];
+    this.#sessionLeases.delete(leaseId);
     return [{ leaseId, outcome: "released" }];
   }
 }

@@ -40,6 +40,7 @@ Front:
 - After a standalone worker restarts, the token's leases the front made are rebuilt into its map (`adoptable`, `front/host-link.ts`), so a live lease keeps working.
 - A command on a lease runs through `Renewals`, renewing the simlock lease until it ends, never past `lease.maxTtlMs`; standalone `boot` checks liveness without renewing.
 - A reply naming `endedLeases` ends each simlock lease this token holds, as a release does: agent-device sends no release of its own for a lease it ended.
+- A successful `close` (or a batch with one) on a lease ends that simlock lease even when its reply names no `endedLeases`, unless the front's entry keeps `retainOnClose`: after an agent-device restart, the session a later command makes holds no lease, so its close ends none.
 - Standalone `boot` on a leased device is answered by the front; in a batch, agent-device's policy refuses the step.
 - `orientation` on an iOS phone or tablet simulator lease is Simlock's `device.rotate`, answered with agent-device's unconfirmed reply. Everything else forwards it.
 
