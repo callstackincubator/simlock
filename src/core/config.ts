@@ -273,6 +273,7 @@ export interface Config {
      * unless it is asked with `showSecrets: true` -- it goes through `redactConfig`. */
     readonly token?: string;
     readonly label?: string;
+    readonly headers?: Readonly<Record<string, string>>;
     /**
      * why: How long a gateway keeps a disconnected worker's view before forgetting it (§6).
      * Gateway-side. Default 24 hours: long enough that a machine rebooting overnight is still

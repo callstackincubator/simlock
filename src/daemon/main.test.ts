@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connect, createServer } from "node:net";
+import { createServer as createHttpServer, type IncomingHttpHeaders } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type Config,
@@ -420,6 +421,67 @@ class ToolsFakeDriver extends FakeDriver {
 }
 
 describe("startDaemon", () => {
+  it.each([
+    { name: "not set", headers: undefined, label: undefined, expected: {} },
+    {
+      name: "two headers",
+      headers: { "CF-Access-Client-Id": "abc.access", "CF-Access-Client-Secret": "s3cr3t" },
+      label: undefined,
+      expected: { "cf-access-client-id": "abc.access", "cf-access-client-secret": "s3cr3t" },
+    },
+    {
+      name: "an empty value",
+      headers: { "x-empty": "" },
+      label: undefined,
+      expected: { "x-empty": "" },
+    },
+    {
+      name: "a label set too",
+      headers: { "x-proxy-key": "k" },
+      label: "mac-1",
+      expected: { "x-proxy-key": "k" },
+    },
+  ])(
+    "a worker started with gateway.headers sends every entry on its uplink dial, beside the join token and worker id: $name",
+    async ({ headers, label, expected }) => {
+      let received: IncomingHttpHeaders | undefined;
+      const gateway = createHttpServer();
+      gateway.on("upgrade", (request, socket) => {
+        received = request.headers;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+      try {
+        const { port } = gateway.address() as { readonly port: number };
+        await start({
+          configOverrides: {
+            gateway: {
+              token: "join-token",
+              url: `ws://127.0.0.1:${port}`,
+              ...(headers === undefined ? {} : { headers }),
+              ...(label === undefined ? {} : { label }),
+            },
+          },
+        });
+        await vi.waitFor(() => expect(received).toBeDefined());
+        const seen = received ?? {};
+        expect({
+          authorization: seen["authorization"],
+          workerId: typeof seen["x-simlock-worker-id"],
+          label: seen["x-simlock-worker-label"],
+          extra: Object.fromEntries(Object.entries(seen).filter(([name]) => name in expected)),
+        }).toEqual({
+          authorization: "Bearer join-token",
+          workerId: "string",
+          label,
+          extra: expected,
+        });
+      } finally {
+        await new Promise<void>((resolve) => gateway.close(() => resolve()));
+      }
+    },
+  );
+
   it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get returns it only as the redaction marker unless showSecrets is asked", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
