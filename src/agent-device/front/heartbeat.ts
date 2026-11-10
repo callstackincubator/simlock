@@ -195,6 +195,7 @@ async function restoreLease(
     leaseId,
   );
   if (allocated.reading.kind !== "success") return { kind: "retry" };
+  context.map.markRestored(leaseId);
   const again = await exchange(
     context,
     forwardedHeartbeat(request, call, leaseMaxTtlMs),

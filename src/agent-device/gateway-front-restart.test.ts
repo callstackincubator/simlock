@@ -21,6 +21,7 @@ import {
   leaveOutOfNextListing,
   advance,
   restarted,
+  sleep,
 } from "./test-gateway.js";
 
 async function restartedWorker(rig: Rig, original: Member): Promise<Member> {
@@ -83,6 +84,47 @@ describe("the agent-device front, through a gateway: after a restart", { timeout
     },
   );
 });
+
+describe(
+  "the agent-device front, through a gateway: a close after a restart",
+  { timeout: 90_000 },
+  () => {
+    it.each([
+      [
+        "a gateway restart keeps a lease allocated with retainOnClose",
+        "gateway",
+        { retainOnClose: true },
+        false,
+      ],
+      ["a worker restart ends a lease allocated without it", "worker", {}, true],
+    ] as const)(
+      "through a gateway, after %s, a close that names no ended lease: the fleet lease list",
+      async (_case, restart, extra, ends) => {
+        const rig = await setUp();
+        await grantedOnGateway(rig, 1, extra);
+        const original = first(rig);
+        const member =
+          restart === "gateway"
+            ? (await restarted(rig, original, 1), original)
+            : await restartedWorker(rig, original);
+        expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+        expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
+
+        const closed = await envelopeOf(await command(rig, "close", 1));
+
+        expect(closed.result).toMatchObject({ ok: true });
+        expect(JSON.stringify(closed)).not.toContain("endedLeases");
+        if (ends) {
+          await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
+        } else {
+          await sleep(50);
+          expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+          expect(member.fake.leases.get(hex(1))?.retainOnClose).toBe(true);
+        }
+      },
+    );
+  },
+);
 
 describe(
   "the agent-device front, through a gateway: a worker still starting",

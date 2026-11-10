@@ -17,6 +17,8 @@ interface DeviceFacts {
   readonly adopted?: boolean;
   // why: agent-device's device list was read for this lease's name, so a device it did not name is not asked about again.
   readonly named?: boolean;
+  // why: the front allocated this lease again after agent-device forgot it, so no agent-device session holds it and a close names it in no `endedLeases`.
+  readonly restored?: boolean;
 }
 
 export interface FrontMapEntry extends DeviceFacts {
@@ -43,10 +45,11 @@ export interface ListedLease {
   readonly ttlDeadline: number;
 }
 
-interface Held extends Omit<DeviceFacts, "deviceKey" | "name" | "named"> {
+interface Held extends Omit<DeviceFacts, "deviceKey" | "name" | "named" | "restored"> {
   deviceKey?: string;
   name?: string;
   named?: boolean;
+  restored?: boolean;
   readonly identity: Identity;
   readonly address: string;
   ttlMs: number;
@@ -103,6 +106,11 @@ export class FrontMap {
     if (held === undefined) return;
     held.named = true;
     if (name !== undefined) held.name = name;
+  }
+
+  markRestored(leaseId: string): void {
+    const held = this.#held.get(leaseId);
+    if (held !== undefined) held.restored = true;
   }
 
   setTtl(leaseId: string, ttlMs: number): void {
