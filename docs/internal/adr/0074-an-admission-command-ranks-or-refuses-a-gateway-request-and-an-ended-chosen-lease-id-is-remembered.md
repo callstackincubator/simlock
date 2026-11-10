@@ -92,7 +92,9 @@ daemon that held it keeps the id and the time it ended in `state.db` for
 `lease.endedIdRetentionMs` (default 24 hours). A `lease.request` naming
 such an id is refused with `LEASE_ENDED`, carrying the id and when it
 ended. A worker records its own leases; a gateway records the ids of its
-leases it learns ended from its workers. A lease that ends while its
+leases it learns ended from its workers: a relayed end, its own release,
+or a lease its worker's views stop listing. A worker the gateway forgets
+records nothing, since its leases may still be live. A lease that ends while its
 gateway is down is not recorded by the gateway: a retry through it is
 answered `LEASE_ENDED` only when routing sends it to the worker that held
 the lease. This is a known gap, chosen over persisting every live chosen id
