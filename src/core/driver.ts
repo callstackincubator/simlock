@@ -321,6 +321,8 @@ export interface Driver {
   listManaged(): Promise<DriverReality>;
   inspectPhysical(id: string): Promise<PhysicalInspection>;
   listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]>;
+  /** why: a read made beyond enrolled IDs; canonical IDs of the phones on USB in any state, sorted, no duplicates, and a throw (never an empty list) when the platform cannot be read. */
+  listAttachedPhysical(): Promise<readonly string[]>;
   listCatalog(): Promise<DriverCatalogEntry>;
   estimate(
     estimate: DriverEstimate & { readonly operation: "boot"; readonly device: DriverDevice },

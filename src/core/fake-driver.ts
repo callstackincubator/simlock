@@ -619,6 +619,10 @@ export class FakeDriver implements Driver {
     });
   }
 
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return [];
+  }
+
   setPhysicalPresence(
     driverDeviceId: string,
     present: boolean,

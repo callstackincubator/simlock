@@ -208,6 +208,10 @@ export class AndroidPhysicalHandler {
     return answers;
   }
 
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return [];
+  }
+
   async reclaim(device: PhysicalDriverDevice): Promise<ReclaimResult> {
     const serial = device.deviceId;
     const user = await this.#readUser(serial);

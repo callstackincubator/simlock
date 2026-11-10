@@ -1528,6 +1528,10 @@ export class IosSimctlDriver implements Driver {
     return this.#physical.listPresent(enrolledIds);
   }
 
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return [];
+  }
+
   async inspectPhysical(id: string): Promise<PhysicalInspection> {
     return this.#physical.inspect(id);
   }

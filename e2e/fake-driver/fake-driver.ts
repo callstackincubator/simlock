@@ -617,6 +617,10 @@ export class OutOfProcessFakeDriver implements Driver {
     });
   }
 
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return [];
+  }
+
   async inspectPhysical(id: string): Promise<PhysicalInspection> {
     const script = await this.#beforeCall("inspectPhysical", [id]);
     const device = script.physicalDevices?.find((candidate) => candidate.ids.includes(id));
