@@ -289,8 +289,7 @@ export class FleetLeaseCoordinator {
       return { promise: started.promise, waiter: created };
     });
     if ("replay" in admitted) return admitted.replay;
-    // why: a `lease.cancel` serialized between admission and this walk (#1492) already rejected the waiter.
-    if (admitted.waiter.state !== "rejected") this.#admit(admitted.waiter);
+    this.#admit(admitted.waiter);
     return admitted.promise;
   }
 
