@@ -326,6 +326,7 @@ export function redactConfig<
   Shape extends {
     readonly gateway: {
       readonly token?: string | undefined;
+      readonly headers?: Readonly<Record<string, string>> | undefined;
       readonly alerts: {
         readonly destinations: readonly {
           readonly url: string;
@@ -335,13 +336,20 @@ export function redactConfig<
     };
   },
 >(config: Shape): Shape {
-  const { token, alerts } = config.gateway;
-  if (token === undefined && alerts.destinations.length === 0) return config;
+  const { token, headers, alerts } = config.gateway;
+  if (token === undefined && headers === undefined && alerts.destinations.length === 0) {
+    return config;
+  }
   return {
     ...config,
     gateway: {
       ...config.gateway,
       ...(token === undefined ? {} : { token: REDACTED_VALUE }),
+      ...(headers === undefined
+        ? {}
+        : {
+            headers: Object.fromEntries(Object.keys(headers).map((name) => [name, REDACTED_VALUE])),
+          }),
       alerts: {
         ...alerts,
         destinations: alerts.destinations.map((destination) => ({
