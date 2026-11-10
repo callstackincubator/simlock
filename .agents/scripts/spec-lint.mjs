@@ -958,6 +958,12 @@ function checkTaskRows(task, rows) {
   });
 }
 
+// why: before the tasks are posted the Task cells hold `T1`, `T2`.
+function namesSubIssues(row, numbers) {
+  if (numbers.size === 0 && !planned() && row.tasks.length === 0) return /\bT\d+\b/.test(row.cell);
+  return row.tasks.length > 0 && row.tasks.every((n) => numbers.has(n));
+}
+
 function checkBehaviours(subs) {
   const rows = behaviourRows(parsed);
   if (rows === null) {
@@ -965,13 +971,8 @@ function checkBehaviours(subs) {
     return;
   }
   const numbers = new Set(subs.map((t) => t.number));
-  // why: before the tasks are posted the Task cells hold `T1`, `T2`.
-  const unposted = subs.length === 0 && !planned();
-  for (const row of rows) {
-    if (unposted && row.tasks.length === 0 && /\bT\d+\b/.test(row.cell)) continue;
-    if (row.tasks.length === 0 || !row.tasks.every((n) => numbers.has(n))) {
-      add("B", "Behaviours", `a row's Task cell "${row.cell}" names no sub-issue; name one`);
-    }
+  for (const row of rows.filter((r) => !namesSubIssues(r, numbers))) {
+    add("B", "Behaviours", `a row's Task cell "${row.cell}" names no sub-issue; name one`);
   }
   for (const task of subs) {
     if (!rows.some((r) => r.tasks.includes(task.number))) {
