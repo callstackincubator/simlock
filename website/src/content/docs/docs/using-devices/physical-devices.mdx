@@ -17,7 +17,7 @@ When a physical lease ends, Simlock uninstalls every app that wasn't on the devi
 
 ## Before you start
 
-- **The device is enrolled.** An admin enrols it on the worker it is plugged into. Simlock never leases a device that isn't enrolled. See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
+- **The device is enrolled.** An admin enrols it on the worker it is plugged into, or the worker does it for every plugged-in phone when its admin turned on `devices.autoEnroll`. Simlock never leases a device that isn't enrolled. See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
 - **The device is ready to use.** It is plugged in by USB, trusted, and usable when the lease is granted. A device that isn't is skipped, and your request waits for it.
 - **An iPhone or iPad is unlocked.** One that asks for its passcode counts as not there.
 
