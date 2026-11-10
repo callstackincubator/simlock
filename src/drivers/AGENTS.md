@@ -1,6 +1,6 @@
 # Drivers
 
-Does: the platform half of every device verb — one driver per platform, serving its virtual and physical devices.
+Does: device verbs through one selected local backend per platform.
 Flows: [device selection](../../docs/internal/flows/device-selection.md), [Android](android/AGENTS.md), [iOS](ios/AGENTS.md).
 
 ## Rules
@@ -17,7 +17,8 @@ What both drivers keep:
 - **Owned root** (ADR 0001). `create` calls `ensureOwnedRoot` (`core/device-root.ts`): when nothing is there it creates the root with `.simlock-owned.json`; otherwise the marker must name this instance and platform; anything else refuses. The key is `drivers.<platform>.deviceRoot` (absolute). A refusal (`OwnedRootError`) skips that platform only and emits `driver.root-rejected`.
 - **Scope every command to the root.** Ownership is membership in the root, never a name prefix. iOS only: under `drivers.ios.deviceSet: "default"` (ADR 0048) simulators stay in Xcode's set with no owned root, and a device is this instance's only when its durable mark names the instance id.
 - **Opaque to core.** `address`, `driverData`, `deviceRoot`, `drivers.<platform>.*` and the keys a driver's definition file declares under `ios.*` or `android.*` are carried unread.
-- A driver's `DeviceDataTable` is built without a driver instance, so a device loads where its driver is refused; `productionDeviceDataTables` (`daemon/driver-discovery.ts`) passes both tables on every host.
+- Register local data tables without starting drivers.
+- Definitions stay light; daemon-only backend modules receive injected ports (ADR 0072).
 - A driver imports only core and ports: never the bus, the contract, leasing, the gateway or the daemon. No lint rule holds this.
 - **Facts reach the bus through callbacks.** `daemon/driver-discovery.ts` bridges a driver's constructor callbacks to an event or to the logger.
 - **Prerequisites** (`iosPrerequisites`, `androidPrerequisites`) are no `Driver` method: they are built even when the driver did not start, and only `doctor` runs them.

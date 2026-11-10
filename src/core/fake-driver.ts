@@ -1,4 +1,5 @@
 import type { Clock } from "../ports/index.js";
+import type { BackendDefinition } from "./backend.js";
 import type {
   DeviceClass,
   DeviceMode,
@@ -85,6 +86,8 @@ export interface FakeDriverCall {
 }
 
 export interface FakeDriverOptions {
+  readonly backend?: string;
+  readonly capabilities?: BackendDefinition["capabilities"];
   readonly availableOsVersions?: readonly string[];
   /** why: the image tag a device made for a request naming none really carries, which a saved source reports. */
   readonly defaultImageTag?: string;
@@ -131,6 +134,19 @@ export interface FakeDriverOptions {
   readonly addressIsDeviceId?: boolean;
 }
 
+function fakeBackendDefinition(
+  options: Pick<FakeDriverOptions, "backend" | "platform" | "capabilities">,
+): BackendDefinition<unknown> {
+  return {
+    id: options.backend ?? "local",
+    platform: options.platform,
+    defaults: {},
+    validators: {},
+    settings: { defaults: {}, validators: {} },
+    capabilities: options.capabilities ?? { baselines: true, physical: true, except: true },
+  };
+}
+
 export class FakeDriverUnknownDeviceError extends Error {
   constructor(readonly deviceId: string) {
     super(`Unknown fake driver device: ${deviceId}`);
@@ -139,6 +155,7 @@ export class FakeDriverUnknownDeviceError extends Error {
 }
 
 export class FakeDriver implements Driver {
+  readonly backend: BackendDefinition<unknown>;
   readonly platform: Platform;
   readonly #defaultModels: FakeDriverOptions["defaultModels"];
   readonly deviceRoot: string;
@@ -229,6 +246,7 @@ export class FakeDriver implements Driver {
     this.deviceTcp = options.deviceTcp;
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
+    this.backend = fakeBackendDefinition(options);
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
     this.#scriptedPhysicalDevices = options.physicalDevices;
     this.#install = options;

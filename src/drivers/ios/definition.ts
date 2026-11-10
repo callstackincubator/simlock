@@ -1,8 +1,9 @@
 import { join } from "node:path";
 
 import {
+  backendSettingValue,
   booleanValue,
-  type DriverConfigEntry,
+  type BackendDefinition,
   objectValidator,
   positiveNumber,
   stringArray,
@@ -31,7 +32,21 @@ export function defaultIosDeviceRoot(simlockHome: string): string {
   return join(simlockHome, "devices", "ios");
 }
 
-export const iosDriverConfig: DriverConfigEntry<IosDriverConfig> = {
+export const iosDriverConfig: BackendDefinition<
+  Readonly<Record<string, string | number | boolean>>,
+  IosDriverConfig
+> = {
+  id: "local",
+  settings: {
+    defaults: {},
+    validators: {
+      deviceRoot: backendSettingValue,
+      deviceSet: backendSettingValue,
+      screenCaptureCommand: backendSettingValue,
+      deviceCaptureCommand: backendSettingValue,
+    },
+  },
+  capabilities: { baselines: true, physical: true, except: true },
   platform: "ios",
   // why: Xcode's own set (`default`) has no owned root, so it shows no deviceRoot.
   settingDefaults: (simlockHome, settings) =>

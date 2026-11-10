@@ -1,5 +1,5 @@
-import type { SilenceFailedFact, WindowFailedFact } from "../drivers/ios/index.js";
-import type { Logger } from "../ports/index.js";
+import type { SilenceFailedFact, WindowFailedFact } from "../index.js";
+import type { Logger } from "../../../ports/index.js";
 
 export function logSilenceFailure(logger: Logger): (fact: SilenceFailedFact) => void {
   return (fact) => {

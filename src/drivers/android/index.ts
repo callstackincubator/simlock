@@ -83,6 +83,7 @@ import { createAndroidDeviceInput } from "./input/index.js";
 import { BOOT_SNAPSHOT, PROVISION_ESTIMATE_MS, SEED_MAKE_ESTIMATE_MS, Seeds } from "./seeds.js";
 import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
+import { androidDriverConfig } from "./definition.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
 export { AndroidLicenseNotAcceptedError } from "./system-images.js";
@@ -162,6 +163,7 @@ type AndroidTargetFor = (
 ) => Promise<ScreenTarget>;
 
 export class AndroidDriver implements Driver {
+  readonly backend = androidDriverConfig;
   readonly platform = "android" as const;
   readonly defaultModels = ANDROID_DEFAULT_MODELS;
   readonly #adbServer: AdbServerSupervisor;

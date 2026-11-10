@@ -84,7 +84,7 @@ import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
-import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
+import { defaultIosDeviceRoot, iosDriverConfig, type IosDriverConfig } from "./definition.js";
 import {
   overridesFor,
   resolveSlimCategories,
@@ -302,6 +302,7 @@ interface ResolvedIosSpec {
 }
 
 export class IosSimctlDriver implements Driver {
+  readonly backend = iosDriverConfig;
   readonly platform = "ios" as const;
   readonly rebootReadyBeforeGrant: boolean;
   readonly defaultModels = IOS_DEFAULT_MODELS;

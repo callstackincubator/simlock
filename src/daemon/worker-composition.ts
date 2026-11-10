@@ -18,7 +18,6 @@ import {
   CleanupReaper,
   ComponentInstaller,
   DEVICE_CLASSES,
-  driverConfig,
   DiskSpaceGuard,
   DriverCatalog,
   HostFactsReader,
@@ -34,8 +33,6 @@ import {
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
 import { type StateDatabase } from "../state/index.js";
-import { androidDriverConfig } from "../drivers/android/index.js";
-import { iosDriverConfig } from "../drivers/ios/index.js";
 import { type Auth } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
 import { createLeaseFiles, type LeaseFilesLimits } from "../lease-files/index.js";
@@ -221,9 +218,8 @@ export async function composeWorker(
           processRunner,
           processSupervisor,
           simlockHome: dataDirectory,
-          iosConfig: driverConfig(config, iosDriverConfig),
+          platformConfigurations: { android: config.android, ios: config.ios },
           slimByDefault: deviceModeWiring(config).slimByDefault,
-          androidConfig: driverConfig(config, androidDriverConfig),
           tcpProbe,
         })
       : {

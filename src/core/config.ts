@@ -1,3 +1,5 @@
+import type { BackendDefinition } from "./backend.js";
+import { selectedBackendDefinition } from "./backend-selection.js";
 import type { ZodType } from "zod";
 
 import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
@@ -402,7 +404,7 @@ const MODE_KEY_REMOVED =
 
 interface ConfigLayerOptions {
   readonly authStrategies?: readonly AuthStrategyDefinition[];
-  readonly driverSections?: readonly DriverConfigEntry[];
+  readonly driverSections?: readonly BackendDefinition<unknown>[];
   readonly modules?: readonly ModuleConfigEntry[];
   readonly systemStats: SystemStats;
   readonly overrides?: ConfigOverrides;
@@ -438,7 +440,7 @@ export function configFromLayers(
   fromFile: unknown,
   {
     authStrategies = registeredAuthStrategies,
-    driverSections = [],
+    driverSections: availableBackends = [],
     modules = [],
     overrides,
     role = "worker",
@@ -447,6 +449,7 @@ export function configFromLayers(
   }: ConfigLayerOptions,
 ): LoadedConfig {
   const fromOverrides = overrides ?? {};
+  const driverSections = selectBackendSections(availableBackends, fromFile, fromOverrides);
 
   // why: The strategy has to be known before anything else can be validated or
   // defaulted: it decides which options block `capacity.config` is, and which
@@ -818,8 +821,16 @@ function defaultConfig(
   authStrategies: readonly AuthStrategyDefinition[],
   standalone: boolean,
   defaulted: ReadonlySet<string>,
-  driverSections: readonly DriverConfigEntry[],
+  driverSections: readonly BackendDefinition<unknown>[],
 ): Omit<Config, "metrics"> {
+  const driverEntries = driverSections.map((entry) => [
+    entry.platform,
+    {
+      ...(entry.settings.defaults as Record<string, string | number | boolean>),
+      backend: entry.id,
+    },
+  ]);
+  const drivers = Object.fromEntries(driverEntries);
   return {
     mode: role,
     capabilities: Object.fromEntries(
@@ -832,7 +843,7 @@ function defaultConfig(
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
     } as CapacityConfig,
-    drivers: {},
+    drivers,
     downloads: {
       policy: "on-request",
       acceptAndroidLicenses: false,
@@ -965,7 +976,7 @@ export function configValidators(
   strategy: CapacityStrategyName,
   modules: readonly ModuleConfigEntry[],
   authStrategies: readonly AuthStrategyDefinition[],
-  driverSections: readonly DriverConfigEntry[] = [],
+  driverSections: readonly BackendDefinition<unknown>[] = [],
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
@@ -986,7 +997,7 @@ export function configValidators(
     // why: Legacy spelling of the resource options; still type-checked here so a typo
     // inside them is still reported rather than silently dropped.
     ...resourceOptionValidators,
-    drivers: driversValidator,
+    drivers: driversValidator(driverSections),
     downloads: objectValidator({
       policy: stringUnion(DOWNLOAD_POLICIES),
       acceptAndroidLicenses: booleanValue,
@@ -1077,7 +1088,7 @@ const memoryPressureRuleValidator = objectValidator({
 });
 
 function driverValidators(
-  driverSections: readonly DriverConfigEntry[],
+  driverSections: readonly BackendDefinition<unknown>[],
   platform: Platform,
 ): Record<string, Validator> {
   return Object.assign(
@@ -1089,7 +1100,7 @@ function driverValidators(
 }
 
 function driverDefaults(
-  driverSections: readonly DriverConfigEntry[],
+  driverSections: readonly BackendDefinition<unknown>[],
   platform: Platform,
 ): Record<string, unknown> {
   return Object.assign(
@@ -1183,16 +1194,63 @@ function isNonEmptyString(value: unknown): value is string {
  * warning. The core does not know which keys a driver has, and warning about the ones it
  * has not heard of would be the same leak as interpreting them.
  */
-const driversValidator: Validator = (value, path) => {
-  const drivers = requireObject(value, path);
+function driversValidator(entries: readonly BackendDefinition<unknown>[]): Validator {
+  return (value, path, warn) => {
+    const drivers = requireObject(value, path);
+    const result: Record<string, Record<string, string | number | boolean>> = {};
+    for (const [name, block] of Object.entries(drivers)) {
+      const entry = entries.find((candidate) => candidate.platform === name);
+      result[name] = validatedBackendSettings(block, `${path}.${name}`, entry, warn);
+    }
+    return result;
+  };
+}
 
-  return Object.fromEntries(
-    Object.entries(drivers).map(([name, block]) => [
-      name,
-      driverSettings(block, `${path}.${name}`),
-    ]),
-  );
-};
+function validatedBackendSettings(
+  block: unknown,
+  path: string,
+  entry: BackendDefinition<unknown> | undefined,
+  warn: Warn,
+): Record<string, string | number | boolean> {
+  const settings = driverSettings(block, path);
+  if (entry === undefined) return settings;
+  const result: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(settings)) {
+    if (key === "backend") {
+      result[key] = value;
+      continue;
+    }
+    const validator = entry.settings.validators[key];
+    if (validator === undefined) {
+      result[key] = value;
+      continue;
+    }
+    result[key] = validator(value, `${path}.${key}`, warn) as string | number | boolean;
+  }
+  return result;
+}
+
+function selectBackendSections(
+  definitions: readonly BackendDefinition<unknown>[],
+  file: unknown,
+  overrides: unknown,
+): readonly BackendDefinition<unknown>[] {
+  const fileObject = asObject(file);
+  const overridesObject = asObject(overrides);
+  const fileDrivers = asObject(fileObject["drivers"]);
+  const overrideDrivers = asObject(overridesObject["drivers"]);
+  const selected: BackendDefinition<unknown>[] = [];
+  for (const platform of ["android", "ios"] as const) {
+    if (definitions.some((entry) => entry.platform === platform) === false) continue;
+    const fileSettings = asObject(fileDrivers[platform]);
+    const overrideSettings = asObject(overrideDrivers[platform]);
+    const settings = { ...fileSettings, ...overrideSettings };
+    const parsed = driverSettings(settings, `drivers.${platform}`);
+    const definition = selectedBackendDefinition(definitions, platform, parsed);
+    selected.push(definition);
+  }
+  return selected;
+}
 
 function driverSettings(value: unknown, path: string): Record<string, string | number | boolean> {
   const settings = requireObject(value, path);

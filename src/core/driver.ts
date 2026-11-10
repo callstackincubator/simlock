@@ -1,4 +1,5 @@
 import type { EventMap } from "../bus/index.js";
+import type { BackendDefinition } from "./backend.js";
 import type { Filesystem, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
 import type { DeviceTcp } from "./device-tcp.js";
@@ -249,6 +250,7 @@ export interface DriverSource {
 }
 
 export interface Driver {
+  readonly backend: BackendDefinition<unknown>;
   readonly rebootReadyBeforeGrant?: boolean;
   readonly platform: Platform;
   readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;

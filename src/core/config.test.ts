@@ -10,9 +10,9 @@ import {
   ALERT_EVENTS,
   ALERT_FORMATS,
   booleanValue,
+  type BackendDefinition,
   type Config,
   driverConfig,
-  type DriverConfigEntry,
   effectiveAllowDownload,
   loadConfig,
   REDACTED_VALUE,
@@ -1199,7 +1199,10 @@ describe("loadConfig", () => {
   });
 
   it("a driver's config entry adds its keys to its platform's section: defaulted, taken from the file, refused by its validator, and unknown to a loader without the entry", async () => {
-    const entry: DriverConfigEntry<{ readonly turbo: boolean }> = {
+    const entry: BackendDefinition<unknown, { readonly turbo: boolean }> = {
+      id: "local",
+      settings: { defaults: {}, validators: {} },
+      capabilities: { baselines: true, physical: true, except: true },
       platform: "android",
       defaults: { turbo: false },
       validators: { turbo: booleanValue },

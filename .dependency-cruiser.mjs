@@ -32,16 +32,33 @@ const entryFiles = (component) =>
     ? "index|testing|definition|version-order|inbox"
     : "index|testing|definition";
 
-const pastIndex = components.map((component) => ({
-  name: "past-index",
-  comment: `${component} is entered through its index`,
-  severity: "error",
-  from: { pathNot: `^${escape(component)}/` },
-  to: {
-    path: `^${escape(component)}/`,
-    pathNot: `^${escape(component)}/(${entryFiles(component)})\\.(ts|js)$`,
-  },
-}));
+// why: backend components under a platform driver own their own boundary; adding one needs no import exception in its parent.
+const pastIndex = components.map((component) => {
+  const prefix = `${component}/`;
+  const driverParent = /^(src|dist)\/drivers\/[^/]+$/.test(component);
+  const nested = driverParent ? components.filter((candidate) => candidate.startsWith(prefix)) : [];
+  const nestedPaths = nested.map((candidate) => `^${escape(candidate)}/`);
+  const componentPath = escape(component);
+  const entries = entryFiles(component);
+  const entryPath = `^${componentPath}/(${entries})\\.(ts|js)$`;
+  const excludedPaths = [entryPath, ...nestedPaths];
+  const pathNot = excludedPaths.join("|");
+  return {
+    name: "past-index",
+    comment: `${component} is entered through its index`,
+    severity: "error",
+    from: { pathNot: `^${componentPath}/` },
+    to: { path: `^${componentPath}/`, pathNot },
+  };
+});
+
+// why: e2e can enter a backend's compiled index before dist exists, while unresolved private backend files still fail.
+const compiledBackends = components.filter((component) =>
+  /^dist\/drivers\/[^/]+\/[^/]+$/.test(component),
+);
+const backendIndexes = compiledBackends.map((component) => `(^|/)${escape(component)}/index\\.js$`);
+const publicCompiledIndexes = ["(^|/)dist/[^/]+/index\\.js$", ...backendIndexes];
+const unresolvedIndexPaths = publicCompiledIndexes.join("|");
 
 const direction = (name, comment, from, to) => ({
   name,
@@ -63,7 +80,7 @@ export default {
       to: {
         couldNotResolve: true,
         path: "(^|/)dist/",
-        pathNot: "(^|/)dist/[^/]+/index\\.js$",
+        pathNot: unresolvedIndexPaths,
       },
     },
     {

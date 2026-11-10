@@ -139,6 +139,19 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
+    "passes a nested backend's own index and refuses its private factory through the same boundary",
+    [
+      ["passes", "src/daemon/x.ts", "../drivers/android/local/index.js"],
+      ["fails", "src/daemon/x.ts", "../drivers/android/local/backend.js"],
+      ["passes", "src/daemon/x.ts", "../drivers/ios/local/index.js"],
+      ["fails", "src/daemon/x.ts", "../drivers/ios/local/backend.js"],
+      ["passes", "e2e/fake-driver/x.ts", "../../dist/drivers/android/local/index.js"],
+      ["fails", "e2e/fake-driver/x.ts", "../../dist/drivers/android/local/backend.js"],
+      ["passes", "e2e/fake-driver/x.ts", "../../dist/drivers/ios/local/index.js", "unbuilt"],
+      ["fails", "e2e/fake-driver/x.ts", "../../dist/drivers/ios/local/backend.js", "unbuilt"],
+    ],
+  ],
+  [
     "fails a file two levels deep importing a file inside core's component directory",
     [["fails", "src/http/deep/x.ts", "../../core/capacity/limits.js"]],
   ],

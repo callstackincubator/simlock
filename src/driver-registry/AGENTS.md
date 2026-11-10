@@ -1,10 +1,11 @@
 # Driver registry
 
-Does: lists each driver's config section (`driverConfigEntries`): the keys a driver reads under `ios.*` or `android.*`, with their validators and defaults.
+Does: selects light backend config for daemon and CLI.
 
 ## Rules
 
-- A new driver setting is a key in that driver's definition file (type, validator, default) and the code that reads it. Nothing in core, the contract or the daemon changes (ADR 0065).
-- A new driver adds its entry here.
-- A new `drivers.<platform>.*` key with a default also returns it from `settingDefaults`, or `config get` refuses the key while it is unset.
-- An entry is a driver's definition file, which loads no driver code (dependency rule `definition-is-light`): the daemon and the CLI both read this list, so both load a config with the same keys.
+- Settings live in their definition and consumer; core, contract and daemon stay unchanged (ADR 0065).
+- Register definitions here, heavy modules in `daemon/backends.ts`; only the daemon loads the latter.
+- Ids are platform-scoped; unknown ids fail config. Only selected settings are validated/defaulted.
+- Defaulted `drivers.<platform>.*` keys also need `settingDefaults`, or unset `config get` fails.
+- Definitions load no driver code (`definition-is-light`); CLI/daemon config keys match.
