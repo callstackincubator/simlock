@@ -42,7 +42,7 @@ export class UnknownEnrolledDeviceError extends Error {
   }
 }
 
-class PhysicalInspectionError extends Error {
+export class PhysicalInspectionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PhysicalInspectionError";

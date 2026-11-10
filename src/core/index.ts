@@ -231,6 +231,7 @@ export {
   DeviceBusyError,
   DeviceNotEnrollableError,
   PhysicalEnrollment,
+  PhysicalInspectionError,
   UnknownEnrolledDeviceError,
 } from "./physical-enrollment.js";
 export { PhysicalAutoEnrollment } from "./physical-auto-enrollment.js";
