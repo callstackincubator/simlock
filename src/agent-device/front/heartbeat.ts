@@ -22,6 +22,7 @@ import {
   type Exchange,
   type FrontContext,
 } from "./context.js";
+import { BACKEND_OF_PLATFORM } from "./allocate.js";
 import type { HeldView } from "./front-map.js";
 import { renewLease } from "./renewals.js";
 import { chosenTtl } from "./ttl.js";
@@ -119,6 +120,8 @@ async function allocateAgain(
 ): Promise<Exchange> {
   const params = {
     ...call.params,
+    // why: agent-device's heartbeat RPC carries no backend, and an allocate without one gets ios-simulator, which refuses every later command naming the real backend.
+    backend: BACKEND_OF_PLATFORM[entry.platform],
     leaseId,
     ttlMs: leaseMaxTtlMs ?? entry.ttlMs,
     ...(entry.retainOnClose === true ? { retainOnClose: true } : {}),
