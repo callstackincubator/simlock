@@ -60,7 +60,7 @@ the status is stale.
 | [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted; §1–2 narrowed by 0022 for physical devices; §4 narrowed by 0036 (a replay reads the current device) |
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — partly implemented: §5 (usage figures) is not built |
-| [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Proposed; amends 0001 §3 and §5, 0015 §3 and 0019 §1–2 for physical devices |
+| [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Accepted; amends 0001 §3 and §5, 0015 §3 and 0019 §1–2 for physical devices; §3, §5 and §6 narrowed by 0073 |
 | [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by 0043; §1, §3–4 narrowed by 0046; §2 and §4 narrowed by 0070; §3 superseded in part by 0071 |
 | [0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) | Leasing calls lease-end participants before it reclaims a device | Accepted |
 | [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted |
@@ -107,3 +107,4 @@ the status is stale.
 | [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Accepted; narrows 0038 §2 and §3 |
 | [0070](0070-test-runners-drive-a-lease-through-the-agent-device-front.md) | Test runners drive a lease through the agent-device front: boot is answered, a close may keep the lease, and each lease is its own tenant | Accepted; narrows 0023 §2 and §4; §2 narrowed by 0071 |
 | [0071](0071-a-restart-re-allocates-a-live-agent-device-lease.md) | A restart re-allocates a live agent-device lease on its device | Accepted; supersedes 0023 §3 in part; narrows 0070 §2 |
+| [0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md) | A worker may enrol the phones plugged into it | Accepted — not yet implemented; narrows 0022 §3, §5 and §6 |
