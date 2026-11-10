@@ -675,6 +675,7 @@ async function autoDaemon(
     readonly ios?: Record<string, unknown>;
     readonly android?: Record<string, unknown>;
     readonly config?: Record<string, unknown>;
+    readonly platforms?: readonly ("ios" | "android")[];
   } = {},
 ): Promise<TestEnv> {
   const base = daemonOptions(options);
@@ -912,5 +913,76 @@ describe("devices.autoEnroll", () => {
       (await slowEnrolled("PHONE-Y")).map((payload) => payload.initiator),
       "added and removed between two runs",
     ).toEqual(["operator"]);
+  });
+
+  it("forgets which phones are held out when the daemon restarts, so a removed phone still plugged in is enrolled on the first run", async () => {
+    const env = await autoDaemon({ ios: { physicalDevices: [IPHONE] } });
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 1, {
+      label: "the phone is enrolled",
+    });
+    const removed = await env.cli(["device", "remove", UDID]);
+    expect(removed.code, removed.stderr).toBe(0);
+
+    await env.restartDaemon();
+
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 2, {
+      label: "the restarted daemon enrols the removed phone again",
+    });
+    expect((await named(env, "device.enrolled")).map((entry) => entry.payload)).toEqual([
+      expect.objectContaining({ driverDeviceId: UDID, initiator: "auto" }),
+      expect.objectContaining({ driverDeviceId: UDID, initiator: "auto" }),
+    ]);
+  });
+
+  it("skips a platform that cannot be listed for that run, still enrols the other platform, logs one line per error message, and logs nothing for a platform with no driver", async () => {
+    const down = { listAttachedPhysical: { message: "adb is down", type: "generic" } } as const;
+    const env = await autoDaemon({
+      android: { physicalDevices: [PIXEL] },
+      ios: { physicalDevices: [IPHONE] },
+    });
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 2, {
+      label: "both phones are enrolled",
+    });
+    const removed = await env.cli(["device", "remove", "R58M123ABC"]);
+    expect(removed.code, removed.stderr).toBe(0);
+    const androidLists = async () =>
+      (await env.driverLog.calls()).filter(
+        (call) => call.operation === "listAttachedPhysical" && call.platform === "android",
+      ).length;
+    const runs = async (count: number) => {
+      const before = await androidLists();
+      await waitFor(async () => (await androidLists()) >= before + count, { interval: 20 });
+    };
+    const couldNotList = async () =>
+      (await autoEnrollLog(env)).filter((line) => line.includes("could not list"));
+
+    await env.driverScript.merge({ android: { failures: down } });
+    await runs(4);
+    await plug(env, "ios", [IPHONE, IPHONE_TWO]);
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 3, {
+      label: "the iPhone plugged in while Android cannot be listed is enrolled",
+    });
+
+    expect(await couldNotList()).toEqual([
+      "auto-enroll: could not list android phones: adb is down",
+    ]);
+
+    await env.driverScript.merge({ android: { failures: {} } });
+    await runs(4);
+    expect(
+      (await named(env, "device.enrolled")).filter(
+        (e) => (e.payload as Added).platform === "android",
+      ),
+      "held out across the failing runs",
+    ).toHaveLength(1);
+    await env.driverScript.merge({ android: { failures: down } });
+    await runs(2);
+    expect(await couldNotList(), "a list that succeeds resets the message").toHaveLength(2);
+
+    const iosOnly = await autoDaemon({ ios: { physicalDevices: [IPHONE] }, platforms: ["ios"] });
+    await waitFor(async () => (await named(iosOnly, "device.enrolled")).length === 1, {
+      label: "the iPhone is enrolled on a worker with no Android driver",
+    });
+    expect(await autoEnrollLog(iosOnly)).toEqual([]);
   });
 });
