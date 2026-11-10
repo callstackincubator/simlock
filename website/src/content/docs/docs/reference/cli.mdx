@@ -655,7 +655,7 @@ Remove baseline login v1? [y/N] y
 Removed baseline login v1.
 ```
 
-When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. With `--worker wrk_a` the prompt and the line end in ` from wrk_a`.
+When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. A copy that is being cleaned up or held by another operation is refused with `DEVICE_BUSY`; run the command again once it ends. With `--worker wrk_a` the prompt and the line end in ` from wrk_a`.
 
 ## simlock device
 

@@ -74,7 +74,7 @@ In a script, check `code`, not the message: the wording of a message can change,
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
 | `DEVICE_NOT_ENROLLABLE` | 12 | 422 | `device add` of a device that cannot be enrolled. The reason is one of: not connected, network only, not trusted, Developer Mode off, OS too old, unsupported kind, locked, unreadable, a simulator or emulator, or enrolled on the other platform. | Fix what the message names (connect it by USB, trust this computer, turn on Developer Mode, unlock it) and run `device add` again. |
-| `DEVICE_BUSY` | 11 | 409 | `device add` or `device remove` of a device that is leased, being cleaned, or held by another operation. | Try again once that ends. |
+| `DEVICE_BUSY` | 11 | 409 | `device add` or `device remove` of a device that is leased, being cleaned, or held by another operation. `baseline remove` of a baseline whose copy is being cleaned up or held by another operation (a leased copy gets `BASELINE_IN_USE`). | Try again once that ends. |
 | `UNKNOWN_DEVICE` | 12 | 404 | `device remove` of an ID that is not an enrolled device. | Check the ID with `simlock list --devices`. |
 
 ## Tunnels

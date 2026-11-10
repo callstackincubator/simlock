@@ -1068,7 +1068,7 @@ export class Dispatcher {
       if (error instanceof UnknownBaselineError) {
         throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
       }
-      throw error;
+      throw describeEnrollmentError(error);
     }
   };
 

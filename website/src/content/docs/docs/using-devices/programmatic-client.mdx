@@ -202,7 +202,7 @@ Each of these does what the matching `simlock` command does:
 | `listBaselines()` | `simlock baseline list` | `{ baselines }`: the newest version of each name. On a gateway it covers every worker, each entry with its `workerId`. |
 | `removeBaseline({ name, workerId? })` | `simlock baseline remove` | `{ name, versions, deletedDevices }`. On a gateway, `workerId` is required and names the worker to remove it from. |
 
-The baseline calls can throw `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `UNKNOWN_BASELINE` and `BASELINE_IN_USE`; see [Baselines](/simlock/docs/worker/baselines).
+The baseline calls can throw `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `UNKNOWN_BASELINE` and `BASELINE_IN_USE`; `removeBaseline` can also throw `DEVICE_BUSY`; see [Baselines](/simlock/docs/worker/baselines).
 
 ### Update the daemon
 
