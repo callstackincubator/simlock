@@ -452,6 +452,7 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     worker.devices = [
       {
+        backend: "local",
         ...deviceFixture("dev_1"),
         createdAt: 1,
         driverData: { secret: "a driver's private blob" },
@@ -476,6 +477,7 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     worker.devices = [
       {
+        backend: "local",
         ...deviceFixture("dev_1"),
         createdAt: 1,
         driverData: { secret: "a driver's private blob" },
@@ -510,6 +512,7 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     worker.devices = [
       {
+        backend: "local",
         class: "phone",
         createdAt: 1,
         driverData: {},

@@ -414,6 +414,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       session({ principal: "tok_other" }),
     );
     await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver-provisioning" },
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
@@ -453,6 +454,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       });
       for (let index = 0; index < count; index += 1) {
         await built.registry.registerDevice({
+          backend: "local",
           driverData: { fakeDeviceId: `driver-${index}` },
           driverDeviceId: `driver-${index}`,
           provisionDuration: 0,
@@ -511,6 +513,7 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
   it("status.get on a worker whose health is starting returns daemon, history and host and no other field", async () => {
     const { dispatcher, registry } = await buildDispatcher({ health: "starting" });
     await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver-unchecked" },
       driverDeviceId: "driver-unchecked",
       provisionDuration: 0,
@@ -536,6 +539,7 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
     async (health) => {
       const { dispatcher, registry } = await buildDispatcher({ health });
       await registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "driver-known" },
         driverDeviceId: "driver-known",
         provisionDuration: 0,

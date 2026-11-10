@@ -986,6 +986,7 @@ describe("Dispatcher: baseline.save refusals", () => {
     const { dispatcher, driver, engine, registry } = await buildDispatcher({
       physicalDevices: [
         {
+          backend: "local",
           createdAt: 1,
           driverDeviceId: "00008110-001A2B3C4D5E",
           enrolledApps: [],
@@ -2017,6 +2018,7 @@ async function seedIdleCopy(
   const driverDevice = await driver.provision(spec, { source: source?.id ?? "" });
   const booted = await driver.makeReady(driverDevice, { mode: "full", purpose: "prepare" });
   const registered = await registry.registerDevice({
+    backend: "local",
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,

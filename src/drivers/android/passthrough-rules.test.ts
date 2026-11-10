@@ -47,6 +47,7 @@ describe("PassthroughRules", () => {
   it("fills an emulator's serial into an adb command that names no device", async () => {
     const driver = rulesFor();
     const emulator = {
+      backend: "local",
       address: "emulator-5554",
       deviceId: "device",
       driverData: {},
@@ -98,6 +99,7 @@ describe("PassthroughRules", () => {
   it("refuses an emulator adb command that names another device, or that runs on another platform", async () => {
     const driver = rulesFor();
     const emulator = {
+      backend: "local",
       address: "emulator-5554",
       deviceId: "device",
       driverData: {},
@@ -177,6 +179,7 @@ describe("PassthroughRules", () => {
     // device.
     const driver = rulesFor();
     const emulator = {
+      backend: "local",
       address: "emulator-5554",
       deviceId: "device",
       driverData: {},

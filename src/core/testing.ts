@@ -16,7 +16,6 @@ import { type Config, configFromLayers, type ConfigOverrides, type DaemonMode } 
 import { type DeviceDataTable, DiskSpaceGuard, type Driver } from "./driver.js";
 import { fakeDeviceDataTable } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import type { Platform } from "./domain.js";
 import { Registry, type RegistryOptions } from "./registry.js";
 import { baselinesOwner } from "./baselines-schema.js";
 import { registryOwner } from "./registry-schema.js";
@@ -85,9 +84,9 @@ export function testComponentWiring<
   };
 }
 
-export const fakeDeviceDataTables: ReadonlyMap<Platform, DeviceDataTable> = new Map([
-  ["android", fakeDeviceDataTable],
-  ["ios", fakeDeviceDataTable],
+export const fakeDeviceDataTables: ReadonlyMap<string, DeviceDataTable> = new Map([
+  ["android:local", fakeDeviceDataTable],
+  ["ios:local", fakeDeviceDataTable],
 ]);
 
 // why: the real adapter on SQLite's in-memory database, whatever path the state module asks for.

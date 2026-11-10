@@ -695,7 +695,11 @@ export class AndroidDriver implements Driver {
       if (state.port !== undefined) {
         this.#consolePorts.release(state.port);
       }
-      await this.deviceTcp?.release({ ...device, physical: false as const });
+      await this.deviceTcp?.release({
+        ...device,
+        backend: this.backend.id,
+        physical: false as const,
+      });
     });
   }
 

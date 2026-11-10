@@ -38,7 +38,7 @@ export const prerequisiteChecks: readonly PrerequisiteCheck[] = (["ios", "androi
   }),
 );
 
-export const deviceDataTables: ReadonlyMap<"ios" | "android", DeviceDataTable> = new Map([
-  ["ios", e2eFakeDeviceDataTable],
-  ["android", e2eFakeDeviceDataTable],
+export const deviceDataTables: ReadonlyMap<string, DeviceDataTable> = new Map([
+  ["ios:local", e2eFakeDeviceDataTable],
+  ["android:local", e2eFakeDeviceDataTable],
 ]);

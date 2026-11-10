@@ -21,6 +21,7 @@ const OTHER_UDID = "5A1E4B7C-0000-4000-8000-00000000BBBB";
 const PORT = 9100;
 
 const simulator: VirtualDriverDevice = {
+  backend: "local",
   address: UDID,
   deviceId: "dev_1",
   driverData: { deviceTypeId: "iphone", name: "simlock-1", runtimeId: "ios", udid: UDID },

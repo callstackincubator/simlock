@@ -214,6 +214,7 @@ export function withoutQuarantineMessages<
 
 export const deviceRecordSchema = z
   .object({
+    backend: z.string().min(1).max(120),
     id: z.string(),
     driverDeviceId: z.string(),
     spec: deviceSpecSchema,

@@ -12,6 +12,7 @@ import { SerializedDecision } from "./serialized-decision.js";
 import { NukeService, type NukeDeviceLifecycle, type NukeRegistryView } from "./nuke-service.js";
 
 const device = (id: string, state: VirtualDevice["state"]): VirtualDevice => ({
+  backend: "local",
   physical: false,
   createdAt: 0,
   driverData: { privateDriverData: id },
@@ -401,6 +402,7 @@ describe("NukeService", () => {
       driverDeviceId: string,
     ) {
       const device = await registry.registerDevice({
+        backend: "local",
         driverData,
         driverDeviceId,
         provisionDuration: 0,

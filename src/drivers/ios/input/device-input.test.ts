@@ -16,6 +16,7 @@ const DEVICE_SET = "/home/.simlock/devices/ios";
 
 function simulator(runtimeId?: string): VirtualDriverDevice {
   return {
+    backend: "local",
     address: "UDID-1",
     deviceId: "UDID-1",
     driverData: {
@@ -234,6 +235,7 @@ describe("iOS device input", () => {
     const pending = factory
       .open(
         {
+          backend: "local",
           address: "UDID-1",
           deviceId: "UDID-1",
           driverData: {},

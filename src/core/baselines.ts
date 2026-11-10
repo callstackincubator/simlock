@@ -94,7 +94,9 @@ export interface BaselineRemoveResult {
 
 export interface BaselineServiceOptions {
   readonly clock: Clock;
-  readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource" | "listSources"> };
+  readonly drivers: {
+    get(platform: Platform, backend?: string): Pick<Driver, "destroySource" | "listSources">;
+  };
   readonly leaseSave: () => {
     releaseToSave<Result>(
       leaseId: string,
@@ -136,6 +138,15 @@ export class BaselineService {
   }
 
   async #save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+    const lease = this.options.registry.snapshot.leases.find(
+      (current) => current.id === request.leaseId,
+    );
+    const device = this.options.registry.snapshot.virtualDevices.find(
+      (current) => current.id === lease?.deviceId,
+    );
+    if (device !== undefined) {
+      this.options.drivers.get(device.spec.platform, device.backend);
+    }
     const baseline = await this.options
       .leaseSave()
       .releaseToSave(request.leaseId, async (released) => {
@@ -190,6 +201,16 @@ export class BaselineService {
     return this.#serial(() => this.#dropReplaced());
   }
 
+  #tryClaimReplacementDevice(device: VirtualDevice): DeviceOperationClaim | undefined {
+    try {
+      this.options.drivers.get(device.spec.platform, device.backend);
+    } catch (error: unknown) {
+      if (error instanceof NoDriverError) return undefined;
+      throw error;
+    }
+    return this.options.claims.tryClaim(device.id, "cleanup");
+  }
+
   /** why: a replace deletes the devices of an older version nobody holds, in the gate and under a claim like a remove, and leaves a leased or busy one to its lease. */
   async #destroyIdleOlderDevices(name: string, version: number): Promise<void> {
     const claimed = await this.options.decisions.run(() => {
@@ -199,7 +220,7 @@ export class BaselineService {
         const made = device.spec.baseline;
         if (made?.name !== name || made.version >= version || device.state === "deleted") continue;
         if (leases.some((lease) => lease.deviceId === device.id)) continue;
-        const claim = this.options.claims.tryClaim(device.id, "cleanup");
+        const claim = this.#tryClaimReplacementDevice(device);
         if (claim !== undefined) taken.push({ claim, device });
       }
       return taken;
@@ -425,6 +446,7 @@ export class BaselineService {
       (device) => device.spec.baseline?.name === name && device.state !== "deleted",
     );
     for (const device of made) {
+      this.options.drivers.get(device.spec.platform, device.backend);
       const lease = leases.find((candidate) => candidate.deviceId === device.id);
       if (lease !== undefined) throw new BaselineInUseError(name, lease.id);
     }

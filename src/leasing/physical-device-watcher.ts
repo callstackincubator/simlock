@@ -32,7 +32,7 @@ export interface PhysicalDeviceWatcherOptions {
   readonly clock: Clock;
   readonly config: Pick<Config, "health">;
   readonly decisions: Pick<SerializedDecision, "run">;
-  readonly drivers: Pick<DriverCatalog, "get">;
+  readonly drivers: Pick<DriverCatalog, "get" | "owns">;
   readonly kick: () => void;
   readonly logger?: Logger | undefined;
   readonly registry: Pick<Registry, "snapshot" | "transitionDevice" | "rewriteAbsentReason">;
@@ -110,7 +110,8 @@ export class PhysicalDeviceWatcher {
 
   #enrolled(): PhysicalDevice[] {
     return this.options.registry.snapshot.devices.filter(
-      (device): device is PhysicalDevice => device.physical && device.state !== "deleted",
+      (device): device is PhysicalDevice =>
+        device.physical && device.state !== "deleted" && this.options.drivers.owns(device),
     );
   }
 

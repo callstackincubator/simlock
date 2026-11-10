@@ -10,7 +10,7 @@ import {
   type DeviceTransitionUpdate,
   type VirtualDevice,
 } from "./domain.js";
-import { DriverCatalog } from "./driver-catalog.js";
+import { DriverCatalog, NoDriverError } from "./driver-catalog.js";
 import { DriverCrashError } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
@@ -54,6 +54,7 @@ async function createHarness() {
     platform: "ios",
   });
   const device = await registry.registerDevice({
+    backend: "local",
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,
@@ -98,7 +99,40 @@ async function shutdownDevice(
   });
 }
 
+// why: this decomposed module is tested directly to force claims and lifecycle ordering that the core surface cannot force.
 describe("ManagedDeviceLifecycle", () => {
+  it("refuses shutdown and destruction through a different selected backend without touching the stored device", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const selected = new FakeDriver({ clock: harness.clock, platform: "ios", backend: "remote" });
+    const lifecycle = new ManagedDeviceLifecycle(
+      new DriverCatalog([selected]),
+      harness.registry,
+      new SerializedDecision(),
+      harness.claims,
+      harness.clock,
+    );
+
+    await expect(lifecycle.shutdown(ready, "operator", "cleanup")).rejects.toBeInstanceOf(
+      NoDriverError,
+    );
+    const afterShutdown = harness.registry.snapshot.devices.find(
+      (device) => device.id === ready.id,
+    );
+    expect(afterShutdown).toEqual(ready);
+    const shutdown = await transitionVirtual(harness.registry, ready.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: ready.id, initiator: "setup" },
+    });
+    await expect(lifecycle.destroy(shutdown, "operator", "cleanup")).rejects.toBeInstanceOf(
+      NoDriverError,
+    );
+
+    expect(selected.calls).toEqual([]);
+    const afterDestroy = harness.registry.snapshot.devices.find((device) => device.id === ready.id);
+    expect(afterDestroy).toEqual(shutdown);
+  });
+
   it("replaces the stored address with the one makeReady re-read when booting a device for a lease", async () => {
     // The address a device is reachable at is a property of its current boot, not of the device:
     // an Android console port is assigned per boot, so a serial captured at provision goes stale
@@ -520,6 +554,7 @@ describe("ManagedDeviceLifecycle", () => {
       platform: "ios",
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: driverDevice.driverData,
       driverDeviceId: driverDevice.deviceId,
       provisionDuration: 0,
@@ -587,6 +622,7 @@ describe("ManagedDeviceLifecycle", () => {
       state,
     });
     await seeding.registerDevice({
+      backend: "local",
       driverData: driverDevice.driverData,
       driverDeviceId: driverDevice.deviceId,
       provisionDuration: 0,
@@ -644,6 +680,7 @@ describe("ManagedDeviceLifecycle", () => {
       );
       const driverDevice = await driver.provision(slimSpec);
       const device = await registry.registerDevice({
+        backend: "local",
         driverData: driverDevice.driverData,
         driverDeviceId: driverDevice.deviceId,
         provisionDuration: 0,

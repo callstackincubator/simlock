@@ -11,7 +11,6 @@ import {
   type DeviceDataTable,
   type DeviceMode,
   type Driver,
-  type Platform,
   type ModelPreferences,
   type PrerequisiteCheck,
   type ServiceCheck,
@@ -103,7 +102,7 @@ export interface SharedParts {
   readonly config: Config;
   readonly dataDirectory: string;
   readonly defaulted: ReadonlySet<string>;
-  readonly deviceDataTables: ReadonlyMap<Platform, DeviceDataTable>;
+  readonly deviceDataTables: ReadonlyMap<string, DeviceDataTable>;
   readonly eventBus: EventBus;
   readonly eventHistory: EventHistoryHandle;
   readonly filesystem: Filesystem;
@@ -454,16 +453,17 @@ export async function composeWorker(
     await Promise.all(
       drivers.map(async (driver) => {
         try {
-          await driver.deviceTcp?.sweep(
-            registry.snapshot.devices
-              .filter(
-                (device) => device.spec.platform === driver.platform && device.state !== "deleted",
-              )
-              .map((device) => ({
-                device: toDriverDevice(device),
-                leased: device.state === "leased",
-              })),
+          const devices = registry.snapshot.devices.filter(
+            (device) =>
+              device.spec.platform === driver.platform &&
+              device.backend === driver.backend.id &&
+              device.state !== "deleted",
           );
+          const swept = devices.map((device) => ({
+            device: toDriverDevice(device),
+            leased: device.state === "leased",
+          }));
+          await driver.deviceTcp?.sweep(swept);
         } catch (error) {
           logger.warn("A driver's start sweep of tunnel rules failed", {
             error: stableError(error),

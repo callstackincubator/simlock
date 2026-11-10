@@ -315,6 +315,7 @@ export interface QuarantineCause {
 }
 
 interface DeviceRecordFields {
+  readonly backend: string;
   readonly id: string;
   readonly driverDeviceId: string;
   readonly driverData: unknown;

@@ -11,6 +11,7 @@ const APP = "com.example.app";
 const BUILD = "/builds/App.app";
 
 const PHYSICAL_DEVICE = {
+  backend: "local",
   address: UDID,
   deviceId: UDID,
   driverData: {},
@@ -19,6 +20,7 @@ const PHYSICAL_DEVICE = {
 } as const;
 
 const VIRTUAL_DEVICE = {
+  backend: "local",
   address: "",
   deviceId: "device",
   driverData: {},

@@ -1,3 +1,4 @@
+import { backendKey } from "./backend-key.js";
 import type { SqliteDatabase, SqliteValue } from "../ports/index.js";
 import {
   type AbsentReason,
@@ -149,6 +150,7 @@ const DEVICE_OPTIONAL_NUMBERS = [
 
 const DEVICE_COLUMNS = [
   "id",
+  "backend",
   "platform",
   "physical",
   "driver_device_id",
@@ -261,6 +263,7 @@ function baselineColumns(device: DeviceRecord): SqliteValue[] {
 function deviceValues(device: DeviceRecord): SqliteValue[] {
   return [
     device.id,
+    device.backend,
     device.spec.platform,
     flagValue(device.physical),
     device.driverDeviceId,
@@ -289,7 +292,7 @@ const UPSERT_GRANT = upsertSql("lease_grants", GRANT_COLUMNS, "request_id");
 export function writeDevice(
   database: SqliteDatabase,
   device: DeviceRecord,
-  deviceData: ReadonlyMap<Platform, DeviceDataTable>,
+  deviceData: ReadonlyMap<string, DeviceDataTable>,
 ): void {
   database.prepare(UPSERT_DEVICE).run(...deviceValues(device));
   if (device.physical) {
@@ -301,7 +304,7 @@ export function writeDevice(
     });
     return;
   }
-  const table = deviceData.get(device.spec.platform);
+  const table = deviceData.get(backendKey(device.spec.platform, device.backend));
   if (table === undefined) {
     throw new Error(`No device-data table for platform ${device.spec.platform}`);
   }
@@ -431,7 +434,7 @@ export interface LoadedRegistry {
 
 export function loadRegistryRows(
   database: SqliteDatabase,
-  deviceData: ReadonlyMap<Platform, DeviceDataTable>,
+  deviceData: ReadonlyMap<string, DeviceDataTable>,
 ): LoadedRegistry {
   const appsByDevice = new Map<string, string[]>();
   for (const row of database
@@ -463,13 +466,15 @@ function deviceFromRow(
   database: SqliteDatabase,
   row: Row,
   appsByDevice: ReadonlyMap<string, string[]>,
-  deviceData: ReadonlyMap<Platform, DeviceDataTable>,
+  deviceData: ReadonlyMap<string, DeviceDataTable>,
 ): DeviceRecord {
   const reader = new RowReader("devices", String(row.id), row);
   const id = reader.text("id");
   const platform = reader.oneOf("platform", PLATFORMS);
   const physical = reader.flag("physical");
+  const backend = reader.text("backend");
   const shared = {
+    backend,
     createdAt: reader.int("created_at"),
     driverDeviceId: reader.text("driver_device_id"),
     id,
@@ -505,7 +510,7 @@ function deviceFromRow(
   }
   const virtual: VirtualDevice = {
     ...shared,
-    driverData: readDeviceData(database, deviceData, platform, id),
+    driverData: readDeviceData(database, deviceData, platform, backend, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
     ...present("except", exceptOf(reader)),
     mode: reader.oneOf("mode", DEVICE_MODES),
@@ -546,13 +551,15 @@ function quarantineCause(reader: RowReader): QuarantineCause | undefined {
 
 function readDeviceData(
   database: SqliteDatabase,
-  deviceData: ReadonlyMap<Platform, DeviceDataTable>,
+  deviceData: ReadonlyMap<string, DeviceDataTable>,
   platform: Platform,
+  backend: string,
   id: string,
 ): unknown {
-  const table = deviceData.get(platform);
+  const key = backendKey(platform, backend);
+  const table = deviceData.get(key);
   if (table === undefined) {
-    throw new RegistryLoadError(`Invalid devices row ${id}: no device-data table for ${platform}`);
+    throw new RegistryLoadError(`Invalid devices row ${id}: no device-data table for ${key}`);
   }
   try {
     return table.read(database, id);

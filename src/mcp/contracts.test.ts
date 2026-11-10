@@ -75,6 +75,7 @@ describe("MCP contracts", () => {
   it("validates a lease grant, release, and lease-status shape using contract field names", () => {
     const grant = leaseSimulatorOutputSchema.parse({
       device: {
+        backend: "local",
         physical: false,
         createdAt: 0,
         driverData: null,

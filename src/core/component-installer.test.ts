@@ -1157,6 +1157,7 @@ async function addDevice(
 ): Promise<string> {
   const driverDeviceId = `${platform}-${osVersion}-${String(registry.snapshot.devices.length)}`;
   const device = await registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,
@@ -1534,6 +1535,7 @@ describe("ComponentInstaller.remove", () => {
     "refuses a component a %s registry device uses with ComponentInUseError naming the count, and never calls removeComponent",
     async (state) => {
       const device: DeviceRecord = {
+        backend: "local",
         physical: false,
         createdAt: 0,
         driverData: {},
@@ -1574,6 +1576,7 @@ describe("ComponentInstaller.remove", () => {
 
   it("does not count a physical device on the runtime's OS as using it, so removal is not refused for it", async () => {
     const physical: DeviceRecord = {
+      backend: "local",
       createdAt: 0,
       driverData: {},
       driverDeviceId: "00008110-001A2B3C4D5E",

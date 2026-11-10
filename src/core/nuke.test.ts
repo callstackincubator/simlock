@@ -35,6 +35,7 @@ describe("Nuke", () => {
       processes: [],
     });
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "managed" },
       driverDeviceId: "managed",
       provisionDuration: 0,

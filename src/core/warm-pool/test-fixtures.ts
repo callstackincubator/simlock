@@ -59,6 +59,7 @@ export function device(
   platform: "ios" | "android" = "ios",
 ): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     // why: a virtual device that ended a lease is never granted again, so the fixture is a never-leased device whose createdAt orders it by recency.
     createdAt: now - endedAgo,
@@ -355,6 +356,7 @@ export function harness(
         }
         const id = `new-${provisionCalls.length}`;
         const created: VirtualDevice = {
+          backend: "local",
           physical: false,
           createdAt: now,
           driverData: {},

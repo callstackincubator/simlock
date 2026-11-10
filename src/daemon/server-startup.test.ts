@@ -210,6 +210,7 @@ describe("DaemonServer startup readiness", () => {
     } as const;
     const provisioned = await harness.driver.provision(spec);
     const device = await harness.registry.registerDevice({
+      backend: "local",
       driverData: provisioned.driverData,
       driverDeviceId: provisioned.deviceId,
       provisionDuration: 0,

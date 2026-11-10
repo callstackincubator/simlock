@@ -1,6 +1,12 @@
 import { type Logger, NoopLogger, type TcpStream } from "../ports/index.js";
 import { classCandidates, pairedRuntimes } from "./catalog-match.js";
-import { DEVICE_CLASSES, type DeviceClass, type VirtualSpec, type Platform } from "./domain.js";
+import {
+  DEVICE_CLASSES,
+  type DeviceClass,
+  type DeviceRecord,
+  type VirtualSpec,
+  type Platform,
+} from "./domain.js";
 import type {
   ExactDeviceRequest,
   Driver,
@@ -21,8 +27,15 @@ import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from ".
 import { stableError } from "./stable-error.js";
 
 export class NoDriverError extends Error {
-  constructor(readonly platform: Platform) {
-    super(`No driver registered for platform: ${platform}`);
+  constructor(
+    readonly platform: Platform,
+    readonly backend?: string,
+  ) {
+    super(
+      backend === undefined
+        ? `No driver registered for platform: ${platform}`
+        : `No driver registered for backend: ${platform}:${backend}`,
+    );
     this.name = "NoDriverError";
   }
 }
@@ -65,9 +78,25 @@ export class DriverCatalog {
     this.#logger = options.logger?.child("driver-catalog") ?? new NoopLogger();
   }
 
-  get(platform: Platform): Driver {
+  get(platform: Platform, backend?: string): Driver {
     const driver = this.#drivers.get(platform);
-    if (driver === undefined) throw new NoDriverError(platform);
+    if (driver === undefined || (backend !== undefined && driver.backend.id !== backend)) {
+      throw new NoDriverError(platform, backend);
+    }
+    return driver;
+  }
+
+  forDevice(device: Pick<DeviceRecord, "backend" | "spec">): Driver {
+    return this.#target(device.spec.platform, device.backend);
+  }
+
+  owns(device: Pick<DeviceRecord, "backend" | "spec">): boolean {
+    return this.#drivers.get(device.spec.platform)?.backend.id === device.backend;
+  }
+
+  #target(platform: Platform, backend: string): Driver {
+    const driver = this.get(platform);
+    if (driver.backend.id !== backend) throw new NoDriverError(platform, backend);
     return driver;
   }
 
@@ -78,6 +107,7 @@ export class DriverCatalog {
     context?: PassthroughContext,
   ): Promise<PassthroughCommand> {
     for (const driver of this.#drivers.values()) {
+      if (device !== undefined && driver.backend.id !== device.backend) continue;
       if (driver.passthroughTools?.includes(tool) === true && driver.passthrough !== undefined) {
         return await driver.passthrough(tool, device, args, context);
       }
@@ -91,7 +121,7 @@ export class DriverCatalog {
     settings: ScreenSettings,
     signal: AbortSignal,
   ): Promise<ScreenFeed> {
-    const capture = this.#drivers.get(platform)?.screenCapture;
+    const capture = this.#target(platform, device.backend).screenCapture;
     if (capture === undefined) {
       throw new ScreenNotSupportedError(`A ${platform} device's screen cannot be streamed`);
     }
@@ -103,7 +133,7 @@ export class DriverCatalog {
     device: VirtualDriverDevice | PhysicalDriverDevice,
     signal: AbortSignal,
   ): Promise<DeviceInput | UnavailableDeviceInput> {
-    const factory = this.#drivers.get(platform)?.input;
+    const factory = this.#target(platform, device.backend).input;
     if (factory === undefined) return { unavailable: `${platform} devices take no input` };
     return await factory.open(device, signal);
   }
@@ -112,7 +142,8 @@ export class DriverCatalog {
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,
   ): boolean {
-    return this.#drivers.get(platform)?.deviceTcp?.supports(device) ?? false;
+    const driver = this.#drivers.get(platform);
+    return driver?.backend.id === device.backend && (driver.deviceTcp?.supports(device) ?? false);
   }
 
   async reverseDevicePort(
@@ -121,7 +152,7 @@ export class DriverCatalog {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<DeviceReverse> {
-    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    const deviceTcp = this.#target(platform, device.backend).deviceTcp;
     if (deviceTcp === undefined) {
       throw new DeviceTcpError(
         "TUNNEL_UNSUPPORTED",
@@ -137,7 +168,7 @@ export class DriverCatalog {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<TcpStream> {
-    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    const deviceTcp = this.#target(platform, device.backend).deviceTcp;
     if (deviceTcp === undefined) {
       throw new DeviceTcpError(
         "TUNNEL_UNSUPPORTED",
@@ -151,7 +182,11 @@ export class DriverCatalog {
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,
   ): boolean {
-    return this.#drivers.get(platform)?.deviceTcp?.supportsEmulatorPort?.(device) ?? false;
+    const driver = this.#drivers.get(platform);
+    return (
+      driver?.backend.id === device.backend &&
+      (driver.deviceTcp?.supportsEmulatorPort?.(device) ?? false)
+    );
   }
 
   async connectEmulatorPort(
@@ -160,7 +195,7 @@ export class DriverCatalog {
     name: string,
     signal: AbortSignal,
   ): Promise<TcpStream> {
-    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    const deviceTcp = this.#target(platform, device.backend).deviceTcp;
     if (deviceTcp?.connectEmulatorPort === undefined) {
       throw new DeviceTcpError(
         "TUNNEL_UNSUPPORTED",

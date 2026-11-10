@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { FakeDriver } from "./testing.js";
 import { FakeClock } from "../ports/index.js";
 import type { Driver, DriverReality, ObservedDevice } from "./driver.js";
 import type { Platform } from "./domain.js";
@@ -15,7 +16,11 @@ function reality(...ids: string[]): DriverReality {
 
 function driver(platform: Platform, listManaged: () => Promise<DriverReality>) {
   const list = vi.fn(listManaged);
-  return { driver: { listManaged: list, platform } as unknown as Driver, list };
+  const fake = new FakeDriver({ clock: new FakeClock(), platform });
+  return {
+    driver: { backend: fake.backend, listManaged: list, platform } as unknown as Driver,
+    list,
+  };
 }
 
 describe("readStartup", () => {
@@ -30,9 +35,9 @@ describe("readStartup", () => {
 
     expect(ios.list).toHaveBeenCalledTimes(1);
     expect(android.list).toHaveBeenCalledTimes(1);
-    expect(read.reality("ios")).toEqual(reality("a"));
-    expect(read.reality("android")).toEqual(reality("b"));
-    expect(read.isReadable("ios")).toBe(true);
+    expect(read.reality("ios", "local")).toEqual(reality("a"));
+    expect(read.reality("android", "local")).toEqual(reality("b"));
+    expect(read.isReadable("ios", "local")).toBe(true);
   });
 
   it("reads a platform with no driver as unreadable", async () => {
@@ -40,9 +45,9 @@ describe("readStartup", () => {
 
     const read = await readStartup({ clock: new FakeClock(0), drivers: [ios.driver] });
 
-    expect(read.isReadable("android")).toBe(false);
-    expect(read.reality("android")).toBeUndefined();
-    expect(read.isReadable("ios")).toBe(true);
+    expect(read.isReadable("android", "local")).toBe(false);
+    expect(read.reality("android", "local")).toBeUndefined();
+    expect(read.isReadable("ios", "local")).toBe(true);
   });
 
   it("reads a platform whose listManaged throws as unreadable and still reads the other", async () => {
@@ -56,8 +61,8 @@ describe("readStartup", () => {
       drivers: [ios.driver, android.driver],
     });
 
-    expect(read.isReadable("ios")).toBe(false);
-    expect(read.reality("android")).toEqual(reality("b"));
+    expect(read.isReadable("ios", "local")).toBe(false);
+    expect(read.reality("android", "local")).toEqual(reality("b"));
   });
 
   it("reads a platform whose listManaged has not answered after 60 seconds as unreadable, and goes on", async () => {
@@ -71,8 +76,8 @@ describe("readStartup", () => {
     const read = await pending;
 
     expect(STARTUP_READ_LIMIT_MS).toBe(60_000);
-    expect(read.isReadable("ios")).toBe(false);
-    expect(read.reality("android")).toEqual(reality("b"));
+    expect(read.isReadable("ios", "local")).toBe(false);
+    expect(read.reality("android", "local")).toEqual(reality("b"));
   });
 
   it("keeps waiting for a platform that has been silent for less than 60 seconds", async () => {
@@ -92,7 +97,7 @@ describe("readStartup", () => {
     answer(reality("a"));
     const read = await pending;
 
-    expect(read.reality("ios")).toEqual(reality("a"));
+    expect(read.reality("ios", "local")).toEqual(reality("a"));
     expect(clock.pendingTimerCount).toBe(0);
   });
 });

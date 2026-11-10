@@ -88,6 +88,7 @@ class HangingTcpStreamConnector extends FakeTcpStreamConnector {
 
 describe("AndroidDriver deviceTcp", () => {
   const emulator = {
+    backend: "local",
     address: "emulator-5586",
     deviceId: "simlock_one",
     driverData: { avdName: "simlock_one", configHash: "h", port: 5586, serial: "emulator-5586" },
@@ -495,7 +496,7 @@ describe("AndroidDriver tunnels of a destroyed device", () => {
     });
     const ready = await harness.driver.makeReady(harness.device);
     await harness.driver.deviceTcp?.reverse(
-      { ...ready, physical: false },
+      { backend: "local", ...ready, physical: false },
       5173,
       new AbortController().signal,
     );
@@ -1312,7 +1313,7 @@ describe("AndroidDriver image fit", () => {
           },
         );
         const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
-        await harness.driver.saveSource({ ...ready, physical: false as const });
+        await harness.driver.saveSource({ backend: "local", ...ready, physical: false as const });
         await harness.filesystem.writeFileAtomic(`${savedHome}/simlock.avd/marker.txt`, "saved");
         const callsBefore = harness.runner.calls.length;
 
@@ -1370,6 +1371,7 @@ describe("AndroidDriver image fit", () => {
           await powered.driver.provision(powered.spec),
         );
         const poweredSaved = await powered.driver.saveSource({
+          backend: "local",
           ...poweredReady,
           physical: false as const,
         });
@@ -1409,7 +1411,11 @@ describe("AndroidDriver image fit", () => {
         const stuckReady = await stuck.driver.makeReady(await stuck.driver.provision(stuck.spec));
         // why: the stuck emulator ignores `reboot -p` and `emu kill`; only the deadlines and a SIGKILL end it.
         stuck.runner.ignoresEmuKill = true;
-        const stuckSaving = stuck.driver.saveSource({ ...stuckReady, physical: false as const });
+        const stuckSaving = stuck.driver.saveSource({
+          backend: "local",
+          ...stuckReady,
+          physical: false as const,
+        });
         await vi.waitFor(() =>
           expect(stuck.runner.calls.filter((call) => call.args.includes("reboot"))).toHaveLength(2),
         );
@@ -1453,6 +1459,7 @@ describe("AndroidDriver image fit", () => {
           { clock: clockAfter },
         );
         const adoptedSaving = adopted.driver.saveSource({
+          backend: "local",
           ...restartedReady,
           physical: false as const,
         });
@@ -1474,7 +1481,7 @@ describe("AndroidDriver image fit", () => {
         const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
 
         await expect(
-          harness.driver.saveSource({ ...ready, physical: false as const }),
+          harness.driver.saveSource({ backend: "local", ...ready, physical: false as const }),
         ).resolves.toMatchObject({ imageTag: "google_apis", sourceId: "baseline_four" });
 
         expect(
@@ -1550,7 +1557,7 @@ describe("AndroidDriver image fit", () => {
           const before = harness.runner.calls.length;
 
           await expect(
-            harness.driver.saveSource({ ...ready, physical: false as const }),
+            harness.driver.saveSource({ backend: "local", ...ready, physical: false as const }),
           ).rejects.toThrow(failing.message);
 
           const sentToDevice = harness.runner.calls

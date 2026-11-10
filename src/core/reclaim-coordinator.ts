@@ -27,7 +27,7 @@ export interface SavedSource {
 }
 
 export interface ReclaimDriverCatalog {
-  get(platform: Platform): Driver;
+  get(platform: Platform, backend?: string): Driver;
 }
 
 export interface ReclaimRegistry {
@@ -107,7 +107,7 @@ export class ReclaimCoordinator {
   }
 
   async #purge(device: DeviceRecord, leaseId?: string): Promise<void> {
-    const driver = this.options.drivers.get(device.spec.platform);
+    const driver = this.options.drivers.get(device.spec.platform, device.backend);
     const startedAt = this.options.clock.now();
     const attemptedStrategy = driver.reclaimStrategy(toDriverDevice(device), { clean: "standard" });
     let result: Awaited<ReturnType<Driver["reclaim"]>>;
@@ -161,7 +161,9 @@ export class ReclaimCoordinator {
       return true;
     }
 
-    await this.options.drivers.get(device.spec.platform).shutdown(toDriverDevice(device));
+    await this.options.drivers
+      .get(device.spec.platform, device.backend)
+      .shutdown(toDriverDevice(device));
     const recovered = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.virtualDevices.find(
         (candidate) => candidate.id === deviceId,
@@ -266,7 +268,7 @@ export class ReclaimCoordinator {
     afterSave: (saved: SavedSource) => Promise<void>,
   ): Promise<SavedSource> {
     const { device, lease } = released;
-    const driver = this.options.drivers.get(device.spec.platform);
+    const driver = this.options.drivers.get(device.spec.platform, device.backend);
     const startedAt = this.options.clock.now();
     let saved: SavedSource;
     try {
@@ -315,7 +317,7 @@ export class ReclaimCoordinator {
     readonly device: VirtualDevice;
     readonly lease: LeaseRecord;
   }): Promise<void> {
-    const driver = this.options.drivers.get(released.device.spec.platform);
+    const driver = this.options.drivers.get(released.device.spec.platform, released.device.backend);
     const startedAt = this.options.clock.now();
     try {
       await driver.shutdown(toDriverDevice(released.device));
@@ -352,7 +354,9 @@ export class ReclaimCoordinator {
 
   /** Destroys a spent device and commits `shutdown -> deleted`, if it is still that device. */
   async #deleteSpent(device: VirtualDevice, initiator = "lease-end"): Promise<boolean> {
-    await this.options.drivers.get(device.spec.platform).destroy(toDriverDevice(device));
+    await this.options.drivers
+      .get(device.spec.platform, device.backend)
+      .destroy(toDriverDevice(device));
     const deleted = await this.options.decisions.run(async () => {
       if (this.#unleasedDevice(device.id, "shutdown") === undefined) return false;
       await this.options.registry.transitionDevice(device.id, "deleted", {
@@ -400,7 +404,7 @@ export class ReclaimCoordinator {
   async #absentAfterFailure(device: PhysicalDevice, error: unknown): Promise<boolean> {
     let absentReason: AbsentReason | undefined;
     try {
-      const driver = this.options.drivers.get(device.spec.platform);
+      const driver = this.options.drivers.get(device.spec.platform, device.backend);
       const reads = await readPhysicalPresenceDetail(driver, [device.driverDeviceId]);
       const read = reads.get(device.driverDeviceId);
       if (read?.present !== true) absentReason = read?.reason ?? "not-present";

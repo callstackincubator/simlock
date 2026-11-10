@@ -694,6 +694,7 @@ describe("lease-end participants (#469)", () => {
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant] });
     const device = await harness.registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "UDID-A",

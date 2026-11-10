@@ -54,7 +54,13 @@ describe("DriverCatalog", () => {
       new FakeDriver({ availableOsVersions: ["14"], clock, deviceTcp, platform: "android" }),
       new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
     ]);
-    const simulator = { address: "", deviceId: "sim", driverData: {}, physical: false } as const;
+    const simulator = {
+      backend: "local",
+      address: "",
+      deviceId: "sim",
+      driverData: {},
+      physical: false,
+    } as const;
     const phone = { ...simulator, enrolledApps: [], physical: true } as const;
     const signal = new AbortController().signal;
 
@@ -97,7 +103,13 @@ describe("DriverCatalog", () => {
     const bare = new DriverCatalog([
       new FakeDriver({ availableOsVersions: ["14"], clock, platform: "android" }),
     ]);
-    const emulator = { address: "", deviceId: "emu", driverData: {}, physical: false } as const;
+    const emulator = {
+      backend: "local",
+      address: "",
+      deviceId: "emu",
+      driverData: {},
+      physical: false,
+    } as const;
     const phone = { ...emulator, enrolledApps: [], physical: true } as const;
     const signal = new AbortController().signal;
 
@@ -345,7 +357,12 @@ describe("DriverCatalog", () => {
         platform: "ios",
       }),
     );
-    const device = { deviceId: "00008110-001A", driverData: {}, physical: true } as const;
+    const device = {
+      backend: "local",
+      deviceId: "00008110-001A",
+      driverData: {},
+      physical: true,
+    } as const;
 
     await route(new DriverCatalog([driver]), "devicectl", device, ["device", "info", "apps"], {
       hasTerminal: false,

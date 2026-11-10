@@ -109,6 +109,7 @@ async function seedLeased(
   deviceCounter += 1;
   const driverDeviceId = options.driverDeviceId ?? `simlock-${deviceCounter}`;
   const device = await harness.registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,
@@ -192,6 +193,7 @@ describe("LeaseHealthMonitor", () => {
   it("observes only leased devices: a ready device the driver reports stopped costs no driver listing and starts no recovery", async () => {
     const harness = await createHarness();
     const device = await harness.registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "simlock-idle" },
       driverDeviceId: "simlock-idle",
       provisionDuration: 0,

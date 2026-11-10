@@ -118,6 +118,7 @@ type Harness = Awaited<ReturnType<typeof createHarness>>;
 
 async function enrollIphone(harness: Harness, driverDeviceId: string): Promise<PhysicalDevice> {
   const device = await harness.registry.enrollPhysical({
+    backend: "local",
     apps: [],
     class: "phone",
     driverDeviceId,
@@ -397,6 +398,7 @@ describe("createLeasing with physical devices", () => {
     const harness = await createHarness();
     const wanted = await enrollIphone(harness, "UDID-A");
     const other = await harness.registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "UDID-B",
@@ -622,6 +624,7 @@ async function enrollPhone(
   deviceClass: "phone" | "tablet" = "phone",
 ): Promise<PhysicalDevice> {
   const device = await harness.registry.enrollPhysical({
+    backend: "local",
     apps: [],
     class: deviceClass,
     driverDeviceId,

@@ -55,7 +55,7 @@ export interface RegistryOptions {
   readonly idGenerator: IdGenerator;
   readonly eventBus: EventBus;
   readonly state: StateDatabase;
-  readonly deviceData: ReadonlyMap<Platform, DeviceDataTable>;
+  readonly deviceData: ReadonlyMap<string, DeviceDataTable>;
   /**
    * `lease.identity`: the policy a newly registered device is stamped with, looked up by its
    * spec's platform. Only registration reads it -- a loaded record keeps the policy it was
@@ -93,6 +93,7 @@ export interface ComponentRecord {
 }
 
 export interface RegisterDeviceInput {
+  readonly backend: string;
   readonly driverDeviceId: string;
   readonly spec: VirtualSpec;
   readonly driverData: unknown;
@@ -100,6 +101,7 @@ export interface RegisterDeviceInput {
 }
 
 export interface PhysicalEnrollmentInput {
+  readonly backend: string;
   readonly platform: Platform;
   readonly driverDeviceId: string;
   readonly model: string;
@@ -255,12 +257,14 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   async registerDevice({
+    backend,
     driverData,
     driverDeviceId,
     provisionDuration,
     spec,
   }: RegisterDeviceInput): Promise<VirtualDevice> {
     const record: VirtualDevice = {
+      backend,
       createdAt: this.options.clock.now(),
       driverData,
       driverDeviceId,
@@ -666,6 +670,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   async enrollPhysical(input: PhysicalEnrollmentInput): Promise<PhysicalDevice> {
     const now = this.options.clock.now();
     const record: PhysicalDevice = {
+      backend: input.backend,
       createdAt: now,
       driverData: {},
       driverDeviceId: input.driverDeviceId,

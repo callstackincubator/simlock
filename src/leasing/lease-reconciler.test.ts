@@ -75,6 +75,7 @@ async function leaseOn(
   ttlDeadline: number,
 ): Promise<LeaseRecord> {
   const device = await harness.registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,
@@ -106,7 +107,10 @@ function reality(...devices: readonly (readonly [string, ObservedRunState])[]): 
 }
 
 function read(entries: Partial<Record<Platform, DriverReality>>): StartupRead {
-  return new StartupRead(new Map(Object.entries(entries) as [Platform, DriverReality][]));
+  const mapped = Object.entries(entries).map(
+    ([platform, reality]) => [`${platform}:local`, reality] as const,
+  );
+  return new StartupRead(new Map(mapped));
 }
 
 function eventNames(harness: Harness): string[] {
@@ -120,6 +124,7 @@ describe("LeaseReconciler", () => {
   it("skips the lease of a physical device, whatever the read says of its ID or its deadline, and keeps the lease and the device as they are", async () => {
     const harness = await createHarness();
     const phone = await harness.registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "00008110-001A2B3C4D5E",

@@ -502,6 +502,7 @@ describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative output grant", () => {
     const grant = {
       device: {
+        backend: "local",
         physical: false,
         id: "dev_1",
         driverDeviceId: "sim-1",

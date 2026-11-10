@@ -19,6 +19,7 @@ const fullSpec: VirtualSpec = {
 
 function record(overrides: Partial<VirtualDevice>): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     createdAt: 0,
     driverData: {},

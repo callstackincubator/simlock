@@ -22,6 +22,7 @@ function view(
     config,
     devices: overrides.devices ?? [
       {
+        backend: "local",
         physical: false as const,
         createdAt: 0,
         driverData: {},
@@ -103,6 +104,7 @@ describe("idleDestroyRule", () => {
 
   describe("a device that never served a lease", () => {
     const never = (id: string, overrides: Partial<RegistryView["devices"][number]> = {}) => ({
+      backend: "local",
       physical: false as const,
       createdAt: 0,
       driverData: {},

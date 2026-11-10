@@ -16,7 +16,7 @@ import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
 
 export interface QuarantineDriverCatalog {
-  get(platform: Platform): Driver;
+  get(platform: Platform, backend?: string): Driver;
 }
 
 export interface QuarantineRegistry {
@@ -224,7 +224,7 @@ export class QuarantineCoordinator {
       return;
     }
     const attempts = (device.quarantineAttempts ?? 0) + 1;
-    const driver = this.options.drivers.get(device.spec.platform);
+    const driver = this.options.drivers.get(device.spec.platform, device.backend);
     if (!device.physical) {
       await this.#retryDelete(driver, device, attempts, claim);
       return;
@@ -273,7 +273,7 @@ export class QuarantineCoordinator {
    */
   async #presentForRetry(device: PhysicalDevice): Promise<boolean> {
     try {
-      const driver = this.options.drivers.get(device.spec.platform);
+      const driver = this.options.drivers.get(device.spec.platform, device.backend);
       const presence = await readPhysicalPresence(driver, [device.driverDeviceId]);
       return presence.get(device.driverDeviceId) === true;
     } catch (error: unknown) {
@@ -361,7 +361,7 @@ export class QuarantineCoordinator {
       await this.#unenroll(device, attempts, claim);
       return;
     }
-    const driver = this.options.drivers.get(device.spec.platform);
+    const driver = this.options.drivers.get(device.spec.platform, device.backend);
     try {
       await driver.destroy(toDriverDevice(device));
     } catch (error: unknown) {

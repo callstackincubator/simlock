@@ -220,6 +220,7 @@ function deviceListResponse(state: string): string {
 }
 
 const PHYSICAL_DEVICE = {
+  backend: "local",
   address: "00008110-001A2B3C4D5E",
   deviceId: "00008110-001A2B3C4D5E",
   driverData: {},
@@ -1526,6 +1527,7 @@ describe("IosSimctlDriver", () => {
     const baselineName = "simlock-baseline-device-1";
     const sourcesSet = `${deviceRoot}/sources`;
     const device = {
+      backend: "local",
       address: driverData.udid,
       deviceId: driverData.udid,
       driverData,
@@ -2535,7 +2537,13 @@ describe("IosSimctlDriver", () => {
   it("fills a simctl device verb's missing device with the lease's UDID", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
     const udid = "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90";
-    const simulator = { address: "", deviceId: udid, driverData: {}, physical: false } as const;
+    const simulator = {
+      backend: "local",
+      address: "",
+      deviceId: udid,
+      driverData: {},
+      physical: false,
+    } as const;
     const scoped = ["simctl", "--set", deviceRoot];
     const cases: readonly (readonly [readonly string[], readonly string[]])[] = [
       [
@@ -2587,7 +2595,13 @@ describe("IosSimctlDriver", () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
     const udid = "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90";
     const other = "0A1B2C3D-0000-4000-8000-123456789ABC";
-    const simulator = { address: "", deviceId: udid, driverData: {}, physical: false } as const;
+    const simulator = {
+      backend: "local",
+      address: "",
+      deviceId: udid,
+      driverData: {},
+      physical: false,
+    } as const;
     const refusal = (command: string, named: string) =>
       `Refusing \`simctl ${command}\`: it names device ${named}, and this lease holds ${udid}. Leave the device out; Simlock fills it in.`;
     const cases: readonly (readonly [readonly string[], string])[] = [
@@ -4795,6 +4809,7 @@ async function settledValue(promise: Promise<unknown>): Promise<unknown> {
 
 describe("IosSimctlDriver screen capture commands", () => {
   const physicalDevice = {
+    backend: "local",
     address: "UDID-P",
     deviceId: "UDID-P",
     driverData: {},
@@ -5694,7 +5709,13 @@ describe("IosSimctlDriver device set", () => {
       if (capture === undefined) throw new Error("the driver offers no screen capture");
 
       await capture.open(
-        { address: driverData.udid, deviceId: driverData.udid, driverData, physical: false },
+        {
+          backend: "local",
+          address: driverData.udid,
+          deviceId: driverData.udid,
+          driverData,
+          physical: false,
+        },
         { bitrateKbps: 1_500, fps: 30, maxDimension: 720 },
         new AbortController().signal,
       );

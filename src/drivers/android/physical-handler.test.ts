@@ -44,6 +44,7 @@ const ADB_VERSION_40 = "Android Debug Bridge version 1.0.40\nVersion 34.0.0-9570
 
 const USB_LINE = `${PHONE} device usb:1-1 product:o1s model:SM_G991B device:o1s transport_id:3`;
 const PHYSICAL = {
+  backend: "local",
   address: PHONE,
   deviceId: PHONE,
   driverData: {},
@@ -51,6 +52,7 @@ const PHYSICAL = {
   physical: true,
 } as const;
 const EMULATOR_DEVICE = {
+  backend: "local",
   address: "",
   deviceId: "device",
   driverData: {},

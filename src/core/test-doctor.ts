@@ -23,6 +23,7 @@ export async function readyIosDevice() {
     idGenerator: sequence(),
   });
   const registered = await registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: "device-1" },
     driverDeviceId: "device-1",
     provisionDuration: 0,
@@ -51,6 +52,7 @@ export async function readyDevice(
   platform: "ios" | "android",
 ) {
   const device = await registry.registerDevice({
+    backend: "local",
     driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,

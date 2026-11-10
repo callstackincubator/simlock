@@ -135,7 +135,9 @@ export class LeaseHealthMonitor {
    */
   async #runTick(): Promise<void> {
     const snapshot = this.options.registry.snapshot;
-    const leased = snapshot.virtualDevices.filter((device) => device.state === "leased");
+    const leased = snapshot.virtualDevices.filter(
+      (device) => device.state === "leased" && this.options.drivers.owns(device),
+    );
     this.#dropStaleCounters(leased);
 
     const observedByPlatform = await this.#pollDrivers(leased);

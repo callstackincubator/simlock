@@ -144,6 +144,7 @@ function device(
   deviceSpec: VirtualSpec,
 ): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     createdAt: 1,
     driverData: {},
@@ -177,6 +178,7 @@ describe("ReclaimCoordinator", () => {
 
   function physicalFixture(): PhysicalDevice {
     return {
+      backend: "local",
       createdAt: 1,
       driverData: {},
       driverDeviceId: PHYSICAL_UDID,
@@ -220,6 +222,7 @@ describe("ReclaimCoordinator", () => {
       platform: "ios",
     });
     const physical: PhysicalDevice = {
+      backend: "local",
       createdAt: 1,
       driverData: {},
       driverDeviceId: "00008110-001A2B3C4D5E",
@@ -290,6 +293,7 @@ describe("ReclaimCoordinator", () => {
 
   it("reclaims a physical device through the driver even when its record carries a spent fresh identity", async () => {
     const physical = {
+      backend: "local",
       createdAt: 1,
       driverData: {},
       driverDeviceId: "00008110-001A2B3C4D5E",
@@ -535,6 +539,7 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
       state: testState,
     });
     await seeding.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: PHYSICAL_ID,
@@ -793,6 +798,7 @@ describe("ReclaimCoordinator readiness callback and returned-device reclaims", (
 
   function physicalRecord(state: PhysicalDevice["state"], id = "dev_physical"): PhysicalDevice {
     return {
+      backend: "local",
       createdAt: 1,
       driverData: {},
       driverDeviceId: PHYSICAL_ID,

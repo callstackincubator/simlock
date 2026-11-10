@@ -24,6 +24,7 @@ describe("simlock/client smoke test", () => {
     const requestFrame = connection.lastSentOf("lease.request")!;
     connection.reply(requestFrame.id, {
       device: {
+        backend: "local",
         physical: false,
         createdAt: 0,
         driverData: null,

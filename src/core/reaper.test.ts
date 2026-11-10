@@ -175,6 +175,7 @@ async function createHarness(
 async function seedReady(harness: Awaited<ReturnType<typeof createHarness>>) {
   const driverDevice = await harness.driver.provision(spec);
   const device = await harness.registry.registerDevice({
+    backend: "local",
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,
@@ -508,6 +509,7 @@ describe("CleanupReaper", () => {
     // discovery refused. The ready one exercises the shutdown path, the shut-down one the
     // destroy path; a healthy device follows each.
     const ghostReady = await harness.registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "ghost-ready-android" },
       driverDeviceId: "ghost-ready-android",
       provisionDuration: 0,
@@ -531,6 +533,7 @@ describe("CleanupReaper", () => {
     });
     const idleReady = await seedReleased(harness, "ready");
     const ghostShutdown = await harness.registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "ghost-shutdown-android" },
       driverDeviceId: "ghost-shutdown-android",
       provisionDuration: 0,

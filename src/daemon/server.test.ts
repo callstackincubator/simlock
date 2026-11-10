@@ -1591,6 +1591,7 @@ describe("DaemonServer decorations", () => {
   it("surfaces a derived transitionAgeMs for a mid-transition device in status and list --devices", async () => {
     const harness = await createHarness();
     const device = await harness.registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver_provisioning" },
       driverDeviceId: "driver_provisioning",
       provisionDuration: 0,

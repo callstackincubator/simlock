@@ -129,6 +129,7 @@ class FakeRegistry implements QuarantineRegistry {
 
 function device(id: string, driverDeviceId: string): VirtualDevice {
   return {
+    backend: "local",
     physical: false,
     createdAt: 1,
     driverData: {},
@@ -608,6 +609,7 @@ describe("QuarantineCoordinator for a physical device (ADR 0022 §4)", () => {
       state,
     });
     await seeding.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: physicalRecord.driverDeviceId,
@@ -1312,6 +1314,7 @@ describe("QuarantineCoordinator quarantine cause", () => {
       driver.setPhysicalPresence(PHYSICAL_ID, true);
       id = "dev_physical";
       await seeding.enrollPhysical({
+        backend: "local",
         apps: [],
         class: "phone",
         driverDeviceId: PHYSICAL_ID,
@@ -1329,6 +1332,7 @@ describe("QuarantineCoordinator quarantine cause", () => {
       const provisioned = await driver.provision(virtualSpec);
       id = "dev_virtual";
       await seeding.registerDevice({
+        backend: "local",
         driverData: provisioned.driverData,
         driverDeviceId: provisioned.deviceId,
         provisionDuration: 0,

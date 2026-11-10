@@ -1,5 +1,6 @@
 import {
   type PassthroughCommand,
+  type DriverDevice,
   type PassthroughContext,
   PassthroughRefusedError,
   type PhysicalDriverDevice,
@@ -8,7 +9,6 @@ import {
 } from "../../core/index.js";
 import type { ProcessResult, ProcessRunner } from "../../ports/index.js";
 import { otherDeviceRefusal } from "../other-device-refusal.js";
-import type { AdbTools } from "./adb-tools.js";
 
 /**
  * why: the `simlock <tool>` wrappers this driver answers to are a constant because a
@@ -276,7 +276,10 @@ function refusedSequenceMessage(args: readonly string[]): string | undefined {
 export interface PassthroughRulesOptions {
   readonly adb: string;
   readonly adbServerPort: number;
-  readonly adbTools: AdbTools;
+  readonly adbTools: {
+    env(): NodeJS.ProcessEnv;
+    dataFor(device: DriverDevice): { readonly serial: string };
+  };
   readonly platform: string;
   /** why: a phone's handler is built with this part's `isBareShell`, so the part reaches it through callbacks rather than owning it. */
   readonly physical: {

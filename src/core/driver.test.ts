@@ -133,11 +133,12 @@ declare const virtualDevice: VirtualDevice;
 
 describe("the virtual-only driver and lifecycle calls (ADR 0022 §4, §5)", () => {
   const physicalDriverDevice = {
+    backend: "local",
     address: "00008110-001A2B3C4D5E",
     deviceId: "00008110-001A2B3C4D5E",
     driverData: {},
     physical: true,
-  } satisfies DriverDevice & { readonly physical: true };
+  } satisfies DriverDevice & { readonly physical: true; readonly backend: string };
   const physicalSpec: PhysicalSpec = {
     class: "phone",
     model: "iPhone 15 Pro",
@@ -196,10 +197,10 @@ describe("the virtual-only driver and lifecycle calls (ADR 0022 §4, §5)", () =
 
     const spec = await fake.resolveSpec({ model: "iPhone 16", osVersion: "18.4", platform: "ios" });
     const provisioned = await fake.provision(spec);
-    const device = { ...provisioned, physical: false } as const;
+    const device = { backend: "local", ...provisioned, physical: false } as const;
     const ready = await fake.makeReady(device, prepare);
-    await fake.shutdown({ ...ready, physical: false });
-    await fake.destroy({ ...ready, physical: false });
+    await fake.shutdown({ backend: "local", ...ready, physical: false });
+    await fake.destroy({ backend: "local", ...ready, physical: false });
 
     expect(spec.physical).toBe(false);
     expect(physicalCallsDoNotCompile).toBeTypeOf("function");
@@ -245,6 +246,7 @@ describe("PhysicalInspection (ADR 0022 §5)", () => {
 
 describe("toDriverDevice", () => {
   const recordFields = {
+    backend: "local",
     address: "emulator-5554",
     createdAt: 1_000,
     driverData: { opaque: true },
@@ -268,6 +270,7 @@ describe("toDriverDevice", () => {
     };
 
     expect(toDriverDevice(record)).toEqual({
+      backend: "local",
       address: "emulator-5554",
       deviceId: "driver_1",
       driverData: { opaque: true },
@@ -278,6 +281,7 @@ describe("toDriverDevice", () => {
 
   it("gives an empty address for a record that has none", () => {
     const record: VirtualDevice = {
+      backend: "local",
       createdAt: 1_000,
       driverData: {},
       driverDeviceId: "driver_1",
@@ -301,6 +305,7 @@ describe("toDriverDevice", () => {
     };
 
     expect(toDriverDevice(record)).toEqual({
+      backend: "local",
       address: "emulator-5554",
       deviceId: "driver_1",
       driverData: { opaque: true },

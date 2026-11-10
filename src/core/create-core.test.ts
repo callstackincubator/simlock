@@ -99,6 +99,7 @@ async function releasedLease(
   const spec = { physical: false, model: "Phone", osVersion: "1", platform: "ios" } as const;
   const provisioned = await driver.provision(spec);
   const device = await registry.registerDevice({
+    backend: "local",
     driverData: provisioned.driverData,
     driverDeviceId: provisioned.deviceId,
     provisionDuration: 0,
@@ -323,6 +324,7 @@ describe("createCore", () => {
     const spec = { physical: false, model: "Phone", osVersion: "1", platform: "ios" } as const;
     const provisioned = await driver.provision(spec);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: provisioned.driverData,
       driverDeviceId: provisioned.deviceId,
       provisionDuration: 0,
@@ -373,6 +375,7 @@ describe("createCore", () => {
     const spec = { physical: false, model: "Phone", osVersion: "1", platform: "ios" } as const;
     const provisioned = await driver.provision(spec);
     const device = await registry.registerDevice({
+      backend: "local",
       driverData: provisioned.driverData,
       driverDeviceId: provisioned.deviceId,
       provisionDuration: 0,
@@ -560,6 +563,7 @@ describe("createCore", () => {
       rig.core.connect(ports());
 
       const ghost = await rig.registry.registerDevice({
+        backend: "local",
         driverData: { fakeDeviceId: "ghost-android" },
         driverDeviceId: "ghost-android",
         provisionDuration: 0,
@@ -578,6 +582,7 @@ describe("createCore", () => {
         platform: "ios",
       });
       const idle = await rig.registry.registerDevice({
+        backend: "local",
         driverData: bootable.driverData,
         driverDeviceId: bootable.deviceId,
         provisionDuration: 0,

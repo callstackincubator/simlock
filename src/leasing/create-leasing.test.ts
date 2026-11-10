@@ -236,6 +236,7 @@ async function seedReady(
   // why: Running on the machine too: a daemon start reads that of a leased device to keep its lease.
   const booted = await driver.makeReady(driverDevice, { mode, purpose: "prepare" });
   const device = await harness.registry.registerDevice({
+    backend: "local",
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,
@@ -373,6 +374,7 @@ describe("createLeasing", () => {
       state,
     });
     const physical = await seeding.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "00008110-001A2B3C4D5E",
@@ -491,6 +493,7 @@ describe("createLeasing", () => {
     } as const;
     const driverDevice = await android.provision(androidSpec);
     const registered = await harness.registry.registerDevice({
+      backend: "local",
       driverData: driverDevice.driverData,
       driverDeviceId: driverDevice.deviceId,
       provisionDuration: 0,
@@ -1443,6 +1446,7 @@ describe("createLeasing RAM budget by mode", () => {
   it("counts a slim-spec device quarantined from provisioning at the full size", async () => {
     const harness = await createHarness({ limits: roomy, ramBudget, totalRamBytes: 9 * gibibyte });
     const registered = await harness.registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "driver-stalled" },
       driverDeviceId: "driver-stalled",
       provisionDuration: 0,
@@ -2071,6 +2075,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       },
     );
     const device = await crashed.registerDevice({
+      backend: "local",
       driverData: driverDevice.driverData,
       driverDeviceId: driverDevice.deviceId,
       provisionDuration: 0,
@@ -2493,6 +2498,7 @@ describe("createLeasing: capacity.changed and queue.changed", () => {
     );
 
     await harness.registry.registerDevice({
+      backend: "local",
       driverData: { fakeDeviceId: "sim-1" },
       driverDeviceId: "sim-1",
       provisionDuration: 0,
@@ -2845,6 +2851,7 @@ describe("createLeasing wiring", () => {
   it("disposes the physical device watcher with leasing: no presence read happens after dispose", async () => {
     const harness = await createHarness();
     await harness.registry.enrollPhysical({
+      backend: "local",
       apps: [],
       class: "phone",
       driverDeviceId: "UDID-A",
@@ -5169,7 +5176,7 @@ describe("createLeasing: a baseline is a pool key", () => {
       mode: "full",
       purpose: "prepare",
     });
-    const saved = await harness.driver.saveSource({ ...ready, physical: false });
+    const saved = await harness.driver.saveSource({ backend: "local", ...ready, physical: false });
     harness.state.database
       .prepare(
         `INSERT INTO baselines

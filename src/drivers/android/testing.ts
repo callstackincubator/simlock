@@ -827,6 +827,7 @@ export const scopedEnv = {
 } as const;
 
 export const PHYSICAL_DEVICE = {
+  backend: "local",
   address: "R58M123ABC",
   deviceId: "R58M123ABC",
   driverData: {},

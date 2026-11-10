@@ -109,6 +109,7 @@ function withHttp(config: Config, http: Config["http"] | undefined): Config {
 }
 
 export interface SeededPhysicalDevice {
+  readonly backend: string;
   readonly createdAt: number;
   readonly driverDeviceId: string;
   readonly enrolledApps: readonly string[];
@@ -123,10 +124,11 @@ function seedPhysicalDevices(state: StateDatabase, devices: readonly SeededPhysi
   for (const device of devices) {
     state.database
       .prepare(
-        "INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version, class, created_at, last_lease_ended_at, reclaiming_since) VALUES (?, 'ios', 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO devices (id, backend, platform, physical, driver_device_id, state, model, os_version, class, created_at, last_lease_ended_at, reclaiming_since) VALUES (?, ?, 'ios', 1, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         device.id,
+        device.backend,
         device.driverDeviceId,
         device.state,
         device.spec.model,
@@ -376,6 +378,7 @@ export async function seedSlimDevice(
   // why: the seed is a slim device whatever the fake reports on its boot, so a test whose driver answers `full` still starts from slim.
   const ready = { ...driven, mode: "slim" as const };
   const registered = await built.registry.registerDevice({
+    backend: "local",
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,

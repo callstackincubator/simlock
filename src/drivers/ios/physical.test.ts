@@ -77,6 +77,7 @@ const enrolledWithGone = (): PhysicalDriverDevice => ({
 });
 
 const PHYSICAL_DEVICE: PhysicalDriverDevice = {
+  backend: "local",
   address: PHONE_UDID,
   deviceId: PHONE_UDID,
   driverData: {},

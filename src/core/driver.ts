@@ -48,9 +48,13 @@ export interface DriverDevice {
   readonly mode?: DeviceMode;
 }
 
-export type VirtualDriverDevice = DriverDevice & { readonly physical: false };
+export type VirtualDriverDevice = DriverDevice & {
+  readonly physical: false;
+  readonly backend: string;
+};
 
 export type PhysicalDriverDevice = DriverDevice & {
+  readonly backend: string;
   readonly physical: true;
   readonly enrolledApps: readonly string[];
 };
@@ -71,6 +75,7 @@ export function toDriverDevice(device: PhysicalDevice): PhysicalDriverDevice;
 export function toDriverDevice(device: DeviceRecord): VirtualDriverDevice | PhysicalDriverDevice;
 export function toDriverDevice(device: DeviceRecord): VirtualDriverDevice | PhysicalDriverDevice {
   const base = {
+    backend: device.backend,
     address: device.address ?? "",
     deviceId: device.driverDeviceId,
     driverData: device.driverData,
@@ -92,8 +97,8 @@ export function uninstallPlan(
   };
 }
 
-export function virtualDriverDevice(device: DriverDevice): VirtualDriverDevice {
-  return { ...device, physical: false };
+export function virtualDriverDevice(device: DriverDevice, backend: string): VirtualDriverDevice {
+  return { ...device, backend, physical: false };
 }
 
 /** why: Always writes `mode`, defaulting `undefined` to `"full"` here and nowhere else, so a stale `"slim"` cannot outlive a re-boot that did not slim. */
