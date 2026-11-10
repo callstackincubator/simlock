@@ -102,7 +102,7 @@ describe("loadConfig", () => {
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
       update: { check: true },
-      devices: { deletedRetentionMs: 60 * 60_000 },
+      devices: { autoEnroll: false, deletedRetentionMs: 60 * 60_000 },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,

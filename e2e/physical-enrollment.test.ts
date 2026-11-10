@@ -657,3 +657,66 @@ describe("android enrolment", () => {
     expect(readEnrolledApps(env)).toEqual([["com.example.mail"]]);
   });
 });
+
+const AUTO_ENROLL = { devices: { autoEnroll: true }, health: { probeIntervalMs: 200 } };
+const IPHONE_TWO: ScriptedPhysicalDevice = {
+  apps: ["com.example.second"],
+  class: "phone",
+  ids: ["00008110-00FFEEDDCCBB"],
+  model: "iPhone 15 Pro",
+  osVersion: "18.4",
+};
+
+async function autoDaemon(
+  options: {
+    readonly ios?: Record<string, unknown>;
+    readonly android?: Record<string, unknown>;
+    readonly config?: Record<string, unknown>;
+  } = {},
+): Promise<TestEnv> {
+  const base = daemonOptions(options);
+  return withDaemon({
+    ...base,
+    configOverrides: { ...AUTO_ENROLL, ...options.config },
+  });
+}
+
+async function plug(
+  env: TestEnv,
+  platform: "ios" | "android",
+  devices: readonly ScriptedPhysicalDevice[],
+): Promise<void> {
+  await env.driverScript.merge({ [platform]: { physicalDevices: devices } });
+}
+
+describe("devices.autoEnroll", () => {
+  it("enrols a phone plugged in, an iPhone, an Android phone and a phone attached before the daemon starts, each with one device.enrolled initiator auto and its installed apps as kept apps", async () => {
+    const env = await autoDaemon({ ios: { physicalDevices: [IPHONE] } });
+
+    await plug(env, "ios", [IPHONE, IPHONE_TWO]);
+    await plug(env, "android", [PIXEL]);
+
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 3, {
+      label: "the three phones are enrolled",
+    });
+    const enrolled = (await named(env, "device.enrolled")).map(
+      (entry) => entry.payload as Added & { readonly initiator: string },
+    );
+    expect(
+      enrolled.map((payload) => [payload.driverDeviceId, payload.initiator, payload.appCount]),
+    ).toEqual(
+      expect.arrayContaining([
+        [UDID, "auto", 12],
+        ["00008110-00FFEEDDCCBB", "auto", 1],
+        ["R58M123ABC", "auto", 1],
+      ]),
+    );
+    expect(enrolled.every((payload) => !payload.reenrolled)).toBe(true);
+    expect(
+      readEnrolledApps(env)
+        .map((apps) => apps.length)
+        .sort(),
+    ).toEqual([1, 1, 12]);
+    expect((await rows(env)).map((row) => row.state)).toEqual(["ready", "ready", "ready"]);
+  });
+});
