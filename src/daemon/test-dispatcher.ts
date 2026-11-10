@@ -41,6 +41,7 @@ import { createAuth, tokensOwner } from "../auth/index.js";
 import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher } from "./dispatcher.js";
+import { describeLeaseRequestFailure } from "./error-code.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 export const gibibyte = 1024 ** 3;
@@ -259,6 +260,7 @@ export async function buildDispatcher(
     ...wiring,
     clock,
     config,
+    describeFailure: describeLeaseRequestFailure,
     ...overrides.engine,
     drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus,
