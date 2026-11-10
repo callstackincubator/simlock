@@ -883,7 +883,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     // why: the agent-device CLI sets `meta.requestProgress: "command"` on every command it sends without `--json`.
-    it("`devices` sent as the agent-device CLI sends it, with `meta.requestProgress`, answers an empty list before open and only the leased device after, without agent B's, and reaches agent-device without `requestProgress`", async () => {
+    it("`devices` sent as the agent-device CLI sends it, with `meta.requestProgress`, answers an empty list before open and only the leased device after, without agent B's, and reaches agent-device without `requestProgress`, while another command keeps it", async () => {
       const rig = await setUp();
       await granted(rig, 2, {}, { token: secrets.two });
       const asTheCli = { meta: { requestProgress: "command" } };
@@ -903,6 +903,15 @@ describe("the agent-device front's request rules", () => {
           (r) => (r.params?.["meta"] as Record<string, unknown> | undefined)?.["requestProgress"],
         );
       expect(sent).toEqual([undefined]);
+
+      const beforeSnapshot = commandsReceived(rig).length;
+      await runCommand(rig, "snapshot", 1, asTheCli);
+      const kept = commandsReceived(rig)
+        .slice(beforeSnapshot)
+        .map(
+          (r) => (r.params?.["meta"] as Record<string, unknown> | undefined)?.["requestProgress"],
+        );
+      expect(kept).toEqual(["command"]);
     });
   });
 
