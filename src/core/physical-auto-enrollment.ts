@@ -2,7 +2,8 @@ import type { Clock, Logger, TimerHandle } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import type { Platform } from "./domain.js";
-import type { DriverCatalog } from "./driver-catalog.js";
+import type { Driver } from "./driver.js";
+import { type DriverCatalog, NoDriverError } from "./driver-catalog.js";
 import {
   DeviceBusyError,
   DeviceNotEnrollableError,
@@ -37,6 +38,7 @@ export interface PhysicalAutoEnrollmentOptions {
 export class PhysicalAutoEnrollment {
   readonly #logger: Logger;
   readonly #attachments = new Map<Platform, Map<string, Attachment>>();
+  readonly #listFailures = new Map<Platform, string>();
   readonly #reasons = new Map<string, string>();
   #disposed = false;
   #running: Promise<void> = Promise.resolve();
@@ -77,7 +79,8 @@ export class PhysicalAutoEnrollment {
   async #tick(): Promise<void> {
     const startedAt = this.options.clock.now();
     for (const platform of PLATFORMS) {
-      const attached = await this.options.drivers.get(platform).listAttachedPhysical();
+      const attached = await this.#list(platform);
+      if (attached === undefined) continue;
       const attachments = this.#attachmentsOf(platform);
       this.#forgetMissing(attachments, attached);
       for (const id of attached) {
@@ -106,6 +109,29 @@ export class PhysicalAutoEnrollment {
     );
     attachment.heldOut = seenLive || removedSince;
     return attachment.heldOut;
+  }
+
+  /** why: a platform that cannot be listed this run is skipped whole, so its held-out phones are not counted as missing. */
+  async #list(platform: Platform): Promise<readonly string[] | undefined> {
+    let driver: Driver;
+    try {
+      driver = this.options.drivers.get(platform);
+    } catch (error: unknown) {
+      if (error instanceof NoDriverError) return undefined;
+      throw error;
+    }
+    try {
+      const attached = await driver.listAttachedPhysical();
+      this.#listFailures.delete(platform);
+      return attached;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.#listFailures.get(platform) !== message) {
+        this.#listFailures.set(platform, message);
+        this.#logger.warn(`auto-enroll: could not list ${platform} phones: ${message}`);
+      }
+      return undefined;
+    }
   }
 
   #attachmentsOf(platform: Platform): Map<string, Attachment> {
