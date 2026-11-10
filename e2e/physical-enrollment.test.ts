@@ -941,7 +941,11 @@ describe("devices.autoEnroll", () => {
   it("skips a platform that cannot be listed for that run, still enrols the other platform, logs one line per error message, and logs nothing for a platform with no driver", async () => {
     const down = { listAttachedPhysical: { message: "adb is down", type: "generic" } } as const;
     const env = await autoDaemon({
-      android: { physicalDevices: [PIXEL] },
+      android: {
+        failures: { reclaim: { message: "scripted reclaim failure", type: "generic" } },
+        physicalDevices: [PIXEL],
+      },
+      config: { warmPool: { quarantine: { retryBackoffMs: 600_000 } } },
       ios: { physicalDevices: [IPHONE] },
     });
     await waitFor(async () => (await named(env, "device.enrolled")).length === 2, {
@@ -1039,9 +1043,13 @@ describe("devices.autoEnroll", () => {
     }
   });
 
-  it("leaves an enrolled phone alone in the states ready, absent and leased: no device.enrolled and the kept apps unchanged", async () => {
+  it("leaves an enrolled phone alone in the states ready, absent, leased and quarantined: no device.enrolled and the kept apps unchanged", async () => {
     const env = await autoDaemon({
-      android: { physicalDevices: [PIXEL] },
+      android: {
+        failures: { reclaim: { message: "scripted reclaim failure", type: "generic" } },
+        physicalDevices: [PIXEL],
+      },
+      config: { warmPool: { quarantine: { retryBackoffMs: 600_000 } } },
       ios: { physicalDevices: [IPHONE] },
     });
     await waitFor(async () => (await named(env, "device.enrolled")).length === 2, {
@@ -1074,5 +1082,14 @@ describe("devices.autoEnroll", () => {
     expect(leased.code, leased.stderr).toBe(0);
     expect(await states()).toContain("leased");
     await stays("leased");
+    const released = await env.cli([
+      "release",
+      (leased.json as { lease: { id: string } }).lease.id,
+    ]);
+    expect(released.code, released.stderr).toBe(0);
+    await waitFor(async () => (await states()).includes("quarantined"), {
+      label: "the Android phone is quarantined",
+    });
+    await stays("quarantined");
   });
 });
