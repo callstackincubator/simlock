@@ -163,7 +163,7 @@ export class NukeService implements NukeExecutor {
     }
   }
 
-  #canOperate(deviceId: string, expectedState: "ready" | "shutdown"): boolean {
+  #canOperate(deviceId: string, expectedState: "ready" | "shutdown" | "provisioning"): boolean {
     const current = this.options.registry.snapshot.virtualDevices.find(
       (device) => device.id === deviceId,
     );
@@ -179,7 +179,7 @@ export class NukeService implements NukeExecutor {
     const shutdown = await this.#shutdownIfReady(device);
     if (!deleteDevices || (device.state === "ready" && shutdown === undefined)) return;
 
-    const current = this.#currentShutdown(device.id);
+    const current = this.#currentDestroyable(device.id);
     if (current !== undefined) await this.options.devices.destroy(current, "nuke", "nuke");
   }
 
@@ -188,12 +188,11 @@ export class NukeService implements NukeExecutor {
     return this.options.devices.shutdown(device, "nuke", "nuke");
   }
 
-  #currentShutdown(deviceId: string): VirtualDevice | undefined {
+  #currentDestroyable(deviceId: string): VirtualDevice | undefined {
     const current = this.options.registry.snapshot.virtualDevices.find(
       (device) => device.id === deviceId,
     );
-    if (current?.state !== "shutdown" || !this.#canOperate(current.id, "shutdown"))
-      return undefined;
-    return current;
+    if (current?.state !== "shutdown" && current?.state !== "provisioning") return undefined;
+    return this.#canOperate(current.id, current.state) ? current : undefined;
   }
 }
