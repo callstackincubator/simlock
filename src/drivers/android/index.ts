@@ -701,6 +701,10 @@ export class AndroidDriver implements Driver {
     return this.#physical.listPresentPhysical(enrolledIds);
   }
 
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return this.#physical.listAttachedPhysical();
+  }
+
   async inspectPhysical(id: string): Promise<PhysicalInspection> {
     return this.#physical.inspectPhysical(id);
   }
