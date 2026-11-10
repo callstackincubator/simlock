@@ -459,24 +459,50 @@ describe("startDaemon", () => {
     });
   });
 
-  it("answers config.get with the drivers section of config.json, so a key under drivers.* can be read back", async () => {
-    const { daemon } = await start({
-      configOverrides: { drivers: { ios: { deviceSet: "simlock", retries: 3 } } },
-    });
+  it.each([
+    {
+      name: "nothing set: each driver's own defaults",
+      drivers: {},
+      expected: (home: string) => ({
+        android: { adbServerPort: 5038, deviceRoot: join(home, "devices", "android") },
+        ios: { deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock" },
+      }),
+    },
+    {
+      name: "set keys win over the defaults, and a driver's unknown key is carried",
+      drivers: { android: { adbServerPort: 5039 }, ios: { deviceSet: "simlock", retries: 3 } },
+      expected: (home: string) => ({
+        android: { adbServerPort: 5039, deviceRoot: join(home, "devices", "android") },
+        ios: { deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock", retries: 3 },
+      }),
+    },
+    {
+      name: "deviceSet default: no iOS deviceRoot, which that set does not use",
+      drivers: { ios: { deviceSet: "default" } },
+      expected: (home: string) => ({
+        android: { adbServerPort: 5038, deviceRoot: join(home, "devices", "android") },
+        ios: { deviceSet: "default" },
+      }),
+    },
+  ])(
+    "answers config.get with every drivers.* key the drivers use, so config get reads it back ($name)",
+    async ({ drivers, expected }) => {
+      const { daemon, directory } = await start({ configOverrides: { drivers } });
 
-    const config = (await daemon.dispatch(
-      "config.get",
-      {},
-      {
-        manageEventSubscription: () => undefined,
-        via: "socket",
-        principal: "operator",
-        role: "admin",
-      },
-    )) as { readonly drivers?: unknown };
+      const config = (await daemon.dispatch(
+        "config.get",
+        {},
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "operator",
+          role: "admin",
+        },
+      )) as { readonly drivers?: unknown };
 
-    expect(config.drivers).toEqual({ ios: { deviceSet: "simlock", retries: 3 } });
-  });
+      expect(config.drivers).toEqual(expected(directory));
+    },
+  );
 
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
     const { daemon, sink } = await start({
