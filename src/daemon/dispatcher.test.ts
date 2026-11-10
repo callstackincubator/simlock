@@ -1335,6 +1335,65 @@ describe("Dispatcher: baseline.remove while a copy is reclaiming", () => {
   });
 });
 
+describe("Dispatcher: baseline.remove while a copy is being made", () => {
+  it("refuses the remove with DEVICE_BUSY and reason busy, naming the device, until the copy is leased", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      driverOptions: { latencyMs: { makeReady: 1_000 } },
+    });
+    const admin = session({ role: "admin" });
+    const finish = async <Result>(pending: Promise<Result>): Promise<Result> => {
+      let done = false;
+      void pending.then(
+        () => (done = true),
+        () => (done = true),
+      );
+      await vi.waitFor(() => {
+        clock.advance(1_000);
+        expect(done).toBe(true);
+      });
+      return pending;
+    };
+    const operator = await finish(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        session(),
+      ),
+    );
+    await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: operator.lease.id, name: "checkout" },
+      admin,
+    );
+    const copyRequest = dispatcher.dispatch(
+      "lease.request",
+      { baseline: "checkout", platform: "ios" },
+      session(),
+    );
+    await vi.waitFor(() =>
+      expect(
+        registry.snapshot.virtualDevices.some(
+          (device) => device.spec.baseline?.name === "checkout" && device.state !== "deleted",
+        ),
+      ).toBe(true),
+    );
+    const making = registry.snapshot.virtualDevices.find(
+      (device) => device.spec.baseline?.name === "checkout" && device.state !== "deleted",
+    );
+
+    const refusal = await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin).then(
+      () => undefined,
+      (rejected: unknown) => rejected,
+    );
+
+    expect(refusal).toMatchObject({
+      code: "DEVICE_BUSY",
+      details: { id: making?.id, reason: "busy" },
+    });
+    await finish(copyRequest);
+  });
+});
+
 describe("Dispatcher: doctor baseline sources", () => {
   it("lists a baseline's source with its name and version, a ready baseline source no row names as an orphan only doctor --purge-orphans deletes, and finds a stale baseline", async () => {
     const { dispatcher, driver, eventBus, registry } = await buildDispatcher();

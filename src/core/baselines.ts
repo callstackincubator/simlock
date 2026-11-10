@@ -101,7 +101,7 @@ export interface BaselineServiceOptions {
       save: (released: ReleasedLease) => Promise<Result>,
     ): Promise<Result>;
   };
-  readonly claims: Pick<DeviceOperationClaims, "claim" | "tryClaim">;
+  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly decisions: SerializedDecision;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "dispose">;
@@ -433,9 +433,7 @@ export class BaselineService {
       const claim = this.options.claims.tryClaim(device.id, "cleanup");
       if (claim === undefined) {
         for (const held of claimed) held.claim.release();
-        const reclaiming =
-          device.state === "reclaiming" || this.options.claims.claim(device.id)?.kind === "reclaim";
-        throw new DeviceBusyError(device.id, reclaiming ? "reclaiming" : "busy");
+        throw new DeviceBusyError(device.id, device.state === "reclaiming" ? "reclaiming" : "busy");
       }
       claimed.push({ claim, device });
     }
