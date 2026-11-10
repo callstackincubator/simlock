@@ -86,10 +86,18 @@ export class PhysicalEnrollment {
     const { initiator } = options;
     this.#refuseVirtual(platform, id);
     const driver = this.options.drivers.get(platform);
+    const recordsBefore = this.#recordIds(id);
     const read = await this.#inspect(driver, platform, id);
 
     const claimed = await this.options.decisions.run(async () => {
       const existing = this.#enrolled(read.driverDeviceId);
+      // why: a record made during the inspection, even one already removed, is the operator's word.
+      if (
+        initiator === "auto" &&
+        [...this.#recordIds(read.driverDeviceId)].some((record) => !recordsBefore.has(record))
+      ) {
+        return "skipped" as const;
+      }
       if (existing === undefined) {
         return {
           created: await this.options.registry.enrollPhysical({ ...read, initiator, platform }),
@@ -189,6 +197,14 @@ export class PhysicalEnrollment {
       model: inspection.model,
       osVersion: inspection.osVersion,
     };
+  }
+
+  #recordIds(driverDeviceId: string): Set<string> {
+    return new Set(
+      this.options.registry.snapshot.devices
+        .filter((device) => device.physical && device.driverDeviceId === driverDeviceId)
+        .map((device) => device.id),
+    );
   }
 
   #enrolled(canonicalId: string): PhysicalDevice | undefined {
