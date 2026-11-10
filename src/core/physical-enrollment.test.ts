@@ -250,6 +250,22 @@ describe("PhysicalEnrollment", () => {
     }
   });
 
+  it("never enrols again an ID that got a record first: an operator's add that commits between an auto add's inspection and its commit leaves one record and one device.enrolled", async () => {
+    const harness = await build();
+    const held = holdInspection(harness.driver, 1);
+    const auto = harness.core.enrollment.add("ios", UDID, { initiator: "auto" });
+    await vi.waitFor(() => expect(held.reached).toHaveBeenCalled());
+    await harness.core.enrollment.add("ios", UDID);
+
+    held.release();
+
+    await expect(auto).resolves.toBe("skipped");
+    expect(live(harness)).toHaveLength(1);
+    expect(enrolledEvents(harness).map((entry) => entry.payload)).toMatchObject([
+      { initiator: "operator", reenrolled: false },
+    ]);
+  });
+
   it("answers DEVICE_BUSY busy to another add and to a remove while an add waits on its second inspection", async () => {
     const harness = await build();
     await harness.core.enrollment.add("ios", UDID);

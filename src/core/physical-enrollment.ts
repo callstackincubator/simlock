@@ -72,11 +72,17 @@ export interface PhysicalEnrollmentRegistry {
 export class PhysicalEnrollment {
   constructor(private readonly options: PhysicalEnrollmentOptions) {}
 
+  async add(platform: Platform, id: string): Promise<PhysicalEnrollmentResult>;
+  async add(
+    platform: Platform,
+    id: string,
+    options: { readonly initiator: "auto" },
+  ): Promise<PhysicalEnrollmentResult | "skipped">;
   async add(
     platform: Platform,
     id: string,
     options: { readonly initiator: "operator" | "auto" } = { initiator: "operator" },
-  ): Promise<PhysicalEnrollmentResult> {
+  ): Promise<PhysicalEnrollmentResult | "skipped"> {
     const { initiator } = options;
     this.#refuseVirtual(platform, id);
     const driver = this.options.drivers.get(platform);
