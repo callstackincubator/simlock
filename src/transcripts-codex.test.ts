@@ -47,7 +47,13 @@ const ROLLOUT = [
   JSON.stringify({
     timestamp: T0,
     type: "response_item",
-    payload: { type: "custom_tool_call", call_id: "c1", name: "exec", input: "ls" },
+    payload: {
+      type: "custom_tool_call",
+      call_id: "c1",
+      name: "exec",
+      input:
+        'const r = await tools.exec_command({cmd:"ls","workdir":"/w","max_output_tokens":30000}); text(r.output)\n',
+    },
   }),
   usage("resp1", T0, 30_000, 20_000, 500),
   JSON.stringify({

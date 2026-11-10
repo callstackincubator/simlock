@@ -123,9 +123,43 @@ function noteResults(rec, s) {
 }
 
 function settle(s, id, content) {
-  s.recent.push({ command: s.pending[id], hash: hashOf(content) });
+  const hash = hashOf(content);
+  for (const command of [].concat(s.pending[id])) s.recent.push({ command, hash });
   delete s.pending[id];
-  if (s.recent.length > RECENT) s.recent.shift();
+  while (s.recent.length > RECENT) s.recent.shift();
+}
+
+// why: a Codex rollout records a shell call as the code-mode snippet the model wrote
+// (`tools.exec_command({cmd:"…"})`, one or several per `exec` call) or as a tool's JSON
+// arguments, while its hook sends the bare command; the guard compares bare commands. A command
+// the snippet holds in a variable is not seen, and a snippet with no literal stays as it is.
+const CMD_LITERAL = /\bcmd:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g;
+export function commandsOf(p) {
+  const text = String(p.input ?? p.arguments ?? "");
+  const args = p.type === "function_call" ? parsedArguments(text) : {};
+  const named = args.cmd ?? args.command;
+  if (typeof named === "string") return [named];
+  const code = typeof args.code === "string" ? args.code : text;
+  const commands = [...code.matchAll(CMD_LITERAL)].map(([, literal]) => unquoted(literal));
+  return commands.length > 0 ? commands : [code];
+}
+
+function parsedArguments(text) {
+  try {
+    const args = JSON.parse(text);
+    return args !== null && typeof args === "object" ? args : {};
+  } catch {
+    return {};
+  }
+}
+
+function unquoted(literal) {
+  if (literal.startsWith("'")) return literal.slice(1, -1).replaceAll(/\\(.)/g, "$1");
+  try {
+    return JSON.parse(literal);
+  } catch {
+    return literal.slice(1, -1);
+  }
 }
 
 // why: Codex's input count includes the cached part; Claude's keys hold them apart, and the
@@ -155,13 +189,12 @@ function noteRollout(rec, s) {
   }
 }
 
-const CALL_COMMAND = { custom_tool_call: "input", function_call: "arguments" };
+const CALLS = new Set(["custom_tool_call", "function_call"]);
 const CALL_OUTPUTS = new Set(["custom_tool_call_output", "function_call_output"]);
 
 function noteRolloutCall(p, s) {
-  if (p.type in CALL_COMMAND) {
-    const command = p[CALL_COMMAND[p.type]];
-    if (typeof command === "string" && p.call_id) s.pending[p.call_id] = command;
+  if (CALLS.has(p.type)) {
+    if (p.call_id) s.pending[p.call_id] = commandsOf(p);
   } else if (CALL_OUTPUTS.has(p.type) && p.call_id in s.pending) {
     settle(s, p.call_id, p.output);
   }

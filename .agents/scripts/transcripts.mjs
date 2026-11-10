@@ -7,6 +7,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { commandsOf } from "./usage.mjs";
 
 export const projectsRoot = () =>
   join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
@@ -65,7 +66,7 @@ export function runOf(file) {
       ...blocks.filter((b) => b.type === "tool_use").map((b) => JSON.stringify(b.input ?? {})),
       ...items
         .filter((p) => p.type === "custom_tool_call" || p.type === "function_call")
-        .map((p) => String(p.input ?? p.arguments ?? "")),
+        .flatMap(commandsOf),
     ],
     lastText:
       blocks.filter((b) => b.type === "text" && b.text?.trim()).at(-1)?.text ??

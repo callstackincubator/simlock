@@ -76,6 +76,42 @@ describe("codex-hook.mjs", () => {
     expect(run.err).toBe("");
   });
 
+  // why: a rollout records the code-mode snippet, not the bare command the hook sends; the
+  // stall rule only fires if the reader takes the command out of the snippet.
+  it("refuses a Codex sub-agent's third run of a command its rollout shows twice with the same output", () => {
+    const root = fixture();
+    const snippet = (id: string) =>
+      JSON.stringify({
+        timestamp: "2026-11-10T00:00:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          call_id: id,
+          name: "exec",
+          input:
+            'const r = await tools.exec_command({cmd:"pnpm vitest run src/x.test.ts","workdir":"/w","max_output_tokens":30000}); text(r.output)\n',
+        },
+      });
+    const output = (id: string) =>
+      JSON.stringify({
+        timestamp: "2026-11-10T00:00:01.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call_output", call_id: id, output: "FAIL src/x.test.ts\n" },
+      });
+    writeFileSync(
+      join(root, "rollout.jsonl"),
+      [snippet("c1"), output("c1"), snippet("c2"), output("c2"), ""].join("\n"),
+    );
+
+    const run = codex(root, {
+      hook_event_name: "PreToolUse",
+      ...bash("pnpm vitest run src/x.test.ts", "a1"),
+    });
+
+    expect(run.status).toBe(2);
+    expect(run.err).toContain("Stall");
+  });
+
   it("passes the report guard's block decision through on SubagentStop", () => {
     const run = codex(fixture(), {
       hook_event_name: "SubagentStop",
