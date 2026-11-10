@@ -163,7 +163,10 @@ export class NukeService implements NukeExecutor {
     }
   }
 
-  #canOperate(deviceId: string, expectedState: "ready" | "shutdown" | "quarantined"): boolean {
+  #canOperate(
+    deviceId: string,
+    expectedState: "ready" | "shutdown" | "provisioning" | "quarantined",
+  ): boolean {
     const current = this.options.registry.snapshot.virtualDevices.find(
       (device) => device.id === deviceId,
     );
@@ -192,7 +195,13 @@ export class NukeService implements NukeExecutor {
     const current = this.options.registry.snapshot.virtualDevices.find(
       (device) => device.id === deviceId,
     );
-    if (current?.state !== "shutdown" && current?.state !== "quarantined") return undefined;
+    if (
+      current?.state !== "shutdown" &&
+      current?.state !== "provisioning" &&
+      current?.state !== "quarantined"
+    ) {
+      return undefined;
+    }
     return this.#canOperate(current.id, current.state) ? current : undefined;
   }
 }
