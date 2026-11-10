@@ -49,12 +49,17 @@ sequenceDiagram
   end
 ```
 
-- It runs once per new request, after the replay check and before the
-  request is stored. A request the gateway already holds is answered as
-  today, without running it. It runs outside the gateway's decision lock,
-  so a slow command delays only its own request.
+- It runs once per new request, after today's cheap refusals and before
+  the request is stored: a request the gateway already holds is answered
+  as today, and the requester limit, a taken chosen id and an ended one
+  (§4) are refused without running it. It runs outside the gateway's
+  decision lock, so a slow command delays only its own request; after it
+  answers, those checks run again under the lock before the request is
+  stored, so two copies of one request are never both admitted.
 - It reads one JSON object on stdin: the requester, the principal, the
-  platform, the request as sent and the caller's `metadata` (§3). It
+  platform, the `lease.request` input as the caller sent it (without
+  `metadata`, the requester and the idempotency key) and the caller's
+  `metadata` (§3). It
   prints one JSON object: `{"priority": <integer -1000..1000>}`, `{}`
   (priority 0) or `{"deny": "<reason>"}`.
 - **It fails closed.** A non-zero exit, output that is not one such object,
@@ -67,7 +72,8 @@ sequenceDiagram
 
 The gateway keeps its lines (virtual and physical devices wait apart).
 Within a line, a higher priority is served first; equal priorities keep
-arrival order. A request's priority is fixed when it is admitted. A
+arrival order, and the queue position a waiter is told follows that
+order. A request's priority is fixed when it is admitted. A
 low-priority request can wait until its own queue timeout. A worker's own
 queue does not change.
 
@@ -86,7 +92,11 @@ daemon that held it keeps the id and the time it ended in `state.db` for
 `lease.endedIdRetentionMs` (default 24 hours). A `lease.request` naming
 such an id is refused with `LEASE_ENDED`, carrying the id and when it
 ended. A worker records its own leases; a gateway records the ids of its
-leases it learns ended from its workers. A generated id is never recorded:
+leases it learns ended from its workers. A lease that ends while its
+gateway is down is not recorded by the gateway: a retry through it is
+answered `LEASE_ENDED` only when routing sends it to the worker that held
+the lease. This is a known gap, chosen over persisting every live chosen id
+on the gateway. A generated id is never recorded:
 it never comes back. After the window the id is forgotten, and ADR 0020's
 rule holds again: the requester keeps its ids unique.
 
@@ -111,8 +121,10 @@ rule holds again: the requester keeps its ids unique.
 - New config keys: `gateway.admission.command`,
   `gateway.admission.timeoutMs` (gateway) and `lease.endedIdRetentionMs`
   (both roles).
-- New error codes `ADMISSION_DENIED`, `ADMISSION_FAILED` and `LEASE_ENDED`,
-  and new `lease.rejected` reasons; the protocol is bumped.
+- New error codes `ADMISSION_DENIED` (403), `ADMISSION_FAILED` (503) and
+  `LEASE_ENDED` (409), and new `lease.rejected` reasons; the protocol is
+  bumped. The CLI gets a new exit code 16 for the two admission codes;
+  `LEASE_ENDED` exits 13, beside `LEASE_ID_TAKEN`.
 - A gateway runs one child process per new request while a command is set:
   about a tenth of a second each on a Mac.
 - A gateway's line order is no longer FIFO when a command answers
