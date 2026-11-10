@@ -1483,3 +1483,38 @@ describe("Dispatcher: lease.request whose device fails to boot", () => {
     }
   });
 });
+
+describe("Dispatcher: a replay of a failed lease.request", () => {
+  it("answers a classified failure with its stored code and message, and an unclassified one as INTERNAL with a generic message", async () => {
+    const ask = {
+      idempotencyKey: "key-1",
+      mode: "slim",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+    async function replayAfter(operation: "makeReady" | "resolveSpec", error: Error) {
+      const built = await buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
+      built.driver.failOn(operation, 1, error);
+      await built.dispatcher.dispatch("lease.request", ask, session()).catch(() => undefined);
+      const replay = await built.dispatcher
+        .dispatch("lease.request", ask, session())
+        .catch((caught: unknown) => caught);
+      return { code: classifyError(replay), message: (replay as Error).message };
+    }
+
+    const classified = await replayAfter("makeReady", new BootTimeoutError("sim-1"));
+    const unclassified = await replayAfter(
+      "resolveSpec",
+      new Error("/Users/someone/secret/path exploded"),
+    );
+
+    expect([classified, unclassified]).toEqual([
+      {
+        code: "PROVISION_FAILED",
+        message: expect.stringMatching(/^Timed out waiting for device to boot: /),
+      },
+      { code: "INTERNAL", message: "Internal error" },
+    ]);
+  });
+});
