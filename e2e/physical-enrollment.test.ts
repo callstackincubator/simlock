@@ -786,4 +786,131 @@ describe("devices.autoEnroll", () => {
       expect.objectContaining({ driverDeviceId: UDID, initiator: "auto" }),
     ]);
   });
+
+  it("keeps a phone out that was removed while plugged in until it has been missing two runs, while an operator's device add enrols it again", async () => {
+    const phone = (id: string): ScriptedPhysicalDevice => ({ ...IPHONE, ids: [id] });
+    const [removed, brief, long, added] = ["PHONE-1", "PHONE-2", "PHONE-3", "PHONE-4"].map(phone);
+    const iphones = [removed, brief, long, added].filter((device) => device !== undefined);
+    const pixel: ScriptedPhysicalDevice = { ...PIXEL, present: true };
+    const env = await autoDaemon({
+      android: {
+        failures: { reclaim: { message: "scripted reclaim failure", type: "generic" } },
+        physicalDevices: [pixel],
+      },
+      config: {
+        health: { probeIntervalMs: 500 },
+        warmPool: { quarantine: { maxRetries: 1, retryBackoffMs: 300, retryBackoffMultiplier: 1 } },
+      },
+      ios: { physicalDevices: iphones },
+    });
+    const enrolledOf = async (id: string) =>
+      (await named(env, "device.enrolled"))
+        .map((entry) => entry.payload as Added & { readonly initiator: string })
+        .filter((payload) => payload.driverDeviceId === id);
+    const runs = async (count: number) => {
+      const lists = async () =>
+        (await env.driverLog.calls()).filter(
+          (call) => call.operation === "listAttachedPhysical" && call.platform === "ios",
+        ).length;
+      const before = await lists();
+      await waitFor(async () => (await lists()) >= before + count, { interval: 20 });
+    };
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 5, {
+      label: "the five phones are enrolled",
+    });
+    const remove = async (id: string) => {
+      const result = await env.cli(["device", "remove", id]);
+      expect(result.code, result.stderr).toBe(0);
+    };
+
+    await remove("PHONE-1");
+    const grant = await env.cli([
+      "lease",
+      "--platform",
+      "android",
+      "--physical",
+      "--agent-id",
+      "a",
+      "--detach",
+    ]);
+    expect(grant.code, grant.stderr).toBe(0);
+    const released = await env.cli(["release", (grant.json as { lease: { id: string } }).lease.id]);
+    expect(released.code, released.stderr).toBe(0);
+    await waitFor(async () => (await named(env, "device.quarantine-abandoned")).length === 1, {
+      label: "the quarantine gives up and unenrols the Android phone",
+    });
+    await remove("PHONE-2");
+    await remove("PHONE-3");
+    await plug(env, "ios", [
+      removed,
+      { ...brief, present: false },
+      { ...long, present: false },
+      added,
+    ]);
+    await runs(1);
+    await plug(env, "ios", [removed, brief, { ...long, present: false }, added]);
+    await runs(1);
+    await plug(env, "ios", iphones);
+    await waitFor(async () => (await enrolledOf("PHONE-3")).length === 2, {
+      label: "the phone missing two runs is enrolled again",
+    });
+    await remove("PHONE-4");
+    const again = await env.cli(["device", "add", "--platform", "ios", "PHONE-4"]);
+    expect(again.code, again.stderr).toBe(0);
+    await runs(3);
+
+    expect(
+      (await enrolledOf("PHONE-1")).map((payload) => payload.initiator),
+      "removed, plugged in",
+    ).toEqual(["auto"]);
+    expect(
+      (await enrolledOf(pixel.ids[0] ?? "")).map((payload) => payload.initiator),
+      "unenrolled after quarantine",
+    ).toEqual(["auto"]);
+    expect(
+      (await enrolledOf("PHONE-2")).map((payload) => payload.initiator),
+      "missing one run",
+    ).toEqual(["auto"]);
+    expect(
+      (await enrolledOf("PHONE-3")).map((payload) => payload.initiator),
+      "missing two runs",
+    ).toEqual(["auto", "auto"]);
+    expect(
+      (await enrolledOf("PHONE-4")).map((payload) => payload.initiator),
+      "device add while held out",
+    ).toEqual(["auto", "operator"]);
+
+    const slow = await autoDaemon({
+      config: { health: { probeIntervalMs: 5000 } },
+      ios: { physicalDevices: [IPHONE, refused({ ...IPHONE, ids: ["PHONE-Y"] }, "locked")] },
+    });
+    const slowEnrolled = async (id: string) =>
+      (await named(slow, "device.enrolled"))
+        .map((entry) => entry.payload as Added & { readonly initiator: string })
+        .filter((payload) => payload.driverDeviceId === id);
+    await waitFor(async () => (await slowEnrolled(UDID)).length === 1, {
+      label: "the first run enrols the unlocked phone",
+      timeout: 30_000,
+    });
+    const gone = await slow.cli(["device", "remove", UDID]);
+    expect(gone.code, gone.stderr).toBe(0);
+    await plug(slow, "ios", [IPHONE, { ...IPHONE, ids: ["PHONE-Y"] }]);
+    await add(slow, "ios", "PHONE-Y");
+    const goneToo = await slow.cli(["device", "remove", "PHONE-Y"]);
+    expect(goneToo.code, goneToo.stderr).toBe(0);
+    const listed = async () =>
+      (await slow.driverLog.calls()).filter((call) => call.operation === "listAttachedPhysical")
+        .length;
+    const seen = await listed();
+    await waitFor(async () => (await listed()) >= seen + 4, { interval: 50, timeout: 30_000 });
+
+    expect(
+      (await slowEnrolled(UDID)).map((payload) => payload.initiator),
+      "removed before the next run",
+    ).toEqual(["auto"]);
+    expect(
+      (await slowEnrolled("PHONE-Y")).map((payload) => payload.initiator),
+      "added and removed between two runs",
+    ).toEqual(["operator"]);
+  });
 });
