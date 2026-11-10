@@ -1,6 +1,6 @@
 # 0073. A worker may enrol the phones plugged into it
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-10
 - **Issue:** [#1503](https://github.com/callstackincubator/simlock/issues/1503) (request [#1502](https://github.com/callstackincubator/simlock/issues/1502))
 - **Narrows:** [ADR 0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
