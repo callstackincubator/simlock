@@ -76,7 +76,8 @@ A device that isn't running has no picture, and the page says why: shut down, st
 - **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the page opens it again.
 - **A frozen device doesn't look live.** A stream that gets no new frames for 30 seconds ends with an error.
 - **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
-- **Rotation.** A rotated iOS simulator or iPhone keeps the scale of the first picture. An Android device's picture follows the rotation.
+- **Rotation.** A rotated iOS simulator keeps the scale of the first picture. An Android device's picture follows the rotation.
+- **Foldables.** An iPhone Duo simulator shows the panel in use, and the picture follows the device when it folds or unfolds, about a second after the fold. A stream opened while the device is unfolded can show black for a few seconds first. Touch input on the inner panel is not tested yet.
 
 ## When it doesn't work
 
