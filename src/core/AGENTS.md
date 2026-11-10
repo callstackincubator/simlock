@@ -30,6 +30,7 @@ Devices:
 - Nothing in core acts on a leased device, except `recoverLeased`, under the lease: it reboots with no commit and no event.
 - Grant paths select by exact state. `mayBeGranted` refuses every virtual device that has ended a lease, whatever its `leaseIdentity` (ADR 0061 §2).
 - A physical device is never destroyed and never counted against capacity.
+- `PhysicalAutoEnrollment` (`devices.autoEnroll`, ADR 0073) enrols through `PhysicalEnrollment.add(..., { initiator: "auto" })`, which leaves an ID that has a live record inside the lock alone. It holds a phone out once a run saw it with a live record, it enrolled it, or a record of it was deleted after the attachment began; the hold-out is memory only and ends after `health.stableObservations` runs without the ID on USB. A run whose list throws counts as none of them.
 - `bootForLease` and `readyProvisionedForLease` keep the `boot` claim for the grant; `bootWarm` drops it at `ready`.
 - `rebootForLease` shuts a `ready` device down and prepares it again with a lease's `except` list under that claim. The record stays `ready` (one `recordRebootedDevice` write, no event); on a failure it commits `ready → shutdown` first.
 - `devices.except_categories` holds the list a lease kept running, written in the grant commit (`createLease`).
