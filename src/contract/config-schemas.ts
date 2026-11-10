@@ -156,6 +156,11 @@ export const configSchema = z.object({
     url: z.string().optional(),
     token: z.string().optional(),
     label: z.string().optional(),
+    // why: names and values carry the load bounds through `.max()`; the 16-entry cap is the refinement, which the wire-bound lint does not see as a bound.
+    headers: z
+      .record(z.string().max(100), z.string().max(4096))
+      .refine((headers) => Object.keys(headers).length <= 16)
+      .optional(),
     disconnectedRetentionMs: z.number(),
     execTimeoutMs: z.number(),
     leaseRequestTimeoutMs: z.number(),
