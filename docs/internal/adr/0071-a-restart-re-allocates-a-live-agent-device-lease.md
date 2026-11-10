@@ -24,9 +24,12 @@ from agent-device, and the front releases the simlock lease
 agent is told `lease ended by simlock; run disconnect, then open`.
 
 The agent-device CLI heartbeats before each command and sends its lease
-scope with it: `runId`, `clientId`, `leaseProvider`, `leaseBackend` and
-`deviceKey` (agent-device v0.21.35,
-`src/cli/commands/connection-runtime.ts:892-941`). agent-device accepts an
+scope with it: `runId`, `clientId`, `leaseProvider` and `deviceKey`
+(agent-device v0.21.35, `src/cli/commands/connection-runtime.ts:892-941`).
+It passes `leaseBackend` too, but the heartbeat RPC drops it
+(`leaseScopeToLeaseRpcParams`, `packages/contracts/src/lease-scope.ts`
+adds `backend` only to `lease_allocate`), so the re-allocate sends the
+platform's backend itself (`ios-instance`, `android-instance`). agent-device accepts an
 allocate with a lease id the caller chooses, unless that daemon already
 issued the id (`LEASE_ID_IN_USE`,
 `packages/daemon/src/resources/lease-registry.ts:81-98`). The issued ids

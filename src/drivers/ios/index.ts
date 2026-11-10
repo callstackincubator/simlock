@@ -1049,6 +1049,8 @@ export class IosSimctlDriver implements Driver {
         await this.#bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
       } catch (error: unknown) {
         await this.#deleteSeedSimulator(udid);
+        // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
+        if (error instanceof BootTimeoutError) throw error;
         throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
       }
       try {

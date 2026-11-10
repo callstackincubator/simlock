@@ -119,6 +119,7 @@ async function allocateAgain(
 ): Promise<Exchange> {
   const params = {
     ...call.params,
+    // why: agent-device's heartbeat RPC carries no backend, and an allocate without one gets ios-simulator, which refuses every later command naming the real backend.
     backend: leaseBackend(entry.platform),
     leaseId,
     ttlMs: leaseMaxTtlMs ?? entry.ttlMs,

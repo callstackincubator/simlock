@@ -27,6 +27,7 @@ import {
   ComponentInstallTimeoutError,
   ComponentNotOwnedError,
   InsufficientDiskSpaceError,
+  BootTimeoutError,
   LicenseNotAcceptedError,
   NoDriverError,
   PassthroughRefusedError,
@@ -119,7 +120,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof DaemonUpdatingError) {
     return "DAEMON_UPDATING";
   }
-  if (error instanceof ProvisionFailedError) {
+  // why: a device that did not boot is a provisioning failure; the lease's own rejection reason
+  // (`boot-timeout`) is set by leasing, not here.
+  if (error instanceof ProvisionFailedError || error instanceof BootTimeoutError) {
     return "PROVISION_FAILED";
   }
   if (error instanceof QueueTimeoutError) {

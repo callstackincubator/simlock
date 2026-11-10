@@ -86,7 +86,7 @@ Remove baseline login v1? [y/N] y
 Removed baseline login v1.
 ```
 
-This deletes every version of `login` and the idle copies made from it. If an agent is still using a copy, Simlock refuses with `BASELINE_IN_USE` and names the lease; remove it after that lease ends. Pass `--yes` to skip the question, for example in a script.
+This deletes every version of `login` and the idle copies made from it. If an agent is still using a copy, Simlock refuses with `BASELINE_IN_USE` and names the lease; remove it after that lease ends. If a copy is still being cleaned up after its lease ended, Simlock refuses with `DEVICE_BUSY`; try again in a moment. Pass `--yes` to skip the question, for example in a script.
 
 `simlock nuke --delete-devices` removes every baseline on the worker.
 
@@ -98,6 +98,7 @@ This deletes every version of `login` and the idle copies made from it. If an ag
 | `UNKNOWN_BASELINE` | No baseline on this worker has that name. | Check the name with `simlock baseline list`. |
 | `BASELINE_STALE` | The runtime or image the baseline needs is gone. | Install it again, or save a new version. |
 | `BASELINE_IN_USE` | `remove` was refused because a lease uses a copy. | Wait for that lease to end, then remove. |
+| `DEVICE_BUSY` | `remove` was refused because a copy is being cleaned up or another operation holds it. | Try again in a moment. |
 | `FORBIDDEN` | The session does not have the admin role. | Run the command as an admin. |
 
 `simlock doctor` lists each baseline's files on disk under `sources`. Files that belong to no baseline are reported as orphans; only `simlock doctor --purge-orphans` deletes them.

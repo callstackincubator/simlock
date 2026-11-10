@@ -95,9 +95,19 @@ async function runLease(
     ? undefined
     : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
 
+  let ourLeaseId: string | undefined;
+  // why: A signal or a dead --bind-pid process while it connects or the request waits must leave the queue at
+  // once, as the client's abort does; noticed only at grant time, the device would be taken and
+  // released, and a killed process would leave its request queued.
+  const waitAbort = new AbortController();
+  let cancelledWhileWaiting = false;
+  void termination?.settled.then(() => {
+    if (ourLeaseId !== undefined) return;
+    cancelledWhileWaiting = true;
+    waitAbort.abort();
+  });
   const client = await connectDaemonClient(environment, token);
   let leaseLost = false;
-  let ourLeaseId: string | undefined;
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
   const leaseLostSignal = new Promise<void>((resolve) => {
@@ -179,16 +189,6 @@ async function runLease(
     }
   };
   let renewal: LeaseRenewal | undefined;
-  // why: A signal or a dead --bind-pid process while the request waits must leave the queue at
-  // once, as the client's abort does; noticed only at grant time, the device would be taken and
-  // released, and a killed process would leave its request queued.
-  const waitAbort = new AbortController();
-  let cancelledWhileWaiting = false;
-  void termination?.settled.then(() => {
-    if (ourLeaseId !== undefined) return;
-    cancelledWhileWaiting = true;
-    waitAbort.abort();
-  });
   try {
     let grant: LeaseGrant;
     try {

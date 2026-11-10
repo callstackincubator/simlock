@@ -288,6 +288,32 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
     },
   );
 
+  it.each([
+    ["an iOS lease, agent-device restarted", "ios", "ios-instance", "agent-device"],
+    ["an Android lease, agent-device restarted", "android", "android-instance", "agent-device"],
+    ["an iOS lease, standalone worker restarted", "ios", "ios-instance", "worker"],
+  ] as const)(
+    "after a restart, the re-allocate names the backend the lease's first allocate named, which the heartbeat does not carry: %s",
+    async (_case, platform, backend, restarted) => {
+      const first = platform === "ios" ? await setUp() : await setUpWithPhone();
+      await granted(first, 1, { backend, platform });
+      const rig =
+        restarted === "worker"
+          ? await first.restart(() => {
+              first.fake.restart();
+            })
+          : (first.fake.restart(), first);
+
+      const answer = await envelopeOf(await heartbeat(rig, 1));
+
+      expect(answer.error).toBeUndefined();
+      expect(allocatesReceived(rig, 1).map((request) => request.params?.["backend"])).toEqual([
+        backend,
+        backend,
+      ]);
+    },
+  );
+
   it("after a standalone worker restarts, a lease of another token is not adopted: standalone boot naming it is refused as not the token's device", async () => {
     const first = await setUpWithPhone();
     await granted(first, 2, { platform: "android" }, { token: secrets.two });

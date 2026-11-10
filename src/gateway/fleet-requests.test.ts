@@ -1627,3 +1627,41 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
     });
   });
 });
+
+describe("FleetLeaseCoordinator: a lease.cancel sent right after its lease.request (#1492)", () => {
+  it.each([
+    { fleetHas: "no room, so the request would queue", room: false },
+    { fleetHas: "a free worker, so the request would be dispatched", room: true },
+  ])(
+    "with $fleetHas, answers cancelled, rejects the request as cancelled, and leaves nothing waiting and nothing dispatched",
+    async ({ room }) => {
+      const fleet = harness();
+      const client = new ScriptedWorkerClient();
+      fleet.directory.add("wrk_a", client);
+      connectWorker(fleet.workers, "wrk_a");
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      await fleet.coordinator.request(REQUEST, requestOptions());
+      connectWorker(fleet.workers, "wrk_a", { capacity: room ? roomierIos() : saturatedIos() });
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: leaseFixture("lease-2", "dev_2") }),
+        kind: "grant",
+      });
+
+      const request = fleet.coordinator
+        .request(REQUEST, requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }))
+        .then(
+          () => "granted",
+          (error: unknown) => error,
+        );
+      const cancel = fleet.coordinator.cancelPending("agent-2");
+
+      await expect(cancel).resolves.toBe("cancelled");
+      await expect(request).resolves.toMatchObject({ name: "RequestCancelledError" });
+      await tick();
+      expect(fleet.coordinator.waitingRequests()).toEqual([]);
+      expect(
+        client.calls.filter((call) => call === `lease.request:${GATEWAY_PREFIX}agent-2`),
+      ).toEqual([]);
+    },
+  );
+});

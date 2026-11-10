@@ -209,9 +209,14 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   get snapshot(): RegistrySnapshot {
+    // why: only a commit drops an expired record from state.db, so an idle worker would list it past devices.deletedRetentionMs.
+    const now = this.options.clock.now();
+    const kept = this.#devices.filter(
+      (device) => !isExpired(device, now, this.options.deletedRetentionMs),
+    );
     const devices = [
-      ...this.#devices.filter((device) => !device.physical),
-      ...this.#devices.filter((device) => device.physical),
+      ...kept.filter((device) => !device.physical),
+      ...kept.filter((device) => device.physical),
     ].map(cloneDevice);
     return {
       devices,
