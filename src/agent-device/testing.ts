@@ -754,14 +754,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       return undefined;
     }
     if (command === "batch") this.#openSessions.add(leaseId);
-    const session = String(params["session"] ?? "default");
-    const positionals = Array.isArray(params["positionals"])
-      ? (params["positionals"] as unknown[])
-      : [];
-    let data: Record<string, unknown> | undefined;
-    if (this.#openSessions.delete(leaseId)) data = { message: `Closed: ${session}`, session };
-    else if (positionals.length > 0)
-      data = { app: positionals[0], message: `Closed: ${String(positionals[0])}` };
+    const data = closeData(params, this.#openSessions.delete(leaseId));
     if (command !== "batch" || data === undefined) return data;
     return { results: [{ command: "close", data, ok: true, step: 1 }] };
   }
@@ -783,6 +776,22 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#sessionLeases.delete(leaseId);
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+// why: agent-device names the session it closed, or for `close <app>` with no session open only the app.
+function closeData(
+  params: Record<string, unknown>,
+  sessionOpen: boolean,
+): Record<string, unknown> | undefined {
+  if (sessionOpen) {
+    const session = String(params["session"] ?? "default");
+    return { message: `Closed: ${session}`, session };
+  }
+  const positionals = Array.isArray(params["positionals"])
+    ? (params["positionals"] as unknown[])
+    : [];
+  if (positionals.length === 0) return undefined;
+  return { app: positionals[0], message: `Closed: ${String(positionals[0])}` };
 }
 
 function closesLease(command: string, params: Record<string, unknown>): boolean {
