@@ -490,11 +490,16 @@ describe("startDaemon", () => {
     async ({ role, withToken }) => {
       const secret = "secret-join-token-170";
       const headerSecret = "s3cr3t-proxy-credential";
+      const secondHeaderSecret = "second-proxy-credential";
       const { daemon, directory, sink } = await start({
         role,
         configOverrides: {
           gateway: {
-            headers: { "CF-Access-Client-Secret": headerSecret },
+            headers: {
+              "CF-Access-Client-Id": "client-id-170",
+              "CF-Access-Client-Secret": headerSecret,
+              "X-Proxy-Key": secondHeaderSecret,
+            },
             ...(withToken ? { token: secret, url: await unreachableGatewayUrl() } : {}),
           },
         },
@@ -529,9 +534,16 @@ describe("startDaemon", () => {
         historyDb: eventFile.includes(value),
       });
       const clean = { daemonLog: false, eventsReplay: false, historyDb: false };
-      expect({ token: leaks(secret), header: leaks(headerSecret) }).toEqual({
+      expect({
+        token: leaks(secret),
+        header: leaks(headerSecret),
+        second: leaks(secondHeaderSecret),
+        first: leaks("client-id-170"),
+      }).toEqual({
         token: clean,
         header: clean,
+        second: clean,
+        first: clean,
       });
       const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as Answer;
       expect({
@@ -539,8 +551,16 @@ describe("startDaemon", () => {
         shown: shown.gateway.headers,
         token: [config.gateway.token, shown.gateway.token],
       }).toEqual({
-        default: { "CF-Access-Client-Secret": "[redacted]" },
-        shown: { "CF-Access-Client-Secret": headerSecret },
+        default: {
+          "CF-Access-Client-Id": "[redacted]",
+          "CF-Access-Client-Secret": "[redacted]",
+          "X-Proxy-Key": "[redacted]",
+        },
+        shown: {
+          "CF-Access-Client-Id": "client-id-170",
+          "CF-Access-Client-Secret": headerSecret,
+          "X-Proxy-Key": secondHeaderSecret,
+        },
         token: withToken ? ["[redacted]", secret] : [undefined, undefined],
       });
     },

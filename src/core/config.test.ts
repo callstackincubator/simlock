@@ -1907,6 +1907,12 @@ describe("loadConfig modes (ADR 0005)", () => {
         ).rejects.toThrow(key(what));
       }
     }
+    // why: the edge itself is accepted, so moving a cap by one fails a named row.
+    const sixteen = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`x-h${i}`, "v"]));
+    const longestName = { ["a".repeat(100)]: "v" };
+    for (const headers of [sixteen, longestName]) {
+      await expect(load({ gateway: { ...joined, headers } })).resolves.toBeDefined();
+    }
     await expect(load({ gateway: { headers: { "x-a": "1" } } })).rejects.toThrow(
       key("gateway.url to be set too, since gateway.headers is set"),
     );
