@@ -201,6 +201,16 @@ export class BaselineService {
     return this.#serial(() => this.#dropReplaced());
   }
 
+  #tryClaimReplacementDevice(device: VirtualDevice): DeviceOperationClaim | undefined {
+    try {
+      this.options.drivers.get(device.spec.platform, device.backend);
+    } catch (error: unknown) {
+      if (error instanceof NoDriverError) return undefined;
+      throw error;
+    }
+    return this.options.claims.tryClaim(device.id, "cleanup");
+  }
+
   /** why: a replace deletes the devices of an older version nobody holds, in the gate and under a claim like a remove, and leaves a leased or busy one to its lease. */
   async #destroyIdleOlderDevices(name: string, version: number): Promise<void> {
     const claimed = await this.options.decisions.run(() => {
@@ -210,13 +220,7 @@ export class BaselineService {
         const made = device.spec.baseline;
         if (made?.name !== name || made.version >= version || device.state === "deleted") continue;
         if (leases.some((lease) => lease.deviceId === device.id)) continue;
-        try {
-          this.options.drivers.get(device.spec.platform, device.backend);
-        } catch (error: unknown) {
-          if (error instanceof NoDriverError) continue;
-          throw error;
-        }
-        const claim = this.options.claims.tryClaim(device.id, "cleanup");
+        const claim = this.#tryClaimReplacementDevice(device);
         if (claim !== undefined) taken.push({ claim, device });
       }
       return taken;
