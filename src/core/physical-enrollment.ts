@@ -95,6 +95,7 @@ export class PhysicalEnrollment {
           created: await this.options.registry.enrollPhysical({ ...read, initiator, platform }),
         };
       }
+      if (initiator === "auto") return "skipped" as const;
       if (existing.spec.platform !== platform) {
         throw new DeviceNotEnrollableError(
           platform,
@@ -109,6 +110,7 @@ export class PhysicalEnrollment {
       if (claim === undefined) throw new DeviceBusyError(existing.driverDeviceId, "busy");
       return { claim, existing };
     });
+    if (claimed === "skipped") return claimed;
     if ("created" in claimed) {
       this.options.physicalDeviceReady?.(claimed.created.id);
       return { device: claimed.created, reenrolled: false };
