@@ -409,6 +409,7 @@ export async function composeWorker(
           url: config.gateway.url,
           workerId: instanceId,
           ...(config.gateway.label === undefined ? {} : { label: config.gateway.label }),
+          ...(config.gateway.headers === undefined ? {} : { headers: config.gateway.headers }),
         });
   // why: Reassigned once the HTTP frontend actually starts, but must exist as a stable closure now:
   // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the frontend itself

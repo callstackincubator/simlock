@@ -278,6 +278,7 @@ export interface Config {
      * unless it is asked with `showSecrets: true` -- it goes through `redactConfig`. */
     readonly token?: string;
     readonly label?: string;
+    readonly headers?: Readonly<Record<string, string>>;
     /**
      * why: How long a gateway keeps a disconnected worker's view before forgetting it (§6).
      * Gateway-side. Default 24 hours: long enough that a machine rebooting overnight is still
@@ -330,6 +331,7 @@ export function redactConfig<
   Shape extends {
     readonly gateway: {
       readonly token?: string | undefined;
+      readonly headers?: Readonly<Record<string, string>> | undefined;
       readonly alerts: {
         readonly destinations: readonly {
           readonly url: string;
@@ -339,13 +341,20 @@ export function redactConfig<
     };
   },
 >(config: Shape): Shape {
-  const { token, alerts } = config.gateway;
-  if (token === undefined && alerts.destinations.length === 0) return config;
+  const { token, headers, alerts } = config.gateway;
+  if (token === undefined && headers === undefined && alerts.destinations.length === 0) {
+    return config;
+  }
   return {
     ...config,
     gateway: {
       ...config.gateway,
       ...(token === undefined ? {} : { token: REDACTED_VALUE }),
+      ...(headers === undefined
+        ? {}
+        : {
+            headers: Object.fromEntries(Object.keys(headers).map((name) => [name, REDACTED_VALUE])),
+          }),
       alerts: {
         ...alerts,
         destinations: alerts.destinations.map((destination) => ({
@@ -602,7 +611,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "update",
 ];
 
-const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
+const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label", "headers"];
 
 /**
  * why: ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -719,6 +728,13 @@ function validateGatewayMembership(config: Config): void {
   }
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
+  }
+  const { headers } = config.gateway;
+  if (url === undefined && headers !== undefined && Object.keys(headers).length > 0) {
+    throw invalidValue(
+      "gateway.headers",
+      "gateway.url to be set too, since gateway.headers is set",
+    );
   }
   requireJoinedWorkerHttpOff(config);
 }
@@ -962,6 +978,81 @@ const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,100}$/;
+const HEADER_VALUE_PATTERN = /^[\t -~]*$/;
+const MAX_HEADERS = 16;
+const MAX_HEADER_VALUE_LENGTH = 4096;
+const MAX_HEADER_CHARACTERS = 8192;
+const SIMLOCK_HEADER_NAMES: ReadonlySet<string> = new Set([
+  "authorization",
+  "x-simlock-worker-id",
+  "x-simlock-worker-label",
+  "host",
+  "connection",
+  "upgrade",
+  "origin",
+]);
+
+type HeaderEntry = [name: string, text: string];
+
+/**
+ * why: Node throws on a header name or value it cannot send, so every such entry is refused
+ * here at load, where the operator sees the key, rather than on each dial.
+ */
+function headersValidator(value: unknown, path: string): Readonly<Record<string, string>> {
+  const shape = "an object of header names to text values";
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidValue(path, shape);
+  }
+  const entries = Object.entries(value);
+  if (!entries.every((entry): entry is HeaderEntry => typeof entry[1] === "string")) {
+    throw invalidValue(path, shape);
+  }
+  if (entries.length > MAX_HEADERS) throw invalidValue(path, "at most 16 headers");
+  checkHeaderNames(entries, path);
+  checkHeaderValues(entries, path);
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (SIMLOCK_HEADER_NAMES.has(lower) || lower.startsWith("sec-websocket-")) {
+      throw invalidValue(path, `no header Simlock sets itself (${name})`);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+
+function checkHeaderNames(entries: readonly HeaderEntry[], path: string): void {
+  const seen = new Set<string>();
+  for (const [name] of entries) {
+    if (!HEADER_NAME_PATTERN.test(name)) {
+      throw invalidValue(
+        path,
+        `a header name of 1 to 100 letters, digits and HTTP name symbols (got ${name})`,
+      );
+    }
+  }
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) throw invalidValue(path, `each header name once (got ${name} twice)`);
+    seen.add(lower);
+  }
+}
+
+function checkHeaderValues(entries: readonly HeaderEntry[], path: string): void {
+  let total = 0;
+  for (const [name, text] of entries) {
+    if (text.length > MAX_HEADER_VALUE_LENGTH || !HEADER_VALUE_PATTERN.test(text)) {
+      throw invalidValue(
+        path,
+        `a header value of at most 4096 plain ASCII characters (in ${name})`,
+      );
+    }
+    total += name.length + text.length;
+  }
+  if (total > MAX_HEADER_CHARACTERS) {
+    throw invalidValue(path, "at most 8192 characters of header names and values in all");
+  }
+}
+
 /**
  * why: The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
@@ -978,6 +1069,7 @@ export function configValidators(
       url: stringValue,
       token: stringValue,
       label: stringValue,
+      headers: headersValidator,
       disconnectedRetentionMs: positiveNumber,
       execTimeoutMs: positiveNumber,
       leaseRequestTimeoutMs: positiveNumber,

@@ -117,7 +117,7 @@ Then restart the gateway.
 
 Your proxy must also:
 
-- **Let workers through without a sign-in.** Workers connect to `/v1/uplink` with their join token, not a proxy sign-in.
+- **Let workers through without a sign-in.** Workers connect to `/v1/uplink` with their join token, not a proxy sign-in. The other way is to give each worker the proxy's service credentials in [`gateway.headers`](../../reference/configuration/); the worker sends them on its connection.
 - **Let `/v1/healthz` through**, if anything checks the gateway's health.
 - **Let agents through**, by whatever means your proxy offers, such as a bypass rule or service credentials. Agents send their Simlock token, which Simlock checks as usual. When a request carries both a Simlock token and a JWT, the token wins.
 - **Serve the console over HTTPS.** Over plain `http://` from another machine, a person signed in through the proxy can look but not change anything: Simlock refuses their changes and screen input.
