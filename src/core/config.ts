@@ -716,6 +716,13 @@ function validateGatewayMembership(config: Config): void {
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
   }
+  const { headers } = config.gateway;
+  if (url === undefined && headers !== undefined && Object.keys(headers).length > 0) {
+    throw invalidValue(
+      "gateway.headers",
+      "gateway.url to be set too, since gateway.headers is set",
+    );
+  }
   requireJoinedWorkerHttpOff(config);
 }
 
@@ -958,17 +965,67 @@ const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,100}$/;
+const HEADER_VALUE_PATTERN = /^[\t -~]*$/;
+const MAX_HEADERS = 16;
+const MAX_HEADER_VALUE_LENGTH = 4096;
+const MAX_HEADER_CHARACTERS = 8192;
+const SIMLOCK_HEADER_NAMES: ReadonlySet<string> = new Set([
+  "authorization",
+  "x-simlock-worker-id",
+  "x-simlock-worker-label",
+  "host",
+  "connection",
+  "upgrade",
+  "origin",
+]);
+
+/**
+ * why: Node throws on a header name or value it cannot send, so every such entry is refused
+ * here at load, where the operator sees the key, rather than on each dial.
+ */
 function headersValidator(value: unknown, path: string): Readonly<Record<string, string>> {
-  const expected = "an object of header names to text values";
+  const shape = "an object of header names to text values";
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw invalidValue(path, expected);
+    throw invalidValue(path, shape);
   }
-  const headers: Record<string, string> = {};
-  for (const [name, text] of Object.entries(value)) {
-    if (typeof text !== "string") throw invalidValue(path, expected);
-    headers[name] = text;
+  const entries = Object.entries(value);
+  if (entries.some(([, text]) => typeof text !== "string")) throw invalidValue(path, shape);
+  if (entries.length > MAX_HEADERS) throw invalidValue(path, "at most 16 headers");
+  for (const [name] of entries) {
+    if (!HEADER_NAME_PATTERN.test(name)) {
+      throw invalidValue(
+        path,
+        `a header name of 1 to 100 letters, digits and HTTP name symbols (got ${name})`,
+      );
+    }
   }
-  return headers;
+  const seen = new Set<string>();
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) throw invalidValue(path, `each header name once (got ${name} twice)`);
+    seen.add(lower);
+  }
+  let total = 0;
+  for (const [name, text] of entries as [string, string][]) {
+    if (text.length > MAX_HEADER_VALUE_LENGTH || !HEADER_VALUE_PATTERN.test(text)) {
+      throw invalidValue(
+        path,
+        `a header value of at most 4096 plain ASCII characters (in ${name})`,
+      );
+    }
+    total += name.length + text.length;
+  }
+  if (total > MAX_HEADER_CHARACTERS) {
+    throw invalidValue(path, "at most 8192 characters of header names and values in all");
+  }
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (SIMLOCK_HEADER_NAMES.has(lower) || lower.startsWith("sec-websocket-")) {
+      throw invalidValue(path, `no header Simlock sets itself (${name})`);
+    }
+  }
+  return Object.fromEntries(entries as [string, string][]);
 }
 
 /**
