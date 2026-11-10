@@ -1818,6 +1818,79 @@ describe("loadConfig modes (ADR 0005)", () => {
     await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
   });
 
+  it("stops the load on a bad gateway.headers with the message naming it, and keeps every accepted row", async () => {
+    const key = (what: string) => `Invalid config value for "gateway.headers": expected ${what}`;
+    const shape = "an object of header names to text values";
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    const many = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`x-h${i}`, "v"]));
+    const fat = Object.fromEntries(
+      Array.from({ length: 3 }, (_, i) => [`x-h${i}`, "a".repeat(3000)]),
+    );
+    const refused: readonly (readonly [string, unknown, string])[] = [
+      ["an array", ["a"], shape],
+      ["a non-text value", { "x-ok": 1 }, shape],
+      ["17 entries", many, "at most 16 headers"],
+      [
+        "a name with a space",
+        { "X Bad": "v" },
+        "a header name of 1 to 100 letters, digits and HTTP name symbols (got X Bad)",
+      ],
+      [
+        "an empty name",
+        { "": "x" },
+        "a header name of 1 to 100 letters, digits and HTTP name symbols (got )",
+      ],
+      [
+        "a 101-character name",
+        { ["a".repeat(101)]: "v" },
+        `a header name of 1 to 100 letters, digits and HTTP name symbols (got ${"a".repeat(101)})`,
+      ],
+      ["one name twice", { "X-A": "1", "x-a": "2" }, "each header name once (got x-a twice)"],
+      [
+        "a line break",
+        { "x-ok": "line\nbreak" },
+        "a header value of at most 4096 plain ASCII characters (in x-ok)",
+      ],
+      [
+        "a non-ASCII value",
+        { "x-ok": "café" },
+        "a header value of at most 4096 plain ASCII characters (in x-ok)",
+      ],
+      [
+        "a 4097-character value",
+        { "x-ok": "a".repeat(4097) },
+        "a header value of at most 4096 plain ASCII characters (in x-ok)",
+      ],
+      ["over 8192 in all", fat, "at most 8192 characters of header names and values in all"],
+      ["Authorization", { Authorization: "x" }, "no header Simlock sets itself (Authorization)"],
+      [
+        "a sec-websocket- name",
+        { "Sec-WebSocket-Key": "x" },
+        "no header Simlock sets itself (Sec-WebSocket-Key)",
+      ],
+    ];
+    for (const role of ["worker", "gateway"] as const) {
+      for (const [name, headers, what] of refused) {
+        await expect(
+          load({ gateway: { ...joined, headers } }, { role }),
+          `${role}: ${name}`,
+        ).rejects.toThrow(key(what));
+      }
+    }
+    await expect(load({ gateway: { headers: { "x-a": "1" } } })).rejects.toThrow(
+      key("gateway.url to be set too, since gateway.headers is set"),
+    );
+    await expect(load({ gateway: { token: "t", headers: { "x-a": "1" } } })).rejects.toThrow(
+      'Invalid config value for "gateway.url": expected a gateway URL, since gateway.token is set',
+    );
+
+    const accepted = { "CF-Access-Client-Id": "abc.access", "x-empty": "", "x-tab": "a\tb" };
+    expect((await load({ gateway: { ...joined, headers: accepted } })).gateway.headers).toEqual(
+      accepted,
+    );
+    expect((await load({ gateway: { headers: {} } })).gateway.url).toBeUndefined();
+  });
+
   it("refuses a joined worker's own HTTP listener with the exact error, and keeps every valid and invalid neighbour as it was", async () => {
     const refusal =
       'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)';
