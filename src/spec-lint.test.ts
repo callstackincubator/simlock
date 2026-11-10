@@ -815,6 +815,22 @@ describe("spec-lint.mjs on a task that names its parent's design rows", () => {
 });
 
 describe("spec-lint.mjs on a feature with design tables", () => {
+  it("takes `none` under Existing code's Commit and Searches lines, and `none` or a dash in backticks in a cell", () => {
+    const sentinels = [
+      swap(
+        "| Id | Code (path:line) | Today | With this feature | Handled by |\n| -- | --- | --- | --- | --- |\n| X1 | `src/core/config.ts:1-2` | reads the file | also reads profiles | S1 |",
+        "none",
+      ),
+      swap("| `registry +1` | #100 | #102 |", "| `none` | `#100` | #102 |"),
+      swap("| #102 | — |", "| #102 | `—` |"),
+    ].reduce((body, change) => change(body), DESIGN_FEATURE);
+
+    expect(lintFeature(sentinels, DESIGN_WORLD)).toEqual({
+      status: 0,
+      lines: ["N 200 Depends on: chain 2 of 2 tasks", "spec-lint: 0 blocking, 1 notes"],
+    });
+  });
+
   it("passes when ids, steps and hand-offs agree with its tasks, and before any task is posted", () => {
     expect(lintFeature(DESIGN_FEATURE, DESIGN_WORLD)).toEqual({
       status: 0,

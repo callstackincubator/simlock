@@ -707,8 +707,16 @@ function lintFeature() {
   checkGraph(subs);
 }
 
+// why: Existing code says `none` under its Commit and Searches lines, so any line may hold it.
 function isNone(s) {
-  return /^none\b/i.test(text(s));
+  const lines = prose(s.lines).map((l) => l.replaceAll("`", "").trim());
+  return (
+    !tables(s.lines).some((t) => t.header[0] === "Id") && lines.some((l) => /^none\b/i.test(l))
+  );
+}
+
+function bare(cell) {
+  return cell.replaceAll("`", "").trim();
 }
 
 function checkIds(s, name, prefix) {
@@ -745,8 +753,8 @@ function checkInterfaces(s) {
 function checkSchemaSteps() {
   const taken = new Map();
   for (const row of designRows(parsed).filter((r) => r.step !== null)) {
-    if (/^(none|—|-)?$/i.test(row.step)) continue;
-    const m = SCHEMA_STEP.exec(row.step.replaceAll("`", ""));
+    if (/^(none|—|-)?$/i.test(bare(row.step))) continue;
+    const m = SCHEMA_STEP.exec(bare(row.step));
     if (m === null) {
       add(
         "B",
@@ -774,14 +782,14 @@ function checkOwners() {
   const one = /^(T\d+|#\d+)$/;
   const some = /(?:\bT\d+|#\d+)\b/;
   for (const row of designRows(parsed).filter((r) => r.prefix === "S" || r.prefix === "I")) {
-    if (!one.test(row.taskCell)) {
+    if (!one.test(bare(row.taskCell))) {
       add(
         "B",
         row.name,
         `${row.id}'s Task cell "${row.taskCell}" is not one task; name the task that adds it`,
       );
     }
-    if (!some.test(row.usedCell) && !/^(—|-|none)$/i.test(row.usedCell)) {
+    if (!some.test(row.usedCell) && !/^(—|-|none)$/i.test(bare(row.usedCell))) {
       add(
         "B",
         row.name,
@@ -797,10 +805,10 @@ function checkDesign() {
     const s = section(parsed, name, 2);
     if (s === undefined) continue;
     if (name !== "Behaviours") checkPaths(s, name, sha);
+    if (name === "Existing code") checkSearches(s, name);
     if (name !== "Behaviours" && isNone(s)) continue;
     checkIds(s, name, prefix);
     if (name === "Interfaces") checkInterfaces(s);
-    if (name === "Existing code") checkSearches(s, name);
   }
   checkSchemaSteps();
   checkOwners();
