@@ -125,7 +125,7 @@ export class PhysicalEnrollment {
         );
       }
       const device = await this.options.decisions.run(() =>
-        this.options.registry.reenrollPhysical(existing.id, { ...again, initiator, platform }),
+        this.options.registry.reenrollPhysical(existing.id, { ...again, platform }),
       );
       this.options.physicalDeviceReady?.(device.id);
       return { device, reenrolled: true };

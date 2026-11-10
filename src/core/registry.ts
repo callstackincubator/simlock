@@ -728,7 +728,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const devices = [...this.#devices];
     devices[index] = updated;
     this.#commit(devices, this.#leases);
-    this.#emitEnrolled(updated, true, input.initiator ?? "operator");
+    this.#emitEnrolled(updated, true, "operator");
     return this.#committed(deviceId) as PhysicalDevice;
   }
 
