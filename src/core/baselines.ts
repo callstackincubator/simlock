@@ -2,8 +2,9 @@ import type { EventBus } from "../bus/index.js";
 import type { BaselineEntry } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
+import { backendKey } from "./backend-key.js";
 import { assertVirtual, type Platform, type VirtualDevice } from "./domain.js";
-import type { Driver, DriverSource } from "./driver.js";
+import { BadDeviceRequestError, type Driver, type DriverSource } from "./driver.js";
 import { NoDriverError } from "./driver-catalog.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { Registry, ReleasedLease } from "./registry.js";
@@ -70,6 +71,7 @@ export class BaselineInUseError extends Error {
 
 /** why: one baseline version as a lease request reads it: the spec a copy has and the source it is copied from. */
 export interface CurrentBaseline {
+  readonly backend: string;
   readonly imageTag?: string;
   readonly mode: "slim" | "full";
   readonly model: string;
@@ -86,6 +88,22 @@ export interface NamedSource extends DriverSource {
   readonly baselineVersion?: number;
 }
 
+interface SourceOwner {
+  readonly platform: Platform;
+  readonly backend: string;
+}
+
+function ownerOf(row: Record<string, unknown>): SourceOwner {
+  const platform = String(row.platform) as Platform;
+  const backend = String(row.backend);
+  return { platform, backend };
+}
+
+function sourceKey(owner: SourceOwner, id: string): string {
+  const prefix = backendKey(owner.platform, owner.backend);
+  return `${prefix}\u0000${id}`;
+}
+
 export interface BaselineRemoveResult {
   readonly name: string;
   readonly versions: readonly number[];
@@ -95,7 +113,10 @@ export interface BaselineRemoveResult {
 export interface BaselineServiceOptions {
   readonly clock: Clock;
   readonly drivers: {
-    get(platform: Platform, backend?: string): Pick<Driver, "destroySource" | "listSources">;
+    get(
+      platform: Platform,
+      backend?: string,
+    ): Pick<Driver, "backend" | "destroySource" | "listSources">;
   };
   readonly leaseSave: () => {
     releaseToSave<Result>(
@@ -132,7 +153,6 @@ export class BaselineService {
     return result;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
     return this.#serial(() => this.#save(request));
   }
@@ -145,8 +165,16 @@ export class BaselineService {
       (current) => current.id === lease?.deviceId,
     );
     if (device !== undefined) {
-      this.options.drivers.get(device.spec.platform, device.backend);
+      const driver = this.options.drivers.get(device.spec.platform, device.backend);
+      if (driver.backend.capabilities.baselines === false) {
+        throw new BadDeviceRequestError("This backend does not support saved baselines");
+      }
     }
+    const previousQuery = this.options.state.database.prepare(
+      "SELECT platform, backend FROM baselines WHERE name = ?",
+    );
+    const previous = previousQuery.all(request.name);
+    for (const row of previous) this.#driver(row);
     const baseline = await this.options
       .leaseSave()
       .releaseToSave(request.leaseId, async (released) => {
@@ -243,7 +271,11 @@ export class BaselineService {
       .prepare("SELECT * FROM baselines WHERE name = ? ORDER BY version DESC LIMIT 1")
       .get(name);
     if (row === undefined) return undefined;
+    const unavailable = this.#unavailableReason(row);
+    const staleReason =
+      unavailable ?? (row.stale_reason === null ? undefined : String(row.stale_reason));
     return {
+      backend: String(row.backend),
       mode: String(row.mode) as CurrentBaseline["mode"],
       model: String(row.model),
       name,
@@ -252,7 +284,7 @@ export class BaselineService {
       sourceId: String(row.source_id),
       version: Number(row.version),
       ...(row.image_tag === null ? {} : { imageTag: String(row.image_tag) }),
-      ...(row.stale_reason === null ? {} : { staleReason: String(row.stale_reason) }),
+      ...(staleReason === undefined ? {} : { staleReason }),
     };
   }
 
@@ -269,10 +301,14 @@ export class BaselineService {
       .all();
     const { sources, unavailable } = await this.#readSources(rows);
     return rows.map((row): BaselineEntry => {
-      const sizeBytes = sources.get(String(row.source_id))?.sizeBytes;
-      const platform = String(row.platform) as Platform;
-      const staleReason = unavailable.has(platform)
-        ? `the ${platform} driver is not available on this worker`
+      const owner = ownerOf(row);
+      const id = String(row.source_id);
+      const key = sourceKey(owner, id);
+      const sizeBytes = sources.get(key)?.sizeBytes;
+      const platform = owner.platform;
+      const ownerKey = backendKey(platform, owner.backend);
+      const staleReason = unavailable.has(ownerKey)
+        ? this.#unavailableReason(row)
         : row.stale_reason === null
           ? undefined
           : String(row.stale_reason);
@@ -298,13 +334,16 @@ export class BaselineService {
    * orphan for `doctor --purge-orphans` to delete.
    */
   // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
-  nameSources(sources: readonly DriverSource[]): readonly NamedSource[] {
-    const names = new Map(
-      this.options.state.database
-        .prepare("SELECT name, version, source_id FROM baselines")
-        .all()
-        .map((row) => [String(row.source_id), row] as const),
+  nameSources(sources: readonly DriverSource[], owner: SourceOwner): readonly NamedSource[] {
+    const query = this.options.state.database.prepare(
+      "SELECT name, version, source_id FROM baselines WHERE platform = ? AND backend = ?",
     );
+    const rows = query.all(owner.platform, owner.backend);
+    const names = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      const id = String(row.source_id);
+      names.set(id, row);
+    }
     return sources.map((source): NamedSource => {
       if (source.kind !== "baseline") return source;
       const row = names.get(source.id);
@@ -323,11 +362,14 @@ export class BaselineService {
   async #checkStale(): Promise<void> {
     const { database } = this.options.state;
     const rows = database
-      .prepare("SELECT name, version, platform, source_id, stale_reason FROM baselines")
+      .prepare("SELECT name, version, platform, backend, source_id, stale_reason FROM baselines")
       .all();
     const { sources } = await this.#readSources(rows);
     for (const row of rows) {
-      const source = sources.get(String(row.source_id));
+      const owner = ownerOf(row);
+      const id = String(row.source_id);
+      const key = sourceKey(owner, id);
+      const source = sources.get(key);
       if (source === undefined) continue;
       database
         .prepare("UPDATE baselines SET stale_reason = ? WHERE name = ? AND version = ?")
@@ -342,21 +384,49 @@ export class BaselineService {
     }
   }
 
-  /** why: a platform with no driver on this worker cannot be read, which is not the same as its sources being gone. */
+  #driver(row: Record<string, unknown>): Pick<Driver, "backend" | "destroySource" | "listSources"> {
+    const owner = ownerOf(row);
+    return this.options.drivers.get(owner.platform, owner.backend);
+  }
+
+  #unavailableReason(row: Record<string, unknown>): string | undefined {
+    try {
+      this.#driver(row);
+      return undefined;
+    } catch (error: unknown) {
+      if (error instanceof NoDriverError) {
+        const owner = ownerOf(row);
+        return `the ${owner.platform}:${owner.backend} backend is not available on this worker`;
+      }
+      throw error;
+    }
+  }
+
+  /** why: a backend that is not selected cannot be read, which is not the same as its sources being gone. */
   async #readSources(rows: readonly Record<string, unknown>[]): Promise<{
     readonly sources: ReadonlyMap<string, DriverSource>;
-    readonly unavailable: ReadonlySet<Platform>;
+    readonly unavailable: ReadonlySet<string>;
   }> {
     const sources = new Map<string, DriverSource>();
-    const unavailable = new Set<Platform>();
-    for (const platform of new Set(rows.map((row) => String(row.platform) as Platform))) {
+    const unavailable = new Set<string>();
+    const owners = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      const owner = ownerOf(row);
+      const key = backendKey(owner.platform, owner.backend);
+      owners.set(key, row);
+    }
+    for (const [key, row] of owners) {
       try {
-        for (const source of await this.options.drivers.get(platform).listSources()) {
-          sources.set(source.id, source);
+        const driver = this.#driver(row);
+        const owner = ownerOf(row);
+        const listed = await driver.listSources();
+        for (const source of listed) {
+          const key = sourceKey(owner, source.id);
+          sources.set(key, source);
         }
       } catch (error: unknown) {
-        if (!(error instanceof NoDriverError)) throw error;
-        unavailable.add(platform);
+        if (error instanceof NoDriverError) unavailable.add(key);
+        else throw error;
       }
     }
     return { sources, unavailable };
@@ -378,10 +448,11 @@ export class BaselineService {
     const { database } = this.options.state;
     const rows = database
       .prepare(
-        "SELECT name, version, platform, source_id FROM baselines WHERE name = ? ORDER BY version",
+        "SELECT name, version, platform, backend, source_id FROM baselines WHERE name = ? ORDER BY version",
       )
       .all(request.name);
     if (rows.length === 0) throw new UnknownBaselineError(request.name);
+    for (const row of rows) this.#driver(row);
     const claimed = await this.options.decisions.run(() => this.#claimIdleDevices(request.name));
     const deletedDevices: string[] = [];
     let failure: unknown;
@@ -411,31 +482,48 @@ export class BaselineService {
   }
 
   /**
-   * why: nuke's removal of every baseline: the rows go first, then the sources, so a source that
-   * will not delete is an orphan `doctor` lists and not a baseline that points at nothing. Every
-   * source is tried; the names whose rows went are answered with the first failure, if any.
+   * why: nuke removes an available source's row first, so a source that will not delete becomes
+   * an orphan. An unavailable backend keeps its rows and sources for a later selected run.
    */
   async removeAll(): Promise<{ readonly failure?: unknown; readonly names: readonly string[] }> {
-    const rows = this.options.state.database
-      .prepare("SELECT name, version, platform, source_id FROM baselines ORDER BY name, version")
-      .all();
-    this.options.state.database.prepare("DELETE FROM baselines").run();
+    const { database } = this.options.state;
+    const rowsQuery = database.prepare(
+      "SELECT name, version, platform, backend, source_id FROM baselines ORDER BY name, version",
+    );
+    const rows = rowsQuery.all();
+    const removedNames = new Set<string>();
     let failure: unknown;
     for (const row of rows) {
+      let driver: Pick<Driver, "backend" | "destroySource" | "listSources">;
+      try {
+        driver = this.#driver(row);
+      } catch (error: unknown) {
+        if (failure === undefined) failure = error;
+        continue;
+      }
+      const name = String(row.name);
+      const version = Number(row.version);
+      const deleting = database.prepare("DELETE FROM baselines WHERE name = ? AND version = ?");
+      deleting.run(name, version);
+      removedNames.add(name);
       this.options.eventBus.emit(
         "baseline.removed",
-        { name: String(row.name), reason: "nuke", version: Number(row.version) },
+        { name, reason: "nuke", version },
         "baselines",
       );
       try {
-        await this.options.drivers
-          .get(String(row.platform) as Platform)
-          .destroySource(String(row.source_id));
+        const id = String(row.source_id);
+        await driver.destroySource(id);
       } catch (error: unknown) {
-        failure ??= error;
+        if (failure === undefined) failure = error;
       }
     }
-    const names = [...new Set(rows.map((row) => String(row.name)))];
+    const names: string[] = [];
+    for (const name of removedNames) {
+      const finding = database.prepare("SELECT 1 FROM baselines WHERE name = ? LIMIT 1");
+      const remaining = finding.get(name);
+      if (remaining === undefined) names.push(name);
+    }
     return failure === undefined ? { names } : { failure, names };
   }
 
@@ -465,7 +553,7 @@ export class BaselineService {
   async #dropReplaced(requesterId?: string): Promise<void> {
     const rows = this.options.state.database
       .prepare(
-        `SELECT name, version, platform, source_id FROM baselines AS b
+        `SELECT name, version, platform, backend, source_id FROM baselines AS b
          WHERE version < (SELECT MAX(version) FROM baselines WHERE name = b.name)`,
       )
       .all();
@@ -481,7 +569,10 @@ export class BaselineService {
             device.spec.baseline?.name === name &&
             device.spec.baseline.version === version,
         );
-      if (!inUse) await this.#deleteVersion(row, "replaced", requesterId);
+      if (inUse) continue;
+      if (this.#unavailableReason(row) === undefined) {
+        await this.#deleteVersion(row, "replaced", requesterId);
+      }
     }
   }
 
@@ -493,9 +584,9 @@ export class BaselineService {
   ): Promise<void> {
     const name = String(row.name);
     const version = Number(row.version);
-    await this.options.drivers
-      .get(String(row.platform) as Platform)
-      .destroySource(String(row.source_id));
+    const driver = this.#driver(row);
+    const sourceId = String(row.source_id);
+    await driver.destroySource(sourceId);
     this.options.state.database
       .prepare("DELETE FROM baselines WHERE name = ? AND version = ?")
       .run(name, version);
@@ -521,13 +612,14 @@ export class BaselineService {
     database
       .prepare(
         `INSERT INTO baselines
-           (name, version, platform, model, os_version, mode, image_tag, note, saved_at, source_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (name, version, platform, backend, model, os_version, mode, image_tag, note, saved_at, source_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         request.name,
         version,
         device.spec.platform,
+        device.backend,
         device.spec.model,
         device.spec.osVersion,
         device.mode,

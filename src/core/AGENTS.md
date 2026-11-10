@@ -56,9 +56,10 @@ Components:
 
 Baselines (ADR 0061 §4):
 
+- Baseline reads, provisioning and deletion use the recorded backend; unavailable owners retain their rows.
 - One save or remove at a time. A save: leasing's `releaseToSave` ends the lease, then `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim. A driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`.
 - A replace keeps the leased devices of older versions. An older version is dropped only when no device record and no provision (`hold`) has it; that is checked after a save, on every `device.deleted` and at startup.
-- `remove` refuses a baseline a lease uses, and destroys each source before its row. `removeAll` (nuke) deletes rows first.
+- `remove` refuses a leased baseline and deletes its source before its row; nuke clears only available backends.
 - `checkStale` runs before `list` and `doctor` and after `component.removed`.
 
 ## Known gaps

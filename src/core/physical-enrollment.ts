@@ -76,6 +76,9 @@ export class PhysicalEnrollment {
   async add(platform: Platform, id: string): Promise<PhysicalEnrollmentResult> {
     this.#refuseVirtual(platform, id);
     const driver = this.options.drivers.get(platform);
+    if (driver.backend.capabilities.physical === false) {
+      throw new BadDeviceRequestError("This backend does not support physical devices");
+    }
     const read = await this.#inspect(driver, platform, id);
 
     const claimed = await this.options.decisions.run(async () => {

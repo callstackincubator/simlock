@@ -591,6 +591,47 @@ describe("LeaseAcquisitionCoordinator: resolve", () => {
     ).resolves.toMatchObject({ lease: { requesterId: "next" } });
   });
 
+  it.each([
+    { label: "another backend", backend: "remote", supported: true, message: "ios:remote" },
+    {
+      label: "a backend without baselines",
+      backend: "local",
+      supported: false,
+      message: "does not support saved baselines",
+    },
+  ])("refuses a warm baseline target owned by $label", async (test) => {
+    const driver = new FakeDriver({
+      clock: new FakeClock(),
+      availableOsVersions: ["26.5"],
+      knownModels: ["iPhone 16"],
+      platform: "ios",
+      capabilities: { baselines: test.supported, physical: true, except: true },
+    });
+    const harness = await createHarness({
+      drivers: [driver],
+      baselines: {
+        current: () => ({
+          backend: test.backend,
+          mode: "full",
+          model: "iPhone 16",
+          name: "checkout",
+          osVersion: "26.5",
+          platform: "ios",
+          sourceId: "source-1",
+          version: 1,
+        }),
+      },
+    });
+
+    const resolved = await harness.coordinator.resolve({ baseline: "checkout", platform: "ios" });
+
+    expect(resolved).toEqual({
+      refusal: "unresolvable",
+      message: expect.stringContaining(test.message),
+    });
+    expect(harness.registry.snapshot.devices).toEqual([]);
+  });
+
   it("answers runtime-missing for an OS that is not installed, and never calls the installer though a request could download it", async () => {
     const { asked, components } = installer();
     const driver = driverOf({ availableOsVersions: [] });

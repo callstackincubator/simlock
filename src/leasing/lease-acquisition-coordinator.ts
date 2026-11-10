@@ -82,7 +82,7 @@ import {
   type PhysicalPlanInput,
   type WaitingReason,
 } from "./acquisition-planner.js";
-import { backendSnapshot } from "./backend-policy.js";
+import { backendSnapshot, requireBackendCapabilities } from "./backend-policy.js";
 import { emitLeaseRefusal } from "./lease-refusal.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
@@ -527,6 +527,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     let driver: Driver;
     try {
       driver = this.options.drivers.get(request.platform);
+      requireBackendCapabilities(driver, request);
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -609,6 +610,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (mismatch !== undefined) {
       throw new BaselineMismatchError(name, mismatch.field, mismatch.message);
     }
+    this.options.drivers.get(current.platform, current.backend);
     if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
     const spec = baselineSpec(current);
     if (request.except !== undefined && spec.mode !== "slim") {
@@ -839,6 +841,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return { message: asError(error).message, refusal: "no-driver" };
     }
     try {
+      requireBackendCapabilities(driver, request);
       const { spec } = await this.#resolveSpec(
         driver,
         request,

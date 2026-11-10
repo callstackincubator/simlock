@@ -63,6 +63,32 @@ function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogS
 
 // why: drives the coordinator on its own, so a test can interleave its lifecycle, queue and clock in orders the leasing surface cannot force.
 describe("LeaseAcquisitionCoordinator", () => {
+  it("refuses unsupported baseline, physical and except requests before provisioning", async () => {
+    const driver = new FakeDriver({
+      clock: new FakeClock(1_000),
+      platform: "ios",
+      capabilities: { baselines: false, physical: false, except: false },
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    for (const unsupported of [
+      { baseline: "checkout" },
+      { physical: true },
+      { except: ["widgets"] },
+    ]) {
+      const pending = harness.coordinator.request(
+        { ...request, ...unsupported },
+        {
+          ownerId: "agent",
+          requesterId: "agent",
+        },
+      );
+      await expect(pending).rejects.toMatchObject({ name: "BadDeviceRequestError" });
+    }
+    expect(driver.calls).toEqual([]);
+    expect(harness.registry.snapshot.devices).toEqual([]);
+    expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+
   it("prepares a warm device before granting when its driver requires it", async () => {
     const harness = await createHarness();
     const device = await seedReady(harness);
@@ -1814,6 +1840,7 @@ describe("LeaseAcquisitionCoordinator waiting demand", () => {
 describe("LeaseAcquisitionCoordinator: a request naming a baseline", () => {
   it("plans against the version current at its decision, so a save between the resolve and the plan grants an idle device of the new version", async () => {
     const current = (version: number) => ({
+      backend: "local",
       mode: "full" as const,
       model: request.model,
       name: "checkout",
@@ -1845,6 +1872,7 @@ describe("LeaseAcquisitionCoordinator: a request naming a baseline", () => {
     const harness = await createHarness({
       baselines: {
         current: () => ({
+          backend: "local",
           mode: "full" as const,
           model: request.model,
           name: "checkout",

@@ -2,6 +2,37 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildDispatcher, session } from "./test-dispatcher.js";
 
+describe("Dispatcher: backend capabilities", () => {
+  it("refuses baseline save on a backend without baselines while keeping the lease active", async () => {
+    const { dispatcher, registry } = await buildDispatcher({
+      driverOptions: { capabilities: { baselines: false, physical: true, except: true } },
+    });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      {
+        platform: "ios",
+        model: "iPhone 17 Pro",
+        osVersion: "26.5",
+      },
+      session(),
+    );
+
+    const saving = dispatcher.dispatch(
+      "baseline.save",
+      {
+        leaseId: grant.lease.id,
+        name: "checkout",
+      },
+      session({ role: "admin" }),
+    );
+
+    await expect(saving).rejects.toMatchObject({ name: "BadDeviceRequestError" });
+    expect(registry.snapshot.leases.map((lease) => lease.id)).toEqual([grant.lease.id]);
+    const device = registry.snapshot.devices.find((current) => current.id === grant.device.id);
+    expect(device?.state).toBe("leased");
+  });
+});
+
 describe("Dispatcher: baseline.remove while a copy is reclaiming", () => {
   it("refuses the remove with DEVICE_BUSY naming the reclaiming device, and removes the baseline once its reclaim ends", async () => {
     const { clock, dispatcher, registry } = await buildDispatcher({

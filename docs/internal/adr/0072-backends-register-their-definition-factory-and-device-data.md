@@ -65,16 +65,33 @@ The backend field is carried by device grants and views, so the daemon protocol
 version advances with this change. Existing operator configuration keys keep
 their meaning; `drivers.<platform>.backend` defaults to `local`.
 
+### Saved baselines retain their backend
+
+Saved baselines retain their backend, with existing published rows migrated to
+`local`. Source ids are interpreted only within that platform and backend.
+An unavailable backend's baseline remains recorded and cannot be leased,
+provisioned, deleted or purged through another backend. Its temporary
+unavailability does not persist a stale result from another provider's source
+catalog.
+
+### Capabilities are checked before device work
+
+Definitions declare support for baselines, physical devices and `except`.
+Admission refuses unsupported requests before provisioning. Physical enrollment
+checks the same metadata before inspecting a phone. Baseline save checks the
+leased device's backend before ending its lease. These checks apply through the
+common operation paths used by all transports.
+
+The driver supplies the meanings of the existing lifecycle verbs. A cloud
+backend may release its remote session on shutdown and create a fresh session
+on a later boot. It must document the resulting loss of app data and preserve
+the identity of an active session during recovery.
+
 ### Implementation sequence
 
-The registry extraction registers local Android and iOS without changing device
-records or the daemon protocol. This step adds recorded device ownership and
-its wire migration. Capabilities remain metadata.
-
-Before another backend is registered, a follow-up must preserve saved-baseline
-and source ownership and enforce capabilities at common admission paths. That
-change needs its own state migration and tests; source ownership and capability
-admission are not implemented by the device ownership step.
+The registry extraction, device ownership and baseline ownership changes land
+in that order. Another backend is registered only after both stored resource
+types retain their owners and common admission paths enforce capabilities.
 
 This decision adds no provider deadline or renewal mechanism. Simlock's
 TTL-first agent lease remains governed by ADR 0004. A backend that needs an

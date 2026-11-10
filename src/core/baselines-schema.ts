@@ -18,7 +18,10 @@ CREATE TABLE baselines (
 `;
 
 export const baselinesOwner: SqliteSchemaOwner = {
-  migrations: [BASELINES_V1],
+  migrations: [
+    BASELINES_V1,
+    "ALTER TABLE baselines ADD COLUMN backend TEXT NOT NULL DEFAULT 'local';",
+  ],
   name: "baselines",
-  version: 1,
+  version: 2,
 };
