@@ -90,6 +90,26 @@ Add `--json` for the full result:
 {"id":"dev_5b0e7c21-9d4a-4f3e-8a16-c2e47f09d3b8","driverDeviceId":"00008110-001A2B3C4D5E","platform":"ios","model":"iPhone 15 Pro","osVersion":"18.4","class":"phone","appCount":12,"reenrolled":false}
 ```
 
+## Enrol phones automatically
+
+An admin can let the worker enrol the phones plugged into it. Set `devices.autoEnroll` to `true` in the worker's `config.json` and restart the daemon:
+
+```json
+{ "devices": { "autoEnroll": true } }
+```
+
+From then on, every `health.probeIntervalMs` (30 seconds by default) the worker enrols each phone plugged in by USB that `simlock device add` would accept, with no command. The `device.enrolled` event of such a phone says `initiator: "auto"`.
+
+<Aside type="danger">
+Turn it on only where every phone plugged into the worker is a test phone. Each enrolled phone has every app that was not on it at enrolment uninstalled when a lease ends, so a personal phone charging on the worker would lose its apps.
+</Aside>
+
+- **A phone that cannot be enrolled yet** (locked, untrusted, Developer Mode off and so on) is tried again at every run. The daemon log gets one line each time the reason changes: `auto-enroll: ios 00008110-001A2B3C4D5E not enrolled: <message>`, with the same message `device add` prints.
+- **A phone you removed stays out.** After `simlock device remove`, or after Simlock unenrols a phone that kept failing its cleanup, the worker does not enrol it again while it stays plugged in. Unplug it for `health.stableObservations` runs in a row (about a minute) and plug it back in, or run `simlock device add` yourself. The worker forgets which phones are held out when it restarts, so a restart enrols a removed phone that is still plugged in.
+- **A phone already enrolled** is left alone, whatever its state.
+- **A platform that cannot be read** is skipped for that run, and the log says `auto-enroll: could not list <platform> phones: <message>` once for each new message. A worker with no driver for a platform lists nothing for it.
+- **The key is read at start.** Change it, then restart the daemon.
+
 ## Keep an app on the device between leases
 
 Enrolment records the model, the OS version, whether it is a phone or a tablet, and the list of apps on the device:

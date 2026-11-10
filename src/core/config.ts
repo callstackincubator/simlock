@@ -175,6 +175,11 @@ export interface Config {
      * from its deletion. At least `lease.requestRetentionMs`: a granted request names its device.
      */
     readonly deletedRetentionMs: number;
+    /**
+     * why: a worker enrols the phones plugged into it by USB, as `device add` would; off by default
+     * because a personal phone on the worker would be wiped of apps at every lease's end.
+     */
+    readonly autoEnroll: boolean;
   };
   readonly lease: {
     /**
@@ -868,7 +873,7 @@ function defaultConfig(
         maxRetryBackoffMs: 5 * 60_000,
       },
     },
-    devices: { deletedRetentionMs: DEFAULT_DEVICES_DELETED_RETENTION_MS },
+    devices: { autoEnroll: false, deletedRetentionMs: DEFAULT_DEVICES_DELETED_RETENTION_MS },
     lease: {
       defaultTtlMs: DEFAULT_LEASE_TTL_MS,
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
@@ -1099,7 +1104,7 @@ export function configValidators(
     // `lease.heartbeatIntervalMs`) are deliberately absent rather than aliased: `objectValidator`
     // warns about each as an unrecognized key and ignores it, so an old config still boots and
     // gets the new key's default rather than the value it wrote.
-    devices: objectValidator({ deletedRetentionMs: positiveNumber }),
+    devices: objectValidator({ autoEnroll: booleanValue, deletedRetentionMs: positiveNumber }),
     lease: objectValidator({
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,

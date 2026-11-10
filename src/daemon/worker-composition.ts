@@ -518,6 +518,7 @@ export async function composeWorker(
     historyPath: join(dataDirectory, HISTORY_DB_NAME),
     healthMonitor: leasing.healthMonitor,
     physicalDeviceWatcher: leasing.physicalDeviceWatcher,
+    autoEnrollment: core.autoEnrollment,
     hostFacts: () => fitHostFacts(hostFacts.current()),
     ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
     ...(memoryPressure === undefined
@@ -591,6 +592,7 @@ export async function composeWorker(
     settle: async () => {
       stopping = true;
       await leasing.settle();
+      await core.autoEnrollment.settle();
       await core.drain();
       // why: after the reclaims settled, so a device that just came back ready is shut down too; before `dispose`, which stops adb.
       await core.shutdownIdle();

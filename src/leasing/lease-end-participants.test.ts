@@ -112,6 +112,7 @@ interface EngineOptions {
 function config(options: EngineOptions): TestEngineConfig {
   const ios = options.ios ?? { maxDevices: 1, maxRunning: 1 };
   return {
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,

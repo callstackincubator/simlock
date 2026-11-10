@@ -31,6 +31,7 @@ const virtualRequest = {
 
 function config(leaseOverrides: object = {}): TestEngineConfig {
   return {
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,

@@ -257,6 +257,7 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
           class: "phone",
           deviceId: device.id,
           driverDeviceId: input.driverDeviceId,
+          initiator: "operator",
           model: "iPhone 15 Pro",
           osVersion: "18.4",
           platform: "ios",

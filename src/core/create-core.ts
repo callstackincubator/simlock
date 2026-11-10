@@ -33,6 +33,7 @@ import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from "./nuke-service.js";
+import { PhysicalAutoEnrollment } from "./physical-auto-enrollment.js";
 import { PhysicalEnrollment } from "./physical-enrollment.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
@@ -44,7 +45,7 @@ import { readStartup, type StartupRead } from "./startup-read.js";
 import { BaselineService } from "./baselines.js";
 import { WarmPool } from "./warm-pool/index.js";
 
-export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "health" | "idle">;
+export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "devices" | "health" | "idle">;
 
 interface CoreOptions {
   readonly clock: Clock;
@@ -130,6 +131,7 @@ export interface Core {
   readonly doctor: Doctor;
   readonly drivers: DriverCatalog;
   readonly enrollment: PhysicalEnrollment;
+  readonly autoEnrollment: PhysicalAutoEnrollment;
   readonly nuke: NukeService;
   readonly provisioner: DeviceProvisioner;
   readonly quarantine: QuarantineCoordinator;
@@ -299,6 +301,15 @@ export function createCore(options: CoreOptions): Core {
     physicalDeviceReady,
     registry,
   });
+  const autoEnrollment = new PhysicalAutoEnrollment({
+    clock: options.clock,
+    config: options.config,
+    drivers,
+    enrollment,
+    logger: options.logger,
+    notifyAvailability,
+    registry,
+  });
   const cleanup = new CleanupExecutor({
     eventBus: options.eventBus,
     lifecycle: deviceLifecycle,
@@ -418,6 +429,7 @@ export function createCore(options: CoreOptions): Core {
     doctor,
     drivers,
     enrollment,
+    autoEnrollment,
     nuke,
     provisioner,
     quarantine,

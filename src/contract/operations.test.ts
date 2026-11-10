@@ -1370,7 +1370,7 @@ describe("operation input/output round trips", () => {
           maxRetryBackoffMs: 1,
         },
       },
-      devices: { deletedRetentionMs: 1 },
+      devices: { autoEnroll: false, deletedRetentionMs: 1 },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
@@ -1456,7 +1456,7 @@ describe("operation input/output round trips", () => {
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       update: { check: true },
-      devices: { deletedRetentionMs: 1 },
+      devices: { autoEnroll: false, deletedRetentionMs: 1 },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
