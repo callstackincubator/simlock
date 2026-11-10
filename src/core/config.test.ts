@@ -1792,6 +1792,18 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining('Ignoring "gateway.disconnectedRetentionMs"'),
     );
+
+    const withHeaders = vi.fn();
+    await load({ gateway: { headers: { "x-a": "1" } } }, { role: "gateway", warn: withHeaders });
+    expect(withHeaders.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining('Ignoring "gateway.headers"'),
+    ]);
+    const withoutHeaders = vi.fn();
+    await load(
+      { gateway: { disconnectedRetentionMs: 60_000 } },
+      { role: "gateway", warn: withoutHeaders },
+    );
+    expect(withoutHeaders).not.toHaveBeenCalled();
   });
 
   it("says nothing about worker keys on a worker, which is every daemon today", async () => {
