@@ -9,7 +9,8 @@
 // data: `{ path, start, end, state, trailing, lines: [{ n, text }], next: { n, text } | null }`,
 // and `trailingText(line, shell)` for the comment part of a code line. `test-lint.mjs` imports
 // `changedFiles({ base, head, files })`: each touched code file as `{ path, lines, added }`, its
-// text at <head> split into lines and the set of the line numbers (from 1) the diff adds.
+// text at <head> split into lines and the set of the line numbers (from 1) the diff adds; in a
+// merge, without <head>, only lines new against the merged-in parent as well.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -107,6 +108,24 @@ function nextCode(lines, end) {
 function addedLines(path, count, range, head) {
   const tracked = git("ls-files", "--", path).trim() !== "" || head !== undefined;
   if (!tracked) return new Set(Array.from({ length: count }, (_, i) => i + 1));
+  const added = diffAdded(path, range);
+  // why: in a merge the other parent's lines come with it, so a line counts as the author's only
+  // when it is new against that parent too; the commit hook runs mid-merge, with no <head>.
+  const other = head === undefined ? mergeHead() : null;
+  if (other === null) return added;
+  const theirs = diffAdded(path, [other]);
+  return new Set([...added].filter((n) => theirs.has(n)));
+}
+
+function mergeHead() {
+  try {
+    return git("rev-parse", "-q", "--verify", "MERGE_HEAD").trim();
+  } catch {
+    return null;
+  }
+}
+
+function diffAdded(path, range) {
   const added = new Set();
   for (const line of git("diff", "-U0", "--no-color", ...range, "--", path).split("\n")) {
     const hunk = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/.exec(line);
