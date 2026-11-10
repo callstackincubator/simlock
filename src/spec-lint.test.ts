@@ -857,6 +857,26 @@ describe("spec-lint.mjs on a feature with design tables", () => {
       "B 200 Interfaces: no table with an `Id` column; add the rows, or write `none`",
     ],
     [
+      "a design section with no table whose prose only starts a line with none",
+      (body: string) =>
+        body.replace(
+          /## Interfaces\n[\s\S]*?\n## Existing code/,
+          "## Interfaces\n\nThe socket adds `profile.get` for callers, and\nnone of the old calls change.\n\n## Existing code",
+        ),
+      DESIGN_WORLD,
+      "B 200 Interfaces: no table with an `Id` column; add the rows, or write `none`",
+    ],
+    [
+      "Existing code that says none without its searches",
+      (body: string) =>
+        body.replace(
+          /Searches: `loadConfig` \(2 hits\)\.\n\n\| Id \| Code[\s\S]*?\| S1 \|\n/,
+          "none\n",
+        ),
+      DESIGN_WORLD,
+      "B 200 Existing code: no `Searches:` line; name the searches that found the list",
+    ],
+    [
       "an id of another table's letter",
       swap("| S1 | Table", "| B4 | Table"),
       DESIGN_WORLD,

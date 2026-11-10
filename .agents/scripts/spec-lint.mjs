@@ -707,11 +707,12 @@ function lintFeature() {
   checkGraph(subs);
 }
 
-// why: Existing code says `none` under its Commit and Searches lines, so any line may hold it.
+// why: Existing code says `none` under its Commit and Searches lines, so the word is looked for
+// on a line of its own, never inside a sentence.
 function isNone(s) {
   const lines = prose(s.lines).map((l) => l.replaceAll("`", "").trim());
   return (
-    !tables(s.lines).some((t) => t.header[0] === "Id") && lines.some((l) => /^none\b/i.test(l))
+    !tables(s.lines).some((t) => t.header[0] === "Id") && lines.some((l) => /^none\.?$/i.test(l))
   );
 }
 
