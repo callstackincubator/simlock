@@ -78,13 +78,15 @@ that is not held out (§3), the worker runs `device add`'s own enrolment.
 That runs the same checks and refusals, the same canonical-ID rule and the
 same kept-apps read, and it holds the same claim. Like `device add`, a
 committed enrolment wakes the lease queue, so a request already waiting for
-a matching phone is granted it. It never re-enrols. An ID
+a model the worker has a phone of is granted the new one. A request for a
+model with no record still fails at once with `UNKNOWN_MODEL` (ADR 0022
+§6). It never re-enrols. An ID
 that already has a record when the enrolment commits is left as it is, so
 an admin's `device add` in the same moment wins and the kept apps are not
 read twice.
 
 A phone that cannot be enrolled yet (locked, not trusted, Developer Mode
-off, iOS below 17, an Apple TV) is tried again on every tick. Its reason is
+off, iOS below 17) is tried again on every tick. Its reason is
 logged once each time it changes, with no event. Nothing else shows it.
 
 Polling, not notifications. `adb track-devices` would keep one connection
@@ -98,7 +100,8 @@ a rack.
 When a phone's record goes away while the phone stays plugged in, the
 worker holds it out: through `device remove`, or when it is unenrolled
 after its quarantine retries ran out. The worker remembers, in memory, each
-listed ID it has seen with a live record. Such an ID with no live record is
+listed ID it has seen with a live record, and each ID it enrolled itself, so
+a removal before its next tick holds the phone out too. Such an ID with no live record is
 held out. An ID missing from the USB list for `health.stableObservations`
 ticks in a row is forgotten, so plugging it in again enrols it: about a
 minute unplugged with the defaults. A failed list counts as no tick. `device add`
