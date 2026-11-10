@@ -112,6 +112,7 @@ export default defineConfig({
           items: [
             doc("worker/running-the-daemon", "Run the daemon"),
             doc("worker/configuration", "Configuration"),
+            doc("worker/agent-device-cloud", "AgentDeviceCloud"),
             doc("worker/capacity", "Capacity and warm pool"),
             doc("worker/runtimes-and-images", "Runtimes and system images"),
             doc("worker/baselines", "Baselines"),

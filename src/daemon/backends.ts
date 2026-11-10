@@ -5,10 +5,12 @@ import {
   type Platform,
 } from "../core/index.js";
 import { androidLocalBackend } from "../drivers/android/local/index.js";
+import { androidAdcBackend } from "../drivers/android/adc/index.js";
 import { iosLocalBackend } from "../drivers/ios/local/index.js";
 
 export const backendModules: readonly BackendModule<unknown, unknown>[] = [
   androidLocalBackend,
+  androidAdcBackend,
   iosLocalBackend,
 ];
 
