@@ -598,7 +598,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "update",
 ];
 
-const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
+const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label", "headers"];
 
 /**
  * why: ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
