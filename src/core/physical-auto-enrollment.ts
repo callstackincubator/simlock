@@ -49,11 +49,13 @@ export class PhysicalAutoEnrollment {
   }
 
   /** why: not armed by the constructor: the daemon starts it once startup convergence has finished. */
+  // fallow-ignore-next-line unused-class-member -- called through the daemon server's engine option.
   start(): void {
     if (!this.options.config.devices.autoEnroll || this.#timer !== undefined) return;
     this.#arm();
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the daemon server's engine option.
   dispose(): void {
     this.#disposed = true;
     if (this.#timer !== undefined) this.options.clock.cancel(this.#timer);
