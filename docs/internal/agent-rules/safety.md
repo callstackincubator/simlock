@@ -97,7 +97,8 @@ never enforce them only inside an individual rule or driver.
    scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
    default device locations. (Under iOS `deviceSet: "default"`, reality is Xcode's set read through
    devices whose durable mark names this instance, ADR 0048 §2.) For a physical device, reality is the platform
-   tool's list of USB devices, read only for enrolled IDs.
+   tool's list of USB devices, read only for enrolled IDs. The one read made beyond
+   enrolled IDs is the host-level USB list, `listAttachedPhysical()` (ADR 0073 §5).
 8. **Ownership is proven, never inferred.** A device is Simlock's because it
    lives inside a validly-marked Simlock root, not because of what it is
    called. `Driver.listManaged()` must answer from root membership; the
@@ -107,7 +108,8 @@ never enforce them only inside an individual rule or driver.
    `deviceSet: "default"` the proof is the device's durable mark naming this
    instance, not root membership (ADR 0048 §2). A
    physical device is Simlock's because an admin enrolled it;
-   `listPresentPhysical()` answers only for enrolled IDs.
+   `listPresentPhysical()` answers only for enrolled IDs; `listAttachedPhysical()`
+   is the exception, a host-level list that names no phone and sends nothing to one.
 9. **Root validation fails closed.** If a device root is missing its marker,
    carries another instance's marker, is a symlink, or has the wrong owner or
    permissions, that platform's driver does not start and Simlock reports why. Under iOS

@@ -209,7 +209,15 @@ export class AndroidPhysicalHandler {
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
-    return [];
+    const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
+    if (listing.kind === "blocked") throw new Error(listing.answer.message);
+    if (listing.kind === "failed") {
+      throw new Error("could not read the device list (adb devices -l)");
+    }
+    const serials = parseDevices(listing.stdout, this.#platform)
+      .filter((entry) => entry.usb)
+      .map((entry) => entry.serial);
+    return [...new Set(serials)].sort();
   }
 
   async reclaim(device: PhysicalDriverDevice): Promise<ReclaimResult> {
@@ -348,6 +356,7 @@ function failure(read: string, ran: Ran): Error {
 function parseDevices(output: string, platform: NodeJS.Platform): ListedTransport[] {
   const entries: ListedTransport[] = [];
   for (const line of output.split("\n")) {
+    if (line.startsWith("List of devices attached")) continue;
     const tokens = line.trim().split(/\s+/);
     const [serial, state] = tokens;
     if (serial === undefined || state === undefined) continue;
