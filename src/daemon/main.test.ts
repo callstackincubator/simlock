@@ -482,44 +482,69 @@ describe("startDaemon", () => {
     },
   );
 
-  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get returns it only as the redaction marker unless showSecrets is asked", async () => {
-    const secret = "secret-join-token-170";
-    const { daemon, directory, sink } = await start({
-      configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
-    });
-    const admin = {
-      manageEventSubscription: () => undefined,
-      via: "socket",
-      principal: "operator",
-      role: "admin",
-    } as const;
+  it.each([
+    { role: "worker", withToken: true },
+    { role: "gateway", withToken: false },
+  ] as const)(
+    "keeps gateway.token and every gateway.headers value out of the daemon log, the events.replay answer, and history.db, while config.get returns them only as the redaction marker unless showSecrets is asked: $role",
+    async ({ role, withToken }) => {
+      const secret = "secret-join-token-170";
+      const headerSecret = "s3cr3t-proxy-credential";
+      const { daemon, directory, sink } = await start({
+        role,
+        configOverrides: {
+          gateway: {
+            headers: { "CF-Access-Client-Secret": headerSecret },
+            ...(withToken ? { token: secret, url: await unreachableGatewayUrl() } : {}),
+          },
+        },
+      });
+      const admin = {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      } as const;
+      type Answer = {
+        readonly gateway: {
+          readonly token?: string;
+          readonly headers?: Readonly<Record<string, string>>;
+        };
+      };
 
-    const replayed = await daemon.dispatch("events.replay", {}, admin);
-    const eventFile = JSON.stringify(
-      await historyEventsWhen(directory, hasEvent("daemon.started")),
-    );
-    const config = (await daemon.dispatch("config.get", {}, admin)) as {
-      readonly gateway: { readonly token?: string };
-    };
+      const replayed = await daemon.dispatch("events.replay", {}, admin);
+      const eventFile = JSON.stringify(
+        await historyEventsWhen(directory, hasEvent("daemon.started")),
+      );
+      const config = (await daemon.dispatch("config.get", {}, admin)) as Answer;
 
-    // why: The fixture is real: the daemon did log its start and emit `daemon.started` to both
-    // the ring and the file, so "absent" below means redacted, not never written.
-    expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
-    expect(eventFile).toContain('"daemon.started"');
-    expect(JSON.stringify(replayed)).toContain('"daemon.started"');
-    expect({
-      daemonLog: JSON.stringify(sink.records).includes(secret),
-      eventsReplay: JSON.stringify(replayed).includes(secret),
-      historyDb: eventFile.includes(secret),
-    }).toEqual({ daemonLog: false, eventsReplay: false, historyDb: false });
-    const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as {
-      readonly gateway: { readonly token?: string };
-    };
-    expect({ default: config.gateway.token, shown: shown.gateway.token }).toEqual({
-      default: "[redacted]",
-      shown: secret,
-    });
-  });
+      // why: The fixture is real: the daemon did log its start and emit `daemon.started` to both
+      // the ring and the file, so "absent" below means redacted, not never written.
+      expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
+      expect(eventFile).toContain('"daemon.started"');
+      expect(JSON.stringify(replayed)).toContain('"daemon.started"');
+      const leaks = (value: string) => ({
+        daemonLog: JSON.stringify(sink.records).includes(value),
+        eventsReplay: JSON.stringify(replayed).includes(value),
+        historyDb: eventFile.includes(value),
+      });
+      const clean = { daemonLog: false, eventsReplay: false, historyDb: false };
+      expect({ token: leaks(secret), header: leaks(headerSecret) }).toEqual({
+        token: clean,
+        header: clean,
+      });
+      const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as Answer;
+      expect({
+        default: config.gateway.headers,
+        shown: shown.gateway.headers,
+        token: [config.gateway.token, shown.gateway.token],
+      }).toEqual({
+        default: { "CF-Access-Client-Secret": "[redacted]" },
+        shown: { "CF-Access-Client-Secret": headerSecret },
+        token: withToken ? ["[redacted]", secret] : [undefined, undefined],
+      });
+    },
+  );
 
   it.each([
     {
