@@ -414,6 +414,107 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.7.0](https://github.com/callstackincubator/simlock/compare/v0.6.0...v0.7.0) (2026-11-10)
+
+### What's Changed
+
+- fix(cli): daemon stop with no daemon running exits 0 and says so by @V3RON in https://github.com/callstackincubator/simlock/pull/1313
+- fix(cli): a held lease cancels its waiting request on a signal or the bound process's exit by @V3RON in https://github.com/callstackincubator/simlock/pull/1316
+- fix(contract): config.get answers the drivers section by @V3RON in https://github.com/callstackincubator/simlock/pull/1314
+- chore(agents): an easy bug goes from its triage report to main through a fast track by @V3RON in https://github.com/callstackincubator/simlock/pull/1322
+- feat(agent-device): the front leases from a named baseline by @V3RON in https://github.com/callstackincubator/simlock/pull/1319
+- fix(contract): device.exec refuses a stdin over 8 MiB with BAD_REQUEST by @V3RON in https://github.com/callstackincubator/simlock/pull/1318
+- fix(agent-device): an allocate's device mode reaches the lease request (#1223) by @vitalyiegorov in https://github.com/callstackincubator/simlock/pull/1225
+- feat(capture): the simulator screen program ships universal, so Intel workers stream by @AndrewBeniston in https://github.com/callstackincubator/simlock/pull/1185
+- test: cut the slowest CI tests, from 11.6 min a PR run to about 5 by @V3RON in https://github.com/callstackincubator/simlock/pull/1325
+- refactor(config): a driver owns its config keys, and a module takes the config sections it reads by @V3RON in https://github.com/callstackincubator/simlock/pull/1324
+- feat(config): configurable boot deadlines for full iOS simulators and Android emulators by @V3RON in https://github.com/callstackincubator/simlock/pull/1321
+- fix(daemon): stop waits for lease requests still booting before it disposes the drivers by @V3RON in https://github.com/callstackincubator/simlock/pull/1317
+- feat(agent-device): the allocate reply reports the granted device mode by @vitalyiegorov in https://github.com/callstackincubator/simlock/pull/1254
+- docs(adr): propose 0062, the warm pool learns a baseline after repeated leases (#1257) by @V3RON in https://github.com/callstackincubator/simlock/pull/1260
+- feat(warm-pool): a baseline kind is learned on its Nth lease in 24 h and warms its newest version by @V3RON in https://github.com/callstackincubator/simlock/pull/1335
+- refactor(agent-device): split edge.test.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1339
+- refactor(daemon): split server.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1341
+- refactor(core): split doctor.test.ts and registry.test.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1340
+- refactor(gateway): split fleet-coordinator.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1342
+- refactor(leasing): split lease-acquisition-coordinator.test.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1344
+- refactor(http): split app.test.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1343
+- refactor(contract): split schemas.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1345
+- refactor(daemon): split main.ts into parts (ADR 0063) by @V3RON in https://github.com/callstackincubator/simlock/pull/1347
+- docs(adr): propose 0064, a tunnel reaches an iOS simulator's ports and an emulator's adb port (#1282) by @V3RON in https://github.com/callstackincubator/simlock/pull/1287
+- feat(tunnel): iOS simulator tunnels, forward to the lease's simulator, reverse on the exact port by @V3RON in https://github.com/callstackincubator/simlock/pull/1336
+- feat(tunnel): simlock tunnel emulator adb, the caller's own adb sees the remote emulator by @V3RON in https://github.com/callstackincubator/simlock/pull/1346
+- chore(agents): sub-agents compact at 300k tokens, the Haiku explorer at 100k by @V3RON in https://github.com/callstackincubator/simlock/pull/1350
+- fix(agent-device): devices through a gateway no longer collides on request id by @V3RON in https://github.com/callstackincubator/simlock/pull/1352
+- chore(docs): a manual holds only what the code cannot say by @V3RON in https://github.com/callstackincubator/simlock/pull/1353
+- test(e2e): the slow lane keeps its seeds and runs leasing cases on one platform by @V3RON in https://github.com/callstackincubator/simlock/pull/1366
+- docs(adr): propose 0066, a slim lease may keep named categories running (#1326) by @V3RON in https://github.com/callstackincubator/simlock/pull/1327
+- feat(ios): slim labels match simslim v0.14.0, with the mdm category by @V3RON in https://github.com/callstackincubator/simlock/pull/1333
+- feat(ios): the iOS driver boots a slim simulator with a lease's except list by @V3RON in https://github.com/callstackincubator/simlock/pull/1348
+- feat(leasing): a slim lease keeps named categories running (--except) by @V3RON in https://github.com/callstackincubator/simlock/pull/1349
+- feat(gateway): route an except lease by each worker's slim set and default mode by @V3RON in https://github.com/callstackincubator/simlock/pull/1360
+- feat(agent-device): the front maps deviceExcept to the lease's except by @V3RON in https://github.com/callstackincubator/simlock/pull/1368
+- fix(docs): warmPool.enabled no longer claims released devices stay booted by @V3RON in https://github.com/callstackincubator/simlock/pull/1377
+- docs(android): fix reattachRunningEmulators comment on what outlives a stop by @V3RON in https://github.com/callstackincubator/simlock/pull/1380
+- fix(daemon): the test helpers give a gateway a free HTTP port by @V3RON in https://github.com/callstackincubator/simlock/pull/1383
+- fix(android): saving a device reads a config.ini with spaces around = by @V3RON in https://github.com/callstackincubator/simlock/pull/1379
+- fix(gateway): lease.list lists a lease as soon as lease.request answers by @V3RON in https://github.com/callstackincubator/simlock/pull/1376
+- fix(drivers): build the seed tables' one-ready-seed index in a version 2 step by @V3RON in https://github.com/callstackincubator/simlock/pull/1384
+- fix(updater): empty update-backup before taking a backup by @V3RON in https://github.com/callstackincubator/simlock/pull/1389
+- docs(adr): propose 0067, a lease has a file folder on its worker that HTTP callers fill and read (#1351) by @V3RON in https://github.com/callstackincubator/simlock/pull/1354
+- feat(lease-files): a lease holder uploads, downloads, lists and deletes its lease's files on a worker by @V3RON in https://github.com/callstackincubator/simlock/pull/1390
+- feat(exec): exec reads a lease file on stdin and runs in the lease folder by @V3RON in https://github.com/callstackincubator/simlock/pull/1393
+- feat(lease-files): a gateway relays the file routes to the lease's worker by @V3RON in https://github.com/callstackincubator/simlock/pull/1392
+- fix(test): startFleet's gatewayUrl hook runs after the gateway listens by @V3RON in https://github.com/callstackincubator/simlock/pull/1396
+- docs(adr): propose 0068, a worker pauses warming and new devices under host memory pressure (#1355) by @V3RON in https://github.com/callstackincubator/simlock/pull/1359
+- feat(host-load): a worker works out its memory pressure step and reports it by @V3RON in https://github.com/callstackincubator/simlock/pull/1398
+- feat(capacity): at new-devices-paused a worker creates and boots no device for a lease by @V3RON in https://github.com/callstackincubator/simlock/pull/1401
+- feat(warm-pool): the warm pool starts nothing and sheds a device at warming-paused by @V3RON in https://github.com/callstackincubator/simlock/pull/1400
+- feat(gateway): a gateway ranks a memory-paused worker last and worker list shows the step by @V3RON in https://github.com/callstackincubator/simlock/pull/1402
+- feat(ui): the console shows a worker's memory-pressure step by @V3RON in https://github.com/callstackincubator/simlock/pull/1403
+- fix(test-support): daemon test rigs start on another port when their picked port is taken by @V3RON in https://github.com/callstackincubator/simlock/pull/1405
+- docs(adr): accept 0069, a learned kind keeps one ready copy while its copies are leased (#1374) by @V3RON in https://github.com/callstackincubator/simlock/pull/1378
+- feat(warm-pool): keep a spare copy of a learned kind while its copies are leased by @V3RON in https://github.com/callstackincubator/simlock/pull/1387
+- fix(test): rotate test workers serve no HTTP unless a test asks for a port by @V3RON in https://github.com/callstackincubator/simlock/pull/1418
+- fix(test): a gateway file test waits for the upload to reach the worker before probing its name by @V3RON in https://github.com/callstackincubator/simlock/pull/1416
+- fix(core): a deleted device record expires after devices.deletedRetentionMs by @V3RON in https://github.com/callstackincubator/simlock/pull/1415
+- fix(agent-device): session folders are removed at lease end and at daemon start by @V3RON in https://github.com/callstackincubator/simlock/pull/1413
+- chore(comments): delete comments that say what, not why, since ded53744 by @V3RON in https://github.com/callstackincubator/simlock/pull/1440
+- docs(delivery): refactor issues run without a spec, and a routine may start them (rule 18) by @V3RON in https://github.com/callstackincubator/simlock/pull/1443
+- fix(daemon): test fixtures keep role defaults when overrides are given by @V3RON in https://github.com/callstackincubator/simlock/pull/1444
+- fix(cli): local passthrough forwards termination signals to its tool by @V3RON in https://github.com/callstackincubator/simlock/pull/1445
+- docs(adr): accept 0070, test runners drive a lease through the agent-device front (#1419) by @V3RON in https://github.com/callstackincubator/simlock/pull/1420
+- feat(agent-device): label front errors with retry guidance by @V3RON in https://github.com/callstackincubator/simlock/pull/1437
+- feat(agent-device): retain leases through close by @V3RON in https://github.com/callstackincubator/simlock/pull/1436
+- feat(agent-device): answer boot on the leased device by @V3RON in https://github.com/callstackincubator/simlock/pull/1439
+- feat(agent-device): each lease is its own agent-device tenant by @V3RON in https://github.com/callstackincubator/simlock/pull/1453
+- fix(ios): isolate simulator clipboards from the Mac by @V3RON in https://github.com/callstackincubator/simlock/pull/1446
+- feat(console): establish redesign foundation by @V3RON in https://github.com/callstackincubator/simlock/pull/1435
+- feat(console): the redesign's pages together, with breakpoints and a light theme (#1434) by @V3RON in https://github.com/callstackincubator/simlock/pull/1454
+- fix(ui): stop the toast test's 5.5 s check landing at 6 s by @V3RON in https://github.com/callstackincubator/simlock/pull/1470
+- docs(adr): propose 0071, a restart re-allocates a live agent-device lease (#1461) by @V3RON in https://github.com/callstackincubator/simlock/pull/1462
+- feat(agent-device): a heartbeat re-allocates a live agent-device lease after a restart by @V3RON in https://github.com/callstackincubator/simlock/pull/1466
+- feat(agent-device): a standalone worker adopts its leases after a restart by @V3RON in https://github.com/callstackincubator/simlock/pull/1468
+- fix(core): a deleted device record leaves the snapshot past devices.deletedRetentionMs by @V3RON in https://github.com/callstackincubator/simlock/pull/1483
+- fix(cli): a signal during connect sends no lease request by @V3RON in https://github.com/callstackincubator/simlock/pull/1482
+- fix(daemon): an abort before the daemon admits a lease request cancels it (#1479) by @V3RON in https://github.com/callstackincubator/simlock/pull/1485
+- fix(agent-device): a re-allocate after a restart names the lease's backend by @V3RON in https://github.com/callstackincubator/simlock/pull/1484
+- docs(cli): a refused simctl or adb command prints USAGE (exit 2) by @V3RON in https://github.com/callstackincubator/simlock/pull/1488
+- fix(ios): an iOS seed boot timeout answers PROVISION_FAILED with reason boot-timeout by @V3RON in https://github.com/callstackincubator/simlock/pull/1491
+- fix(gateway): a lease.cancel right after its lease.request cancels the fleet request by @V3RON in https://github.com/callstackincubator/simlock/pull/1493
+- fix(agent-device): devices with requestProgress is forwarded, docs open an app before snapshot by @V3RON in https://github.com/callstackincubator/simlock/pull/1489
+- fix(core): baseline remove while a copy is reclaiming answers DEVICE_BUSY by @V3RON in https://github.com/callstackincubator/simlock/pull/1490
+- docs(agent-device): the guide names the iOS errors after a restart and says to open again by @V3RON in https://github.com/callstackincubator/simlock/pull/1496
+- fix(config): config get answers a drivers key at its default by @V3RON in https://github.com/callstackincubator/simlock/pull/1494
+- fix(agent-device): close after a restart ends the lease by @V3RON in https://github.com/callstackincubator/simlock/pull/1495
+
+### New Contributors
+
+- @vitalyiegorov made their first contribution in https://github.com/callstackincubator/simlock/pull/1225
+- @AndrewBeniston made their first contribution in https://github.com/callstackincubator/simlock/pull/1185
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.6.0...v0.7.0
+
 ## [0.6.0](https://github.com/callstackincubator/simlock/compare/v0.5.0...v0.6.0) (2026-11-05)
 
 ### What's Changed
