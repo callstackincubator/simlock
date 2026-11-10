@@ -100,10 +100,15 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 | Make iOS devices slim by default | `ios.defaultMode` | `full` |
 | Choose which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | none |
 | Run Android emulators without a window | `android.emulator.headless` | `false` |
+| Lease remote Android devices from AgentDeviceCloud | `drivers.android.backend` | `local` |
 | Watch iOS simulators in a window | `ios.simulator.headless`, with `drivers.ios.deviceSet` | `true` (no window) |
 | Write more or less to the log | `log.level` | `info` |
 
 Every change below needs a daemon restart.
+
+For a cloud Android worker, follow [AgentDeviceCloud](/simlock/docs/worker/agent-device-cloud).
+That backend needs an account API key in the worker's environment, fixed cloud concurrency, and
+the warm pool disabled.
 
 ### Turn off HTTP
 

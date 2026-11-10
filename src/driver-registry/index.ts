@@ -1,9 +1,11 @@
 import { selectedBackendDefinition, type BackendDefinition, type Config } from "../core/index.js";
 import { androidDriverConfig } from "../drivers/android/definition.js";
+import { androidAdcDefinition } from "../drivers/android/adc/definition.js";
 import { iosDriverConfig } from "../drivers/ios/definition.js";
 
 export const backendDefinitions: readonly BackendDefinition<unknown>[] = [
   androidDriverConfig,
+  androidAdcDefinition,
   iosDriverConfig,
 ];
 

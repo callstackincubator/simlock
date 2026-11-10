@@ -1,0 +1,107 @@
+---
+title: AgentDeviceCloud
+description: Run a worker backed by Android devices from AgentDeviceCloud.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A worker can provision Android devices from [AgentDeviceCloud](https://agentdevicecloud.xyz). Agents keep using Simlock's leases, ADB commands, and gateway. The worker creates the cloud session and connects it through an authenticated ADB bridge.
+
+<Aside type="note">
+This backend requires ADC's `/v2/leases` API, whose devices run until explicitly released. Use a separate worker data directory when trying it. Only one Simlock worker may run per OS user: stop an existing worker first, or use another user or machine. The earlier ADC prototype's data directory is not migrated to this backend.
+</Aside>
+
+## Configure a cloud worker
+
+Install Android platform-tools so `adb` is on the worker's `PATH`. Create an ADC account API key and keep it in the environment of the process that starts the worker:
+
+```sh
+export ADC_API_KEY='<your-account-api-key>'
+export SIMLOCK_HOME="$HOME/.simlock-adc-v2"
+mkdir -p "$SIMLOCK_HOME"
+```
+
+Create `$SIMLOCK_HOME/config.json`:
+
+```json
+{
+  "drivers": {
+    "android": {
+      "backend": "adc",
+      "apiUrl": "https://api.agentdevicecloud.xyz",
+      "apiKeyEnv": "ADC_API_KEY"
+    }
+  },
+  "capacity": {
+    "strategy": "fixed",
+    "config": {
+      "maxRunning": 1,
+      "android": { "maxRunning": 1, "maxDevices": 1 }
+    }
+  },
+  "warmPool": { "enabled": false },
+  "memoryPressure": { "enabled": false }
+}
+```
+
+Then start the worker and inspect its catalog:
+
+```sh
+simlock daemon start
+simlock catalog --platform android
+```
+
+`apiKeyEnv` names the environment variable containing the key. The worker needs that variable every time it starts. Start it from the configured shell; an installed login service needs its secret environment configured separately.
+
+Allocations retain the API origin that created them. Changing `apiUrl` while that data directory still holds allocations makes the backend unavailable. Restore the original API origin to manage those devices, or use a new data directory for another ADC deployment.
+
+Use fixed capacity because devices run remotely. Choose limits within the account's available concurrency. Keep the warm pool off while evaluating the backend: a spare cloud device holds a billable ADC session. Disabling local memory-pressure admission prevents the worker's RAM readings from pausing remote device creation.
+
+ADC uses its own ADB server record and defaults to port `5039`; the local backend defaults to `5038`. A backend switch does not adopt or stop another backend's server. If you configure the same port for both, stop the owning backend's devices first or choose an unused port.
+
+A worker uses one backend per platform. With `backend: "adc"`, Android USB phones are unavailable on that worker. To offer local Android emulators or phones alongside cloud devices, run separate workers on different machines or OS users and [join them to a gateway](/simlock/docs/gateway/joining-workers).
+
+## Lease and use a device
+
+The cloud catalog offers one Android 14 phone profile, represented by API level `34`:
+
+```sh
+simlock lease --platform android --os 34 --ttl 15m --detach
+```
+
+Copy `lease.id` and `device.address` from the grant, then use the device:
+
+```sh
+LEASE_ID='<lease.id from the grant>'
+SERIAL='<device.address from the grant>'
+
+simlock adb -s "$SERIAL" install app-debug.apk
+simlock adb -s "$SERIAL" shell am start -n com.example.myapp/.MainActivity
+simlock adb -s "$SERIAL" exec-out screencap -p > screen.png
+
+simlock release "$LEASE_ID"
+```
+
+Use your APK path and app component. The address is a local TCP ADB serial, such as `127.0.0.1:49152`; use the actual returned address. On the worker, tools calling ADB directly also need `ANDROID_ADB_SERVER_PORT` from the grant's `environment`.
+
+The worker's bridge and its device tools share one upstream ADB connection per ADC session. Use Simlock's connection rather than opening a separate `adc connect` for the same session.
+
+## Lifetime and recovery
+
+The Simlock lease controls the agent's access. Its TTL and renewals work as usual. ADC imposes no additional deadline or maximum lifetime. Release or Simlock expiry releases the cloud device and discards its app data.
+
+Shutting down an idle cloud device releases its backing ADC session. Starting that local device record again creates a fresh cloud device with empty app data.
+
+For a recorded active device, a worker restart reconnects to the same ADC session and reuses its local ADB port. A connection failure is not permission to replace an agent's active device with a fresh one. A creation request whose response was lost is replayed with its journaled idempotency key.
+
+Stopping or losing the worker does not release its ADC sessions. They continue running and accruing usage until explicitly released or the device fails. Release devices before stopping a worker for a long time. If the worker cannot return, release its remaining sessions through ADC.
+
+## Current limits
+
+- One Android 14 phone profile. Requests cannot choose an image tag, region, or CPU architecture. Check APK compatibility with the device you receive.
+- Saved baselines, `except`, local runtime installation, and physical-device enrollment are unavailable.
+- The raw `emulator adb` tunnel is unavailable. Use Simlock's ADB commands, agent-device, or an ordinary device-port tunnel; reverse tunnels can connect the device to Metro on your machine.
+- Provisioning can wait for cloud capacity. `drivers.android.provisionTimeoutMs` bounds how long the worker waits; a failed boot is cleaned up through the normal device lifecycle.
+- The API key stays on the worker. Agents using a gateway need their Simlock credentials.
+
+For the available keys, see the [configuration reference](/simlock/docs/reference/configuration#devices-and-drivers).
