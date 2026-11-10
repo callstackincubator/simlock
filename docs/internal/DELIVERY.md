@@ -67,19 +67,25 @@ the fast track. The limits are `MAX_LINES` and `MAX_FILES` at the top of
 1. Create a `feature:spec` issue, or take up a `request:new` one: the spec
    session creates the feature from it and links the two. The request
    closes when the feature ships.
-2. Run `spec-session` and sit through it. It explores first, then asks
-   you every decision in rounds, each with a recommended answer and an
-   `Explain` option. It never asks you a fact: background explorers read
-   the source for each one. Decisions that bind more than one task become
-   ADRs.
-3. It posts the feature and its tasks as `task:draft`, has `spec-checker`
-   agents check them, and fixes what they find. It asks you only about
-   findings that need a decision.
-4. You approve once, from a short summary: the feature, each ADR, a table
-   of the tasks with their Depends on. The tasks become `task:ready` and
-   the feature `feature:planned`. Move a task back to `task:draft` to hold
-   it.
-5. Run `deliver <feature>`. It delivers the tasks in dependency order, two
+2. Run `spec-session`. It explores first, then asks you, in rounds, the
+   decisions that are expensive to reverse, change scope or change what a
+   user sees, each with a recommended answer and an `Explain` option. It
+   takes the small ones itself and lists them. It never asks you a fact:
+   background explorers read the source for each one. Decisions that bind
+   more than one task become ADRs.
+3. It posts the feature with its design: tables of the behaviours, the
+   stored state, the interfaces between tasks and the existing code they
+   meet. `spec-checker` agents check the tables against the code, and it
+   fixes what they find. It asks you only about findings that need a
+   decision.
+4. You approve once, from a short summary: the feature, each ADR, the
+   decisions it took itself, a table of the tasks with their rows and
+   Depends on. You can leave after this.
+5. It writes the tasks, which only name the design's rows, has them
+   checked, and sets them `task:ready` and the feature `feature:planned`.
+   It comes back to you only for a finding that needs a decision. Move a
+   task back to `task:draft` to hold it.
+6. Run `deliver <feature>`. It delivers the tasks in dependency order, two
    at a time, and merges the feature's PRs as one stack at the end.
 
 A session can stop part way: what is settled is written, the rest goes

@@ -132,14 +132,18 @@ is open, done means closed as completed.
    that they could not before, and how anyone would check it. An
    implementation detail belongs there only when it *is* a requirement — "no
    inbound port on the worker" is an outcome; "use a WebSocket" is not.
-   Implementation lives in an ADR or in a task. The same spec session
-   writes both halves: the business sections and the tasks.
+   Implementation lives in an ADR and in the feature's design tables
+   (Behaviours, Stored state, Interfaces, Existing code), each fact once.
+   The same spec session writes the business sections, the design and the
+   tasks.
 
-7. **A task carries both halves.** A task's Scope is the slice of the parent's
-   outcome it delivers; its Technical spec is what a delivery agent needs to
-   build it without asking: the facts it rests on, modules touched,
-   contract and event changes, which rules in this directory are in play,
-   and the tests to write phrased as claims. A fact is what existing code,
+7. **The design is checked before a task is written, and a task names
+   its rows.** A task's Scope is the slice of the parent's outcome it
+   delivers; its Technical spec names the parent's design rows it
+   delivers and adds what a delivery agent needs to build them without
+   asking: the facts no row holds, modules touched, which rules in this
+   directory are in play, and one test per Behaviours row. A task never
+   restates a row. A fact is what existing code,
    another tool or the machine does today; each cites the line or the
    command output it was read from, never a summary. It need not repeat
    what `always-in-scope.md` lists, and a small gap it leaves is an
@@ -148,12 +152,13 @@ is open, done means closed as completed.
    lint runs before the check: `.agents/scripts/spec-lint.mjs` checks the
    body's structure, the spec session fixes its blocking lines before any
    checker starts, and the issue-state workflow moves a task whose lint
-   fails back to `task:draft`. Before
-   a task gets `task:ready`, the spec session has the `check-spec` skill
-   read the body as posted, with a fresh context, and fixes in the body
-   what it reports; the same checker then rechecks only what the fix
-   changed. The maintainer approves the feature, its ADRs and its tasks
-   once, at the end.
+   fails back to `task:draft`. Fresh `spec-checker` agents read the
+   feature's design against the code before any task exists, and the
+   tasks against the design before they get `task:ready`; the spec
+   session fixes what they report, and the same checker rechecks only
+   what the fix changed. The maintainer approves the feature, its design
+   and its ADRs once, before the tasks are written; a later finding that
+   needs a decision goes back to them.
 
 8. **Triage produces a report, not a fix.** An agent triaging a `bug:new`
    issue reproduces the bug as a failing test whose title states the claim
@@ -418,8 +423,8 @@ retyping the steps. `deliver` is the orchestrator: it claims, then hands
 each stage to a background agent — `implementer`, `reviewer`,
 `hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
 `spec-session` and `triage-bug` cover the rest; `spec-session` starts with
-selective exploration (rule 4) and ends with the `spec-checker` agent
-(rule 7).
+selective exploration (rule 4) and has the `spec-checker` agent check the
+design, then the tasks (rule 7).
 
 ## Automation
 
