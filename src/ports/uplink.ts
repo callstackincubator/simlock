@@ -126,6 +126,8 @@ export interface UplinkDialOptions {
   readonly token: string;
   readonly workerId: string;
   readonly label?: string;
+  /** why: `gateway.headers`: extra upgrade headers for a sign-in proxy in front of the gateway. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface UplinkConnector {

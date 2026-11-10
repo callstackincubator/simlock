@@ -958,6 +958,19 @@ const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
+function headersValidator(value: unknown, path: string): Readonly<Record<string, string>> {
+  const expected = "an object of header names to text values";
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidValue(path, expected);
+  }
+  const headers: Record<string, string> = {};
+  for (const [name, text] of Object.entries(value)) {
+    if (typeof text !== "string") throw invalidValue(path, expected);
+    headers[name] = text;
+  }
+  return headers;
+}
+
 /**
  * why: The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
@@ -974,6 +987,7 @@ export function configValidators(
       url: stringValue,
       token: stringValue,
       label: stringValue,
+      headers: headersValidator,
       disconnectedRetentionMs: positiveNumber,
       execTimeoutMs: positiveNumber,
       leaseRequestTimeoutMs: positiveNumber,

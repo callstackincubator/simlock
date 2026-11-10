@@ -255,6 +255,9 @@ These keys go in a **worker's** file. A gateway ignores them with a warning.
 | `gateway.url`   | `ws://` or `wss://` URL      | not set (no gateway)     | The gateway's base URL, such as `wss://simlock-gw.example.com`. Set it together with `gateway.token`.       | Worker     |
 | `gateway.token` | string                       | not set                  | Join token made on the gateway with `simlock --gateway token create --role worker`. Set it together with `gateway.url`. | Worker     |
 | `gateway.label` | string                       | not set (the worker's id is shown) | Name shown for this worker in the gateway's lists and console. Display only.                      | Worker     |
+| `gateway.headers` | object of header names to text values | not set | Extra headers the worker sends on its connection to the gateway, such as a sign-in proxy's service credentials: `{"CF-Access-Client-Id":"abc.access","CF-Access-Client-Secret":"s3cr3t"}`. Needs `gateway.url`. Every value reads `[redacted]` in `simlock config` unless `--show-secrets` is given. | Worker |
+
+`gateway.headers` takes at most 16 headers and 8192 characters of names and values in all. A name is 1 to 100 letters, digits and the symbols ``!#$%&'*+-.^_`|~``, and each name appears once, whatever its case. A value is at most 4096 plain ASCII characters (tab and space to `~`). Simlock refuses the names it sets itself: `authorization`, `x-simlock-worker-id`, `x-simlock-worker-label`, `host`, `connection`, `upgrade`, `origin` and any name starting `sec-websocket-`. `{}` is the same as not set. A bad value stops the worker from starting, with a message naming `gateway.headers`. A change takes effect on restart.
 
 <Aside type="caution">
 Joining a gateway gives that gateway admin rights on this worker. The token travels on the
