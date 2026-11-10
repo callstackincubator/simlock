@@ -256,18 +256,57 @@ the tool's docs alone.
   changes no wire shape (a refactor, a client-only error code) carries the
   commit trailer `Protocol-bump: none (<reason>)`.
 
+## Codex
+
+The same process runs on Codex models, from Codex itself or from a T3 Code
+thread, out of the repository's own `.codex/` layer; nothing is installed
+on the machine, and nothing reaches another repository.
+
+- `.codex/hooks.json` runs `.agents/scripts/codex-hook.mjs` on four
+  events; it runs the scripts `.claude/settings.json` wires for the same
+  events (the budget and tool guards before a shell command, the clock
+  and the module manuals after one, the report guard when a stage agent
+  stops, the checkout age at session start).
+- `.codex/agents/<name>.toml` is one Codex custom agent per
+  `.claude/agents/<name>.md`, with the model `.agents/codex-models.json`
+  maps it to. They are generated and committed: after a change to an
+  agent file or to the model map, run
+  `node .agents/scripts/codex-agents.mjs` (`codex-agents.test.ts` fails
+  on a stale twin).
+- `.agents/skills/` links to each skill under `.claude/skills/`.
+
+Two things hold per machine. Codex loads a project layer only from a
+trusted project and runs a hook only once its definition is trusted: in
+the main checkout, open `codex`, accept the trust prompt, type `/hooks`
+and trust the handlers that name `codex-hook.mjs`. And Codex 0.167 reads
+a worktree's hooks from the main checkout's `.codex/hooks.json`, never
+the worktree's own (so a branch cannot add a hook), while agents and
+skills come from the worktree; every T3 Code thread runs in a worktree,
+so the main checkout must carry the file (`git pull` on `main` there)
+for those threads to be guarded, and a checkout from before it runs no
+hooks and reports nothing.
+
+A Codex sub-agent's hooks carry `agent_id` and `agent_type` as Claude
+Code's do, so the sub-agent rules bind it; a stage started as a
+top-level thread is bound by neither harness's sub-agent rules (the tag
+in its prompt is the only mark). Codex loads only the root `AGENTS.md`
+by itself, so the manual hook is what brings a module's manual to a
+Codex agent.
+
 ## Review measurement
 
 Every prompt a delivery stage or review lens is started with begins with
-this line, `-` for a key that does not apply yet:
+this line, `-` for a key that does not apply yet (a T3 Code thread may put
+one sentence before it; the readers look at the first three lines):
 
 ```
 ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> round=<1|2|fix-check> role=<implementer|reviewer|spec|code|claims|hardware-verifier> lens=<behaviour|tests|both>
 ```
 
 `node .agents/scripts/review-metrics.mjs --pr <M> --issue <N> [--findings
-<file>]` reads the runs so tagged from Claude Code's transcripts on this
-machine and prints their models, seconds, tokens and cost, and with
+<file>]` reads the runs so tagged from Claude Code's transcripts and Codex's
+rollouts on this machine and prints their models, seconds, tokens and cost
+(unknown for a model the script does not price, every Codex model today), and with
 `--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
 what goes in the findings file and where the result is posted. It reports,
 it checks nothing. Runs tagged `stage=replay` (a frozen snapshot reviewed

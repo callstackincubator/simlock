@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // `node .agents/scripts/usage.mjs [<transcript.jsonl>]`: what a Claude Code session and its
-// sub-agents have used so far, read from their transcripts. The default transcript is
+// sub-agents have used so far, read from their transcripts; a Codex rollout (its records carry a
+// `payload`) is read the same way, its `token_usage_record` per API response and its model from
+// `turn_context`. The default transcript is
 // $CLAUDE_TRANSCRIPT_PATH, which session-env.sh exports at session start.
 //
 //   tokens=<n>M turns=<n> agents=<n>
@@ -11,6 +13,7 @@
 // `sessionFiles(path)` (the session's transcript and its sub-agents'), `emptyState()` and
 // `scan(file, state)`, which reads what the file gained since `state.offset` into it: tokens,
 // turns, the model, and `recent`, the last Bash commands with a hash of what each returned.
+// review-metrics.mjs imports `codexUsage(usage)`, a Codex usage record in Claude's keys.
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -51,7 +54,8 @@ export function scan(file, s) {
   for (const line of appended(file, s).split("\n")) {
     const rec = parsed(line);
     if (rec === null) continue;
-    if (rec.message?.usage || rec.type === "assistant") noteAssistant(rec, s);
+    if (rec.payload !== undefined) noteRollout(rec, s);
+    else if (rec.message?.usage || rec.type === "assistant") noteAssistant(rec, s);
     else noteResults(rec, s);
   }
   return s;
@@ -114,10 +118,52 @@ function notePending(rec, s) {
 
 function noteResults(rec, s) {
   for (const b of contentOf(rec)) {
-    if (b.type !== "tool_result" || !(b.tool_use_id in s.pending)) continue;
-    s.recent.push({ command: s.pending[b.tool_use_id], hash: hashOf(b.content) });
-    delete s.pending[b.tool_use_id];
-    if (s.recent.length > RECENT) s.recent.shift();
+    if (b.type === "tool_result" && b.tool_use_id in s.pending) settle(s, b.tool_use_id, b.content);
+  }
+}
+
+function settle(s, id, content) {
+  s.recent.push({ command: s.pending[id], hash: hashOf(content) });
+  delete s.pending[id];
+  if (s.recent.length > RECENT) s.recent.shift();
+}
+
+// why: Codex's input count includes the cached part; Claude's keys hold them apart, and the
+// weights and prices are written for Claude's keys.
+export function codexUsage(u) {
+  const cached = u.cached_input_tokens ?? 0;
+  return {
+    input_tokens: Math.max(0, (u.input_tokens ?? 0) - cached),
+    cache_read_input_tokens: cached,
+    cache_creation_input_tokens: u.cache_write_input_tokens ?? 0,
+    output_tokens: u.output_tokens ?? 0,
+  };
+}
+
+// why: Codex writes one token_usage_record per API response, with the model on the turn's
+// turn_context rather than on the record.
+function noteRollout(rec, s) {
+  const p = rec.payload;
+  if (rec.type === "turn_context" && typeof p.model === "string") {
+    s.model = p.model;
+  } else if (rec.type === "token_usage_record" && p.usage && p.response_id !== s.lastId) {
+    s.lastId = p.response_id ?? null;
+    s.total += weighted(codexUsage(p.usage));
+    s.turns += 1;
+  } else if (rec.type === "response_item") {
+    noteRolloutCall(p, s);
+  }
+}
+
+const CALL_COMMAND = { custom_tool_call: "input", function_call: "arguments" };
+const CALL_OUTPUTS = new Set(["custom_tool_call_output", "function_call_output"]);
+
+function noteRolloutCall(p, s) {
+  if (p.type in CALL_COMMAND) {
+    const command = p[CALL_COMMAND[p.type]];
+    if (typeof command === "string" && p.call_id) s.pending[p.call_id] = command;
+  } else if (CALL_OUTPUTS.has(p.type) && p.call_id in s.pending) {
+    settle(s, p.call_id, p.output);
   }
 }
 

@@ -122,7 +122,8 @@ Nobody writes usage by hand. Every agent prompt a delivery writes starts
 with the ledger tag line (`toolchain.md`, "Review measurement"), and
 `node .agents/scripts/review-metrics.mjs --pr <M> --issue <N>` reads each
 tagged run's model, start, finish, tokens and cost from Claude Code's
-transcripts. Unknown values print as unknown, never zero.
+transcripts and Codex's rollouts. Unknown values print as unknown, never
+zero: a Codex model's cost is unknown until the price table lists it.
 
 The coordinator keeps one findings file per PR, `{"findings": [...]}`, one
 entry per canonical finding: `id`, `role`, `class` (the `[class]` the lens

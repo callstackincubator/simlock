@@ -61,8 +61,9 @@ grounds for rejecting a change even if the prose reads well.
    [../templates/manual.md](../templates/manual.md), and
    `src/docs-manuals.test.ts` holds them. A `CLAUDE.md` beside a manual
    holds only `@AGENTS.md`, so Claude Code loads the manual when it reads
-   a file in the module; other agents load it by the rule in the root
-   `AGENTS.md`. A path that runs through several modules (startup,
+   a file in the module; the manual hook sends it to any agent, under
+   Claude Code or Codex, whose shell command names a file there; other
+   agents load it by the rule in the root `AGENTS.md`. A path that runs through several modules (startup,
    device selection, `device.exec`) is a flow doc under
    `docs/internal/flows/`, linked from each module's manual. A manual and
    a flow doc hold no rationale (the ADR does) and no history (git does);
