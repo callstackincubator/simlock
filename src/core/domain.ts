@@ -584,6 +584,17 @@ export function transition(
   // A deferred reclaim (ADR 0019 §2) ends with any transition out of `reclaiming`.
   const { deferredReclaimLeaseId: _deferred, ...record } = current;
 
+  if (to === "deleted") {
+    // why: a quarantined device nuke destroys keeps its retry fields otherwise, and the deleted row would look like one still waiting for a retry.
+    const {
+      quarantineAttempts: _attempts,
+      quarantineNextRetryAt: _nextRetryAt,
+      quarantinedAt: _at,
+      ...gone
+    } = record;
+    return { ...gone, ...update, state: to };
+  }
+
   if (to === "shutdown") {
     // Nothing is listening at the old address once the device stops, and the next
     // `makeReady` supplies a fresh one on the way back to `ready` -- so dropping it here

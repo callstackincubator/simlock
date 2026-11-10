@@ -137,6 +137,11 @@ describe("Nuke", () => {
       { id: waitingId, state: "deleted" },
       { id: strandedId, state: "deleted" },
     ]);
+    for (const device of registry.snapshot.devices) {
+      expect(device).not.toHaveProperty("quarantineAttempts");
+      expect(device).not.toHaveProperty("quarantineNextRetryAt");
+      expect(device).not.toHaveProperty("quarantinedAt");
+    }
     expect(
       driver.calls.filter((call) => call.operation === "destroy").flatMap((call) => call.arguments),
     ).toEqual([

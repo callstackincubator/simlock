@@ -47,7 +47,7 @@ Reclaim and quarantine:
 - Out of retries, a virtual device is destroyed and a physical one unenrolled (`device.quarantine-abandoned`). A destroy that fails leaves the device quarantined, with its capacity slot and no further retry (`device.quarantine-stranded`).
 - `quarantineCause` is written at entry; retries keep it and every exit drops it.
 
-Nuke, one at a time: close acquisition, settle reclaim and the warm pool → release all leases `killed` → clear the warm pool's learned kinds → shut down each unleased `ready` virtual device and, with delete, destroy each `shutdown` one, then the seeds and every baseline. A device it cannot reset is logged and the rest go on.
+Nuke, one at a time: close acquisition, settle reclaim and the warm pool → release all leases `killed` → clear the warm pool's learned kinds → shut down each unleased `ready` virtual device and, with delete, destroy each `shutdown` or `quarantined` one, then the seeds and every baseline. A device it cannot reset is logged and the rest go on.
 
 Components:
 
