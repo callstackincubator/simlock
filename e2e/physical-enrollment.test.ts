@@ -791,8 +791,11 @@ describe("devices.autoEnroll", () => {
 
   it("keeps a phone out that was removed while plugged in until it has been missing two runs, while an operator's device add enrols it again", async () => {
     const phone = (id: string): ScriptedPhysicalDevice => ({ ...IPHONE, ids: [id] });
-    const [removed, brief, long, added] = ["PHONE-1", "PHONE-2", "PHONE-3", "PHONE-4"].map(phone);
-    const iphones = [removed, brief, long, added].filter((device) => device !== undefined);
+    const removed = phone("PHONE-1");
+    const brief = phone("PHONE-2");
+    const long = phone("PHONE-3");
+    const added = phone("PHONE-4");
+    const iphones = [removed, brief, long, added];
     const pixel: ScriptedPhysicalDevice = { ...PIXEL, present: true };
     const env = await autoDaemon({
       android: {
