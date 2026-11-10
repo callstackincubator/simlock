@@ -99,10 +99,11 @@ a rack.
 
 When a phone's record goes away while the phone stays plugged in, the
 worker holds it out: through `device remove`, or when it is unenrolled
-after its quarantine retries ran out. The worker remembers, in memory, each
-listed ID it has seen with a live record, and each ID it enrolled itself, so
-a removal before its next tick holds the phone out too. Such an ID with no live record is
-held out. An ID missing from the USB list for `health.stableObservations`
+after its quarantine retries ran out. The worker remembers this in memory. An
+attachment starts at the first tick that lists the ID. During it, the ID is
+held out once a tick saw it with a live record, the worker enrolled it, or
+it has a `deleted` record deleted after the attachment started. The last
+case covers a record made and removed between two ticks. An ID missing from the USB list for `health.stableObservations`
 ticks in a row is forgotten, so plugging it in again enrols it: about a
 minute unplugged with the defaults. A failed list counts as no tick. `device add`
 enrols a held-out phone as always.
