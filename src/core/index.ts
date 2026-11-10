@@ -233,6 +233,7 @@ export {
   PhysicalEnrollment,
   UnknownEnrolledDeviceError,
 } from "./physical-enrollment.js";
+export { PhysicalAutoEnrollment } from "./physical-auto-enrollment.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {
   baselineMismatch,

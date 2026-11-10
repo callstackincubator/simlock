@@ -20,6 +20,7 @@ import {
   type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
+  type PhysicalAutoEnrollment,
 } from "../core/index.js";
 import {
   type LeaseHealthMonitor,
@@ -95,6 +96,7 @@ export interface DaemonServerEngineOptions {
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor | undefined;
   readonly physicalDeviceWatcher?: PhysicalDeviceWatcher | undefined;
+  readonly autoEnrollment?: Pick<PhysicalAutoEnrollment, "dispose" | "start"> | undefined;
   readonly enrollment?: DispatcherOptions["enrollment"];
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
@@ -551,6 +553,7 @@ export class DaemonServer {
     // this monitor.
     this.#engine?.healthMonitor?.start();
     this.#engine?.physicalDeviceWatcher?.start();
+    this.#engine?.autoEnrollment?.start();
     // why: a gateway's `events.subscribe` parked on readiness resumes only after this continuation, so the rollback's `daemon.update-failed` waits one turn of the event loop for it to subscribe.
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (!this.#stopping) this.options.update?.announceResultFile();
@@ -668,6 +671,7 @@ export class DaemonServer {
     // why: a health tick or recovery reboot already running still acts on a device; it ends before the drivers are disposed.
     await this.#engine?.healthMonitor?.settle();
     this.#engine?.physicalDeviceWatcher?.dispose();
+    this.#engine?.autoEnrollment?.dispose();
   }
 
   async #closeConnections(): Promise<void> {

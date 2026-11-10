@@ -72,7 +72,12 @@ export interface PhysicalEnrollmentRegistry {
 export class PhysicalEnrollment {
   constructor(private readonly options: PhysicalEnrollmentOptions) {}
 
-  async add(platform: Platform, id: string): Promise<PhysicalEnrollmentResult> {
+  async add(
+    platform: Platform,
+    id: string,
+    options: { readonly initiator: "operator" | "auto" } = { initiator: "operator" },
+  ): Promise<PhysicalEnrollmentResult> {
+    const { initiator } = options;
     this.#refuseVirtual(platform, id);
     const driver = this.options.drivers.get(platform);
     const read = await this.#inspect(driver, platform, id);
@@ -80,7 +85,9 @@ export class PhysicalEnrollment {
     const claimed = await this.options.decisions.run(async () => {
       const existing = this.#enrolled(read.driverDeviceId);
       if (existing === undefined) {
-        return { created: await this.options.registry.enrollPhysical({ ...read, platform }) };
+        return {
+          created: await this.options.registry.enrollPhysical({ ...read, initiator, platform }),
+        };
       }
       if (existing.spec.platform !== platform) {
         throw new DeviceNotEnrollableError(
@@ -110,7 +117,7 @@ export class PhysicalEnrollment {
         );
       }
       const device = await this.options.decisions.run(() =>
-        this.options.registry.reenrollPhysical(existing.id, { ...again, platform }),
+        this.options.registry.reenrollPhysical(existing.id, { ...again, initiator, platform }),
       );
       this.options.physicalDeviceReady?.(device.id);
       return { device, reenrolled: true };
