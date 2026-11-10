@@ -1874,6 +1874,24 @@ describe("loadConfig modes (ADR 0005)", () => {
         "a header value of at most 4096 plain ASCII characters (in x-ok)",
       ],
       ["over 8192 in all", fat, "at most 8192 characters of header names and values in all"],
+      [
+        "8193 in all",
+        { "x-a": "a".repeat(4096), "x-b": "b".repeat(4091) },
+        "at most 8192 characters of header names and values in all",
+      ],
+      ...[
+        "authorization",
+        "x-simlock-worker-id",
+        "x-simlock-worker-label",
+        "host",
+        "connection",
+        "upgrade",
+        "origin",
+      ].map((name): readonly [string, unknown, string] => [
+        `${name} in capitals`,
+        { [name.toUpperCase()]: "x" },
+        `no header Simlock sets itself (${name.toUpperCase()})`,
+      ]),
       ["Authorization", { Authorization: "x" }, "no header Simlock sets itself (Authorization)"],
       [
         "a sec-websocket- name",
@@ -1896,6 +1914,10 @@ describe("loadConfig modes (ADR 0005)", () => {
       'Invalid config value for "gateway.url": expected a gateway URL, since gateway.token is set',
     );
 
+    const exactly8192 = { "x-a": "a".repeat(4096), "x-b": "b".repeat(4090) };
+    expect((await load({ gateway: { ...joined, headers: exactly8192 } })).gateway.headers).toEqual(
+      exactly8192,
+    );
     const accepted = { "CF-Access-Client-Id": "abc.access", "x-empty": "", "x-tab": "a\tb" };
     expect((await load({ gateway: { ...joined, headers: accepted } })).gateway.headers).toEqual(
       accepted,
