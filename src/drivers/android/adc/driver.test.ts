@@ -42,18 +42,29 @@ class CloudAdbRunner extends ScriptedProcessRunner {
   ): Promise<ProcessResult> {
     this.calls.push({ command, args, options });
     const verb = args[0] === "-P" ? args[2] : args[0];
-    let stdout = "";
-    if (verb === "version") stdout = "Android Debug Bridge version 1.0.41";
-    else if (verb === "connect") {
+    if (verb === "-s") return this.#deviceResult(args);
+    const stdout = this.#hostOutput(verb, args);
+    return { code: 0, stdout, stderr: "" };
+  }
+
+  #hostOutput(verb: string | undefined, args: readonly string[]): string {
+    if (verb === "version") return "Android Debug Bridge version 1.0.41";
+    if (verb === "connect") {
       this.online = true;
-      stdout = "connected";
-    } else if (verb === "disconnect") stdout = "disconnected";
-    else if (verb === "-s" && args[4] === "get-state") {
+      return "connected";
+    }
+    if (verb === "disconnect") return "disconnected";
+    const commandText = args.join(" ");
+    throw new Error(`Unexpected fake ADB command: ${commandText}`);
+  }
+
+  #deviceResult(args: readonly string[]): ProcessResult {
+    let stdout = "";
+    if (args[4] === "get-state") {
       if (this.online === false) return { code: 1, stdout: "", stderr: "error: device offline" };
       stdout = "device";
-    } else if (verb === "-s" && args[5] === "getprop") stdout = "1\n";
-    else if (verb === "-s" && args[5] === "pm")
-      stdout = "package:/system/framework/framework-res.apk";
+    } else if (args[5] === "getprop") stdout = "1\n";
+    else if (args[5] === "pm") stdout = "package:/system/framework/framework-res.apk";
     else {
       const commandText = args.join(" ");
       throw new Error(`Unexpected fake ADB command: ${commandText}`);
