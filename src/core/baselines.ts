@@ -8,6 +8,7 @@ import { NoDriverError } from "./driver-catalog.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { Registry, ReleasedLease } from "./registry.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
+import { DeviceBusyError } from "./physical-enrollment.js";
 import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
@@ -100,7 +101,7 @@ export interface BaselineServiceOptions {
       save: (released: ReleasedLease) => Promise<Result>,
     ): Promise<Result>;
   };
-  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
+  readonly claims: Pick<DeviceOperationClaims, "claim" | "tryClaim">;
   readonly decisions: SerializedDecision;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "dispose">;
@@ -432,7 +433,9 @@ export class BaselineService {
       const claim = this.options.claims.tryClaim(device.id, "cleanup");
       if (claim === undefined) {
         for (const held of claimed) held.claim.release();
-        throw new Error(`Device ${device.id} made from baseline ${name} is busy`);
+        const reclaiming =
+          device.state === "reclaiming" || this.options.claims.claim(device.id)?.kind === "reclaim";
+        throw new DeviceBusyError(device.id, reclaiming ? "reclaiming" : "busy");
       }
       claimed.push({ claim, device });
     }

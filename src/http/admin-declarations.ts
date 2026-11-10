@@ -199,7 +199,7 @@ export const baselineRemoveRoute = declareRoute({
   errors: {
     400: ["BAD_REQUEST"],
     404: ["UNKNOWN_BASELINE", "UNKNOWN_WORKER"],
-    409: ["BASELINE_IN_USE", "WORKER_NOT_CONNECTED"],
+    409: ["BASELINE_IN_USE", "DEVICE_BUSY", "WORKER_NOT_CONNECTED"],
   },
 });
 
