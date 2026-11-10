@@ -5,7 +5,12 @@ import type { ComponentInstaller } from "./component-installer.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import type { LeaseProgress, VirtualDevice, VirtualSpec } from "./domain.js";
 import { UnknownBaselineError, type CurrentBaseline } from "./baselines.js";
-import { BootTimeoutError, type DriverDevice } from "./driver.js";
+import {
+  BadDeviceRequestError,
+  BaselineStaleError,
+  BootTimeoutError,
+  type DriverDevice,
+} from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -69,16 +74,28 @@ export class DeviceProvisioner {
     requested: VirtualSpec,
     made: { spec: VirtualSpec; source?: string; hold: () => void },
   ): () => void {
-    const release = this.options.components.claimProvision(requested);
-    if (requested.baseline === undefined) return release;
-    const current = this.options.baselines().current(requested.baseline.name);
+    if (requested.baseline === undefined) {
+      return this.options.components.claimProvision(requested);
+    }
+    const baselines = this.options.baselines();
+    const current = baselines.current(requested.baseline.name);
     if (current === undefined) {
-      release();
       throw new UnknownBaselineError(requested.baseline.name);
     }
+    if (current.platform !== requested.platform) {
+      throw new BadDeviceRequestError("The saved baseline belongs to another platform");
+    }
+    const driver = this.options.catalog.get(current.platform, current.backend);
+    if (driver.backend.capabilities.baselines === false) {
+      throw new BadDeviceRequestError("This backend does not support saved baselines");
+    }
+    if (current.staleReason !== undefined) {
+      throw new BaselineStaleError(current.name, current.staleReason);
+    }
+    const release = this.options.components.claimProvision(requested);
     made.spec = { ...requested, baseline: { name: current.name, version: current.version } };
     made.source = current.sourceId;
-    made.hold = this.options.baselines().hold(current.name, current.version);
+    made.hold = baselines.hold(current.name, current.version);
     return release;
   }
 

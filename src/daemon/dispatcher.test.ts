@@ -1125,7 +1125,7 @@ describe("Dispatcher: baseline.list without a driver", () => {
 
     const listed = await dispatcher.dispatch("baseline.list", {}, agent);
     expect(listed.baselines).toMatchObject([
-      { name: "droid", staleReason: "the android driver is not available on this worker" },
+      { name: "droid", staleReason: "the android:local backend is not available on this worker" },
     ]);
     expect(eventBus.replay().filter((envelope) => envelope.event === "baseline.stale")).toEqual([]);
   });

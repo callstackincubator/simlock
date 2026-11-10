@@ -145,7 +145,10 @@ export interface DoctorSource extends Omit<DriverSource, "id"> {
 /** why: the baselines the worker holds name their sources and are checked for staleness before a report. */
 export interface DoctorBaselines {
   checkStale(): Promise<void>;
-  nameSources(sources: readonly DriverSource[]): readonly (DriverSource & {
+  nameSources(
+    sources: readonly DriverSource[],
+    owner: { readonly platform: Platform; readonly backend: string },
+  ): readonly (DriverSource & {
     readonly baselineName?: string;
     readonly baselineVersion?: number;
   })[];
@@ -302,7 +305,7 @@ export class Doctor {
       this.options.drivers.map(async (driver) => {
         try {
           const sources = await driver.listSources();
-          const listed = this.#named(sources);
+          const listed = this.#named(driver, sources);
           const kept: DriverSource[] = [];
           for (const source of listed) {
             if (
@@ -340,8 +343,9 @@ export class Doctor {
     }
   }
 
-  #named(sources: readonly DriverSource[]): readonly DriverSource[] {
-    return this.options.baselines?.nameSources(sources) ?? sources;
+  #named(driver: Driver, sources: readonly DriverSource[]): readonly DriverSource[] {
+    const owner = { platform: driver.platform, backend: driver.backend.id };
+    return this.options.baselines?.nameSources(sources, owner) ?? sources;
   }
 
   async #purgeSource(driver: Driver, source: DriverSource): Promise<boolean> {

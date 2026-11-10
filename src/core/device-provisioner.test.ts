@@ -13,13 +13,18 @@ import {
 } from "../ports/index.js";
 import { sourceFilesRecursive, srcDir, stripComments } from "../test-support/imports.js";
 import { type CapacityReservation } from "./capacity/index.js";
-import { UnknownBaselineError, type CurrentBaseline } from "./index.js";
+import { UnknownBaselineError, BaselineStaleError, type CurrentBaseline } from "./index.js";
 import { ComponentBeingRemovedError, ComponentInstaller } from "./component-installer.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner, type DeviceProvisionerOptions } from "./device-provisioner.js";
-import { DriverCatalog } from "./driver-catalog.js";
-import { DriverCrashError, BootTimeoutError, DiskSpaceGuard } from "./driver.js";
-import { FakeDriver } from "./fake-driver.js";
+import { DriverCatalog, NoDriverError } from "./driver-catalog.js";
+import {
+  BadDeviceRequestError,
+  DriverCrashError,
+  BootTimeoutError,
+  DiskSpaceGuard,
+} from "./driver.js";
+import { FakeDriver, type FakeDriverOptions } from "./fake-driver.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { loadTestRegistry } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -38,6 +43,7 @@ async function createHarness(
   },
   logger?: Logger,
   baselines?: DeviceProvisionerOptions["baselines"],
+  capabilities?: FakeDriverOptions["capabilities"],
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -46,6 +52,7 @@ async function createHarness(
     estimateMs: { boot: 20, provision: 30 },
     platform: "ios",
     ...(latencyMs === undefined ? {} : { latencyMs }),
+    ...(capabilities === undefined ? {} : { capabilities }),
   });
   let nextId = 0;
   const registry = await loadTestRegistry({
@@ -507,21 +514,29 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
 
 describe("DeviceProvisioner copying a baseline", () => {
   /** why: the baselines port is a fake whose current version a test moves and whose holds it counts. */
-  async function withBaseline(latencyMs?: { readonly provision?: number }) {
+  async function withBaseline(
+    latencyMs?: { readonly provision?: number },
+    capabilities?: FakeDriverOptions["capabilities"],
+  ) {
     let current: CurrentBaseline | undefined;
     const held = { count: 0 };
-    const harness = await createHarness(latencyMs, undefined, () => ({
-      current: () => current,
-      hold: () => {
-        held.count += 1;
-        let released = false;
-        return () => {
-          if (released) return;
-          released = true;
-          held.count -= 1;
-        };
-      },
-    }));
+    const harness = await createHarness(
+      latencyMs,
+      undefined,
+      () => ({
+        current: () => current,
+        hold: () => {
+          held.count += 1;
+          let released = false;
+          return () => {
+            if (released) return;
+            released = true;
+            held.count -= 1;
+          };
+        },
+      }),
+      capabilities,
+    );
     await harness.components.install({ component: "26.5", platform: "ios" });
     const saved = async (version: number): Promise<CurrentBaseline> => {
       const providing = harness.driver.provision(spec);
@@ -535,6 +550,7 @@ describe("DeviceProvisioner copying a baseline", () => {
         physical: false,
       });
       return {
+        backend: "local",
         mode: "full",
         model: spec.model,
         name: "checkout",
@@ -555,6 +571,43 @@ describe("DeviceProvisioner copying a baseline", () => {
   const requested = { ...spec, baseline: { name: "checkout", version: 1 } };
   const provisionCalls = (harness: { readonly driver: FakeDriver }) =>
     harness.driver.calls.filter((call) => call.operation === "provision");
+
+  it.each([
+    { label: "another backend", change: { backend: "remote" }, error: NoDriverError },
+    {
+      label: "another platform",
+      change: { platform: "android" as const },
+      error: BadDeviceRequestError,
+    },
+    {
+      label: "a stale source",
+      change: { staleReason: "source unavailable" },
+      error: BaselineStaleError,
+    },
+    {
+      label: "a backend without baselines",
+      change: {},
+      error: BadDeviceRequestError,
+      supported: false,
+    },
+  ])("refuses $label before copying a baseline or taking its component claim", async (test) => {
+    const capabilities = { baselines: test.supported ?? true, physical: true, except: true };
+    const harness = await withBaseline(undefined, capabilities);
+    const current = await harness.saved(1);
+    harness.setCurrent({ ...current, ...test.change });
+    const before = provisionCalls(harness).length;
+    const claim = vi.spyOn(harness.components, "claimProvision");
+    const reserved = reservation();
+
+    const provisioning = harness.provisioner.provision(requested, { reservation: reserved });
+
+    await expect(provisioning).rejects.toBeInstanceOf(test.error);
+    expect(provisionCalls(harness)).toHaveLength(before);
+    expect(claim).not.toHaveBeenCalled();
+    expect(harness.held.count).toBe(0);
+    expect(reserved.releaseCount()).toBe(1);
+    expect(harness.registry.snapshot.devices).toEqual([]);
+  });
 
   it("copies the version current at its claim, keeps its source until the device has a record however many copies are made at once, and ends its claim and hold on every failure", async () => {
     const harness = await withBaseline({ provision: 50 });
