@@ -66,14 +66,19 @@ flowchart LR
 A driver gains one host-level read: list the canonical IDs of the phones
 on USB, in any state. Android: every `adb devices -l` entry with a `usb:`
 transport, on the default server behind its protocol check (ADR 0022 §5).
+Like every physical `adb` call, the list may start that server when
+nothing listens on 5037; Simlock never stops it.
 iOS: every `devicectl list devices` entry with transport `wired`. A phone
 reached only over the network is not listed. The read names no phone and
-sends nothing to one.
+sends nothing to one. A platform whose driver did not start (no Android
+SDK, iOS on Linux) is not listed and logs nothing.
 
 Each tick, for each listed ID with no live record (a record not `deleted`)
 that is not held out (§3), the worker runs `device add`'s own enrolment.
 That runs the same checks and refusals, the same canonical-ID rule and the
-same kept-apps read, and it holds the same claim. It never re-enrols. An ID
+same kept-apps read, and it holds the same claim. Like `device add`, a
+committed enrolment wakes the lease queue, so a request already waiting for
+a matching phone is granted it. It never re-enrols. An ID
 that already has a record when the enrolment commits is left as it is, so
 an admin's `device add` in the same moment wins and the kept apps are not
 read twice.
@@ -95,7 +100,8 @@ worker holds it out: through `device remove`, or when it is unenrolled
 after its quarantine retries ran out. The worker remembers, in memory, each
 listed ID it has seen with a live record. Such an ID with no live record is
 held out. An ID missing from the USB list for `health.stableObservations`
-ticks in a row is forgotten, so plugging it in again enrols it. `device add`
+ticks in a row is forgotten, so plugging it in again enrols it: about a
+minute unplugged with the defaults. A failed list counts as no tick. `device add`
 enrols a held-out phone as always.
 
 The memory dies with the daemon. After a restart, a removed phone that is
