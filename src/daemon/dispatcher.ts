@@ -1065,13 +1065,7 @@ export class Dispatcher {
       if (error instanceof UnknownBaselineError) {
         throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
       }
-      if (error instanceof DeviceBusyError) {
-        throw new DispatchError("DEVICE_BUSY", error.message, {
-          id: error.id,
-          reason: error.reason,
-        });
-      }
-      throw error;
+      throw describeEnrollmentError(error);
     }
   };
 
