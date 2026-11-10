@@ -119,6 +119,54 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
     },
   );
 
+  it.each([
+    ["a batch whose steps end with a close ends it", "batch", true],
+    ["a close agent-device answers with an error keeps it", "failed", false],
+    ["a `close <app>` with no session open closes the app only and keeps it", "app", false],
+  ] as const)(
+    "after agent-device restarts, a close that names no ended lease and its simlock lease: %s",
+    async (_case, close, ends) => {
+      const rig = await setUpWithPhone();
+      await granted(rig, 1, { platform: "android" });
+      rig.fake.restart();
+      expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+      if (close !== "app") {
+        expect((await envelopeOf(await runCommand(rig, "snapshot", 1))).error).toBeUndefined();
+      }
+      if (close === "failed") {
+        rig.fake.failNextCommand({
+          code: "COMMAND_FAILED",
+          details: { session: "default" },
+          message: "close failed",
+        });
+      }
+
+      const answer = await envelopeOf(
+        close === "batch"
+          ? await runCommand(rig, "batch", 1, {
+              flags: { batchSteps: [{ command: "snapshot" }, { command: "close" }] },
+            })
+          : await runCommand(
+              rig,
+              "close",
+              1,
+              close === "app" ? { positionals: ["com.example"] } : {},
+            ),
+      );
+
+      expect(JSON.stringify(answer)).not.toContain("endedLeases");
+      if (ends) {
+        await expect.poll(async () => listed(rig)).toEqual([]);
+        await expect.poll(() => rig.fake.rpcRequests("agent_device.lease.release").length).toBe(1);
+      } else {
+        expect(answer.error === undefined).toBe(close === "app");
+        await sleep(50);
+        expect(await listed(rig)).toEqual([hex(1)]);
+        expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+      }
+    },
+  );
+
   it("while a re-allocate fails, the agent gets the retryable reply and the simlock lease stays listed, and a later heartbeat recovers", async () => {
     const restoring = "the lease is being restored after an agent-device restart; try again";
     const cases = [
