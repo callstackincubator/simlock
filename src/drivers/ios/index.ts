@@ -1529,7 +1529,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
-    return [];
+    return this.#physical.listAttached();
   }
 
   async inspectPhysical(id: string): Promise<PhysicalInspection> {

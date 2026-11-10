@@ -58,6 +58,7 @@ export type FakeDriverOperation =
   | "listManaged"
   | "inspectPhysical"
   | "listPresentPhysical"
+  | "listAttachedPhysical"
   | "listCatalog"
   | "listComponents"
   | "removeComponent"
@@ -620,7 +621,18 @@ export class FakeDriver implements Driver {
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
-    return [];
+    await this.#beforeCall("listAttachedPhysical");
+    const devices = this.#physicalDevices ?? this.#scriptedPhysicalDevices ?? [];
+    const attached = devices
+      .filter((device) =>
+        device.ids.some((id) => {
+          const reason = this.#absentReasons.get(id);
+          return this.#presentPhysical.has(id) || reason === "locked" || reason === "untrusted";
+        }),
+      )
+      .map((device) => device.ids[0])
+      .filter((id) => id !== undefined);
+    return [...new Set(attached)].sort();
   }
 
   setPhysicalPresence(
