@@ -464,24 +464,41 @@ describe("startDaemon", () => {
       name: "nothing set: each driver's own defaults",
       drivers: {},
       expected: (home: string) => ({
-        android: { adbServerPort: 5038, deviceRoot: join(home, "devices", "android") },
-        ios: { deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock" },
+        android: {
+          backend: "local",
+          adbServerPort: 5038,
+          deviceRoot: join(home, "devices", "android"),
+        },
+        ios: { backend: "local", deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock" },
       }),
     },
     {
       name: "set keys win over the defaults, and a driver's unknown key is carried",
       drivers: { android: { adbServerPort: 5039 }, ios: { deviceSet: "simlock", retries: 3 } },
       expected: (home: string) => ({
-        android: { adbServerPort: 5039, deviceRoot: join(home, "devices", "android") },
-        ios: { deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock", retries: 3 },
+        android: {
+          backend: "local",
+          adbServerPort: 5039,
+          deviceRoot: join(home, "devices", "android"),
+        },
+        ios: {
+          backend: "local",
+          deviceRoot: join(home, "devices", "ios"),
+          deviceSet: "simlock",
+          retries: 3,
+        },
       }),
     },
     {
       name: "deviceSet default: no iOS deviceRoot, which that set does not use",
       drivers: { ios: { deviceSet: "default" } },
       expected: (home: string) => ({
-        android: { adbServerPort: 5038, deviceRoot: join(home, "devices", "android") },
-        ios: { deviceSet: "default" },
+        android: {
+          backend: "local",
+          adbServerPort: 5038,
+          deviceRoot: join(home, "devices", "android"),
+        },
+        ios: { backend: "local", deviceSet: "default" },
       }),
     },
   ])(

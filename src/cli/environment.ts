@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { resolveRequesterId } from "../agent-identity/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
-import type { ConfigOverrides, DriverConfigEntry, ModuleConfigEntry } from "../core/index.js";
+import type { BackendDefinition, ConfigOverrides, ModuleConfigEntry } from "../core/index.js";
 import type {
   Clock,
   DaemonExit,
@@ -227,15 +227,15 @@ async function isUnavailable(error: unknown): Promise<boolean> {
 
 // why: the same module and driver sections the daemon loads its config with, so the CLI accepts and refuses the same keys.
 async function configSections(): Promise<{
-  readonly driverSections: readonly DriverConfigEntry[];
+  readonly driverSections: readonly BackendDefinition<unknown>[];
   readonly modules: readonly ModuleConfigEntry[];
 }> {
-  const [{ optionalModules }, { driverConfigEntries }] = await Promise.all([
+  const [{ optionalModules }, { backendDefinitions }] = await Promise.all([
     import("../module-registry/index.js"),
     import("../driver-registry/index.js"),
   ]);
   return {
-    driverSections: driverConfigEntries,
+    driverSections: backendDefinitions,
     modules: optionalModules.map(({ config, enabledByDefault, name }) => ({
       name,
       ...config,

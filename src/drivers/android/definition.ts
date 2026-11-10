@@ -1,8 +1,9 @@
 import { join } from "node:path";
 
 import {
+  backendSettingValue,
   booleanValue,
-  type DriverConfigEntry,
+  type BackendDefinition,
   nonEmptyString,
   objectValidator,
   positiveNumber,
@@ -34,7 +35,16 @@ export function defaultAndroidDeviceRoot(simlockHome: string): string {
   return join(simlockHome, "devices", "android");
 }
 
-export const androidDriverConfig: DriverConfigEntry<AndroidDriverConfig> = {
+export const androidDriverConfig: BackendDefinition<
+  Readonly<Record<string, string | number | boolean>>,
+  AndroidDriverConfig
+> = {
+  id: "local",
+  settings: {
+    defaults: {},
+    validators: { deviceRoot: backendSettingValue, adbServerPort: backendSettingValue },
+  },
+  capabilities: { baselines: true, physical: true, except: true },
   platform: "android",
   settingDefaults: (simlockHome) => ({
     adbServerPort: DEFAULT_ADB_SERVER_PORT,

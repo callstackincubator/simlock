@@ -181,3 +181,9 @@ export function stringUnion<Value extends string>(
     return value as Value;
   };
 }
+export const backendSettingValue: Validator = (value, path) => {
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    throw invalidValue(path, "a string, number, or boolean");
+  }
+  return value;
+};

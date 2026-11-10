@@ -2,8 +2,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Config, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
-import { androidDriverConfig } from "../drivers/android/index.js";
-import { IosSimctlDriver, iosDriverConfig } from "../drivers/ios/index.js";
+import { androidDriverConfig, type AndroidDriverConfig } from "../drivers/android/index.js";
+import { IosSimctlDriver, iosDriverConfig, type IosDriverConfig } from "../drivers/ios/index.js";
+import { logAndroidDiagnostic } from "../drivers/android/local/index.js";
+import { emitSlimDiagnostic } from "../drivers/ios/local/index.js";
 import { EventBus } from "../bus/index.js";
 import {
   CryptoIdGenerator,
@@ -19,12 +21,7 @@ import {
 import { memorySourceDatabase } from "../drivers/ios/testing.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { deviceModeWiring, modelPreferenceWiring, processRunnerFor } from "./worker-composition.js";
-import {
-  discoverDrivers,
-  logAndroidDiagnostic,
-  emitSlimDiagnostic,
-  type DriverDiscoveryContext,
-} from "./driver-discovery.js";
+import { discoverDrivers, type DriverDiscoveryContext } from "./driver-discovery.js";
 import { SIMLOCK_HOME, start, stopDaemons, writeModule } from "./test-main.js";
 
 afterEach(stopDaemons);
@@ -508,11 +505,8 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<
-        DriverDiscoveryContext,
-        "androidConfig" | "clock" | "hostArch" | "logger" | "processRunner"
-      >
-    > = {},
+      Pick<DriverDiscoveryContext, "clock" | "hostArch" | "logger" | "processRunner">
+    > & { readonly androidConfig?: AndroidDriverConfig } = {},
   ) {
     return discoverDrivers({
       database: await memorySourceDatabase(),
@@ -522,6 +516,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       filesystem,
       hostArch: "arm64",
       ...overrides,
+      platformConfigurations: { android: overrides.androidConfig },
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: INSTANCE_ID,
@@ -583,7 +578,7 @@ async function discoverIos(
     readonly filesystem?: MemoryFilesystem;
     readonly hostPlatform?: NodeJS.Platform;
     readonly idGenerator?: IdGenerator;
-    readonly iosConfig?: DriverDiscoveryContext["iosConfig"];
+    readonly iosConfig?: IosDriverConfig;
     readonly processRunner?: ScriptedProcessRunner;
     readonly sink?: MemoryLogSink;
   } = {},
@@ -591,7 +586,7 @@ async function discoverIos(
   return discoverDrivers({
     database: await memorySourceDatabase(),
     clock: overrides.clock ?? new FakeClock(),
-    ...(overrides.iosConfig === undefined ? {} : { iosConfig: overrides.iosConfig }),
+    platformConfigurations: { ios: overrides.iosConfig },
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
     filesystem: overrides.filesystem ?? new MemoryFilesystem(),
@@ -683,7 +678,9 @@ describe("slim diagnostic bridging", () => {
     const eventBus = new EventBus(clock);
     const seen: unknown[] = [];
     eventBus.subscribeAll((envelope) => seen.push(envelope));
-    const bridge = emitSlimDiagnostic(eventBus);
+    const bridge = emitSlimDiagnostic((diagnostic) => {
+      eventBus.emit(diagnostic.event, diagnostic.payload, "driver-diagnostics");
+    });
 
     bridge({
       address: "simlock-ios-1-address",
@@ -808,9 +805,9 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
          globalThis.${key} = {
-           emulator: context.androidConfig.emulator,
-           simulator: context.iosConfig.simulator,
-           slim: context.iosConfig.slim,
+           emulator: context.platformConfigurations.android.emulator,
+           simulator: context.platformConfigurations.ios.simulator,
+           slim: context.platformConfigurations.ios.slim,
          };
          return [];
        }`,
@@ -838,7 +835,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     const key = "__simlockDiscoveredBootTimeouts";
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
-         globalThis.${key} = [context.iosConfig.full.bootTimeoutMs, context.androidConfig.bootTimeoutMs];
+         globalThis.${key} = [context.platformConfigurations.ios.full.bootTimeoutMs, context.platformConfigurations.android.bootTimeoutMs];
          return [];
        }`,
     );

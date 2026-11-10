@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
-import { logSilenceFailure, logWindowFailure } from "./ios-driver-logging.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../../../ports/index.js";
+import { logSilenceFailure, logWindowFailure } from "./logging.js";
 
+// why: the backend logging adapter is pure logic with multiple failure cases.
 describe("the iOS driver's failure logs", () => {
   it.each([
     { name: "silence", log: logSilenceFailure, message: "Could not silence iOS simulator" },

@@ -107,3 +107,4 @@ the status is stale.
 | [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Accepted; narrows 0038 §2 and §3 |
 | [0070](0070-test-runners-drive-a-lease-through-the-agent-device-front.md) | Test runners drive a lease through the agent-device front: boot is answered, a close may keep the lease, and each lease is its own tenant | Accepted; narrows 0023 §2 and §4; §2 narrowed by 0071 |
 | [0071](0071-a-restart-re-allocates-a-live-agent-device-lease.md) | A restart re-allocates a live agent-device lease on its device | Accepted; supersedes 0023 §3 in part; narrows 0070 §2 |
+| [0072](0072-backends-register-their-definition-factory-and-device-data.md) | Backends register their definition, factory and device data | Proposed; extends 0065; narrows 0061 |

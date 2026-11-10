@@ -1,8 +1,8 @@
-import type { Config, DriverConfigEntry } from "../core/index.js";
+import { selectedBackendDefinition, type BackendDefinition, type Config } from "../core/index.js";
 import { androidDriverConfig } from "../drivers/android/definition.js";
 import { iosDriverConfig } from "../drivers/ios/definition.js";
 
-export const driverConfigEntries: readonly DriverConfigEntry[] = [
+export const backendDefinitions: readonly BackendDefinition<unknown>[] = [
   androidDriverConfig,
   iosDriverConfig,
 ];
@@ -15,10 +15,16 @@ export function driversWithDefaults(
   const result: Record<string, Readonly<Record<string, string | number | boolean>>> = {
     ...drivers,
   };
-  for (const entry of driverConfigEntries) {
-    const settings = drivers[entry.platform] ?? {};
+  for (const platform of ["android", "ios"] as const) {
+    const settings = drivers[platform] ?? {};
+    const entry = selectedBackendDefinition(backendDefinitions, platform, settings);
     const defaults = entry.settingDefaults?.(simlockHome, settings) ?? {};
-    const merged = { ...defaults, ...settings };
+    const merged = {
+      ...defaults,
+      ...(entry.settings.defaults as Record<string, string | number | boolean>),
+      backend: entry.id,
+      ...settings,
+    };
     if (Object.keys(merged).length > 0) result[entry.platform] = merged;
   }
   return result;

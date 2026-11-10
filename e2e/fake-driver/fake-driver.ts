@@ -15,6 +15,7 @@ import {
   UnknownModelError,
   type ExactDeviceRequest,
   type Driver,
+  type BackendDefinition,
   type DriverCatalogEntry,
   type DriverComponent,
   type DriverDevice,
@@ -228,6 +229,7 @@ const PASSTHROUGH_PROGRAM =
  * a broken daemon.
  */
 export class OutOfProcessFakeDriver implements Driver {
+  readonly backend: BackendDefinition<unknown>;
   readonly platform: Platform;
   /** Synthetic: this driver owns no real devices, and nothing validates or creates it. */
   readonly deviceRoot: string;
@@ -249,6 +251,14 @@ export class OutOfProcessFakeDriver implements Driver {
 
   constructor(options: OutOfProcessFakeDriverOptions) {
     this.platform = options.platform;
+    this.backend = {
+      id: "local",
+      platform: options.platform,
+      defaults: {},
+      validators: {},
+      settings: { defaults: {}, validators: {} },
+      capabilities: { baselines: true, physical: true, except: true },
+    };
     this.deviceRoot = `/fake/${options.platform}`;
     this.passthroughTools = PASSTHROUGH_TOOLS[options.platform];
     // A real directory: the installer measures its free space before every install.

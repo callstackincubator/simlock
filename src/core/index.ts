@@ -1,3 +1,13 @@
+export type {
+  BackendContext,
+  BackendDefinition,
+  BackendDiagnostic,
+  BackendModule,
+  BackendSettings,
+} from "./backend.js";
+export { backendKey } from "./backend-key.js";
+export { BackendUnavailableError } from "./backend-unavailable.js";
+export { selectedBackendDefinition, UnknownBackendError } from "./backend-selection.js";
 export {
   ALERT_EVENTS,
   ALERT_FORMATS,
@@ -10,7 +20,6 @@ export {
   // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
   type DownloadPolicy,
   driverConfig,
-  type DriverConfigEntry,
   effectiveAllowDownload,
   loadConfig,
   loadConfigWithDefaults,
@@ -49,6 +58,7 @@ export {
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
 export {
+  backendSettingValue,
   booleanValue,
   ConfigError,
   integerInRange,
