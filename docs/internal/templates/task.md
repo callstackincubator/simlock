@@ -1,45 +1,38 @@
 <!--
-Task spec. A spec session writes this as a sub-issue of a feature.
-A task is task:draft until its Technical spec is filled in and its spec
-check passes; the spec session then sets task:ready. "Depends on" sets only
-the order of delivery.
+Task spec. A spec session writes this as a sub-issue of a feature, after
+the feature's design is checked and approved. The design lives in the
+parent: a task names the parent's rows it delivers and never restates
+one. "Depends on" sets only the order of delivery.
 -->
 
 Part of #NNN.
 
 ## Scope
 
-<!-- The slice of the parent's outcome this task delivers: what a user can do
-after this PR merges that they could not after the previous one. -->
-
-## In short
-
-<!-- Two or three plain sentences: what changes for the user after this PR,
-then a small Mermaid diagram of the flow it touches, with the changed step
-marked. Define any new term here with an example. Every quantity says
-its direction, unit and where it is counted from ("64 MiB uploaded, per
-request", not "64 MiB"); every message the tool prints is written out word
-for word, its variable parts named. When the task changes
-what input is accepted or what the tool prints, add the user's session
-(commands and output, before and after) and an inputs table with today's
-result beside the new one. End with one line: what a user would notice if
-this task goes wrong. -->
+<!-- The slice of the parent's outcome this task delivers: what a user can
+do after this PR merges that they could not after the previous one. Last
+line: what a user would notice if this task goes wrong. -->
 
 ## Technical spec
 
+Commit <sha>.
+
+### Rows
+
+<!-- The parent's rows this task delivers, by id, one line per table:
+"Behaviours: B3, B4", "Stored state: S2", "Interfaces: I5, I6", and
+"Existing code: X4, X7" for the rows it must handle. The rows are the
+spec. A detail no row holds goes into the parent's row first, never only
+here. -->
+
 ### Facts
 
-<!-- Every fact this spec rests on, one row each: what existing code,
-another tool or this machine does today. Source: where it was read, a
-`path:line` in this repo, a `path:line` in another tool's source at the
-commit toolchain.md names, or a command and the output line it printed. A
-value this change sends to another module, process or tool (an id, name,
-key, header, path, flag, JSON shape) is a row: its source is the line that
-parses or validates it, and the row shows the value passes. A fake of
-another tool cites the real reply it copies. A sentence anywhere in this
-body about today's behaviour names its row (F1). Docs, memory or "to
-re-check" is no source; a fact with no source is an open question, not a
-row. -->
+<!-- Only what no row of the parent holds: what existing code, another
+tool or this machine does today that this task rests on, one row each.
+Source: a `path:line` in this repo, a `path:line` in another tool's source
+at the commit toolchain.md names, or a command and the output line it
+printed. Docs, memory or "to re-check" is no source. `none` when the
+parent's rows cover it. -->
 
 | #  | Fact | Source |
 | -- | ---- | ------ |
@@ -49,60 +42,13 @@ row. -->
 
 <!-- Found by searching for every symbol the task adds, changes or
 removes, files that break when it goes included; one line names the
-searches. A Mermaid flowchart of the modules this changes and the ones
-they call, changed ones marked, arrows pointing from caller to callee. When the change
-crosses a process or a network hop (CLI, daemon, driver, gateway, worker,
-HTTP or MCP client), add a Mermaid sequence diagram of one request through
-it, including the failure reply. Skip a diagram that would show one box. -->
-
-### Surface and extension points
-
-<!-- For each module this adds or whose `index.ts` it grows: the factory
-and the handle it returns (architecture rule 18). If the change adds a
-second implementation of something simlock already does, or an accepted
-ADR or this spec names one: what varies, the definition type and the
-registry (architecture rules 19, 20). Delete this section when neither
-applies. -->
-
-### Contract and event changes
-
-<!-- Every contract shape the change adds or changes, or "none" after a search.
-A shape change says "this PR bumps the protocol by one", never a version
-number: another task may take the next one first, and the PR that merges
-second bumps again when it takes the base branch. Every new or changed event needs its
-EVENTS.md entry named here. Every new field read from the wire or a file:
-its type, its bounds, the characters it allows, and what a bad value
-gets. -->
-
-### Other code on the same state
-
-<!-- Every existing component that reads or changes the state this change
-touches (the same records, files, processes, timers or locks), found by
-searching the code for the state itself, not for names. One line names
-the searches and their hit counts. For each component: what happens when
-both act, in either order or at once, and which one wins. A task of this
-feature that writes the same state is a row too (the feature's Shared
-values names them). "None" only after the search. -->
-
-### Failure modes
-
-<!-- One table per call this task adds or changes that crosses a module, a
-process or another tool, one row per outcome: ok, error reply, throws,
-absent (not installed, no driver, no record), unavailable, no answer. Each
-row: what happens, the time limit, and when that limit starts counting.
-Then one line per state the task writes: what a restart in the middle of
-the step leaves behind, and what two callers at once get. Every row and
-line has a Tests line or says why none is needed. "none" only when the
-task crosses no boundary and writes no state. -->
-
-| Call | Outcome | What happens | Limit, counted from |
-| ---- | ------- | ------------ | ------------------- |
-| ...  | ok      | ...          | ...                 |
+searches. A Mermaid flowchart of the modules only when more than three
+change. -->
 
 ### Rules in play
 
-<!-- Each rule and ADR section the task touches, one line each: the
-rule or section, a few quoted words of it, and how the task complies. -->
+<!-- Each rule file and ADR section the task touches, one line each: the
+file or section, and how the task complies. -->
 
 ### Retired words
 
@@ -118,16 +64,12 @@ the claims review. Delete this section when nothing is retired. -->
 
 ### Tests
 
-<!-- First, one line: the seam the tests drive (the highest existing entry
-point that can see the behaviour, with the platform faked; one if
-possible) and an existing test file to model them on. Then one line per
-row of the feature's Behaviours table this task delivers, in the row's
-words: what the invoker does and what it sees, its cases listed in the
-line as the one table the test will hold. About ten lines; never one line
-per case, never a line for a branch no invoker can see, never a line for
-"as today" (name the existing test in prose instead). A claim an existing
-test already proves names that test to extend (testing rule 7). A Failure
-modes row gets a line only when an invoker can see the failure. -->
+<!-- First, one line: the seam the tests drive and an existing test file
+to model them on. Then one line per Behaviours row this task delivers,
+starting with its id, in the row's words with its cases: "- B3: an
+operator removes a baseline: unused; in use; unknown". About ten lines;
+never a line for a row of another task or for "as today" (name the
+existing test in prose instead). -->
 
 - ...
 
@@ -142,6 +84,7 @@ real simulator or emulator says so and names the slow-lane test that proves it. 
 
 ## Depends on
 
-<!-- One issue per line. Leave empty if none. -->
+<!-- One issue per line: the task of every Stored state or Interfaces row
+this task uses. Leave empty if none. -->
 
 - #NNN

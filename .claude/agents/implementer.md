@@ -125,7 +125,8 @@ cd "$dir"
 ## 2. Read the spec, and only the spec
 
 Read the issue body; for a task, its parent's body and the ADRs under
-Decisions; for a bug, the triage report (its Simplest fix is the agreed
+Decisions (the parent's rows the task names under Rows are its spec,
+word for word); for a bug, the triage report (its Simplest fix is the agreed
 approach) and any `## Decision` comment; the latest `## Handoff` comment
 (its Findings are facts). Never the rest of the comment thread. Reread the
 files under Rules in play before touching the code they cover, and open
