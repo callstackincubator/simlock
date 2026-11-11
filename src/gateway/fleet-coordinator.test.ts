@@ -18,7 +18,7 @@ import {
 import type { WorkerRegistry } from "./worker-registry.js";
 import {
   GATEWAY_PREFIX,
-  harness,
+  buildFleet,
   connectWorker,
   tick,
   REQUEST,
@@ -34,7 +34,7 @@ describe("FleetLeaseCoordinator device mode", () => {
   ] as const)(
     "routes a %s request to %s by the %s stage when the only warm device is slim and another worker has more room",
     async (mode, expectedWorker, expectedStage) => {
-      const { coordinator, directory, eventBus, workers } = harness();
+      const { coordinator, directory, eventBus, workers } = buildFleet();
       for (const id of ["wrk_a_cold", "wrk_z_slim"]) {
         const client = new ScriptedWorkerClient();
         client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -59,7 +59,7 @@ describe("FleetLeaseCoordinator device mode", () => {
     ["slim", { mode: "slim" as const }],
     ["full", { mode: "full" as const }],
   ])("forwards a request's mode %s to the worker unchanged", async (_label, mode) => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -71,7 +71,7 @@ describe("FleetLeaseCoordinator device mode", () => {
   });
 
   it("forwards no mode when the request named none, so the worker's default applies", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -85,7 +85,7 @@ describe("FleetLeaseCoordinator device mode", () => {
 
 describe("FleetLeaseCoordinator stored requests", () => {
   it("answers a repeat under the same key with the first grant, forwarding nothing a second time", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -100,7 +100,7 @@ describe("FleetLeaseCoordinator stored requests", () => {
   });
 
   it("keeps a request out of the granted state in its book until the granting worker's view has been read, so a replay or a watcher never sees a grant before lease.list lists it", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -124,7 +124,7 @@ describe("FleetLeaseCoordinator stored requests", () => {
   });
 
   it("reads a request back through its in-memory book once the fleet grants it, and names it on lease.requested", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -154,7 +154,7 @@ describe("FleetLeaseCoordinator stored requests", () => {
 
 describe("FleetLeaseCoordinator dispatch", () => {
   it("grants a queued request from whichever worker frees first -- never dispatching to the one routing did not prefer", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -183,7 +183,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("issues exactly one lease.request for a waiter still in flight, even when another worker's view changes mid-flight", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -212,7 +212,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("dispatches at most one queued waiter per worker per pass, rather than sending every queued waiter at a single over-reporting worker at once (H6, round 3 review)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -251,7 +251,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("gives a waiter passed over by the per-pass cap a guaranteed next look once the claiming attempt settles terminally, even when that failure produces no worker-side event at all (C1, round 3 review)", async () => {
-    const { clock, coordinator, directory, workers } = harness({ leaseRequestTimeoutMs: 5_000 });
+    const { clock, coordinator, directory, workers } = buildFleet({ leaseRequestTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ kind: "hang" });
@@ -296,7 +296,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -318,7 +318,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("leaves a request queued after NO_CAPACITY, refreshes that worker's view, and tries it once more when a refresh changes its capacity", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -342,7 +342,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("sends a worker that keeps answering NO_CAPACITY with an unchanged view one lease.request for that request", async () => {
-    const { clock, coordinator, directory, workers } = harness();
+    const { clock, coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -360,7 +360,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("tries another eligible worker in the pass that follows a refusal", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const preferred = new ScriptedWorkerClient();
     const other = new ScriptedWorkerClient();
     directory.add("wrk_a", preferred);
@@ -384,7 +384,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not exclude a worker for another request because it refused one", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -408,7 +408,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("leaves a request queued when the worker that refused it left the views before the refusal arrived", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -435,7 +435,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("sends a queued noWait request refused by one worker to only one other worker in the next walk", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const first = new ScriptedWorkerClient();
     const second = new ScriptedWorkerClient();
     const third = new ScriptedWorkerClient();
@@ -471,7 +471,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("grants a noWait request refused by one worker from another in the next walk", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const preferred = new ScriptedWorkerClient();
     const other = new ScriptedWorkerClient();
     directory.add("wrk_a", preferred);
@@ -502,7 +502,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   ])(
     "terminally rejects, rather than re-queuing or asking another worker, a $code that arrives after progress already fired (P1, round 2 review)",
     async ({ code, error }) => {
-      const { coordinator, directory, eventBus, workers } = harness();
+      const { coordinator, directory, eventBus, workers } = buildFleet();
       const client = new ScriptedWorkerClient();
       const other = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
@@ -532,7 +532,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   );
 
   it("bounds a forwarded lease.request against gateway.leaseRequestTimeoutMs when the worker never answers at all (P2, round 2 review)", async () => {
-    const { clock, coordinator, directory, workers } = harness({ leaseRequestTimeoutMs: 5_000 });
+    const { clock, coordinator, directory, workers } = buildFleet({ leaseRequestTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -560,7 +560,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not emit request.dispatched for a progress push that arrives after gateway.leaseRequestTimeoutMs already rejected the waiter (P4, round 3 review)", async () => {
-    const { clock, coordinator, directory, eventBus, workers } = harness({
+    const { clock, coordinator, directory, eventBus, workers } = buildFleet({
       leaseRequestTimeoutMs: 5_000,
     });
     const client = new ScriptedWorkerClient();
@@ -590,7 +590,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("passes over a request only a busy worker can serve instead of blocking behind it, and never lets a brand-new admission jump an older, equally-eligible waiter still queued behind it (C2, round 3 review)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_ios", client);
     directory.add("wrk_android", new ScriptedWorkerClient());
@@ -653,7 +653,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("indexes a fresh grant under the ownerId it forwarded, not the worker's own echo of it (H6)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -677,7 +677,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("emits request.dispatched on the worker's first progress push even when the request never settles at all (§11, C4 round 2 review)", async () => {
-    const { coordinator, eventBus, directory, workers } = harness();
+    const { coordinator, eventBus, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -715,7 +715,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("emits request.dispatched exactly once, on the worker's first progress push, not again when the grant lands afterward (§11)", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -750,7 +750,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   it.each(["full", "slim"] as const)(
     "request.dispatched carries the requested mode %s",
     async (mode) => {
-      const { coordinator, directory, eventBus, workers } = harness();
+      const { coordinator, directory, eventBus, workers } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       connectWorker(workers, "wrk_a");
@@ -769,7 +769,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   );
 
   it("request.dispatched carries no mode and no physical key for a plain virtual request", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -785,7 +785,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("relays a worker's downloading pushes to the requester unchanged", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -807,7 +807,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("emits request.dispatched when a grant lands with no progress push at all -- the ADR §11 rule's other half", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -832,7 +832,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("reports request.dispatched's reason as warm-hit when routing picked the worker for an unleased ready device, and queuedMs as the real wait (C2, round 2 review)", async () => {
-    const { clock, coordinator, directory, eventBus, workers } = harness();
+    const { clock, coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     const noFree = { ...statusFixture().capacity.ios, maxRunning: 0, running: 0 };
@@ -868,7 +868,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("request.dispatched carries the routing decision's stage name and reason", async () => {
-    const { coordinator, directory, eventBus, workers } = harness({
+    const { coordinator, directory, eventBus, workers } = buildFleet({
       routing: () => ({
         assess: () => ({ kind: "route-or-wait" }),
         explain: () => [],
@@ -893,7 +893,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not emit request.dispatched for a stale-view NO_CAPACITY -- the request stayed queued, never actually dispatched", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -909,7 +909,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("handles a worker's DAEMON_UPDATING answer as NO_CAPACITY: the view is read again, the request stays queued and is placed once the view changes", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -940,7 +940,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("forwards device.exec with the namespaced requesterId reaching the scripted worker client", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -973,7 +973,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("announces started from the worker's own push, before any output (ADR §19a)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1013,7 +1013,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   ] as const)(
     "rejects a noWait request refused by its only worker with NO_CAPACITY and lease.rejected no-wait, refreshes that worker's view, and never queues it (no lease.queued, no queued progress), with %s -- the answer does not depend on queue depth (ADR §10, architecture rule 10)",
     async (_queue, queued) => {
-      const { coordinator, directory, eventBus, workers } = harness();
+      const { coordinator, directory, eventBus, workers } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       connectWorker(workers, "wrk_a");
@@ -1059,7 +1059,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   );
 
   it("relays the worker's own started push for a silent command that never answers (ADR §19a/§19b/§19e)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1086,7 +1086,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not announce started for a command the worker refuses before any process exists -- a pre-process refusal keeps its own real status (ADR §19a′)", async () => {
-    const { clock, coordinator, directory, workers } = harness();
+    const { clock, coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1122,7 +1122,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("times out a forwarded device.exec after gateway.execTimeoutMs when the worker never answers at all (P5)", async () => {
-    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const { clock, coordinator, directory, workers } = buildFleet({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1165,7 +1165,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("times out a forwarded device.rotate after gateway.execTimeoutMs when the worker never answers", async () => {
-    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const { clock, coordinator, directory, workers } = buildFleet({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1198,7 +1198,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("stops relaying a worker's device.exec output once gateway.execTimeoutMs has already rejected the call (H4, round 3 review)", async () => {
-    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const { clock, coordinator, directory, workers } = buildFleet({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1245,7 +1245,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not announce started from a worker frame that arrives after gateway.execTimeoutMs already rejected the call (H4, round 6 review)", async () => {
-    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const { clock, coordinator, directory, workers } = buildFleet({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1282,7 +1282,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("announces started once even if the worker sends the frame more than once", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1311,7 +1311,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
   it("runs another pass for a view change raised from inside the walk, rather than dropping it (round 4 finding 6, round 6 review)", async () => {
     let selectCalls = 0;
-    const { coordinator, directory, workers } = harness({
+    const { coordinator, directory, workers } = buildFleet({
       routing: (registry) => {
         const real = createRoutingPolicy("warm-then-free");
         return {
@@ -1374,7 +1374,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   ])(
     "maps $row on a forwarded lease.request to $code, never the uplink client's own error code verbatim (P4)",
     async ({ code, details, error }) => {
-      const { coordinator, directory, workers } = harness();
+      const { coordinator, directory, workers } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       connectWorker(workers, "wrk_a");
@@ -1407,7 +1407,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   ])(
     "maps $row on a forwarded lease.renew to $code, never the other (P4)",
     async ({ code, error }) => {
-      const { coordinator, directory, workers, leaseIndex } = harness();
+      const { coordinator, directory, workers, leaseIndex } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       connectWorker(workers, "wrk_a");
@@ -1445,7 +1445,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   ])(
     "drops its own index entry when the worker answers UNKNOWN_LEASE to a $verb, instead of leaving a zombie behind (C3)",
     async ({ answer, call }) => {
-      const { coordinator, directory, workers, leaseIndex } = harness();
+      const { coordinator, directory, workers, leaseIndex } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       connectWorker(workers, "wrk_a");
@@ -1470,7 +1470,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   );
 
   it("release-all treats a worker's UNKNOWN_LEASE as already-released rather than a failure that blocks every future call (C3)", async () => {
-    const { coordinator, directory, workers, leaseIndex } = harness();
+    const { coordinator, directory, workers, leaseIndex } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1494,7 +1494,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not evict a lease on one worker when only a different worker's view changes repeatedly (C1, round 2 review)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -1518,7 +1518,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("grants a requester's next lease when a worker view read before its release lands after it (#898)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1545,7 +1545,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   it.each(["release", "releaseAll"] as const)(
     "grants the next lease when %s's relayed event came before the worker's answer and a stale view follows (#898)",
     async (how) => {
-      const { coordinator, directory, workers, leaseIndex } = harness();
+      const { coordinator, directory, workers, leaseIndex } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       connectWorker(workers, "wrk_a");
@@ -1572,7 +1572,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
   );
 
   it("release-all attaches the leases it already released to a later failure's own details (H8)", async () => {
-    const { coordinator, directory, workers, leaseIndex } = harness();
+    const { coordinator, directory, workers, leaseIndex } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -1618,7 +1618,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
   async function excludedWorkerKeepsLeaseButGetsNoNewDispatch(
     exclude: (workers: WorkerRegistry) => unknown,
   ): Promise<void> {
-    const { coordinator, directory, leaseIndex, workers } = harness();
+    const { coordinator, directory, leaseIndex, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -1665,7 +1665,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
   });
 
   it("answers WORKER_UNREACHABLE for a forwarded device.exec on a worker the directory reports unreachable, never a success (§28)", async () => {
-    const { coordinator, directory, workers, leaseIndex } = harness();
+    const { coordinator, directory, workers, leaseIndex } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1697,7 +1697,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
   });
 
   it("a request dispatched to a worker whose uplink then drops: the client sees WORKER_UNREACHABLE, and the lease is not silently double-granted once the worker's view catches up (§29)", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -1734,7 +1734,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
   });
 
   it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline (not one ms before it), still counts a lease past its deadline on a connected worker, and keeps the lease routable to its worker, and still counts a lease its worker's last view does not list (#984)", async () => {
-    const { clock, coordinator, directory, leaseIndex, workers } = harness();
+    const { clock, coordinator, directory, leaseIndex, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -1818,7 +1818,7 @@ describe("FleetLeaseCoordinator: queue.changed", () => {
   }
 
   it("emits queue.changed once when started, with the depth then", () => {
-    const { coordinator, eventBus } = harness();
+    const { coordinator, eventBus } = buildFleet();
     expect(depths(eventBus)).toEqual([]);
 
     coordinator.start();
@@ -1827,7 +1827,7 @@ describe("FleetLeaseCoordinator: queue.changed", () => {
   });
 
   it("emits queue.changed for the fleet queue when a request joins it and when it leaves, with the new depth", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a", { capacity: saturatedIos() });

@@ -11,7 +11,7 @@ import {
   RecordingLogger,
   REQUEST,
   connectWorker,
-  harness,
+  buildFleet,
   requestOptions,
   roomierIos,
   saturatedIos,
@@ -52,7 +52,7 @@ function admissionFleet(output: Output, command: readonly string[] = COMMAND) {
           },
         ]);
   const logger = new RecordingLogger();
-  const fleet = harness({ admission: { command, runner, timeoutMs: 5_000 }, logger });
+  const fleet = buildFleet({ admission: { command, runner, timeoutMs: 5_000 }, logger });
   const client = new ScriptedWorkerClient();
   fleet.directory.add("wrk_a", client);
   connectWorker(fleet.workers, "wrk_a", { capacity: saturatedIos() });
@@ -95,7 +95,7 @@ class GatedRunner extends ScriptedProcessRunner {
 /** why: every command answers `{}` at once; the worker has room, so a request is granted and a refused one never reaches it. */
 function grantingFleet(runner: ScriptedProcessRunner) {
   const logger = new RecordingLogger();
-  const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 }, logger });
+  const fleet = buildFleet({ admission: { command: COMMAND, runner, timeoutMs: 5_000 }, logger });
   const client = new ScriptedWorkerClient();
   fleet.directory.add("wrk_a", client);
   connectWorker(fleet.workers, "wrk_a");
@@ -283,7 +283,7 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
         result: { code: 0, stderr: "", stdout: JSON.stringify({ priority }) },
       })),
     );
-    const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 } });
+    const fleet = buildFleet({ admission: { command: COMMAND, runner, timeoutMs: 5_000 } });
     const client = new ScriptedWorkerClient();
     fleet.directory.add("wrk_a", client);
     const busy = {
