@@ -1,18 +1,33 @@
 import { describe, expect, it } from "vitest";
 
 import { openMemoryStateDatabase } from "../auth/testing.js";
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, type Logger } from "../ports/index.js";
 import { endedLeaseIdsOwner, MemoryEndedLeaseIds, StateEndedLeaseIds } from "./ended-lease-ids.js";
 
 const RETENTION_MS = 10_000;
 
+class RecordingLogger implements Logger {
+  readonly errors: string[] = [];
+  debug(): void {}
+  info(): void {}
+  warn(): void {}
+  error(message: string): void {
+    this.errors.push(message);
+  }
+  child(): Logger {
+    return this;
+  }
+}
+
 async function store() {
   const clock = new FakeClock(100_000);
+  const logger = new RecordingLogger();
   const { database } = await openMemoryStateDatabase([endedLeaseIdsOwner]);
   return {
     clock,
     database,
-    store: new StateEndedLeaseIds({ clock, database, retentionMs: RETENTION_MS }),
+    logger,
+    store: new StateEndedLeaseIds({ clock, database, logger, retentionMs: RETENTION_MS }),
   };
 }
 
@@ -51,11 +66,16 @@ describe("ended lease ids", () => {
   });
 
   it("state.db: a record or a read whose statement throws is logged and the gateway goes on", async () => {
-    const { database, store: ids } = await store();
+    const { database, logger, store: ids } = await store();
     ids.record("myid", 95_000);
     database.exec("DROP TABLE ended_lease_ids");
 
     expect(() => ids.record("again", 96_000)).not.toThrow();
+    expect(logger.errors).toEqual(["Could not record the gateway's ended lease ids"]);
     expect(ids.endedAt("myid")).toBeUndefined();
+    expect(logger.errors).toEqual([
+      "Could not record the gateway's ended lease ids",
+      "Could not read the gateway's ended lease ids",
+    ]);
   });
 });
