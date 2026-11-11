@@ -3831,6 +3831,19 @@ describe("createLeasing a lease ID chosen by the requester", () => {
     expect(rejected.map((event) => event.module)).toEqual(["lease-acquisition-coordinator"]);
   });
 
+  it("a caller re-sending a chosen lease id whose lease ended within the window gets LEASE_ENDED with the id and when it ended", async () => {
+    const harness = await createHarness({ limits: roomy });
+    await harness.engine.request(request, asking("agent-1", "myid"));
+    await harness.engine.release("myid", "explicit");
+    harness.clock.advance(60_000);
+
+    await expect(harness.engine.request(request, asking("agent-1", "myid"))).rejects.toMatchObject({
+      code: "LEASE_ENDED",
+      details: { endedAt: 1_000, leaseId: "myid" },
+      message: "Lease myid ended at 1970-01-01T00:00:01.000Z; choose a new lease id",
+    });
+  });
+
   it("lease.requested and lease.rejected requestSpec, and the status waiting spec, carry no leaseId", async () => {
     const harness = await withWaiting("agent-2", "myid");
     await settledOrPending(harness.engine.request(request, asking("agent-3", "myid")));
