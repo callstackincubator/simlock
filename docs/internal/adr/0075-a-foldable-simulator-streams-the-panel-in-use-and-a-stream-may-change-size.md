@@ -1,6 +1,6 @@
 # 0075. A foldable simulator streams the panel in use, and a stream may change size while it runs
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-11
 - **Issue:** [#1531](https://github.com/callstackincubator/simlock/issues/1531), bug [#1457](https://github.com/callstackincubator/simlock/issues/1457)
 - **Narrows:** [ADR 0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md)'s
