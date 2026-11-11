@@ -96,6 +96,9 @@ public enum Tag: UInt8 {
 
 /// The video channel: a private duplicate of the stdout the program was started with.
 public enum Wire {
+    /// Where `emit` writes instead of the descriptor, set by a test.
+    nonisolated(unsafe) static var sink: ((Tag, Data) -> Void)?
+
     /// Set by `claimStdout`, which every program's `main.swift` calls as its first statement.
     public private(set) static var fd: Int32 = -1
 
