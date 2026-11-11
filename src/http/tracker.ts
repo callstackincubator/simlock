@@ -120,6 +120,7 @@ function requestOptions(body: LeaseRequestInput) {
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
+    ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
   };
 }
 
