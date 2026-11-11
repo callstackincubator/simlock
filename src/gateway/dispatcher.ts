@@ -717,6 +717,7 @@ export class GatewayDispatcher {
         // count through a gateway (ADR 0009 §3).
         // why: ADR 0074 §1: the admission command reads the request as the caller sent it, without what is not the device's ask.
         admissionRequest: withoutCallerIdentity(input),
+        ...(input.metadata === undefined ? {} : { admissionMetadata: input.metadata }),
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
         requesterId: input.requesterId ?? principalAsRequester(session.principal),

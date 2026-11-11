@@ -175,6 +175,8 @@ const leaseRequestBaseSchema = z
     idempotencyKey: z.string().min(1).max(200).optional(),
     leaseId: leaseIdSchema.optional(),
     fleetRequestId: z.string().min(1).max(200).optional(),
+    // why: A plain record of plain strings, bounded by `refuseBadMetadata` as one object-level check, like `except`: a bound on the field itself would be checked by the MCP SDK before the handler.
+    metadata: z.record(z.string(), z.string()).optional(),
     requires: z
       .array(capabilityNameSchema)
       .max(8)
@@ -307,6 +309,41 @@ function exceptRefusal(
   return undefined;
 }
 
+const METADATA_MAX_KEYS = 16;
+const METADATA_KEY_MAX = 64;
+const METADATA_VALUE_MAX = 256;
+const METADATA_TOTAL_MAX = 2048;
+
+function metadataRefusal(metadata: Readonly<Record<string, string>>): string | undefined {
+  const entries = Object.entries(metadata);
+  if (entries.length > METADATA_MAX_KEYS) return `metadata has more than ${METADATA_MAX_KEYS} keys`;
+  const badKey = entries.find(([key]) => key.length < 1 || key.length > METADATA_KEY_MAX);
+  if (badKey !== undefined) {
+    return `metadata key must be 1 to ${METADATA_KEY_MAX} characters (got ${badKey[0]})`;
+  }
+  const badValue = entries.find(([, value]) => value.length > METADATA_VALUE_MAX);
+  if (badValue !== undefined) {
+    return `metadata value for ${badValue[0]} must be at most ${METADATA_VALUE_MAX} characters`;
+  }
+  const total = entries.reduce((sum, [key, value]) => sum + key.length + value.length, 0);
+  if (total > METADATA_TOTAL_MAX)
+    return `metadata is longer than ${METADATA_TOTAL_MAX} characters in all`;
+  return undefined;
+}
+
+function refuseBadMetadata(): <
+  T extends { readonly metadata?: Readonly<Record<string, string>> | undefined },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.metadata === undefined) return;
+    const message = metadataRefusal(input.metadata);
+    if (message !== undefined) context.addIssue({ code: "custom", message });
+  };
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -342,6 +379,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseBaselineWithClass())
   .superRefine(refuseBadOsVersion())
   .superRefine(refuseBadExcept())
+  .superRefine(refuseBadMetadata())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 
