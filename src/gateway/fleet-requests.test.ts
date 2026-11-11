@@ -144,6 +144,14 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       await ask(fleet, { requesterId: "agent-9" });
       return { fleet, requester: "agent-9" };
     },
+    "admission-failed": async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: { args: [], command: "policy" }, result: { code: 1, stderr: "", stdout: "" } },
+      ]);
+      const fleet = harness({ admission: { command: ["policy"], runner, timeoutMs: 5_000 } });
+      await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requester: "agent-9" };
+    },
     cancelled: async () => {
       const fleet = await busyFleet();
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });

@@ -6,7 +6,6 @@ import {
   type ProcessRunOptions,
   type ProcessResult,
 } from "../ports/index.js";
-import { promiseState } from "../test-support/promise-state.js";
 import {
   RecordingLogger,
   REQUEST,
@@ -91,18 +90,14 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
     for (const { output, expected } of rows) {
       const fleet = admissionFleet(output);
       const request = fleet.coordinator.request(REQUEST, requestOptions());
-      const settled = request.then(
-        () => ({ granted: true }),
-        (error: { code: string; details: unknown }) => ({
-          code: error.code,
-          details: error.details,
-        }),
-      );
+      let refusal: { code: string; details: unknown } | undefined;
+      request.catch((error: { code: string; details: unknown }) => {
+        refusal = { code: error.code, details: error.details };
+      });
       await tick();
-      const outcome =
-        promiseState(request).state === "pending"
-          ? { queued: fleet.coordinator.waitingRequests().map((entry) => entry.stage) }
-          : await settled;
+      const outcome = refusal ?? {
+        queued: fleet.coordinator.waitingRequests().map((entry) => entry.stage),
+      };
       expect(outcome, JSON.stringify(output)).toEqual(
         "queued" in expected ? { queued: ["queued"] } : expected,
       );

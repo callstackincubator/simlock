@@ -2645,6 +2645,7 @@ describe("createLeasing: lease.rejected names its request", () => {
     },
     "no-worker": "gateway",
     "admission-denied": "gateway",
+    "admission-failed": "gateway",
     "worker-failed": "gateway",
     "already-leased": async () => {
       const harness = await createHarness();

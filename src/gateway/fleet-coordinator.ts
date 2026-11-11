@@ -44,6 +44,7 @@ import type {
 } from "../admin/index.js";
 import {
   admissionDeniedError,
+  admissionFailedError,
   isSimlockError,
   leaseEndedError,
   requestedClass,
@@ -316,21 +317,28 @@ export class FleetLeaseCoordinator {
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<void> {
-    const decision = await askAdmission(admission, {
-      metadata: {},
-      platform: deviceRequest.platform,
-      principal: options.ownerId,
-      request: deviceRequest,
-      requesterId: options.requesterId,
-    });
-    if (decision.kind !== "deny") return;
+    const decision = await askAdmission(
+      admission,
+      {
+        metadata: {},
+        platform: deviceRequest.platform,
+        principal: options.ownerId,
+        request: deviceRequest,
+        requesterId: options.requesterId,
+      },
+      this.#logger,
+    );
+    if (decision.kind === "priority") return;
     this.#emit("lease.rejected", {
       requestId: newLeaseRequestId(this.options.idGenerator),
       requester: options.requesterId,
       requestSpec: deviceRequest,
-      reason: "admission-denied",
+      reason: decision.kind === "deny" ? "admission-denied" : "admission-failed",
     });
-    const refusal = admissionDeniedError(decision.reason);
+    const refusal =
+      decision.kind === "deny"
+        ? admissionDeniedError(decision.reason)
+        : admissionFailedError(decision.cause);
     throw new DispatchError(refusal.code, refusal.message, refusal.details);
   }
 
