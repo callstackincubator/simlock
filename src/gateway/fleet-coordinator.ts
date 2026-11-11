@@ -129,6 +129,8 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
  */
 export type FleetRequestOptions = LeaseRequestOptions & {
   readonly admissionRequest?: Readonly<Record<string, unknown>>;
+  /** why: ADR 0074 §3: the caller's `metadata` goes to the admission command only, never into an event, a record or a worker call. */
+  readonly admissionMetadata?: Readonly<Record<string, string>>;
 };
 
 /** why: a request whose admission command is running: `lease.cancel` and `dispose` end it by aborting `controller`. */
@@ -391,7 +393,7 @@ export class FleetLeaseCoordinator {
     return askAdmission(
       admission,
       {
-        metadata: {},
+        metadata: options.admissionMetadata ?? {},
         platform: deviceRequest.platform,
         principal: options.ownerId,
         request: options.admissionRequest ?? deviceRequest,
