@@ -77,7 +77,7 @@ import {
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { FleetRefusals, refusedCapacityReason, type WorkerEntry } from "./fleet-refusals.js";
-import { askAdmission, type AdmissionOptions } from "./admission.js";
+import { askAdmission, type AdmissionDecision, type AdmissionOptions } from "./admission.js";
 import type { EndedLeaseIds } from "./ended-lease-ids.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -277,16 +277,23 @@ export class FleetLeaseCoordinator {
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<FleetLeaseGrant> {
-    // why: no await without a command: the request enters the decision lock in the same tick, as a `lease.cancel` sent right after it expects (#1492).
+    // why: ADR 0074 §1: with a command, the checks run under the lock, then the command outside it, then the checks again with the answer under the lock; no await without a command, so a `lease.cancel` sent right after the request finds it in the same tick (#1492).
     const { admission } = this.options;
-    if (admission !== undefined) await this.#askAdmission(admission, deviceRequest, options);
+    let decision: AdmissionDecision | undefined;
+    if (admission !== undefined) {
+      const early = await this.#decisions.run(async () =>
+        this.#checkAdmission(deviceRequest, options),
+      );
+      if ("replay" in early) return early.replay;
+      decision = await this.#askAdmission(admission, deviceRequest, options);
+    }
     const admitted = await this.#decisions.run(async () => {
-      const replay = this.requests.replay(deviceRequest, options);
-      if (replay !== undefined) return { replay };
-      const requestId = newLeaseRequestId(this.options.idGenerator);
-      this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
-      this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
-      this.#refuseIfLeaseIdEnded(deviceRequest, options, requestId);
+      const checked = this.#checkAdmission(deviceRequest, options);
+      if ("replay" in checked) return checked;
+      const { requestId } = checked;
+      if (decision !== undefined && decision.kind !== "priority") {
+        this.#refuseByAdmission(decision, deviceRequest, options, requestId);
+      }
       const { id, started } = await this.requests.admit(
         deviceRequest,
         options,
@@ -311,13 +318,27 @@ export class FleetLeaseCoordinator {
     return admitted.promise;
   }
 
+  /** why: replay, the requester limit, a taken id and an ended id, in this order; a refusal is thrown, a replay returned. */
+  #checkAdmission(
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+  ): { readonly replay: Promise<FleetLeaseGrant> } | { readonly requestId: string } {
+    const replay = this.requests.replay(deviceRequest, options);
+    if (replay !== undefined) return { replay };
+    const requestId = newLeaseRequestId(this.options.idGenerator);
+    this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
+    this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
+    this.#refuseIfLeaseIdEnded(deviceRequest, options, requestId);
+    return { requestId };
+  }
+
   /** why: ADR 0074 §1: the operator's command answers outside the decision lock, since it may take seconds. */
-  async #askAdmission(
+  #askAdmission(
     admission: AdmissionOptions,
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
-  ): Promise<void> {
-    const decision = await askAdmission(
+  ): Promise<AdmissionDecision> {
+    return askAdmission(
       admission,
       {
         metadata: {},
@@ -328,9 +349,16 @@ export class FleetLeaseCoordinator {
       },
       this.#logger,
     );
-    if (decision.kind === "priority") return;
+  }
+
+  #refuseByAdmission(
+    decision: Exclude<AdmissionDecision, { readonly kind: "priority" }>,
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): never {
     this.#emit("lease.rejected", {
-      requestId: newLeaseRequestId(this.options.idGenerator),
+      requestId,
       requester: options.requesterId,
       requestSpec: deviceRequest,
       reason: decision.kind === "deny" ? "admission-denied" : "admission-failed",
