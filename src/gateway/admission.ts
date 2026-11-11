@@ -1,4 +1,4 @@
-import type { Logger, ProcessRunner } from "../ports/index.js";
+import type { Logger, ProcessResult, ProcessRunner } from "../ports/index.js";
 
 /** why: ADR 0074 §1: the gateway operator's admission command and how long it may take. */
 export interface AdmissionOptions {
@@ -27,6 +27,16 @@ const PRIORITY_LIMIT = 1000;
 const REASON_MAX_LENGTH = 500;
 const PROGRAM_MAX_LENGTH = 500;
 const STDERR_LOGGED_BYTES = 2048;
+const STDOUT_MAX_BYTES = 65_536;
+
+/** why: ADR 0074 §1: a child the runner killed, or a signal that ended it, names its own cause; an exit code is the cause only for a child that exited. */
+function causeOf(result: ProcessResult, timeoutMs: number): string | undefined {
+  if (result.endedBy === "timeout") return `killed after ${String(timeoutMs)} ms`;
+  if (result.endedBy === "output-limit")
+    return `printed more than ${String(STDOUT_MAX_BYTES)} bytes`;
+  if (result.signal !== undefined) return `killed by signal ${result.signal}`;
+  return result.code === 0 ? undefined : `exited ${String(result.code)}`;
+}
 
 function fail(cause: string): AdmissionDecision {
   return { cause, kind: "fail" };
@@ -84,12 +94,13 @@ export async function askAdmission(
   try {
     const result = await options.runner.run(program, args, {
       input: `${JSON.stringify(input)}\n`,
+      maxStdoutBytes: STDOUT_MAX_BYTES,
       signal,
       timeoutMs: options.timeoutMs,
     });
     stderr = result.stderr;
-    decision =
-      result.code === 0 ? parseAnswer(result.stdout) : fail(`exited ${String(result.code)}`);
+    const cause = causeOf(result, options.timeoutMs);
+    decision = cause === undefined ? parseAnswer(result.stdout) : fail(cause);
   } catch {
     decision = fail(`could not start ${program.slice(0, PROGRAM_MAX_LENGTH)}`);
   }

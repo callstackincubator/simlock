@@ -213,14 +213,14 @@ export class NodeProcessRunner implements ProcessRunner {
     args: readonly string[],
     options: ProcessRunOptions = {},
   ): Promise<ProcessResult> {
-    const process = this.spawn(command, args, options);
+    const process = this.#launch(command, args, options);
     let killTimeout: NodeJS.Timeout | undefined;
     const timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             try {
-              process.kill("SIGTERM");
+              process.kill("SIGTERM", "timeout");
             } catch {
               // why: The child may have exited between the timer firing and the kill.
             }
@@ -251,6 +251,10 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 
   spawn(command: string, args: readonly string[], options: ProcessRunOptions = {}): ProcessHandle {
+    return this.#launch(command, args, options);
+  }
+
+  #launch(command: string, args: readonly string[], options: ProcessRunOptions): NodeProcessHandle {
     const launch = childLaunch(command, args);
     const logFd =
       typeof options.stdio === "object" ? openSync(options.stdio.file, "a", 0o600) : undefined;
@@ -288,6 +292,10 @@ export class NodeProcessRunner implements ProcessRunner {
       this.exitDeferralCapMs,
       this.exitGraceMs,
       launch.windowsVerbatimArguments,
+      {
+        ...(options.maxStdoutBytes === undefined ? {} : { maxStdoutBytes: options.maxStdoutBytes }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
     );
   }
 
@@ -701,6 +709,7 @@ class NodeProcessHandle implements ProcessHandle {
   readonly #stderrChunks: string[] = [];
   readonly #result: Promise<ProcessResult>;
   #killedWith: NodeJS.Signals | undefined;
+  #endedBy: ProcessResult["endedBy"];
 
   constructor(
     private readonly child: ChildProcess,
@@ -709,15 +718,17 @@ class NodeProcessHandle implements ProcessHandle {
     private readonly exitDeferralCapMs: number,
     private readonly exitGraceMs: number,
     private readonly wrapped: boolean,
+    limits: Pick<ProcessRunOptions, "maxStdoutBytes" | "signal"> = {},
   ) {
     this.pid = pid;
     captureLines(child.stdout, this.stdout, this.#stdoutChunks, lineEnd);
     captureLines(child.stderr, this.stderr, this.#stderrChunks, lineEnd);
+    this.#watchLimits(limits);
     this.#result = new Promise<ProcessResult>((resolve, reject) => {
       child.once("error", reject);
 
       let settled = false;
-      const settle = (code: number | null): void => {
+      const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
         if (settled) {
           return;
         }
@@ -726,13 +737,15 @@ class NodeProcessHandle implements ProcessHandle {
           code: wrapped && this.#killedWith !== undefined ? null : code,
           stderr: this.#stderrChunks.join(""),
           stdout: this.#stdoutChunks.join(""),
+          ...(this.#endedBy === undefined ? {} : { endedBy: this.#endedBy }),
+          ...(signal === null ? {} : { signal }),
         });
       };
 
-      child.once("close", (code) => {
-        settle(code);
+      child.once("close", (code, signal) => {
+        settle(code, signal);
       });
-      child.once("exit", (code) => {
+      child.once("exit", (code, signal) => {
         const deadline = Date.now() + this.exitDeferralCapMs;
         const capturedSoFar = (): number => this.#stdoutChunks.length + this.#stderrChunks.length;
         const armGrace = (chunksAtArm: number): void => {
@@ -741,7 +754,7 @@ class NodeProcessHandle implements ProcessHandle {
               armGrace(capturedSoFar());
               return;
             }
-            settle(code);
+            settle(code, signal);
           }, this.exitGraceMs);
           // why: A pending grace timer must never keep the Node process alive on its own.
           timer.unref();
@@ -755,8 +768,35 @@ class NodeProcessHandle implements ProcessHandle {
     this.#result.catch(() => undefined);
   }
 
-  kill(signal: NodeJS.Signals = "SIGTERM"): void {
-    if (isRunning(this.child)) this.#killedWith ??= signal;
+  /**
+   * why: the output bound counts bytes as they arrive, and an aborted signal ends the child the
+   * same way; both kill with SIGKILL, since the caller has no use for a graceful end of a child
+   * that is printing without end or whose answer nobody wants.
+   */
+  #watchLimits({
+    maxStdoutBytes,
+    signal,
+  }: Pick<ProcessRunOptions, "maxStdoutBytes" | "signal">): void {
+    if (maxStdoutBytes !== undefined) {
+      let received = 0;
+      this.child.stdout?.on("data", (chunk: string | Buffer) => {
+        received += Buffer.byteLength(chunk);
+        if (received > maxStdoutBytes) this.kill("SIGKILL", "output-limit");
+      });
+    }
+    if (signal !== undefined) {
+      const abort = (): void => this.kill("SIGKILL", "aborted");
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+      this.child.once("close", () => signal.removeEventListener("abort", abort));
+    }
+  }
+
+  kill(signal: NodeJS.Signals = "SIGTERM", endedBy?: ProcessResult["endedBy"]): void {
+    if (isRunning(this.child)) {
+      this.#killedWith ??= signal;
+      this.#endedBy ??= endedBy;
+    }
     killProcessTree(this.child, this.pid, signal, this.wrapped);
   }
 

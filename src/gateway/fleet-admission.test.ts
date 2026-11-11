@@ -132,6 +132,12 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
       { expected: failed(NOT_AN_ANSWER), output: { stdout: "{}{}" } },
       { expected: failed("printed no answer"), output: { stdout: "  \n" } },
       { expected: failed("exited 1"), output: { code: 1, stdout: '{"priority":1}' } },
+      { expected: failed("killed after 5000 ms"), output: { code: null, endedBy: "timeout" } },
+      {
+        expected: failed("printed more than 65536 bytes"),
+        output: { code: null, endedBy: "output-limit", stdout: '{"priority":1}' },
+      },
+      { expected: failed("killed by signal SIGKILL"), output: { code: null, signal: "SIGKILL" } },
       { expected: failed("could not start bun"), output: "cannot-start" },
       {
         expected: { code: "ADMISSION_DENIED", details: { reason: "budget used" } },
