@@ -217,6 +217,8 @@ export const leaseRequestBodySchema = z
     imageTag: imageTagSchema.optional(),
     leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    // why: a plain record of plain strings; `lease.request`'s own check bounds it and words the refusal (keys, characters), as for the CLI.
+    metadata: z.record(z.string(), z.string()).optional(),
     // why: a coarse bound only; `lease.request`'s own check words the refusal (count, characters, repeats), as for the CLI and MCP.
     except: z.array(z.string().max(64)).max(64).optional(),
     noWait: z.boolean().optional(),
