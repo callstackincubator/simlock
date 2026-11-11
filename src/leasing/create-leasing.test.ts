@@ -3845,16 +3845,102 @@ describe("createLeasing a lease ID chosen by the requester", () => {
   });
 
   it("a caller re-sending a chosen lease id whose lease ended within the window gets LEASE_ENDED with the id and when it ended", async () => {
-    const harness = await createHarness({ limits: roomy });
-    await harness.engine.request(request, asking("agent-1", "myid"));
-    await harness.engine.release("myid", "explicit");
-    harness.clock.advance(60_000);
+    type Harness = Awaited<ReturnType<typeof createHarness>>;
+    const dayMs = 24 * 60 * 60_000;
+    const freshDriver = () =>
+      new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(1_000),
+        platform: "ios",
+      });
+    const cases: readonly {
+      readonly name: string;
+      readonly endIt: (harness: Harness) => Promise<Harness>;
+      readonly outcome: "ended" | "granted" | "taken";
+      readonly endedAt?: number;
+    }[] = [
+      {
+        name: "released",
+        endIt: async (harness) => {
+          await harness.engine.release("myid", "explicit");
+          return harness;
+        },
+        outcome: "ended",
+        endedAt: 1_000,
+      },
+      {
+        name: "expired",
+        endIt: async (harness) => {
+          harness.clock.advance(100_000);
+          await flush();
+          return harness;
+        },
+        outcome: "ended",
+        endedAt: 101_000,
+      },
+      {
+        name: "ended by nuke",
+        endIt: async (harness) => {
+          await harness.engine.nuke(false);
+          return harness;
+        },
+        outcome: "ended",
+        endedAt: 1_000,
+      },
+      {
+        name: "ended at a daemon start",
+        endIt: async (harness) => {
+          const restarted = await createHarness({ driver: freshDriver(), state: harness.state });
+          await restarted.engine.convergeRunningCapacity();
+          return restarted;
+        },
+        outcome: "ended",
+        endedAt: 1_000,
+      },
+      {
+        name: "after a daemon restart",
+        endIt: async (harness) => {
+          await harness.engine.release("myid", "explicit");
+          return createHarness({ driver: freshDriver(), state: harness.state });
+        },
+        outcome: "ended",
+        endedAt: 1_000,
+      },
+      {
+        name: "past the window",
+        endIt: async (harness) => {
+          await harness.engine.release("myid", "explicit");
+          harness.clock.advance(dayMs + 1);
+          return harness;
+        },
+        outcome: "granted",
+      },
+      { name: "never used", endIt: async (harness) => harness, outcome: "granted" },
+      { name: "still held", endIt: async (harness) => harness, outcome: "taken" },
+    ];
 
-    await expect(harness.engine.request(request, asking("agent-1", "myid"))).rejects.toMatchObject({
-      code: "LEASE_ENDED",
-      details: { endedAt: 1_000, leaseId: "myid" },
-      message: "Lease myid ended at 1970-01-01T00:00:01.000Z; choose a new lease id",
-    });
+    for (const { name, endIt, outcome, endedAt } of cases) {
+      const used = name === "never used" ? "other" : "myid";
+      const first = await createHarness({ lease: { defaultTtlMs: 100_000 }, limits: roomy });
+      await first.engine.request(request, asking("agent-1", used));
+      const harness = await endIt(first);
+      const again = name === "never used" ? "myid" : used;
+      harness.clock.advance(1_000);
+
+      const retry = harness.engine.request(request, asking("agent-2", again));
+
+      if (outcome === "ended") {
+        await expect(retry, name).rejects.toMatchObject({
+          code: "LEASE_ENDED",
+          details: { endedAt, leaseId: "myid" },
+          message: `Lease myid ended at ${new Date(endedAt ?? 0).toISOString()}; choose a new lease id`,
+        });
+      } else if (outcome === "taken") {
+        await expect(retry, name).rejects.toMatchObject({ name: "LeaseIdTakenError" });
+      } else {
+        await expect(retry, name).resolves.toMatchObject({ lease: { id: "myid" } });
+      }
+    }
   });
 
   it("lease.requested and lease.rejected requestSpec, and the status waiting spec, carry no leaseId", async () => {
