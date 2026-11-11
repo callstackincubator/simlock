@@ -204,6 +204,23 @@ const capturePids = () => pidsOf(["-x", "simlock-screen-capture"]);
 // the udid keeps another simulator's log out of the count.
 const logChildren = (udid: string) => pidsOf(["-f", `simctl .*spawn ${udid} log (stream|show)`]);
 
+// why: the log process that matters runs inside the simulator, where the host's `pgrep` does not
+// see it by udid; `simctl spawn <udid> ps` lists the simulator's own processes.
+async function simulatorLogStreams(deviceSet: string, udid: string): Promise<number> {
+  const listed = await execFileAsync("xcrun", [
+    "simctl",
+    "--set",
+    deviceSet,
+    "spawn",
+    udid,
+    "ps",
+    "-ax",
+    "-o",
+    "command=",
+  ]);
+  return listed.stdout.split("\n").filter((line) => /(^|\/)log stream\b/.test(line.trim())).length;
+}
+
 interface Lease {
   readonly id: string;
   readonly deviceId: string;
@@ -453,6 +470,11 @@ describe.skipIf(notRunnable !== undefined)(
             label: `${how}: the capture started its log children`,
             timeout: 30_000,
           });
+          await waitFor(async () => (await simulatorLogStreams(lease.deviceSet, lease.udid)) > 0, {
+            interval: 250,
+            label: `${how}: the simulator runs the capture's log stream`,
+            timeout: 30_000,
+          });
           const [capture] = await capturePids();
           expect(capture, `${how}: no capture is running`).toBeDefined();
           if (how === "stdin closed") viewer.abort();
@@ -462,6 +484,14 @@ describe.skipIf(notRunnable !== undefined)(
             label: `${how}: the log children of the ended capture`,
             timeout: 5_000,
           });
+          await waitFor(
+            async () => (await simulatorLogStreams(lease.deviceSet, lease.udid)) === 0,
+            {
+              interval: 250,
+              label: `${how}: the log stream inside the simulator of the ended capture`,
+              timeout: 5_000,
+            },
+          );
           viewer.abort();
           await waitFor(async () => (await capturePids()).length === 0, {
             interval: 250,
