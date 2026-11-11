@@ -41,8 +41,9 @@ final class Picks: @unchecked Sendable {
     var all: [String] { lock.lock(); defer { lock.unlock() }; return names }
 }
 
-/// Lets the follower's background tasks run; a count of turns, never a time.
-func settle() async { for _ in 0..<200 { await Task.yield() } }
+/// Lets the follower's background tasks run on the other threads of the pool; patience, never a bound
+/// a test asserts.
+func settle() async { for _ in 0..<50 { try? await Task.sleep(nanoseconds: 2_000_000) } }
 
 func move(_ role: PanelRole) -> String {
     let other = role == .cover ? "inner" : "cover"

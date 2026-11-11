@@ -1,5 +1,6 @@
 // simlock's own, MIT-licensed (see NOTICE.md): which panel of a foldable simulator to stream (#1534).
 import Foundation
+import SimlockCapture
 
 enum PanelRole: String {
     case cover, inner
@@ -63,10 +64,68 @@ protocol PanelClock: Sendable {
 
 /// Picks the panel in use when it starts, then reports each move SpringBoard makes.
 final class PanelFollower: @unchecked Sendable {
-    init(panels: [Panel], sampler: PanelSampler, log: PanelLog, clock: PanelClock) {}
+    /// How long a start waits for this boot's log when the lit panel does not say which is in use.
+    static let bootReadSeconds: TimeInterval = 10
+
+    private let panels: [Panel]
+    private let sampler: PanelSampler
+    private let source: PanelLog
+    private let clock: PanelClock
+    private let lock = NSLock()
+    private var current: Panel?
+    private var onPanel: (@Sendable (Panel) -> Void)?
+    private var stopped = false
+
+    init(panels: [Panel], sampler: PanelSampler, log: PanelLog, clock: PanelClock) {
+        self.panels = panels
+        self.sampler = sampler
+        self.source = log
+        self.clock = clock
+    }
 
     /// Reports the first panel before it returns, then each change.
-    func start(onPanel: @escaping @Sendable (Panel) -> Void) async {}
+    func start(onPanel: @escaping @Sendable (Panel) -> Void) async {
+        guard panels.count >= 2 else { return }
+        self.onPanel = onPanel
+        guard panels.count == 2,
+              let cover = panels.first(where: { $0.role == .cover }),
+              let inner = panels.first(where: { $0.role == .inner })
+        else {
+            log("[panels] \(panels.count) panels; staying on the first")
+            report(panels[0])
+            return
+        }
+        source.live(onLine: { _ in }, onEnd: {})
+        let lit = await sampler.lit(panels)
+        let coverLit = lit[cover.screenID] ?? false
+        let innerLit = lit[inner.screenID] ?? false
+        report(innerLit && !coverLit ? inner : cover)
+        if coverLit == innerLit {
+            // why: a black app lights neither panel and a bright one lights both, so the lit panel
+            // does not say which one SpringBoard shows; this boot's last move does.
+            Task {
+                let lines = await source.bootLines(timeout: Self.bootReadSeconds)
+                if let role = lines.reversed().lazy.compactMap({ Panels.primary(inLogLine: $0) }).first,
+                   let panel = panels.first(where: { $0.role == role }) {
+                    report(panel)
+                }
+            }
+        }
+    }
 
-    func stop() {}
+    func stop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+        source.stop()
+    }
+
+    /// Hands the panel on unless it is the one already reported.
+    private func report(_ panel: Panel) {
+        lock.lock()
+        let changed = current != panel && !stopped
+        if changed { current = panel }
+        lock.unlock()
+        if changed { onPanel?(panel) }
+    }
 }
