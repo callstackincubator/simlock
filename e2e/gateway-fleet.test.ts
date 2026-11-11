@@ -847,9 +847,16 @@ describe("gateway fleet", () => {
     await workerB.startDaemon();
     await waitForEnded("end-missing");
 
+    expect((await lease("agent-a", "end-rebuilt")).code).toBe(0);
     await gateway.restartDaemon();
     await expectEnded("agent-b", "end-released");
     await bothConnected();
+    await waitFor(async () => (await gateway.cli(["release", "end-rebuilt"])).code === 0, {
+      label: "the restarted gateway releases a lease it rebuilt from its workers' views",
+      timeout: 60_000,
+    });
+    await expectEnded("agent-b", "end-rebuilt");
+    expect((await rejections()).at(-1), "end-rebuilt").toBe("lease-ended");
 
     expect((await lease("agent-a", "end-gap", "2s")).code).toBe(0);
     const holder = (await gateway.events()).find(

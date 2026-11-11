@@ -3861,9 +3861,11 @@ describe("createLeasing a lease ID chosen by the requester", () => {
       readonly endedAt?: number;
     }[] = [
       {
-        name: "released",
+        name: "released, and another lease commits after it",
         endIt: async (harness) => {
           await harness.engine.release("myid", "explicit");
+          harness.clock.advance(5_000);
+          await harness.engine.request(request, asking("agent-3", "other"));
           return harness;
         },
         outcome: "ended",
