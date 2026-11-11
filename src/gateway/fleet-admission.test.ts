@@ -341,51 +341,13 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
   });
 
   it("a caller that cancels, or a gateway that stops, while the command runs ends the request and the command", async () => {
-    const stopped = { code: "DAEMON_STOPPING" };
-    const cancelled = { name: "RequestCancelledError" };
     const cases = [
-      {
-        end: (fleet: ReturnType<typeof gatedFleet>) => fleet.coordinator.cancelPending("agent-1"),
-        expectedError: cancelled,
-        name: "lease.cancel",
-        rejected: ["cancelled"],
-      },
-      {
-        end: (fleet: ReturnType<typeof gatedFleet>) => fleet.coordinator.dispose(),
-        expectedError: stopped,
-        name: "the gateway stops",
-        rejected: [],
-      },
+      { cancel: true, expectedError: { name: "RequestCancelledError" }, rejected: ["cancelled"] },
+      { cancel: false, expectedError: { code: "DAEMON_STOPPING" }, rejected: [] },
     ];
-
-    for (const { end, expectedError, name, rejected } of cases) {
-      for (const early of [false, true]) {
-        const label = `${name}${early ? " sent right after the request" : ""}`;
-        const fleet = gatedFleet();
-        let error: unknown;
-        fleet.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => (error = e));
-        if (!early) {
-          await tick();
-          expect(fleet.runner.calls, label).toHaveLength(1);
-        }
-
-        const answer = await end(fleet);
-        await tick();
-
-        expect(answer, label).toBe(name === "lease.cancel" ? "cancelled" : undefined);
-        expect(error, label).toMatchObject(expectedError);
-        if (!early) expect(fleet.runner.calls[0]?.options.signal?.aborted, label).toBe(true);
-        else expect(fleet.runner.calls, label).toEqual([]);
-        fleet.runner.answer(0, "{}");
-        await tick();
-        expect(fleet.requested, label).toEqual([]);
-        expect(fleet.coordinator.waitingRequests(), label).toEqual([]);
-        expect(
-          fleet.rejected.map((event) => event.reason),
-          label,
-        ).toEqual(rejected);
-        expect(fleet.logger.warnings, label).toEqual([]);
-      }
+    for (const endCase of cases) {
+      await endWhileCommandRuns(endCase, false);
+      await endWhileCommandRuns(endCase, true);
     }
 
     const answered = gatedFleet();
@@ -408,3 +370,36 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
     expect(other.runner.calls[0]?.options.signal?.aborted).toBe(false);
   });
 });
+
+async function endWhileCommandRuns(
+  endCase: { cancel: boolean; expectedError: object; rejected: string[] },
+  early: boolean,
+): Promise<void> {
+  const label = `${endCase.cancel ? "lease.cancel" : "the gateway stops"}${early ? " sent right after the request" : ""}`;
+  const fleet = gatedFleet();
+  let error: unknown;
+  fleet.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => (error = e));
+  if (!early) {
+    await tick();
+    expect(fleet.runner.calls, label).toHaveLength(1);
+  }
+
+  const answer = await (endCase.cancel
+    ? fleet.coordinator.cancelPending("agent-1")
+    : fleet.coordinator.dispose());
+  await tick();
+
+  expect(answer, label).toBe(endCase.cancel ? "cancelled" : undefined);
+  expect(error, label).toMatchObject(endCase.expectedError);
+  if (early) expect(fleet.runner.calls, label).toEqual([]);
+  else expect(fleet.runner.calls[0]?.options.signal?.aborted, label).toBe(true);
+  fleet.runner.answer(0, "{}");
+  await tick();
+  expect(fleet.requested, label).toEqual([]);
+  expect(fleet.coordinator.waitingRequests(), label).toEqual([]);
+  expect(
+    fleet.rejected.map((event) => event.reason),
+    label,
+  ).toEqual(endCase.rejected);
+  expect(fleet.logger.warnings, label).toEqual([]);
+}
