@@ -4,12 +4,13 @@ import type { Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
 /**
- * `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
+ * why: `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
  * §27a, §30; ADR 0020). Nothing here is persisted -- like every worker view, it is rebuilt from
  * what a worker reports (`rebuildFromWorker`) whenever the gateway can see it. A gateway restart
  * loses nothing a worker restart would not also lose (Decision 5): every id, generated or
  * caller-chosen (ADR 0020), is looked up in this one map, so for the moment before its worker
- * has reported, the gateway does not know it.
+ * has reported, the gateway does not know it. `FleetForwarding` answers `WORKER_UNREACHABLE`, not
+ * `UNKNOWN_LEASE`, for a generated id in that gap during the gateway's first minute.
  *
  * A generated gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) --
  * a caller-chosen one is that id as sent, bare -- and never re-derived by splitting the string back
@@ -17,7 +18,8 @@ import { NoopLogger } from "../ports/index.js";
  * minted or by the `(workerId, workerLeaseId)` pair a relayed worker event carries. The "split on
  * the first `.`" the ADR describes is what makes a generated id *routable in principle* (a worker
  * id is a UUID, so it can never itself contain the separator); nothing in this codebase needs to
- * actually perform that split, because this index always has the structured pair already.
+ * actually perform that split, because this index always has the structured pair already
+ * (`FleetForwarding` splits only to name the worker in that `WORKER_UNREACHABLE` answer).
  */
 
 /** One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*

@@ -22,6 +22,7 @@ Leases:
 - No gateway request waits in a worker queue: every dispatch is `noWait: true`.
 - A gateway forwards `allowDownload: false`, always.
 - Only the gateway's prefix `gw:<instance id>:` marks its leases; the lease index (and so `release-all`) and retention read it.
+- For 60 s after a gateway start, renew, release and exec on a generated lease id (`<workerId>.<workerLeaseId>`) the index lacks answer `WORKER_UNREACHABLE` while that worker has not reported its leases; a caller-chosen id, or any id after the window, answers `UNKNOWN_LEASE`.
 - The lease index is rebuilt from each view's leases. An entry goes only when consecutive snapshots lack it; it is kept across a disconnect and forgotten with the view.
 - A lease the worker answered released or `UNKNOWN_LEASE` is not added back by a later snapshot that still lists it. A worker's `UNKNOWN_LEASE` drops the entry.
 - A refusal is remembered against the worker's `viewLoadKey`, so the worker is asked again only once its view changes. `DAEMON_UPDATING` is handled as `NO_CAPACITY`.
@@ -69,7 +70,7 @@ Relay:
   ids answer `404`, a repeated `Idempotency-Key` is new (maybe `REQUESTER_ALREADY_LEASED`).
 - **A dispatched request whose uplink drops may have granted a lease anyway.** Client sees
   `WORKER_UNREACHABLE`; the lease stands until TTL. A re-request may name it or get a second lease.
-- **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew, release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
+- **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew, release and exec fail meanwhile (a retryable `WORKER_UNREACHABLE` for a generated id until its worker reports); past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
 - **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`. `worker drain` leaves it to the owner.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
 - **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`; amending the ADR is the maintainer's call.

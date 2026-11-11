@@ -1956,7 +1956,7 @@ describe("GatewayDispatcher", () => {
 
   describe("lease lifecycle and device.exec (#118)", () => {
     it("forwards lease.request through the fleet coordinator and answers UNKNOWN_LEASE for renew/release/exec against an id it never issued", async () => {
-      const { dispatcher } = harness();
+      const { clock, dispatcher } = harness();
 
       await expect(
         dispatcher.dispatch(
@@ -1966,6 +1966,8 @@ describe("GatewayDispatcher", () => {
         ),
       ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
+      // why: inside the gateway's first minute a generated id may belong to a worker yet to report, which answers WORKER_UNREACHABLE.
+      clock.advance(60_000);
       for (const [operation, input] of [
         ["lease.renew", { leaseId: "wrk_ghost.lease_1" }],
         ["lease.release", { leaseId: "wrk_ghost.lease_1" }],
