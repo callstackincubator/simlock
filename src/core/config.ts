@@ -314,6 +314,7 @@ export interface Config {
     readonly leaseRequestTimeoutMs: number;
     readonly routing: RoutingPolicyName;
     readonly alerts: { readonly destinations: readonly AlertDestination[] };
+    readonly admission?: { readonly command?: readonly string[]; readonly timeoutMs: number };
   };
   readonly stalledTransition: {
     /**
