@@ -107,6 +107,8 @@ export async function askAdmission(
       signal,
       timeoutMs: options.timeoutMs,
     });
+    // why: the gateway killed it on a cancel or a stop and discards the answer; that is not a failed decision to log.
+    if (result.endedBy === "aborted") return fail("aborted");
     stderr = result.stderr;
     const cause = causeOf(result, options.timeoutMs);
     decision = cause === undefined ? parseAnswer(result.stdout) : fail(cause);

@@ -294,14 +294,10 @@ export class FleetLeaseCoordinator {
     deviceRequest: DeviceRequest,
     options: FleetRequestOptions,
   ): Promise<FleetLeaseGrant> {
-    // why: ADR 0074 §1: with a command, the checks run under the lock, then the command outside it, then the checks again with the answer under the lock; no await without a command, so a `lease.cancel` sent right after the request finds it in the same tick (#1492).
+    // why: ADR 0074 §1: with a command, the checks run under the lock, then the command outside it, then the checks again with the answer under the lock; no await without a command, so a `lease.cancel` sent right after the request finds it in the same tick (#1492). The request is listed as asking before the first await, so a cancel or a stop in that window ends it too.
     const { admission } = this.options;
     let decision: AdmissionDecision | undefined;
     if (admission !== undefined) {
-      const early = await this.#decisions.run(async () =>
-        this.#checkAdmission(deviceRequest, options),
-      );
-      if ("replay" in early) return early.replay;
       const asking: AskingRequest = {
         controller: new AbortController(),
         platform: deviceRequest.platform,
@@ -309,15 +305,21 @@ export class FleetLeaseCoordinator {
       };
       this.#asking.add(asking);
       try {
-        // why: the caller is answered at once; the runner kills the command on its own time (SIGTERM, then SIGKILL).
-        decision = await Promise.race([
-          this.#askAdmission(admission, deviceRequest, options, asking.controller),
-          new Promise<undefined>((resolve) =>
-            asking.controller.signal.addEventListener("abort", () => resolve(undefined), {
-              once: true,
-            }),
-          ),
-        ]);
+        const early = await this.#decisions.run(async () =>
+          this.#checkAdmission(deviceRequest, options),
+        );
+        if ("replay" in early) return early.replay;
+        // why: the caller is answered at once; the runner kills the command on its own time (it kills with SIGKILL).
+        if (asking.end === undefined) {
+          decision = await Promise.race([
+            this.#askAdmission(admission, deviceRequest, options, asking.controller),
+            new Promise<undefined>((resolve) =>
+              asking.controller.signal.addEventListener("abort", () => resolve(undefined), {
+                once: true,
+              }),
+            ),
+          ]);
+        }
       } finally {
         this.#asking.delete(asking);
       }

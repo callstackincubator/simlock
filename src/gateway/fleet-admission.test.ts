@@ -79,6 +79,12 @@ class GatedRunner extends ScriptedProcessRunner {
     this.calls.push({ args: [...args], command, options });
     return new Promise((resolve) => {
       this.#open.push((stdout) => resolve({ code: 0, stderr: "", stdout }));
+      options.signal?.addEventListener(
+        "abort",
+        () =>
+          resolve({ code: null, endedBy: "aborted", signal: "SIGKILL", stderr: "", stdout: "" }),
+        { once: true },
+      );
     });
   }
   answer(index: number, stdout: string): void {
@@ -88,11 +94,12 @@ class GatedRunner extends ScriptedProcessRunner {
 
 /** why: every command answers `{}` at once; the worker has room, so a request is granted and a refused one never reaches it. */
 function grantingFleet(runner: ScriptedProcessRunner) {
-  const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 } });
+  const logger = new RecordingLogger();
+  const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 }, logger });
   const client = new ScriptedWorkerClient();
   fleet.directory.add("wrk_a", client);
   connectWorker(fleet.workers, "wrk_a");
-  return { ...fleet, client, runner };
+  return { ...fleet, client, logger, runner };
 }
 
 function gatedFleet() {
@@ -139,10 +146,18 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
       { expected: failed(NOT_AN_ANSWER), output: { stdout: "{}{}" } },
       { expected: failed("printed no answer"), output: { stdout: "  \n" } },
       { expected: failed("exited 1"), output: { code: 1, stdout: '{"priority":1}' } },
-      { expected: failed("killed after 5000 ms"), output: { code: null, endedBy: "timeout" } },
+      {
+        expected: failed("killed after 5000 ms"),
+        output: { code: null, endedBy: "timeout", signal: "SIGKILL" },
+      },
       {
         expected: failed("printed more than 65536 bytes"),
-        output: { code: null, endedBy: "output-limit", stdout: '{"priority":1}' },
+        output: {
+          code: null,
+          endedBy: "output-limit",
+          signal: "SIGKILL",
+          stdout: '{"priority":1}',
+        },
       },
       { expected: failed("killed by signal SIGKILL"), output: { code: null, signal: "SIGKILL" } },
       { expected: failed("could not start bun"), output: "cannot-start" },
@@ -344,27 +359,43 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
     ];
 
     for (const { end, expectedError, name, rejected } of cases) {
-      const fleet = gatedFleet();
-      let error: unknown;
-      fleet.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => (error = e));
-      await tick();
-      expect(fleet.runner.calls, name).toHaveLength(1);
+      for (const early of [false, true]) {
+        const label = `${name}${early ? " sent right after the request" : ""}`;
+        const fleet = gatedFleet();
+        let error: unknown;
+        fleet.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => (error = e));
+        if (!early) {
+          await tick();
+          expect(fleet.runner.calls, label).toHaveLength(1);
+        }
 
-      const answer = await end(fleet);
-      await tick();
+        const answer = await end(fleet);
+        await tick();
 
-      expect(answer, name).toBe(name === "lease.cancel" ? "cancelled" : undefined);
-      expect(error, name).toMatchObject(expectedError);
-      expect(fleet.runner.calls[0]?.options.signal?.aborted, name).toBe(true);
-      fleet.runner.answer(0, "{}");
-      await tick();
-      expect(fleet.requested, name).toEqual([]);
-      expect(fleet.coordinator.waitingRequests(), name).toEqual([]);
-      expect(
-        fleet.rejected.map((event) => event.reason),
-        name,
-      ).toEqual(rejected);
+        expect(answer, label).toBe(name === "lease.cancel" ? "cancelled" : undefined);
+        expect(error, label).toMatchObject(expectedError);
+        if (!early) expect(fleet.runner.calls[0]?.options.signal?.aborted, label).toBe(true);
+        else expect(fleet.runner.calls, label).toEqual([]);
+        fleet.runner.answer(0, "{}");
+        await tick();
+        expect(fleet.requested, label).toEqual([]);
+        expect(fleet.coordinator.waitingRequests(), label).toEqual([]);
+        expect(
+          fleet.rejected.map((event) => event.reason),
+          label,
+        ).toEqual(rejected);
+        expect(fleet.logger.warnings, label).toEqual([]);
+      }
     }
+
+    const answered = gatedFleet();
+    answered.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
+    await tick();
+    answered.runner.answer(0, '{"priority":1}');
+    await tick();
+    expect(await answered.coordinator.cancelPending("agent-1")).toBe("cancelled");
+    expect(answered.rejected.map((event) => event.reason)).toEqual(["cancelled"]);
+    expect(answered.runner.calls[0]?.options.signal?.aborted).toBe(false);
 
     const other = gatedFleet();
     other.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
