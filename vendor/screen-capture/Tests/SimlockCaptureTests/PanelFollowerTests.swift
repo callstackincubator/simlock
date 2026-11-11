@@ -161,6 +161,7 @@ final class PanelFollowerLiveTests: XCTestCase {
         XCTAssertEqual(ending.log.liveStarts, 2, "not restarted after 1 s")
         ending.follower.stop()
         ending.log.end()
+        await settle()
         ending.clock.advance(1)
         await settle()
         XCTAssertEqual(ending.log.liveStarts, 2, "restarted after a stop")
