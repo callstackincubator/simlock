@@ -66,6 +66,8 @@ protocol PanelClock: Sendable {
 final class PanelFollower: @unchecked Sendable {
     /// How long a start waits for this boot's log when the lit panel does not say which is in use.
     static let bootReadSeconds: TimeInterval = 10
+    /// How long without a line before the follower says it hears nothing.
+    static let silenceSeconds: TimeInterval = 30
 
     private let panels: [Panel]
     private let sampler: PanelSampler
@@ -75,6 +77,8 @@ final class PanelFollower: @unchecked Sendable {
     private var current: Panel?
     private var onPanel: (@Sendable (Panel) -> Void)?
     private var stopped = false
+    private var heardLine = false
+    private var heardMove = false
 
     init(panels: [Panel], sampler: PanelSampler, log: PanelLog, clock: PanelClock) {
         self.panels = panels
@@ -95,21 +99,54 @@ final class PanelFollower: @unchecked Sendable {
             report(panels[0])
             return
         }
-        source.live(onLine: { _ in }, onEnd: {})
+        // why: the live log starts before the lit panel is read, so a fold during the read is not
+        // missed, and a move heard live is newer than anything read after it, so it wins.
+        startLive()
         let lit = await sampler.lit(panels)
         let coverLit = lit[cover.screenID] ?? false
         let innerLit = lit[inner.screenID] ?? false
-        report(innerLit && !coverLit ? inner : cover)
+        if !hasReported { report(innerLit && !coverLit ? inner : cover) }
+        Task {
+            await clock.sleep(seconds: Self.silenceSeconds)
+            if !isSilenceBroken { log("[panels] no panel move heard; staying on \(currentRole)") }
+        }
         if coverLit == innerLit {
             // why: a black app lights neither panel and a bright one lights both, so the lit panel
             // does not say which one SpringBoard shows; this boot's last move does.
             Task {
                 let lines = await source.bootLines(timeout: Self.bootReadSeconds)
-                if let role = lines.reversed().lazy.compactMap({ Panels.primary(inLogLine: $0) }).first,
+                if !heardMove, let role = lines.reversed().lazy.compactMap({ Panels.primary(inLogLine: $0) }).first,
                    let panel = panels.first(where: { $0.role == role }) {
                     report(panel)
                 }
             }
+        }
+    }
+
+    private var hasReported: Bool { lock.lock(); defer { lock.unlock() }; return current != nil }
+    private var isSilenceBroken: Bool { lock.lock(); defer { lock.unlock() }; return heardLine || stopped }
+    private var currentRole: String { lock.lock(); defer { lock.unlock() }; return current?.role?.rawValue ?? "?" }
+
+    private func startLive() {
+        source.live(
+            onLine: { [weak self] line in self?.heard(line) },
+            onEnd: { [weak self] in self?.liveEnded() }
+        )
+    }
+
+    private func heard(_ line: String) {
+        guard let role = Panels.primary(inLogLine: line) else { return }
+        lock.lock()
+        heardLine = true
+        heardMove = true
+        lock.unlock()
+        if let panel = panels.first(where: { $0.role == role }) { report(panel) }
+    }
+
+    private func liveEnded() {
+        Task {
+            await clock.sleep(seconds: 1)
+            if !lock.withLock({ stopped }) { startLive() }
         }
     }
 
