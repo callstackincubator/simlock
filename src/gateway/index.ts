@@ -13,6 +13,7 @@
  * their own tests import their modules.
  */
 export { drainedWorkersOwner, StateDrainStore } from "./drain-store.js";
+export { endedLeaseIdsOwner, MemoryEndedLeaseIds, StateEndedLeaseIds } from "./ended-lease-ids.js";
 // fallow-ignore-next-line unused-type -- public port shape for anyone supplying their own store.
 export type { DrainStore } from "./drain-store.js";
 export { GatewayDispatcher } from "./dispatcher.js";

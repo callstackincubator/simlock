@@ -383,6 +383,7 @@ describe("FleetLeaseIndex", () => {
       expect(index.resolve("ad-7f3a")).toEqual({
         gatewayLeaseId: "ad-7f3a",
         grantedAt: 1,
+        idChosenByRequester: true,
         ownerId: "alice-principal",
         requesterId: "alice",
         workerId: "wrk_1",

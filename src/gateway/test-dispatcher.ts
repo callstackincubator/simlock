@@ -1,3 +1,4 @@
+import { MemoryEndedLeaseIds } from "./ended-lease-ids.js";
 import { createAlerts } from "../alerts/index.js";
 import { EventBus } from "../bus/index.js";
 import type { AlertDestination } from "../core/index.js";
@@ -149,6 +150,7 @@ export function harness(
   const leaseIndex = new FleetLeaseIndex(GATEWAY_REQUESTER_PREFIX);
   const coordinator = new FleetLeaseCoordinator({
     clock,
+    endedLeaseIds: new MemoryEndedLeaseIds({ clock: clock, retentionMs: 86_400_000 }),
     directory,
     describeFailure: (error) => ({
       code: "INTERNAL",

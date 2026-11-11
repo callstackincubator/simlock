@@ -106,6 +106,7 @@ describe("loadConfig", () => {
         maxTtlMs: 4 * 60 * 60_000,
         identity: { ios: "reusable", android: "reusable" },
         requestRetentionMs: 600_000,
+        endedIdRetentionMs: 86_400_000,
         maxRequestRecords: 10_000,
         maxPerRequester: 1,
         endWaitMs: 600_000,
@@ -979,6 +980,7 @@ describe("loadConfig", () => {
         maxRequestRecords: 10_000,
         maxTtlMs: 4 * 60 * 60_000,
         requestRetentionMs: 10 * 60_000,
+        endedIdRetentionMs: 24 * 60 * 60_000,
       });
     },
   );

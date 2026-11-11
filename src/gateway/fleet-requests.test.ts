@@ -118,7 +118,20 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
       return { fleet, requester: "agent-2" };
     },
-    "lease-ended": "worker",
+    "lease-ended": async () => {
+      const fleet = harness();
+      const client = new ScriptedWorkerClient();
+      fleet.directory.add("wrk_a", client);
+      connectWorker(fleet.workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: { ...grantFixture().lease, id: "myid" } }),
+        kind: "grant",
+      });
+      await fleet.coordinator.request(REQUEST, requestOptions({ leaseId: "myid" }));
+      fleet.leaseIndex.remove("myid");
+      await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
+      return { fleet, requester: "agent-2" };
+    },
     cancelled: async () => {
       const fleet = await busyFleet();
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });

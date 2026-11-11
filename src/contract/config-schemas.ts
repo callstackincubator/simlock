@@ -105,6 +105,7 @@ export const configSchema = z.object({
       android: leaseIdentitySchema,
     }),
     requestRetentionMs: z.number(),
+    endedIdRetentionMs: z.number(),
     maxRequestRecords: z.number(),
     maxPerRequester: z.union([
       z.number(),

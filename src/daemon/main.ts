@@ -80,6 +80,8 @@ import {
   createRoutingPolicy,
   StateDrainStore,
   drainedWorkersOwner,
+  endedLeaseIdsOwner,
+  StateEndedLeaseIds,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
   GatewayDispatcher,
@@ -196,7 +198,7 @@ export function stateOwners(
   deviceDataTables: ReadonlyMap<Platform, DeviceDataTable>,
 ): readonly SqliteSchemaOwner[] {
   return role === "gateway"
-    ? [tokensOwner, drainedWorkersOwner]
+    ? [tokensOwner, drainedWorkersOwner, endedLeaseIdsOwner]
     : [
         registryOwner,
         warmPoolOwner,
@@ -448,6 +450,12 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const fleetCoordinator = new FleetLeaseCoordinator({
     clock,
     directory: gatewayService,
+    endedLeaseIds: new StateEndedLeaseIds({
+      clock,
+      database: state.database,
+      logger: logger.child("gateway"),
+      retentionMs: config.lease.endedIdRetentionMs,
+    }),
     eventBus,
     execTimeoutMs: config.gateway.execTimeoutMs,
     idGenerator,

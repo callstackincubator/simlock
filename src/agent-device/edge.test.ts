@@ -756,11 +756,12 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toEqual([]);
   });
 
-  it("after a phone lease ends, an allocate that reuses its lease id for a virtual device reaches the simulator daemon", async () => {
+  it("after a phone lease ends and its lease id has left the ended-id window, an allocate that reuses it for a virtual device reaches the simulator daemon", async () => {
     const rig = await setUpWithPhone();
     await granted(rig, 1, { physical: true, platform: "android" });
     await release(rig, 1);
     await expect.poll(() => listed(rig)).toEqual([]);
+    rig.clock.advance(25 * 60 * 60_000);
 
     await granted(rig, 1, { platform: "android" });
 

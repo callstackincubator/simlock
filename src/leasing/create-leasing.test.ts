@@ -83,6 +83,7 @@ function config(
       maxTtlMs: 14_400_000,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
+      endedIdRetentionMs: 600_000,
       maxRequestRecords: 10_000,
       maxPerRequester: 1,
       endWaitMs: 600_000,
