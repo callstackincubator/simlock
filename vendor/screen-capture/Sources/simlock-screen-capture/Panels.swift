@@ -166,3 +166,15 @@ final class PanelFollower: @unchecked Sendable {
         if changed { onPanel?(panel) }
     }
 }
+
+/// Runs a command so that it ends when the process holding the other end of its stdin pipe ends, by
+/// any way, SIGKILL included.
+enum Watchdog {
+    /// Not started; the caller keeps the `standardInput` pipe open for as long as the command should run.
+    static func process(running command: [String]) -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        process.standardInput = Pipe()
+        return process
+    }
+}
