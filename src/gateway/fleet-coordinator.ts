@@ -75,6 +75,7 @@ import {
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { FleetRefusals, refusedCapacityReason, type WorkerEntry } from "./fleet-refusals.js";
+import type { AdmissionOptions } from "./admission.js";
 import type { EndedLeaseIds } from "./ended-lease-ids.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -149,6 +150,8 @@ export interface FleetLeaseCoordinatorOptions {
   readonly describeFailure: (error: unknown) => LeaseRequestFailure;
   readonly maxPerRequester?: MaxPerRequester;
   readonly logger?: Logger;
+  /** why: ADR 0074 §1: set, the gateway asks this command about every new request; unset, every request has priority 0. */
+  readonly admission?: AdmissionOptions;
 }
 
 type FleetEventName =
