@@ -657,6 +657,45 @@ describe("NodeProcessRunner", () => {
     );
   });
 
+  it("the admission command runs as a real child process with the request on stdin", async () => {
+    const runner = new NodeProcessRunner();
+    const echo = "process.stdin.pipe(process.stdout)";
+    // why: a child that is not killed leaves on its own after 3 s, so a missing kill fails an assertion instead of the test timing out.
+    const lingers = "setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 3_000)";
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+
+    const outcomes = {
+      aborted: await runner.run(process.execPath, ["-e", lingers], {
+        signal: controller.signal,
+      }),
+      answer: await runner.run(process.execPath, ["-e", echo], { input: '{"a":1}\n' }),
+      exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], { input: "{}\n" }),
+      killedFromOutside: await runner.run(process.execPath, [
+        "-e",
+        "process.kill(process.pid, 'SIGKILL')",
+      ]),
+      timeout: await runner.run(process.execPath, ["-e", lingers], { timeoutMs: 100 }),
+      tooMuchOutput: await runner.run(
+        process.execPath,
+        ["-e", `process.stdout.write('x'.repeat(70_000)); ${lingers}`],
+        { maxStdoutBytes: 65_536 },
+      ),
+    };
+
+    expect(outcomes.answer).toEqual({ code: 0, stderr: "", stdout: '{"a":1}\n' });
+    expect(outcomes.exit1).toMatchObject({ code: 1 });
+    expect(outcomes.exit1.endedBy).toBeUndefined();
+    expect(outcomes.timeout).toMatchObject({ code: null, endedBy: "timeout" });
+    expect(outcomes.tooMuchOutput).toMatchObject({ code: null, endedBy: "output-limit" });
+    expect(outcomes.aborted).toMatchObject({ code: null, endedBy: "aborted" });
+    expect(outcomes.killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
+    expect(outcomes.killedFromOutside.endedBy).toBeUndefined();
+    await expect(
+      runner.run("/nonexistent/simlock-policy", [], { input: "{}\n" }),
+    ).rejects.toBeInstanceOf(ProcessSpawnError);
+  });
+
   it("kills a process that exceeds its timeout", async () => {
     const runner = new NodeProcessRunner();
 
@@ -664,7 +703,7 @@ describe("NodeProcessRunner", () => {
       runner.run(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
         timeoutMs: 100,
       }),
-    ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
+    ).resolves.toMatchObject({ code: null, stderr: "", stdout: "" });
   });
 
   // why: real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
@@ -691,7 +730,7 @@ describe("NodeProcessRunner", () => {
       }),
     ]);
 
-    expect(outcome).toEqual({ code: null, stderr: "", stdout: "" });
+    expect(outcome).toMatchObject({ code: null, stderr: "", stdout: "" });
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   }, 15_000);
 

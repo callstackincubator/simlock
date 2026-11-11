@@ -31,7 +31,7 @@ A worker can still turn a request down, for example because an agent on that mac
 
 ## When every worker is busy: the fleet queue
 
-A request that no worker can take now waits at the gateway, oldest first. Requests for virtual devices and for physical devices wait in separate lines. A request one worker can serve isn't held up by an older one that needs a different worker.
+A request that no worker can take now waits at the gateway, oldest first, or by the priority an [admission command](#ranking-or-refusing-requests-with-an-admission-command) gave it when one is set. Requests for virtual devices and for physical devices wait in separate lines. A request one worker can serve isn't held up by an older one that needs a different worker.
 
 By default a request waits until a worker can take it. To give up after a while, pass `--timeout`:
 
@@ -42,6 +42,43 @@ simlock --gateway lease --platform ios --device "iPhone 16" --timeout 10m
 When the time runs out, the request fails with `QUEUE_TIMEOUT` (exit 10). To fail at once instead of waiting, pass `--no-wait`; the request fails with `NO_CAPACITY` (exit 11) if no worker can take it now.
 
 To see the queue, run `simlock --gateway status`, which prints `Queue depth`, or open the console's **Queue** page. It lists each waiting request and, for each worker, why that worker didn't take it. See [Fleet console](/simlock/docs/gateway/fleet-console#why-a-request-waits).
+
+## Ranking or refusing requests with an admission command
+
+Set `gateway.admission.command` on the gateway to an argv list, and the gateway runs it once for every new lease request, before the request waits:
+
+```sh
+simlock --gateway config set gateway.admission.command '["bun","/etc/simlock/policy.ts"]'
+```
+
+The gateway writes one line of JSON to the command's stdin and then closes it:
+
+```json
+{"requesterId":"job-78","principal":"tok_7f3a","platform":"ios","request":{"platform":"ios","leaseId":"job-78"},"metadata":{}}
+```
+
+`request` is the `lease.request` input as the caller sent it, without `requesterId` and `idempotencyKey`. It is not filled with defaults: a `ttlMs` the caller did not send is absent. `metadata` is `{}` for now.
+
+The command exits 0 and prints one JSON object on stdout, optionally surrounded by whitespace:
+
+| Output | The caller gets |
+| --- | --- |
+| `{"priority": 10}` | The request waits at priority 10. The priority is an integer from -1000 to 1000. |
+| `{}` | The request waits at priority 0, the same as with no command. |
+| `{"deny": "budget used"}` | `ADMISSION_DENIED` (exit 16, HTTP 403) with the reason, 1 to 500 characters. |
+| Anything else | `ADMISSION_FAILED` (exit 16, HTTP 503). |
+
+Any other key in the object is ignored. Within a line, a higher priority is served first, and requests of equal priority are served oldest first. The virtual and the physical line are ordered apart.
+
+The gateway fails closed. These each refuse the request with `ADMISSION_FAILED`, and the gateway log says why at warn level, with the first 2048 bytes of the command's stderr:
+
+- a non-zero exit, or a kill by a signal;
+- no exit within `gateway.admission.timeoutMs` (5 seconds by default), counted from the start; the command is killed;
+- more than 65536 bytes on stdout; the command is killed;
+- output that is not a priority, `{}` or a refusal (not JSON, two objects, a priority out of range, an empty reason, both keys);
+- a program that does not exist or cannot start.
+
+A request the gateway already holds (a repeated idempotency key), a requester over its limit and a chosen lease id that is taken or ended are answered without running the command. A `lease.cancel` for the requester while the command runs kills the command and ends the request `cancelled`. A worker ignores `gateway.admission.*`.
 
 ## When no worker can serve a request
 

@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  admissionDeniedError,
+  admissionFailedError,
   CODES_WITH_DECLARED_DETAILS,
   ERROR_TABLE,
   fromWireError,
@@ -105,6 +107,19 @@ describe("SimlockError", () => {
       httpStatus: 409,
       kind: "domain",
     });
+  });
+
+  it("a caller refused by the admission policy sees the reason or the cause in the message, HTTP 403 for a refusal and 503 for no decision, CLI exit 16 for both", () => {
+    expect(admissionDeniedError("budget used").message).toBe(
+      "The gateway's admission policy refused this request: budget used",
+    );
+    expect(admissionFailedError("exited 1").message).toBe(
+      "The gateway's admission policy could not decide on this request (exited 1)",
+    );
+    expect([TABLE.ADMISSION_DENIED, TABLE.ADMISSION_FAILED]).toEqual([
+      { cliExitCode: 16, code: "ADMISSION_DENIED", httpStatus: 403, kind: "domain" },
+      { cliExitCode: 16, code: "ADMISSION_FAILED", httpStatus: 503, kind: "domain" },
+    ]);
   });
 
   it("answers the two baseline request codes as domain errors with HTTP 422: a mismatch with exit 2, a stale baseline with exit 12, each with its declared details", () => {

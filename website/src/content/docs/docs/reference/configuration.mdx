@@ -279,6 +279,8 @@ These keys go in a **gateway's** file.
 | `gateway.disconnectedRetentionMs` | positive number               | `86400000` (24 h)  | How long a disconnected worker stays listed before the gateway forgets it. The clock waits while leases on it are still live. | Gateway    |
 | `gateway.execTimeoutMs`           | positive number               | `660000` (11 min)  | How long the gateway waits on a device command it passed to a worker. Keep it above the worker's `exec.timeoutMs`. | Gateway    |
 | `gateway.leaseRequestTimeoutMs`   | positive number               | `300000` (5 min)   | How long the gateway waits on one worker for a lease before it fails the request with `WORKER_UNREACHABLE`. | Gateway    |
+| `gateway.admission.command` | list of 1 to 64 strings of 1 to 4096 characters | not set | The program the gateway runs once for every new lease request, as an argv list such as `["bun","/etc/simlock/policy.ts"]`. It reads the request on stdin and prints a priority or a refusal. With none set, requests wait oldest first. See [Routing](/simlock/docs/gateway/routing#ranking-or-refusing-requests-with-an-admission-command). | Gateway    |
+| `gateway.admission.timeoutMs` | integer from 1 to 60000 | `5000` | How long the admission command may run, counted from its start. A command that runs longer is killed and the request is refused with `ADMISSION_FAILED`. | Gateway    |
 
 ## Alerts
 

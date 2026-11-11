@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { LeaseRecord } from "../admin/index.js";
 import { fromWireError, SimlockError } from "../contract/index.js";
+import { ScriptedProcessRunner } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerReportedLease } from "./lease-index.js";
@@ -19,7 +20,7 @@ import type { WorkerRegistry } from "./worker-registry.js";
 import {
   GATEWAY_PREFIX,
   RecordingLogger,
-  harness,
+  buildFleet,
   connectWorker,
   tick,
   REQUEST,
@@ -31,7 +32,7 @@ import {
 // why: the coordinator's tests, split by subject; they assert the queue's `RequesterAlreadyLeasedError`, which index.ts does not export.
 describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
   type Reason = EventMap["lease.rejected"]["reason"];
-  type Fleet = ReturnType<typeof harness>;
+  type Fleet = ReturnType<typeof buildFleet>;
 
   interface Outcome {
     readonly fleet: Fleet;
@@ -55,7 +56,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
   const holderGrant = () => ({ grant: grantFixture(), kind: "grant" as const });
 
   async function busyFleet(): Promise<Fleet> {
-    const fleet = harness();
+    const fleet = buildFleet();
     const client = new ScriptedWorkerClient();
     fleet.directory.add("wrk_a", client);
     connectWorker(fleet.workers, "wrk_a");
@@ -87,7 +88,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       return { fleet, requestId, requester: "agent-2" };
     },
     "unresolvable-spec": async () => {
-      const fleet = harness();
+      const fleet = buildFleet();
       connectWorker(fleet.workers, "wrk_a");
       const requestId = await ask(fleet, {
         request: { ...REQUEST, model: "iPhone 99" },
@@ -96,7 +97,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       return { fleet, requestId, requester: "agent-9" };
     },
     "no-worker": async () => {
-      const fleet = harness();
+      const fleet = buildFleet();
       const requestId = await ask(fleet, { requesterId: "agent-9" });
       return { fleet, requestId, requester: "agent-9" };
     },
@@ -106,7 +107,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       return { fleet, requester: "agent-1" };
     },
     "lease-id-taken": async () => {
-      const fleet = harness();
+      const fleet = buildFleet();
       const client = new ScriptedWorkerClient();
       fleet.directory.add("wrk_a", client);
       connectWorker(fleet.workers, "wrk_a");
@@ -119,7 +120,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       return { fleet, requester: "agent-2" };
     },
     "lease-ended": async () => {
-      const fleet = harness();
+      const fleet = buildFleet();
       const client = new ScriptedWorkerClient();
       fleet.directory.add("wrk_a", client);
       connectWorker(fleet.workers, "wrk_a");
@@ -132,6 +133,25 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
       return { fleet, requester: "agent-2" };
     },
+    "admission-denied": async () => {
+      const runner = new ScriptedProcessRunner([
+        {
+          match: { args: [], command: "policy" },
+          result: { code: 0, stderr: "", stdout: '{"deny":"no"}' },
+        },
+      ]);
+      const fleet = buildFleet({ admission: { command: ["policy"], runner, timeoutMs: 5_000 } });
+      await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requester: "agent-9" };
+    },
+    "admission-failed": async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: { args: [], command: "policy" }, result: { code: 1, stderr: "", stdout: "" } },
+      ]);
+      const fleet = buildFleet({ admission: { command: ["policy"], runner, timeoutMs: 5_000 } });
+      await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requester: "agent-9" };
+    },
     cancelled: async () => {
       const fleet = await busyFleet();
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });
@@ -139,7 +159,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       return { fleet, requestId, requester: "agent-2" };
     },
     "worker-failed": async () => {
-      const fleet = harness();
+      const fleet = buildFleet();
       const client = new ScriptedWorkerClient();
       fleet.directory.add("wrk_a", client);
       connectWorker(fleet.workers, "wrk_a");
@@ -237,8 +257,8 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
     });
   }
 
-  function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
-    const fleet = harness(overrides);
+  function oneWorker(overrides: Parameters<typeof buildFleet>[0] = {}) {
+    const fleet = buildFleet(overrides);
     const client = new ScriptedWorkerClient();
     fleet.directory.add("wrk_a", client);
     connectWorker(fleet.workers, "wrk_a");
@@ -270,7 +290,7 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
   });
 
   it("through a gateway, renew and release by a caller-chosen ID reach the right worker", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -295,7 +315,7 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
   });
 
   it("when two workers report the same caller-chosen ID on rebuild, renew of that ID reaches the first worker", async () => {
-    const { coordinator, directory, leaseIndex, workers } = harness();
+    const { coordinator, directory, leaseIndex, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -450,7 +470,7 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
   });
 
   describe("a grant for a bare ID the index maps to another worker", () => {
-    function grantRacingAReport(overrides: Parameters<typeof harness>[0] = {}) {
+    function grantRacingAReport(overrides: Parameters<typeof buildFleet>[0] = {}) {
       const fleet = oneWorker(overrides);
       fleet.client.requestLeaseQueue.push({
         beforeGrant: () => {
@@ -512,8 +532,8 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
 });
 
 describe("FleetLeaseCoordinator records every fleet request's outcome (ADR 0021)", () => {
-  function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
-    const fleet = harness(overrides);
+  function oneWorker(overrides: Parameters<typeof buildFleet>[0] = {}) {
+    const fleet = buildFleet(overrides);
     const client = new ScriptedWorkerClient();
     fleet.directory.add("wrk_a", client);
     connectWorker(fleet.workers, "wrk_a");
@@ -568,7 +588,7 @@ describe("FleetLeaseCoordinator records every fleet request's outcome (ADR 0021)
   });
 
   function twoWorkersAPreferred() {
-    const fleet = harness();
+    const fleet = buildFleet();
     const preferred = new ScriptedWorkerClient();
     const other = new ScriptedWorkerClient();
     fleet.directory.add("wrk_a", preferred);
@@ -925,7 +945,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
     "Requester agent-1 already has a waiting request; wait for it to be granted or cancel it before requesting another device";
 
   async function withWaitingRequest(maxPerRequester?: number) {
-    const built = harness(maxPerRequester === undefined ? {} : { maxPerRequester });
+    const built = buildFleet(maxPerRequester === undefined ? {} : { maxPerRequester });
     connectWorker(built.workers, "wrk_a", { capacity: saturatedIos() });
     built.directory.add("wrk_a", new ScriptedWorkerClient());
     void built.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
@@ -935,7 +955,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
   }
 
   it("with no limit set, a requester holding a fleet lease is refused with today's message, naming that lease", async () => {
-    const { coordinator, leaseIndex } = harness();
+    const { coordinator, leaseIndex } = buildFleet();
     leaseIndex.rebuildFromWorker("wrk_a", [held("lse_1", 1)]);
 
     const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
@@ -949,7 +969,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
   });
 
   it("with limit 2, a requester holding two fleet leases is refused, naming the earlier-granted one", async () => {
-    const { coordinator, leaseIndex } = harness({ maxPerRequester: 2 });
+    const { coordinator, leaseIndex } = buildFleet({ maxPerRequester: 2 });
     leaseIndex.rebuildFromWorker("wrk_a", [held("lse_9", 10), held("lse_1", 20)]);
 
     const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
@@ -962,7 +982,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
   });
 
   it("with limit 2, a requester holding one fleet lease is not refused", async () => {
-    const { coordinator, directory, leaseIndex, workers } = harness({ maxPerRequester: 2 });
+    const { coordinator, directory, leaseIndex, workers } = buildFleet({ maxPerRequester: 2 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -998,7 +1018,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
     };
     const iosRefusal = (leaseId: string) =>
       `Requester agent-1 already holds iOS lease ${leaseId}; release it (\`simlock release ${leaseId}\`) before requesting another iOS device`;
-    const twoWorkers = (built: ReturnType<typeof harness>, held: LeaseRecord[] = []) => {
+    const twoWorkers = (built: ReturnType<typeof buildFleet>, held: LeaseRecord[] = []) => {
       const ios = new ScriptedWorkerClient();
       const android = new ScriptedWorkerClient();
       built.directory.add("wrk_a", ios);
@@ -1013,7 +1033,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
 
     it("with lease.maxPerRequester per platform, a requester holding an iOS fleet lease is granted an Android one on another worker and refused a second iOS one, also once the index is rebuilt from worker views alone", async () => {
       const limit = { ios: 1, android: 1 };
-      const live = harness({ maxPerRequester: limit });
+      const live = buildFleet({ maxPerRequester: limit });
       const liveWorkers = twoWorkers(live);
       liveWorkers.ios.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
       liveWorkers.android.requestLeaseQueue.push({ grant: androidGrant(), kind: "grant" });
@@ -1031,7 +1051,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
         name: "RequesterAlreadyLeasedError",
       });
 
-      const rebuilt = harness({ maxPerRequester: limit });
+      const rebuilt = buildFleet({ maxPerRequester: limit });
       const rebuiltWorkers = twoWorkers(rebuilt, [iosHeld()]);
       rebuiltWorkers.android.requestLeaseQueue.push({ grant: androidGrant(), kind: "grant" });
 
@@ -1046,7 +1066,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
   });
 
   it("with a numeric limit of 1, a requester holding an iOS and an Android fleet lease is refused with today's message, naming the earlier one", async () => {
-    const { coordinator, leaseIndex } = harness({ maxPerRequester: 1 });
+    const { coordinator, leaseIndex } = buildFleet({ maxPerRequester: 1 });
     leaseIndex.rebuildFromWorker(
       "wrk_a",
       [
@@ -1069,7 +1089,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
   });
 
   it("with lease.maxPerRequester per platform, a fleet lease whose device a worker view does not list counts against every platform", async () => {
-    const { coordinator, leaseIndex } = harness({ maxPerRequester: { ios: 1, android: 1 } });
+    const { coordinator, leaseIndex } = buildFleet({ maxPerRequester: { ios: 1, android: 1 } });
     leaseIndex.rebuildFromWorker("wrk_a", [{ ...held("lse_1", 10), deviceId: "dev_unlisted" }], []);
 
     const refusal = await coordinator
@@ -1085,7 +1105,7 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
 
   describe("per platform, waiting", () => {
     it("with lease.maxPerRequester per platform, a requester may wait for an iOS and an Android lease at once but not two of one platform, and lease.cancel names which one to cancel", async () => {
-      const built = harness({ maxPerRequester: { ios: 1, android: 1 } });
+      const built = buildFleet({ maxPerRequester: { ios: 1, android: 1 } });
       const capacity = statusFixture().capacity;
       built.directory.add("wrk_a", new ScriptedWorkerClient());
       built.directory.add("wrk_b", new ScriptedWorkerClient());
@@ -1203,7 +1223,7 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
     setup: (id: string) => Parameters<typeof connectWorker>[2] = () => ({}),
     gated: readonly string[] = [],
   ) {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const clients: Record<string, ScriptedWorkerClient> = {};
     for (const id of ids) {
       const client = gated.includes(id) ? new GatedClient() : new ScriptedWorkerClient();
@@ -1649,7 +1669,7 @@ describe("FleetLeaseCoordinator: a lease.cancel sent right after its lease.reque
   ])(
     "with $fleetHas, answers cancelled, rejects the request as cancelled, and leaves nothing waiting and nothing dispatched",
     async ({ room }) => {
-      const fleet = harness();
+      const fleet = buildFleet();
       const client = new ScriptedWorkerClient();
       fleet.directory.add("wrk_a", client);
       connectWorker(fleet.workers, "wrk_a");

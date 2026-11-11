@@ -254,9 +254,10 @@ export const leaseRequestCreateRoute = declareRoute({
   status: 201,
   errors: {
     409: ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
+    403: ["ADMISSION_DENIED"],
     404: ["UNKNOWN_BASELINE"],
     422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
-    503: ["NO_CAPACITY"],
+    503: ["NO_CAPACITY", "ADMISSION_FAILED"],
   },
   errorExtras: {
     409: { fields: { existingLeaseId: z.string().optional() } },

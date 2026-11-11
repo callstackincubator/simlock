@@ -335,6 +335,7 @@ async function composeDaemon(
       logger,
       npm,
       optionalModules: moduleDefinitions,
+      processRunner,
       socketPath,
       state,
       ...(options.updater === undefined ? {} : { updater: options.updater }),
@@ -396,6 +397,8 @@ interface GatewayDaemonOptions {
   readonly logger: Logger;
   readonly npm: NpmCli;
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
+  /** why: runs the gateway's admission command (ADR 0074 §1). */
+  readonly processRunner: ProcessRunner;
   readonly socketPath: string;
   readonly state: StateDatabase;
   readonly updater?: StartDaemonOptions["updater"];
@@ -448,6 +451,15 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   } satisfies GatewayServiceOptions);
 
   const fleetCoordinator = new FleetLeaseCoordinator({
+    ...(config.gateway.admission.command === undefined
+      ? {}
+      : {
+          admission: {
+            command: config.gateway.admission.command,
+            runner: options.processRunner,
+            timeoutMs: config.gateway.admission.timeoutMs,
+          },
+        }),
     clock,
     directory: gatewayService,
     endedLeaseIds: new StateEndedLeaseIds({

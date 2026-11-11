@@ -62,6 +62,14 @@ export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 /** why: `lease.endedIdRetentionMs`'s default: how long a chosen lease id is refused after its lease ended (ADR 0074 §4). */
 export const DEFAULT_LEASE_ENDED_ID_RETENTION_MS = 24 * 60 * 60_000;
 
+/** why: `gateway.admission.timeoutMs`'s default (ADR 0074 §1): a policy script answers in well under this, and a stuck one refuses requests for no longer. */
+const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
+
+/** why: the bounds on `gateway.admission`, checked when the config is read. */
+const ADMISSION_TIMEOUT_MAX_MS = 60_000;
+const ADMISSION_COMMAND_MAX_ENTRIES = 64;
+const ADMISSION_ARGUMENT_MAX_LENGTH = 4096;
+
 const DEFAULT_LEASE_MAX_PER_REQUESTER = 1;
 
 export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
@@ -314,6 +322,11 @@ export interface Config {
     readonly leaseRequestTimeoutMs: number;
     readonly routing: RoutingPolicyName;
     readonly alerts: { readonly destinations: readonly AlertDestination[] };
+    /**
+     * why: ADR 0074 §1: the program a gateway runs for each new lease request, and how long it may
+     * take; a worker ignores both, as it does `execTimeoutMs`.
+     */
+    readonly admission: { readonly command?: readonly string[]; readonly timeoutMs: number };
   };
   readonly stalledTransition: {
     /**
@@ -932,6 +945,7 @@ function defaultConfig(
       leaseRequestTimeoutMs: DEFAULT_LEASE_REQUEST_TIMEOUT_MS,
       routing: DEFAULT_ROUTING_POLICY,
       alerts: { destinations: [] },
+      admission: { timeoutMs: DEFAULT_ADMISSION_TIMEOUT_MS },
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -1026,6 +1040,36 @@ function headersValidator(value: unknown, path: string): Readonly<Record<string,
   return Object.fromEntries(entries);
 }
 
+function admissionCommandValidator(value: unknown, path: string): readonly string[] {
+  const shape = `a list of 1 to ${String(ADMISSION_COMMAND_MAX_ENTRIES)} strings of 1 to ${String(ADMISSION_ARGUMENT_MAX_LENGTH)} characters`;
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > ADMISSION_COMMAND_MAX_ENTRIES ||
+    !value.every(
+      (entry): entry is string =>
+        typeof entry === "string" &&
+        entry.length >= 1 &&
+        entry.length <= ADMISSION_ARGUMENT_MAX_LENGTH,
+    )
+  ) {
+    throw invalidValue(path, shape);
+  }
+  return value;
+}
+
+function admissionTimeoutValidator(value: unknown, path: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > ADMISSION_TIMEOUT_MAX_MS
+  ) {
+    throw invalidValue(path, `an integer from 1 to ${String(ADMISSION_TIMEOUT_MAX_MS)}`);
+  }
+  return value;
+}
+
 function checkHeaderNames(entries: readonly HeaderEntry[], path: string): void {
   const seen = new Set<string>();
   for (const [name] of entries) {
@@ -1081,6 +1125,10 @@ export function configValidators(
       leaseRequestTimeoutMs: positiveNumber,
       routing: stringUnion(ROUTING_POLICIES),
       alerts: objectValidator({ destinations: alertDestinationsValidator }),
+      admission: objectValidator({
+        command: admissionCommandValidator,
+        timeoutMs: admissionTimeoutValidator,
+      }),
     }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),

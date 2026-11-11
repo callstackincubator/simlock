@@ -59,6 +59,8 @@ export interface EventMap {
       | "already-leased"
       | "lease-id-taken"
       | "lease-ended"
+      | "admission-denied"
+      | "admission-failed"
       | "boot-timeout"
       | "killed"
       | "updating"
