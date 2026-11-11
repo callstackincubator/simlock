@@ -108,7 +108,7 @@ describe("buildOpenApiDocument", () => {
       ),
     ).toEqual({
       "404": ["UNKNOWN_BASELINE"],
-      "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+      "409": ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
       "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
       "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });

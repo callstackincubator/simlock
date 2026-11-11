@@ -83,6 +83,8 @@ The gateway keeps waiting requests in memory only. When it stops or restarts:
 - **Granted leases survive.** They live on the workers, and the devices stay booted. While the gateway is down, nothing can renew, release or run commands on them through it, so a lease whose time to live runs out meanwhile expires. When the gateway is back, these leases work through it again.
 - **Drained workers stay drained.**
 
+A lease ID you chose that you send again after its lease ended gets `LEASE_ENDED`, not a new device, for `lease.endedIdRetentionMs` (24 hours by default). A gateway refuses it itself when a worker reported the end, even across a gateway restart. A lease that ended while the gateway was down is not recorded by the gateway: the request goes to a worker, and the worker that held the lease answers `LEASE_ENDED` (a request routed to another worker is granted).
+
 Because of the lease limit, a request sent again after a restart may get `REQUESTER_ALREADY_LEASED`, naming the lease the requester already holds. Use that lease or release it.
 
 If a worker's connection drops while it grants a lease, the agent gets `WORKER_UNREACHABLE`, but the worker may have granted the lease anyway. That lease runs on the worker until its time to live runs out.

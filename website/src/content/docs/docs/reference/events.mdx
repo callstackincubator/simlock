@@ -110,12 +110,12 @@ The **Gateway** column below says what a gateway shows for each event:
 | `lease.renewed` | A lease was renewed. | `leaseId`, `newDeadline` | Relayed |
 | `lease.released` | A lease ended because someone or something ended it. | `leaseId`, `deviceId`, `reason` (`explicit`: released; `killed`: `release --all` or `nuke`; `device-lost`: the device crashed and could not be brought back, or a physical device went away), `ownerId` | Relayed |
 | `lease.expired` | A lease reached its deadline without a renew. | `leaseId`, `deviceId`, `ownerId` | Relayed |
-| `lease.rejected` | A request ended without a device. A worker records it only for its own requests. | `requestId`, `requester`, `requestSpec` (with `baseline` when it named one), `reason` (`timeout`, `no-wait`, `unresolvable-spec`, `no-worker`, `already-leased`, `lease-id-taken`, `boot-timeout`, `killed`, `updating`, `cancelled`, `daemon-restarted`, `worker-failed`), and on `worker-failed` the error `code` and the `worker` | Own and relayed |
+| `lease.rejected` | A request ended without a device. A worker records it only for its own requests. | `requestId`, `requester`, `requestSpec` (with `baseline` when it named one), `reason` (`timeout`, `no-wait`, `unresolvable-spec`, `no-worker`, `already-leased`, `lease-id-taken`, `lease-ended`, `boot-timeout`, `killed`, `updating`, `cancelled`, `daemon-restarted`, `worker-failed`), and on `worker-failed` the error `code` and the `worker` | Own and relayed |
 | `lease.declined` | A worker refused or failed a request a gateway sent it. The gateway may try another worker. | `requestId`, `fleetRequestId`, `requester`, `requestSpec` (with `baseline` when it named one), `reason` (the `lease.rejected` values) | Relayed |
 | `request.granted` | The gateway handed a worker's grant to the caller. | `requestId`, `worker`, `leaseId` (the gateway's), `workerLeaseId` | Own |
 | `request.dispatched` | The gateway sent a queued request to a worker and the worker took it. | `requestId`, `workerId`, `requesterId`, `platform`, `model` or `class` when named, `mode` when named, `physical` for a physical request, `reason` (`warm-hit` or `free-capacity`), `stage`, `queuedMs` | Own |
 
-A request refused before it was stored (`killed`, `already-leased`, `lease-id-taken`) has a
+A request refused before it was stored (`killed`, `already-leased`, `lease-id-taken`, `lease-ended`) has a
 `lease.rejected` and no `lease.requested`. Closing the connection that took a lease is not a
 release and records nothing.
 

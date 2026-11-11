@@ -32,7 +32,7 @@ Leases:
 
 State and reads:
 
-- Persisted: the drained ids and the tokens in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
+- Persisted: the drained ids, the tokens and the ended chosen lease ids (`lease.endedIdRetentionMs`, ADR 0074 §4) in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
 - The registry loads the drained ids before the uplink listener opens.
 - A disconnected view is kept for `gateway.disconnectedRetentionMs`, and for as long as one of this gateway's leases on it is live.
 - Reads answer from the views, never from a worker call. A `starting` view has no catalog and no baselines, and `routingViews` puts the last ones back.
@@ -52,7 +52,7 @@ Relay:
 ## Flow: a lease through a gateway
 
 1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config and drops `allowDownload`.
-2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, then it stores the request and emits `lease.requested`.
+2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, ended lease id, then it stores the request and emits `lease.requested`.
 3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
 4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
 5. A pick: `lease.request` goes to that worker's [leasing](../leasing/AGENTS.md) over its uplink, as requester `gw:<id>:<requester>`, bounded by `gateway.leaseRequestTimeoutMs`. The first progress push emits `request.dispatched`; a refusal before it starts another walk without that worker.
@@ -65,6 +65,7 @@ Relay:
 - **A starting worker's leases are hidden from their owner.** `lease.list` and `lease.get` omit them
   for the startup checks plus one refresh. Meanwhile remote commands fail with
   "No lease is held by …" and MCP `status()` reports none; the lease stands. Don't request a new device.
+- **A lease that ended while the gateway was down is not recorded by it.** A chosen id it never saw end is dispatched, and the worker that held the lease answers `LEASE_ENDED` (`worker-failed`); another worker grants it.
 - **A fleet request is stored only once a worker takes it.** A gateway restart loses every open request;
   ids answer `404`, a repeated `Idempotency-Key` is new (maybe `REQUESTER_ALREADY_LEASED`).
 - **A dispatched request whose uplink drops may have granted a lease anyway.** Client sees
