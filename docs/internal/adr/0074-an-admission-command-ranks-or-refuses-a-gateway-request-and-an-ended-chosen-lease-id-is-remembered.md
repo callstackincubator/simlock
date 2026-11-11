@@ -1,6 +1,6 @@
 # 0074. An admission command ranks or refuses a gateway request, and an ended chosen lease id is remembered
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-10
 - **Issue:** [#1516](https://github.com/callstackincubator/simlock/issues/1516) (request [#1406](https://github.com/callstackincubator/simlock/issues/1406))
 - **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) items 10 and 11 ("one gateway-side FIFO queue", "each queued request, oldest first"): with an admission command set, a gateway line is ordered by priority, then by arrival.
