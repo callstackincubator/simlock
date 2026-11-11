@@ -53,6 +53,12 @@ export interface ProcessRunOptions {
    */
   readonly signal?: AbortSignal;
   /**
+   * why: a bound on a child's stdout, counted in bytes as it arrives: past it the runner kills the
+   * child and answers `endedBy: "output-limit"`. Output is kept in memory until the child ends, so
+   * a caller that reads an answer from an untrusted program sets it.
+   */
+  readonly maxStdoutBytes?: number;
+  /**
    * why: Where `spawn`'s `stdout` and `stderr` iterables end a line. `"newline"` (the default) ends
    * one only at `\n`. `"carriage-return-too"` also ends one at a bare `\r`, and yields no empty
    * lines: an installer such as `sdkmanager` redraws its progress bar in place with `\r`, so
@@ -68,6 +74,10 @@ export interface ProcessResult {
   readonly code: number | null;
   readonly stdout: string;
   readonly stderr: string;
+  /** why: set when the runner itself killed the child, and why: its `timeoutMs`, `maxStdoutBytes` or `signal`. */
+  readonly endedBy?: "timeout" | "output-limit" | "aborted";
+  /** why: the name of the signal that ended the child, whoever sent it; absent when it exited by itself. */
+  readonly signal?: NodeJS.Signals;
 }
 
 /**
