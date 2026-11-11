@@ -36,8 +36,15 @@ export interface FleetForwardingOptions {
   readonly logger: Logger;
 }
 
+// why: the same window as the agent-device front's `START_WINDOW_MS`: long enough for every worker to dial back in and report.
+const REBUILD_WINDOW_MS = 60_000;
+
 export class FleetForwarding {
-  constructor(private readonly options: FleetForwardingOptions) {}
+  readonly #startedAt: number;
+
+  constructor(private readonly options: FleetForwardingOptions) {
+    this.#startedAt = options.clock.now();
+  }
 
   async renew(gatewayLeaseId: string, ttlMs: number | undefined): Promise<FleetLeaseRecord> {
     const entry = this.#requireEntry(gatewayLeaseId);
@@ -322,9 +329,25 @@ export class FleetForwarding {
     }
   }
 
+  #rebuilding(): boolean {
+    return this.options.clock.now() - this.#startedAt < REBUILD_WINDOW_MS;
+  }
+
   #requireEntry(gatewayLeaseId: string): FleetLeaseEntry {
     const entry = this.options.leaseIndex.resolve(gatewayLeaseId);
     if (entry === undefined) {
+      // why: ADR 0005 §16 and §30: a generated id (`<workerId>.<workerLeaseId>`; a caller-chosen id cannot hold a dot) names its worker, and right after a restart that worker's leases are not in the index until it reports, so the client must retry and keep the lease.
+      const dot = gatewayLeaseId.indexOf(".");
+      if (dot > 0 && this.#rebuilding()) {
+        const workerId = gatewayLeaseId.slice(0, dot);
+        if (this.options.views.view(workerId)?.leases === undefined) {
+          throw new DispatchError(
+            "WORKER_UNREACHABLE",
+            `Worker ${workerId} has not reported its leases since this gateway started`,
+            { workerId },
+          );
+        }
+      }
       throw new DispatchError("UNKNOWN_LEASE", `Unknown lease: ${gatewayLeaseId}`, {
         leaseId: gatewayLeaseId,
       });
