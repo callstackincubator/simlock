@@ -53,6 +53,7 @@ async function runLease(
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
     "lease-id": { type: "string" },
+    meta: { type: "string", multiple: true },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },

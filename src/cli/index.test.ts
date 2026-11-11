@@ -6734,6 +6734,50 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     });
   });
 
+  it("a caller's --meta flags become the request's metadata", async () => {
+    const cases = [
+      {
+        argv: ["--meta", "project=checkout-app", "--meta", "role=ci"],
+        metadata: { project: "checkout-app", role: "ci" },
+      },
+      { argv: ["--meta", "query=a=b=c"], metadata: { query: "a=b=c" } },
+      { argv: ["--meta", "role=ci", "--meta", "role=dev"], metadata: { role: "dev" } },
+      { argv: [], metadata: undefined },
+    ] as const;
+    for (const { argv, metadata } of cases) {
+      const output = outputCapture();
+      let sent: { metadata?: unknown } | undefined;
+      await expect(
+        runCli(
+          ["lease", "--platform", "ios", "--detach", ...argv],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                requestLease: (input) => {
+                  sent = input;
+                  return Promise.resolve(detachedGrant);
+                },
+              }),
+          }),
+        ),
+        argv.join(" "),
+      ).resolves.toBe(0);
+      expect(sent?.metadata, argv.join(" ")).toEqual(metadata);
+    }
+
+    const refused = outputCapture();
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--meta", "project"],
+        refused.environmentWith({ connectAdmin: async () => fakeClient({}) }),
+      ),
+    ).resolves.toBe(2);
+    expect(JSON.parse(refused.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: expect.stringContaining("--meta needs key=value (got project)"),
+    });
+  });
+
   it("maps --mode and --no-wait onto the contract's mode/noWait input fields", async () => {
     const output = outputCapture();
     let capturedInput: Record<string, unknown> | undefined;
