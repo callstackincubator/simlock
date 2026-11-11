@@ -298,7 +298,12 @@ export class FleetLeaseCoordinator {
         deviceRequest,
         options,
         (id, onProgress) => {
-          const waiter = this.#queue.create(deviceRequest, { ...options, onProgress }, id);
+          const waiter = this.#queue.create(
+            deviceRequest,
+            { ...options, onProgress },
+            id,
+            decision?.kind === "priority" ? decision.priority : 0,
+          );
           return { promise: this.#afterViewRead(waiter.promise), waiter };
         },
         requestId,
@@ -1066,8 +1071,7 @@ export class FleetLeaseCoordinator {
     const alreadyQueued = this.#queue.isQueued(waiter);
     if (this.#queue.enqueue(waiter) && !alreadyQueued) {
       this.#emit("lease.queued", {
-        queuePosition:
-          lineOf(waiter.request) === "physical" ? this.#queue.physicalDepth : this.#queue.depth,
+        queuePosition: this.#queue.positionOf(waiter),
         requestId: waiter.id,
       });
     }

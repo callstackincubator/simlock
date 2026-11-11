@@ -271,13 +271,13 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
       Object.fromEntries(waiting.map((entry) => [entry.requesterId, entry.queuePosition])),
     ).toEqual({ A: 3, B: 1, C: 4, D: 2, P: 2, Q: 1 });
 
-    connectWorker(fleet.workers, "wrk_a", { ...busy, capacity: roomierIos() });
     for (const name of ["B", "D", "A", "C"]) {
       client.requestLeaseQueue.push({
         grant: grantFixture({ lease: { ...grantFixture().lease, id: `lse_${name}` } }),
         kind: "grant",
       });
     }
+    fleet.workers.refresh("wrk_a", { capacity: roomierIos() });
     await tick();
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toEqual(
       ["B", "D", "A", "C"].map((name) => `lease.request:${GATEWAY_PREFIX}${name}`),
