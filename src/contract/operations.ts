@@ -175,6 +175,8 @@ const leaseRequestBaseSchema = z
     idempotencyKey: z.string().min(1).max(200).optional(),
     leaseId: leaseIdSchema.optional(),
     fleetRequestId: z.string().min(1).max(200).optional(),
+    // why: A plain record of plain strings, bounded by `refuseBadMetadata` as one object-level check, like `except`: a bound on the field itself would be checked by the MCP SDK before the handler.
+    metadata: z.record(z.string(), z.string()).optional(),
     requires: z
       .array(capabilityNameSchema)
       .max(8)

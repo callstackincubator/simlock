@@ -63,4 +63,32 @@ describe("GatewayDispatcher: the admission command's input", () => {
       });
     }
   });
+
+  it("a caller's metadata reaches the admission command, and the command's request holds no metadata", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["/etc/simlock/policy.ts"], command: "bun" },
+        result: { code: 0, stderr: "", stdout: "{}" },
+      },
+    ]);
+    const { dispatcher } = harness({
+      admission: { command: ["bun", "/etc/simlock/policy.ts"], runner, timeoutMs: 5_000 },
+    });
+
+    await dispatcher
+      .dispatch(
+        "lease.request",
+        { metadata: { project: "checkout-app", role: "ci" }, noWait: true, platform: "ios" },
+        session({ principal: "tok_7f3a", role: "agent" }),
+      )
+      .catch(() => undefined);
+
+    expect(JSON.parse(runner.calls[0]?.options.input ?? "")).toEqual({
+      metadata: { project: "checkout-app", role: "ci" },
+      platform: "ios",
+      principal: "tok_7f3a",
+      request: { noWait: true, platform: "ios" },
+      requesterId: "tok_7f3a",
+    });
+  });
 });
