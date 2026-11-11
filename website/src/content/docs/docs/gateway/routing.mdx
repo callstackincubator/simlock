@@ -54,10 +54,10 @@ simlock --gateway config set gateway.admission.command '["bun","/etc/simlock/pol
 The gateway writes one line of JSON to the command's stdin and then closes it:
 
 ```json
-{"requesterId":"job-78","principal":"tok_7f3a","platform":"ios","request":{"platform":"ios","leaseId":"job-78"},"metadata":{}}
+{"requesterId":"job-78","principal":"tok_7f3a","platform":"ios","request":{"platform":"ios","leaseId":"job-78"},"metadata":{"project":"checkout-app","role":"ci"}}
 ```
 
-`request` is the `lease.request` input as the caller sent it, without `requesterId` and `idempotencyKey`. It is not filled with defaults: a `ttlMs` the caller did not send is absent. `metadata` is `{}` for now.
+`request` is the `lease.request` input as the caller sent it, without `requesterId`, `idempotencyKey` and `metadata`. It is not filled with defaults: a `ttlMs` the caller did not send is absent. `metadata` is what the caller sent as `metadata` (`simlock lease --meta project=checkout-app --meta role=ci`, the HTTP body's `metadata` or the client's `metadata`), `{}` when it sent none. It is an object of text values: at most 16 keys, a key of 1 to 64 characters, a value of 0 to 256, and 2048 characters of keys and values in all, else `BAD_REQUEST`. A gateway passes it to the command and nowhere else: it is not stored, in no event, and not sent to a worker.
 
 The command exits 0 and prints one JSON object on stdout, optionally surrounded by whitespace:
 
