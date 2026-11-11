@@ -14,7 +14,7 @@ Trust in a worker:
 - A worker event named like a fact only a gateway authors (`GATEWAY_OWN_EVENTS` in `worker-link.ts`) is dropped; any other name is forwarded, known here or not. An event nested past `MAX_RELAYED_PAYLOAD_DEPTH`, or one that cannot be serialized, is dropped.
 - Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id replaces the old one. `token.revoke` closes the token's uplinks.
 - A protocol mismatch does not close the link: the view is `incompatible`, and that worker is asked only `daemon.update` with `query`.
-- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch to a worker.
+- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch.
 
 Leases:
 
@@ -47,12 +47,12 @@ Relay:
 - Every wait is bounded on the `Clock`: one deadline for the channel and the head, then a silence bound on the body. At either limit: `WORKER_UNREACHABLE`, and `relay.cancel` to the worker.
 - A file upload (`upload` on the call) is bounded by `UPLOAD_STALLED` silence of the caller instead; its head deadline starts at the body's end.
 - A two-way relay keeps both directions open after a 2xx head; ending one ends only that one.
-- Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. Bytes the gateway writes never reset it, and it stops while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
+- Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. It pauses while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
 - On an uplink close the worker aborts that connection's relays. Leases, requests and exec keep running.
 
 ## Flow: a lease through a gateway
 
-1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config and drops `allowDownload`.
+1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config.
 2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, ended lease id, then it stores the request and emits `lease.requested`.
 3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
 4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
