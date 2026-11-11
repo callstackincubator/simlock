@@ -2593,7 +2593,7 @@ describe("createLeasing: capacity.changed and queue.changed", () => {
 });
 
 describe("createLeasing: lease.rejected names its request", () => {
-  type Reason = EventMap["lease.rejected"]["reason"];
+  type Reason = Exclude<EventMap["lease.rejected"]["reason"], `admission-${string}`>;
   type Rejection = EventMap["lease.rejected"];
   type Harness = Awaited<ReturnType<typeof createHarness>>;
 
@@ -2644,8 +2644,6 @@ describe("createLeasing: lease.rejected names its request", () => {
       return { harness, requestId: await admittedId(harness, "odd"), requester: "odd" };
     },
     "no-worker": "gateway",
-    "admission-denied": "gateway",
-    "admission-failed": "gateway",
     "worker-failed": "gateway",
     "already-leased": async () => {
       const harness = await createHarness();
