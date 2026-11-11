@@ -15,7 +15,7 @@ import {
   saturatedIos,
   tick,
 } from "./test-fleet.js";
-import { ScriptedWorkerClient } from "./test-support.js";
+import { ScriptedWorkerClient, grantFixture } from "./test-support.js";
 
 const COMMAND = ["bun", "/etc/simlock/policy.ts"] as const;
 const FAILED = "ADMISSION_FAILED";
@@ -60,6 +60,44 @@ function admissionFleet(output: Output) {
   fleet.eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
   return { ...fleet, logger, rejected, requested, runner };
 }
+
+/** why: a runner whose commands answer only when the test says, as a slow policy script does. */
+class GatedRunner extends ScriptedProcessRunner {
+  readonly #open: Array<(stdout: string) => void> = [];
+  constructor() {
+    super([]);
+  }
+  override run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    this.calls.push({ args: [...args], command, options });
+    return new Promise((resolve) => {
+      this.#open.push((stdout) => resolve({ code: 0, stderr: "", stdout }));
+    });
+  }
+  answer(index: number, stdout: string): void {
+    this.#open[index]?.(stdout);
+  }
+}
+
+/** why: every command answers `{}` at once; the worker has room, so a request is granted and a refused one never reaches it. */
+function grantingFleet(runner: ScriptedProcessRunner) {
+  const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 } });
+  const client = new ScriptedWorkerClient();
+  fleet.directory.add("wrk_a", client);
+  connectWorker(fleet.workers, "wrk_a");
+  return { ...fleet, client, runner };
+}
+
+const answering = (count: number) =>
+  new ScriptedProcessRunner(
+    Array.from({ length: count }, () => ({
+      match: { args: [COMMAND[1]], command: COMMAND[0] },
+      result: { code: 0, stderr: "", stdout: "{}" },
+    })),
+  );
 
 describe("FleetLeaseCoordinator: the admission command decides each new request", () => {
   it("a gateway with an admission command queues a new request at the priority the command answers, and refuses it when the command denies or fails", async () => {
@@ -117,5 +155,58 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
         }) as unknown,
       }),
     ]);
+
+    const held = grantingFleet(answering(1));
+    held.client.requestLeaseQueue.push({
+      grant: grantFixture({ lease: { ...grantFixture().lease, id: "myid" } }),
+      kind: "grant",
+    });
+    await held.coordinator.request(REQUEST, requestOptions({ leaseId: "myid" }));
+    const taken = await held.coordinator
+      .request(
+        REQUEST,
+        requestOptions({ leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" }),
+      )
+      .catch((error: { code?: string }) => error.code);
+    const limited = await held.coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: { name?: string }) => error.name);
+    expect([taken, limited]).toEqual(["LEASE_ID_TAKEN", "RequesterAlreadyLeasedError"]);
+    expect(held.runner.calls).toHaveLength(1);
+  });
+
+  it("a request the gateway already holds is answered without running the command", async () => {
+    const granted = grantingFleet(answering(1));
+    granted.client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const first = await granted.coordinator.request(
+      REQUEST,
+      requestOptions({ idempotencyKey: "k" }),
+    );
+    const repeat = await granted.coordinator.request(
+      REQUEST,
+      requestOptions({ idempotencyKey: "k" }),
+    );
+    expect(repeat).toEqual(first);
+    expect(granted.runner.calls).toHaveLength(1);
+
+    const runner = new GatedRunner();
+    const fleet = grantingFleet(runner);
+    connectWorker(fleet.workers, "wrk_a", { capacity: saturatedIos() });
+    const asked = [0, 1].map(() =>
+      fleet.coordinator.request(REQUEST, requestOptions({ idempotencyKey: "k" })),
+    );
+    asked.forEach((request) => request.catch(() => undefined));
+    await tick();
+    expect(runner.calls).toHaveLength(2);
+    runner.answer(0, '{"priority":5}');
+    await tick();
+    runner.answer(1, '{"deny":"budget used"}');
+    await tick();
+    expect(fleet.coordinator.waitingRequests()).toHaveLength(1);
+    void fleet.coordinator.request(REQUEST, requestOptions({ idempotencyKey: "k" }));
+    await tick();
+    expect(runner.calls).toHaveLength(2);
+    const rejected = fleet.eventBus.replay().filter((event) => event.event === "lease.rejected");
+    expect(rejected).toEqual([]);
   });
 });
