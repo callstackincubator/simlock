@@ -229,7 +229,7 @@ async function duoOs(env: TestEnv): Promise<string> {
 
 describe.skipIf(notRunnable !== undefined)(
   "iOS foldable simulator stream (real simulator)",
-  { tags: ["slow", "ios", "ios-foldable"] },
+  { tags: ["slow", "ios"] },
   () => {
     let dir: string | undefined;
     let teardown: (() => Promise<void>) | undefined;

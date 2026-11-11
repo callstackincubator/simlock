@@ -76,7 +76,9 @@ A device that isn't running has no picture, and the page says why: shut down, st
 - **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the page opens it again.
 - **A frozen device doesn't look live.** A stream that gets no new frames for 30 seconds ends with an error.
 - **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
-- **Rotation.** A rotated iOS simulator or iPhone keeps the scale of the first picture. An Android device's picture follows the rotation.
+- **Rotation.** A rotated iOS simulator keeps the scale of the first picture. An Android device's picture follows the rotation, and so does an iPhone's: a new meta frame gives the new size, and nobody has run it on a physical iPhone yet.
+- **Foldables.** An iPhone Duo simulator shows the panel in use, upright, and the open stream switches panels about a second after the device folds or unfolds, with no reconnect. A stream opened while the screen is all black can show the cover for a few seconds before it switches. If SpringBoard's log never names the move, the stream stays on the panel it opened on.
+- **The size can change.** The size headers give the picture's size when the stream opens; a meta frame in the body gives each later size. A viewer that reads the size once draws a stretched picture after a fold until it reconnects.
 
 ## When it doesn't work
 
