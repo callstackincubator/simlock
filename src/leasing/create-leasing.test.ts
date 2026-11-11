@@ -3856,9 +3856,13 @@ describe("createLeasing a lease ID chosen by the requester", () => {
       });
     const cases: readonly {
       readonly name: string;
-      readonly endIt: (harness: Harness) => Promise<Harness>;
+      readonly endIt: (harness: Harness, id: string) => Promise<Harness>;
       readonly outcome: "ended" | "granted" | "taken";
       readonly endedAt?: number;
+      /** why: the first lease asks for no id (`generated`), or for one the retry does not use (`other`). */
+      readonly asked?: "generated" | "other";
+      /** why: rows left in `ended_lease_ids` once the retry is answered. */
+      readonly rows?: number;
     }[] = [
       {
         name: "released, and another lease commits after it",
@@ -3917,17 +3921,35 @@ describe("createLeasing a lease ID chosen by the requester", () => {
           return harness;
         },
         outcome: "granted",
+        rows: 0,
       },
-      { name: "never used", endIt: async (harness) => harness, outcome: "granted" },
+      {
+        name: "a lease with a generated id",
+        asked: "generated",
+        endIt: async (harness, id) => {
+          await harness.engine.release(id, "explicit");
+          return harness;
+        },
+        outcome: "granted",
+        rows: 0,
+      },
+      {
+        name: "never used",
+        asked: "other",
+        endIt: async (harness) => harness,
+        outcome: "granted",
+      },
       { name: "still held", endIt: async (harness) => harness, outcome: "taken" },
     ];
 
-    for (const { name, endIt, outcome, endedAt } of cases) {
-      const used = name === "never used" ? "other" : "myid";
+    for (const { name, asked, endIt, outcome, endedAt, rows } of cases) {
       const first = await createHarness({ lease: { defaultTtlMs: 100_000 }, limits: roomy });
-      await first.engine.request(request, asking("agent-1", used));
-      const harness = await endIt(first);
-      const again = name === "never used" ? "myid" : used;
+      const granted = await first.engine.request(
+        request,
+        asking("agent-1", asked === "generated" ? undefined : asked === "other" ? "other" : "myid"),
+      );
+      const harness = await endIt(first, granted.lease.id);
+      const again = asked === "other" ? "myid" : granted.lease.id;
       harness.clock.advance(1_000);
 
       const retry = harness.engine.request(request, asking("agent-2", again));
@@ -3941,7 +3963,13 @@ describe("createLeasing a lease ID chosen by the requester", () => {
       } else if (outcome === "taken") {
         await expect(retry, name).rejects.toMatchObject({ name: "LeaseIdTakenError" });
       } else {
-        await expect(retry, name).resolves.toMatchObject({ lease: { id: "myid" } });
+        await expect(retry, name).resolves.toMatchObject({ lease: { id: again } });
+      }
+      if (rows !== undefined) {
+        expect(
+          harness.state.database.prepare("SELECT COUNT(*) AS n FROM ended_lease_ids").get(),
+          name,
+        ).toEqual({ n: rows });
       }
     }
   });
@@ -4728,6 +4756,21 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
         return {
           harness,
           payload: expect.objectContaining({ fleetRequestId: "req_gw1", reason: "lease-id-taken" }),
+        };
+      },
+    ],
+    [
+      "lease-ended",
+      async () => {
+        const harness = await createHarness();
+        await harness.engine.request(request, { ...holder, leaseId: "myid" });
+        await harness.engine.release("myid", "explicit");
+        await expect(
+          harness.engine.request(request, probeOf("gw:two", { leaseId: "myid" })),
+        ).rejects.toMatchObject({ code: "LEASE_ENDED" });
+        return {
+          harness,
+          payload: expect.objectContaining({ fleetRequestId: "req_gw1", reason: "lease-ended" }),
         };
       },
     ],
