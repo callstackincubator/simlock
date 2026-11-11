@@ -307,8 +307,14 @@ struct SimctlPanelSampler: PanelSampler {
         await withTaskGroup(of: (Int, Bool).self) { group in
             for panel in panels {
                 group.addTask { [udid] in
-                    let command = Panels.simctl(["io", udid, "screenshot", "--type=png", "--display=\(panel.screenID)", "-"])
-                    guard let png = Panels.runData(command, seconds: Self.cutSeconds) else { return (panel.screenID, false) }
+                    // why: a file, not `-`: simctl takes `-` as the name of a file in the working directory
+                    // and writes nothing to stdout.
+                    let file = NSTemporaryDirectory() + "simlock-panel-\(UUID().uuidString).png"
+                    defer { try? FileManager.default.removeItem(atPath: file) }
+                    let command = Panels.simctl(["io", udid, "screenshot", "--type=png", "--display=\(panel.screenID)", file])
+                    guard Panels.runData(command, seconds: Self.cutSeconds) != nil,
+                          let png = FileManager.default.contents(atPath: file)
+                    else { return (panel.screenID, false) }
                     return (panel.screenID, Self.meanLuminance(ofPNG: png) > Self.litAbove)
                 }
             }
