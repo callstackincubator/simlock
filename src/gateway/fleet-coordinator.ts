@@ -131,6 +131,14 @@ export type FleetRequestOptions = LeaseRequestOptions & {
   readonly admissionRequest?: Readonly<Record<string, unknown>>;
 };
 
+/** why: a request whose admission command is running: `lease.cancel` and `dispose` end it by aborting `controller`. */
+interface AskingRequest {
+  readonly requesterId: string;
+  readonly platform: Platform;
+  readonly controller: AbortController;
+  end?: "cancelled" | "stopping";
+}
+
 export interface FleetLeaseCoordinatorOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
@@ -175,6 +183,7 @@ type FleetEventName =
 export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
   readonly #decisions = new SerializedDecision();
+  readonly #asking = new Set<AskingRequest>();
   readonly requests: LeaseRequestBook<FleetLeaseGrant>;
   readonly #logger: Logger;
   #knownWorkerIds = new Set<string>();
@@ -293,7 +302,27 @@ export class FleetLeaseCoordinator {
         this.#checkAdmission(deviceRequest, options),
       );
       if ("replay" in early) return early.replay;
-      decision = await this.#askAdmission(admission, deviceRequest, options);
+      const asking: AskingRequest = {
+        controller: new AbortController(),
+        platform: deviceRequest.platform,
+        requesterId: options.requesterId,
+      };
+      this.#asking.add(asking);
+      try {
+        // why: the caller is answered at once; the runner kills the command on its own time (SIGTERM, then SIGKILL).
+        decision = await Promise.race([
+          this.#askAdmission(admission, deviceRequest, options, asking.controller),
+          new Promise<undefined>((resolve) =>
+            asking.controller.signal.addEventListener("abort", () => resolve(undefined), {
+              once: true,
+            }),
+          ),
+        ]);
+      } finally {
+        this.#asking.delete(asking);
+      }
+      if (asking.end !== undefined)
+        this.#refuseEndedWhileAsking(asking.end, deviceRequest, options);
     }
     const admitted = await this.#decisions.run(async () => {
       const checked = this.#checkAdmission(deviceRequest, options);
@@ -331,6 +360,11 @@ export class FleetLeaseCoordinator {
     return admitted.promise;
   }
 
+  #endAsking(asking: AskingRequest, end: "cancelled" | "stopping"): void {
+    asking.end = end;
+    asking.controller.abort();
+  }
+
   /** why: replay, the requester limit, a taken id and an ended id, in this order; a refusal is thrown, a replay returned. */
   #checkAdmission(
     deviceRequest: DeviceRequest,
@@ -350,6 +384,7 @@ export class FleetLeaseCoordinator {
     admission: AdmissionOptions,
     deviceRequest: DeviceRequest,
     options: FleetRequestOptions,
+    controller: AbortController,
   ): Promise<AdmissionDecision> {
     return askAdmission(
       admission,
@@ -361,7 +396,25 @@ export class FleetLeaseCoordinator {
         requesterId: options.requesterId,
       },
       this.#logger,
+      controller.signal,
     );
+  }
+
+  /** why: the caller cancelled, or the gateway stopped, while the command ran: nothing was stored, so there is nothing to undo. */
+  #refuseEndedWhileAsking(
+    end: "cancelled" | "stopping",
+    deviceRequest: DeviceRequest,
+    options: FleetRequestOptions,
+  ): never {
+    if (end === "stopping") throw new DispatchError("DAEMON_STOPPING", "Gateway is stopping");
+    const requestId = newLeaseRequestId(this.options.idGenerator);
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: "cancelled",
+    });
+    throw new RequestCancelledError(requestId);
   }
 
   #refuseByAdmission(
@@ -501,6 +554,15 @@ export class FleetLeaseCoordinator {
     requesterId: string,
     platform?: Platform,
   ): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+    for (const asking of this.#asking) {
+      if (
+        asking.requesterId === requesterId &&
+        (platform === undefined || asking.platform === platform)
+      ) {
+        this.#endAsking(asking, "cancelled");
+        return "cancelled";
+      }
+    }
     return this.#decisions.run(async () => {
       const waiter = this.#queue.findPendingWaiter(requesterId, platform);
       if (waiter === undefined) return "not-found";
@@ -549,6 +611,7 @@ export class FleetLeaseCoordinator {
    * again. */
   dispose(): void {
     this.#unsubscribeViews();
+    for (const asking of this.#asking) this.#endAsking(asking, "stopping");
     this.#queue.cancelAll(() => new DispatchError("DAEMON_STOPPING", "Gateway is stopping"));
   }
 

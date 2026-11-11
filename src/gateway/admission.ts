@@ -76,6 +76,7 @@ export async function askAdmission(
   options: AdmissionOptions,
   input: AdmissionInput,
   logger: Logger,
+  signal: AbortSignal,
 ): Promise<AdmissionDecision> {
   const [program = "", ...args] = options.command;
   let decision: AdmissionDecision;
@@ -83,6 +84,7 @@ export async function askAdmission(
   try {
     const result = await options.runner.run(program, args, {
       input: `${JSON.stringify(input)}\n`,
+      signal,
       timeoutMs: options.timeoutMs,
     });
     stderr = result.stderr;
