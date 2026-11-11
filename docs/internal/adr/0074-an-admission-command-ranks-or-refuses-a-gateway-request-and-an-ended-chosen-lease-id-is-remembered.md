@@ -3,7 +3,7 @@
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-10
 - **Issue:** [#1516](https://github.com/callstackincubator/simlock/issues/1516) (request [#1406](https://github.com/callstackincubator/simlock/issues/1406))
-- **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) items 10 and 11 ("one gateway-side FIFO queue", "each queued request, oldest first"): with an admission command set, a gateway line is ordered by priority, then by arrival.
+- **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) items 10 and 11 ("one gateway-side FIFO queue", "each queued request, oldest first"): with an admission command set, a gateway line is ordered by priority, then by arrival. Also narrows decision 5 ("nothing about a *lease* is written" on the gateway) and requirements 14 and 30 (nothing about a lease persisted on the gateway) for §4: the gateway writes the ids of ended chosen leases and the times they ended to `state.db`, and nothing else about a lease.
 - **Supersedes in part:** [ADR 0020](0020-a-requester-may-choose-its-lease-id.md) §1 ("It keeps no record of ids that were used"): an ended chosen id is kept for a window.
 
 ## Context
