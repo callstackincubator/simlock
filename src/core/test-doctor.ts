@@ -72,6 +72,7 @@ export function config(
   stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {},
 ): TestEngineConfig {
   return {
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,

@@ -19,7 +19,9 @@ never enforce them only inside an individual rule or driver.
    and the only destructive act that record allows is uninstalling a
    user-installed app that is not on its enrollment app list. Simlock never
    erases, reboots, shuts down or unpairs a physical device, and never runs
-   a command on one that is not enrolled
+   a command on one that is not enrolled, except `device add`'s read-only
+   inspection, which a worker with `devices.autoEnroll` runs on a phone plugged in
+   by USB ([ADR 0073](../adr/0073-a-worker-may-enrol-the-phones-plugged-into-it.md) §5)
    ([ADR 0022](../adr/0022-a-physical-device-is-a-second-device-type-the-core-knows.md) §3).
 
    A component (an iOS simulator runtime or an Android system image) is
@@ -97,7 +99,8 @@ never enforce them only inside an individual rule or driver.
    scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
    default device locations. (Under iOS `deviceSet: "default"`, reality is Xcode's set read through
    devices whose durable mark names this instance, ADR 0048 §2.) For a physical device, reality is the platform
-   tool's list of USB devices, read only for enrolled IDs.
+   tool's list of USB devices, read only for enrolled IDs. The one read made beyond
+   enrolled IDs is the host-level USB list, `listAttachedPhysical()` (ADR 0073 §5).
 8. **Ownership is proven, never inferred.** A device is Simlock's because it
    lives inside a validly-marked Simlock root, not because of what it is
    called. `Driver.listManaged()` must answer from root membership; the
@@ -106,8 +109,10 @@ never enforce them only inside an individual rule or driver.
    evidence of ownership — a user can create a device with any name. Under iOS
    `deviceSet: "default"` the proof is the device's durable mark naming this
    instance, not root membership (ADR 0048 §2). A
-   physical device is Simlock's because an admin enrolled it;
-   `listPresentPhysical()` answers only for enrolled IDs.
+   physical device is Simlock's because an admin enrolled it, or the worker did under
+   `devices.autoEnroll`;
+   `listPresentPhysical()` answers only for enrolled IDs; `listAttachedPhysical()`
+   is the exception, a host-level list that names no phone and sends nothing to one.
 9. **Root validation fails closed.** If a device root is missing its marker,
    carries another instance's marker, is a symlink, or has the wrong owner or
    permissions, that platform's driver does not start and Simlock reports why. Under iOS

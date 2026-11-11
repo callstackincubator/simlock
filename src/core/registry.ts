@@ -106,6 +106,8 @@ export interface PhysicalEnrollmentInput {
   readonly osVersion: string;
   readonly class: PhysicalClass;
   readonly apps: readonly string[];
+  /** why: who enrolled the phone, for `device.enrolled`; an operator's `device add` unless the worker's auto-enroller says otherwise. */
+  readonly initiator?: "operator" | "auto";
 }
 
 export interface ReleasedLease {
@@ -683,7 +685,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       state: "ready",
     };
     this.#commit([...this.#devices, record], this.#leases);
-    this.#emitEnrolled(record, false);
+    this.#emitEnrolled(record, false, input.initiator ?? "operator");
     return cloneDevice(record) as PhysicalDevice;
   }
 
@@ -726,7 +728,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const devices = [...this.#devices];
     devices[index] = updated;
     this.#commit(devices, this.#leases);
-    this.#emitEnrolled(updated, true);
+    this.#emitEnrolled(updated, true, "operator");
     return this.#committed(deviceId) as PhysicalDevice;
   }
 
@@ -759,7 +761,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return this.#committed(deviceId) as PhysicalDevice;
   }
 
-  #emitEnrolled(device: PhysicalDevice, reenrolled: boolean): void {
+  #emitEnrolled(device: PhysicalDevice, reenrolled: boolean, initiator: "operator" | "auto"): void {
     this.options.eventBus.emit(
       "device.enrolled",
       {
@@ -767,6 +769,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         class: device.spec.class,
         deviceId: device.id,
         driverDeviceId: device.driverDeviceId,
+        initiator,
         model: device.spec.model,
         osVersion: device.spec.osVersion,
         platform: device.spec.platform,

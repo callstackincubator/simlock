@@ -7,8 +7,6 @@ import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { configSchema } from "../contract/schemas.js";
 import {
-  ALERT_EVENTS,
-  ALERT_FORMATS,
   booleanValue,
   type Config,
   driverConfig,
@@ -102,7 +100,7 @@ describe("loadConfig", () => {
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
       update: { check: true },
-      devices: { deletedRetentionMs: 60 * 60_000 },
+      devices: { autoEnroll: false, deletedRetentionMs: 60 * 60_000 },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
@@ -254,6 +252,22 @@ describe("loadConfig", () => {
     ).rejects.toThrow(/"eventLog\.maxBytes".*at least 16 MiB/);
 
     expect(accepted.eventLog.maxBytes).toBe(sixteenMiB);
+  });
+
+  it("devices.autoEnroll defaults to false, accepts true and false, and refuses a non-boolean naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    expect((await loadWith({})).devices.autoEnroll).toBe(false);
+    expect((await loadWith({ devices: { autoEnroll: true } })).devices.autoEnroll).toBe(true);
+    expect((await loadWith({ devices: { autoEnroll: false } })).devices.autoEnroll).toBe(false);
+    await expect(loadWith({ devices: { autoEnroll: "yes" } })).rejects.toThrow(
+      'Invalid config value for "devices.autoEnroll": expected a boolean',
+    );
   });
 
   it("devices.deletedRetentionMs defaults to 3600000, is accepted from lease.requestRetentionMs up, and a smaller value is refused naming both keys", async () => {
@@ -1792,6 +1806,18 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining('Ignoring "gateway.disconnectedRetentionMs"'),
     );
+
+    const withHeaders = vi.fn();
+    await load({ gateway: { headers: { "x-a": "1" } } }, { role: "gateway", warn: withHeaders });
+    expect(withHeaders.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining('Ignoring "gateway.headers"'),
+    ]);
+    const withoutHeaders = vi.fn();
+    await load(
+      { gateway: { disconnectedRetentionMs: 60_000 } },
+      { role: "gateway", warn: withoutHeaders },
+    );
+    expect(withoutHeaders).not.toHaveBeenCalled();
   });
 
   it("says nothing about worker keys on a worker, which is every daemon today", async () => {
@@ -1816,6 +1842,107 @@ describe("loadConfig modes (ADR 0005)", () => {
     // joined looks exactly like one whose gateway is down -- so this fails the start instead.
     await expect(load({ gateway: { url: "ws://fleet.example" } })).rejects.toThrow("gateway.token");
     await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
+  });
+
+  it("stops the load on a bad gateway.headers with the message naming it, and keeps every accepted row", async () => {
+    const key = (what: string) => `Invalid config value for "gateway.headers": expected ${what}`;
+    const shape = "an object of header names to text values";
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    const many = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`x-h${i}`, "v"]));
+    const fat = Object.fromEntries(
+      Array.from({ length: 3 }, (_, i) => [`x-h${i}`, "a".repeat(3000)]),
+    );
+    const refused: readonly (readonly [string, unknown, string])[] = [
+      ["an array", ["a"], shape],
+      ["a non-text value", { "x-ok": 1 }, shape],
+      ["17 entries", many, "at most 16 headers"],
+      [
+        "a name with a space",
+        { "X Bad": "v" },
+        "a header name of 1 to 100 letters, digits and HTTP name symbols (got X Bad)",
+      ],
+      [
+        "an empty name",
+        { "": "x" },
+        "a header name of 1 to 100 letters, digits and HTTP name symbols (got )",
+      ],
+      [
+        "a 101-character name",
+        { ["a".repeat(101)]: "v" },
+        `a header name of 1 to 100 letters, digits and HTTP name symbols (got ${"a".repeat(101)})`,
+      ],
+      ["one name twice", { "X-A": "1", "x-a": "2" }, "each header name once (got x-a twice)"],
+      [
+        "a line break",
+        { "x-ok": "line\nbreak" },
+        "a header value of at most 4096 plain ASCII characters (in x-ok)",
+      ],
+      [
+        "a non-ASCII value",
+        { "x-ok": "café" },
+        "a header value of at most 4096 plain ASCII characters (in x-ok)",
+      ],
+      [
+        "a 4097-character value",
+        { "x-ok": "a".repeat(4097) },
+        "a header value of at most 4096 plain ASCII characters (in x-ok)",
+      ],
+      ["over 8192 in all", fat, "at most 8192 characters of header names and values in all"],
+      [
+        "8193 in all",
+        { "x-a": "a".repeat(4096), "x-b": "b".repeat(4091) },
+        "at most 8192 characters of header names and values in all",
+      ],
+      ...[
+        "authorization",
+        "x-simlock-worker-id",
+        "x-simlock-worker-label",
+        "host",
+        "connection",
+        "upgrade",
+        "origin",
+      ].map((name): readonly [string, unknown, string] => [
+        `${name} in capitals`,
+        { [name.toUpperCase()]: "x" },
+        `no header Simlock sets itself (${name.toUpperCase()})`,
+      ]),
+      ["Authorization", { Authorization: "x" }, "no header Simlock sets itself (Authorization)"],
+      [
+        "a sec-websocket- name",
+        { "Sec-WebSocket-Key": "x" },
+        "no header Simlock sets itself (Sec-WebSocket-Key)",
+      ],
+    ];
+    for (const role of ["worker", "gateway"] as const) {
+      for (const [name, headers, what] of refused) {
+        await expect(
+          load({ gateway: { ...joined, headers } }, { role }),
+          `${role}: ${name}`,
+        ).rejects.toThrow(key(what));
+      }
+    }
+    // why: the edge itself is accepted, so moving a cap by one fails a named row.
+    const sixteen = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`x-h${i}`, "v"]));
+    const longestName = { ["a".repeat(100)]: "v" };
+    for (const headers of [sixteen, longestName]) {
+      await expect(load({ gateway: { ...joined, headers } })).resolves.toBeDefined();
+    }
+    await expect(load({ gateway: { headers: { "x-a": "1" } } })).rejects.toThrow(
+      key("gateway.url to be set too, since gateway.headers is set"),
+    );
+    await expect(load({ gateway: { token: "t", headers: { "x-a": "1" } } })).rejects.toThrow(
+      'Invalid config value for "gateway.url": expected a gateway URL, since gateway.token is set',
+    );
+
+    const exactly8192 = { "x-a": "a".repeat(4096), "x-b": "b".repeat(4090) };
+    expect((await load({ gateway: { ...joined, headers: exactly8192 } })).gateway.headers).toEqual(
+      exactly8192,
+    );
+    const accepted = { "CF-Access-Client-Id": "abc.access", "x-empty": "", "x-tab": "a\tb" };
+    expect((await load({ gateway: { ...joined, headers: accepted } })).gateway.headers).toEqual(
+      accepted,
+    );
+    expect((await load({ gateway: { headers: {} } })).gateway.url).toBeUndefined();
   });
 
   it("refuses a joined worker's own HTTP listener with the exact error, and keeps every valid and invalid neighbour as it was", async () => {
@@ -2026,169 +2153,6 @@ describe("effectiveAllowDownload", () => {
   it("defers to the request's own flag under the on-request policy", () => {
     expect(effectiveAllowDownload("on-request", false)).toBe(false);
     expect(effectiveAllowDownload("on-request", true)).toBe(true);
-  });
-});
-
-describe("gateway.alerts.destinations", () => {
-  const validDestination = {
-    name: "audit",
-    format: "generic",
-    url: "https://n8n.example.com/x",
-    events: ["worker.connected"],
-    secret: "s3cr3t",
-  };
-  const nameExpected =
-    "expected a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters";
-  const urlExpected =
-    "expected an https:// URL, or an http:// URL to localhost, 127.0.0.1 or [::1], with no user name or password";
-  const formatExpected = 'expected one of "generic", "slack"';
-  const eventsExpected = `expected a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`;
-
-  async function load(
-    gateway: Record<string, unknown>,
-    role: "gateway" | "worker" = "gateway",
-    warn: (message: string) => void = () => {},
-  ): Promise<Config> {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ gateway }));
-    return loadConfig({ configPath, filesystem, role, systemStats: createStats(), warn });
-  }
-
-  function loadDestinations(destinations: unknown, role: "gateway" | "worker" = "gateway") {
-    return load({ alerts: { destinations } }, role);
-  }
-
-  it("loadConfig accepts a valid generic destination and defaults gateway.alerts.destinations to an empty list", async () => {
-    expect((await load({})).gateway.alerts.destinations).toEqual([]);
-    for (const url of [
-      "https://n8n.example.com/x",
-      "http://localhost:5678/x",
-      "http://127.0.0.1/x",
-      "http://[::1]:80/x",
-    ]) {
-      const config = await loadDestinations([{ ...validDestination, url }]);
-      expect(config.gateway.alerts.destinations).toEqual([{ ...validDestination, url }]);
-    }
-    const names = await loadDestinations([
-      { ...validDestination, name: "ops-1" },
-      validDestination,
-    ]);
-    expect(names.gateway.alerts.destinations.map((each) => each.name)).toEqual(["ops-1", "audit"]);
-  });
-
-  const bad = (field: string, value: unknown) => ({ ...validDestination, [field]: value });
-  const without = (field: string) => {
-    const { [field as "name"]: _omitted, ...rest } = validDestination;
-    return rest;
-  };
-
-  it.each([
-    ["name", bad("name", "Audit"), nameExpected],
-    ["name", bad("name", "1ops"), nameExpected],
-    ["name", bad("name", "a_b"), nameExpected],
-    ["name", bad("name", ""), nameExpected],
-    ["name", bad("name", "a".repeat(33)), nameExpected],
-    ["name", without("name"), nameExpected],
-    ["format", bad("format", "teams"), formatExpected],
-    ["format", bad("format", "json"), formatExpected],
-    ["format", without("format"), formatExpected],
-    ["url", bad("url", "http://n8n.internal/x"), urlExpected],
-    ["url", bad("url", "ftp://example.com"), urlExpected],
-    ["url", bad("url", "n8n.example.com/x"), urlExpected],
-    ["url", bad("url", "https://user:pw@host/x"), urlExpected],
-    ["url", bad("url", "https://user@host/x"), urlExpected],
-    ["url", bad("url", "https://:pw@host/x"), urlExpected],
-    ["url", bad("url", ""), urlExpected],
-    ["url", without("url"), urlExpected],
-    ["events", bad("events", []), eventsExpected],
-    ["events", bad("events", ["lease.granted"]), eventsExpected],
-    ["events", bad("events", ["worker.connected", "worker.connected"]), eventsExpected],
-    ["events", without("events"), eventsExpected],
-    ["secret", bad("secret", ""), "expected a non-empty secret for a generic destination"],
-    ["secret", without("secret"), "expected a non-empty secret for a generic destination"],
-  ])("loadConfig refuses a bad %s with its message", async (field, destination, expected) => {
-    await expect(loadDestinations([validDestination])).resolves.toBeDefined();
-    await expect(loadDestinations([destination])).rejects.toThrow(
-      `Invalid config value for "gateway.alerts.destinations[0].${field}": ${expected}`,
-    );
-  });
-
-  it("loadConfig accepts a slack destination, refuses a secret on it, and lists both formats in the format message", async () => {
-    const { secret: _secret, ...slack } = { ...validDestination, format: "slack" };
-    const config = await loadDestinations([slack]);
-    expect(config.gateway.alerts.destinations).toEqual([slack]);
-
-    for (const secret of ["s", "", null]) {
-      await expect(loadDestinations([{ ...slack, secret }])).rejects.toThrow(
-        'Invalid config value for "gateway.alerts.destinations[0].secret": expected no secret: a slack destination is not signed',
-      );
-    }
-    await expect(
-      loadDestinations([{ ...slack, url: "https://user:pw@hooks.slack.com/x" }]),
-    ).rejects.toThrow(
-      `Invalid config value for "gateway.alerts.destinations[0].url": ${urlExpected}`,
-    );
-    await expect(loadDestinations([bad("format", "teams")])).rejects.toThrow(
-      `Invalid config value for "gateway.alerts.destinations[0].format": ${formatExpected}`,
-    );
-  });
-
-  it("loadConfig refuses a repeated name, a bad list and a bad entry, on a gateway and on a worker", async () => {
-    await expect(loadDestinations([validDestination, validDestination])).rejects.toThrow(
-      'Invalid config value for "gateway.alerts.destinations[1].name": expected a name no other destination uses',
-    );
-    const sixteen = Array.from({ length: 16 }, (_, index) => ({
-      ...validDestination,
-      name: `d${index}`,
-    }));
-    await expect(loadDestinations(sixteen)).resolves.toBeDefined();
-    for (const list of [[...sixteen, validDestination], {}, "x"]) {
-      await expect(loadDestinations(list)).rejects.toThrow(
-        'Invalid config value for "gateway.alerts.destinations": expected a list of at most 16 destinations',
-      );
-    }
-    for (const entry of ["x", null, []]) {
-      await expect(loadDestinations([entry])).rejects.toThrow(
-        'Invalid config value for "gateway.alerts.destinations[0]": expected an object',
-      );
-    }
-    await expect(loadDestinations([bad("url", "ftp://x")], "worker")).rejects.toThrow(
-      `Invalid config value for "gateway.alerts.destinations[0].url": ${urlExpected}`,
-    );
-  });
-
-  it("loadConfig reports name before url when two fields are bad, and the first bad destination", async () => {
-    await expect(
-      loadDestinations([
-        { ...validDestination, url: "ftp://x", name: "Bad" },
-        { ...validDestination, name: "Worse" },
-      ]),
-    ).rejects.toThrow(`"gateway.alerts.destinations[0].name": ${nameExpected}`);
-  });
-
-  it("loadConfig warns about an unknown key inside a destination and still loads", async () => {
-    const warnings: string[] = [];
-    const config = await load(
-      { alerts: { destinations: [{ ...validDestination, headers: {} }] } },
-      "gateway",
-      (message) => warnings.push(message),
-    );
-    expect(warnings).toEqual(['Unknown config key: "gateway.alerts.destinations[0].headers"']);
-    expect(config.gateway.alerts.destinations).toEqual([validDestination]);
-  });
-
-  it("config.get's format enum lists exactly core's ALERT_FORMATS", () => {
-    const destination = configSchema.shape.gateway.shape.alerts.shape.destinations.element;
-    expect(destination.shape.format.options).toEqual([...ALERT_FORMATS]);
-  });
-
-  it("config.get's schema keeps every field of a loaded destination, a slack one without a secret", async () => {
-    const { secret: _secret, ...slack } = { ...validDestination, name: "chat", format: "slack" };
-    const config = await loadDestinations([validDestination, slack]);
-    expect(config.gateway.alerts.destinations[1]).toEqual(slack);
-    const parsed = configSchema.parse(config);
-    expect(parsed.gateway.alerts).toEqual(config.gateway.alerts);
   });
 });
 

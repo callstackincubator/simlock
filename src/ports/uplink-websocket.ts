@@ -295,6 +295,7 @@ export class WebSocketUplinkConnector implements UplinkConnector {
     const socket = new WebSocket(resolveUplinkUrl(options.url), {
       handshakeTimeout: this.#handshakeTimeoutMs,
       headers: {
+        ...options.headers,
         authorization: `Bearer ${options.token}`,
         [WORKER_ID_HEADER]: options.workerId,
         ...(options.label === undefined

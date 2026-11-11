@@ -409,6 +409,7 @@ export async function composeWorker(
           url: config.gateway.url,
           workerId: instanceId,
           ...(config.gateway.label === undefined ? {} : { label: config.gateway.label }),
+          ...(config.gateway.headers === undefined ? {} : { headers: config.gateway.headers }),
         });
   // why: Reassigned once the HTTP frontend actually starts, but must exist as a stable closure now:
   // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the frontend itself
@@ -517,6 +518,7 @@ export async function composeWorker(
     historyPath: join(dataDirectory, HISTORY_DB_NAME),
     healthMonitor: leasing.healthMonitor,
     physicalDeviceWatcher: leasing.physicalDeviceWatcher,
+    autoEnrollment: core.autoEnrollment,
     hostFacts: () => fitHostFacts(hostFacts.current()),
     ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
     ...(memoryPressure === undefined
@@ -590,6 +592,7 @@ export async function composeWorker(
     settle: async () => {
       stopping = true;
       await leasing.settle();
+      await core.autoEnrollment.settle();
       await core.drain();
       // why: after the reclaims settled, so a device that just came back ready is shut down too; before `dispose`, which stops adb.
       await core.shutdownIdle();

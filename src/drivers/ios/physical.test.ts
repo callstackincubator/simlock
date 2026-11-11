@@ -1091,6 +1091,43 @@ describe("IosSimctlDriver physical handler: stream iOS version", () => {
   });
 });
 
+describe("IosSimctlDriver physical handler: listAttachedPhysical", () => {
+  it("lists the wired phones in any pairing state, once each, none on the network, on this machine or simulated, and throws when the list read times out, exits non-zero or has no result.devices", async () => {
+    const lab = new Lab().list([
+      listed(UDID_B, { pairingState: "unpaired" }),
+      listed(UDID_A),
+      listed(UDID_A, { transportType: "localNetwork" }),
+      listed(UDID_C, { transportType: "localNetwork" }),
+      listed(UDID_D, { transportType: "sameMachine" }),
+      listed("00008110-00000000000E", { reality: "simulated" }),
+    ]);
+
+    const attached = await (await lab.driver()).listAttachedPhysical();
+
+    expect(attached).toEqual([UDID_A, UDID_B]);
+    expect(lab.calls()).toEqual([LIST_ARGV]);
+
+    const document = listDocument([listed(UDID_A)]);
+    const reads = [
+      {
+        lab: new Lab().list([], { file: document, hangs: true }),
+        reason: /timed out after 30000ms/,
+      },
+      { lab: new Lab().list([], { exit: 1, file: document }), reason: /exited 1/ },
+      { lab: new Lab().list('{"result":{}}'), reason: /no result\.devices list/ },
+    ];
+    for (const { lab, reason } of reads) {
+      const pending = (await lab.driver()).listAttachedPhysical();
+
+      const settled = reason.test("timed out after 30000ms")
+        ? expireAfter(lab, pending, 1, READ_LIMIT_MS)
+        : pending;
+
+      await expect(settled).rejects.toThrow(reason);
+    }
+  });
+});
+
 describe("IosSimctlDriver physical handler: presence", () => {
   it("listPresentPhysical answers a paired, wired, unlocked given iPhone present, with its OS version", async () => {
     const lab = new Lab().list([listed(UDID_A)]).lock(UDID_A);

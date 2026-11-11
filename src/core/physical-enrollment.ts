@@ -42,7 +42,7 @@ export class UnknownEnrolledDeviceError extends Error {
   }
 }
 
-class PhysicalInspectionError extends Error {
+export class PhysicalInspectionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PhysicalInspectionError";
@@ -72,16 +72,38 @@ export interface PhysicalEnrollmentRegistry {
 export class PhysicalEnrollment {
   constructor(private readonly options: PhysicalEnrollmentOptions) {}
 
-  async add(platform: Platform, id: string): Promise<PhysicalEnrollmentResult> {
+  async add(platform: Platform, id: string): Promise<PhysicalEnrollmentResult>;
+  async add(
+    platform: Platform,
+    id: string,
+    options: { readonly initiator: "auto" },
+  ): Promise<PhysicalEnrollmentResult | "skipped">;
+  async add(
+    platform: Platform,
+    id: string,
+    options: { readonly initiator: "operator" | "auto" } = { initiator: "operator" },
+  ): Promise<PhysicalEnrollmentResult | "skipped"> {
+    const { initiator } = options;
     this.#refuseVirtual(platform, id);
     const driver = this.options.drivers.get(platform);
+    const recordsBefore = this.#recordIds(id);
     const read = await this.#inspect(driver, platform, id);
 
     const claimed = await this.options.decisions.run(async () => {
       const existing = this.#enrolled(read.driverDeviceId);
-      if (existing === undefined) {
-        return { created: await this.options.registry.enrollPhysical({ ...read, platform }) };
+      // why: a record made during the inspection, even one already removed, is the operator's word.
+      if (
+        initiator === "auto" &&
+        [...this.#recordIds(read.driverDeviceId)].some((record) => !recordsBefore.has(record))
+      ) {
+        return "skipped" as const;
       }
+      if (existing === undefined) {
+        return {
+          created: await this.options.registry.enrollPhysical({ ...read, initiator, platform }),
+        };
+      }
+      if (initiator === "auto") return "skipped" as const;
       if (existing.spec.platform !== platform) {
         throw new DeviceNotEnrollableError(
           platform,
@@ -96,6 +118,7 @@ export class PhysicalEnrollment {
       if (claim === undefined) throw new DeviceBusyError(existing.driverDeviceId, "busy");
       return { claim, existing };
     });
+    if (claimed === "skipped") return claimed;
     if ("created" in claimed) {
       this.options.physicalDeviceReady?.(claimed.created.id);
       return { device: claimed.created, reenrolled: false };
@@ -174,6 +197,14 @@ export class PhysicalEnrollment {
       model: inspection.model,
       osVersion: inspection.osVersion,
     };
+  }
+
+  #recordIds(driverDeviceId: string): Set<string> {
+    return new Set(
+      this.options.registry.snapshot.devices
+        .filter((device) => device.physical && device.driverDeviceId === driverDeviceId)
+        .map((device) => device.id),
+    );
   }
 
   #enrolled(canonicalId: string): PhysicalDevice | undefined {

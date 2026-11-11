@@ -1,44 +1,52 @@
 #!/usr/bin/env node
 // `node .agents/scripts/spec-lint.mjs [<issue>] [--feature | --refactor] [--body-file <f>]
-// [--parent-file <f>] [--world <f>]`: the structural half of the spec checker's categories, run
-// before any checker starts and when a task gets `task:ready` or a refactor `refactor:ready`. It reads the posted body (a task with its parent, a
+// [--parent-file <f>] [--world <f>]`: the checks on a spec that need no judgement, run before
+// any checker starts and when a task gets `task:ready` or a refactor `refactor:ready`. It reads the posted body (a task with its parent, a
 // feature with its sub-issues) and prints one line per finding, `B <n> <section>: <what, and
 // what to do>` for a blocking one and `N ...` for a note, where <n> is the issue the line is
 // about (`-` for a draft with no number yet). Then `spec-lint: <b> blocking, <k> notes`; exit 1
 // when anything blocks, 2 on a usage error.
 //
-// A task (task template, delivery rule 7, toolchain "Slow lane" and "Contract shapes"):
-//   - `Part of #N.` first, equal to the GitHub parent; then `## Scope`, `## In short`, `##
-//     Technical spec` with `### Facts`, `### Modules touched`, (`### Surface and extension
-//     points`), `### Contract and event changes`, `### Other code on the same state`, `###
-//     Failure modes`, `### Rules in play`, (`### Retired words`), `### Tests`, then `## Done when`, `## Out of scope`,
-//     `## Depends on`, in that order; the last line is the agent footer;
+// A task (task template, delivery rule 7, toolchain "Slow lane"):
+//   - `Part of #N.` first, equal to the GitHub parent; then `## Scope`, `## Technical spec` with
+//     `### Rows`, `### Facts`, `### Modules touched`, `### Rules in play`, (`### Retired words`),
+//     `### Tests`, then `## Done when`, `## Out of scope`, `## Depends on`, in that order; the
+//     last line is the agent footer;
 //   - no template leftovers: `#NNN`, a row of `...` cells, a `- ...` bullet, a template comment;
-//   - In short holds a mermaid block;
-//   - Facts holds `Commit <sha>.`, unique F numbers (a note when out of order), and a Source in
-//     every row that is not docs, memory, "to re-check" or empty (docs alone is a note when the
-//     Fact names code); every `path:line[-line]` in Facts, Modules touched and Rules in play
-//     (a backticked `:line` takes the path before it) is a file at that commit with that many
-//     lines. A path may be a unique suffix (`state/inbox.ts`). `node_modules/...` and
-//     `v<version>:<path>` are another tool's source and are skipped; any other path this repo
-//     lacks blocks;
-//   - Modules touched and Other code on the same state each name their searches; more than 20
-//     distinct `src/<module>/` paths need a Scope line saying why it cannot split;
-//   - Contract and event changes is `none`, or says `bumps the protocol by one`; it never names
-//     a protocol version, and names `EVENTS.md` when it names an event;
-//   - Failure modes is a `Call | Outcome | What happens | Limit, counted from` table, or none;
+//   - the Technical spec holds `Commit <sha>.`; Facts has unique F numbers (a note when out of
+//     order) and a Source in every row that is not docs, memory, "to re-check" or empty (docs
+//     alone is a note when the Fact names code); every `path:line[-line]` in Facts, Modules
+//     touched and Rules in play (a backticked `:line` takes the path before it) is a file at
+//     that commit with that many lines. A path may be a unique suffix (`state/inbox.ts`).
+//     `node_modules/...` and `v<version>:<path>` are another tool's source and are skipped; any
+//     other path this repo lacks blocks;
+//   - Modules touched names its searches; more than 20 distinct `src/<module>/` paths need a
+//     Scope line saying why it cannot split;
 //   - Tests opens with a line naming an existing test file; more than 10 bullets is a note and
-//     more than 30 blocks, unless Scope says why it cannot split; with the parent read, its
-//     Behaviours rows for this task number the Tests bullets;
+//     more than 30 blocks, unless Scope says why it cannot split;
+//   - with the parent read: every id under Rows is a row of the parent, every row the parent's
+//     Task cell gives this task is under Rows, and the Tests bullets start with the ids of its
+//     Behaviours rows (`B3: ...`), each once and no other;
 //   - a Done when line about the slow lane, a real device or "on a Mac with" names an
 //     `e2e/slow-*.test.ts` that exists, or that Modules touched adds.
-// A feature (feature template, spec-session step 7): `Request: #N` or `Request: none`, then its
+// A feature (feature template, spec-session): `Request: #N` or `Request: none`, then its
 // sections in template order and the footer, no leftovers; How it works holds a mermaid block;
 // Words used is not empty; Open questions is empty or `none` once `feature:planned` (or
-// closed); per sub-issue, its Behaviours rows equal its Tests bullets, each bullet shares 60% of
-// its words with one of its rows, every Task cell names a sub-issue; over the open sub-issues,
-// each Depends on number exists, a closed one is a note, an open issue of another feature is a
+// closed). Its design tables, Behaviours (B), Stored state (S), Interfaces (I) and Existing code
+// (X): a table with an `Id` column, or `none` (never for Behaviours), ids of the table's letter,
+// each once; Existing code holds `Commit <sha>.` and its searches, and every `path:line` in the
+// three tables after Behaviours is checked at that commit; Interfaces names no protocol version,
+// and `EVENTS.md` when it names an event; a Schema step is `<owner> +<n>` or `none`, and no two
+// tasks take the same one. Once it has sub-issues: every Task cell names a sub-issue, exactly
+// one in Stored state and Interfaces, whose Used by names tasks or is `—`; every sub-issue has a Behaviours row; a task under a
+// row's Used by reaches the row's task through Depends on; over the open sub-issues, each
+// Depends on number exists, a closed one is a note, an open issue of another feature is a
 // `depends-outside` note, a cycle blocks, and `chain <k> of <t> tasks` is printed.
+//
+// A task with `## In short` or a feature with `## Shared values` was written before the design
+// tables: it is checked as it was then (In short with a mermaid block, Contract and event
+// changes, Other code on the same state, Failure modes as a `Call | Outcome | What happens |
+// Limit, counted from` table, Tests bullets counted against the parent's Behaviours rows).
 //
 // A refactor (refactor template, delivery rule 18): `## Why`, `## Target shape`, `## Out of
 // bounds`, `## Done when`, in that order, each with text; no leftovers; the footer. Nothing else
@@ -72,8 +80,18 @@ import {
 } from "./spec-body.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TASK_H2 = ["Scope", "In short", "Technical spec", "Done when", "Out of scope", "Depends on"];
-const TASK_H3 = [
+const TASK_H2 = ["Scope", "Technical spec", "Done when", "Out of scope", "Depends on"];
+const TASK_H3 = ["Rows", "Facts", "Modules touched", "Rules in play", "Retired words", "Tests"];
+// why: tasks and features written before the design tables keep their layout until they close.
+const OLD_TASK_H2 = [
+  "Scope",
+  "In short",
+  "Technical spec",
+  "Done when",
+  "Out of scope",
+  "Depends on",
+];
+const OLD_TASK_H3 = [
   "Facts",
   "Modules touched",
   "Surface and extension points",
@@ -85,7 +103,7 @@ const TASK_H3 = [
   "Tests",
 ];
 const OPTIONAL = new Set(["Surface and extension points", "Retired words"]);
-const FEATURE_H2 = [
+const BUSINESS_H2 = [
   "Problem",
   "Who it is for",
   "Outcome",
@@ -97,10 +115,16 @@ const FEATURE_H2 = [
   "Completion conditions",
   "Open questions",
   "Decisions",
-  "Shared values",
-  "Behaviours",
-  "Tasks",
 ];
+const DESIGN = [
+  ["Behaviours", "B"],
+  ["Stored state", "S"],
+  ["Interfaces", "I"],
+  ["Existing code", "X"],
+];
+const FEATURE_H2 = [...BUSINESS_H2, ...DESIGN.map(([name]) => name), "Tasks"];
+const OLD_FEATURE_H2 = [...BUSINESS_H2, "Shared values", "Behaviours", "Tasks"];
+const SCHEMA_STEP = /^([\w-]+) \+(\d+)$/;
 const REFACTOR_H2 = ["Why", "Target shape", "Out of bounds", "Done when"];
 const FAILURE_HEADER = ["Call", "Outcome", "What happens", "Limit, counted from"];
 const CANNOT_SPLIT =
@@ -280,24 +304,31 @@ function lintRefactor() {
   }
 }
 
+function oldTask(p) {
+  return section(p, "In short", 2) !== undefined;
+}
+
 function lintTask() {
+  const old = oldTask(parsed);
   const tech = h3Within("Technical spec");
   checkOrder(
     parsed.sections.filter((s) => s.level === 2),
-    TASK_H2,
+    old ? OLD_TASK_H2 : TASK_H2,
     "body",
     "##",
   );
-  checkOrder(tech, TASK_H3, "Technical spec", "###");
+  checkOrder(tech, old ? OLD_TASK_H3 : TASK_H3, "Technical spec", "###");
   checkPartOf();
   if (lacksMermaid(section(parsed, "In short", 2))) {
     add("B", "In short", "no ```mermaid block; add the small diagram the template asks for");
   }
-  const sha = checkCommit();
+  const sha = checkCommit("Technical spec", "Facts");
   checkFacts();
-  for (const name of ["Facts", "Modules touched", "Rules in play"]) checkPaths(name, sha);
-  checkSearches("Modules touched");
-  checkSearches("Other code on the same state");
+  for (const name of ["Facts", "Modules touched", "Rules in play"]) {
+    checkPaths(section(parsed, name, 3), name, sha);
+  }
+  checkSearches(section(parsed, "Modules touched", 3), "Modules touched");
+  checkSearches(section(parsed, "Other code on the same state", 3), "Other code on the same state");
   checkModuleCount();
   checkContract();
   checkFailureModes();
@@ -324,22 +355,16 @@ function canSplitReason() {
   return CANNOT_SPLIT.test(text(section(parsed, "Scope", 2)));
 }
 
-function checkCommit() {
-  const m = /^Commit\b[^\n]*?\b([0-9a-f]{7,40})\b/m.exec(
-    text(section(parsed, "Technical spec", 2)),
-  );
+function checkCommit(name, where) {
+  const m = /^Commit\b[^\n]*?\b([0-9a-f]{7,40})\b/m.exec(text(section(parsed, name, 2)));
   if (m === null) {
-    add(
-      "B",
-      "Facts",
-      "no `Commit <sha>.` line, so no path:line can be checked; add the commit read",
-    );
+    add("B", where, "no `Commit <sha>.` line, so no path:line can be checked; add the commit read");
     return null;
   }
   try {
     return git("rev-parse", "--verify", "--quiet", `${m[1]}^{commit}`).trim();
   } catch {
-    add("B", "Facts", `commit ${m[1]} is not in this clone; fetch it, or cite one that is`);
+    add("B", where, `commit ${m[1]} is not in this clone; fetch it, or cite one that is`);
     return null;
   }
 }
@@ -470,15 +495,13 @@ function checkRef(where, sha, ref, named) {
   }
 }
 
-function checkPaths(name, sha) {
-  const s = section(parsed, name, 3);
+function checkPaths(s, name, sha) {
   if (s === undefined || sha === null) return;
   const named = namedPaths(s.lines);
   for (const ref of pathRefs(s.lines)) checkRef(name, sha, ref, named);
 }
 
-function checkSearches(name) {
-  const s = section(parsed, name, 3);
+function checkSearches(s, name) {
   if (s !== undefined && !/\bsearch(es|ed)?\b/i.test(text(s))) {
     add("B", name, "no `Searches:` line; name the searches that found the list");
   }
@@ -606,9 +629,54 @@ function checkOwnBehaviours() {
         ? null
         : (issues([self.parent], world).get(self.parent)?.body ?? null);
   if (parentBody === null) return;
-  const rows = behaviourRows(splitBody(parentBody));
+  const parent = splitBody(parentBody);
+  checkRows(designRows(parent));
+  const rows = behaviourRows(parent);
   if (rows === null) return;
   checkTaskRows({ number, body }, rows);
+}
+
+function taskNumbers(cell) {
+  return [...(cell ?? "").matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+}
+
+function designRows(p) {
+  const out = [];
+  for (const [name, prefix] of DESIGN) {
+    const s = section(p, name, 2);
+    for (const table of s === undefined ? [] : tables(s.lines)) {
+      if (table.header[0] !== "Id") continue;
+      const at = (start) => table.header.findIndex((h) => h.startsWith(start));
+      for (const row of table.rows) {
+        out.push({
+          id: row[0],
+          name,
+          prefix,
+          taskCell: row[at("Task")] ?? "",
+          tasks: taskNumbers(row[at("Task")]),
+          users: taskNumbers(row[at("Used by")]),
+          usedCell: row[at("Used by")] ?? "",
+          step: row[at("Schema step")] ?? null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function checkRows(design) {
+  const s = section(parsed, "Rows", 3);
+  if (s === undefined || design.length === 0) return;
+  const named = new Set([...text(s).matchAll(/\b([BSIX]\d+)\b/g)].map((m) => m[1]));
+  const known = new Set(design.map((r) => r.id));
+  for (const id of named) {
+    if (!known.has(id)) add("B", "Rows", `${id} is no row of the parent; fix the id`);
+  }
+  for (const row of design) {
+    if (row.tasks.includes(number) && !named.has(row.id)) {
+      add("B", "Rows", `the parent gives ${row.id} to this task; list it`);
+    }
+  }
 }
 
 function lintFeature() {
@@ -616,12 +684,14 @@ function lintFeature() {
   if (!/^Request: (#\d+|none)\b/.test(first)) {
     add("B", "body", "the first line is not `Request: #<n>` or `Request: none`");
   }
+  const old = section(parsed, "Shared values", 2) !== undefined;
   checkOrder(
     parsed.sections.filter((s) => s.level === 2),
-    FEATURE_H2,
+    old ? OLD_FEATURE_H2 : FEATURE_H2,
     "body",
     "##",
   );
+  if (!old) checkDesign();
   if (lacksMermaid(section(parsed, "How it works for the user", 2))) {
     add("B", "How it works for the user", "no ```mermaid block; add the user's flow");
   }
@@ -633,14 +703,160 @@ function lintFeature() {
   if (self === null) return;
   const subs = [...issues(self.subIssues, world).values()];
   checkBehaviours(subs);
+  if (!old) checkHandOffs(subs);
   checkGraph(subs);
 }
 
+// why: Existing code says `none` under its Commit and Searches lines, so the word is looked for
+// on a line of its own, never inside a sentence.
+function isNone(s) {
+  const lines = prose(s.lines).map((l) => l.replaceAll("`", "").trim());
+  return (
+    !tables(s.lines).some((t) => t.header[0] === "Id") && lines.some((l) => /^none\.?$/i.test(l))
+  );
+}
+
+function bare(cell) {
+  return cell.replaceAll("`", "").trim();
+}
+
+function checkIds(s, name, prefix) {
+  const rows = tables(s.lines)
+    .filter((t) => t.header[0] === "Id")
+    .flatMap((t) => t.rows);
+  if (rows.length === 0) {
+    const empty = name === "Behaviours" ? "add the rows" : "add the rows, or write `none`";
+    add("B", name, `no table with an \`Id\` column; ${empty}`);
+  }
+  const seen = new Set();
+  for (const [id] of rows) {
+    if (!new RegExp(`^${prefix}\\d+$`).test(id)) {
+      add("B", name, `"${id}" is no id; number the rows ${prefix}1, ${prefix}2`);
+    } else if (seen.has(id)) {
+      add("B", name, `${id} is used twice; renumber one`);
+    }
+    seen.add(id);
+  }
+}
+
+function checkInterfaces(s) {
+  const t = text(s);
+  if (/\bprotocol (version )?\d+|PROTOCOL_VERSION(_RANGE)?\b[^\n]*\d/i.test(t)) {
+    add("B", "Interfaces", "names a protocol version; say `bumps the protocol by one`");
+  }
+  const events = eventNames();
+  const named = [...t.matchAll(/`([a-z-]+\.[a-z-]+)`/g)].some((m) => events.has(m[1]));
+  if (named && !/EVENTS\.md/.test(t)) {
+    add("B", "Interfaces", "names an event but not its `EVENTS.md` entry; add it");
+  }
+}
+
+function checkSchemaSteps() {
+  const taken = new Map();
+  for (const row of designRows(parsed).filter((r) => r.step !== null)) {
+    if (/^(none|—|-)?$/i.test(bare(row.step))) continue;
+    const m = SCHEMA_STEP.exec(bare(row.step));
+    if (m === null) {
+      add(
+        "B",
+        "Stored state",
+        `${row.id}'s Schema step "${row.step}" is not \`<owner> +<n>\` or \`none\``,
+      );
+      continue;
+    }
+    const key = `${m[1]} +${m[2]}`;
+    const first = taken.get(key);
+    if (first === undefined) taken.set(key, row);
+    else if (first.taskCell !== row.taskCell) {
+      add(
+        "B",
+        "Stored state",
+        `${first.id} and ${row.id} both take \`${key}\` in different tasks; give the later task the next step`,
+      );
+    }
+  }
+}
+
+// why: Depends on is checked against these cells once the tasks exist, so a cell that names a
+// module or "the CLI" instead of a task hides a hand-off.
+function checkOwners() {
+  const one = /^(T\d+|#\d+)$/;
+  const some = /(?:\bT\d+|#\d+)\b/;
+  for (const row of designRows(parsed).filter((r) => r.prefix === "S" || r.prefix === "I")) {
+    if (!one.test(bare(row.taskCell))) {
+      add(
+        "B",
+        row.name,
+        `${row.id}'s Task cell "${row.taskCell}" is not one task; name the task that adds it`,
+      );
+    }
+    if (!some.test(row.usedCell) && !/^(—|-|none)$/i.test(bare(row.usedCell))) {
+      add(
+        "B",
+        row.name,
+        `${row.id}'s Used by "${row.usedCell}" names no task; name the tasks, or write \`—\``,
+      );
+    }
+  }
+}
+
+function checkDesign() {
+  const sha = checkCommit("Existing code", "Existing code");
+  for (const [name, prefix] of DESIGN) {
+    const s = section(parsed, name, 2);
+    if (s === undefined) continue;
+    if (name !== "Behaviours") checkPaths(s, name, sha);
+    if (name === "Existing code") checkSearches(s, name);
+    if (name !== "Behaviours" && isNone(s)) continue;
+    checkIds(s, name, prefix);
+    if (name === "Interfaces") checkInterfaces(s);
+  }
+  checkSchemaSteps();
+  checkOwners();
+}
+
+// why: a task that reads a row another task writes is built on that task's branch, so delivery
+// must run it second; a missing Depends on runs the two at once.
+function checkHandOffs(subs) {
+  if (subs.length === 0) return;
+  const byNumber = new Map(subs.map((t) => [t.number, t]));
+  const reaches = (from, to, seen = new Set()) => {
+    if (seen.has(from)) return false;
+    seen.add(from);
+    const deps = dependsOn(byNumber.get(from)?.body ?? "");
+    return deps.includes(to) || deps.some((d) => reaches(d, to, seen));
+  };
+  for (const row of designRows(parsed).filter((r) => r.prefix === "S" || r.prefix === "I")) {
+    if (row.tasks.length !== 1 || !byNumber.has(row.tasks[0])) {
+      add(
+        "B",
+        row.name,
+        `${row.id}'s Task cell "${row.taskCell}" names no sub-issue; name the task`,
+      );
+      continue;
+    }
+    const [provider] = row.tasks;
+    if (byNumber.get(provider).state !== "open") continue;
+    for (const user of row.users.filter((u) => u !== provider && byNumber.has(u))) {
+      if (!reaches(user, provider)) {
+        add(
+          "B",
+          "Depends on",
+          `#${user} uses ${row.id}, which #${provider} provides, but does not depend on it; add #${provider}`,
+          user,
+        );
+      }
+    }
+  }
+}
+
+function planned() {
+  return self !== null && (self.labels.includes("feature:planned") || self.state === "closed");
+}
+
 function checkOpenQuestions() {
-  const planned =
-    self !== null && (self.labels.includes("feature:planned") || self.state === "closed");
   const t = stripComments(text(section(parsed, "Open questions", 2)));
-  if (planned && t.trim() !== "" && !/^none\.?$/i.test(t.trim())) {
+  if (planned() && t.trim() !== "" && !/^none\.?$/i.test(t.trim())) {
     add(
       "B",
       "Open questions",
@@ -655,10 +871,16 @@ function behaviourRows(p) {
   const table = tables(s.lines).find((t) => t.header.some((h) => h.startsWith("Task")));
   if (table === undefined) return null;
   const at = table.header.findIndex((h) => h.startsWith("Task"));
+  const idAt = table.header.indexOf("Id");
+  const behaviourAt = Math.max(
+    0,
+    table.header.findIndex((h) => h.startsWith("Behaviour")),
+  );
   return table.rows.map((r) => ({
-    tasks: [...(r[at] ?? "").matchAll(/#(\d+)/g)].map((m) => Number(m[1])),
-    behaviour: words(r[0] ?? ""),
-    words: words(r.filter((_, i) => i !== at).join(" ")),
+    id: idAt === -1 ? null : r[idAt],
+    tasks: taskNumbers(r[at]),
+    behaviour: words(r[behaviourAt] ?? ""),
+    words: words(r.filter((_, i) => i !== at && i !== idAt).join(" ")),
     cell: r[at] ?? "",
   }));
 }
@@ -687,11 +909,43 @@ function overlap(line, row) {
   return Math.max(byBehaviour, shorter === 0 ? 0 : shared(line, row.words) / shorter);
 }
 
+function checkTestIds(task, own, lines) {
+  const ids = own.map((r) => r.id);
+  const named = lines.map((l) => /^(B\d+):/.exec(l)?.[1] ?? null);
+  named.forEach((id, i) => {
+    if (id === null) {
+      add(
+        "B",
+        "Tests",
+        `line ${i + 1} does not start with its Behaviours id, as in \`B3: ...\``,
+        task.number,
+      );
+    } else if (!ids.includes(id)) {
+      add(
+        "B",
+        "Tests",
+        `line ${i + 1} names ${id}, which the parent does not give to #${task.number}`,
+        task.number,
+      );
+    } else if (named.indexOf(id) !== i) {
+      add("B", "Tests", `two lines for ${id}; one line per row`, task.number);
+    }
+  });
+  for (const id of ids.filter((x) => !named.includes(x))) {
+    add("B", "Behaviours", `#${task.number} has no Tests line for ${id}; add it`, task.number);
+  }
+}
+
 function checkTaskRows(task, rows) {
-  const tests = section(splitBody(task.body), "Tests", 3);
+  const p = splitBody(task.body);
+  const tests = section(p, "Tests", 3);
   if (tests === undefined) return;
   const own = rows.filter((r) => r.tasks.includes(task.number));
   const lines = bullets(tests.lines);
+  if (!oldTask(p) && rows.every((r) => r.id !== null)) {
+    checkTestIds(task, own, lines);
+    return;
+  }
   if (own.length !== lines.length) {
     add(
       "B",
@@ -713,6 +967,12 @@ function checkTaskRows(task, rows) {
   });
 }
 
+// why: before the tasks are posted the Task cells hold `T1`, `T2`.
+function namesSubIssues(row, numbers) {
+  if (numbers.size === 0 && !planned() && row.tasks.length === 0) return /\bT\d+\b/.test(row.cell);
+  return row.tasks.length > 0 && row.tasks.every((n) => numbers.has(n));
+}
+
 function checkBehaviours(subs) {
   const rows = behaviourRows(parsed);
   if (rows === null) {
@@ -720,10 +980,8 @@ function checkBehaviours(subs) {
     return;
   }
   const numbers = new Set(subs.map((t) => t.number));
-  for (const row of rows) {
-    if (row.tasks.length === 0 || !row.tasks.every((n) => numbers.has(n))) {
-      add("B", "Behaviours", `a row's Task cell "${row.cell}" names no sub-issue; name one`);
-    }
+  for (const row of rows.filter((r) => !namesSubIssues(r, numbers))) {
+    add("B", "Behaviours", `a row's Task cell "${row.cell}" names no sub-issue; name one`);
   }
   for (const task of subs) {
     if (!rows.some((r) => r.tasks.includes(task.number))) {

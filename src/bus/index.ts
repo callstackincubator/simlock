@@ -194,6 +194,7 @@ export interface EventMap {
     readonly class: "phone" | "tablet";
     readonly appCount: number;
     readonly reenrolled: boolean;
+    readonly initiator: "operator" | "auto";
   };
   "device.slimmed": {
     readonly deviceId: string;
