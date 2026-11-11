@@ -761,4 +761,63 @@ describe("gateway fleet", () => {
     expect(generated.code, generated.stderr).toBe(0);
     expect((generated.json as { lease: { id: string } }).lease.id).toMatch(/^[^.]+\.lse_/);
   });
+
+  it("through a gateway, a caller re-sending a chosen lease ID after its lease ended gets LEASE_ENDED", async () => {
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
+      driver: "none",
+    }));
+    const url = `ws://127.0.0.1:${port}`;
+    const driverScript = { ios: { availableOsVersions: ["26.0"], knownModels: ["iPhone 16 Pro"] } };
+    await withDaemon({
+      configOverrides: { gateway: { label: "worker-a", token: await mintJoinToken(gateway), url } },
+      driverScript,
+    });
+    await withDaemon({
+      configOverrides: { gateway: { label: "worker-b", token: await mintJoinToken(gateway), url } },
+      driverScript,
+    });
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+    const lease = (agentId: string, leaseId: string) =>
+      gateway.cli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16 Pro",
+          "--agent-id",
+          agentId,
+          "--detach",
+          "--lease-id",
+          leaseId,
+        ],
+        { timeout: 30_000 },
+      );
+    const rejections = async () =>
+      (await gateway.events())
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => (event.payload as { reason: string }).reason);
+
+    expect((await lease("agent-a", "end-released")).code).toBe(0);
+    expect((await gateway.cli(["release", "end-released"], { timeout: 30_000 })).code).toBe(0);
+
+    const retry = await lease("agent-b", "end-released");
+
+    expect(retry.code).toBe(13);
+    expect(retry.error).toMatchObject({
+      code: "LEASE_ENDED",
+      message: expect.stringMatching(
+        /^Lease end-released ended at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z; choose a new lease id$/,
+      ),
+    });
+    expect(await rejections()).toEqual(["lease-ended"]);
+  });
 });
