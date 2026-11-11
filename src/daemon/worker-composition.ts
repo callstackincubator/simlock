@@ -173,6 +173,7 @@ export async function composeWorker(
     eventBus,
     idGenerator,
     deletedRetentionMs: config.devices.deletedRetentionMs,
+    endedIdRetentionMs: config.lease.endedIdRetentionMs,
     leaseIdentity: config.lease.identity,
     leaseRequestLimits: {
       maxRecords: config.lease.maxRequestRecords,

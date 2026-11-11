@@ -12,9 +12,9 @@ Trust in a worker:
 - A worker must not be able to crash, stall or corrupt its gateway. A bad worker reply fails that call. Every view read is bounded, and a link whose refreshes keep timing out is closed.
 - Only `WorkerLink` republishes onto the bus (`boundary.test.ts`). It adds `workerId` and keeps the worker's own event id, name and timestamp.
 - A worker event named like a fact only a gateway authors (`GATEWAY_OWN_EVENTS` in `worker-link.ts`) is dropped; any other name is forwarded, known here or not. An event nested past `MAX_RELAYED_PAYLOAD_DEPTH`, or one that cannot be serialized, is dropped.
-- Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id closes and replaces the old link. `token.revoke` closes the token's uplinks.
+- Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id replaces the old one. `token.revoke` closes the token's uplinks.
 - A protocol mismatch does not close the link: the view is `incompatible`, and that worker is asked only `daemon.update` with `query`.
-- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch to a worker.
+- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch.
 
 Leases:
 
@@ -33,7 +33,7 @@ Leases:
 
 State and reads:
 
-- Persisted: the drained ids and the tokens in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
+- Persisted: the drained ids, the tokens and the ended chosen lease ids in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
 - The registry loads the drained ids before the uplink listener opens.
 - A disconnected view is kept for `gateway.disconnectedRetentionMs`, and for as long as one of this gateway's leases on it is live.
 - Reads answer from the views, never from a worker call. A `starting` view has no catalog and no baselines, and `routingViews` puts the last ones back.
@@ -47,13 +47,13 @@ Relay:
 - Every wait is bounded on the `Clock`: one deadline for the channel and the head, then a silence bound on the body. At either limit: `WORKER_UNREACHABLE`, and `relay.cancel` to the worker.
 - A file upload (`upload` on the call) is bounded by `UPLOAD_STALLED` silence of the caller instead; its head deadline starts at the body's end.
 - A two-way relay keeps both directions open after a 2xx head; ending one ends only that one.
-- Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. Bytes the gateway writes never reset it, and it stops while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
+- Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. It pauses while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
 - On an uplink close the worker aborts that connection's relays. Leases, requests and exec keep running.
 
 ## Flow: a lease through a gateway
 
-1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config and drops `allowDownload`.
-2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, then it stores the request and emits `lease.requested`.
+1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config.
+2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, ended lease id, then it stores the request and emits `lease.requested`.
 3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
 4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
 5. A pick: `lease.request` goes to that worker's [leasing](../leasing/AGENTS.md) over its uplink, as requester `gw:<id>:<requester>`, bounded by `gateway.leaseRequestTimeoutMs`. The first progress push emits `request.dispatched`; a refusal before it starts another walk without that worker.

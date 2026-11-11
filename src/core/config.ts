@@ -59,6 +59,9 @@ export const DEFAULT_DEVICES_DELETED_RETENTION_MS = 60 * 60_000;
 
 export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 
+/** why: `lease.endedIdRetentionMs`'s default: how long a chosen lease id is refused after its lease ended (ADR 0074 §4). */
+export const DEFAULT_LEASE_ENDED_ID_RETENTION_MS = 24 * 60 * 60_000;
+
 const DEFAULT_LEASE_MAX_PER_REQUESTER = 1;
 
 export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
@@ -202,6 +205,8 @@ export interface Config {
       readonly android: LeaseIdentity;
     };
     readonly requestRetentionMs: number;
+    /** why: ADR 0074 §4: how long a chosen lease id is refused after its lease ended, counted from the end; read by a worker and a gateway. */
+    readonly endedIdRetentionMs: number;
     readonly maxRequestRecords: number;
     readonly maxPerRequester: MaxPerRequester;
     readonly endWaitMs: number;
@@ -879,6 +884,7 @@ function defaultConfig(
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: DEFAULT_LEASE_REQUEST_RETENTION_MS,
+      endedIdRetentionMs: DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
       maxRequestRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
       maxPerRequester: DEFAULT_LEASE_MAX_PER_REQUESTER,
       endWaitMs: DEFAULT_EXEC_TIMEOUT_MS,
@@ -1113,6 +1119,7 @@ export function configValidators(
         android: stringUnion(LEASE_IDENTITIES),
       }),
       requestRetentionMs: positiveNumber,
+      endedIdRetentionMs: positiveNumber,
       maxRequestRecords: positiveInteger,
       maxPerRequester: maxPerRequesterValidator,
       endWaitMs: endWaitValidator,

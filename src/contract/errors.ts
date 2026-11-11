@@ -53,6 +53,9 @@ export interface ErrorDetailsMap {
    * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the
    * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
   LEASE_ID_TAKEN: { readonly leaseId: string };
+  /** why: `lease.request` named a `leaseId` whose lease ended within `lease.endedIdRetentionMs`
+   * (ADR 0074 §4); `endedAt` is when, in milliseconds since the epoch. The request is stored nowhere. */
+  LEASE_ENDED: { readonly leaseId: string; readonly endedAt: number };
   NO_DRIVER: { readonly platform: Platform };
   CAPABILITY_MISSING: { readonly capabilities: readonly string[] };
   RELAY_TARGET_MISSING: { readonly target: string };
@@ -222,6 +225,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   NO_CAPACITY: true,
   REQUESTER_ALREADY_LEASED: true,
   LEASE_ID_TAKEN: true,
+  LEASE_ENDED: true,
   NO_DRIVER: true,
   CAPABILITY_MISSING: true,
   RELAY_TARGET_MISSING: true,
@@ -336,6 +340,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // lease or request that is already there.
   LEASE_ID_TAKEN: {
     code: "LEASE_ID_TAKEN",
+    kind: "domain",
+    cliExitCode: 13,
+    httpStatus: 409,
+  },
+  // why: 409 and exit 13 like `LEASE_ID_TAKEN`: the id clashes with a lease that recently ended.
+  LEASE_ENDED: {
+    code: "LEASE_ENDED",
     kind: "domain",
     cliExitCode: 13,
     httpStatus: 409,
@@ -666,6 +677,16 @@ export type AnySimlockError = { [Code in SimlockErrorCode]: SimlockError<Code> }
 
 export function isSimlockError(error: unknown): error is AnySimlockError {
   return error instanceof SimlockError;
+}
+
+/** why: the worker's admission and the gateway's both refuse an ended lease id, so the message lives once. */
+export function leaseEndedError(leaseId: string, endedAt: number): SimlockError<"LEASE_ENDED"> {
+  return new SimlockError(
+    "LEASE_ENDED",
+    "domain",
+    `Lease ${leaseId} ended at ${new Date(endedAt).toISOString()}; choose a new lease id`,
+    { endedAt, leaseId },
+  );
 }
 
 /** why: the CLI and MCP raise this one error from two places, so the wording lives once. */

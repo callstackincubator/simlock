@@ -30,8 +30,9 @@ export interface LeaseRequestOptions {
    */
   readonly idempotencyKey?: string;
   /**
-   * ADR 0020: the lease ID the requester chose. The granted lease has exactly this ID; the
-   * requester guarantees it is unique for all time, and while the request waits it holds the ID.
+   * why: ADR 0020: the lease ID the requester chose. The granted lease has exactly this ID; a live
+   * lease or waiting request holds it, and one whose lease ended is refused for
+   * `lease.endedIdRetentionMs` (ADR 0074 §4).
    * An option of the request, not part of the device it names.
    */
   readonly leaseId?: string;

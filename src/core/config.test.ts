@@ -106,6 +106,7 @@ describe("loadConfig", () => {
         maxTtlMs: 4 * 60 * 60_000,
         identity: { ios: "reusable", android: "reusable" },
         requestRetentionMs: 600_000,
+        endedIdRetentionMs: 86_400_000,
         maxRequestRecords: 10_000,
         maxPerRequester: 1,
         endWaitMs: 600_000,
@@ -791,6 +792,28 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
+  it("an operator's lease.endedIdRetentionMs is checked at load: unset is 24 h, a positive number is read, and 0, a negative number or text are refused", async () => {
+    const load = async (written: unknown) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      if (written !== undefined) {
+        await filesystem.writeFileAtomic(
+          configPath,
+          JSON.stringify({ lease: { endedIdRetentionMs: written } }),
+        );
+      }
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    await expect(load(undefined)).resolves.toMatchObject({
+      lease: { endedIdRetentionMs: 86_400_000 },
+    });
+    await expect(load(5_000)).resolves.toMatchObject({ lease: { endedIdRetentionMs: 5_000 } });
+    for (const refused of [0, -1, "1d"]) {
+      await expect(load(refused), String(refused)).rejects.toThrow("lease.endedIdRetentionMs");
+    }
+  });
+
   it.each([
     [undefined, 1],
     [2, 2],
@@ -979,6 +1002,7 @@ describe("loadConfig", () => {
         maxRequestRecords: 10_000,
         maxTtlMs: 4 * 60 * 60_000,
         requestRetentionMs: 10 * 60_000,
+        endedIdRetentionMs: 24 * 60 * 60_000,
       });
     },
   );

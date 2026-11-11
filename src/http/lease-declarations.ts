@@ -253,7 +253,7 @@ export const leaseRequestCreateRoute = declareRoute({
   replyHeaders: z.object({ Location: z.string().openapi({ description: "The request's URL." }) }),
   status: 201,
   errors: {
-    409: ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+    409: ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
     404: ["UNKNOWN_BASELINE"],
     422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
     503: ["NO_CAPACITY"],

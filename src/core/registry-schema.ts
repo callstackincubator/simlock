@@ -133,8 +133,15 @@ const REGISTRY_V5 = `
 ALTER TABLE devices ADD COLUMN deleted_at INTEGER;
 `;
 
+const REGISTRY_V6 = `
+CREATE TABLE ended_lease_ids (
+  lease_id TEXT PRIMARY KEY,
+  ended_at INTEGER NOT NULL
+) STRICT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4, REGISTRY_V5],
+  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4, REGISTRY_V5, REGISTRY_V6],
   name: "registry",
-  version: 5,
+  version: 6,
 };

@@ -2015,6 +2015,42 @@ describe("startDaemon state.db", () => {
     expect(await queryState(directory, "SELECT id FROM devices")).toEqual([]);
   });
 
+  it("a worker refuses a re-sent chosen lease id inside the configured lease.endedIdRetentionMs and grants it after", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon } = await start({
+      clock,
+      configOverrides: { lease: { endedIdRetentionMs: 600_000 } },
+      drivers: [driver],
+    });
+    const agent = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "agent",
+      role: "agent",
+    } as const;
+    const chosen = {
+      leaseId: "retained",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      requesterId: "agent-1",
+    } as const;
+    await daemon.dispatch("lease.request", chosen, agent);
+    await daemon.dispatch("lease.release", { leaseId: "retained" }, agent);
+
+    // why: 5 minutes is inside the ten minutes configured and far inside the default day.
+    clock.advance(5 * 60_000);
+    await expect(daemon.dispatch("lease.request", chosen, agent)).rejects.toMatchObject({
+      code: "LEASE_ENDED",
+    });
+    // why: 30 minutes is outside the ten minutes configured and inside the default day.
+    clock.advance(30 * 60_000);
+    await expect(daemon.dispatch("lease.request", chosen, agent)).resolves.toMatchObject({
+      lease: { id: "retained" },
+    });
+  });
+
   it("a worker's state.db holds both platforms' source-data tables, a gateway's holds neither", async () => {
     const worker = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
     const gateway = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));

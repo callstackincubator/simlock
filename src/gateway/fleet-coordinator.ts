@@ -44,6 +44,7 @@ import type {
 } from "../admin/index.js";
 import {
   isSimlockError,
+  leaseEndedError,
   requestedClass,
   requestedDevice,
   type Platform,
@@ -74,6 +75,7 @@ import {
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { FleetRefusals, refusedCapacityReason, type WorkerEntry } from "./fleet-refusals.js";
+import type { EndedLeaseIds } from "./ended-lease-ids.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 import {
@@ -126,6 +128,8 @@ export interface FleetLeaseCoordinatorOptions {
   readonly views: FleetViews;
   readonly routing: RoutingPolicy;
   readonly leaseIndex: FleetLeaseIndex;
+  /** why: ADR 0074 §4: the chosen ids this gateway learned ended from its workers. */
+  readonly endedLeaseIds: EndedLeaseIds;
   /** why: ADR §19e (P5, round 2 review): `gateway.execTimeoutMs`, the backstop for a forwarded
    * `device.exec` whose worker never answers at all -- the worker's own `exec.timeoutMs` is
    * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
@@ -211,6 +215,11 @@ export class FleetLeaseCoordinator {
         limits: options.leaseRequestLimits,
       }),
     });
+    options.leaseIndex.onEnded((entry) => {
+      if (entry.idChosenByRequester === true) {
+        options.endedLeaseIds.record(entry.gatewayLeaseId, options.clock.now());
+      }
+    });
     this.#unsubscribeViews = options.views.onViewsChanged(() => this.#onViewsChanged());
   }
 
@@ -269,6 +278,7 @@ export class FleetLeaseCoordinator {
       const requestId = newLeaseRequestId(this.options.idGenerator);
       this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
       this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
+      this.#refuseIfLeaseIdEnded(deviceRequest, options, requestId);
       const { id, started } = await this.requests.admit(
         deviceRequest,
         options,
@@ -381,6 +391,26 @@ export class FleetLeaseCoordinator {
       reason: "lease-id-taken",
     });
     throw leaseIdTaken(leaseId);
+  }
+
+  /** why: ADR 0074 §4: after the taken-id check, a chosen id whose lease this gateway learned ended is refused without a dispatch; a worker answers for ends the gateway missed. */
+  #refuseIfLeaseIdEnded(
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    const endedAt = this.options.endedLeaseIds.endedAt(leaseId);
+    if (endedAt === undefined) return;
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: "lease-ended",
+    });
+    const ended = leaseEndedError(leaseId, endedAt);
+    throw new DispatchError(ended.code, ended.message, ended.details);
   }
 
   /**
@@ -933,6 +963,7 @@ export class FleetLeaseCoordinator {
     const entry: FleetLeaseEntry = {
       gatewayLeaseId,
       grantedAt: grant.lease.grantedAt,
+      idChosenByRequester: forwardedLeaseId !== undefined,
       ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
       workerId,
