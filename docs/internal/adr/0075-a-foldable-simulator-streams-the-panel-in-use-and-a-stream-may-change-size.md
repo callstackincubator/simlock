@@ -67,10 +67,21 @@ sequenceDiagram
   C-->>V: meta (cover 494x720), keyframe, frames
 ```
 
-### 4. The capture's helpers die with it
+### 4. Taps follow the same panel
 
-Every process the capture starts to follow the log ends when the capture
-ends, by any way out, SIGKILL included.
+The input helper uses the same panel follower as the capture, because it
+cannot read from the host which panel is lit. A tap's fraction is of the
+picture the viewer sees. On a two-panel device it goes to that panel's
+own digitizer target, and the inner panel's fraction is turned back to
+its sideways framebuffer. The helper sends a new screen config, with the
+upright size of the panel in use, on each change; a one-panel device
+keeps today's target and config. Measured on an iOS 27.1 Duo: today's
+target misses the cover, and lands turned a quarter on the inner panel.
+
+### 5. The helpers' children die with them
+
+Every process the capture or the input helper starts to follow the log
+ends when that helper ends, by any way out, SIGKILL included.
 
 ## Consequences
 
@@ -95,6 +106,8 @@ ends, by any way out, SIGKILL included.
 - **Brightness only, no log.** No undocumented dependency, but the capture
   would have to keep sampling the other panel to notice a fold. Untried,
   and more work per stream.
+- **Taps unchanged, a known gap.** Rejected by the maintainer: a picture
+  that cannot be tapped where it is seen is half the feature.
 - **End the stream on a fold, and let viewers reconnect.** Keeps the
   contract. Rejected by the maintainer: the switch should not drop the
   viewer.
