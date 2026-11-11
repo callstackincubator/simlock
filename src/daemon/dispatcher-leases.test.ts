@@ -145,6 +145,24 @@ describe("Dispatcher: ownership", () => {
     });
   });
 
+  it("a worker with no gateway accepts a request's metadata and stores and emits none of it", async () => {
+    const { dispatcher, eventBus, registry } = await buildDispatcher();
+
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { metadata: { project: "checkout-app" }, model: "iPhone 17", platform: "ios" },
+      session({ principal: "tok_owner" }),
+    );
+
+    expect(grant.lease.id).toBeDefined();
+    expect(registry.leaseRequests().length, "the request is stored").toBeGreaterThan(0);
+    expect(JSON.stringify(registry.leaseRequests()), "the stored request").not.toContain(
+      "checkout-app",
+    );
+    expect(JSON.stringify(registry.snapshot), "the registry").not.toContain("checkout-app");
+    expect(JSON.stringify(eventBus.replay()), "the events").not.toContain("checkout-app");
+  });
+
   it("lease.renew: rejects a non-owner with FORBIDDEN, admits the owner, admin bypasses", async () => {
     const { dispatcher } = await buildDispatcher();
     const leaseId = await grantLease(dispatcher);
