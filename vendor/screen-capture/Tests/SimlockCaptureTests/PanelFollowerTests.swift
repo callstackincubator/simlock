@@ -12,6 +12,7 @@ final class FakeLog: PanelLog, @unchecked Sendable {
     private let lock = NSLock()
     private let boot: [String]
     private(set) var liveStarts = 0
+    private(set) var bootTimeouts: [TimeInterval] = []
     private var onLine: (@Sendable (String) -> Void)?
     private var onEnd: (@Sendable () -> Void)?
 
@@ -24,6 +25,7 @@ final class FakeLog: PanelLog, @unchecked Sendable {
     }
 
     func bootLines(timeout: TimeInterval) async -> [String] {
+        lock.withLock { bootTimeouts.append(timeout) }
         if holdsBoot {
             await withCheckedContinuation { gate in
                 lock.lock()
@@ -78,6 +80,13 @@ final class Picks: @unchecked Sendable {
     var all: [String] { lock.lock(); defer { lock.unlock() }; return names }
 }
 
+final class Notes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func add(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+}
+
 /// Lets the follower's background tasks run on the other threads of the pool; patience, never a bound
 /// a test asserts.
 func settle() async { for _ in 0..<50 { try? await Task.sleep(nanoseconds: 2_000_000) } }
@@ -106,13 +115,20 @@ final class PanelFollowerStartTests: XCTestCase {
         ]
         for row in cases {
             let log = FakeLog(boot: row.boot)
-            let follower = PanelFollower(panels: row.panels, sampler: FakeSampler(row.lit), log: log, clock: FakeClock())
+            let notes = Notes()
+            let follower = PanelFollower(
+                panels: row.panels, sampler: FakeSampler(row.lit), log: log, clock: FakeClock(), note: { notes.add($0) }
+            )
             let picks = Picks()
             await follower.start { picks.add($0) }
             XCTAssertEqual(picks.all.count, row.picks.isEmpty ? 0 : 1, "\(row.title): the first panel is not reported before start returns")
             await settle()
             XCTAssertEqual(picks.all, row.picks, row.title)
             XCTAssertEqual(log.liveStarts, row.liveStarts, row.title)
+            XCTAssertEqual(notes.all, row.panels.count > 2 ? ["[panels] 3 panels; staying on the first"] : [], row.title)
+            // the boot log is asked for within 10 s, and only when the lit panels do not say which is in use
+            let asked = row.liveStarts == 1 && row.lit[1] == row.lit[3]
+            XCTAssertEqual(log.bootTimeouts, asked ? [10] : [], row.title)
             follower.stop()
         }
     }
@@ -121,12 +137,15 @@ final class PanelFollowerStartTests: XCTestCase {
 final class PanelFollowerLiveTests: XCTestCase {
     private func started(
         lit: [Int: Bool] = [1: true, 3: false], log: FakeLog = FakeLog()
-    ) async -> (follower: PanelFollower, log: FakeLog, clock: FakeClock, picks: Picks) {
+    ) async -> (follower: PanelFollower, log: FakeLog, clock: FakeClock, picks: Picks, notes: Notes) {
         let clock = FakeClock()
         let picks = Picks()
-        let follower = PanelFollower(panels: [cover, inner], sampler: FakeSampler(lit), log: log, clock: clock)
+        let notes = Notes()
+        let follower = PanelFollower(
+            panels: [cover, inner], sampler: FakeSampler(lit), log: log, clock: clock, note: { notes.add($0) }
+        )
         await follower.start { picks.add($0) }
-        return (follower, log, clock, picks)
+        return (follower, log, clock, picks, notes)
     }
 
     func testTheFollowerFollowsLiveMoves() async {
@@ -155,8 +174,10 @@ final class PanelFollowerLiveTests: XCTestCase {
         let ending = await started()
         ending.log.end()
         await settle()
+        ending.clock.advance(0.9)
+        await settle()
         XCTAssertEqual(ending.log.liveStarts, 1, "restarted before the second passed")
-        ending.clock.advance(1)
+        ending.clock.advance(0.1)
         await settle()
         XCTAssertEqual(ending.log.liveStarts, 2, "not restarted after 1 s")
         ending.follower.stop()
@@ -168,8 +189,13 @@ final class PanelFollowerLiveTests: XCTestCase {
 
         // no line ever: it stays on the panel it picked
         let silent = await started(lit: [1: false, 3: true])
-        silent.clock.advance(30)
         await settle()
+        silent.clock.advance(29)
+        await settle()
+        XCTAssertEqual(silent.notes.all, [], "said it heard nothing before 30 s")
+        silent.clock.advance(1)
+        await settle()
+        XCTAssertEqual(silent.notes.all, ["[panels] no panel move heard; staying on inner"], "one log line after 30 s")
         XCTAssertEqual(silent.picks.all, ["inner"], "moved without a line")
         silent.follower.stop()
     }

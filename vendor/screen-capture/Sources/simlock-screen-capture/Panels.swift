@@ -76,6 +76,7 @@ final class PanelFollower: @unchecked Sendable {
     private let sampler: PanelSampler
     private let source: PanelLog
     private let clock: PanelClock
+    private let note: @Sendable (String) -> Void
     private let lock = NSLock()
     private var current: Panel?
     private var onPanel: (@Sendable (Panel) -> Void)?
@@ -83,7 +84,13 @@ final class PanelFollower: @unchecked Sendable {
     private var heardLine = false
     private var heardMove = false
 
-    init(panels: [Panel], sampler: PanelSampler, log: PanelLog, clock: PanelClock) {
+    static let toStderr: @Sendable (String) -> Void = { message in log(message) }
+
+    init(
+        panels: [Panel], sampler: PanelSampler, log: PanelLog, clock: PanelClock,
+        note: @escaping @Sendable (String) -> Void = PanelFollower.toStderr
+    ) {
+        self.note = note
         self.panels = panels
         self.sampler = sampler
         self.source = log
@@ -98,7 +105,7 @@ final class PanelFollower: @unchecked Sendable {
               let cover = panels.first(where: { $0.role == .cover }),
               let inner = panels.first(where: { $0.role == .inner })
         else {
-            log("[panels] \(panels.count) panels; staying on the first")
+            note("[panels] \(panels.count) panels; staying on the first")
             report(panels[0])
             return
         }
@@ -111,7 +118,7 @@ final class PanelFollower: @unchecked Sendable {
         if !hasReported { report(innerLit && !coverLit ? inner : cover) }
         Task {
             await clock.sleep(seconds: Self.silenceSeconds)
-            if !isSilenceBroken { log("[panels] no panel move heard; staying on \(currentRole)") }
+            if !isSilenceBroken { note("[panels] no panel move heard; staying on \(currentRole)") }
         }
         if coverLit == innerLit {
             // why: a black app lights neither panel and a bright one lights both, so the lit panel

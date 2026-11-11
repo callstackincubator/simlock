@@ -220,7 +220,7 @@ func encodeLoop(_ frames: AsyncStream<Pending>, options: Options, session: Sessi
     for await frame in frames {
         if started, frame.atNanos &- lastSent < intervalNanos { continue }
         lastSent = frame.atNanos
-        var forceKeyframe = !started
+        let forceKeyframe = !started
         started = true
 
         guard let prepared = prepareForEncode(frame.buffer, options: options, session: session) else {
@@ -228,13 +228,12 @@ func encodeLoop(_ frames: AsyncStream<Pending>, options: Options, session: Sessi
         }
         // The meta frame rides the first picture because that is the first moment the encoded
         // geometry (post-scale) is known. A picture of another size gets a meta frame of its own,
-        // ahead of the fresh parameter sets the encoder sends for it, and starts on a keyframe, so a
-        // viewer learns the new size before the first picture drawn at it.
+        // ahead of the fresh parameter sets and keyframe the encoder sends for it, so a viewer learns the
+        // new size before the first picture drawn at it.
         let size = Dimensions(width: CVPixelBufferGetWidth(prepared), height: CVPixelBufferGetHeight(prepared))
         if metaSize != size {
             if metaSize != nil {
                 log("picture size changed to \(size.width)x\(size.height)")
-                forceKeyframe = true
             }
             metaSize = size
             let meta: [String: Any] = [
