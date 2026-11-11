@@ -5,7 +5,10 @@
 - **Issue:** [#1531](https://github.com/callstackincubator/simlock/issues/1531), bug [#1457](https://github.com/callstackincubator/simlock/issues/1457)
 - **Narrows:** [ADR 0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md)'s
   Consequences line "the stream module, the frame envelope, the HTTP API
-  and the console do not change", for the size of the picture.
+  and the console do not change", for the size of the picture; and
+  [ADR 0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) §4's
+  "positions stay fractions of the device's native frame", for a
+  two-panel device (§4 below).
 - **Evidence:** draft PR [#1525](https://github.com/callstackincubator/simlock/pull/1525),
   a proof of concept on an iPhone Duo (iOS 27.2, Xcode 27.2).
 
@@ -75,7 +78,9 @@ picture the viewer sees. On a two-panel device it goes to that panel's
 own digitizer target, and the inner panel's fraction is turned back to
 its sideways framebuffer. The helper sends a new screen config, with the
 upright size of the panel in use, on each change; a one-panel device
-keeps today's target and config. Measured on an iOS 27.1 Duo: today's
+keeps today's target and config. `0x82` still says `portrait` on both
+panels, as 0052 §4 has it; only the meaning of a fraction changes, from
+the device's native frame to the upright picture the viewer sees. Measured on an iOS 27.1 Duo: today's
 target misses the cover, and lands turned a quarter on the inner panel.
 
 ### 5. The helpers' children die with them
