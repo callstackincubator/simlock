@@ -7,15 +7,17 @@ import {
   type ProcessResult,
 } from "../ports/index.js";
 import {
+  GATEWAY_PREFIX,
   RecordingLogger,
   REQUEST,
   connectWorker,
   harness,
   requestOptions,
+  roomierIos,
   saturatedIos,
   tick,
 } from "./test-fleet.js";
-import { ScriptedWorkerClient, grantFixture } from "./test-support.js";
+import { ScriptedWorkerClient, grantFixture, physicalDeviceFixture } from "./test-support.js";
 
 const COMMAND = ["bun", "/etc/simlock/policy.ts"] as const;
 const FAILED = "ADMISSION_FAILED";
@@ -208,5 +210,77 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
     expect(runner.calls).toHaveLength(2);
     const rejected = fleet.eventBus.replay().filter((event) => event.event === "lease.rejected");
     expect(rejected).toEqual([]);
+  });
+
+  it("waiting requests on one gateway line are served by priority, then arrival", async () => {
+    const arrivals = [
+      { name: "A", priority: 0 },
+      { name: "B", priority: 10 },
+      { name: "C", priority: 0 },
+      { name: "D", priority: 10 },
+      { name: "P", physical: true, priority: 0 },
+      { name: "Q", physical: true, priority: 5 },
+    ];
+    const runner = new ScriptedProcessRunner(
+      arrivals.map(({ priority }) => ({
+        match: { args: [COMMAND[1]], command: COMMAND[0] },
+        result: { code: 0, stderr: "", stdout: JSON.stringify({ priority }) },
+      })),
+    );
+    const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 } });
+    const client = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", client);
+    const busy = {
+      capacity: saturatedIos(),
+      devices: [
+        physicalDeviceFixture("dev_p", "ready", {
+          presence: { present: false, reason: "not-present" },
+        }),
+      ],
+    };
+    connectWorker(fleet.workers, "wrk_a", busy);
+    const queued: number[] = [];
+    fleet.eventBus.subscribe("lease.queued", (envelope) =>
+      queued.push(envelope.payload.queuePosition),
+    );
+    const pushed: Record<string, number[]> = {};
+
+    for (const { name, physical } of arrivals) {
+      pushed[name] = [];
+      void fleet.coordinator
+        .request(
+          physical === true
+            ? { ...REQUEST, model: "iPhone 15 Pro", osVersion: "18.4", physical }
+            : REQUEST,
+          requestOptions({
+            onProgress: (progress) => {
+              if (progress.stage === "queued") pushed[name]?.push(progress.queuePosition);
+            },
+            ownerId: name,
+            requesterId: name,
+          }),
+        )
+        .catch(() => undefined);
+      await tick();
+    }
+
+    expect(pushed).toEqual({ A: [1], B: [1], C: [3], D: [2], P: [1], Q: [1] });
+    expect(queued).toEqual([1, 1, 3, 2, 1, 1]);
+    const waiting = fleet.coordinator.waitingRequests();
+    expect(
+      Object.fromEntries(waiting.map((entry) => [entry.requesterId, entry.queuePosition])),
+    ).toEqual({ A: 3, B: 1, C: 4, D: 2, P: 2, Q: 1 });
+
+    connectWorker(fleet.workers, "wrk_a", { ...busy, capacity: roomierIos() });
+    for (const name of ["B", "D", "A", "C"]) {
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: { ...grantFixture().lease, id: `lse_${name}` } }),
+        kind: "grant",
+      });
+    }
+    await tick();
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toEqual(
+      ["B", "D", "A", "C"].map((name) => `lease.request:${GATEWAY_PREFIX}${name}`),
+    );
   });
 });
