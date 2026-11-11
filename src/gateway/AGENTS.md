@@ -52,8 +52,8 @@ Relay:
 ## Flow: a lease through a gateway
 
 1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config and drops `allowDownload`.
-2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, ended lease id, then it stores the request and emits `lease.requested`.
-3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
+2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, ended lease id, then it stores the request and emits `lease.requested`. With `gateway.admission.command` set, those checks run first, then the command runs outside the lock (`admission.ts`, one JSON object in and out, time and output bounded, ADR 0074 §1), then the checks run again with its answer before anything is stored. A priority orders the queue; a refusal or a failed command ends the request (`ADMISSION_DENIED`, `ADMISSION_FAILED`). `lease.cancel` and `dispose` abort a running command.
+3. It walks the open requests by priority, then oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
 4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
 5. A pick: `lease.request` goes to that worker's [leasing](../leasing/AGENTS.md) over its uplink, as requester `gw:<id>:<requester>`, bounded by `gateway.leaseRequestTimeoutMs`. The first progress push emits `request.dispatched`; a refusal before it starts another walk without that worker.
 6. Grant: the gateway lease id is the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. The index entry is added, then `request.granted` is emitted. The worker's view is read again before any answer.
