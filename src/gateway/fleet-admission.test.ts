@@ -22,6 +22,8 @@ import { ScriptedWorkerClient, grantFixture, physicalDeviceFixture } from "./tes
 const COMMAND = ["bun", "/etc/simlock/policy.ts"] as const;
 const FAILED = "ADMISSION_FAILED";
 const NOT_AN_ANSWER = "printed an answer that is not a priority or a refusal";
+const denied = (reason: string) => ({ code: "ADMISSION_DENIED", details: { reason } });
+const refusal = (reason: string) => ({ stdout: JSON.stringify({ deny: reason }) });
 
 type Output = Partial<ProcessResult> | "cannot-start";
 
@@ -39,7 +41,7 @@ class MissingProgramRunner extends ScriptedProcessRunner {
   }
 }
 
-function admissionFleet(output: Output) {
+function admissionFleet(output: Output, command: readonly string[] = COMMAND) {
   const runner =
     output === "cannot-start"
       ? new MissingProgramRunner()
@@ -50,7 +52,7 @@ function admissionFleet(output: Output) {
           },
         ]);
   const logger = new RecordingLogger();
-  const fleet = harness({ admission: { command: COMMAND, runner, timeoutMs: 5_000 }, logger });
+  const fleet = harness({ admission: { command, runner, timeoutMs: 5_000 }, logger });
   const client = new ScriptedWorkerClient();
   fleet.directory.add("wrk_a", client);
   connectWorker(fleet.workers, "wrk_a", { capacity: saturatedIos() });
@@ -117,7 +119,12 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
   it("a gateway with an admission command queues a new request at the priority the command answers, and refuses it when the command denies or fails", async () => {
     const queued = { queued: true };
     const failed = (cause: string) => ({ code: FAILED, details: { cause } });
-    const rows: ReadonlyArray<{ readonly output: Output; readonly expected: object }> = [
+    const longProgram = "p".repeat(501);
+    const rows: ReadonlyArray<{
+      readonly output: Output;
+      readonly expected: object;
+      readonly command?: readonly string[];
+    }> = [
       { expected: queued, output: { stdout: '{"priority":10}' } },
       { expected: queued, output: { stdout: "{}" } },
       { expected: queued, output: { stdout: ' \n{"priority":-1000}\n' } },
@@ -143,10 +150,20 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
         expected: { code: "ADMISSION_DENIED", details: { reason: "budget used" } },
         output: { stdout: '{"deny":"budget used"}' },
       },
+      { expected: denied("x".repeat(500)), output: refusal("x".repeat(500)) },
+      { expected: failed(NOT_AN_ANSWER), output: refusal("x".repeat(501)) },
+      { expected: denied("a b"), output: refusal("a b") },
+      { expected: failed(NOT_AN_ANSWER), output: refusal("a\u0001b") },
+      { expected: failed(NOT_AN_ANSWER), output: refusal("a\u007fb") },
+      {
+        command: [longProgram],
+        expected: failed(`could not start ${"p".repeat(500)}`),
+        output: "cannot-start",
+      },
     ];
 
-    for (const { output, expected } of rows) {
-      const fleet = admissionFleet(output);
+    for (const { output, expected, command } of rows) {
+      const fleet = admissionFleet(output, command);
       const request = fleet.coordinator.request(REQUEST, requestOptions());
       let refusal: { code: string; details: unknown } | undefined;
       request.catch((error: { code: string; details: unknown }) => {
@@ -175,6 +192,12 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
         }) as unknown,
       }),
     ]);
+
+    expect(fleet.runner.calls[0]?.options.maxStdoutBytes).toBe(65_536);
+
+    const noisy = admissionFleet({ code: 1, stderr: "e".repeat(3000), stdout: "" });
+    await noisy.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
+    expect(noisy.logger.warnings[0]?.fields).toMatchObject({ stderr: "e".repeat(2048) });
 
     const held = grantingFleet(answering(1));
     held.client.requestLeaseQueue.push({
@@ -342,5 +365,15 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
         name,
       ).toEqual(rejected);
     }
+
+    const other = gatedFleet();
+    other.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
+    await tick();
+    const strangers = [
+      await other.coordinator.cancelPending("agent-2"),
+      await other.coordinator.cancelPending("agent-1", "android"),
+    ];
+    expect(strangers).toEqual(["not-found", "not-found"]);
+    expect(other.runner.calls[0]?.options.signal?.aborted).toBe(false);
   });
 });
