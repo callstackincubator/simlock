@@ -12,7 +12,7 @@ Trust in a worker:
 - A worker must not be able to crash, stall or corrupt its gateway. A bad worker reply fails that call. Every view read is bounded, and a link whose refreshes keep timing out is closed.
 - Only `WorkerLink` republishes onto the bus (`boundary.test.ts`). It adds `workerId` and keeps the worker's own event id, name and timestamp.
 - A worker event named like a fact only a gateway authors (`GATEWAY_OWN_EVENTS` in `worker-link.ts`) is dropped; any other name is forwarded, known here or not. An event nested past `MAX_RELAYED_PAYLOAD_DEPTH`, or one that cannot be serialized, is dropped.
-- Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id closes and replaces the old link. `token.revoke` closes the token's uplinks.
+- Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id replaces the old one. `token.revoke` closes the token's uplinks.
 - A protocol mismatch does not close the link: the view is `incompatible`, and that worker is asked only `daemon.update` with `query`.
 - A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch to a worker.
 
@@ -32,7 +32,7 @@ Leases:
 
 State and reads:
 
-- Persisted: the drained ids, the tokens and the ended chosen lease ids (`lease.endedIdRetentionMs`, ADR 0074 §4) in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
+- Persisted: the drained ids, the tokens and the ended chosen lease ids in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
 - The registry loads the drained ids before the uplink listener opens.
 - A disconnected view is kept for `gateway.disconnectedRetentionMs`, and for as long as one of this gateway's leases on it is live.
 - Reads answer from the views, never from a worker call. A `starting` view has no catalog and no baselines, and `routingViews` puts the last ones back.
@@ -65,7 +65,6 @@ Relay:
 - **A starting worker's leases are hidden from their owner.** `lease.list` and `lease.get` omit them
   for the startup checks plus one refresh. Meanwhile remote commands fail with
   "No lease is held by …" and MCP `status()` reports none; the lease stands. Don't request a new device.
-- **A lease that ended while the gateway was down is not recorded by it.** A chosen id it never saw end is dispatched, and the worker that held the lease answers `LEASE_ENDED` (`worker-failed`); another worker grants it.
 - **A fleet request is stored only once a worker takes it.** A gateway restart loses every open request;
   ids answer `404`, a repeated `Idempotency-Key` is new (maybe `REQUESTER_ALREADY_LEASED`).
 - **A dispatched request whose uplink drops may have granted a lease anyway.** Client sees
@@ -73,7 +72,7 @@ Relay:
 - **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew, release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
 - **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`. `worker drain` leaves it to the owner.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
-- **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`; amending the ADR is the maintainer's call.
+- **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish it; amending the ADR is the maintainer's call.
 - **Gateway warm hits miss some devices.** A slim-pool device that failed its slim pass reports `full`
   and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a
   mode-less request; a `--mode slim` request there is no hit on a ready full device.
