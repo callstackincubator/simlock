@@ -49,36 +49,45 @@ function hasControlCharacter(text: string): boolean {
   });
 }
 
-/** why: the command is another process: only a priority in range, `{}` or a refusal with a printable reason of 1 to 500 characters is an answer; anything else fails the request. */
-function parseAnswer(stdout: string): AdmissionDecision {
-  const text = stdout.trim();
-  if (text === "") return fail("printed no answer");
-  let value: unknown;
+function parseObject(stdout: string): Record<string, unknown> | undefined {
   try {
-    value = JSON.parse(text);
+    const value: unknown = JSON.parse(stdout);
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   } catch {
-    return fail(NOT_AN_ANSWER);
+    return undefined;
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return fail(NOT_AN_ANSWER);
-  }
-  const answer = value as Record<string, unknown>;
-  const { deny, priority } = answer;
-  if ("deny" in answer && "priority" in answer) return fail(NOT_AN_ANSWER);
-  if ("deny" in answer) {
-    return typeof deny === "string" &&
-      deny.length >= 1 &&
-      deny.length <= REASON_MAX_LENGTH &&
-      !hasControlCharacter(deny)
-      ? { kind: "deny", reason: deny }
-      : fail(NOT_AN_ANSWER);
-  }
-  if (!("priority" in answer)) return { kind: "priority", priority: 0 };
+}
+
+function parseRefusal(reason: unknown): AdmissionDecision {
+  return typeof reason === "string" &&
+    reason.length >= 1 &&
+    reason.length <= REASON_MAX_LENGTH &&
+    !hasControlCharacter(reason)
+    ? { kind: "deny", reason }
+    : fail(NOT_AN_ANSWER);
+}
+
+function parsePriority(priority: unknown): AdmissionDecision {
   return typeof priority === "number" &&
     Number.isInteger(priority) &&
     Math.abs(priority) <= PRIORITY_LIMIT
     ? { kind: "priority", priority }
     : fail(NOT_AN_ANSWER);
+}
+
+/** why: the command is another process: only a priority in range, `{}` or a refusal with a printable reason of 1 to 500 characters is an answer; anything else fails the request. */
+function parseAnswer(stdout: string): AdmissionDecision {
+  const text = stdout.trim();
+  if (text === "") return fail("printed no answer");
+  const answer = parseObject(text);
+  if (answer === undefined) return fail(NOT_AN_ANSWER);
+  const refuses = "deny" in answer;
+  const ranks = "priority" in answer;
+  if (refuses && ranks) return fail(NOT_AN_ANSWER);
+  if (refuses) return parseRefusal(answer["deny"]);
+  return ranks ? parsePriority(answer["priority"]) : { kind: "priority", priority: 0 };
 }
 
 /** why: ADR 0074 §1: the gateway runs the operator's command once per new request and reads its one JSON answer; it fails closed, and its log line names the cause and the start of the command's stderr. */

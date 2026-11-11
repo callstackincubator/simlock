@@ -292,10 +292,7 @@ export class NodeProcessRunner implements ProcessRunner {
       this.exitDeferralCapMs,
       this.exitGraceMs,
       launch.windowsVerbatimArguments,
-      {
-        ...(options.maxStdoutBytes === undefined ? {} : { maxStdoutBytes: options.maxStdoutBytes }),
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      },
+      runLimits(options),
     );
   }
 
@@ -628,6 +625,16 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
 }
 
 const TASKKILL_TIMEOUT_MS = 10_000;
+
+function runLimits({
+  maxStdoutBytes,
+  signal,
+}: ProcessRunOptions): Pick<ProcessRunOptions, "maxStdoutBytes" | "signal"> {
+  return {
+    ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
+    ...(signal === undefined ? {} : { signal }),
+  };
+}
 
 /**
  * why: Windows has no process groups, and a batch file runs under a `cmd.exe` wrapper

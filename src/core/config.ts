@@ -63,7 +63,7 @@ export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 export const DEFAULT_LEASE_ENDED_ID_RETENTION_MS = 24 * 60 * 60_000;
 
 /** why: `gateway.admission.timeoutMs`'s default (ADR 0074 §1): a policy script answers in well under this, and a stuck one refuses requests for no longer. */
-export const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
+const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
 
 /** why: the bounds on `gateway.admission`; the contract's schema repeats them for the wire. */
 const ADMISSION_TIMEOUT_MAX_MS = 60_000;
