@@ -31,8 +31,6 @@ import {
   UnknownLeaseError,
   type CapacityReader,
   BaselineInUseError,
-  BaselineMismatchError,
-  BaselineStaleError,
   BaselineSaveFailedError,
   UnknownBaselineError,
   type BaselineService,
@@ -47,10 +45,10 @@ import {
   redactConfig,
 } from "../core/index.js";
 import type { ModuleInputs } from "../modules/index.js";
+import { leaseRequestRefusal } from "./lease-request-refusal.js";
 import { rotationRefusal } from "./rotation-refusal.js";
 import {
   type DeviceModeReader,
-  LeaseIdTakenError,
   type LeaseCommands,
   capacityReasonOf,
   NoCapacityError,
@@ -83,7 +81,6 @@ import {
   EVENTS_PAGE_DEFAULT,
   fitPlatformCatalog,
   inboxItems,
-  isSimlockError,
   OPERATIONS,
   requestedDevice,
   type ComponentProgress,
@@ -556,27 +553,8 @@ export class Dispatcher {
           device: device.physical ? { ...device, class: device.spec.class } : device,
         };
       } catch (error: unknown) {
-        if (isSimlockError(error) && error.code === "LEASE_ENDED") {
-          throw new DispatchError(error.code, error.message, error.details);
-        }
-        if (error instanceof LeaseIdTakenError) {
-          throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
-        }
-        if (error instanceof UnknownBaselineError) {
-          throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
-        }
-        if (error instanceof BaselineMismatchError) {
-          throw new DispatchError("BASELINE_MISMATCH", error.message, {
-            baseline: error.baselineName,
-            field: error.field,
-          });
-        }
-        if (error instanceof BaselineStaleError) {
-          throw new DispatchError("BASELINE_STALE", error.message, {
-            baseline: error.baselineName,
-            reason: error.reason,
-          });
-        }
+        const refusal = leaseRequestRefusal(error);
+        if (refusal !== undefined) throw refusal;
         if (error instanceof NoCapacityError) {
           const capacityReason = capacityReasonOf(error.reason);
           if (capacityReason !== undefined) {
