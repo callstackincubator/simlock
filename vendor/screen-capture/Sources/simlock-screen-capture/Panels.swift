@@ -27,3 +27,46 @@ enum Panels {
         return primaries.count == 1 ? primaries[0] : nil
     }
 }
+
+/// One built-in touch panel of a simulator.
+struct Panel: Equatable {
+    let name: String
+    /// The id `simctl io enumerate` lists the panel under; also its touch target.
+    let screenID: Int
+    let width: Int
+    let height: Int
+    /// Degrees the panel is mounted at relative to its framebuffer; the inner Duo panel's is 270, so
+    /// its framebuffer holds the picture on its side.
+    let nativeRotation: Int
+    /// Set only on a device with exactly two panels, where the smaller is the cover.
+    let role: PanelRole?
+}
+
+/// Which of a device's panels are lit right now.
+protocol PanelSampler: Sendable {
+    /// A panel that failed or was late to read is dark.
+    func lit(_ panels: [Panel]) async -> [Int: Bool]
+}
+
+/// SpringBoard's panel moves, as log lines.
+protocol PanelLog: AnyObject, Sendable {
+    /// This boot's moves, oldest first; empty when they could not be read within `timeout`.
+    func bootLines(timeout: TimeInterval) async -> [String]
+    /// Streams lines as they come; `onEnd` runs when the stream ends by itself.
+    func live(onLine: @escaping @Sendable (String) -> Void, onEnd: @escaping @Sendable () -> Void)
+    func stop()
+}
+
+protocol PanelClock: Sendable {
+    func sleep(seconds: TimeInterval) async
+}
+
+/// Picks the panel in use when it starts, then reports each move SpringBoard makes.
+final class PanelFollower: @unchecked Sendable {
+    init(panels: [Panel], sampler: PanelSampler, log: PanelLog, clock: PanelClock) {}
+
+    /// Reports the first panel before it returns, then each change.
+    func start(onPanel: @escaping @Sendable (Panel) -> Void) async {}
+
+    func stop() {}
+}
