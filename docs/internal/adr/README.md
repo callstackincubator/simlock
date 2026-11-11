@@ -69,7 +69,7 @@ the status is stale.
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted; §4 narrowed by 0049 and, for a file PUT's deadline, 0067 |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted; Context's "nothing acts on them", §1's "nothing that decides reads the readings" and §7 narrowed by 0068 |
 | [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Accepted; §2 narrowed by 0046; §3 narrowed by 0049 |
-| [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted |
+| [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted; Consequences' unchanged-stream line narrowed by 0075 (proposed) |
 | [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented; §1 narrowed by 0036 |
 | [0033](0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md) | A sign-in proxy is a second way to sign in, and auth is one module | Accepted |
 | [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted; §1's "no new lock" narrowed by 0059 |
@@ -108,3 +108,4 @@ the status is stale.
 | [0070](0070-test-runners-drive-a-lease-through-the-agent-device-front.md) | Test runners drive a lease through the agent-device front: boot is answered, a close may keep the lease, and each lease is its own tenant | Accepted; narrows 0023 §2 and §4; §2 narrowed by 0071 |
 | [0071](0071-a-restart-re-allocates-a-live-agent-device-lease.md) | A restart re-allocates a live agent-device lease on its device | Accepted; supersedes 0023 §3 in part; narrows 0070 §2 |
 | [0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md) | A worker may enrol the phones plugged into it | Accepted; narrows 0022 §3, §5 and §6 |
+| [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Proposed; narrows 0031's Consequences |
