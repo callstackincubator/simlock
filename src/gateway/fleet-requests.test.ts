@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { LeaseRecord } from "../admin/index.js";
 import { fromWireError, SimlockError } from "../contract/index.js";
+import { ScriptedProcessRunner } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerReportedLease } from "./lease-index.js";
@@ -131,6 +132,17 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       fleet.leaseIndex.remove("myid");
       await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
       return { fleet, requester: "agent-2" };
+    },
+    "admission-denied": async () => {
+      const runner = new ScriptedProcessRunner([
+        {
+          match: { args: [], command: "policy" },
+          result: { code: 0, stderr: "", stdout: '{"deny":"no"}' },
+        },
+      ]);
+      const fleet = harness({ admission: { command: ["policy"], runner, timeoutMs: 5_000 } });
+      await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requester: "agent-9" };
     },
     cancelled: async () => {
       const fleet = await busyFleet();

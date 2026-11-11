@@ -56,6 +56,10 @@ export interface ErrorDetailsMap {
   /** why: `lease.request` named a `leaseId` whose lease ended within `lease.endedIdRetentionMs`
    * (ADR 0074 §4); `endedAt` is when, in milliseconds since the epoch. The request is stored nowhere. */
   LEASE_ENDED: { readonly leaseId: string; readonly endedAt: number };
+  /** why: the gateway's admission command (ADR 0074 §1) refused the request; `reason` is the command's own, 1 to 500 characters. */
+  ADMISSION_DENIED: { readonly reason: string };
+  /** why: the gateway's admission command could not decide, and the gateway fails closed; `cause` names why, at most 600 characters. */
+  ADMISSION_FAILED: { readonly cause: string };
   NO_DRIVER: { readonly platform: Platform };
   CAPABILITY_MISSING: { readonly capabilities: readonly string[] };
   RELAY_TARGET_MISSING: { readonly target: string };
@@ -226,6 +230,8 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   REQUESTER_ALREADY_LEASED: true,
   LEASE_ID_TAKEN: true,
   LEASE_ENDED: true,
+  ADMISSION_DENIED: true,
+  ADMISSION_FAILED: true,
   NO_DRIVER: true,
   CAPABILITY_MISSING: true,
   RELAY_TARGET_MISSING: true,
@@ -350,6 +356,19 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "domain",
     cliExitCode: 13,
     httpStatus: 409,
+  },
+  // why: the operator's policy said no (403) or could not answer (503, the gateway fails closed); exit 16 for both: the policy, not the request's shape, decided.
+  ADMISSION_DENIED: {
+    code: "ADMISSION_DENIED",
+    kind: "domain",
+    cliExitCode: 16,
+    httpStatus: 403,
+  },
+  ADMISSION_FAILED: {
+    code: "ADMISSION_FAILED",
+    kind: "domain",
+    cliExitCode: 16,
+    httpStatus: 503,
   },
   NO_DRIVER: { code: "NO_DRIVER", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   CAPABILITY_MISSING: {
@@ -686,6 +705,25 @@ export function leaseEndedError(leaseId: string, endedAt: number): SimlockError<
     "domain",
     `Lease ${leaseId} ended at ${new Date(endedAt).toISOString()}; choose a new lease id`,
     { endedAt, leaseId },
+  );
+}
+
+/** why: the gateway's refusals by its admission command (ADR 0074 §1), worded once. */
+export function admissionDeniedError(reason: string): SimlockError<"ADMISSION_DENIED"> {
+  return new SimlockError(
+    "ADMISSION_DENIED",
+    "domain",
+    `The gateway's admission policy refused this request: ${reason}`,
+    { reason },
+  );
+}
+
+export function admissionFailedError(cause: string): SimlockError<"ADMISSION_FAILED"> {
+  return new SimlockError(
+    "ADMISSION_FAILED",
+    "domain",
+    `The gateway's admission policy could not decide on this request (${cause})`,
+    { cause },
   );
 }
 

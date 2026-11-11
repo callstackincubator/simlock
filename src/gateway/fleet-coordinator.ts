@@ -43,6 +43,7 @@ import type {
   RotateOutput,
 } from "../admin/index.js";
 import {
+  admissionDeniedError,
   isSimlockError,
   leaseEndedError,
   requestedClass,
@@ -75,7 +76,7 @@ import {
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { FleetRefusals, refusedCapacityReason, type WorkerEntry } from "./fleet-refusals.js";
-import type { AdmissionOptions } from "./admission.js";
+import { askAdmission, type AdmissionOptions } from "./admission.js";
 import type { EndedLeaseIds } from "./ended-lease-ids.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -275,6 +276,9 @@ export class FleetLeaseCoordinator {
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<FleetLeaseGrant> {
+    // why: no await without a command: the request enters the decision lock in the same tick, as a `lease.cancel` sent right after it expects (#1492).
+    const { admission } = this.options;
+    if (admission !== undefined) await this.#askAdmission(admission, deviceRequest, options);
     const admitted = await this.#decisions.run(async () => {
       const replay = this.requests.replay(deviceRequest, options);
       if (replay !== undefined) return { replay };
@@ -304,6 +308,30 @@ export class FleetLeaseCoordinator {
     if ("replay" in admitted) return admitted.replay;
     this.#admit(admitted.waiter);
     return admitted.promise;
+  }
+
+  /** why: ADR 0074 §1: the operator's command answers outside the decision lock, since it may take seconds. */
+  async #askAdmission(
+    admission: AdmissionOptions,
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+  ): Promise<void> {
+    const decision = await askAdmission(admission, {
+      metadata: {},
+      platform: deviceRequest.platform,
+      principal: options.ownerId,
+      request: deviceRequest,
+      requesterId: options.requesterId,
+    });
+    if (decision.kind !== "deny") return;
+    this.#emit("lease.rejected", {
+      requestId: newLeaseRequestId(this.options.idGenerator),
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: "admission-denied",
+    });
+    const refusal = admissionDeniedError(decision.reason);
+    throw new DispatchError(refusal.code, refusal.message, refusal.details);
   }
 
   /**
