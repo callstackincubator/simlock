@@ -1,6 +1,6 @@
 # 0020. A requester may choose its lease id, and the gateway passes it through bare
 
-- **Status:** Accepted
+- **Status:** Accepted; §1 ("It keeps no record of ids that were used") superseded in part by [0074](0074-an-admission-command-ranks-or-refuses-a-gateway-request-and-an-ended-chosen-lease-id-is-remembered.md) §4 (an ended chosen id is kept for a window)
 - **Date:** 2026-10-06
 - **Issue:** [#410](https://github.com/callstackincubator/simlock/issues/410)
 - **Supersedes:** nothing. Narrows [ADR 0005](0005-gateway-and-worker-modes.md)
