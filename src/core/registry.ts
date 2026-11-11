@@ -999,7 +999,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     components: readonly ComponentRecord[] = this.#components,
   ): void {
     const now = this.options.clock.now();
-    const { deletedRetentionMs, deviceData, endedIdRetentionMs, state } = this.options;
+    const { deletedRetentionMs, deviceData, state } = this.options;
     const stamped = devices
       .map(withoutCauseUnlessQuarantined)
       .map((device) =>
@@ -1023,12 +1023,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       for (const id of device.removed) deleteDevice(database, id);
       for (const record of device.changed) writeDevice(database, record, deviceData);
       for (const id of lease.removed) deleteLease(database, id);
-      for (const id of lease.removed) {
-        if (this.#leases.find((record) => record.id === id)?.idChosenByRequester === true) {
-          writeEndedLeaseId(database, id, now);
-        }
-      }
-      pruneEndedLeaseIds(database, now - endedIdRetentionMs);
+      this.#recordEndedLeaseIds(lease.removed, now);
       for (const record of lease.changed) writeLease(database, record);
       for (const record of request.changed) writeLeaseRequest(database, record);
       for (const key of component.removed) {
@@ -1044,7 +1039,19 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     this.#commitListeners.forEach((listener) => listener());
   }
 
+  /** why: ADR 0074 §4: runs inside the commit's transaction, so a lease and its ended row are written together. */
+  #recordEndedLeaseIds(removedIds: readonly string[], now: number): void {
+    const { database } = this.options.state;
+    for (const id of removedIds) {
+      if (this.#leases.find((record) => record.id === id)?.idChosenByRequester === true) {
+        writeEndedLeaseId(database, id, now);
+      }
+    }
+    pruneEndedLeaseIds(database, now - this.options.endedIdRetentionMs);
+  }
+
   /** why: ADR 0074 §4: when the chosen lease id ended, while it is still inside `lease.endedIdRetentionMs`. */
+  // fallow-ignore-next-line unused-class-member -- reached through the acquisition coordinator's registry port.
   endedLeaseId(leaseId: string): number | undefined {
     const endedAt = readEndedLeaseId(this.options.state.database, leaseId);
     if (endedAt === undefined) return undefined;
