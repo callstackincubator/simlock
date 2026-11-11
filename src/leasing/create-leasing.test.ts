@@ -2668,6 +2668,19 @@ describe("createLeasing: lease.rejected names its request", () => {
       );
       return { harness, requester: "clash" };
     },
+    "lease-ended": async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, { ...holder, leaseId: "myid" });
+      await harness.engine.release("myid", "explicit");
+      await settledOrPending(
+        harness.engine.request(request, {
+          leaseId: "myid",
+          ownerId: "again",
+          requesterId: "again",
+        }),
+      );
+      return { harness, requester: "again" };
+    },
     "boot-timeout": async () => {
       const driver = new FakeDriver({
         availableOsVersions: ["26.5"],

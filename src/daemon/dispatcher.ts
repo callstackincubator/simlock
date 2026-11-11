@@ -83,6 +83,7 @@ import {
   EVENTS_PAGE_DEFAULT,
   fitPlatformCatalog,
   inboxItems,
+  isSimlockError,
   OPERATIONS,
   requestedDevice,
   type ComponentProgress,
@@ -555,6 +556,9 @@ export class Dispatcher {
           device: device.physical ? { ...device, class: device.spec.class } : device,
         };
       } catch (error: unknown) {
+        if (isSimlockError(error) && error.code === "LEASE_ENDED") {
+          throw new DispatchError(error.code, error.message, error.details);
+        }
         if (error instanceof LeaseIdTakenError) {
           throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
         }

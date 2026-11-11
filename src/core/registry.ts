@@ -3,6 +3,7 @@ import type { Clock, IdGenerator } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import {
   DEFAULT_DEVICES_DELETED_RETENTION_MS,
+  DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
   DEFAULT_LEASE_MAX_REQUEST_RECORDS,
   DEFAULT_LEASE_REQUEST_RETENTION_MS,
 } from "./config.js";
@@ -44,8 +45,11 @@ import {
   deleteDevice,
   deleteLeaseRequest,
   loadRegistryRows,
+  pruneEndedLeaseIds,
+  readEndedLeaseId,
   writeComponent,
   writeDevice,
+  writeEndedLeaseId,
   writeLease,
   writeLeaseRequest,
 } from "./registry-rows.js";
@@ -69,6 +73,8 @@ export interface RegistryOptions {
   readonly leaseRequestLimits?: LeaseRequestLimits;
   /** why: `devices.deletedRetentionMs`, how long a `deleted` device record is kept; defaults to the config default. */
   readonly deletedRetentionMs?: number;
+  /** why: `lease.endedIdRetentionMs`, how long a chosen lease id is remembered after its lease ended; defaults to the config default. */
+  readonly endedIdRetentionMs?: number;
 }
 
 export interface RegistrySnapshot {
@@ -192,6 +198,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const registry = new Registry({
       ...options,
       deletedRetentionMs: options.deletedRetentionMs ?? DEFAULT_DEVICES_DELETED_RETENTION_MS,
+      endedIdRetentionMs: options.endedIdRetentionMs ?? DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
       leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
       leaseRequestLimits: options.leaseRequestLimits ?? {
         maxRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
@@ -992,7 +999,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     components: readonly ComponentRecord[] = this.#components,
   ): void {
     const now = this.options.clock.now();
-    const { deletedRetentionMs, deviceData, state } = this.options;
+    const { deletedRetentionMs, deviceData, endedIdRetentionMs, state } = this.options;
     const stamped = devices
       .map(withoutCauseUnlessQuarantined)
       .map((device) =>
@@ -1016,6 +1023,12 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       for (const id of device.removed) deleteDevice(database, id);
       for (const record of device.changed) writeDevice(database, record, deviceData);
       for (const id of lease.removed) deleteLease(database, id);
+      for (const id of lease.removed) {
+        if (this.#leases.find((record) => record.id === id)?.idChosenByRequester === true) {
+          writeEndedLeaseId(database, id, now);
+        }
+      }
+      pruneEndedLeaseIds(database, now - endedIdRetentionMs);
       for (const record of lease.changed) writeLease(database, record);
       for (const record of request.changed) writeLeaseRequest(database, record);
       for (const key of component.removed) {
@@ -1029,6 +1042,15 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     this.#leaseRequests = requests;
     this.#components = components;
     this.#commitListeners.forEach((listener) => listener());
+  }
+
+  /** why: ADR 0074 §4: when the chosen lease id ended, while it is still inside `lease.endedIdRetentionMs`. */
+  endedLeaseId(leaseId: string): number | undefined {
+    const endedAt = readEndedLeaseId(this.options.state.database, leaseId);
+    if (endedAt === undefined) return undefined;
+    return this.options.clock.now() - endedAt > this.options.endedIdRetentionMs
+      ? undefined
+      : endedAt;
   }
 
   /** Calls `listener` after every commit, once the new state is what `snapshot` reads. */

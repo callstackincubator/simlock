@@ -118,6 +118,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
       return { fleet, requester: "agent-2" };
     },
+    "lease-ended": "worker",
     cancelled: async () => {
       const fleet = await busyFleet();
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });

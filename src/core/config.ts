@@ -59,6 +59,9 @@ export const DEFAULT_DEVICES_DELETED_RETENTION_MS = 60 * 60_000;
 
 export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 
+/** why: `lease.endedIdRetentionMs`'s default: how long a chosen lease id is refused after its lease ended (ADR 0074 §4). */
+export const DEFAULT_LEASE_ENDED_ID_RETENTION_MS = 24 * 60 * 60_000;
+
 const DEFAULT_LEASE_MAX_PER_REQUESTER = 1;
 
 export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
