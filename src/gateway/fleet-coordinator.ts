@@ -123,6 +123,14 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "BASELINE_STALE",
 ]);
 
+/**
+ * why: ADR 0074 §1: `admissionRequest` is the `lease.request` input as the caller sent it, which the
+ * admission command reads; the gateway dispatcher fills `ttlMs` and drops `allowDownload` after that.
+ */
+export type FleetRequestOptions = LeaseRequestOptions & {
+  readonly admissionRequest?: Readonly<Record<string, unknown>>;
+};
+
 export interface FleetLeaseCoordinatorOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
@@ -275,7 +283,7 @@ export class FleetLeaseCoordinator {
    */
   async request(
     deviceRequest: DeviceRequest,
-    options: LeaseRequestOptions,
+    options: FleetRequestOptions,
   ): Promise<FleetLeaseGrant> {
     // why: ADR 0074 §1: with a command, the checks run under the lock, then the command outside it, then the checks again with the answer under the lock; no await without a command, so a `lease.cancel` sent right after the request finds it in the same tick (#1492).
     const { admission } = this.options;
@@ -341,7 +349,7 @@ export class FleetLeaseCoordinator {
   #askAdmission(
     admission: AdmissionOptions,
     deviceRequest: DeviceRequest,
-    options: LeaseRequestOptions,
+    options: FleetRequestOptions,
   ): Promise<AdmissionDecision> {
     return askAdmission(
       admission,
@@ -349,7 +357,7 @@ export class FleetLeaseCoordinator {
         metadata: {},
         platform: deviceRequest.platform,
         principal: options.ownerId,
-        request: deviceRequest,
+        request: options.admissionRequest ?? deviceRequest,
         requesterId: options.requesterId,
       },
       this.#logger,
