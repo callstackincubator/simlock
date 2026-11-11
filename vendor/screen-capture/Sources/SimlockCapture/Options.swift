@@ -131,6 +131,10 @@ public enum Wire {
         out.append(tag.rawValue)
         out.append(data)
         session.recordWritten(out.count)
+        if let sink {
+            sink(tag, data)
+            return
+        }
         out.withUnsafeBytes { pointer in
             var written = 0
             let base = pointer.baseAddress!
