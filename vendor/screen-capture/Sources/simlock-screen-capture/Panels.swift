@@ -170,10 +170,28 @@ final class PanelFollower: @unchecked Sendable {
 /// Runs a command so that it ends when the process holding the other end of its stdin pipe ends, by
 /// any way, SIGKILL included.
 enum Watchdog {
+    // why: the command runs in the background with stdin off, and a second background job holds the
+    // pipe on fd 3; `cat` returns when every writer is gone, which is the moment the holder ended,
+    // and the command is killed then. `-9` because `simctl spawn … log` is only reliably ended by it.
+    // The reader is killed once the command ends first, so neither outlives the other.
+    private static let script = """
+        exec 3<&0
+        "$@" 3<&- </dev/null &
+        child=$!
+        { cat <&3 >/dev/null; kill -9 "$child" 2>/dev/null; } &
+        reader=$!
+        wait "$child"
+        status=$?
+        pkill -P "$reader" 2>/dev/null
+        kill "$reader" 2>/dev/null
+        exit "$status"
+        """
+
     /// Not started; the caller keeps the `standardInput` pipe open for as long as the command should run.
     static func process(running command: [String]) -> Process {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script, "sh"] + command
         process.standardInput = Pipe()
         return process
     }
