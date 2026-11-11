@@ -47,6 +47,15 @@ async function capturesRunning(): Promise<number> {
   return found.stdout.split("\n").filter((line) => line.trim() !== "").length;
 }
 
+// why: a one-panel device starts no panel follower, so nothing runs `log` inside its simulator; the
+// pattern names the follower's children (`simctl spawn <udid> log stream|show`), not this shell.
+async function panelLogChildren(): Promise<number> {
+  const found = await execFileAsync("pgrep", ["-f", "simctl .*spawn .* log (stream|show)"]).catch(
+    () => ({ stdout: "" }),
+  );
+  return found.stdout.split("\n").filter((line) => line.trim() !== "").length;
+}
+
 describe.skipIf(process.platform !== "darwin")(
   "iOS screen stream (real simulator)",
   { tags: ["slow", "ios"] },
@@ -126,7 +135,7 @@ describe.skipIf(process.platform !== "darwin")(
           });
 
           const second = await open(new AbortController().signal);
-          await within(
+          const opening = await within(
             readFrames(second.reader, (read) => read.some((frame) => frame.tag === TAG.keyframe)),
             KEY_FRAME_BOUND,
             "the second stream's key frame",
@@ -142,6 +151,11 @@ describe.skipIf(process.platform !== "darwin")(
           expect(held.length, "a still simulator's stream sent nothing for 35 s").toBeGreaterThan(
             0,
           );
+          expect(
+            [...opening, ...held].filter((frame) => frame.tag === TAG.meta).length,
+            "a one-panel device's stream sent more than one meta frame",
+          ).toBe(1);
+          expect(await panelLogChildren(), "a one-panel device started a panel follower").toBe(0);
           const after = await within(
             second.reader.read(),
             KEY_FRAME_BOUND,
