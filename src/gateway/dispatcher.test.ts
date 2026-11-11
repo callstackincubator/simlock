@@ -1966,13 +1966,20 @@ describe("GatewayDispatcher", () => {
         ),
       ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
-      // why: inside the gateway's first minute a generated id may belong to a worker yet to report, which answers WORKER_UNREACHABLE.
-      clock.advance(60_000);
-      for (const [operation, input] of [
+      const ghostCalls = [
         ["lease.renew", { leaseId: "wrk_ghost.lease_1" }],
         ["lease.release", { leaseId: "wrk_ghost.lease_1" }],
         ["device.exec", { args: [], leaseId: "wrk_ghost.lease_1", tool: "adb" }],
-      ] as const) {
+      ] as const;
+      // why: inside the gateway's first minute a generated id may belong to a worker yet to report, which answers WORKER_UNREACHABLE.
+      clock.advance(59_999);
+      for (const [operation, input] of ghostCalls) {
+        await expect(
+          dispatcher.dispatch(operation, input, session({ role: "agent" })),
+        ).rejects.toMatchObject({ code: "WORKER_UNREACHABLE" });
+      }
+      clock.advance(1);
+      for (const [operation, input] of ghostCalls) {
         await expect(
           dispatcher.dispatch(operation, input, session({ role: "agent" })),
         ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
