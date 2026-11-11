@@ -48,6 +48,11 @@ export interface ProcessRunOptions {
   readonly stdio?: "pipe" | "ignore" | { readonly file: string };
   readonly input?: string;
   /**
+   * why: ends the child when the caller no longer wants its answer: aborting kills the child's
+   * whole process group, and `run` answers `endedBy: "aborted"`.
+   */
+  readonly signal?: AbortSignal;
+  /**
    * why: Where `spawn`'s `stdout` and `stderr` iterables end a line. `"newline"` (the default) ends
    * one only at `\n`. `"carriage-return-too"` also ends one at a bare `\r`, and yields no empty
    * lines: an installer such as `sdkmanager` redraws its progress bar in place with `\r`, so

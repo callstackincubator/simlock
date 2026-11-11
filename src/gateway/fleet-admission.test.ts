@@ -93,6 +93,18 @@ function grantingFleet(runner: ScriptedProcessRunner) {
   return { ...fleet, client, runner };
 }
 
+function gatedFleet() {
+  const runner = new GatedRunner();
+  const fleet = grantingFleet(runner);
+  const requested: string[] = [];
+  fleet.eventBus.subscribe("lease.requested", (envelope) =>
+    requested.push(envelope.payload.requestId),
+  );
+  const rejected: Array<EventMap["lease.rejected"]> = [];
+  fleet.eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+  return { ...fleet, rejected, requested, runner };
+}
+
 const answering = (count: number) =>
   new ScriptedProcessRunner(
     Array.from({ length: count }, () => ({
@@ -282,5 +294,47 @@ describe("FleetLeaseCoordinator: the admission command decides each new request"
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toEqual(
       ["B", "D", "A", "C"].map((name) => `lease.request:${GATEWAY_PREFIX}${name}`),
     );
+  });
+
+  it("a caller that cancels, or a gateway that stops, while the command runs ends the request and the command", async () => {
+    const stopped = { code: "DAEMON_STOPPING" };
+    const cancelled = { name: "RequestCancelledError" };
+    const cases = [
+      {
+        end: (fleet: ReturnType<typeof gatedFleet>) => fleet.coordinator.cancelPending("agent-1"),
+        expectedError: cancelled,
+        name: "lease.cancel",
+        rejected: ["cancelled"],
+      },
+      {
+        end: (fleet: ReturnType<typeof gatedFleet>) => fleet.coordinator.dispose(),
+        expectedError: stopped,
+        name: "the gateway stops",
+        rejected: [],
+      },
+    ];
+
+    for (const { end, expectedError, name, rejected } of cases) {
+      const fleet = gatedFleet();
+      let error: unknown;
+      fleet.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => (error = e));
+      await tick();
+      expect(fleet.runner.calls, name).toHaveLength(1);
+
+      const answer = await end(fleet);
+      await tick();
+
+      expect(answer, name).toBe(name === "lease.cancel" ? "cancelled" : undefined);
+      expect(error, name).toMatchObject(expectedError);
+      expect(fleet.runner.calls[0]?.options.signal?.aborted, name).toBe(true);
+      fleet.runner.answer(0, "{}");
+      await tick();
+      expect(fleet.requested, name).toEqual([]);
+      expect(fleet.coordinator.waitingRequests(), name).toEqual([]);
+      expect(
+        fleet.rejected.map((event) => event.reason),
+        name,
+      ).toEqual(rejected);
+    }
   });
 });
