@@ -72,7 +72,7 @@ export class RecordingLogger implements Logger {
   }
 }
 
-export function harness(
+export function buildFleet(
   overrides: {
     readonly admission?: AdmissionOptions;
     readonly execTimeoutMs?: number;
