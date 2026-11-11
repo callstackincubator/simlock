@@ -8,6 +8,7 @@ import {
   CODES_WITH_DECLARED_DETAILS,
   ERROR_TABLE,
   fromWireError,
+  leaseEndedError,
   isSimlockError,
 } from "./errors.js";
 
@@ -83,6 +84,24 @@ describe("SimlockError", () => {
     expect(ERROR_TABLE.LEASE_ID_TAKEN).toEqual({
       cliExitCode: 13,
       code: "LEASE_ID_TAKEN",
+      httpStatus: 409,
+      kind: "domain",
+    });
+  });
+
+  it("a caller refused with LEASE_ENDED sees its message with the id and the end time, HTTP 409 and CLI exit 13", () => {
+    const error = leaseEndedError("ad-7f3a", Date.UTC(2026, 10, 10, 14, 2, 11));
+
+    expect(error.message).toBe(
+      "Lease ad-7f3a ended at 2026-11-10T14:02:11.000Z; choose a new lease id",
+    );
+    expect(error.details).toEqual({
+      endedAt: Date.UTC(2026, 10, 10, 14, 2, 11),
+      leaseId: "ad-7f3a",
+    });
+    expect(ERROR_TABLE.LEASE_ENDED).toEqual({
+      cliExitCode: 13,
+      code: "LEASE_ENDED",
       httpStatus: 409,
       kind: "domain",
     });
