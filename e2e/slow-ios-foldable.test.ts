@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
@@ -10,12 +10,13 @@ import {
   REPO_ROOT,
   SCREEN_TAGS,
   deviceStreamUrl,
+  freeLoopbackPort,
   readScreenFrames,
   waitFor,
-  withHttpDaemon,
+  withSharedDaemon,
 } from "./helpers/index.js";
 import type { ScreenFrame } from "./helpers/screen-frames.js";
-import type { TestEnv } from "./helpers/env.js";
+import type { SharedTestEnv as TestEnv } from "./helpers/env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -252,19 +253,30 @@ describe.skipIf(notRunnable !== undefined)(
     function setup() {
       started ??= (async () => {
         dir = await mkdtemp(join(tmpdir(), "simlock-foldable-"));
-        const { env, port } = await withHttpDaemon((httpPort) => ({
+        const port = await freeLoopbackPort();
+        // why: the shared daemon belongs to the file, not to the first test: `withDaemon`'s env is
+        // torn down after the test that made it, which would leave the second test a stopped
+        // daemon, and the file's own `nuke` would start a new one that nothing stops.
+        const env = await withSharedDaemon({
           configOverrides: {
-            http: { enabled: true, host: "127.0.0.1", port: httpPort },
+            http: { enabled: true, host: "127.0.0.1", port },
+            // why: the file leases one Duo; a second one booting in the warm pool beside it is load
+            // on agent-device's 3 s reads of the leased one, and proves nothing.
+            warmPool: { enabled: false },
             capabilities: {
               stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
             },
           },
           driver: "real",
-        }));
+        });
         teardown = async () => {
-          await env
-            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
-            .catch(() => undefined);
+          try {
+            await env
+              .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+              .catch(() => undefined);
+          } finally {
+            await env.teardown();
+          }
         };
         const granted = await env.cli(
           [
@@ -326,14 +338,45 @@ describe.skipIf(notRunnable !== undefined)(
       if (dir !== undefined) await rm(dir, { force: true, recursive: true });
     }, 180_000);
 
-    async function fold(pose: "open" | "closed"): Promise<void> {
-      // why: its own failure is the test's failure, with its message (I10).
-      await execFileAsync("node", [AGENT_DEVICE!, "fold", pose, "--session", FOLD_SESSION], {
-        timeout: 60_000,
-      }).catch((error: unknown) => {
-        const failed = error as { stderr?: string; stdout?: string; message: string };
-        throw new Error(`agent-device fold ${pose} failed: ${failed.stderr ?? failed.message}`);
-      });
+    // why: agent-device reads the hinge and the panel table back to confirm a pose, each under a
+    // 3 s limit of its own; a simulator just booted on a loaded host misses it though the pose was
+    // sent, and sending it again is harmless. The failure is the test's when the retries end.
+    const UNCONFIRMED = /no panel table|no hinge-angle sample|returned no sample/;
+    const FOLD_ATTEMPTS = 3;
+
+    // why: the 3 s bound is about the stream following the fold, not about how long agent-device
+    // takes to reach the simulator, which is seconds on a loaded host; agent-device logs the time
+    // it sent the pose, and that is where the bound is counted from.
+    async function poseSentAt(since: number): Promise<number | undefined> {
+      const requests = join(homedir(), ".agent-device", "sessions", FOLD_SESSION, "requests");
+      const sent: number[] = [];
+      for (const name of await readdir(requests).catch(() => [] as string[])) {
+        const text = await readFile(join(requests, name), "utf8").catch(() => "");
+        for (const line of text.split("\n")) {
+          if (!line.includes('"apple_fold_pose_dispatched"')) continue;
+          const at = Date.parse((JSON.parse(line) as { ts: string }).ts);
+          if (at >= since) sent.push(at);
+        }
+      }
+      return sent.length === 0 ? undefined : Math.min(...sent);
+    }
+
+    async function fold(pose: "open" | "closed"): Promise<number> {
+      const started = Date.now();
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await execFileAsync("node", [AGENT_DEVICE!, "fold", pose, "--session", FOLD_SESSION], {
+            timeout: 60_000,
+          });
+          return (await poseSentAt(started)) ?? started;
+        } catch (error: unknown) {
+          const failed = error as { stderr?: string; stdout?: string; message: string };
+          const message = failed.stderr ?? failed.message;
+          if (attempt < FOLD_ATTEMPTS && UNCONFIRMED.test(message)) continue;
+          // why: its own failure is the test's failure, with its message (I10).
+          throw new Error(`agent-device fold ${pose} failed: ${message}`);
+        }
+      }
     }
 
     async function open(signal: AbortSignal) {
@@ -376,6 +419,9 @@ describe.skipIf(notRunnable !== undefined)(
           );
           return metas >= 3 && pictures.length >= 3;
         });
+        // why: a failing test ends the daemon, which cuts the stream; that rejection must not
+        // surface as an unhandled one.
+        reading.catch(() => undefined);
         const metaCount = () => switches.at(-1)?.count ?? 0;
         await waitFor(() => metaCount() >= 1 && frames.length >= 3, {
           interval: 250,
@@ -393,8 +439,7 @@ describe.skipIf(notRunnable !== undefined)(
           ["open", 2],
           ["closed", 3],
         ] as const) {
-          const foldedAt = Date.now();
-          await fold(pose);
+          const foldedAt = await fold(pose);
           await waitFor(() => metaCount() >= count, {
             interval: 100,
             label: `the meta frame after folding ${pose}`,
