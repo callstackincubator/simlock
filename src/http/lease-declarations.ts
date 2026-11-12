@@ -217,6 +217,8 @@ export const leaseRequestBodySchema = z
     imageTag: imageTagSchema.optional(),
     leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    // why: a plain record of plain strings; `lease.request`'s own check bounds it and words the refusal (keys, characters), as for the CLI.
+    metadata: z.record(z.string(), z.string()).optional(),
     // why: a coarse bound only; `lease.request`'s own check words the refusal (count, characters, repeats), as for the CLI and MCP.
     except: z.array(z.string().max(64)).max(64).optional(),
     noWait: z.boolean().optional(),
@@ -253,10 +255,11 @@ export const leaseRequestCreateRoute = declareRoute({
   replyHeaders: z.object({ Location: z.string().openapi({ description: "The request's URL." }) }),
   status: 201,
   errors: {
-    409: ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+    409: ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
+    403: ["ADMISSION_DENIED"],
     404: ["UNKNOWN_BASELINE"],
     422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
-    503: ["NO_CAPACITY"],
+    503: ["NO_CAPACITY", "ADMISSION_FAILED"],
   },
   errorExtras: {
     409: { fields: { existingLeaseId: z.string().optional() } },

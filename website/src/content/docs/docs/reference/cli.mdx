@@ -99,7 +99,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
-              [--export-env] [--bind-pid <pid>]
+              [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
 ```
 
 | Flag | Meaning | Default |
@@ -115,6 +115,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
+| `--meta <key=value>` | Repeatable. Context for the gateway's admission command, such as `--meta project=checkout-app --meta role=ci`. The key is the text before the first `=`; the value is everything after it. The same key twice keeps the last. At most 16 keys; a key is 1 to 64 characters, a value 0 to 256, and keys and values together at most 2048. A gateway passes it to its admission command only: it is stored nowhere, in no event, and a worker ignores it. A flag with no `=`, or a bound broken, exits 2. | None |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
 | `--detach` | Print the grant and exit. Nothing renews or releases the lease after that. | Off |
@@ -789,6 +790,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | 13 | You already hold a lease, or the lease ID is taken. |
 | 14 | `lease` without `--detach`: the daemon ended the lease before you did. |
 | 15 | `component install` with `--worker` or `--all-workers`: at least one worker did not install. |
+| 16 | The gateway's admission policy refused the request, or could not decide. |
 
 `simlock simctl` and `simlock adb` exit with the tool's own exit code, which can collide with these numbers. Check stderr for an `{"error":...}` line, which only Simlock writes. The [errors reference](/simlock/docs/reference/errors#exit-codes) lists which error code gives which exit code.
 

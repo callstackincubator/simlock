@@ -1,5 +1,5 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import { type OsRange, requestedClass } from "../contract/index.js";
+import { leaseEndedError, type OsRange, requestedClass } from "../contract/index.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import {
   downloadingProgress,
@@ -132,6 +132,7 @@ export interface LeaseAcquisitionRegistry {
     readonly virtualDevices: readonly VirtualDevice[];
     readonly leases: readonly LeaseRecord[];
   };
+  endedLeaseId(leaseId: string): number | undefined;
 }
 
 export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive">;
@@ -323,6 +324,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         }
         this.#refuseIfRequesterAtLimit(request, options, requestId);
         this.#refuseIfLeaseIdTaken(request, options, requestId);
+        this.#refuseIfLeaseIdEnded(request, options, requestId);
         const { id, started: accepted } = await this.options.requests.admit(
           request,
           options,
@@ -426,6 +428,30 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       "lease-acquisition-coordinator",
     );
     throw new LeaseIdTakenError(leaseId);
+  }
+
+  /** why: ADR 0074 §4: a chosen id whose lease ended within `lease.endedIdRetentionMs` is refused, after the taken-id check so a live id stays `LEASE_ID_TAKEN`. */
+  #refuseIfLeaseIdEnded(
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    const endedAt = this.options.registry.endedLeaseId(leaseId);
+    if (endedAt === undefined) return;
+    emitLeaseRefusal(
+      this.options.eventBus,
+      {
+        requestId,
+        requester: options.requesterId,
+        requestSpec: request,
+        reason: "lease-ended",
+        fleetRequestId: options.fleetRequestId,
+      },
+      "lease-acquisition-coordinator",
+    );
+    throw leaseEndedError(leaseId, endedAt);
   }
 
   /** Closes acquisition admission, settles all demand, and drains driver work. */

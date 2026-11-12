@@ -106,6 +106,7 @@ describe("loadConfig", () => {
         maxTtlMs: 4 * 60 * 60_000,
         identity: { ios: "reusable", android: "reusable" },
         requestRetentionMs: 600_000,
+        endedIdRetentionMs: 86_400_000,
         maxRequestRecords: 10_000,
         maxPerRequester: 1,
         endWaitMs: 600_000,
@@ -791,6 +792,28 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
+  it("an operator's lease.endedIdRetentionMs is checked at load: unset is 24 h, a positive number is read, and 0, a negative number or text are refused", async () => {
+    const load = async (written: unknown) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      if (written !== undefined) {
+        await filesystem.writeFileAtomic(
+          configPath,
+          JSON.stringify({ lease: { endedIdRetentionMs: written } }),
+        );
+      }
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    await expect(load(undefined)).resolves.toMatchObject({
+      lease: { endedIdRetentionMs: 86_400_000 },
+    });
+    await expect(load(5_000)).resolves.toMatchObject({ lease: { endedIdRetentionMs: 5_000 } });
+    for (const refused of [0, -1, "1d"]) {
+      await expect(load(refused), String(refused)).rejects.toThrow("lease.endedIdRetentionMs");
+    }
+  });
+
   it.each([
     [undefined, 1],
     [2, 2],
@@ -979,6 +1002,7 @@ describe("loadConfig", () => {
         maxRequestRecords: 10_000,
         maxTtlMs: 4 * 60 * 60_000,
         requestRetentionMs: 10 * 60_000,
+        endedIdRetentionMs: 24 * 60 * 60_000,
       });
     },
   );
@@ -1669,7 +1693,37 @@ describe("loadConfig modes (ADR 0005)", () => {
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free",
       alerts: { destinations: [] },
+      admission: { timeoutMs: 5_000 },
     });
+  });
+
+  it("an operator's gateway.admission.command and gateway.admission.timeoutMs are checked at load: an argv list is read, an empty list, an empty string or text is refused, the timeout defaults to 5000, and 0 or over 60000 is refused", async () => {
+    const admission = (written: unknown) => load({ gateway: { admission: written } });
+    const argument = (length: number) => "a".repeat(length);
+
+    const read = await admission({ command: ["bun", "/etc/simlock/policy.ts"], timeoutMs: 60_000 });
+    expect(read.gateway.admission).toEqual({
+      command: ["bun", "/etc/simlock/policy.ts"],
+      timeoutMs: 60_000,
+    });
+    expect((await admission({ command: [argument(4096)] })).gateway.admission?.timeoutMs).toBe(
+      5_000,
+    );
+    expect((await load({})).gateway.admission).toEqual({ timeoutMs: 5_000 });
+
+    const refused = [
+      [{ command: [] }, "gateway.admission.command"],
+      [{ command: ["bun", ""] }, "gateway.admission.command"],
+      [{ command: "bun policy.ts" }, "gateway.admission.command"],
+      [{ command: [argument(4097)] }, "gateway.admission.command"],
+      [{ command: Array.from({ length: 65 }, () => "a") }, "gateway.admission.command"],
+      [{ timeoutMs: 0 }, "gateway.admission.timeoutMs"],
+      [{ timeoutMs: 60_001 }, "gateway.admission.timeoutMs"],
+      [{ timeoutMs: 1.5 }, "gateway.admission.timeoutMs"],
+    ] as const;
+    for (const [written, key] of refused) {
+      await expect(admission(written), JSON.stringify(written)).rejects.toThrow(key);
+    }
   });
 
   it.each([

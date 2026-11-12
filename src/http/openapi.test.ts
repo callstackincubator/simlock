@@ -104,13 +104,14 @@ describe("buildOpenApiDocument", () => {
     expect(Object.keys(responseOf(post, "201").headers ?? {})).toEqual(["Location"]);
     expect(
       Object.fromEntries(
-        ["404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
+        ["403", "404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
       ),
     ).toEqual({
+      "403": ["ADMISSION_DENIED", "FORBIDDEN"],
       "404": ["UNKNOWN_BASELINE"],
-      "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+      "409": ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
       "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
-      "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
+      "503": ["NO_CAPACITY", "ADMISSION_FAILED", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
     const leaseShape = replySchema(operation("/v1/leases/{id}", "get"), "200").properties
       ?.lease as {

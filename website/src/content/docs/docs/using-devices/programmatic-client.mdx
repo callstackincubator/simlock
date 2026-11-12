@@ -120,7 +120,7 @@ Run it with a TypeScript runner, for example `npx tsx lease-and-launch.mts`.
 | `onLeaseLost`, `onDeviceUnhealthy`, `onDeviceRecovered` | Tell you what happens to a lease this client took. Each returns a function that stops listening. |
 | `close()` | Closes the connection. It doesn't release your leases. |
 
-`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `baseline`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` and `leaseId`. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `baseline`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload`, `leaseId` and `metadata`, an object of text values for a gateway's admission command (see [Ranking or refusing requests](/simlock/docs/gateway/routing#ranking-or-refusing-requests-with-an-admission-command)). See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
 
 For `exec`:
 

@@ -23,6 +23,7 @@ export interface LeaseRequestInput {
   /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
   readonly leaseId?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface LeasePayload {
@@ -119,6 +120,7 @@ function requestOptions(body: LeaseRequestInput) {
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
+    ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
   };
 }
 

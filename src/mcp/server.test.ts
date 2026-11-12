@@ -165,7 +165,7 @@ describe("MCP server (smoke)", () => {
     }
   });
 
-  it("the lease tool's input schema in tools/list lists noWait and physical, and has no fleetRequestId and no requires", async () => {
+  it("the lease tool's input schema in tools/list lists noWait and physical, and has no fleetRequestId, no metadata and no requires", async () => {
     const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
     try {
       const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
@@ -174,6 +174,7 @@ describe("MCP server (smoke)", () => {
 
       expect(properties).toContain("noWait");
       expect(properties).not.toContain("fleetRequestId");
+      expect(properties).not.toContain("metadata");
       expect(properties).not.toContain("requires");
       expect(properties).toContain("physical");
     } finally {
