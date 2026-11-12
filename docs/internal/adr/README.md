@@ -69,7 +69,7 @@ the status is stale.
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted; §4 narrowed by 0049 and, for a file PUT's deadline, 0067 |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted; Context's "nothing acts on them", §1's "nothing that decides reads the readings" and §7 narrowed by 0068 |
 | [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Accepted; §2 narrowed by 0046; §3 narrowed by 0049 |
-| [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted |
+| [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted; Consequences' unchanged-stream line narrowed by 0075 |
 | [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented; §1 narrowed by 0036 |
 | [0033](0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md) | A sign-in proxy is a second way to sign in, and auth is one module | Accepted |
 | [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted; §1's "no new lock" narrowed by 0059 |
@@ -90,7 +90,7 @@ the status is stale.
 | [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted; §3 narrowed by 0052 |
 | [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted; how `warm forget` matches a baseline kind narrowed by 0062 |
 | [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |
-| [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |
+| [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators; §4 narrowed by 0075 |
 | [0053](0053-the-daemon-owns-each-leases-device-input.md) | The daemon owns each lease's device input, and `device.rotate` uses it | Accepted; narrows 0049 §4 and 0052 §1 |
 | [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) | A lease holder tunnels device ports to its own machine | Accepted; narrows 0005 Non-goals (port forwarding); §2, §5 and §6 and the iOS Consequence narrowed by 0064 |
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
@@ -109,3 +109,4 @@ the status is stale.
 | [0071](0071-a-restart-re-allocates-a-live-agent-device-lease.md) | A restart re-allocates a live agent-device lease on its device | Accepted; supersedes 0023 §3 in part; narrows 0070 §2 |
 | [0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md) | A worker may enrol the phones plugged into it | Accepted; narrows 0022 §3, §5 and §6 |
 | [0074](0074-an-admission-command-ranks-or-refuses-a-gateway-request-and-an-ended-chosen-lease-id-is-remembered.md) | An admission command ranks or refuses a gateway request, and an ended chosen lease id is remembered | Accepted; narrows 0005 items 10 and 11, decision 5 and requirements 14 and 30; supersedes 0020 §1 in part |
+| [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Accepted — not yet implemented; narrows 0031's Consequences and 0052 §4 |
