@@ -184,17 +184,19 @@ enum Watchdog {
     // pipe on fd 3; `cat` returns when every writer is gone, which is the moment the holder ended,
     // and the command is killed then. `-9` because `simctl spawn … log` is only reliably ended by it.
     // The reader is killed once the command ends first, so neither outlives the other.
-    // why: `then` runs right after the kill, from this script, because killing `simctl spawn` leaves
-    // the process it started inside the simulator to CoreSimulator, which on a loaded host takes
-    // longer than the caller can wait; `then` ends that process itself.
+    // why: `then` runs from the main script once the command is gone, not from the reader that kills
+    // it, which the main script ends. Killing `simctl spawn` leaves the process it started inside the
+    // simulator to CoreSimulator, which on a loaded host takes longer than the caller can wait;
+    // `then` ends that process itself.
     private static let script = """
         exec 3<&0
         "$@" 3<&- </dev/null &
         child=$!
-        { cat <&3 >/dev/null; kill -9 "$child" 2>/dev/null; eval "$WATCHDOG_THEN"; } &
+        { cat <&3 >/dev/null; kill -9 "$child" 2>/dev/null; } &
         reader=$!
         wait "$child"
         status=$?
+        eval "$WATCHDOG_THEN"
         pkill -P "$reader" 2>/dev/null
         kill "$reader" 2>/dev/null
         exit "$status"

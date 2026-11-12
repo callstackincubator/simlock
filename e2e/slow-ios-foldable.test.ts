@@ -208,12 +208,29 @@ const logChildren = (udid: string) => pidsOf(["-f", `simctl .*spawn ${udid} log 
 // why: the simulator's runtimes ship no `ps`; its processes are host processes whose parent is the
 // simulator's `launchd_sim`, whose arguments name the udid, so the in-simulator `log stream` is that
 // launchd's child.
-async function simulatorLogStreams(udid: string): Promise<number> {
+async function simulatorLogStreamPids(udid: string): Promise<number[]> {
   const launchds = await pidsOf(["-f", `^launchd_sim .*/${udid}/`]);
   const streams = await Promise.all(
     launchds.map((pid) => pidsOf(["-P", String(pid), "-f", "^log stream"])),
   );
-  return streams.flat().length;
+  return streams.flat();
+}
+
+async function simulatorLogStreams(udid: string): Promise<number> {
+  return (await simulatorLogStreamPids(udid)).length;
+}
+
+// why: a stream that outlives its capture is named by its command line, so a failure says whose it is.
+async function survivors(udid: string): Promise<string> {
+  const pids = await simulatorLogStreamPids(udid);
+  if (pids.length === 0) return "none";
+  const listed = await execFileAsync("ps", [
+    "-o",
+    "pid=,etime=,command=",
+    "-p",
+    pids.join(","),
+  ]).catch(() => ({ stdout: pids.join(",") }));
+  return listed.stdout.trim();
 }
 
 interface Lease {
@@ -542,6 +559,10 @@ describe.skipIf(notRunnable !== undefined)(
             interval: 250,
             label: `${how}: the log stream inside the simulator of the ended capture`,
             timeout: 5_000,
+          }).catch(async (error: unknown) => {
+            throw new Error(
+              `${(error as Error).message}; still running: ${await survivors(lease.udid)}`,
+            );
           });
           viewer.abort();
           await waitFor(async () => (await capturePids()).length === 0, {
