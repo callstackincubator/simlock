@@ -56,8 +56,9 @@ Tunnels (`device-tcp.ts`):
 - **A recovered slim device runs full but its record says `slim` (#174)** until its next `makeReady`.
 - **A cold slim lease takes a full cold boot.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
 - **Concurrent Simulator.app windows:** the second may not appear or warn.
-- **A screen stream can freeze after a reboot under its lease.** The capture program checks the simulator is booted only when it starts, so after the health monitor reboots a crashed simulator the viewer sees the old picture until the Screen tab is reopened.
-- **An iPhone rotated mid-stream keeps the first picture's scale**, as a simulator does: the scaler is sized once. An iPhone that stays connected but stops sending video shows the last picture until the lease ends.
+- **A screen stream can freeze after a reboot under its lease.** The capture checks the simulator is booted only at start, so after a crash reboot the viewer sees the old picture until the Screen tab is reopened.
+- **An iPhone's rotation has not run on hardware**; only a Duo's panel switch is proven. A silent iPhone shows its last picture until the lease ends.
+- **A foldable's stream follows SpringBoard's `DisplayContentMode` log** (ADR 0075): another wording leaves it on the panel picked at open. Taps ignore the panel in use (#1535).
 - **A capture killed by SIGKILL cannot stop its CoreDevice stream**; CoreDevice is left to notice its client is gone. The same for a stop while `startMediaStream` is still running past its limit.
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked against that release and the pin moves.
-- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. Nothing can observe CoreDevice's state, so the slow lane proves only that the process is gone and the device streams again. Two viewers of one lease ask for two streams (#602).
+- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. The slow lane proves only that the process is gone and the device streams again. Two viewers of one lease ask for two streams (#602).
