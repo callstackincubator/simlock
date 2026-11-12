@@ -235,7 +235,7 @@ export async function createHarness(
         ? {}
         : { slimmableOsVersions: options.slimmableOsVersions }),
     });
-  const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
+  const config = testServerConfig(options.lease, options.downloads, options.iosMaxDevices);
   const unreadable =
     options.update?.resultFile instanceof Error ? options.update.resultFile : undefined;
   const resultFileGate = options.update?.resultFileGate;
@@ -637,7 +637,7 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-export function testConfig(
+export function testServerConfig(
   leaseOverrides?: Partial<Config["lease"]>,
   downloadsOverrides?: Partial<Config["downloads"]>,
   iosMaxDevices = 1,

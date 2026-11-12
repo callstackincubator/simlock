@@ -39,7 +39,7 @@ import {
   runningDaemons,
   stopTestDaemons,
   temporaryDirectories,
-  testConfig,
+  testServerConfig,
   waitFor,
 } from "./test-server.js";
 
@@ -364,7 +364,7 @@ describe("DaemonServer", () => {
     await expect(client.request("events.subscribe", {})).resolves.toMatchObject({ ok: true });
     harness.eventBus.emit(
       "disk.pressure-detected",
-      { freeBytes: 1, threshold: testConfig().diskPressure.freeBytesThreshold },
+      { freeBytes: 1, threshold: testServerConfig().diskPressure.freeBytesThreshold },
       "test",
     );
     await expect(client.nextFrame((frame) => frame.push === "event")).resolves.toMatchObject({
