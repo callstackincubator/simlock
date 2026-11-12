@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
@@ -361,23 +361,8 @@ describe.skipIf(notRunnable !== undefined)(
     const UNCONFIRMED = /no panel table|no hinge-angle sample|returned no sample/;
     const FOLD_ATTEMPTS = 3;
 
-    // why: the 5 s bound is about the stream following the fold, not about how long agent-device
-    // takes to reach the simulator, which is seconds on a loaded host; agent-device logs the time
-    // it sent the pose, and that is where the bound is counted from.
-    async function poseSentAt(since: number): Promise<number | undefined> {
-      const requests = join(homedir(), ".agent-device", "sessions", FOLD_SESSION, "requests");
-      const sent: number[] = [];
-      for (const name of await readdir(requests).catch(() => [] as string[])) {
-        const text = await readFile(join(requests, name), "utf8").catch(() => "");
-        for (const line of text.split("\n")) {
-          if (!line.includes('"apple_fold_pose_dispatched"')) continue;
-          const at = Date.parse((JSON.parse(line) as { ts: string }).ts);
-          if (at >= since) sent.push(at);
-        }
-      }
-      return sent.length === 0 ? undefined : Math.min(...sent);
-    }
-
+    // why: the 5 s bound counts from the start of the `agent-device fold` command, the first attempt's
+    // start when it is retried, so it holds the fold command and the stream's switch together.
     async function fold(pose: "open" | "closed"): Promise<number> {
       const started = Date.now();
       for (let attempt = 1; ; attempt++) {
@@ -385,7 +370,7 @@ describe.skipIf(notRunnable !== undefined)(
           await execFileAsync("node", [AGENT_DEVICE!, "fold", pose, "--session", FOLD_SESSION], {
             timeout: 60_000,
           });
-          return (await poseSentAt(started)) ?? started;
+          return started;
         } catch (error: unknown) {
           const failed = error as { stderr?: string; stdout?: string; message: string };
           const message = failed.stderr ?? failed.message;
