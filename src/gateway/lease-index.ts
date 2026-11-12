@@ -4,12 +4,13 @@ import type { Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
 /**
- * `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
+ * why: `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
  * §27a, §30; ADR 0020). Nothing here is persisted -- like every worker view, it is rebuilt from
  * what a worker reports (`rebuildFromWorker`) whenever the gateway can see it. A gateway restart
  * loses nothing a worker restart would not also lose (Decision 5): every id, generated or
  * caller-chosen (ADR 0020), is looked up in this one map, so for the moment before its worker
- * has reported, the gateway does not know it.
+ * has reported, the gateway does not know it. `FleetForwarding` answers `WORKER_UNREACHABLE`, not
+ * `UNKNOWN_LEASE`, for a generated id in that gap during the gateway's first minute.
  *
  * A generated gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) --
  * a caller-chosen one is that id as sent, bare -- and never re-derived by splitting the string back
@@ -17,7 +18,8 @@ import { NoopLogger } from "../ports/index.js";
  * minted or by the `(workerId, workerLeaseId)` pair a relayed worker event carries. The "split on
  * the first `.`" the ADR describes is what makes a generated id *routable in principle* (a worker
  * id is a UUID, so it can never itself contain the separator); nothing in this codebase needs to
- * actually perform that split, because this index always has the structured pair already.
+ * actually perform that split, because this index always has the structured pair already
+ * (`FleetForwarding` splits only to name the worker in that `WORKER_UNREACHABLE` answer).
  */
 
 /** One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*
@@ -30,6 +32,8 @@ export interface FleetLeaseEntry {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  /** why: ADR 0074 §4: only a requester-chosen id is remembered when its lease ends. */
+  readonly idChosenByRequester?: boolean;
 }
 
 /** The subset of a worker-reported lease record this index needs to recognize and rebuild its
@@ -71,6 +75,7 @@ export class FleetLeaseIndex {
   // why: kept beside the entry, not in it, because a module sees the entry's shape; a lease with no platform here counts against every platform.
   readonly #platforms = new Map<string, Platform>();
   readonly #removalListeners: ((entry: FleetLeaseEntry) => void)[] = [];
+  readonly #endListeners: ((entry: FleetLeaseEntry) => void)[] = [];
   /** C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
    * `rebuildFromWorker` call for that worker -- what lets reconciliation (below) tell "missing
    * from this snapshot" apart from "missing for a whole extra snapshot in a row" without
@@ -194,7 +199,7 @@ export class FleetLeaseIndex {
     // relayed event may already have forgotten the entry; the answer still ends the lease.
     remember(this.#endedByWorkerAnswer, gatewayLeaseId);
     if (entry === undefined) return undefined;
-    this.#forget(entry);
+    this.#forget(entry, true);
     return entry;
   }
 
@@ -210,7 +215,7 @@ export class FleetLeaseIndex {
   removeByWorkerLease(workerId: string, workerLeaseId: string): FleetLeaseEntry | undefined {
     const entry = this.findByWorkerLease(workerId, workerLeaseId);
     if (entry === undefined) return undefined;
-    this.#forget(entry);
+    this.#forget(entry, true);
     remember(this.#removedByEvent, entry.gatewayLeaseId);
     return entry;
   }
@@ -297,6 +302,7 @@ export class FleetLeaseIndex {
           gatewayLeaseId,
           grantedAt: lease.grantedAt,
           ownerId: lease.ownerId,
+          idChosenByRequester: gatewayLeaseId === lease.id,
           requesterId: lease.requesterId.slice(this.gatewayRequesterPrefix.length),
           workerId,
           workerLeaseId: lease.id,
@@ -335,7 +341,7 @@ export class FleetLeaseIndex {
       if (firstMissedAt === undefined) {
         this.#missingSince.set(entry.gatewayLeaseId, generation);
       } else if (firstMissedAt < generation) {
-        this.#forget(entry);
+        this.#forget(entry, true);
       }
     }
   }
@@ -386,13 +392,19 @@ export class FleetLeaseIndex {
     this.#removalListeners.push(listener);
   }
 
-  #forget(entry: FleetLeaseEntry): void {
+  // why: ADR 0074 §4: tells the listener a lease ended as far as this gateway can tell, which a forgotten worker's leases did not (they may still be live).
+  onEnded(listener: (entry: FleetLeaseEntry) => void): void {
+    this.#endListeners.push(listener);
+  }
+
+  #forget(entry: FleetLeaseEntry, ended = false): void {
     this.#byGatewayId.delete(entry.gatewayLeaseId);
     this.#platforms.delete(entry.gatewayLeaseId);
     this.#dropRequesterLink(entry);
     this.#byWorkerLease.delete(workerKey(entry.workerId, entry.workerLeaseId));
     this.#missingSince.delete(entry.gatewayLeaseId);
     for (const listener of this.#removalListeners) listener(entry);
+    if (ended) for (const listener of this.#endListeners) listener(entry);
   }
 }
 

@@ -20,7 +20,7 @@ import {
 import type { WorkerRegistry } from "./worker-registry.js";
 import {
   GATEWAY_PREFIX,
-  harness,
+  buildFleet,
   connectWorker,
   tick,
   REQUEST,
@@ -54,7 +54,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   }
 
   it("dispatches a request in another letter case with the worker's own name for the model", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
+    const { coordinator, directory, eventBus, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -75,7 +75,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   });
 
   it("dispatches a request by an alias to the worker that lists it", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const other = new ScriptedWorkerClient();
     const lister = new ScriptedWorkerClient();
     directory.add("wrk_a", other);
@@ -103,7 +103,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   });
 
   it("passes over a worker with the model and the runtime unpaired for one that pairs them", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const unpaired = new ScriptedWorkerClient();
     const paired = new ScriptedWorkerClient();
     directory.add("wrk_a", unpaired);
@@ -128,7 +128,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   });
 
   it("with no runtime named, needs a model with at least one paired runtime", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const unpaired = new ScriptedWorkerClient();
     const paired = new ScriptedWorkerClient();
     directory.add("wrk_a", unpaired);
@@ -156,7 +156,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   });
 
   it("sends a request naming an image tag to the worker whose catalog lists that tag for the API level, not to one listing the API level with another tag, and forwards the tag", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const otherTag = new ScriptedWorkerClient();
     const lister = new ScriptedWorkerClient();
     directory.add("wrk_a", otherTag);
@@ -196,7 +196,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   });
 
   it("rejects a request naming an image tag no worker lists with RUNTIME_MISSING at once, sending it to no worker", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWithCatalog(workers, "wrk_a", {
@@ -219,7 +219,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
   });
 
   it("does not make a worker eligible for allowDownload: true, and forwards allowDownload: false", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const downloader = new ScriptedWorkerClient();
     const installed = new ScriptedWorkerClient();
     directory.add("wrk_a", downloader);
@@ -252,7 +252,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   }
 
   function lease(
-    harnessed: ReturnType<typeof harness>,
+    harnessed: ReturnType<typeof buildFleet>,
     request: Parameters<FleetLeaseCoordinator["request"]>[0],
     options: Parameters<typeof requestOptions>[0] = {},
   ) {
@@ -317,7 +317,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     "$row: answers $code at once and sends it to no worker, $wait",
     async (row) => {
       const { options } = row;
-      const fleetHarness = harness();
+      const fleetHarness = buildFleet();
       const client = new ScriptedWorkerClient();
       fleetHarness.directory.add("wrk_a", client);
       fleetHarness.directory.add("wrk_b", client);
@@ -343,7 +343,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
 
   describe("row 6: a worker that takes requests can serve it but is busy", () => {
     function busyFleet() {
-      const fleetHarness = harness();
+      const fleetHarness = buildFleet();
       const client = new ScriptedWorkerClient();
       fleetHarness.directory.add("wrk_a", client);
       connectWorker(fleetHarness.workers, "wrk_a", { capacity: saturatedIos() });
@@ -395,7 +395,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   });
 
   it("lets a rejected requester make a new request at once", async () => {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const { coordinator, directory, workers } = fleetHarness;
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -420,7 +420,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   });
 
   it("emits no lease.queued and pushes no queued progress for a request it rejects on arrival", async () => {
-    const { coordinator, eventBus, workers } = harness();
+    const { coordinator, eventBus, workers } = buildFleet();
     connectWorker(workers, "wrk_a");
     const events: string[] = [];
     eventBus.subscribe("lease.queued", () => events.push("lease.queued"));
@@ -446,7 +446,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   ] as const)(
     "fails a waiting request with NO_CAPACITY when its only capable worker %s",
     async (_change, change) => {
-      const fleetHarness = harness();
+      const fleetHarness = buildFleet();
       const { coordinator, directory, eventBus, workers } = fleetHarness;
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
@@ -473,7 +473,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   );
 
   it("Gateway routes a lease while a worker is updating: it skips the worker with reason updating, the request waits, and the worker is picked once the update ends", async () => {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const { coordinator, directory, workers } = fleetHarness;
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -516,7 +516,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   ])(
     "answers NO_CAPACITY, not UNKNOWN_MODEL, for a request only a worker that is $row lists while another worker takes requests",
     async ({ change }) => {
-      const fleetHarness = harness();
+      const fleetHarness = buildFleet();
       const { workers } = fleetHarness;
       connectWorker(workers, "wrk_a");
       connectWorker(workers, "wrk_b", { models: ["iPhone 16"] });
@@ -544,7 +544,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   ])(
     "answers NO_CAPACITY at once, not UNKNOWN_MODEL, and sends it to no worker, while the only worker has $row and its catalog has not arrived",
     async ({ read }) => {
-      const fleetHarness = harness();
+      const fleetHarness = buildFleet();
       const { directory, workers } = fleetHarness;
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
@@ -561,7 +561,7 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   );
 
   it("names osVersion default in RUNTIME_MISSING when the request named no runtime", async () => {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const { workers } = fleetHarness;
     workers.connected("wrk_a", undefined, "0.3.0");
     workers.refresh("wrk_a", {
@@ -620,7 +620,7 @@ describe("FleetLeaseCoordinator waits for a worker that is busy, not unable (ADR
   ])(
     "queues a request, and does not fail it, when the only capable worker %s, and sends it once the worker is ready",
     async (_label, busy, ready) => {
-      const { coordinator, directory, workers } = harness();
+      const { coordinator, directory, workers } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -655,7 +655,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
   }
 
   function twoWorkers(options: { readonly busyB?: boolean } = {}) {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const a = new ScriptedWorkerClient();
     const b = new ScriptedWorkerClient();
     fleetHarness.directory.add("wrk_a", a);
@@ -901,7 +901,7 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
   }
 
   function single() {
-    const fleet = harness();
+    const fleet = buildFleet();
     const client = new ScriptedWorkerClient();
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     fleet.directory.add("wrk_a", client);
@@ -973,7 +973,7 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
   });
 
   it("sends a request for a class only one worker lists a model of to that worker", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const phonesOnly = new ScriptedWorkerClient();
     const withTablet = new ScriptedWorkerClient();
     directory.add("wrk_a", phonesOnly);
@@ -996,7 +996,7 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
   });
 
   it("retries a worker's UNKNOWN_MODEL for a class request, before any progress, on another worker", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const a = new ScriptedWorkerClient();
     const b = new ScriptedWorkerClient();
     directory.add("wrk_a", a);
@@ -1023,7 +1023,7 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
   });
 
   it("dispatches an Android phone request to the worker with a warm Pixel over one with free capacity", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const free = new ScriptedWorkerClient();
     const warm = new ScriptedWorkerClient();
     directory.add("wrk_a", free);
@@ -1070,7 +1070,7 @@ describe("FleetLeaseCoordinator: requires", () => {
     });
 
   it("sends requires to the worker with the request", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     directory.add("wrk_a", client);
@@ -1083,7 +1083,7 @@ describe("FleetLeaseCoordinator: requires", () => {
   });
 
   it("leaves a worker whose own check answers CAPABILITY_MISSING out for this request and tries the next, and gives the caller that error when no worker is left", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const stale = new ScriptedWorkerClient();
     const next = new ScriptedWorkerClient();
     stale.requestLeaseQueue.push({ error: missing(), kind: "error" });
@@ -1114,7 +1114,7 @@ describe("FleetLeaseCoordinator: requires", () => {
   });
 
   it("fails a request waiting only on the capable worker with CAPABILITY_MISSING when that worker's view turns starting", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     directory.add("wrk_a", new ScriptedWorkerClient());
     connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     workers.refresh("wrk_a", { capabilities: [...available] });
@@ -1136,7 +1136,7 @@ describe("FleetLeaseCoordinator: requires", () => {
   });
 
   it("keeps a request with requires waiting for a busy capable worker while a free worker lists the capability off", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     directory.add("wrk_a", new ScriptedWorkerClient());
     const free = new ScriptedWorkerClient();
     directory.add("wrk_b", free);
@@ -1173,7 +1173,7 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
       >
     >,
   ) {
-    const made = harness();
+    const made = buildFleet();
     const clients: Record<string, ScriptedWorkerClient> = {};
     for (const [id, slim] of Object.entries(slims)) {
       const client = new ScriptedWorkerClient();
@@ -1399,7 +1399,7 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   }
 
   it("gives a starting worker a view with health and host and no devices, leases or capacity, indexes none of its leases, then indexes them once the worker answers running", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const ready = new ScriptedWorkerClient();
     directory.add("wrk_b", ready);
     ready.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -1426,7 +1426,7 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   });
 
   it("keeps the leases it indexed for a worker through every answer the worker gives while starting, until it answers running", async () => {
-    const { coordinator, workers } = harness();
+    const { coordinator, workers } = buildFleet();
     workers.connected("wrk_a", undefined, "0.3.0");
     workers.refresh("wrk_a", running([gatewayLease]));
     const refused = async () => {
@@ -1447,7 +1447,7 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   });
 
   it("sends a request to the worker that answered running, never to one that answered starting", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const starting = new ScriptedWorkerClient();
     const ready = new ScriptedWorkerClient();
     directory.add("wrk_a", starting);
@@ -1465,7 +1465,7 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   });
 
   it("keeps dispatching a queued request to a running worker while another, already reconciled, answers starting", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const restarting = new ScriptedWorkerClient();
     const other = new ScriptedWorkerClient();
     directory.add("wrk_a", restarting);
@@ -1487,7 +1487,7 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   });
 
   it("queues a request for the only worker that can serve it, which is starting, though another worker takes requests but lists no such model", async () => {
-    const { coordinator, directory, workers } = harness();
+    const { coordinator, directory, workers } = buildFleet();
     const other = new ScriptedWorkerClient();
     const restarting = new ScriptedWorkerClient();
     directory.add("wrk_a", other);
@@ -1564,7 +1564,7 @@ describe("FleetLeaseCoordinator routes a physical request by the enrolled device
     devices: ReturnType<typeof deviceFixture>[],
     capacity?: ReturnType<typeof statusFixture>["capacity"],
   ) {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const client = new ScriptedWorkerClient();
     fleetHarness.directory.add("wrk_a", client);
     connectWorker(fleetHarness.workers, "wrk_a", {
@@ -1578,7 +1578,7 @@ describe("FleetLeaseCoordinator routes a physical request by the enrolled device
     devicesA: ReturnType<typeof deviceFixture>[] = [iphone()],
     devicesB: ReturnType<typeof deviceFixture>[] = [iphone("dev_q")],
   ) {
-    const fleetHarness = harness();
+    const fleetHarness = buildFleet();
     const a = new ScriptedWorkerClient();
     const b = new ScriptedWorkerClient();
     fleetHarness.directory.add("wrk_a", a);
@@ -1664,7 +1664,7 @@ describe("FleetLeaseCoordinator routes a physical request by the enrolled device
   ])(
     "a physical request fails $code $reason when $row",
     async ({ code, reason, request, setup }) => {
-      const { coordinator, directory, eventBus, workers } = harness();
+      const { coordinator, directory, eventBus, workers } = buildFleet();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
       setup(workers);
@@ -1813,7 +1813,7 @@ describe("FleetLeaseCoordinator routes a physical request by the enrolled device
   });
 
   it("a physical request whose only enrolled match is on a disconnected worker fails NO_CAPACITY no-worker, and fails UNKNOWN_MODEL after pruneExpired forgets that worker", async () => {
-    const { clock, coordinator, directory, eventBus, workers } = harness();
+    const { clock, coordinator, directory, eventBus, workers } = buildFleet();
     directory.add("wrk_a", new ScriptedWorkerClient());
     directory.add("wrk_b", new ScriptedWorkerClient());
     connectWorker(workers, "wrk_a", { devices: [iphone()] });

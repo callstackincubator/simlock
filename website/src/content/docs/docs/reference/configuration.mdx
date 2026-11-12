@@ -63,6 +63,7 @@ ignores it, so you can copy one file between a worker and a gateway.
 | `lease.identity.ios`       | `reusable` or `fresh`                  | `reusable`         | No longer changes anything: every simulator and emulator serves one lease and is deleted when it ends. Still accepted and stored. | Worker     |
 | `lease.identity.android`   | `reusable` or `fresh`                  | `reusable`         | The same for Android emulators.                                                                                                                                     | Worker     |
 | `lease.requestRetentionMs` | positive number                        | `600000` (10 min)  | How long a finished lease request is kept, so a client that repeats it with the same idempotency key gets the same answer.                                           | Both       |
+| `lease.endedIdRetentionMs`              | positive number                        | `86400000` (24 h)  | How long a lease ID a caller chose is refused with `LEASE_ENDED` after its lease ended, counted from the end. A worker keeps its own leases' IDs, a gateway those its workers reported. A gateway forgets an end it never saw. | Both       |
 | `lease.maxRequestRecords`  | positive integer                       | `10000`            | Most lease-request records kept. Over it, the oldest finished record is dropped; a waiting request never is.                                                        | Both       |
 | `lease.endWaitMs`          | positive number, at most `2147483647`  | `600000` (10 min)  | How long the clean-up after a lease waits for add-ons (such as agent-device) to finish with the device. Stopping the daemon and `simlock nuke` do not wait.             | Worker     |
 
@@ -278,6 +279,8 @@ These keys go in a **gateway's** file.
 | `gateway.disconnectedRetentionMs` | positive number               | `86400000` (24 h)  | How long a disconnected worker stays listed before the gateway forgets it. The clock waits while leases on it are still live. | Gateway    |
 | `gateway.execTimeoutMs`           | positive number               | `660000` (11 min)  | How long the gateway waits on a device command it passed to a worker. Keep it above the worker's `exec.timeoutMs`. | Gateway    |
 | `gateway.leaseRequestTimeoutMs`   | positive number               | `300000` (5 min)   | How long the gateway waits on one worker for a lease before it fails the request with `WORKER_UNREACHABLE`. | Gateway    |
+| `gateway.admission.command` | list of 1 to 64 strings of 1 to 4096 characters | not set | The program the gateway runs once for every new lease request, as an argv list such as `["bun","/etc/simlock/policy.ts"]`. It reads the request on stdin and prints a priority or a refusal. With none set, requests wait oldest first. See [Routing](/simlock/docs/gateway/routing#ranking-or-refusing-requests-with-an-admission-command). | Gateway    |
+| `gateway.admission.timeoutMs` | integer from 1 to 60000 | `5000` | How long the admission command may run, counted from its start. A command that runs longer is killed and the request is refused with `ADMISSION_FAILED`. | Gateway    |
 
 ## Alerts
 

@@ -584,6 +584,8 @@ export function transition(
   // A deferred reclaim (ADR 0019 §2) ends with any transition out of `reclaiming`.
   const { deferredReclaimLeaseId: _deferred, ...record } = current;
 
+  if (to === "deleted") return { ...withoutQuarantineRetry(record), ...update, state: to };
+
   if (to === "shutdown") {
     // Nothing is listening at the old address once the device stops, and the next
     // `makeReady` supplies a fresh one on the way back to `ready` -- so dropping it here
@@ -605,6 +607,17 @@ export function transition(
   return { ...record, ...update, state: to };
 }
 
+/** why: a quarantined device that is deleted otherwise keeps its retry fields, and the deleted row would look like one still waiting for a retry. */
+function withoutQuarantineRetry<T extends DeviceRecord>(record: T): T {
+  const {
+    quarantineAttempts: _attempts,
+    quarantineNextRetryAt: _nextRetryAt,
+    quarantinedAt: _at,
+    ...gone
+  } = record;
+  return gone as T;
+}
+
 function transitionPhysical(
   current: PhysicalDevice,
   to: DeviceState,
@@ -620,7 +633,8 @@ function transitionPhysical(
     throw new IllegalTransition(current.state, to);
   }
   // A physical device has no driver-reported mode, and a deferred reclaim ends with any exit.
-  const { absentReason: _left, deferredReclaimLeaseId: _deferred, ...record } = current;
+  const { absentReason: _left, deferredReclaimLeaseId: _deferred, ...kept } = current;
+  const record = to === "deleted" ? withoutQuarantineRetry(kept) : kept;
   const { absentReason, mode: _mode, osVersion, ...fields } = update ?? {};
   return {
     ...record,

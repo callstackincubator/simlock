@@ -332,6 +332,28 @@ export function writeLease(database: SqliteDatabase, lease: LeaseRecord): void {
   database.prepare(UPSERT_LEASE).run(...leaseValues(lease));
 }
 
+/** why: ADR 0074 §4: the newer end of a reused id replaces the older. */
+export function writeEndedLeaseId(
+  database: SqliteDatabase,
+  leaseId: string,
+  endedAt: number,
+): void {
+  database
+    .prepare("INSERT OR REPLACE INTO ended_lease_ids (lease_id, ended_at) VALUES (?, ?)")
+    .run(leaseId, endedAt);
+}
+
+export function pruneEndedLeaseIds(database: SqliteDatabase, endedBefore: number): void {
+  database.prepare("DELETE FROM ended_lease_ids WHERE ended_at < ?").run(endedBefore);
+}
+
+export function readEndedLeaseId(database: SqliteDatabase, leaseId: string): number | undefined {
+  const row = database
+    .prepare("SELECT ended_at FROM ended_lease_ids WHERE lease_id = ?")
+    .get(leaseId);
+  return row === undefined ? undefined : Number(row["ended_at"]);
+}
+
 export function deleteLease(database: SqliteDatabase, id: string): void {
   database.prepare("DELETE FROM leases WHERE id = ?").run(id);
 }

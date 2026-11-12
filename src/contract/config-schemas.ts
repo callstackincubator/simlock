@@ -105,6 +105,7 @@ export const configSchema = z.object({
       android: leaseIdentitySchema,
     }),
     requestRetentionMs: z.number(),
+    endedIdRetentionMs: z.number(),
     maxRequestRecords: z.number(),
     maxPerRequester: z.union([
       z.number(),
@@ -165,6 +166,10 @@ export const configSchema = z.object({
     execTimeoutMs: z.number(),
     leaseRequestTimeoutMs: z.number(),
     routing: z.enum(["warm-then-free"]),
+    admission: z.object({
+      command: z.array(z.string().max(4096)).max(64).optional(),
+      timeoutMs: z.number(),
+    }),
     /**
      * why: `format` and `events` are re-declared, not imported from core; a test checks `format` against core's list. `secret` is optional so a `slack` destination parses.
      */

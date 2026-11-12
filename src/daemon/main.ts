@@ -80,6 +80,8 @@ import {
   createRoutingPolicy,
   StateDrainStore,
   drainedWorkersOwner,
+  endedLeaseIdsOwner,
+  StateEndedLeaseIds,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
   GatewayDispatcher,
@@ -196,7 +198,7 @@ export function stateOwners(
   deviceDataTables: ReadonlyMap<Platform, DeviceDataTable>,
 ): readonly SqliteSchemaOwner[] {
   return role === "gateway"
-    ? [tokensOwner, drainedWorkersOwner]
+    ? [tokensOwner, drainedWorkersOwner, endedLeaseIdsOwner]
     : [
         registryOwner,
         warmPoolOwner,
@@ -333,6 +335,7 @@ async function composeDaemon(
       logger,
       npm,
       optionalModules: moduleDefinitions,
+      processRunner,
       socketPath,
       state,
       ...(options.updater === undefined ? {} : { updater: options.updater }),
@@ -394,6 +397,8 @@ interface GatewayDaemonOptions {
   readonly logger: Logger;
   readonly npm: NpmCli;
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
+  /** why: runs the gateway's admission command (ADR 0074 §1). */
+  readonly processRunner: ProcessRunner;
   readonly socketPath: string;
   readonly state: StateDatabase;
   readonly updater?: StartDaemonOptions["updater"];
@@ -446,8 +451,23 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   } satisfies GatewayServiceOptions);
 
   const fleetCoordinator = new FleetLeaseCoordinator({
+    ...(config.gateway.admission.command === undefined
+      ? {}
+      : {
+          admission: {
+            command: config.gateway.admission.command,
+            runner: options.processRunner,
+            timeoutMs: config.gateway.admission.timeoutMs,
+          },
+        }),
     clock,
     directory: gatewayService,
+    endedLeaseIds: new StateEndedLeaseIds({
+      clock,
+      database: state.database,
+      logger: logger.child("gateway"),
+      retentionMs: config.lease.endedIdRetentionMs,
+    }),
     eventBus,
     execTimeoutMs: config.gateway.execTimeoutMs,
     idGenerator,

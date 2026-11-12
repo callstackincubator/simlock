@@ -11,6 +11,7 @@ import {
 } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { MemoryDrainStore } from "./drain-store.js";
+import { MemoryEndedLeaseIds } from "./index.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
 import { createRoutingPolicy } from "./routing.js";
@@ -807,6 +808,7 @@ describe("GatewayService", () => {
     await harness.service.start();
     const coordinator = new FleetLeaseCoordinator({
       clock: harness.clock,
+      endedLeaseIds: new MemoryEndedLeaseIds({ clock: harness.clock, retentionMs: 86_400_000 }),
       describeFailure: (error) => ({ code: "INTERNAL", message: String(error) }),
       directory: harness.service,
       eventBus: harness.eventBus,
@@ -907,6 +909,7 @@ describe("GatewayService", () => {
     await harness.service.start();
     const coordinator = new FleetLeaseCoordinator({
       clock: harness.clock,
+      endedLeaseIds: new MemoryEndedLeaseIds({ clock: harness.clock, retentionMs: 86_400_000 }),
       describeFailure: (error) => ({ code: "INTERNAL", message: String(error) }),
       directory: harness.service,
       eventBus: harness.eventBus,

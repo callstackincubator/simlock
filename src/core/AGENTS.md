@@ -19,6 +19,7 @@ Lock, claims and commits:
 - Every verb: claim and revalidate (lock) → driver (no lock) → revalidate and commit (lock) → release.
 - Only `Registry` writes the `registry` tables, inside `SerializedDecision.run`. A commit is one `state.db` transaction, then memory, then `onCommit`, then the event. A throw rolls back and leaves memory as it was.
 - A transition without the one event its edge calls for throws `RegistryEventError`.
+- A lease with a requester-chosen id that leaves the registry writes its `ended_lease_ids` row in the same commit, and each commit prunes rows older than `lease.endedIdRetentionMs`.
 - A virtual device record is created only by `DeviceProvisioner`. Every driver verb on a registered device goes through `ManagedDeviceLifecycle`.
 - A driver keeps its own `DeviceDataTable` (`driver.ts`) for a virtual device's `driverData`; a physical device has none.
 - A granted request's `grant.device` is read as the device is now.

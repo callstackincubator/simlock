@@ -1,3 +1,4 @@
+import { MemoryEndedLeaseIds } from "./ended-lease-ids.js";
 import { createAlerts } from "../alerts/index.js";
 import { EventBus } from "../bus/index.js";
 import type { AlertDestination } from "../core/index.js";
@@ -10,6 +11,7 @@ import { FakeWebhookPoster } from "../ports/testing.js";
 import type { TokenOperations } from "../auth/index.js";
 import { GatewayDispatcher, type GatewayDispatcherOptions } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
+import type { AdmissionOptions } from "./admission.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseIndex } from "./lease-index.js";
@@ -120,6 +122,7 @@ class ScriptedUpdate {
 
 export function harness(
   options: {
+    readonly admission?: AdmissionOptions;
     readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly tokenRecords?: readonly { id: string; label?: string }[];
@@ -148,7 +151,9 @@ export function harness(
   const directory = new FakeDirectory();
   const leaseIndex = new FleetLeaseIndex(GATEWAY_REQUESTER_PREFIX);
   const coordinator = new FleetLeaseCoordinator({
+    ...(options.admission === undefined ? {} : { admission: options.admission }),
     clock,
+    endedLeaseIds: new MemoryEndedLeaseIds({ clock: clock, retentionMs: 86_400_000 }),
     directory,
     describeFailure: (error) => ({
       code: "INTERNAL",
