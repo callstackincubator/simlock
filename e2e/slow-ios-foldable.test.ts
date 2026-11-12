@@ -406,6 +406,7 @@ describe.skipIf(notRunnable !== undefined)(
         const folded = new AbortController();
         const reader = await open(folded.signal);
         const switches: { at: number; count: number }[] = [];
+        let settled = false;
         const frames: ScreenFrame[] = [];
         const reading = readScreenFrames(reader, (read) => {
           frames.length = 0;
@@ -417,7 +418,7 @@ describe.skipIf(notRunnable !== undefined)(
           const pictures = last.filter(
             (frame) => frame.tag === SCREEN_TAGS.keyframe || frame.tag === 0x03,
           );
-          return metas >= 3 && pictures.length >= 3;
+          return metas >= 3 && pictures.length >= 3 && settled;
         });
         // why: a failing test ends the daemon, which cuts the stream; that rejection must not
         // surface as an unhandled one.
@@ -450,6 +451,20 @@ describe.skipIf(notRunnable !== undefined)(
             SWITCH_BOUND_MS,
           );
         }
+        // why: the log names the panel before SpringBoard has painted it, so the first pictures
+        // after a switch can be black on a loaded host; the claim is that the panel is lit once it
+        // has been painted, which the last picture shows.
+        const litBy = Date.now() + 60_000;
+        for (;;) {
+          const last = partsOf(frames).at(-1) ?? [];
+          if (last.some((frame) => frame.tag === SCREEN_TAGS.keyframe || frame.tag === 0x03)) {
+            const gray = await decodeLast(last, work, "settle");
+            if (meanOf(gray) > LIT_ABOVE) break;
+          }
+          if (Date.now() > litBy) break;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+        settled = true;
         const all = await within(reading, 60_000, "the pictures after the last switch");
         folded.abort();
         const parts = partsOf(all);
