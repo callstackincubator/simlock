@@ -190,6 +190,20 @@ describe("PhysicalEnrollment", () => {
     expect(physicalRecords(harness)[0]).not.toHaveProperty("quarantinedAt");
   });
 
+  it("makes a quarantined physical device deleted with no quarantine fields when its retries run out", async () => {
+    const harness = await build();
+    const { device } = await harness.core.enrollment.add("ios", UDID);
+    await quarantine(harness, device.id);
+
+    await harness.registry.deleteQuarantined(device.id, "quarantine");
+
+    const record = physicalRecords(harness)[0];
+    expect(record).toMatchObject({ id: device.id, state: "deleted" });
+    expect(record).not.toHaveProperty("quarantinedAt");
+    expect(record).not.toHaveProperty("quarantineAttempts");
+    expect(record).not.toHaveProperty("quarantineNextRetryAt");
+  });
+
   it("answers DEVICE_BUSY leased to add and remove of a leased device, and changes nothing", async () => {
     const harness = await build();
     const { device } = await harness.core.enrollment.add("ios", UDID);
