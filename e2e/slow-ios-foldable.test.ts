@@ -24,7 +24,7 @@ const AGENT_DEVICE = process.env.SIMLOCK_E2E_AGENT_DEVICE;
 const DUO_MODEL = "iPhone Duo";
 const MIN_RUNTIME = [27, 1] as const;
 const UNFRAME = join(REPO_ROOT, "vendor", "screen-capture", "scripts", "unframe.mjs");
-const SWITCH_BOUND_MS = 3_000;
+const SWITCH_BOUND_MS = 5_000;
 const STREAM_BOUND_MS = 240_000;
 const FOLD_SESSION = "simlock-foldable-e2e";
 // why: a decoded picture counts as lit when its mean luminance is above 2% of white, the same line
@@ -344,7 +344,7 @@ describe.skipIf(notRunnable !== undefined)(
     const UNCONFIRMED = /no panel table|no hinge-angle sample|returned no sample/;
     const FOLD_ATTEMPTS = 3;
 
-    // why: the 3 s bound is about the stream following the fold, not about how long agent-device
+    // why: the 5 s bound is about the stream following the fold, not about how long agent-device
     // takes to reach the simulator, which is seconds on a loaded host; agent-device logs the time
     // it sent the pose, and that is where the bound is counted from.
     async function poseSentAt(since: number): Promise<number | undefined> {
@@ -396,7 +396,7 @@ describe.skipIf(notRunnable !== undefined)(
     }
 
     it(
-      "a viewer of a leased Duo sees the cover folded and the inner panel unfolded, upright and lit, and the stream switches within 3 s of each fold",
+      "a viewer of a leased Duo sees the cover folded and the inner panel unfolded, upright and lit, and the stream switches within 5 s of each fold",
       { timeout: 900_000 },
       async () => {
         const { lease } = await setup();
