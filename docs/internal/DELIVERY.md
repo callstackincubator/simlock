@@ -242,10 +242,10 @@ project. To move them, copy those, then write the new project's
 | ------------------------- | ------------------------------------------------------------------------ |
 | Rules                     | [agent-rules/](agent-rules/)                                             |
 | Spec templates            | [templates/](templates/)                                                 |
-| Skills (what you run)     | `.claude/skills/`                                                        |
-| Agents (stages, reviewers) | `.claude/agents/`                                                        |
+| Skills (what you run)     | `.claude/skills/`, linked from `.agents/skills/` for Codex               |
+| Agents (stages, reviewers) | `.claude/agents/`; `.codex/agents/` holds their generated Codex twins    |
 | Stage and review briefs   | `.agents/briefs/`                                                        |
-| Scripts and hooks         | `.agents/scripts/` (hooks wired in `.claude/settings.json`), `scripts/` |
+| Scripts and hooks         | `.agents/scripts/` (hooks wired in `.claude/settings.json` and, for Codex, in `.codex/hooks.json`), `scripts/` |
 | Labels and reporter forms | `.github/labels.json`, `.github/ISSUE_TEMPLATE/`                         |
 | Issue automation          | `.github/workflows/issue-state.yml`                                      |
 | Releases                  | `.github/workflows/release.yml`                                          |

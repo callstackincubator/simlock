@@ -2,8 +2,9 @@
 
 A module manual is `src/<module>/AGENTS.md`, beside a one-line
 `src/<module>/CLAUDE.md` that holds `@AGENTS.md`. Claude Code and OpenCode
-load it when they read a file in the module; Codex and others load it by the
-rule in the root `AGENTS.md`. It says what a change must not break and the
+load it when they read a file in the module; the manual hook sends it to any
+agent, Codex's included, whose shell command names a file there; others
+load it by the rule in the root `AGENTS.md`. It says what a change must not break and the
 code does not show (documentation rule 7). Rationale lives in ADRs; history
 in git. Budget: `MANUAL_CHARACTERS` for one manual and
 `MANUALS_TOTAL_CHARACTERS` for all of them together, both in

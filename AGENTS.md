@@ -20,26 +20,27 @@ reference a finding cites.
 | Spec writer (`spec-session`)    | its skill and the stage file it names; [templates/](docs/internal/templates/)                                                                                       |
 | Everyone touching `src/`        | the `AGENTS.md` of every module directory on the path (a hook sends each one the first time a call names a file there); a change that makes a manual false fixes it |
 
-Commands come from [toolchain.md](docs/internal/agent-rules/toolchain.md).
+Commands come from [toolchain.md](docs/internal/agent-rules/toolchain.md);
+its "Codex" section says how the same process runs on Codex models.
 Accepted ADRs under [docs/internal/adr/](docs/internal/adr/) bind; one
 marked _Accepted — not yet implemented_ is the target: build toward it, and
 never "fix" docs that describe it (ADRs 0004, 0005) back to today's code.
 
 ## Where to look
 
-| Need                              | Read                                                                             |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| Architecture, modules, boundaries | [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md)                                 |
-| Paths across modules              | [flows/](docs/internal/flows/)                                                   |
-| Exploring before a change         | [EXPLORATION.md](docs/internal/EXPLORATION.md)                                   |
-| Issues, specs, delivery           | [DELIVERY.md](docs/internal/DELIVERY.md), [templates/](docs/internal/templates/) |
-| Review protocol                   | [REVIEW.md](docs/internal/REVIEW.md)                                             |
-| Business events                   | [EVENTS.md](docs/internal/EVENTS.md) (with rationale)                            |
-| Console design                    | [DESIGN.md](docs/internal/DESIGN.md)                                             |
-| Website and brand visuals         | [BRAND.md](docs/internal/BRAND.md)                                               |
-| Third-party code                  | [VENDORED-CODE.md](docs/internal/VENDORED-CODE.md)                               |
-| Post-v1 ideas (not unless asked)  | [IDEAS.md](docs/internal/IDEAS.md)                                               |
-| Skills and agents                 | `.claude/skills/`, `.claude/agents/`, briefs in `.agents/briefs/`                |
+| Need                              | Read                                                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Architecture, modules, boundaries | [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md)                                                            |
+| Paths across modules              | [flows/](docs/internal/flows/)                                                                              |
+| Exploring before a change         | [EXPLORATION.md](docs/internal/EXPLORATION.md)                                                              |
+| Issues, specs, delivery           | [DELIVERY.md](docs/internal/DELIVERY.md), [templates/](docs/internal/templates/)                            |
+| Review protocol                   | [REVIEW.md](docs/internal/REVIEW.md)                                                                        |
+| Business events                   | [EVENTS.md](docs/internal/EVENTS.md) (with rationale)                                                       |
+| Console design                    | [DESIGN.md](docs/internal/DESIGN.md)                                                                        |
+| Website and brand visuals         | [BRAND.md](docs/internal/BRAND.md)                                                                          |
+| Third-party code                  | [VENDORED-CODE.md](docs/internal/VENDORED-CODE.md)                                                          |
+| Post-v1 ideas (not unless asked)  | [IDEAS.md](docs/internal/IDEAS.md)                                                                          |
+| Skills and agents                 | `.claude/skills/` (linked from `.agents/skills/` for Codex), `.claude/agents/`, briefs in `.agents/briefs/` |
 
 ## Docs
 

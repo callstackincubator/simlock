@@ -40,7 +40,9 @@
 //              an agent other than `hardware-verifier` and `implementer` runs `slow-e2e.sh`
 //              for anything but `status` (delivery rule 16).
 //
-// A refusal exits 2 with the reason on stderr, which the agent reads.
+// A refusal exits 2 with the reason on stderr, which the agent reads. Under Codex (codex-hook.mjs
+// runs this with SIMLOCK_HARNESS=codex) the two `waiting` rules about the Claude Bash tool's own
+// flags, `timeout` and `run_in_background`, do not apply: Codex's shell tool has neither.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -703,6 +705,7 @@ const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
 const tool = input.tool_name;
 const args = input.tool_input ?? {};
 const subAgent = typeof input.agent_id === "string";
+const codex = process.env.SIMLOCK_HARNESS === "codex";
 const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
 
 if (tool === "Agent" || tool === "Task") agentRules();
@@ -719,14 +722,14 @@ if (tool === "Bash" && subAgent) {
   const raw = args.command ?? "";
   const slowLane = /slow-e2e\.sh|\.exit\b/.test(raw);
   if (!slowLane) {
-    if (TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
+    if (!codex && TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
       refuse(
         "Refused: a test run needs `timeout: 600000` on this Bash call. The default 120 s " +
           "moves a two-minute run to the background, and a background job holds your report " +
           "until it ends. Run it again in the foreground with the timeout set.",
       );
     }
-    if (args.run_in_background === true || BACKGROUND_JOB.test(shell)) {
+    if ((!codex && args.run_in_background === true) || BACKGROUND_JOB.test(shell)) {
       refuse(
         "Refused: nothing runs in the background in a delivery stage. A background job holds " +
           "your report until it ends or hits its 30-minute cap, and polling it costs the turn. " +
