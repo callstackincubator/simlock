@@ -362,28 +362,28 @@ struct SimctlPanelSampler: PanelSampler {
 /// SpringBoard's log, read by `simctl spawn … log` children under a `Watchdog`.
 final class SimctlPanelLog: PanelLog, @unchecked Sendable {
     private let udid: String
-    /// Names this follower's streams among any other `log` in the simulator.
-    private let token = UUID().uuidString
     private let lock = NSLock()
     private var children: [Process] = []
     private var stopped = false
 
     init(udid: String) { self.udid = udid }
 
-    private func logCommand(_ verb: [String]) -> [String] {
-        // why: the token is a clause that is always true; it puts a name on the in-simulator command line.
+    /// The `log` command for one verb and the snippet that ends it inside the simulator, where it is a host
+    /// process whose parent is the simulator's `launchd_sim`.
+    func commands(_ verb: [String]) -> (log: [String], end: String) {
+        // why: a token of its own per command, so ending one (`show`) never ends another (`stream`); it is a
+        // clause that is always true and puts a name on the in-simulator command line.
+        let token = UUID().uuidString
         let predicate = Panels.logPredicate + #" AND "\#(token)" != """#
-        return Panels.simctl(["spawn", udid, "log"] + verb + ["--style", "compact", "--predicate", predicate])
-    }
-
-    /// Ends this follower's `log` processes inside the simulator, which are host processes whose parent
-    /// is the simulator's `launchd_sim`.
-    private var endInSimulator: String {
-        #"for l in $(pgrep -f "^launchd_sim .*/\#(udid)/"); do pkill -9 -P "$l" -f "\#(token)"; done"#
+        return (
+            Panels.simctl(["spawn", udid, "log"] + verb + ["--style", "compact", "--predicate", predicate]),
+            #"for l in $(pgrep -f "^launchd_sim .*/\#(udid)/"); do pkill -9 -P "$l" -f "\#(token)"; done"#
+        )
     }
 
     private func launch(_ verb: [String], stdout: Pipe) -> Process? {
-        let process = Watchdog.process(running: logCommand(verb), then: endInSimulator)
+        let (log, end) = commands(verb)
+        let process = Watchdog.process(running: log, then: end)
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
         lock.lock()

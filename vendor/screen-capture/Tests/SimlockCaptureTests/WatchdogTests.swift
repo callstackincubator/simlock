@@ -11,9 +11,9 @@ final class WatchdogTests: XCTestCase {
         for _ in 0..<500 where !done() { try? await Task.sleep(nanoseconds: 10_000_000) }
     }
 
-    private func startCommand(_ body: String) async throws -> (watchdog: Process, child: pid_t) {
+    private func startCommand(_ body: String, then: (String) -> String = { _ in "" }) async throws -> (watchdog: Process, child: pid_t) {
         let file = NSTemporaryDirectory() + "watchdog-\(UUID().uuidString).pid"
-        let watchdog = Watchdog.process(running: ["/bin/sh", "-c", "echo $$ > \(file); \(body)"])
+        let watchdog = Watchdog.process(running: ["/bin/sh", "-c", "echo $$ > \(file); \(body)"], then: then(file))
         try watchdog.run()
         await waitUntil { FileManager.default.fileExists(atPath: file) && ((try? String(contentsOfFile: file)) ?? "").hasSuffix("\n") }
         let text = (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
@@ -34,13 +34,23 @@ final class WatchdogTests: XCTestCase {
         try (short.watchdog.standardInput as! Pipe).fileHandleForWriting.close()
     }
 
-    func testTheWatchdogRunsItsFollowUpAfterKillingTheCommand() async throws {
+    func testTheWatchdogRunsItsFollowUpOnlyOnceTheCommandIsGone() async throws {
         let marker = NSTemporaryDirectory() + "watchdog-then-\(UUID().uuidString)"
-        let watchdog = Watchdog.process(running: ["/bin/sleep", "60"], then: "touch \(marker)")
-        try watchdog.run()
-        try (watchdog.standardInput as! Pipe).fileHandleForWriting.close()
+        // The follow-up records the moment the command is already dead; run earlier, it records nothing.
+        let held = try await startCommand("exec sleep 60") { pidFile in
+            #"kill -0 "$(cat \#(pidFile))" 2>/dev/null || touch \#(marker)"#
+        }
+        try (held.watchdog.standardInput as! Pipe).fileHandleForWriting.close()
         await waitUntil { FileManager.default.fileExists(atPath: marker) }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: marker), "the follow-up never ran after the pipe closed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker), "the follow-up ran before the command was gone, or never")
         try? FileManager.default.removeItem(atPath: marker)
+    }
+
+    func testEachLogCommandIsNamedAndEndedByATokenOfItsOwn() {
+        let log = SimctlPanelLog(udid: "UDID")
+        let show = log.commands(["show"]), stream = log.commands(["stream"])
+        XCTAssertNotEqual(show.end, stream.end, "ending one log command would end the other")
+        XCTAssertFalse(stream.log.joined(separator: " ").contains(show.end.components(separatedBy: "\"")[5]),
+                       "the stream carries the token that ends the show")
     }
 }
