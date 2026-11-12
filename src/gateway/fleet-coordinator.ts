@@ -43,7 +43,10 @@ import type {
   RotateOutput,
 } from "../admin/index.js";
 import {
+  admissionDeniedError,
+  admissionFailedError,
   isSimlockError,
+  leaseEndedError,
   requestedClass,
   requestedDevice,
   type Platform,
@@ -74,6 +77,8 @@ import {
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { FleetRefusals, refusedCapacityReason, type WorkerEntry } from "./fleet-refusals.js";
+import { askAdmission, type AdmissionDecision, type AdmissionOptions } from "./admission.js";
+import type { EndedLeaseIds } from "./ended-lease-ids.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 import {
@@ -118,6 +123,24 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "BASELINE_STALE",
 ]);
 
+/**
+ * why: ADR 0074 §1: `admissionRequest` is the `lease.request` input as the caller sent it, which the
+ * admission command reads; the gateway dispatcher fills `ttlMs` and drops `allowDownload` after that.
+ */
+export type FleetRequestOptions = LeaseRequestOptions & {
+  readonly admissionRequest?: Readonly<Record<string, unknown>>;
+  /** why: ADR 0074 §3: the caller's `metadata` goes to the admission command only, never into an event, a record or a worker call. */
+  readonly admissionMetadata?: Readonly<Record<string, string>>;
+};
+
+/** why: a request whose admission command is running: `lease.cancel` and `dispose` end it by aborting `controller`. */
+interface AskingRequest {
+  readonly requesterId: string;
+  readonly platform: Platform;
+  readonly controller: AbortController;
+  end?: "cancelled" | "stopping";
+}
+
 export interface FleetLeaseCoordinatorOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
@@ -126,6 +149,8 @@ export interface FleetLeaseCoordinatorOptions {
   readonly views: FleetViews;
   readonly routing: RoutingPolicy;
   readonly leaseIndex: FleetLeaseIndex;
+  /** why: ADR 0074 §4: the chosen ids this gateway learned ended from its workers. */
+  readonly endedLeaseIds: EndedLeaseIds;
   /** why: ADR §19e (P5, round 2 review): `gateway.execTimeoutMs`, the backstop for a forwarded
    * `device.exec` whose worker never answers at all -- the worker's own `exec.timeoutMs` is
    * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
@@ -145,6 +170,8 @@ export interface FleetLeaseCoordinatorOptions {
   readonly describeFailure: (error: unknown) => LeaseRequestFailure;
   readonly maxPerRequester?: MaxPerRequester;
   readonly logger?: Logger;
+  /** why: ADR 0074 §1: set, the gateway asks this command about every new request; unset, every request has priority 0. */
+  readonly admission?: AdmissionOptions;
 }
 
 type FleetEventName =
@@ -158,6 +185,7 @@ type FleetEventName =
 export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
   readonly #decisions = new SerializedDecision();
+  readonly #asking = new Set<AskingRequest>();
   readonly requests: LeaseRequestBook<FleetLeaseGrant>;
   readonly #logger: Logger;
   #knownWorkerIds = new Set<string>();
@@ -211,6 +239,11 @@ export class FleetLeaseCoordinator {
         limits: options.leaseRequestLimits,
       }),
     });
+    options.leaseIndex.onEnded((entry) => {
+      if (entry.idChosenByRequester === true) {
+        options.endedLeaseIds.record(entry.gatewayLeaseId, options.clock.now());
+      }
+    });
     this.#unsubscribeViews = options.views.onViewsChanged(() => this.#onViewsChanged());
   }
 
@@ -261,19 +294,57 @@ export class FleetLeaseCoordinator {
    */
   async request(
     deviceRequest: DeviceRequest,
-    options: LeaseRequestOptions,
+    options: FleetRequestOptions,
   ): Promise<FleetLeaseGrant> {
+    // why: ADR 0074 §1: with a command, the checks run under the lock, then the command outside it, then the checks again with the answer under the lock; no await without a command, so a `lease.cancel` sent right after the request finds it in the same tick (#1492). The request is listed as asking before the first await, so a cancel or a stop in that window ends it too.
+    const { admission } = this.options;
+    let decision: AdmissionDecision | undefined;
+    if (admission !== undefined) {
+      const asking: AskingRequest = {
+        controller: new AbortController(),
+        platform: deviceRequest.platform,
+        requesterId: options.requesterId,
+      };
+      this.#asking.add(asking);
+      try {
+        const early = await this.#decisions.run(async () =>
+          this.#checkAdmission(deviceRequest, options),
+        );
+        if ("replay" in early) return early.replay;
+        // why: the caller is answered at once; the runner kills the command on its own time (it kills with SIGKILL).
+        if (asking.end === undefined) {
+          decision = await Promise.race([
+            this.#askAdmission(admission, deviceRequest, options, asking.controller),
+            new Promise<undefined>((resolve) =>
+              asking.controller.signal.addEventListener("abort", () => resolve(undefined), {
+                once: true,
+              }),
+            ),
+          ]);
+        }
+      } finally {
+        this.#asking.delete(asking);
+      }
+      if (asking.end !== undefined)
+        this.#refuseEndedWhileAsking(asking.end, deviceRequest, options);
+    }
     const admitted = await this.#decisions.run(async () => {
-      const replay = this.requests.replay(deviceRequest, options);
-      if (replay !== undefined) return { replay };
-      const requestId = newLeaseRequestId(this.options.idGenerator);
-      this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
-      this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
+      const checked = this.#checkAdmission(deviceRequest, options);
+      if ("replay" in checked) return checked;
+      const { requestId } = checked;
+      if (decision !== undefined && decision.kind !== "priority") {
+        this.#refuseByAdmission(decision, deviceRequest, options, requestId);
+      }
       const { id, started } = await this.requests.admit(
         deviceRequest,
         options,
         (id, onProgress) => {
-          const waiter = this.#queue.create(deviceRequest, { ...options, onProgress }, id);
+          const waiter = this.#queue.create(
+            deviceRequest,
+            { ...options, onProgress },
+            id,
+            decision?.kind === "priority" ? decision.priority : 0,
+          );
           return { promise: this.#afterViewRead(waiter.promise), waiter };
         },
         requestId,
@@ -291,6 +362,82 @@ export class FleetLeaseCoordinator {
     if ("replay" in admitted) return admitted.replay;
     this.#admit(admitted.waiter);
     return admitted.promise;
+  }
+
+  #endAsking(asking: AskingRequest, end: "cancelled" | "stopping"): void {
+    asking.end = end;
+    asking.controller.abort();
+  }
+
+  /** why: replay, the requester limit, a taken id and an ended id, in this order; a refusal is thrown, a replay returned. */
+  #checkAdmission(
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+  ): { readonly replay: Promise<FleetLeaseGrant> } | { readonly requestId: string } {
+    const replay = this.requests.replay(deviceRequest, options);
+    if (replay !== undefined) return { replay };
+    const requestId = newLeaseRequestId(this.options.idGenerator);
+    this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
+    this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
+    this.#refuseIfLeaseIdEnded(deviceRequest, options, requestId);
+    return { requestId };
+  }
+
+  /** why: ADR 0074 §1: the operator's command answers outside the decision lock, since it may take seconds. */
+  #askAdmission(
+    admission: AdmissionOptions,
+    deviceRequest: DeviceRequest,
+    options: FleetRequestOptions,
+    controller: AbortController,
+  ): Promise<AdmissionDecision> {
+    return askAdmission(
+      admission,
+      {
+        metadata: options.admissionMetadata ?? {},
+        platform: deviceRequest.platform,
+        principal: options.ownerId,
+        request: options.admissionRequest ?? deviceRequest,
+        requesterId: options.requesterId,
+      },
+      this.#logger,
+      controller.signal,
+    );
+  }
+
+  /** why: the caller cancelled, or the gateway stopped, while the command ran: nothing was stored, so there is nothing to undo. */
+  #refuseEndedWhileAsking(
+    end: "cancelled" | "stopping",
+    deviceRequest: DeviceRequest,
+    options: FleetRequestOptions,
+  ): never {
+    if (end === "stopping") throw new DispatchError("DAEMON_STOPPING", "Gateway is stopping");
+    const requestId = newLeaseRequestId(this.options.idGenerator);
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: "cancelled",
+    });
+    throw new RequestCancelledError(requestId);
+  }
+
+  #refuseByAdmission(
+    decision: Exclude<AdmissionDecision, { readonly kind: "priority" }>,
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): never {
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: decision.kind === "deny" ? "admission-denied" : "admission-failed",
+    });
+    const refusal =
+      decision.kind === "deny"
+        ? admissionDeniedError(decision.reason)
+        : admissionFailedError(decision.cause);
+    throw new DispatchError(refusal.code, refusal.message, refusal.details);
   }
 
   /**
@@ -383,14 +530,47 @@ export class FleetLeaseCoordinator {
     throw leaseIdTaken(leaseId);
   }
 
+  /** why: ADR 0074 §4: after the taken-id check, a chosen id whose lease this gateway learned ended is refused without a dispatch; a worker answers for ends the gateway missed. */
+  #refuseIfLeaseIdEnded(
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    const endedAt = this.options.endedLeaseIds.endedAt(leaseId);
+    if (endedAt === undefined) return;
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: "lease-ended",
+    });
+    const ended = leaseEndedError(leaseId, endedAt);
+    throw new DispatchError(ended.code, ended.message, ended.details);
+  }
+
+  /**
+   * why: a `new` waiter is admitted but not yet walked: no worker was asked, so it is as safe to reject as
+   * a `queued` one (#1492). Only `processing` means a worker already has the request.
+   */
   async cancelPending(
     requesterId: string,
     platform?: Platform,
   ): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+    for (const asking of this.#asking) {
+      if (
+        asking.requesterId === requesterId &&
+        (platform === undefined || asking.platform === platform)
+      ) {
+        this.#endAsking(asking, "cancelled");
+        return "cancelled";
+      }
+    }
     return this.#decisions.run(async () => {
       const waiter = this.#queue.findPendingWaiter(requesterId, platform);
       if (waiter === undefined) return "not-found";
-      if (waiter.state !== "queued") return "not-cancellable";
+      if (waiter.state === "processing") return "not-cancellable";
       if (this.#queue.reject(waiter, new RequestCancelledError(waiter.id))) {
         this.#emitRejected(waiter, "cancelled");
       }
@@ -435,6 +615,7 @@ export class FleetLeaseCoordinator {
    * again. */
   dispose(): void {
     this.#unsubscribeViews();
+    for (const asking of this.#asking) this.#endAsking(asking, "stopping");
     this.#queue.cancelAll(() => new DispatchError("DAEMON_STOPPING", "Gateway is stopping"));
   }
 
@@ -929,6 +1110,7 @@ export class FleetLeaseCoordinator {
     const entry: FleetLeaseEntry = {
       gatewayLeaseId,
       grantedAt: grant.lease.grantedAt,
+      idChosenByRequester: forwardedLeaseId !== undefined,
       ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
       workerId,
@@ -964,8 +1146,7 @@ export class FleetLeaseCoordinator {
     const alreadyQueued = this.#queue.isQueued(waiter);
     if (this.#queue.enqueue(waiter) && !alreadyQueued) {
       this.#emit("lease.queued", {
-        queuePosition:
-          lineOf(waiter.request) === "physical" ? this.#queue.physicalDepth : this.#queue.depth,
+        queuePosition: this.#queue.positionOf(waiter),
         requestId: waiter.id,
       });
     }

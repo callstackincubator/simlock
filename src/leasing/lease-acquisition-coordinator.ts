@@ -1,5 +1,5 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import { type OsRange, requestedClass } from "../contract/index.js";
+import { leaseEndedError, type OsRange, requestedClass } from "../contract/index.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import {
   downloadingProgress,
@@ -132,6 +132,7 @@ export interface LeaseAcquisitionRegistry {
     readonly virtualDevices: readonly VirtualDevice[];
     readonly leases: readonly LeaseRecord[];
   };
+  endedLeaseId(leaseId: string): number | undefined;
 }
 
 export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive">;
@@ -323,6 +324,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         }
         this.#refuseIfRequesterAtLimit(request, options, requestId);
         this.#refuseIfLeaseIdTaken(request, options, requestId);
+        this.#refuseIfLeaseIdEnded(request, options, requestId);
         const { id, started: accepted } = await this.options.requests.admit(
           request,
           options,
@@ -426,6 +428,30 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       "lease-acquisition-coordinator",
     );
     throw new LeaseIdTakenError(leaseId);
+  }
+
+  /** why: ADR 0074 §4: a chosen id whose lease ended within `lease.endedIdRetentionMs` is refused, after the taken-id check so a live id stays `LEASE_ID_TAKEN`. */
+  #refuseIfLeaseIdEnded(
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    const endedAt = this.options.registry.endedLeaseId(leaseId);
+    if (endedAt === undefined) return;
+    emitLeaseRefusal(
+      this.options.eventBus,
+      {
+        requestId,
+        requester: options.requesterId,
+        requestSpec: request,
+        reason: "lease-ended",
+        fleetRequestId: options.fleetRequestId,
+      },
+      "lease-acquisition-coordinator",
+    );
+    throw leaseEndedError(leaseId, endedAt);
   }
 
   /** Closes acquisition admission, settles all demand, and drains driver work. */
@@ -783,8 +809,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Only a `queued` waiter is safe to reject: `processing` means device work already claimed it,
-   * which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
+   * why: a `new` or `queued` waiter is safe to reject: `new` is still resolving its spec, with no device
+   * work, and `#nextPlan` skips a rejected waiter. `processing` means device work already claimed
+   * it, which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
    * read, so it is cancellable in any live state.
    */
   async cancelPending(
@@ -796,7 +823,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         | AcquisitionWaiter
         | undefined;
       if (waiter === undefined) return "not-found";
-      if (waiter.state !== "queued" && waiter.request.physical !== true) return "not-cancellable";
+      if (waiter.state === "processing" && waiter.request.physical !== true) {
+        return "not-cancellable";
+      }
       const holdsClaim = waiter.state === "processing";
       this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
       // why: a waiter mid presence read holds a grant claim, and its own wake follows the release.

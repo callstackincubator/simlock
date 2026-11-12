@@ -43,7 +43,7 @@ Boot:
 
 Physical phones:
 
-- The 5037 server is never started, stopped or adopted on purpose. Phones are USB transports only.
+- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it as a side effect when nothing listens. Phones are USB transports only.
 - Before every command `DefaultAdbServerGate.check`: the 5037 server's protocol must equal Simlock's `adb version`; nothing listening is open. A mismatch or an unreadable answer sends no command and shows as advisory `adb-protocol-mismatch`.
 
 Profiles and components:

@@ -18,6 +18,7 @@ The lock:
 The queue:
 
 - `LeaseRequestBook.admit` stores the request before it queues it.
+- Admit refuses a chosen lease id a live lease or a waiting request holds (`LEASE_ID_TAKEN`), then one whose lease ended within `lease.endedIdRetentionMs` (`LEASE_ENDED`, kept in the registry; ADR 0074 §4).
 - Only the head of the virtual line plans; every physical waiter plans.
 - A request's queue timeout is fixed at its first enqueue.
 - A waiting reason is never stored: not in `state.db`, not in an event. The waiter keeps it in memory from its latest enqueue; `waitingRequests()` lists it on a `queued` entry, never on a `starting` one.

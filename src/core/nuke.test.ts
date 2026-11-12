@@ -75,6 +75,72 @@ describe("Nuke", () => {
     );
   });
 
+  it("with delete, deletes a device an earlier process left provisioning, reports it, and frees its slot for the next lease", async () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({
+      clock,
+      eventBus,
+      idGenerator: sequence(),
+    });
+    const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "android" });
+    driver.setManagedReality({
+      devices: [
+        {
+          address: "stalled-address",
+          deviceId: "stalled",
+          driverData: { fakeDeviceId: "stalled" },
+          runState: "stopped",
+        },
+      ],
+      processes: [],
+    });
+    const stalled = await registry.registerDevice({
+      driverData: { fakeDeviceId: "stalled" },
+      driverDeviceId: "stalled",
+      provisionDuration: 0,
+      spec: { physical: false, model: "Phone", osVersion: "1", platform: "android" },
+    });
+    expect(registry.snapshot.devices).toMatchObject([{ id: stalled.id, state: "provisioning" }]);
+    const engine = createTestEngine({
+      ...testComponentWiring({
+        clock: clock,
+        drivers: [driver],
+        eventBus: eventBus,
+        registry: registry,
+      }),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      idGenerator: sequence(),
+      registry,
+      state: testStateOf(registry),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        totalRamBytes: 32 * 1024 ** 3,
+      }),
+    });
+
+    const report = await new Nuke({ executor: engine, registry }).run({ deleteDevices: true });
+
+    expect(registry.snapshot.devices.find((device) => device.id === stalled.id)?.state).toBe(
+      "deleted",
+    );
+    expect(report.deletedDevices).toEqual([stalled.id]);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toEqual([
+      expect.objectContaining({ arguments: [expect.objectContaining({ deviceId: "stalled" })] }),
+    ]);
+    const grant = await engine.request(
+      { model: "Phone", osVersion: "1", platform: "android" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+    expect(grant.device.id).not.toBe(stalled.id);
+    expect(registry.snapshot.devices.find((device) => device.id === grant.device.id)?.state).toBe(
+      "leased",
+    );
+  });
+
   it("waits for a blocked release shutdown before deleting the registry-owned device", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
@@ -152,6 +218,7 @@ function sequence() {
 
 function config(): TestEngineConfig {
   return {
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -167,6 +234,7 @@ function config(): TestEngineConfig {
       maxTtlMs: 3_600_000,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
+      endedIdRetentionMs: 600_000,
       maxRequestRecords: 10_000,
       maxPerRequester: 1,
       endWaitMs: 600_000,

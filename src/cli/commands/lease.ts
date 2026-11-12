@@ -35,6 +35,18 @@ function parseBindPid(value: unknown): number | undefined {
   return pid;
 }
 
+/** why: the key is the text before the first `=` and the value everything after it; a repeated key keeps the last value. */
+function parseMeta(flags: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(flags)) return undefined;
+  const metadata: Record<string, string> = {};
+  for (const flag of flags as string[]) {
+    const at = flag.indexOf("=");
+    if (at < 0) throw new UsageError(`--meta needs key=value (got ${flag})`);
+    metadata[flag.slice(0, at)] = flag.slice(at + 1);
+  }
+  return metadata;
+}
+
 // fallow-ignore-next-line complexity -- CLI command parsing remains intentionally local to its rendering boundary.
 async function runLease(
   argv: readonly string[],
@@ -53,6 +65,7 @@ async function runLease(
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
     "lease-id": { type: "string" },
+    meta: { type: "string", multiple: true },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -68,13 +81,14 @@ async function runLease(
         "                     [--except <category,...>] [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
-        "                     [--export-env] [--bind-pid <pid>]\n",
+        "                     [--meta <key=value>]... [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
   if (values.platform !== "ios" && values.platform !== "android")
     throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   const platform = values.platform as "ios" | "android";
+  const metadata = parseMeta(values.meta);
   const baseline =
     typeof values.baseline === "string"
       ? values.baseline
@@ -95,9 +109,19 @@ async function runLease(
     ? undefined
     : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
 
+  let ourLeaseId: string | undefined;
+  // why: A signal or a dead --bind-pid process while it connects or the request waits must leave the queue at
+  // once, as the client's abort does; noticed only at grant time, the device would be taken and
+  // released, and a killed process would leave its request queued.
+  const waitAbort = new AbortController();
+  let cancelledWhileWaiting = false;
+  void termination?.settled.then(() => {
+    if (ourLeaseId !== undefined) return;
+    cancelledWhileWaiting = true;
+    waitAbort.abort();
+  });
   const client = await connectDaemonClient(environment, token);
   let leaseLost = false;
-  let ourLeaseId: string | undefined;
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
   const leaseLostSignal = new Promise<void>((resolve) => {
@@ -179,16 +203,6 @@ async function runLease(
     }
   };
   let renewal: LeaseRenewal | undefined;
-  // why: A signal or a dead --bind-pid process while the request waits must leave the queue at
-  // once, as the client's abort does; noticed only at grant time, the device would be taken and
-  // released, and a killed process would leave its request queued.
-  const waitAbort = new AbortController();
-  let cancelledWhileWaiting = false;
-  void termination?.settled.then(() => {
-    if (ourLeaseId !== undefined) return;
-    cancelledWhileWaiting = true;
-    waitAbort.abort();
-  });
   try {
     let grant: LeaseGrant;
     try {
@@ -207,6 +221,7 @@ async function runLease(
           ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
           ...(baseline === undefined ? {} : { baseline }),
           ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
+          ...(metadata === undefined ? {} : { metadata }),
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(ttlMs === undefined ? {} : { ttlMs }),
         },

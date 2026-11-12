@@ -55,7 +55,12 @@ import {
   Emulator,
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
-import type { AndroidDriverConfig, AndroidEmulatorLaunchOptions } from "./definition.js";
+import {
+  type AndroidDriverConfig,
+  type AndroidEmulatorLaunchOptions,
+  DEFAULT_ADB_SERVER_PORT,
+  defaultAndroidDeviceRoot,
+} from "./definition.js";
 import { ADB_DEVICES_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
 import { ANDROID_DEFAULT_MODELS, Catalog } from "./catalog.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
@@ -93,7 +98,6 @@ export {
 } from "./passthrough-rules.js";
 
 const DEFAULT_BOOT_TIMEOUT_MS = 300_000;
-const DEFAULT_ADB_SERVER_PORT = 5038;
 // why: the reclaim estimates below price the two strategies `virtualReclaimStrategy` still names; the Android driver
 // reclaims no virtual device (a released one is deleted), so they were measured on an M3 Pro against Pixel 8 / API 35
 // when it did: 2.4-5.1s for the snapshot strategy.
@@ -697,6 +701,10 @@ export class AndroidDriver implements Driver {
     return this.#physical.listPresentPhysical(enrolledIds);
   }
 
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return this.#physical.listAttachedPhysical();
+  }
+
   async inspectPhysical(id: string): Promise<PhysicalInspection> {
     return this.#physical.inspectPhysical(id);
   }
@@ -814,7 +822,7 @@ function configuredDeviceRoot(options: AndroidDriverOptions): string {
     );
   }
 
-  return configured ?? join(options.simlockHome, "devices", "android");
+  return configured ?? defaultAndroidDeviceRoot(options.simlockHome);
 }
 
 /**

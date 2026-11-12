@@ -1121,6 +1121,72 @@ describe("Android physical handler: listPresentPhysical", () => {
   });
 });
 
+describe("Android physical handler: listAttachedPhysical", () => {
+  // why: the Windows rule needs `platform: "win32"`, which the driver surface cannot fake per host;
+  // the handler is built straight, as the Windows describe below does.
+  async function handlerFor(
+    listing: string,
+    options: { readonly platform?: NodeJS.Platform; readonly reply?: string } = {},
+  ) {
+    const runner = new PhoneAdb([]);
+    runner.devicesOutput = listing;
+    const probe = new FakeTcpProbe([]);
+    probe.replyWith(options.reply ?? VERSION_REPLY_41);
+    const handler = new AndroidPhysicalHandler({
+      adb,
+      baseEnv: { ANDROID_HOME: sdk },
+      filesystem: await androidFilesystem(),
+      isBareShell: () => false,
+      platform: options.platform ?? "linux",
+      processRunner: runner,
+      tcpProbe: probe,
+    });
+    return { handler, runner };
+  }
+
+  it("lists the phones on USB in any state, none on the network or an emulator, throws when the list cannot be read, and runs no adb command at a protocol mismatch", async () => {
+    const listings = [
+      {
+        listing: devicesListing(
+          USB_LINE,
+          "UNAUTH1 unauthorized usb:1-2 transport_id:4",
+          "OFFLINE1 offline usb:1-3 transport_id:5",
+          "192.168.1.5:5555 device product:o1s transport_id:6",
+          "emulator-5554 device product:sdk transport_id:7",
+        ),
+        listed: [PHONE, "UNAUTH1", "OFFLINE1"],
+        name: "linux",
+        platform: "linux",
+      },
+      {
+        listing: devicesListing(
+          `${PHONE} device product:a70qxtc transport_id:1`,
+          "192.168.1.5:5555 device product:o1s transport_id:6",
+        ),
+        listed: [PHONE],
+        name: "windows, with no usb: path and the header line",
+        platform: "win32",
+      },
+    ] as const;
+    for (const { listing, listed, name, platform } of listings) {
+      const { handler, runner } = await handlerFor(listing, { platform });
+
+      await expect(handler.listAttachedPhysical(), name).resolves.toEqual([...listed].sort());
+      expect(runner.rests, name).toEqual([["devices", "-l"]]);
+    }
+
+    const failing = await handlerFor(devicesListing(USB_LINE));
+    failing.runner.override((rest) => (isDevicesListing(rest) ? FAILED : undefined));
+    await expect(failing.handler.listAttachedPhysical()).rejects.toThrow(
+      /could not read the device list \(adb devices -l\)/,
+    );
+
+    const mismatch = await handlerFor(devicesListing(USB_LINE), { reply: VERSION_REPLY_40 });
+    await expect(mismatch.handler.listAttachedPhysical()).rejects.toThrow(/speaks protocol 40/);
+    expect(mismatch.runner.commands).toEqual([]);
+  });
+});
+
 describe("Android physical handler: reclaim", () => {
   it("uninstalls, for the current user, each package off the enrollment list, uninstalls no listed package, reports listed packages not installed as missingApps, and returns strategy uninstall", async () => {
     const { driver, runner } = await world();

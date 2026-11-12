@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { AdminAuthenticationFailedError } from "../auth/index.js";
+import { connectSimlock } from "../client/index.js";
 import { linkPair } from "../link/testing.js";
+import { promiseState } from "../test-support/promise-state.js";
 import * as relaySupport from "./test-relay-support.js";
 import {
   createClient,
@@ -13,6 +15,7 @@ import {
   helloAs,
   leaseIdOf,
   stopTestDaemons,
+  waitFor,
 } from "./test-server.js";
 
 afterEach(stopTestDaemons);
@@ -483,6 +486,70 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 
     await holder.close();
     await waiter.close();
+  });
+
+  it("a requestLease aborted right after its frame is sent, with the device limit held, rejects CANCELLED and its request ends cancelled, not by its queue timeout", async () => {
+    const harness = await createHarness();
+    const refusals: string[] = [];
+    harness.eventBus.subscribe("lease.rejected", (envelope) => {
+      if (envelope.payload.requester === "waiter") refusals.push(envelope.payload.reason);
+    });
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const held = await holder.request("lease.request", {
+      requesterId: "holder",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(held.ok).toBe(true);
+
+    const client = await connectSimlock({
+      endpoint: harness.socketPath,
+      principal: "waiter",
+    });
+    const controller = new AbortController();
+    const lease = client.requestLease(
+      { model: "iPhone 16", osVersion: "26.5", platform: "ios", timeoutMs: 60_000 },
+      { signal: controller.signal },
+    );
+    const state = promiseState(lease);
+    const outcome = lease.then(
+      () => "granted",
+      (error: unknown) => error,
+    );
+    await Promise.resolve();
+    controller.abort();
+
+    await waitFor(() => state.state !== "pending" || harness.engine.queueDepth === 1);
+    harness.clock.advance(60_001);
+
+    expect(await outcome).toMatchObject({ code: "CANCELLED" });
+    expect(refusals).toEqual(["cancelled"]);
+
+    await holder.close();
+    await client.close();
+  });
+
+  it("a lease.cancel sent while the same requester's lease.request is refused before admission answers once it is refused, instead of waiting forever", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const refused = client.request("lease.request", {
+      requesterId: "waiter",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      requires: ["no-such-capability"],
+    });
+    const cancel = client.request("lease.cancel", { requesterId: "waiter", platform: "ios" });
+    const state = promiseState(cancel);
+    await waitFor(() => state.state !== "pending");
+
+    expect(state.state).toBe("fulfilled");
+    expect(await refused).toMatchObject({ ok: false, error: { code: "CAPABILITY_MISSING" } });
+    expect(await cancel).toMatchObject({ ok: true });
+    await client.close();
   });
 
   it("pushes lease-lost to every live connection sharing the lease's owner, including a detached holder on another connection (ADR 0003 §8)", async () => {

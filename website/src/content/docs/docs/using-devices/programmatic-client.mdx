@@ -120,7 +120,7 @@ Run it with a TypeScript runner, for example `npx tsx lease-and-launch.mts`.
 | `onLeaseLost`, `onDeviceUnhealthy`, `onDeviceRecovered` | Tell you what happens to a lease this client took. Each returns a function that stops listening. |
 | `close()` | Closes the connection. It doesn't release your leases. |
 
-`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `baseline`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` and `leaseId`. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `baseline`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload`, `leaseId` and `metadata`, an object of text values for a gateway's admission command (see [Ranking or refusing requests](/simlock/docs/gateway/routing#ranking-or-refusing-requests-with-an-admission-command)). See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
 
 For `exec`:
 
@@ -202,7 +202,7 @@ Each of these does what the matching `simlock` command does:
 | `listBaselines()` | `simlock baseline list` | `{ baselines }`: the newest version of each name. On a gateway it covers every worker, each entry with its `workerId`. |
 | `removeBaseline({ name, workerId? })` | `simlock baseline remove` | `{ name, versions, deletedDevices }`. On a gateway, `workerId` is required and names the worker to remove it from. |
 
-The baseline calls can throw `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `UNKNOWN_BASELINE` and `BASELINE_IN_USE`; see [Baselines](/simlock/docs/worker/baselines).
+The baseline calls can throw `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `UNKNOWN_BASELINE` and `BASELINE_IN_USE`; `removeBaseline` can also throw `DEVICE_BUSY`; see [Baselines](/simlock/docs/worker/baselines).
 
 ### Update the daemon
 

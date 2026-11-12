@@ -322,6 +322,24 @@ describe("POST /v1/lease-requests", () => {
     expect((await responsePromise).status).toBe(201);
   });
 
+  it("an HTTP body's metadata reaches the daemon's lease.request", async () => {
+    const cases = [
+      {
+        body: { metadata: { project: "checkout-app", role: "ci" } },
+        expected: { project: "checkout-app", role: "ci" },
+      },
+      { body: {}, expected: undefined },
+    ] as const;
+    for (const { body, expected } of cases) {
+      const { app, dispatcher } = buildHarness();
+      void postLeaseRequest(app, { ...defaultBody, ...body });
+      const call = await waitForDispatch(dispatcher, "lease.request");
+      expect((call.input as { metadata?: unknown }).metadata, JSON.stringify(body)).toEqual(
+        expected,
+      );
+    }
+  });
+
   it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {
     const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, { ...defaultBody, ttlMs: 60_000 });

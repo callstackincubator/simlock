@@ -422,8 +422,9 @@ async function run(
 }
 
 function ruleDevicesAnswer(check: Check, main: Unit): void {
-  if (main.command === "devices" && Boolean(check.meta["requestProgress"])) {
-    throw refuse("refused: devices does not stream through simlock");
+  if (main.command === "devices" && present(check.meta["requestProgress"])) {
+    delete check.meta["requestProgress"];
+    check.changed = true;
   }
 }
 

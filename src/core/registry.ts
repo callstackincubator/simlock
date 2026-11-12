@@ -3,6 +3,7 @@ import type { Clock, IdGenerator } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import {
   DEFAULT_DEVICES_DELETED_RETENTION_MS,
+  DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
   DEFAULT_LEASE_MAX_REQUEST_RECORDS,
   DEFAULT_LEASE_REQUEST_RETENTION_MS,
 } from "./config.js";
@@ -44,8 +45,11 @@ import {
   deleteDevice,
   deleteLeaseRequest,
   loadRegistryRows,
+  pruneEndedLeaseIds,
+  readEndedLeaseId,
   writeComponent,
   writeDevice,
+  writeEndedLeaseId,
   writeLease,
   writeLeaseRequest,
 } from "./registry-rows.js";
@@ -69,6 +73,8 @@ export interface RegistryOptions {
   readonly leaseRequestLimits?: LeaseRequestLimits;
   /** why: `devices.deletedRetentionMs`, how long a `deleted` device record is kept; defaults to the config default. */
   readonly deletedRetentionMs?: number;
+  /** why: `lease.endedIdRetentionMs`, how long a chosen lease id is remembered after its lease ended; defaults to the config default. */
+  readonly endedIdRetentionMs?: number;
 }
 
 export interface RegistrySnapshot {
@@ -106,6 +112,8 @@ export interface PhysicalEnrollmentInput {
   readonly osVersion: string;
   readonly class: PhysicalClass;
   readonly apps: readonly string[];
+  /** why: who enrolled the phone, for `device.enrolled`; an operator's `device add` unless the worker's auto-enroller says otherwise. */
+  readonly initiator?: "operator" | "auto";
 }
 
 export interface ReleasedLease {
@@ -190,6 +198,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const registry = new Registry({
       ...options,
       deletedRetentionMs: options.deletedRetentionMs ?? DEFAULT_DEVICES_DELETED_RETENTION_MS,
+      endedIdRetentionMs: options.endedIdRetentionMs ?? DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
       leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
       leaseRequestLimits: options.leaseRequestLimits ?? {
         maxRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
@@ -209,9 +218,14 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   get snapshot(): RegistrySnapshot {
+    // why: only a commit drops an expired record from state.db, so an idle worker would list it past devices.deletedRetentionMs.
+    const now = this.options.clock.now();
+    const kept = this.#devices.filter(
+      (device) => !isExpired(device, now, this.options.deletedRetentionMs),
+    );
     const devices = [
-      ...this.#devices.filter((device) => !device.physical),
-      ...this.#devices.filter((device) => device.physical),
+      ...kept.filter((device) => !device.physical),
+      ...kept.filter((device) => device.physical),
     ].map(cloneDevice);
     return {
       devices,
@@ -678,7 +692,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       state: "ready",
     };
     this.#commit([...this.#devices, record], this.#leases);
-    this.#emitEnrolled(record, false);
+    this.#emitEnrolled(record, false, input.initiator ?? "operator");
     return cloneDevice(record) as PhysicalDevice;
   }
 
@@ -721,7 +735,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const devices = [...this.#devices];
     devices[index] = updated;
     this.#commit(devices, this.#leases);
-    this.#emitEnrolled(updated, true);
+    this.#emitEnrolled(updated, true, "operator");
     return this.#committed(deviceId) as PhysicalDevice;
   }
 
@@ -754,7 +768,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return this.#committed(deviceId) as PhysicalDevice;
   }
 
-  #emitEnrolled(device: PhysicalDevice, reenrolled: boolean): void {
+  #emitEnrolled(device: PhysicalDevice, reenrolled: boolean, initiator: "operator" | "auto"): void {
     this.options.eventBus.emit(
       "device.enrolled",
       {
@@ -762,6 +776,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         class: device.spec.class,
         deviceId: device.id,
         driverDeviceId: device.driverDeviceId,
+        initiator,
         model: device.spec.model,
         osVersion: device.spec.osVersion,
         platform: device.spec.platform,
@@ -1008,6 +1023,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       for (const id of device.removed) deleteDevice(database, id);
       for (const record of device.changed) writeDevice(database, record, deviceData);
       for (const id of lease.removed) deleteLease(database, id);
+      this.#recordEndedLeaseIds(lease.removed, now);
       for (const record of lease.changed) writeLease(database, record);
       for (const record of request.changed) writeLeaseRequest(database, record);
       for (const key of component.removed) {
@@ -1021,6 +1037,27 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     this.#leaseRequests = requests;
     this.#components = components;
     this.#commitListeners.forEach((listener) => listener());
+  }
+
+  /** why: ADR 0074 §4: runs inside the commit's transaction, so a lease and its ended row are written together. */
+  #recordEndedLeaseIds(removedIds: readonly string[], now: number): void {
+    const { database } = this.options.state;
+    for (const id of removedIds) {
+      if (this.#leases.find((record) => record.id === id)?.idChosenByRequester === true) {
+        writeEndedLeaseId(database, id, now);
+      }
+    }
+    pruneEndedLeaseIds(database, now - this.options.endedIdRetentionMs);
+  }
+
+  /** why: ADR 0074 §4: when the chosen lease id ended, while it is still inside `lease.endedIdRetentionMs`. */
+  // fallow-ignore-next-line unused-class-member -- reached through the acquisition coordinator's registry port.
+  endedLeaseId(leaseId: string): number | undefined {
+    const endedAt = readEndedLeaseId(this.options.state.database, leaseId);
+    if (endedAt === undefined) return undefined;
+    return this.options.clock.now() - endedAt > this.options.endedIdRetentionMs
+      ? undefined
+      : endedAt;
   }
 
   /** Calls `listener` after every commit, once the new state is what `snapshot` reads. */

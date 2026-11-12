@@ -156,6 +156,8 @@ export class RelayConnection {
       return await this.#run(input, call, active, push);
     } finally {
       this.#active.delete(input.relayId);
+      // why: the Request carries the relay's own abort signal, whose listener closes over `active`; keeping the Request makes a cycle through fetch's finalizer registry that is never collected.
+      active.request = undefined;
     }
   }
 

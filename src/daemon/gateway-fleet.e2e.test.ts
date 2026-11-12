@@ -42,6 +42,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  ScriptedProcessRunner,
   resolveDaemonSocketPath,
   SystemClock,
 } from "../ports/index.js";
@@ -128,7 +129,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   });
 
   async function startGateway(
-    alerts: { destinations?: readonly AlertDestination[]; poster?: FakeWebhookPoster } = {},
+    alerts: {
+      admission?: readonly string[];
+      destinations?: readonly AlertDestination[];
+      poster?: FakeWebhookPoster;
+    } = {},
     extra: Partial<StartDaemonOptions> = {},
   ): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
@@ -137,9 +142,18 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       startDaemon({
         configOverrides: {
           http: { enabled: true, host: "127.0.0.1", port },
-          ...(alerts.destinations === undefined
+          ...(alerts.destinations === undefined && alerts.admission === undefined
             ? {}
-            : { gateway: { alerts: { destinations: alerts.destinations } } }),
+            : {
+                gateway: {
+                  ...(alerts.destinations === undefined
+                    ? {}
+                    : { alerts: { destinations: alerts.destinations } }),
+                  ...(alerts.admission === undefined
+                    ? {}
+                    : { admission: { command: alerts.admission } }),
+                },
+              }),
         },
         role: "gateway",
         dataDirectory: directory,
@@ -340,6 +354,28 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     expect(launcher.launches).toMatchObject([{ from: "1.0.0-e2e", role: "gateway", to: "2.0.0" }]);
     const status = await gateway.dispatch("status.get", {}, adminSession());
     expect(status.daemon.update).toMatchObject(installing);
+  });
+
+  it("a gateway configured with gateway.admission.command asks that command about a new request and refuses it when the command denies", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["/etc/simlock/policy.ts"], command: "bun" },
+        result: { code: 0, stderr: "", stdout: '{"deny":"budget used"}' },
+      },
+    ]);
+    const gateway = await startGateway(
+      { admission: ["bun", "/etc/simlock/policy.ts"] },
+      { processRunner: runner },
+    );
+
+    await expect(
+      gateway.dispatch(
+        "lease.request",
+        { model: "Pixel-B", platform: "android", noWait: true },
+        agentSession(),
+      ),
+    ).rejects.toMatchObject({ code: "ADMISSION_DENIED" });
+    expect(runner.calls).toHaveLength(1);
   });
 
   it("emits queue.changed once when the gateway has started, with depth 0, and no capacity.changed of its own", async () => {

@@ -422,6 +422,66 @@ describe("lease.request fleetRequestId", () => {
   });
 });
 
+describe("lease.request metadata", () => {
+  const parse = (metadata: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({ metadata, platform: "ios" });
+  const longKeys = (count: number) =>
+    Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [`${i}${"k".repeat(63)}`, "v".repeat(256)]),
+    );
+
+  it("a request's metadata is checked by the contract", () => {
+    const accepted: ReadonlyArray<[string, unknown]> = [
+      ["two keys", { project: "checkout-app", role: "ci" }],
+      ["no keys", {}],
+      ["an empty value", { project: "" }],
+      ["16 keys", Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`k${i}`, "v"]))],
+      ["a key of 64 characters", { ["k".repeat(64)]: "v" }],
+      ["a value of 256 characters", { k: "v".repeat(256) }],
+      ["exactly 2048 characters in all", { ...longKeys(6), k: "v".repeat(127) }],
+    ];
+    for (const [name, metadata] of accepted) {
+      expect(parse(metadata).success, name).toBe(true);
+    }
+
+    const refused: ReadonlyArray<[string, unknown, string]> = [
+      [
+        "17 keys",
+        Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, "v"])),
+        "metadata has more than 16 keys",
+      ],
+      [
+        "a key of 65 characters",
+        { ["k".repeat(65)]: "v" },
+        `metadata key must be 1 to 64 characters (got ${"k".repeat(65)})`,
+      ],
+      ["an empty key", { "": "v" }, "metadata key must be 1 to 64 characters (got )"],
+      [
+        "a value of 257 characters",
+        { k: "v".repeat(257) },
+        "metadata value for k must be at most 256 characters",
+      ],
+      [
+        "2049 characters in all",
+        { ...longKeys(6), k: "v".repeat(128) },
+        "metadata is longer than 2048 characters in all",
+      ],
+    ];
+    for (const [name, metadata, message] of refused) {
+      const result = parse(metadata);
+      expect(result.success, name).toBe(false);
+      expect(
+        result.error?.issues.map((issue) => issue.message),
+        name,
+      ).toEqual([message]);
+    }
+
+    const notText = parse({ n: 1 });
+    expect(notText.success, "a value that is not text").toBe(false);
+    expect(notText.error?.issues[0]?.path, "a value that is not text").toEqual(["metadata", "n"]);
+  });
+});
+
 describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({
@@ -1353,6 +1413,7 @@ describe("operation input/output round trips", () => {
         leaseRequestTimeoutMs: 300_000,
         routing: "warm-then-free",
         alerts: { destinations: [] },
+        admission: { command: ["bun", "policy.ts"], timeoutMs: 5_000 },
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
@@ -1370,12 +1431,13 @@ describe("operation input/output round trips", () => {
           maxRetryBackoffMs: 1,
         },
       },
-      devices: { deletedRetentionMs: 1 },
+      devices: { autoEnroll: false, deletedRetentionMs: 1 },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
         identity: { ios: "fresh", android: "reusable" },
         requestRetentionMs: 1,
+        endedIdRetentionMs: 1,
         maxRequestRecords: 1,
         maxPerRequester: 1,
         endWaitMs: 600_000,
@@ -1451,17 +1513,19 @@ describe("operation input/output round trips", () => {
         leaseRequestTimeoutMs: 1,
         routing: "warm-then-free",
         alerts: { destinations: [] },
+        admission: { command: ["bun", "policy.ts"], timeoutMs: 5_000 },
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       update: { check: true },
-      devices: { deletedRetentionMs: 1 },
+      devices: { autoEnroll: false, deletedRetentionMs: 1 },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
         identity: { ios: "fresh", android: "reusable" },
         requestRetentionMs: 1,
+        endedIdRetentionMs: 1,
         maxRequestRecords: 1,
         maxPerRequester: 1,
         endWaitMs: 600_000,

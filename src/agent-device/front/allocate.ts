@@ -61,7 +61,7 @@ interface Plan {
 }
 
 // why: connect proxy names the backend that rents the platform (ios-instance, android-instance) on every allocate; any other backend is a different kind of device.
-const BACKEND_OF_PLATFORM: Record<string, string> = {
+export const BACKEND_OF_PLATFORM: Record<string, string> = {
   android: "android-instance",
   ios: "ios-instance",
 };
@@ -371,7 +371,7 @@ export async function allocate(
 
 async function keepOrRelease(
   context: FrontContext,
-  { request, identity, plan, grant, address }: Granted,
+  { request, identity, call, plan, grant, address }: Granted,
   reply: Parameters<typeof relay>[0],
   reading: { readonly result: Record<string, unknown> },
 ): Promise<Response | undefined> {
@@ -384,6 +384,7 @@ async function keepOrRelease(
       model: grant.device.spec.model,
       physical: grant.device.spec.physical === true,
       platform: plan.platform,
+      ...(call.params["retainOnClose"] === true ? { retainOnClose: true } : {}),
       ttlMs: grant.lease.ttlMs,
       ...replyFacts(reading.result),
     });

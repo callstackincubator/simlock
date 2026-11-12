@@ -8,6 +8,7 @@ import { NoDriverError } from "./driver-catalog.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { Registry, ReleasedLease } from "./registry.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
+import { DeviceBusyError } from "./physical-enrollment.js";
 import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
@@ -432,7 +433,7 @@ export class BaselineService {
       const claim = this.options.claims.tryClaim(device.id, "cleanup");
       if (claim === undefined) {
         for (const held of claimed) held.claim.release();
-        throw new Error(`Device ${device.id} made from baseline ${name} is busy`);
+        throw new DeviceBusyError(device.id, device.state === "reclaiming" ? "reclaiming" : "busy");
       }
       claimed.push({ claim, device });
     }

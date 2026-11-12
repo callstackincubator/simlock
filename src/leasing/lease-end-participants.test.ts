@@ -112,6 +112,7 @@ interface EngineOptions {
 function config(options: EngineOptions): TestEngineConfig {
   const ios = options.ios ?? { maxDevices: 1, maxRunning: 1 };
   return {
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -127,6 +128,7 @@ function config(options: EngineOptions): TestEngineConfig {
       maxTtlMs: 14_400_000,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
+      endedIdRetentionMs: 600_000,
       maxRequestRecords: 10_000,
       maxPerRequester: 1,
       endWaitMs: END_WAIT_MS,

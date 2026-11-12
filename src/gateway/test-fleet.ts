@@ -1,3 +1,5 @@
+import type { AdmissionOptions } from "./admission.js";
+import { MemoryEndedLeaseIds } from "./ended-lease-ids.js";
 import { EventBus } from "../bus/index.js";
 import type { LeaseRecord } from "../admin/index.js";
 import type { MaxPerRequester } from "../core/index.js";
@@ -70,8 +72,9 @@ export class RecordingLogger implements Logger {
   }
 }
 
-export function harness(
+export function buildFleet(
   overrides: {
+    readonly admission?: AdmissionOptions;
     readonly execTimeoutMs?: number;
     readonly leaseRequestTimeoutMs?: number;
     readonly logger?: Logger;
@@ -90,7 +93,9 @@ export function harness(
   const directory = new FakeDirectory();
   const leaseIndex = new FleetLeaseIndex(GATEWAY_PREFIX);
   const coordinator = new FleetLeaseCoordinator({
+    ...(overrides.admission === undefined ? {} : { admission: overrides.admission }),
     clock,
+    endedLeaseIds: new MemoryEndedLeaseIds({ clock: clock, retentionMs: 86_400_000 }),
     directory,
     describeFailure: (error) => ({
       code: "INTERNAL",

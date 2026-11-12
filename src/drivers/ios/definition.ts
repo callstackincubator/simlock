@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import {
   booleanValue,
   type DriverConfigEntry,
@@ -25,8 +27,17 @@ export interface IosDriverConfig {
   };
 }
 
+export function defaultIosDeviceRoot(simlockHome: string): string {
+  return join(simlockHome, "devices", "ios");
+}
+
 export const iosDriverConfig: DriverConfigEntry<IosDriverConfig> = {
   platform: "ios",
+  // why: Xcode's own set (`default`) has no owned root, so it shows no deviceRoot.
+  settingDefaults: (simlockHome, settings) =>
+    settings["deviceSet"] === "default"
+      ? {}
+      : { deviceRoot: defaultIosDeviceRoot(simlockHome), deviceSet: "simlock" },
   defaults: {
     slim: { bootTimeoutMs: 600_000 },
     full: { bootTimeoutMs: 300_000 },

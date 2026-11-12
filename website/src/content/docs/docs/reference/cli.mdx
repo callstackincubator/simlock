@@ -99,7 +99,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
-              [--export-env] [--bind-pid <pid>]
+              [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
 ```
 
 | Flag | Meaning | Default |
@@ -115,6 +115,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
+| `--meta <key=value>` | Repeatable. Context for the gateway's admission command, such as `--meta project=checkout-app --meta role=ci`. The key is the text before the first `=`; the value is everything after it. The same key twice keeps the last. At most 16 keys; a key is 1 to 64 characters, a value 0 to 256, and keys and values together at most 2048. A gateway passes it to its admission command only: it is stored nowhere, in no event, and a worker ignores it. A flag with no `=`, or a bound broken, exits 2. | None |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
 | `--detach` | Print the grant and exit. Nothing renews or releases the lease after that. | Off |
@@ -175,7 +176,7 @@ simlock simctl [--lease <lease-id>] [--stdin] <simctl-args...>
 | `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command, at most 8,388,608 characters; more is refused with `BAD_REQUEST`. Must come before the simctl arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<simctl-args...>` | Passed to `xcrun simctl` as written. | — |
 
-Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back. Stdin is sent only with `--stdin`; without it the command gets empty input and a pipe that never closes does not hold it up. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back. On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to the tool, and `simlock` waits for the tool to finish and exits with its code, so `simctl io recordVideo` finishes its file before the command returns (`recordVideo` only finalizes on `SIGINT`, so `simlock` passes it a `SIGTERM` as `SIGINT`). In a terminal, Ctrl-C reaches the tool directly, so `simlock` does not pass `SIGINT` on a second time: it waits for the tool and exits with its code. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead.
+Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back. Stdin is sent only with `--stdin`; without it the command gets empty input and a pipe that never closes does not hold it up. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `USAGE` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back. On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to the tool, and `simlock` waits for the tool to finish and exits with its code, so `simctl io recordVideo` finishes its file before the command returns (`recordVideo` only finalizes on `SIGINT`, so `simlock` passes it a `SIGTERM` as `SIGINT`). In a terminal, Ctrl-C reaches the tool directly, so `simlock` does not pass `SIGINT` on a second time: it waits for the tool and exits with its code. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead.
 
 ## simlock adb
 
@@ -191,7 +192,7 @@ simlock adb [--lease <lease-id>] [--stdin] <adb-args...>
 | `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command, at most 8,388,608 characters; more is refused with `BAD_REQUEST`. Must come before the adb arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<adb-args...>` | Passed to `adb` as written. | — |
 
-The command exits with `adb`'s own exit code. Through a gateway, stdin is sent only with `--stdin`; without it the command gets empty input. Simlock refuses `adb kill-server`, `adb disconnect`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to `adb`, and `simlock` waits for it to finish and exits with its code. In a terminal, Ctrl-C reaches `adb` directly, so `simlock` does not pass `SIGINT` on a second time: it waits for `adb` and exits with its code. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
+The command exits with `adb`'s own exit code. Through a gateway, stdin is sent only with `--stdin`; without it the command gets empty input. Simlock refuses `adb kill-server`, `adb disconnect`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `USAGE` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to `adb`, and `simlock` waits for it to finish and exits with its code. In a terminal, Ctrl-C reaches `adb` directly, so `simlock` does not pass `SIGINT` on a second time: it waits for `adb` and exits with its code. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
 
 ## simlock rotate
 
@@ -428,15 +429,15 @@ simlock config set <key> <value>
 
 | Subcommand | What it does |
 | --- | --- |
-| (none) | Print the daemon's whole effective configuration as one JSON line. `gateway.token` and every alert destination's `url` and `secret` read `[redacted]`. Needs the admin role. |
-| `get <key>` | Print one value, with the same secrets redacted. `<key>` is a dotted path, such as `lease.defaultTtlMs`. An unknown key is a usage error. Needs the admin role. |
+| (none) | Print the daemon's whole effective configuration as one JSON line. `gateway.token`, every `gateway.headers` value and every alert destination's `url` and `secret` read `[redacted]`. Needs the admin role. |
+| `get <key>` | Print one value, with the same secrets redacted. `<key>` is a dotted path, such as `lease.defaultTtlMs`. A key you have not set prints its default, `drivers.*` keys included; `drivers.ios.screenCaptureCommand` and `drivers.ios.deviceCaptureCommand` print only when set, and under `drivers.ios.deviceSet: default` `drivers.ios.deviceRoot` has no value (Xcode's own set uses no device root), so asking for it is a usage error. An unknown key is a usage error. Needs the admin role. |
 | `set <key> <value>` | Write one value to `config.json` in the daemon's data folder. `<value>` is read as JSON when it parses (`900000`, `true`, `["ios"]`), else as a string. Does not contact the daemon. |
 
 `config set` checks the whole file after the change and refuses an invalid value or an unknown key with a usage error (exit 2), leaving the file as it was. The file is written with owner-only permissions. A change takes effect the next time the daemon starts; the command prints `Updated <key> in <path>; takes effect on daemon restart.`
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--show-secrets` | `config` and `config get` only: print `gateway.token` and the alert destinations' `url` and `secret` as written instead of `[redacted]`. | Off |
+| `--show-secrets` | `config` and `config get` only: print `gateway.token`, the `gateway.headers` values and the alert destinations' `url` and `secret` as written instead of `[redacted]`. | Off |
 
 ## simlock doctor
 
@@ -655,7 +656,7 @@ Remove baseline login v1? [y/N] y
 Removed baseline login v1.
 ```
 
-When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. With `--worker wrk_a` the prompt and the line end in ` from wrk_a`.
+When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. A copy that is being cleaned up or held by another operation is refused with `DEVICE_BUSY`; run the command again once it ends. With `--worker wrk_a` the prompt and the line end in ` from wrk_a`.
 
 ## simlock device
 
@@ -789,6 +790,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | 13 | You already hold a lease, or the lease ID is taken. |
 | 14 | `lease` without `--detach`: the daemon ended the lease before you did. |
 | 15 | `component install` with `--worker` or `--all-workers`: at least one worker did not install. |
+| 16 | The gateway's admission policy refused the request, or could not decide. |
 
 `simlock simctl` and `simlock adb` exit with the tool's own exit code, which can collide with these numbers. Check stderr for an `{"error":...}` line, which only Simlock writes. The [errors reference](/simlock/docs/reference/errors#exit-codes) lists which error code gives which exit code.
 

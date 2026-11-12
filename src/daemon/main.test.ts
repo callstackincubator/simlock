@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connect, createServer } from "node:net";
+import { createServer as createHttpServer, type IncomingHttpHeaders } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type Config,
@@ -420,63 +421,195 @@ class ToolsFakeDriver extends FakeDriver {
 }
 
 describe("startDaemon", () => {
-  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get returns it only as the redaction marker unless showSecrets is asked", async () => {
-    const secret = "secret-join-token-170";
-    const { daemon, directory, sink } = await start({
-      configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
-    });
-    const admin = {
-      manageEventSubscription: () => undefined,
-      via: "socket",
-      principal: "operator",
-      role: "admin",
-    } as const;
+  it.each([
+    { name: "not set", headers: undefined, label: undefined, expected: {} },
+    {
+      name: "two headers",
+      headers: { "CF-Access-Client-Id": "abc.access", "CF-Access-Client-Secret": "s3cr3t" },
+      label: undefined,
+      expected: { "cf-access-client-id": "abc.access", "cf-access-client-secret": "s3cr3t" },
+    },
+    {
+      name: "an empty value",
+      headers: { "x-empty": "" },
+      label: undefined,
+      expected: { "x-empty": "" },
+    },
+    {
+      name: "a label set too",
+      headers: { "x-proxy-key": "k" },
+      label: "mac-1",
+      expected: { "x-proxy-key": "k" },
+    },
+  ])(
+    "a worker started with gateway.headers sends every entry on its uplink dial, beside the join token and worker id: $name",
+    async ({ headers, label, expected }) => {
+      let received: IncomingHttpHeaders | undefined;
+      const gateway = createHttpServer();
+      gateway.on("upgrade", (request, socket) => {
+        received = request.headers;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+      try {
+        const { port } = gateway.address() as { readonly port: number };
+        await start({
+          configOverrides: {
+            gateway: {
+              token: "join-token",
+              url: `ws://127.0.0.1:${port}`,
+              ...(headers === undefined ? {} : { headers }),
+              ...(label === undefined ? {} : { label }),
+            },
+          },
+        });
+        await vi.waitFor(() => expect(received).toBeDefined());
+        const seen = received ?? {};
+        expect({
+          authorization: seen["authorization"],
+          workerId: typeof seen["x-simlock-worker-id"],
+          label: seen["x-simlock-worker-label"],
+          extra: Object.fromEntries(Object.entries(seen).filter(([name]) => name in expected)),
+        }).toEqual({
+          authorization: "Bearer join-token",
+          workerId: "string",
+          label,
+          extra: expected,
+        });
+      } finally {
+        await new Promise<void>((resolve) => gateway.close(() => resolve()));
+      }
+    },
+  );
 
-    const replayed = await daemon.dispatch("events.replay", {}, admin);
-    const eventFile = JSON.stringify(
-      await historyEventsWhen(directory, hasEvent("daemon.started")),
-    );
-    const config = (await daemon.dispatch("config.get", {}, admin)) as {
-      readonly gateway: { readonly token?: string };
-    };
-
-    // why: The fixture is real: the daemon did log its start and emit `daemon.started` to both
-    // the ring and the file, so "absent" below means redacted, not never written.
-    expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
-    expect(eventFile).toContain('"daemon.started"');
-    expect(JSON.stringify(replayed)).toContain('"daemon.started"');
-    expect({
-      daemonLog: JSON.stringify(sink.records).includes(secret),
-      eventsReplay: JSON.stringify(replayed).includes(secret),
-      historyDb: eventFile.includes(secret),
-    }).toEqual({ daemonLog: false, eventsReplay: false, historyDb: false });
-    const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as {
-      readonly gateway: { readonly token?: string };
-    };
-    expect({ default: config.gateway.token, shown: shown.gateway.token }).toEqual({
-      default: "[redacted]",
-      shown: secret,
-    });
-  });
-
-  it("answers config.get with the drivers section of config.json, so a key under drivers.* can be read back", async () => {
-    const { daemon } = await start({
-      configOverrides: { drivers: { ios: { deviceSet: "simlock", retries: 3 } } },
-    });
-
-    const config = (await daemon.dispatch(
-      "config.get",
-      {},
-      {
+  it.each([
+    { role: "worker", withToken: true },
+    { role: "gateway", withToken: false },
+  ] as const)(
+    "keeps gateway.token and every gateway.headers value out of the daemon log, the events.replay answer, and history.db, while config.get returns them only as the redaction marker unless showSecrets is asked: $role",
+    async ({ role, withToken }) => {
+      const secret = "secret-join-token-170";
+      const headerSecret = "s3cr3t-proxy-credential";
+      const secondHeaderSecret = "second-proxy-credential";
+      const { daemon, directory, sink } = await start({
+        role,
+        configOverrides: {
+          gateway: {
+            headers: {
+              "CF-Access-Client-Id": "client-id-170",
+              "CF-Access-Client-Secret": headerSecret,
+              "X-Proxy-Key": secondHeaderSecret,
+            },
+            ...(withToken ? { token: secret, url: await unreachableGatewayUrl() } : {}),
+          },
+        },
+      });
+      const admin = {
         manageEventSubscription: () => undefined,
         via: "socket",
         principal: "operator",
         role: "admin",
-      },
-    )) as { readonly drivers?: unknown };
+      } as const;
+      type Answer = {
+        readonly gateway: {
+          readonly token?: string;
+          readonly headers?: Readonly<Record<string, string>>;
+        };
+      };
 
-    expect(config.drivers).toEqual({ ios: { deviceSet: "simlock", retries: 3 } });
-  });
+      const replayed = await daemon.dispatch("events.replay", {}, admin);
+      const eventFile = JSON.stringify(
+        await historyEventsWhen(directory, hasEvent("daemon.started")),
+      );
+      const config = (await daemon.dispatch("config.get", {}, admin)) as Answer;
+
+      // why: The fixture is real: the daemon did log its start and emit `daemon.started` to both
+      // the ring and the file, so "absent" below means redacted, not never written.
+      expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
+      expect(eventFile).toContain('"daemon.started"');
+      expect(JSON.stringify(replayed)).toContain('"daemon.started"');
+      const leaks = (value: string) => ({
+        daemonLog: JSON.stringify(sink.records).includes(value),
+        eventsReplay: JSON.stringify(replayed).includes(value),
+        historyDb: eventFile.includes(value),
+      });
+      const clean = { daemonLog: false, eventsReplay: false, historyDb: false };
+      expect({
+        token: leaks(secret),
+        header: leaks(headerSecret),
+        second: leaks(secondHeaderSecret),
+        first: leaks("client-id-170"),
+      }).toEqual({
+        token: clean,
+        header: clean,
+        second: clean,
+        first: clean,
+      });
+      const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as Answer;
+      expect({
+        default: config.gateway.headers,
+        shown: shown.gateway.headers,
+        token: [config.gateway.token, shown.gateway.token],
+      }).toEqual({
+        default: {
+          "CF-Access-Client-Id": "[redacted]",
+          "CF-Access-Client-Secret": "[redacted]",
+          "X-Proxy-Key": "[redacted]",
+        },
+        shown: {
+          "CF-Access-Client-Id": "client-id-170",
+          "CF-Access-Client-Secret": headerSecret,
+          "X-Proxy-Key": secondHeaderSecret,
+        },
+        token: withToken ? ["[redacted]", secret] : [undefined, undefined],
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "nothing set: each driver's own defaults",
+      drivers: {},
+      expected: (home: string) => ({
+        android: { adbServerPort: 5038, deviceRoot: join(home, "devices", "android") },
+        ios: { deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock" },
+      }),
+    },
+    {
+      name: "set keys win over the defaults, and a driver's unknown key is carried",
+      drivers: { android: { adbServerPort: 5039 }, ios: { deviceSet: "simlock", retries: 3 } },
+      expected: (home: string) => ({
+        android: { adbServerPort: 5039, deviceRoot: join(home, "devices", "android") },
+        ios: { deviceRoot: join(home, "devices", "ios"), deviceSet: "simlock", retries: 3 },
+      }),
+    },
+    {
+      name: "deviceSet default: no iOS deviceRoot, which that set does not use",
+      drivers: { ios: { deviceSet: "default" } },
+      expected: (home: string) => ({
+        android: { adbServerPort: 5038, deviceRoot: join(home, "devices", "android") },
+        ios: { deviceSet: "default" },
+      }),
+    },
+  ])(
+    "answers config.get with every drivers.* key the drivers use, so config get reads it back ($name)",
+    async ({ drivers, expected }) => {
+      const { daemon, directory } = await start({ configOverrides: { drivers } });
+
+      const config = (await daemon.dispatch(
+        "config.get",
+        {},
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "operator",
+          role: "admin",
+        },
+      )) as { readonly drivers?: unknown };
+
+      expect(config.drivers).toEqual(expected(directory));
+    },
+  );
 
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
     const { daemon, sink } = await start({
@@ -1880,6 +2013,42 @@ describe("startDaemon state.db", () => {
     });
 
     expect(await queryState(directory, "SELECT id FROM devices")).toEqual([]);
+  });
+
+  it("a worker refuses a re-sent chosen lease id inside the configured lease.endedIdRetentionMs and grants it after", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon } = await start({
+      clock,
+      configOverrides: { lease: { endedIdRetentionMs: 600_000 } },
+      drivers: [driver],
+    });
+    const agent = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "agent",
+      role: "agent",
+    } as const;
+    const chosen = {
+      leaseId: "retained",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      requesterId: "agent-1",
+    } as const;
+    await daemon.dispatch("lease.request", chosen, agent);
+    await daemon.dispatch("lease.release", { leaseId: "retained" }, agent);
+
+    // why: 5 minutes is inside the ten minutes configured and far inside the default day.
+    clock.advance(5 * 60_000);
+    await expect(daemon.dispatch("lease.request", chosen, agent)).rejects.toMatchObject({
+      code: "LEASE_ENDED",
+    });
+    // why: 30 minutes is outside the ten minutes configured and inside the default day.
+    clock.advance(30 * 60_000);
+    await expect(daemon.dispatch("lease.request", chosen, agent)).resolves.toMatchObject({
+      lease: { id: "retained" },
+    });
   });
 
   it("a worker's state.db holds both platforms' source-data tables, a gateway's holds neither", async () => {

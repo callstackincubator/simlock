@@ -11,6 +11,7 @@ With Simlock, `agent-device open` leases a device from Simlock. Later commands u
 
 ```sh
 agent-device open --platform ios --device "iPhone 16"
+agent-device open com.example.myapp
 agent-device snapshot
 agent-device close
 ```
@@ -154,6 +155,7 @@ Each time the worker starts, it writes `agent-device-profile.json` in its data f
 ```sh
 agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1
 agent-device open --platform ios --session s1
+agent-device open com.example.myapp --session s1
 agent-device snapshot --session s1
 agent-device close --session s1
 ```
@@ -195,7 +197,7 @@ If that worker disconnects, requests for your device answer `agent-device is not
 
 ## When Simlock ends the lease
 
-If the lease ends for any reason other than your `close` (it expired, an admin released it, the device was lost, or the worker's daemon or agent-device restarted), Simlock can answer a heartbeat or standalone `boot` with:
+If the lease ends for any reason other than your `close` (it expired, an admin released it, or the device was lost), Simlock can answer a heartbeat or standalone `boot` with:
 
 ```text
 lease ended by simlock; run disconnect, then open
@@ -204,7 +206,7 @@ lease ended by simlock; run disconnect, then open
 Run `agent-device disconnect`, then `open` again. You get a new, clean device; anything on the old one is gone.
 
 <Aside type="caution">
-Restarting a worker's daemon ends every agent-device lease on that worker, even though ordinary Simlock leases survive a restart.
+If agent-device restarts, Simlock keeps your lease, your device and its apps: your next heartbeat succeeds. Agent-device's own session is gone. On iOS, a command before a new `open` answers `SESSION_NOT_FOUND`, or `AMBIGUOUS_MATCH` (`<n> devices match this request equally`) while other simulators are booted on that worker; the devices it lists are not yours to pick. Run `open <app>` again on the same session: it opens on your leased device. On Android, commands go on without a new `open`. The same holds when a worker or the gateway restarts behind a gateway. While Simlock restores the lease, a heartbeat can answer `agent-device is not available on this simlock: the lease is being restored after an agent-device restart; try again`. Retry it; the lease stays. The same holds when a standalone worker's own daemon restarts: your next heartbeat succeeds on the same device. A lease made with `retainOnClose` loses that flag across such a restart.
 </Aside>
 
 ## Error reasons

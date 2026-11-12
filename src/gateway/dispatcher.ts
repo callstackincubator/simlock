@@ -715,6 +715,9 @@ export class GatewayDispatcher {
       {
         // why: `input.allowDownload` stays accepted and is not passed on: only installed runtimes
         // count through a gateway (ADR 0009 §3).
+        // why: ADR 0074 §1: the admission command reads the request as the caller sent it, without what is not the device's ask.
+        admissionRequest: withoutCallerIdentity(input),
+        ...(input.metadata === undefined ? {} : { admissionMetadata: input.metadata }),
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
         requesterId: input.requesterId ?? principalAsRequester(session.principal),
@@ -851,4 +854,15 @@ function relayedUpdateError(error: unknown, workerId: string): unknown {
     });
   }
   return new DispatchError(error.code, error.message, error.details);
+}
+
+/** why: the admission command is told who asks in its own fields, so `request` leaves out `requesterId`, `idempotencyKey` and `metadata`. */
+function withoutCallerIdentity(input: object): Record<string, unknown> {
+  const {
+    idempotencyKey: _key,
+    metadata: _metadata,
+    requesterId: _requester,
+    ...request
+  } = input as Record<string, unknown>;
+  return request;
 }

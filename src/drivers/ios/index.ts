@@ -84,7 +84,7 @@ import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
-import type { IosDriverConfig } from "./definition.js";
+import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
   overridesFor,
   resolveSlimCategories,
@@ -1049,6 +1049,8 @@ export class IosSimctlDriver implements Driver {
         await this.#bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
       } catch (error: unknown) {
         await this.#deleteSeedSimulator(udid);
+        // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
+        if (error instanceof BootTimeoutError) throw error;
         throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
       }
       try {
@@ -1524,6 +1526,10 @@ export class IosSimctlDriver implements Driver {
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
     return this.#physical.listPresent(enrolledIds);
+  }
+
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    return this.#physical.listAttached();
   }
 
   async inspectPhysical(id: string): Promise<PhysicalInspection> {
@@ -2242,7 +2248,7 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
     );
   }
 
-  return configured ?? join(options.simlockHome, "devices", "ios");
+  return configured ?? defaultIosDeviceRoot(options.simlockHome);
 }
 
 function runtimeMountsAsset(runtime: Runtime, asset: RuntimeAsset): boolean {

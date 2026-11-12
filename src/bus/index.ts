@@ -58,6 +58,9 @@ export interface EventMap {
       | "no-worker"
       | "already-leased"
       | "lease-id-taken"
+      | "lease-ended"
+      | "admission-denied"
+      | "admission-failed"
       | "boot-timeout"
       | "killed"
       | "updating"
@@ -194,6 +197,7 @@ export interface EventMap {
     readonly class: "phone" | "tablet";
     readonly appCount: number;
     readonly reenrolled: boolean;
+    readonly initiator: "operator" | "auto";
   };
   "device.slimmed": {
     readonly deviceId: string;

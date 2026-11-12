@@ -75,8 +75,8 @@ export interface FakeInventoryDevice {
 }
 
 export interface FakeAllocateReplyEdit {
-  readonly runId?: string;
-  readonly clientId?: string;
+  readonly runId?: string | undefined;
+  readonly clientId?: string | undefined;
 }
 
 interface Gate {
@@ -158,6 +158,11 @@ export interface FakeArtifact {
 export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly requests: FakeAgentDeviceRequest[] = [];
   readonly leases = new Map<string, FakeAgentDeviceLease>();
+  // why: agent-device's `close` ends only the lease its session was opened on; a session a command makes after a restart holds none, until `open` runs again.
+  readonly #sessionLeases = new Set<string>();
+  readonly #lostSessions = new Set<string>();
+  // why: agent-device's `close` names the session it shut in its reply; a `close <app>` with no session closes the app only and names none.
+  readonly #openSessions = new Set<string>();
   readonly abortedCommands: string[] = [];
   readonly abortedReleases: string[] = [];
   // why: the ids of releases whose request was hung up on before the fake answered, so a test can wait until the hang-up has reached the daemon side.
@@ -186,6 +191,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #failAllocate: FakeFailure | undefined;
   #failRelease: FakeFailure | undefined;
   #failHeartbeat: FakeFailure | undefined;
+  #failHeartbeatAfterAllocate: FakeFailure | undefined;
   #failCommand: FakeFailure | undefined;
   #failCommandStatus: { readonly status: number; readonly body: string } | undefined;
   readonly #goneReasons = new Map<string, FakeLeaseGoneReason>();
@@ -250,6 +256,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   failNextHeartbeat(failure: FakeFailure): void {
     this.#failHeartbeat = failure;
+  }
+
+  // why: a restart test needs the heartbeat that follows the re-allocate to fail, not the one that finds the lease gone.
+  failHeartbeatAfterNextAllocate(failure: FakeFailure): void {
+    this.#failHeartbeatAfterAllocate = failure;
   }
 
   failNextCommand(failure: FakeFailure): void {
@@ -396,6 +407,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.generation += 1;
     this.baseUrl = `http://127.0.0.1:${47_001 + this.#restarts}`;
     this.token = `daemon-token-${this.generation}`;
+    for (const leaseId of this.leases.keys()) this.#lostSessions.add(leaseId);
+    this.#sessionLeases.clear();
+    this.#openSessions.clear();
     this.leases.clear();
   }
 
@@ -525,10 +539,16 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       runId: params["runId"],
     };
     this.#replyDeviceKey = undefined;
+    this.#failHeartbeat = this.#failHeartbeatAfterAllocate;
+    this.#failHeartbeatAfterAllocate = undefined;
     const edit = this.#replyEdit;
     this.#replyEdit = undefined;
     const picked = this.#replyDevice;
     this.#replyDevice = undefined;
+    if (!this.#lostSessions.has(leaseId)) {
+      this.#sessionLeases.add(leaseId);
+      this.#openSessions.add(leaseId);
+    }
     this.leases.set(leaseId, {
       address,
       leaseId,
@@ -565,6 +585,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         code: "UNAUTHORIZED",
         details: { reason },
         message: reason.toLowerCase().replaceAll("_", " "),
+      });
+    }
+    const keys = ["runId", "leaseProvider", "clientId", "deviceKey"] as const;
+    if (keys.some((key) => present(params[key]) && lease.scope[key] !== params[key])) {
+      return errorEnvelope(id, {
+        code: "UNAUTHORIZED",
+        details: { reason: "LEASE_SCOPE_MISMATCH" },
+        message: "lease scope mismatch",
       });
     }
     return envelope(id, { data: { lease: params }, ok: true });
@@ -673,6 +701,10 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         { headers: { "content-type": "application/x-ndjson" } },
       );
     }
+    if (command === "open" && typeof leaseId === "string" && this.leases.has(leaseId)) {
+      this.#sessionLeases.add(leaseId);
+    }
+    const closed = this.#closeReply(command, params, leaseId);
     const endedLeases = this.#endOnClose(command, params, leaseId);
     const failure = this.#failCommand;
     this.#failCommand = undefined;
@@ -703,10 +735,28 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       }
     }
     if (endedLeases.length > 0) {
-      const data = command === "batch" ? { endedLeases, results: [] } : { endedLeases };
+      const data = command === "batch" ? { endedLeases, results: [] } : { ...closed, endedLeases };
       return envelope(id, { command, data, ok: true });
     }
+    if (closed !== undefined) return envelope(id, { command, data: closed, ok: true });
     return envelope(id, { command, ok: true });
+  }
+
+  // why: a command on a lease makes its session if none is open, and a close shuts it; a batch's close step answers inside `results`.
+  #closeReply(
+    command: string,
+    params: Record<string, unknown>,
+    leaseId: unknown,
+  ): Record<string, unknown> | undefined {
+    if (typeof leaseId !== "string") return undefined;
+    if (!closesLease(command, params)) {
+      if (command !== "devices") this.#openSessions.add(leaseId);
+      return undefined;
+    }
+    if (command === "batch") this.#openSessions.add(leaseId);
+    const data = closeData(params, this.#openSessions.delete(leaseId));
+    if (command !== "batch" || data === undefined) return data;
+    return { results: [{ command: "close", data, ok: true, step: 1 }] };
   }
 
   // why: agent-device names a plain lease ended by close in `endedLeases` instead of waiting for a release.
@@ -718,12 +768,30 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     if (
       !closesLease(command, params) ||
       typeof leaseId !== "string" ||
+      !this.#sessionLeases.has(leaseId) ||
       this.leases.get(leaseId)?.retainOnClose ||
       !this.leases.delete(leaseId)
     )
       return [];
+    this.#sessionLeases.delete(leaseId);
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+// why: agent-device names the session it closed, or for `close <app>` with no session open only the app.
+function closeData(
+  params: Record<string, unknown>,
+  sessionOpen: boolean,
+): Record<string, unknown> | undefined {
+  if (sessionOpen) {
+    const session = String(params["session"] ?? "default");
+    return { message: `Closed: ${session}`, session };
+  }
+  const positionals = Array.isArray(params["positionals"])
+    ? (params["positionals"] as unknown[])
+    : [];
+  if (positionals.length === 0) return undefined;
+  return { app: positionals[0], message: `Closed: ${String(positionals[0])}` };
 }
 
 function closesLease(command: string, params: Record<string, unknown>): boolean {

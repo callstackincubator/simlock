@@ -47,6 +47,7 @@ class MutableFreeDiskFilesystem extends MemoryFilesystem {
 
 function config(): ReaperTestConfig {
   return {
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     health: {
       enabled: true,
@@ -63,6 +64,7 @@ function config(): ReaperTestConfig {
       maxTtlMs: 100,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
+      endedIdRetentionMs: 600_000,
       maxRequestRecords: 10_000,
       maxPerRequester: 1,
       endWaitMs: 600_000,

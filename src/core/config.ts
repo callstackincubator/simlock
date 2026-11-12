@@ -59,6 +59,17 @@ export const DEFAULT_DEVICES_DELETED_RETENTION_MS = 60 * 60_000;
 
 export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
 
+/** why: `lease.endedIdRetentionMs`'s default: how long a chosen lease id is refused after its lease ended (ADR 0074 §4). */
+export const DEFAULT_LEASE_ENDED_ID_RETENTION_MS = 24 * 60 * 60_000;
+
+/** why: `gateway.admission.timeoutMs`'s default (ADR 0074 §1): a policy script answers in well under this, and a stuck one refuses requests for no longer. */
+const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
+
+/** why: the bounds on `gateway.admission`, checked when the config is read. */
+const ADMISSION_TIMEOUT_MAX_MS = 60_000;
+const ADMISSION_COMMAND_MAX_ENTRIES = 64;
+const ADMISSION_ARGUMENT_MAX_LENGTH = 4096;
+
 const DEFAULT_LEASE_MAX_PER_REQUESTER = 1;
 
 export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
@@ -175,6 +186,11 @@ export interface Config {
      * from its deletion. At least `lease.requestRetentionMs`: a granted request names its device.
      */
     readonly deletedRetentionMs: number;
+    /**
+     * why: a worker enrols the phones plugged into it by USB, as `device add` would; off by default
+     * because a personal phone on the worker would be wiped of apps at every lease's end.
+     */
+    readonly autoEnroll: boolean;
   };
   readonly lease: {
     /**
@@ -197,6 +213,8 @@ export interface Config {
       readonly android: LeaseIdentity;
     };
     readonly requestRetentionMs: number;
+    /** why: ADR 0074 §4: how long a chosen lease id is refused after its lease ended, counted from the end; read by a worker and a gateway. */
+    readonly endedIdRetentionMs: number;
     readonly maxRequestRecords: number;
     readonly maxPerRequester: MaxPerRequester;
     readonly endWaitMs: number;
@@ -273,6 +291,7 @@ export interface Config {
      * unless it is asked with `showSecrets: true` -- it goes through `redactConfig`. */
     readonly token?: string;
     readonly label?: string;
+    readonly headers?: Readonly<Record<string, string>>;
     /**
      * why: How long a gateway keeps a disconnected worker's view before forgetting it (§6).
      * Gateway-side. Default 24 hours: long enough that a machine rebooting overnight is still
@@ -303,6 +322,11 @@ export interface Config {
     readonly leaseRequestTimeoutMs: number;
     readonly routing: RoutingPolicyName;
     readonly alerts: { readonly destinations: readonly AlertDestination[] };
+    /**
+     * why: ADR 0074 §1: the program a gateway runs for each new lease request, and how long it may
+     * take; a worker ignores both, as it does `execTimeoutMs`.
+     */
+    readonly admission: { readonly command?: readonly string[]; readonly timeoutMs: number };
   };
   readonly stalledTransition: {
     /**
@@ -325,6 +349,7 @@ export function redactConfig<
   Shape extends {
     readonly gateway: {
       readonly token?: string | undefined;
+      readonly headers?: Readonly<Record<string, string>> | undefined;
       readonly alerts: {
         readonly destinations: readonly {
           readonly url: string;
@@ -334,13 +359,20 @@ export function redactConfig<
     };
   },
 >(config: Shape): Shape {
-  const { token, alerts } = config.gateway;
-  if (token === undefined && alerts.destinations.length === 0) return config;
+  const { token, headers, alerts } = config.gateway;
+  if (token === undefined && headers === undefined && alerts.destinations.length === 0) {
+    return config;
+  }
   return {
     ...config,
     gateway: {
       ...config.gateway,
       ...(token === undefined ? {} : { token: REDACTED_VALUE }),
+      ...(headers === undefined
+        ? {}
+        : {
+            headers: Object.fromEntries(Object.keys(headers).map((name) => [name, REDACTED_VALUE])),
+          }),
       alerts: {
         ...alerts,
         destinations: alerts.destinations.map((destination) => ({
@@ -373,6 +405,11 @@ export interface DriverConfigEntry<Section = unknown> {
   readonly platform: Platform;
   readonly validators: Readonly<Record<string, Validator>>;
   readonly defaults: Section;
+  // why: the values the driver uses for the `drivers.<platform>.*` keys config.json leaves unset, which depend on the data directory and on the keys that are set; `config.get` shows them, so `config get` reads a key at its default.
+  readonly settingDefaults?: (
+    simlockHome: string,
+    settings: Readonly<Record<string, string | number | boolean>>,
+  ) => Readonly<Record<string, string | number | boolean>>;
 }
 
 // why: typed by the entry the loader validated the section with; a config loaded without that entry holds none of its keys.
@@ -592,7 +629,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "update",
 ];
 
-const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
+const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label", "headers"];
 
 /**
  * why: ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -709,6 +746,13 @@ function validateGatewayMembership(config: Config): void {
   }
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
+  }
+  const { headers } = config.gateway;
+  if (url === undefined && headers !== undefined && Object.keys(headers).length > 0) {
+    throw invalidValue(
+      "gateway.headers",
+      "gateway.url to be set too, since gateway.headers is set",
+    );
   }
   requireJoinedWorkerHttpOff(config);
 }
@@ -847,12 +891,13 @@ function defaultConfig(
         maxRetryBackoffMs: 5 * 60_000,
       },
     },
-    devices: { deletedRetentionMs: DEFAULT_DEVICES_DELETED_RETENTION_MS },
+    devices: { autoEnroll: false, deletedRetentionMs: DEFAULT_DEVICES_DELETED_RETENTION_MS },
     lease: {
       defaultTtlMs: DEFAULT_LEASE_TTL_MS,
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: DEFAULT_LEASE_REQUEST_RETENTION_MS,
+      endedIdRetentionMs: DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
       maxRequestRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
       maxPerRequester: DEFAULT_LEASE_MAX_PER_REQUESTER,
       endWaitMs: DEFAULT_EXEC_TIMEOUT_MS,
@@ -900,6 +945,7 @@ function defaultConfig(
       leaseRequestTimeoutMs: DEFAULT_LEASE_REQUEST_TIMEOUT_MS,
       routing: DEFAULT_ROUTING_POLICY,
       alerts: { destinations: [] },
+      admission: { timeoutMs: DEFAULT_ADMISSION_TIMEOUT_MS },
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -952,6 +998,111 @@ const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,100}$/;
+const HEADER_VALUE_PATTERN = /^[\t -~]*$/;
+const MAX_HEADERS = 16;
+const MAX_HEADER_VALUE_LENGTH = 4096;
+const MAX_HEADER_CHARACTERS = 8192;
+const SIMLOCK_HEADER_NAMES: ReadonlySet<string> = new Set([
+  "authorization",
+  "x-simlock-worker-id",
+  "x-simlock-worker-label",
+  "host",
+  "connection",
+  "upgrade",
+  "origin",
+]);
+
+type HeaderEntry = [name: string, text: string];
+
+/**
+ * why: Node throws on a header name or value it cannot send, so every such entry is refused
+ * here at load, where the operator sees the key, rather than on each dial.
+ */
+function headersValidator(value: unknown, path: string): Readonly<Record<string, string>> {
+  const shape = "an object of header names to text values";
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidValue(path, shape);
+  }
+  const entries = Object.entries(value);
+  if (!entries.every((entry): entry is HeaderEntry => typeof entry[1] === "string")) {
+    throw invalidValue(path, shape);
+  }
+  if (entries.length > MAX_HEADERS) throw invalidValue(path, "at most 16 headers");
+  checkHeaderNames(entries, path);
+  checkHeaderValues(entries, path);
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (SIMLOCK_HEADER_NAMES.has(lower) || lower.startsWith("sec-websocket-")) {
+      throw invalidValue(path, `no header Simlock sets itself (${name})`);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+
+function admissionCommandValidator(value: unknown, path: string): readonly string[] {
+  const shape = `a list of 1 to ${String(ADMISSION_COMMAND_MAX_ENTRIES)} strings of 1 to ${String(ADMISSION_ARGUMENT_MAX_LENGTH)} characters`;
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > ADMISSION_COMMAND_MAX_ENTRIES ||
+    !value.every(
+      (entry): entry is string =>
+        typeof entry === "string" &&
+        entry.length >= 1 &&
+        entry.length <= ADMISSION_ARGUMENT_MAX_LENGTH,
+    )
+  ) {
+    throw invalidValue(path, shape);
+  }
+  return value;
+}
+
+function admissionTimeoutValidator(value: unknown, path: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > ADMISSION_TIMEOUT_MAX_MS
+  ) {
+    throw invalidValue(path, `an integer from 1 to ${String(ADMISSION_TIMEOUT_MAX_MS)}`);
+  }
+  return value;
+}
+
+function checkHeaderNames(entries: readonly HeaderEntry[], path: string): void {
+  const seen = new Set<string>();
+  for (const [name] of entries) {
+    if (!HEADER_NAME_PATTERN.test(name)) {
+      throw invalidValue(
+        path,
+        `a header name of 1 to 100 letters, digits and HTTP name symbols (got ${name})`,
+      );
+    }
+  }
+  for (const [name] of entries) {
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) throw invalidValue(path, `each header name once (got ${name} twice)`);
+    seen.add(lower);
+  }
+}
+
+function checkHeaderValues(entries: readonly HeaderEntry[], path: string): void {
+  let total = 0;
+  for (const [name, text] of entries) {
+    if (text.length > MAX_HEADER_VALUE_LENGTH || !HEADER_VALUE_PATTERN.test(text)) {
+      throw invalidValue(
+        path,
+        `a header value of at most 4096 plain ASCII characters (in ${name})`,
+      );
+    }
+    total += name.length + text.length;
+  }
+  if (total > MAX_HEADER_CHARACTERS) {
+    throw invalidValue(path, "at most 8192 characters of header names and values in all");
+  }
+}
+
 /**
  * why: The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
@@ -968,11 +1119,16 @@ export function configValidators(
       url: stringValue,
       token: stringValue,
       label: stringValue,
+      headers: headersValidator,
       disconnectedRetentionMs: positiveNumber,
       execTimeoutMs: positiveNumber,
       leaseRequestTimeoutMs: positiveNumber,
       routing: stringUnion(ROUTING_POLICIES),
       alerts: objectValidator({ destinations: alertDestinationsValidator }),
+      admission: objectValidator({
+        command: admissionCommandValidator,
+        timeoutMs: admissionTimeoutValidator,
+      }),
     }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
@@ -1002,7 +1158,7 @@ export function configValidators(
     // `lease.heartbeatIntervalMs`) are deliberately absent rather than aliased: `objectValidator`
     // warns about each as an unrecognized key and ignores it, so an old config still boots and
     // gets the new key's default rather than the value it wrote.
-    devices: objectValidator({ deletedRetentionMs: positiveNumber }),
+    devices: objectValidator({ autoEnroll: booleanValue, deletedRetentionMs: positiveNumber }),
     lease: objectValidator({
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,
@@ -1011,6 +1167,7 @@ export function configValidators(
         android: stringUnion(LEASE_IDENTITIES),
       }),
       requestRetentionMs: positiveNumber,
+      endedIdRetentionMs: positiveNumber,
       maxRequestRecords: positiveInteger,
       maxPerRequester: maxPerRequesterValidator,
       endWaitMs: endWaitValidator,

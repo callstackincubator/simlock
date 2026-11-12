@@ -9865,7 +9865,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
         "                     [--except <category,...>] [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
-        "                     [--export-env] [--bind-pid <pid>]\n",
+        "                     [--meta <key=value>]... [--export-env] [--bind-pid <pid>]\n",
     );
   });
 

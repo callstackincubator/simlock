@@ -19,13 +19,14 @@ Lock, claims and commits:
 - Every verb: claim and revalidate (lock) → driver (no lock) → revalidate and commit (lock) → release.
 - Only `Registry` writes the `registry` tables, inside `SerializedDecision.run`. A commit is one `state.db` transaction, then memory, then `onCommit`, then the event. A throw rolls back and leaves memory as it was.
 - A transition without the one event its edge calls for throws `RegistryEventError`.
+- A lease with a requester-chosen id that leaves the registry writes its `ended_lease_ids` row in the same commit, and each commit prunes rows older than `lease.endedIdRetentionMs`.
 - A virtual device record is created only by `DeviceProvisioner`. Every driver verb on a registered device goes through `ManagedDeviceLifecycle`.
 - A driver keeps its own `DeviceDataTable` (`driver.ts`) for a virtual device's `driverData`; a physical device has none.
 - A granted request's `grant.device` is read as the device is now.
 
 Devices:
 
-- The state machine is `transition` in `domain.ts`. `markDeviceMissing` writes `deleted` from any state of a device with no lease. A `deleted` record stays in `state.db` and `status.get` for `devices.deletedRetentionMs`, counted from `deletedAt`, then the registry drops it in a commit with no event; a row already `deleted` at the first start after the upgrade gets that start's time.
+- The state machine is `transition` in `domain.ts`. `markDeviceMissing` writes `deleted` from any state of a device with no lease. A `deleted` record stays in `state.db` and `status.get` for `devices.deletedRetentionMs`, counted from `deletedAt`, then `snapshot` stops listing it and the next commit drops it, with no event; a row already `deleted` at the first start after the upgrade gets that start's time.
 - Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in.
 - Nothing in core acts on a leased device, except `recoverLeased`, under the lease: it reboots with no commit and no event.
 - Grant paths select by exact state. `mayBeGranted` refuses every virtual device that has ended a lease, whatever its `leaseIdentity` (ADR 0061 §2).
@@ -46,8 +47,6 @@ Reclaim and quarantine:
 - Quarantine retries run under the `reclaim` claim: a virtual device is destroyed, a physical one reclaimed. A physical device not present waits `health.probeIntervalMs`, and that try is not counted.
 - Out of retries, a virtual device is destroyed and a physical one unenrolled (`device.quarantine-abandoned`). A destroy that fails leaves the device quarantined, with its capacity slot and no further retry (`device.quarantine-stranded`).
 - `quarantineCause` is written at entry; retries keep it and every exit drops it.
-
-Nuke, one at a time: close acquisition, settle reclaim and the warm pool → release all leases `killed` → clear the warm pool's learned kinds → shut down each unleased `ready` virtual device and, with delete, destroy each `shutdown` one, then the seeds and every baseline. A device it cannot reset is logged and the rest go on.
 
 Components:
 

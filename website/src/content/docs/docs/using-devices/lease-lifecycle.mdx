@@ -137,7 +137,7 @@ An admin can raise the limit with `lease.maxPerRequester`: either one number for
 
 ### Choose your own lease id
 
-`--lease-id <id>` sets the lease id yourself, for when your tool already has its own id for the work. Use 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. Don't reuse an id: one that an active lease or waiting request already has fails with `LEASE_ID_TAKEN` (exit 13).
+`--lease-id <id>` sets the lease id yourself, for when your tool already has its own id for the work. Use 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. Don't reuse an id: one that an active lease or waiting request already has fails with `LEASE_ID_TAKEN` (exit 13), and one whose lease ended in the last 24 hours (`lease.endedIdRetentionMs`) fails with `LEASE_ENDED` (exit 13), so a late retry of a finished request does not get a new device.
 
 ## Who the requester is
 

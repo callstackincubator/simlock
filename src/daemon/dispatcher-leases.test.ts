@@ -4,7 +4,7 @@ import { type Config, type LatestPresence } from "../core/index.js";
 import { FakeClock } from "../ports/index.js";
 import type { DispatcherOptions } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
-import { UnknownLeaseError } from "../core/index.js";
+import { BootTimeoutError, DriverCrashError, UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import {
   HOST_SYSTEM,
@@ -143,6 +143,24 @@ describe("Dispatcher: ownership", () => {
         expect.objectContaining({ fleetRequestId: "req_gw1", state: "granted" }),
       ]);
     });
+  });
+
+  it("a worker with no gateway accepts a request's metadata and stores and emits none of it", async () => {
+    const { dispatcher, eventBus, registry } = await buildDispatcher();
+
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { metadata: { project: "checkout-app" }, model: "iPhone 17", platform: "ios" },
+      session({ principal: "tok_owner" }),
+    );
+
+    expect(grant.lease.id).toBeDefined();
+    expect(registry.leaseRequests().length, "the request is stored").toBeGreaterThan(0);
+    expect(JSON.stringify(registry.leaseRequests()), "the stored request").not.toContain(
+      "checkout-app",
+    );
+    expect(JSON.stringify(registry.snapshot), "the registry").not.toContain("checkout-app");
+    expect(JSON.stringify(eventBus.replay()), "the events").not.toContain("checkout-app");
   });
 
   it("lease.renew: rejects a non-owner with FORBIDDEN, admits the owner, admin bypasses", async () => {
@@ -1440,4 +1458,81 @@ describe("Dispatcher: lease.request at new-devices-paused", () => {
       expect(granted).toMatchObject({ lease: { ownerId: "tok_asker" } });
     },
   );
+});
+
+describe("Dispatcher: lease.request whose device fails to boot", () => {
+  it("answers a boot timeout or failed boot of a new or shut-down device as PROVISION_FAILED with the boot's message", async () => {
+    const ask = {
+      mode: "slim",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+    const timedOut = /^Timed out waiting for device to boot: /;
+    const failed = /^Device failed to boot: .+: simulator exited$/;
+    const cases = [
+      ["a new device", new BootTimeoutError("sim-1"), timedOut],
+      ["a new device", new DriverCrashError("simulator exited"), failed],
+      ["a shut-down device", new BootTimeoutError("sim-1"), timedOut],
+      ["a shut-down device", new DriverCrashError("simulator exited"), failed],
+    ] as const;
+
+    for (const [target, error, message] of cases) {
+      const name = `${target}: ${error.name}`;
+      const built = await buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
+      if (target === "a shut-down device") {
+        await seedSlimDevice(built, "shutdown");
+        // why: call 1 of makeReady is the seed's own boot; the waiter's boot is call 2.
+        built.driver.failOn("makeReady", 2, error);
+      } else {
+        built.driver.failOn("makeReady", 1, error);
+      }
+
+      const refusal = await built.dispatcher
+        .dispatch("lease.request", ask, session())
+        .catch((caught: unknown) => caught);
+
+      expect(
+        built.eventBus.replay().find((event) => event.event === "lease.rejected")?.payload,
+        name,
+      ).toMatchObject({ reason: "boot-timeout" });
+      expect(classifyError(refusal) ?? "INTERNAL", name).toBe("PROVISION_FAILED");
+      expect((refusal as Error).message, name).toMatch(message);
+    }
+  });
+});
+
+describe("Dispatcher: a replay of a failed lease.request", () => {
+  it("answers a classified failure with its stored code and message, and an unclassified one as INTERNAL with a generic message", async () => {
+    const ask = {
+      idempotencyKey: "key-1",
+      mode: "slim",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+    async function replayAfter(operation: "makeReady" | "resolveSpec", error: Error) {
+      const built = await buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
+      built.driver.failOn(operation, 1, error);
+      await built.dispatcher.dispatch("lease.request", ask, session()).catch(() => undefined);
+      const replay = await built.dispatcher
+        .dispatch("lease.request", ask, session())
+        .catch((caught: unknown) => caught);
+      return { code: classifyError(replay), message: (replay as Error).message };
+    }
+
+    const classified = await replayAfter("makeReady", new BootTimeoutError("sim-1"));
+    const unclassified = await replayAfter(
+      "resolveSpec",
+      new Error("/Users/someone/secret/path exploded"),
+    );
+
+    expect([classified, unclassified]).toEqual([
+      {
+        code: "PROVISION_FAILED",
+        message: expect.stringMatching(/^Timed out waiting for device to boot: /),
+      },
+      { code: "INTERNAL", message: "Internal error" },
+    ]);
+  });
 });
