@@ -184,11 +184,14 @@ enum Watchdog {
     // pipe on fd 3; `cat` returns when every writer is gone, which is the moment the holder ended,
     // and the command is killed then. `-9` because `simctl spawn … log` is only reliably ended by it.
     // The reader is killed once the command ends first, so neither outlives the other.
+    // why: `then` runs right after the kill, from this script, because killing `simctl spawn` leaves
+    // the process it started inside the simulator to CoreSimulator, which on a loaded host takes
+    // longer than the caller can wait; `then` ends that process itself.
     private static let script = """
         exec 3<&0
         "$@" 3<&- </dev/null &
         child=$!
-        { cat <&3 >/dev/null; kill -9 "$child" 2>/dev/null; } &
+        { cat <&3 >/dev/null; kill -9 "$child" 2>/dev/null; eval "$WATCHDOG_THEN"; } &
         reader=$!
         wait "$child"
         status=$?
@@ -198,8 +201,10 @@ enum Watchdog {
         """
 
     /// Not started; the caller keeps the `standardInput` pipe open for as long as the command should run.
-    static func process(running command: [String]) -> Process {
+    /// `then` is a shell snippet that runs once the pipe has closed and the command has been killed.
+    static func process(running command: [String], then: String = "") -> Process {
         let process = Process()
+        process.environment = ProcessInfo.processInfo.environment.merging(["WATCHDOG_THEN": then]) { _, new in new }
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script, "sh"] + command
         process.standardInput = Pipe()
@@ -355,6 +360,8 @@ struct SimctlPanelSampler: PanelSampler {
 /// SpringBoard's log, read by `simctl spawn … log` children under a `Watchdog`.
 final class SimctlPanelLog: PanelLog, @unchecked Sendable {
     private let udid: String
+    /// Names this follower's streams among any other `log` in the simulator.
+    private let token = UUID().uuidString
     private let lock = NSLock()
     private var children: [Process] = []
     private var stopped = false
@@ -362,11 +369,19 @@ final class SimctlPanelLog: PanelLog, @unchecked Sendable {
     init(udid: String) { self.udid = udid }
 
     private func logCommand(_ verb: [String]) -> [String] {
-        Panels.simctl(["spawn", udid, "log"] + verb + ["--style", "compact", "--predicate", Panels.logPredicate])
+        // why: the token is a clause that is always true; it puts a name on the in-simulator command line.
+        let predicate = Panels.logPredicate + #" AND "\#(token)" != """#
+        return Panels.simctl(["spawn", udid, "log"] + verb + ["--style", "compact", "--predicate", predicate])
+    }
+
+    /// Ends this follower's `log` processes inside the simulator, which are host processes whose parent
+    /// is the simulator's `launchd_sim`.
+    private var endInSimulator: String {
+        #"for l in $(pgrep -f "^launchd_sim .*/\#(udid)/"); do pkill -9 -P "$l" -f "\#(token)"; done"#
     }
 
     private func launch(_ verb: [String], stdout: Pipe) -> Process? {
-        let process = Watchdog.process(running: logCommand(verb))
+        let process = Watchdog.process(running: logCommand(verb), then: endInSimulator)
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
         lock.lock()

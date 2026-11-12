@@ -33,4 +33,14 @@ final class WatchdogTests: XCTestCase {
         XCTAssertFalse(short.watchdog.isRunning, "the watchdog outlived its command")
         try (short.watchdog.standardInput as! Pipe).fileHandleForWriting.close()
     }
+
+    func testTheWatchdogRunsItsFollowUpAfterKillingTheCommand() async throws {
+        let marker = NSTemporaryDirectory() + "watchdog-then-\(UUID().uuidString)"
+        let watchdog = Watchdog.process(running: ["/bin/sleep", "60"], then: "touch \(marker)")
+        try watchdog.run()
+        try (watchdog.standardInput as! Pipe).fileHandleForWriting.close()
+        await waitUntil { FileManager.default.fileExists(atPath: marker) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker), "the follow-up never ran after the pipe closed")
+        try? FileManager.default.removeItem(atPath: marker)
+    }
 }
