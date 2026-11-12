@@ -193,7 +193,12 @@ export class ManagedDeviceLifecycle {
     operation: DeviceOperation,
     claim?: DeviceOperationClaim,
   ): Promise<VirtualDevice | undefined> {
-    const claimed = await this.#claim(target, ["provisioning", "shutdown"], operation, claim);
+    const claimed = await this.#claim(
+      target,
+      ["provisioning", "shutdown", "quarantined"],
+      operation,
+      claim,
+    );
     if (claimed === undefined) return undefined;
 
     try {
@@ -203,7 +208,7 @@ export class ManagedDeviceLifecycle {
       throw error;
     }
 
-    return this.#commit(claimed, ["provisioning", "shutdown"], "deleted", {
+    return this.#commit(claimed, ["provisioning", "shutdown", "quarantined"], "deleted", {
       event: "device.deleted",
       payload: { deviceId: claimed.device.id, initiator },
     });

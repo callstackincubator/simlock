@@ -448,7 +448,6 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * restarting daemon re-arms from this field -- undefined makes it retry once promptly instead
    * of at a timestamp that has long since passed.
    */
-  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
   async strandQuarantine(deviceId: string, attempts: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "quarantined") {
@@ -467,14 +466,9 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (device.state !== "quarantined") {
       throw new RegistryEventError(`Device is not quarantined: ${deviceId}`);
     }
-    const {
-      quarantineAttempts: _quarantineAttempts,
-      quarantineNextRetryAt: _quarantineNextRetryAt,
-      quarantinedAt: _quarantinedAt,
-      ...updated
-    } = this.#transitioned(device, "deleted");
+    const updated = this.#transitioned(device, "deleted");
     const devices = [...this.#devices];
-    devices[index] = updated as DeviceRecord;
+    devices[index] = updated;
     this.#commit(devices, this.#leases);
     this.options.eventBus.emit(
       "device.deleted",
