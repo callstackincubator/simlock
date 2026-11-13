@@ -30,6 +30,7 @@ Seeds (ADR 0061):
 - A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` and no `simlock simctl list`.
 - Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app, system apps included, under the original device's folder. A clone whose drop fails is deleted.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
+- `simctl create` and `simctl clone` (a seed, a copy, `saveSource`) wait `ios.simulator.createTimeoutMs`, not the 30 s of every other call, and are not killed at it: CoreSimulator's service finishes the simulator anyway. The caller gets its error, and the simulator the command names when it ends is deleted; a copy of a seed keeps the seed's turn until then. Still silent 5 minutes later, the command is killed and a warning names it.
 - A `making` row of another process is swept at the first `listSources`; one of this process, once older than any make takes, at the next make of its kind.
 - A seed that `simctl delete` reports as `Invalid device` is already gone, so its row is dropped.
 - `removeComponent` deletes the runtime's seeds first.
@@ -48,7 +49,7 @@ Tunnels (`device-tcp.ts`):
 
 ## Known gaps
 
-- **A restart between `simctl clone` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
+- **A restart between `simctl clone` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`. So does a clone killed 5 minutes past `ios.simulator.createTimeoutMs` whose simulator still appears (#1546).
 - **Runtime downloads outlive deletion (#79).** Simlock reports retained assets; reclaim them in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync. Use `--mode full` when a test needs them.
 - **Overrides folders of simulators deleted before ADR 0060 remain.**
