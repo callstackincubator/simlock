@@ -24,8 +24,8 @@ export interface IosDriverConfig {
     readonly audio: boolean;
     /** why: `false` shows each simulator Simlock boots in DeviceHub or Simulator.app; it needs `drivers.ios.deviceSet: default`. */
     readonly headless: boolean;
-    /** why: one `simctl create` or `simctl clone` may take this long; a busy Mac copies a simulator slowly. */
-    readonly createTimeoutMs: number;
+    /** why: one `simctl` command that creates, copies, boots, shuts down or deletes a simulator may take this long; a busy Mac is slow at each. */
+    readonly lifecycleTimeoutMs: number;
   };
 }
 
@@ -43,7 +43,7 @@ export const iosDriverConfig: DriverConfigEntry<IosDriverConfig> = {
   defaults: {
     slim: { bootTimeoutMs: 600_000 },
     full: { bootTimeoutMs: 300_000 },
-    simulator: { audio: true, headless: true, createTimeoutMs: 30_000 },
+    simulator: { audio: true, headless: true, lifecycleTimeoutMs: 30_000 },
   },
   validators: {
     slim: objectValidator({ categories: stringArray, bootTimeoutMs: positiveNumber }),
@@ -51,7 +51,7 @@ export const iosDriverConfig: DriverConfigEntry<IosDriverConfig> = {
     simulator: objectValidator({
       audio: booleanValue,
       headless: booleanValue,
-      createTimeoutMs: positiveNumber,
+      lifecycleTimeoutMs: positiveNumber,
     }),
   },
 };

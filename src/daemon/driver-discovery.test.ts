@@ -816,7 +816,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
        }`,
     );
     const emulator = { audio: false, bootAnimation: false, gpu: "host", headless: true };
-    const simulator = { audio: false, createTimeoutMs: 240_000, headless: true };
+    const simulator = { audio: false, lifecycleTimeoutMs: 240_000, headless: true };
 
     try {
       await start({

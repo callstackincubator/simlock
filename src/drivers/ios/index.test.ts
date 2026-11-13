@@ -5756,7 +5756,7 @@ describe("IosSimctlDriver device set", () => {
   });
 });
 
-describe("a simctl create or clone that runs past ios.simulator.createTimeoutMs", () => {
+describe("a simctl create or clone that runs past ios.simulator.lifecycleTimeoutMs", () => {
   const lateUdid = "00000000-0000-0000-0000-0000000000dd";
   const xcodeSet = "/CoreSim/Devices";
   const defaultSources = "/home/.simlock/devices/ios-sources";
@@ -5780,7 +5780,7 @@ describe("a simctl create or clone that runs past ios.simulator.createTimeoutMs"
   ): Promise<IosSimctlDriver> {
     return IosSimctlDriver.create({
       clock,
-      config: { simulator: { audio: true, createTimeoutMs: 240_000, headless: true } },
+      config: { simulator: { audio: true, lifecycleTimeoutMs: 240_000, headless: true } },
       database: options.database ?? (await memorySourceDatabase()),
       driverConfig: options.deviceSet === undefined ? { deviceRoot } : { deviceSet: "default" },
       filesystem: new MemoryFilesystem(),
@@ -5877,6 +5877,48 @@ describe("a simctl create or clone that runs past ios.simulator.createTimeoutMs"
     },
   );
 
+  it.each([
+    {
+      name: "the boot of a device being made ready",
+      before: [],
+      message: "Timed out waiting for device to boot",
+      slow: simctl("boot", driverData.udid),
+      start: (driver: IosSimctlDriver) => driver.makeReady(device, prepareFull),
+    },
+    {
+      name: "a shutdown",
+      before: [],
+      message: `simctl shutdown ${driverData.udid} timed out after 240000ms`,
+      slow: simctl("shutdown", driverData.udid),
+      start: (driver: IosSimctlDriver) => driver.shutdown(device),
+    },
+    {
+      name: "the delete of a destroy",
+      before: [{ match: simctl("shutdown", driverData.udid) }],
+      message: `simctl delete ${driverData.udid} timed out after 240000ms`,
+      slow: simctl("delete", driverData.udid),
+      start: (driver: IosSimctlDriver) => driver.destroy(device),
+    },
+  ])(
+    "a simctl boot, shutdown or delete also waits that limit, not the 30 s of other calls: $name",
+    async ({ before, message, slow, start }) => {
+      const runner = new ScriptedProcessRunner([...before, { hangs: true, match: slow }]);
+      const clock = new FakeClock();
+      const driver = await slowDriver(runner, clock);
+
+      const done = start(driver);
+      const state = promiseState(done);
+      await waitForCalls(runner, before.length + 1);
+      clock.advance(239_999);
+      for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      expect(state.state, "one millisecond before the limit").toBe("pending");
+      clock.advance(1);
+
+      await expect(done).rejects.toThrow(message);
+      expect(runner.calls.at(-1)?.options).toEqual({ timeoutMs: 240_000 });
+    },
+  );
+
   it("is killed when it is still silent 5 minutes after the limit, a warning names the command, and the seed's next clone then runs", async () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
     const clone = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
@@ -5892,7 +5934,7 @@ describe("a simctl create or clone that runs past ios.simulator.createTimeoutMs"
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
     const driver = await IosSimctlDriver.create({
       clock,
-      config: { simulator: { audio: true, createTimeoutMs: 240_000, headless: true } },
+      config: { simulator: { audio: true, lifecycleTimeoutMs: 240_000, headless: true } },
       database: await seededDatabase(),
       driverConfig: { deviceRoot },
       filesystem,
@@ -6023,7 +6065,7 @@ describe("IosSimctlDriver simulator audio", () => {
         processRunner: runner,
         simlockHome: "/home/.simlock",
         config: {
-          simulator: { audio: c.audio ?? false, headless: true, createTimeoutMs: 30_000 },
+          simulator: { audio: c.audio ?? false, headless: true, lifecycleTimeoutMs: 30_000 },
           slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
         },
       });

@@ -107,7 +107,7 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
-// why: how long a `simctl create` or `simctl clone` past `ios.simulator.createTimeoutMs` may still
+// why: how long a `simctl create` or `simctl clone` past `ios.simulator.lifecycleTimeoutMs` may still
 // run before it is killed: the simulator it names by then is deleted, one it names later is not.
 const LATE_CREATE_LIMIT_MS = 300_000;
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
@@ -325,7 +325,7 @@ export class IosSimctlDriver implements Driver {
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #fullBootTimeoutMs: number;
-  readonly #createTimeoutMs: number;
+  readonly #lifecycleTimeoutMs: number;
   readonly #afterBoot: AfterBoot;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
@@ -364,7 +364,7 @@ export class IosSimctlDriver implements Driver {
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.config?.slim;
     this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
-    this.#createTimeoutMs = options.config?.simulator?.createTimeoutMs ?? COMMAND_TIMEOUT_MS;
+    this.#lifecycleTimeoutMs = options.config?.simulator?.lifecycleTimeoutMs ?? COMMAND_TIMEOUT_MS;
     this.#afterBoot = {
       silent: options.config?.simulator?.audio === false,
       headless: options.config?.simulator?.headless !== false,
@@ -938,7 +938,7 @@ export class IosSimctlDriver implements Driver {
     const udid = await this.#withSeedLock(seed.udid, (hold) =>
       this.#createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
         discard: async (late) => {
-          await this.#simctl(["delete", late], COMMAND_TIMEOUT_MS);
+          await this.#simctl(["delete", late], this.#lifecycleTimeoutMs);
         },
         hold,
         set: this.#sourcesSet,
@@ -955,7 +955,7 @@ export class IosSimctlDriver implements Driver {
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
-      await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      await this.#invokeSimctl(["delete", udid], this.#lifecycleTimeoutMs).catch(() => undefined);
       throw error;
     }
     await this.#copyOverrides(seed.udid, udid);
@@ -1149,10 +1149,10 @@ export class IosSimctlDriver implements Driver {
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#bestEffortShutdown(udid, this.#sourcesSet);
     const args = ["delete", udid];
-    const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const outcome = await this.#invokeSimctl(args, this.#lifecycleTimeoutMs, this.#sourcesSet);
     // why: a seed deleted by hand is already gone, and its row must still be dropped.
     if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
-    this.#checked(args, COMMAND_TIMEOUT_MS, outcome);
+    this.#checked(args, this.#lifecycleTimeoutMs, outcome);
   }
 
   async #ensureSourcesSet(): Promise<void> {
@@ -1264,7 +1264,7 @@ export class IosSimctlDriver implements Driver {
   // why: a booted simulator keeps the clipboard sync it booted with, so a lease's device that is
   // already up is shut down and booted again once DeviceHub's preference is set.
   async #boot(udid: string, set: string | undefined, refreshBooted: boolean) {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+    const boot = await this.#invokeSimctl(["boot", udid], this.#lifecycleTimeoutMs, set);
     const refresh =
       refreshBooted &&
       this.#rootOptions === undefined &&
@@ -1274,7 +1274,7 @@ export class IosSimctlDriver implements Driver {
       alreadyBooted(boot.result.stderr);
     if (!refresh) return boot;
     await this.#shutdown(udid);
-    return await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
+    return await this.#invokeSimctl(["boot", udid], this.#lifecycleTimeoutMs);
   }
 
   async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {
@@ -1441,7 +1441,7 @@ export class IosSimctlDriver implements Driver {
   async destroy(device: DriverDevice): Promise<void> {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
-    await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
+    await this.#simctl(["delete", data.udid], this.#lifecycleTimeoutMs);
     if (this.#rootOptions === undefined) await this.#removePasteboardPreference(data.udid);
     await this.#removeOverrides(data.udid);
   }
@@ -1533,8 +1533,8 @@ export class IosSimctlDriver implements Driver {
   async destroyLegacy(device: DriverDevice): Promise<void> {
     const { udid } = iosDriverData(device);
     // why: Best effort: a device that is already shut down reports a failure unrelated to the delete.
-    await this.#invokeLegacySimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
-    await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
+    await this.#invokeLegacySimctl(["shutdown", udid], this.#lifecycleTimeoutMs);
+    await this.#legacySimctl(["delete", udid], this.#lifecycleTimeoutMs);
     await this.#removeOverrides(udid);
   }
 
@@ -2005,10 +2005,12 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #shutdown(udid: string, set?: string): Promise<void> {
-    const outcome = await this.#invokeSimctl(["shutdown", udid], COMMAND_TIMEOUT_MS, set);
+    const outcome = await this.#invokeSimctl(["shutdown", udid], this.#lifecycleTimeoutMs, set);
 
     if (outcome.kind === "timed-out") {
-      throw new DriverCrashError(`simctl shutdown ${udid} timed out after ${COMMAND_TIMEOUT_MS}ms`);
+      throw new DriverCrashError(
+        `simctl shutdown ${udid} timed out after ${this.#lifecycleTimeoutMs}ms`,
+      );
     }
     if (outcome.result.code !== 0 && !alreadyShutdown(outcome.result.stderr)) {
       this.#assertSuccessful(["shutdown", udid], outcome.result);
@@ -2027,7 +2029,7 @@ export class IosSimctlDriver implements Driver {
    * why: `simctl create` and `simctl clone` only ask CoreSimulator's service for the simulator, and the
    * service finishes it after `simctl` is killed. Killed at its limit, the command would leave a
    * simulator whose UDID nobody was told: under `deviceSet: default` it has no mark, so it could never be
-   * listed or deleted again. So at `ios.simulator.createTimeoutMs` the caller gets its error and the
+   * listed or deleted again. So at `ios.simulator.lifecycleTimeoutMs` the caller gets its error and the
    * command runs on, and the simulator it names when it ends is handed to `discard`.
    */
   async #createSimulator(
@@ -2039,7 +2041,7 @@ export class IosSimctlDriver implements Driver {
     },
   ): Promise<string> {
     const argv = this.#scopedSimctlArgv(args, options.set);
-    const limitMs = this.#createTimeoutMs;
+    const limitMs = this.#lifecycleTimeoutMs;
     let process: ProcessHandle;
     try {
       process = this.#processRunner.spawn("xcrun", argv, { timeoutMs: limitMs });

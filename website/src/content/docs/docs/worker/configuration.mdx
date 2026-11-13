@@ -101,7 +101,7 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 | Choose which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | none |
 | Run Android emulators without a window | `android.emulator.headless` | `false` |
 | Watch iOS simulators in a window | `ios.simulator.headless`, with `drivers.ios.deviceSet` | `true` (no window) |
-| Give a busy Mac longer to copy an iOS simulator | `ios.simulator.createTimeoutMs` | `30000` (30 s) |
+| Give a busy Mac longer to copy, boot, shut down or delete an iOS simulator | `ios.simulator.lifecycleTimeoutMs` | `30000` (30 s) |
 | Write more or less to the log | `log.level` | `info` |
 
 Every change below needs a daemon restart.
