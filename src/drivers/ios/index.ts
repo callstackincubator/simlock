@@ -54,6 +54,7 @@ import type {
   Filesystem,
   IdGenerator,
   Logger,
+  ProcessHandle,
   ProcessResult,
   ProcessRunner,
   SqliteDatabase,
@@ -106,6 +107,9 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+// why: how long a `simctl create` or `simctl clone` past `ios.simulator.lifecycleTimeoutMs` may still
+// run before it is killed: the simulator it names by then is deleted, one it names later is not.
+const LATE_CREATE_LIMIT_MS = 300_000;
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -321,6 +325,7 @@ export class IosSimctlDriver implements Driver {
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #fullBootTimeoutMs: number;
+  readonly #lifecycleTimeoutMs: number;
   readonly #afterBoot: AfterBoot;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
@@ -359,6 +364,7 @@ export class IosSimctlDriver implements Driver {
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.config?.slim;
     this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
+    this.#lifecycleTimeoutMs = options.config?.simulator?.lifecycleTimeoutMs ?? COMMAND_TIMEOUT_MS;
     this.#afterBoot = {
       silent: options.config?.simulator?.audio === false,
       headless: options.config?.simulator?.headless !== false,
@@ -848,11 +854,10 @@ export class IosSimctlDriver implements Driver {
     try {
       await this.#ensureSourcesSet();
       await this.#shutdown(data.udid);
-      const cloned = await this.#simctl(
+      cloneUdid = await this.#createSimulator(
         ["clone", data.udid, `simlock-baseline-${sourceId}`, this.#sourcesSet],
-        COMMAND_TIMEOUT_MS,
+        { discard: (udid) => this.#deleteSeedSimulator(udid) },
       );
-      cloneUdid = cloned.stdout.trim();
       if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
       this.#sources.setUdid(sourceId, cloneUdid);
       await this.#copyOverrides(data.udid, cloneUdid);
@@ -930,14 +935,15 @@ export class IosSimctlDriver implements Driver {
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
-    const result = await this.#withSeedLock(seed.udid, () =>
-      this.#simctl(
-        ["clone", seed.udid, name, this.#deviceRoot],
-        COMMAND_TIMEOUT_MS,
-        this.#sourcesSet,
-      ),
+    const udid = await this.#withSeedLock(seed.udid, (hold) =>
+      this.#createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
+        discard: async (late) => {
+          await this.#simctl(["delete", late], this.#lifecycleTimeoutMs);
+        },
+        hold,
+        set: this.#sourcesSet,
+      }),
     );
-    const udid = result.stdout.trim();
 
     if (udid === "") {
       throw new DriverCrashError("simctl clone returned no device UDID");
@@ -949,7 +955,7 @@ export class IosSimctlDriver implements Driver {
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
-      await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      await this.#invokeSimctl(["delete", udid], this.#lifecycleTimeoutMs).catch(() => undefined);
       throw error;
     }
     await this.#copyOverrides(seed.udid, udid);
@@ -988,17 +994,27 @@ export class IosSimctlDriver implements Driver {
     return made;
   }
 
-  /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
-  async #withSeedLock<T>(udid: string, run: () => Promise<T>): Promise<T> {
+  /**
+   * why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a
+   * running clone. A clone that ran past its limit is still running, so `hold` keeps its turn until it ends.
+   */
+  async #withSeedLock<T>(
+    udid: string,
+    run: (hold: (late: Promise<void>) => void) => Promise<T>,
+  ): Promise<T> {
     const before = this.#seedLocks.get(udid) ?? Promise.resolve();
-    const turn = before.then(run, run);
-    const settled = turn.catch(() => undefined);
+    const held: Promise<void>[] = [];
+    const start = (): Promise<T> =>
+      run((late) => {
+        held.push(late);
+      });
+    const turn = before.then(start, start);
+    const settled = turn.catch(() => undefined).then(() => Promise.all(held));
     this.#seedLocks.set(udid, settled);
-    try {
-      return await turn;
-    } finally {
+    void settled.then(() => {
       if (this.#seedLocks.get(udid) === settled) this.#seedLocks.delete(udid);
-    }
+    });
+    return await turn;
   }
 
   async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
@@ -1033,17 +1049,15 @@ export class IosSimctlDriver implements Driver {
     });
     try {
       await this.#ensureSourcesSet();
-      const created = await this.#simctl(
+      const udid = await this.#createSimulator(
         [
           "create",
           `simlock-seed-${sourceId}`,
           resolved.deviceType.identifier,
           resolved.runtime.identifier,
         ],
-        COMMAND_TIMEOUT_MS,
-        this.#sourcesSet,
+        { discard: (late) => this.#deleteSeedSimulator(late), set: this.#sourcesSet },
       );
-      const udid = created.stdout.trim();
       this.#sources.setUdid(sourceId, udid);
       try {
         await this.#bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
@@ -1135,10 +1149,10 @@ export class IosSimctlDriver implements Driver {
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#bestEffortShutdown(udid, this.#sourcesSet);
     const args = ["delete", udid];
-    const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const outcome = await this.#invokeSimctl(args, this.#lifecycleTimeoutMs, this.#sourcesSet);
     // why: a seed deleted by hand is already gone, and its row must still be dropped.
     if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
-    this.#checked(args, COMMAND_TIMEOUT_MS, outcome);
+    this.#checked(args, this.#lifecycleTimeoutMs, outcome);
   }
 
   async #ensureSourcesSet(): Promise<void> {
@@ -1250,7 +1264,7 @@ export class IosSimctlDriver implements Driver {
   // why: a booted simulator keeps the clipboard sync it booted with, so a lease's device that is
   // already up is shut down and booted again once DeviceHub's preference is set.
   async #boot(udid: string, set: string | undefined, refreshBooted: boolean) {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+    const boot = await this.#invokeSimctl(["boot", udid], this.#lifecycleTimeoutMs, set);
     const refresh =
       refreshBooted &&
       this.#rootOptions === undefined &&
@@ -1260,7 +1274,7 @@ export class IosSimctlDriver implements Driver {
       alreadyBooted(boot.result.stderr);
     if (!refresh) return boot;
     await this.#shutdown(udid);
-    return await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
+    return await this.#invokeSimctl(["boot", udid], this.#lifecycleTimeoutMs);
   }
 
   async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {
@@ -1427,7 +1441,7 @@ export class IosSimctlDriver implements Driver {
   async destroy(device: DriverDevice): Promise<void> {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
-    await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
+    await this.#simctl(["delete", data.udid], this.#lifecycleTimeoutMs);
     if (this.#rootOptions === undefined) await this.#removePasteboardPreference(data.udid);
     await this.#removeOverrides(data.udid);
   }
@@ -1519,8 +1533,8 @@ export class IosSimctlDriver implements Driver {
   async destroyLegacy(device: DriverDevice): Promise<void> {
     const { udid } = iosDriverData(device);
     // why: Best effort: a device that is already shut down reports a failure unrelated to the delete.
-    await this.#invokeLegacySimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
-    await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
+    await this.#invokeLegacySimctl(["shutdown", udid], this.#lifecycleTimeoutMs);
+    await this.#legacySimctl(["delete", udid], this.#lifecycleTimeoutMs);
     await this.#removeOverrides(udid);
   }
 
@@ -1991,10 +2005,12 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #shutdown(udid: string, set?: string): Promise<void> {
-    const outcome = await this.#invokeSimctl(["shutdown", udid], COMMAND_TIMEOUT_MS, set);
+    const outcome = await this.#invokeSimctl(["shutdown", udid], this.#lifecycleTimeoutMs, set);
 
     if (outcome.kind === "timed-out") {
-      throw new DriverCrashError(`simctl shutdown ${udid} timed out after ${COMMAND_TIMEOUT_MS}ms`);
+      throw new DriverCrashError(
+        `simctl shutdown ${udid} timed out after ${this.#lifecycleTimeoutMs}ms`,
+      );
     }
     if (outcome.result.code !== 0 && !alreadyShutdown(outcome.result.stderr)) {
       this.#assertSuccessful(["shutdown", udid], outcome.result);
@@ -2006,6 +2022,88 @@ export class IosSimctlDriver implements Driver {
       await this.#shutdown(udid, set);
     } catch {
       // why: Boot failure cleanup must not obscure the timeout that triggered it.
+    }
+  }
+
+  /**
+   * why: `simctl create` and `simctl clone` only ask CoreSimulator's service for the simulator, and the
+   * service finishes it after `simctl` is killed. Killed at its limit, the command would leave a
+   * simulator whose UDID nobody was told: under `deviceSet: default` it has no mark, so it could never be
+   * listed or deleted again. So at `ios.simulator.lifecycleTimeoutMs` the caller gets its error and the
+   * command runs on, and the simulator it names when it ends is handed to `discard`.
+   */
+  async #createSimulator(
+    args: readonly string[],
+    options: {
+      readonly discard: (udid: string) => Promise<void>;
+      readonly hold?: (late: Promise<void>) => void;
+      readonly set?: string;
+    },
+  ): Promise<string> {
+    const argv = this.#scopedSimctlArgv(args, options.set);
+    const limitMs = this.#lifecycleTimeoutMs;
+    let process: ProcessHandle;
+    try {
+      process = this.#processRunner.spawn("xcrun", argv, { timeoutMs: limitMs });
+    } catch (error: unknown) {
+      throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
+    }
+    const answer = process.wait();
+    let passLimit: (() => void) | undefined;
+    const limit = new Promise<undefined>((resolve) => {
+      passLimit = () => resolve(undefined);
+    });
+    const timer = this.#clock.setTimer(limitMs, () => passLimit?.());
+    let result: ProcessResult | undefined;
+    try {
+      result = await Promise.race([answer, limit]);
+    } catch (error: unknown) {
+      throw new DriverCrashError(`${argv.join(" ")} failed: ${errorMessage(error)}`);
+    } finally {
+      this.#clock.cancel(timer);
+    }
+    if (result === undefined) {
+      const late = this.#discardLate(process, answer, args, options.discard);
+      options.hold?.(late);
+      throw new DriverCrashError(`simctl ${args.join(" ")} timed out after ${limitMs}ms`);
+    }
+    this.#assertSuccessful(args, result);
+    return result.stdout.trim();
+  }
+
+  async #discardLate(
+    process: ProcessHandle,
+    answer: Promise<ProcessResult>,
+    args: readonly string[],
+    discard: (udid: string) => Promise<void>,
+  ): Promise<void> {
+    const command = `simctl ${args.join(" ")}`;
+    const killer = this.#clock.setTimer(LATE_CREATE_LIMIT_MS, () => {
+      try {
+        process.kill("SIGTERM");
+      } catch {
+        // why: A process that has already exited needs no timeout cleanup.
+      }
+    });
+    try {
+      const result = await answer;
+      const udid = result.code === 0 ? result.stdout.trim() : "";
+      if (udid === "") {
+        this.#logger?.warn(
+          `${command} ended after its limit and named no simulator; one it made is left in the device set`,
+        );
+        return;
+      }
+      await discard(udid);
+      this.#logger?.info(
+        `${command} answered after its limit; deleted the simulator ${udid} it made`,
+      );
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `${command} answered after its limit, and its simulator was not deleted: ${errorMessage(error)}`,
+      );
+    } finally {
+      this.#clock.cancel(killer);
     }
   }
 

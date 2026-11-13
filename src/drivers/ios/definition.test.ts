@@ -23,18 +23,22 @@ async function load(file: unknown) {
 
 const accepted = {
   full: { bootTimeoutMs: 400_000 },
-  simulator: { audio: false, headless: false },
+  simulator: { audio: false, lifecycleTimeoutMs: 240_000, headless: false },
   slim: { bootTimeoutMs: 900_000, categories: ["logging", "diagnostics"] },
 };
 
 describe("the iOS driver's keys of the ios config section", () => {
-  it("default to a 5 minute full boot deadline, a 10 minute slim boot deadline with no category list, audio on and headless, and take each value a config file sets", async () => {
+  it("default to a 5 minute full boot deadline, a 10 minute slim boot deadline with no category list, audio on, headless and a 30 second limit on the simctl commands of a simulator's lifecycle, and take each value a config file sets", async () => {
     const defaulted = await load({});
     const set = await load({ ios: accepted });
 
     expect(defaulted.section.full).toEqual({ bootTimeoutMs: 300_000 });
     expect(defaulted.section.slim).toEqual({ bootTimeoutMs: 600_000 });
-    expect(defaulted.section.simulator).toEqual({ audio: true, headless: true });
+    expect(defaulted.section.simulator).toEqual({
+      audio: true,
+      lifecycleTimeoutMs: 30_000,
+      headless: true,
+    });
     expect(defaulted.warn).not.toHaveBeenCalled();
     expect(set.section.full).toEqual(accepted.full);
     expect(set.section.slim).toEqual(accepted.slim);
@@ -51,6 +55,9 @@ describe("the iOS driver's keys of the ios config section", () => {
     ["ios.slim.categories", { slim: { categories: [""] } }],
     ["ios.simulator.audio", { simulator: { audio: "no" } }],
     ["ios.simulator.headless", { simulator: { headless: "no" } }],
+    ["ios.simulator.lifecycleTimeoutMs", { simulator: { lifecycleTimeoutMs: 0 } }],
+    ["ios.simulator.lifecycleTimeoutMs", { simulator: { lifecycleTimeoutMs: -1 } }],
+    ["ios.simulator.lifecycleTimeoutMs", { simulator: { lifecycleTimeoutMs: "30000" } }],
     ["ios.full.bootTimeoutMs", { full: { bootTimeoutMs: 0 } }],
     ["ios.full.bootTimeoutMs", { full: { bootTimeoutMs: -1 } }],
     ["ios.full.bootTimeoutMs", { full: { bootTimeoutMs: "300000" } }],
@@ -69,6 +76,6 @@ describe("the iOS driver's keys of the ios config section", () => {
 
     expect(warn).toHaveBeenCalledWith(`Unknown config key: "${key}"`);
     expect(section.slim).toEqual({ bootTimeoutMs: 600_000 });
-    expect(section.simulator).toEqual({ audio: true, headless: true });
+    expect(section.simulator).toEqual({ audio: true, lifecycleTimeoutMs: 30_000, headless: true });
   });
 });
