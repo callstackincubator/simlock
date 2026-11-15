@@ -184,6 +184,7 @@ A message is dropped, and the socket stays open, when it isn't valid JSON, has a
 - **Keys** work on iOS 26 and older. On iOS 27 and newer the simulator ignores injected keys, so they are dropped, and `0x82` carries `"keyboardUnavailable":true`.
 - **Orientation (`0x07`)** turns the simulator as if you turned the phone in your hand. A screen that doesn't rotate, such as the iPhone home screen, stays as it is, and nothing tells the client.
 - `0x82` always says `"orientation":"portrait"`, even after a rotation, and touch positions stay fractions of the screen in portrait.
+- **On an iPhone Duo** a tap lands at its fraction of the panel in use, upright, folded or unfolded: the cover when folded, the inner panel when unfolded. A fold while the socket is open sends a new `0x82` with the new panel's size, so a client that reads `0x82` follows it.
 
 ### When the socket closes
 

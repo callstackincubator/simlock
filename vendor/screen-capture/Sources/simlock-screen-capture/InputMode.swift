@@ -1,7 +1,7 @@
 // simlock's own, MIT-licensed (see NOTICE.md): the input mode of `simlock-screen-capture`.
 //
 // `simlock-screen-capture <UDID> --input` writes no picture. It sets up serve-sim's HID injector for
-// one simulator, tells the daemon the device's native size once, then injects what the daemon sends on
+// one simulator, tells the daemon the screen's size, then injects what the daemon sends on
 // stdin. Each message is the stream's envelope: a 4-byte big-endian length (covering the tag), a tag
 // byte, and serve-sim's JSON for that tag:
 //
