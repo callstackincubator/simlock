@@ -140,3 +140,20 @@ async function measured(
     return undefined;
   }
 }
+
+/**
+ * why: ADR 0076 §4: the only sets a row may name are today's sources folder and the ones earlier releases used:
+ * `devices/ios-sources`, and `sources` in the owned root (`ownedRoot` is undefined under `default`, which has none besides the home's `devices/ios`).
+ */
+export function sourcesSetCheck(
+  today: string,
+  simlockHome: string,
+  ownedRoot: string | undefined,
+): (path: string) => boolean {
+  const known = new Set([
+    today,
+    join(simlockHome, "devices", "ios-sources"),
+    join(ownedRoot ?? join(simlockHome, "devices", "ios"), "sources"),
+  ]);
+  return (path) => known.has(path);
+}

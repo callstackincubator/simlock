@@ -86,7 +86,7 @@ import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { seedIsStale, sourceStaleReason } from "./source-staleness.js";
-import { fitSourcesFolders, sourcesFolderOf } from "./sources-folder.js";
+import { fitSourcesFolders, sourcesFolderOf, sourcesSetCheck } from "./sources-folder.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
@@ -333,7 +333,7 @@ export class IosSimctlDriver implements Driver {
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
-  readonly #earlierSourcesSets: readonly string[];
+  readonly #ownsSourcesSet: (path: string) => boolean;
   #sourceMaker: string | undefined;
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -374,14 +374,11 @@ export class IosSimctlDriver implements Driver {
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = sourcesSet;
-    // why: ADR 0076 §4: the only sets a row may name besides today's are the sources folders earlier releases used.
-    this.#earlierSourcesSets = [
-      join(options.simlockHome, "devices", "ios-sources"),
-      join(
-        rootOptions === undefined ? join(options.simlockHome, "devices", "ios") : deviceRoot,
-        "sources",
-      ),
-    ];
+    this.#ownsSourcesSet = sourcesSetCheck(
+      sourcesSet,
+      options.simlockHome,
+      rootOptions === undefined ? undefined : deviceRoot,
+    );
     this.screenCapture = createScreenCaptureFor(
       options,
       deviceRoot,
@@ -427,12 +424,8 @@ export class IosSimctlDriver implements Driver {
         ...(await fitSourcesFolders(options, ownRoot, () => xcodeDeviceSetPath(options))),
       ]);
       const devices = xcodeDeviceSetPath(options);
-      return new IosSimctlDriver(
-        options,
-        devices,
-        undefined,
-        await sourcesFolderOf(options, devices),
-      );
+      const folder = await sourcesFolderOf(options, devices);
+      return new IosSimctlDriver(options, devices, undefined, folder);
     }
     await refuseDefaultSourcesLeftovers(options.filesystem, [
       join(options.simlockHome, "devices", "ios-sources"),
@@ -460,12 +453,8 @@ export class IosSimctlDriver implements Driver {
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
 
-    return new IosSimctlDriver(
-      options,
-      deviceRoot,
-      rootOptions,
-      await sourcesFolderOf(options, deviceRoot, true),
-    );
+    const folder = await sourcesFolderOf(options, deviceRoot, true);
+    return new IosSimctlDriver(options, deviceRoot, rootOptions, folder);
   }
 
   get deviceRoot(): string {
@@ -1165,7 +1154,7 @@ export class IosSimctlDriver implements Driver {
 
   /** why: a row made by an earlier release names the set its simulator is in; `simctl --set` of any other set answers "Invalid device" for it. */
   async #deleteSeedSimulator(udid: string, setPath: string = this.#sourcesSet): Promise<void> {
-    if (setPath !== this.#sourcesSet && !this.#earlierSourcesSets.includes(setPath)) {
+    if (!this.#ownsSourcesSet(setPath)) {
       // why: safety rule 1: a row names a path Simlock never made a sources folder of, so nothing there is its to delete.
       this.#logger?.warn(
         `left source ${udid} in ${setPath}, which is no sources folder of Simlock`,
