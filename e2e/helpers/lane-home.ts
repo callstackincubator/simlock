@@ -19,16 +19,21 @@ type Row = Record<string, string | number | null>;
 interface KeptSeed {
   readonly table: string;
   readonly row: Row;
+  /** why: the rows other tables hold for the seed (ADR 0076: the files a copy swaps), kept and put back with it. */
+  readonly children?: readonly { readonly table: string; readonly rows: Row[] }[];
 }
 
 interface SeedTable {
   readonly table: string;
+  /** why: a table whose rows belong to a seed, and the column that holds the seed's `source_id`. */
+  readonly children?: readonly string[];
   folderOf(row: Row): string;
 }
 
 // why: a seed is a row and a folder (ADR 0061), and each driver names the folder in its own columns.
 const SEED_TABLES: readonly SeedTable[] = [
   {
+    children: ["ios_source_files"],
     folderOf: (row) => join(String(row["set_path"]), String(row["udid"])),
     table: "ios_source_data",
   },
@@ -83,17 +88,24 @@ export async function restoreKeptSeeds(home: string): Promise<void> {
   const seeds = JSON.parse(await readFile(join(home, KEPT_SEEDS_FILE), "utf8")) as KeptSeed[];
   const database = new DatabaseSync(join(home, "state.db"));
   try {
-    for (const { table, row } of seeds) {
-      const columns = Object.keys(row);
-      database
-        .prepare(
-          `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-        )
-        .run(...columns.map((column) => row[column] ?? null));
+    for (const { table, row, children } of seeds) {
+      insertRow(database, table, row);
+      for (const child of children ?? []) {
+        for (const childRow of child.rows) insertRow(database, child.table, childRow);
+      }
     }
   } finally {
     database.close();
   }
+}
+
+function insertRow(database: DatabaseSync, table: string, row: Row): void {
+  const columns = Object.keys(row);
+  database
+    .prepare(
+      `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+    )
+    .run(...columns.map((column) => row[column] ?? null));
 }
 
 /** why: the driver's record of its adb server is the only handle on a server that outlives its daemon (it stays while an emulator is attached); removed with the rest, the flow's own daemon finds the port listening with no record and refuses Android as `occupied`. */
@@ -148,8 +160,17 @@ async function readySeeds(home: string): Promise<KeptSeed[]> {
   }
   const database = new DatabaseSync(path, { readOnly: true });
   try {
-    return SEED_TABLES.flatMap(({ table }) =>
-      readyRows(database, table).map((row) => ({ row, table })),
+    return SEED_TABLES.flatMap(({ table, children }) =>
+      readyRows(database, table).map((row) => ({
+        children: (children ?? []).map((child) => ({
+          rows: database
+            .prepare(`SELECT * FROM ${child} WHERE source_id = ?`)
+            .all(String(row["source_id"])) as Row[],
+          table: child,
+        })),
+        row,
+        table,
+      })),
     ).filter((seed) => existsSync(folderOf(seed)));
   } finally {
     database.close();
