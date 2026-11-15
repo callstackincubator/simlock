@@ -175,13 +175,22 @@ jobs:
           # why: `prepare` installs git hooks, which a tarball does not need and this checkout
           # cannot run.
           pnpm pack --config.ignore-scripts=true --pack-destination "$RUNNER_TEMP/package"
+          pnpm --dir packages/e2e pack --config.ignore-scripts=true --pack-destination "$RUNNER_TEMP/package"
           cd "$RUNNER_TEMP/package"
           tar tzf "simlock-$VERSION.tgz" | tee contents.txt
           for file in package/dist/cli/main.js package/dist/bin/simlock-screen-capture package/dist/bin/simlock-device-capture package/dist/vendor/scrcpy/NOTICE.md; do
             grep -qx "$file" contents.txt || { echo "::error::$file is not in the tarball"; exit 1; }
           done
+          tar tzf "simlock-e2e-$VERSION.tgz" | tee contents.txt
+          for file in package/dist/index.js package/dist/index.d.ts; do
+            grep -qx "$file" contents.txt || { echo "::error::$file is not in the @simlock/e2e tarball"; exit 1; }
+          done
+          if grep -q '\.test\.' contents.txt; then
+            echo "::error::the @simlock/e2e tarball holds a test file"
+            exit 1
+          fi
           rm contents.txt
-          shasum -a 256 "simlock-$VERSION.tgz" | tee SHA256SUMS.txt
+          shasum -a 256 "simlock-$VERSION.tgz" "simlock-e2e-$VERSION.tgz" | tee SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
