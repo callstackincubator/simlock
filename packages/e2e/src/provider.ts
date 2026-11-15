@@ -3,7 +3,7 @@ import type { createAgentDeviceClient } from "agent-device";
 
 import type { ProviderOptions } from "./options.js";
 
-export type AgentDeviceClientFactory = typeof createAgentDeviceClient;
+type AgentDeviceClientFactory = typeof createAgentDeviceClient;
 
 export function createProvider(
   _options: ProviderOptions,

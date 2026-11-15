@@ -45,7 +45,11 @@
     ".agents/scripts/*.mjs",
     ".dependency-cruiser.cycles.mjs",
     "vendor/screen-capture/scripts/*.mjs",
-    "docs/internal/console-redesign/prototype/build.mjs"
+    "docs/internal/console-redesign/prototype/build.mjs",
+    // why: packages/e2e/src/index.ts is the published package's one entry (its "exports"), and
+    // config.sample.ts is a type-check fixture that `pnpm typecheck` compiles; nothing imports either.
+    "packages/e2e/src/index.ts",
+    "packages/e2e/src/config.sample.ts"
   ],
   "dynamicallyLoaded": [
     "e2e/console/render-cases/*.ts",
@@ -74,7 +78,10 @@
     "pixelmatch",
     "pngjs",
     // The update e2e (e2e/update/update.e2e.test.ts) runs its binary as a local npm registry.
-    "verdaccio"
+    "verdaccio",
+    // why: `e2e` is the runner @e2e-dev/mobile's types extend; packages/e2e lists it as a dev
+    // dependency so the type check finds those types, and no file imports it.
+    "e2e"
   ],
   "ignoreDependencyOverrides": [
     // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.
