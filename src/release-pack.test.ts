@@ -159,4 +159,16 @@ describe("the Release workflow's plan, tag, publish and release steps (.github/w
       '"simlock-$VERSION.tgz" "simlock-e2e-$VERSION.tgz" SHA256SUMS.txt',
     );
   });
+
+  it("recovers a half-published release by skipping each package whose exact version is already on npm", () => {
+    for (const [stepName, tarball, name] of [
+      ["Publish @simlock/e2e", "simlock-e2e-$VERSION.tgz", "@simlock/e2e"],
+      ["Publish simlock", "simlock-$VERSION.tgz", "simlock"],
+    ] as const) {
+      const publish = step(stepName);
+      expect(publish).toContain(`npm view "${name}@$VERSION" version`);
+      expect(publish.indexOf("npm view")).toBeLessThan(publish.indexOf(`npm publish "${tarball}"`));
+      expect(publish).toContain(`${name}@$VERSION is on npm already, skipping`);
+    }
+  });
 });
