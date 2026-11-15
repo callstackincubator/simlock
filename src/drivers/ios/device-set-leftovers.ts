@@ -14,39 +14,54 @@ const SWITCH_STEPS =
  * leave them invisible to the new setting, so the driver refuses to start. The
  * check reads files only: a start-up `simctl` call would be a new way for start-up to hang.
  */
-export async function refuseOwnSetLeftovers(filesystem: Filesystem, root: string): Promise<void> {
-  // why: the sources set of `deviceSet: simlock` is the `sources` folder of the set; its seeds are as invisible to `default` as the set's devices.
-  const entries = [
-    ...(await readFolder(filesystem, root)),
-    ...(await readFolder(filesystem, join(root, "sources"))),
-  ];
-  const udids = entries.filter((entry) => UDID_PATTERN.test(entry)).sort();
+export async function refuseOwnSetLeftovers(
+  filesystem: Filesystem,
+  root: string,
+  sourcesFolders: readonly string[],
+): Promise<void> {
+  // why: the sources folders `simlock` has used are as invisible to `default` as the set's devices, so seeds in any of them are leftovers.
+  const inSources = new Map<string, string[]>();
+  for (const folder of sourcesFolders) {
+    inSources.set(folder, await udidsIn(filesystem, folder));
+  }
+  const udids = [...(await udidsIn(filesystem, root)), ...[...inSources.values()].flat()].sort();
   if (udids.length === 0) return;
+  const holding = sourcesFolders.filter((folder) => (inSources.get(folder) ?? []).length > 0);
+  const sourcesNote =
+    holding.length === 0
+      ? ""
+      : `, or, for a seed in a sources folder, ${holding
+          .map((folder) => `\`xcrun simctl --set ${folder} delete <udid>\``)
+          .join(" or ")}`;
 
   throw new OwnedRootError(
-    `Refusing the ios device set: Simlock's own set at ${root} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to simlock, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${root} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${join(root, "sources")} delete <udid>\`.`,
+    `Refusing the ios device set: Simlock's own set at ${root} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to simlock, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${root} delete <udid>\`${sourcesNote}.`,
     "device-set-changed",
     root,
     "ios",
   );
 }
 
-/** why: the sources set of `deviceSet: default` is its own folder, which `simlock` never reads, so seeds left there are refused like devices. */
+/** why: the sources folders of `deviceSet: default` are folders `simlock` never reads, so seeds left in them are refused like devices. */
 export async function refuseDefaultSourcesLeftovers(
   filesystem: Filesystem,
-  sourcesSet: string,
+  sourcesFolders: readonly string[],
 ): Promise<void> {
-  const udids = (await readFolder(filesystem, sourcesSet))
-    .filter((entry) => UDID_PATTERN.test(entry))
-    .sort();
-  if (udids.length === 0) return;
+  for (const sourcesSet of sourcesFolders) {
+    const udids = await udidsIn(filesystem, sourcesSet);
+    if (udids.length === 0) continue;
 
-  throw new OwnedRootError(
-    `Refusing the ios device set: Simlock's sources set at ${sourcesSet} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${sourcesSet} delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
-    "device-set-changed",
-    sourcesSet,
-    "ios",
-  );
+    throw new OwnedRootError(
+      `Refusing the ios device set: Simlock's sources set at ${sourcesSet} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${sourcesSet} delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
+      "device-set-changed",
+      sourcesSet,
+      "ios",
+    );
+  }
+}
+
+async function udidsIn(filesystem: Filesystem, folder: string): Promise<string[]> {
+  return (await readFolder(filesystem, folder)).filter((entry) => UDID_PATTERN.test(entry)).sort();
 }
 
 export async function refuseXcodeSetLeftovers(

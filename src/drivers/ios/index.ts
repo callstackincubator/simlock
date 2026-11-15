@@ -411,7 +411,11 @@ export class IosSimctlDriver implements Driver {
   static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
     const deviceSet = configuredDeviceSet(options);
     if (deviceSet === "default") {
-      await refuseOwnSetLeftovers(options.filesystem, join(options.simlockHome, "devices", "ios"));
+      const ownRoot = join(options.simlockHome, "devices", "ios");
+      await refuseOwnSetLeftovers(options.filesystem, ownRoot, [
+        join(ownRoot, "sources"),
+        ...(await fitSourcesFolder(options, ownRoot)),
+      ]);
       const devices = xcodeDeviceSetPath(options);
       return new IosSimctlDriver(
         options,
@@ -420,10 +424,12 @@ export class IosSimctlDriver implements Driver {
         await sourcesFolderOf(options, devices),
       );
     }
-    await refuseDefaultSourcesLeftovers(
-      options.filesystem,
+    await refuseDefaultSourcesLeftovers(options.filesystem, [
       join(options.simlockHome, "devices", "ios-sources"),
-    );
+      ...(options.coreSimulatorRoot === undefined
+        ? []
+        : await fitSourcesFolder(options, xcodeDeviceSetPath(options))),
+    ]);
     if (options.coreSimulatorRoot !== undefined) {
       await refuseXcodeSetLeftovers(
         options.filesystem,
@@ -2239,6 +2245,19 @@ function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "defa
     );
   }
   return "default";
+}
+
+/** why: the other setting's sources folder only matters when it can exist: where its length is unfit, nothing was ever made there, and it is read to nothing. */
+async function fitSourcesFolder(
+  options: IosSimctlDriverOptions,
+  deviceSet: string,
+): Promise<readonly string[]> {
+  try {
+    return [await sourcesFolderOf(options, deviceSet)];
+  } catch {
+    // why: a set that cannot be measured is one the check reads anyway, and reports as unreadable.
+    return [];
+  }
 }
 
 function configuredRoot(options: IosSimctlDriverOptions): string | undefined {
