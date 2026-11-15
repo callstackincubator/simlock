@@ -1,6 +1,6 @@
 # 0076. An iOS clone names only its own folders before its first boot
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-15
 - **Issue:** [#1561](https://github.com/callstackincubator/simlock/issues/1561), bug [#1548](https://github.com/callstackincubator/simlock/issues/1548)
 - **Narrows:** [ADR 0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md)
