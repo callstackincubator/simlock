@@ -51,6 +51,12 @@ function machine() {
   return { dir, repo, env, run, lock: env.SIMLOCK_SLOW_LOCK, lane: env.SIMLOCK_SLOW_TMP };
 }
 
+// why: the script removes and kills by a lane folder only when it holds the marker a run writes.
+function markLane(lane: string): void {
+  mkdirSync(lane, { recursive: true });
+  writeFileSync(join(lane, ".simlock-slow-lane"), "");
+}
+
 // why: a process that is not this test's child, as a lane's are not the script's, so it is
 // reaped as soon as it stops instead of staying a zombie while spawnSync blocks; `group` makes
 // it lead its own process group, as the lane's runner does.
@@ -116,7 +122,7 @@ describe("scripts/slow-e2e.sh", () => {
 
   it("clean stops a process whose environment names the lane's home, removes the home, and leaves other processes alone", async () => {
     const { lane, run } = machine();
-    mkdirSync(lane, { recursive: true });
+    markLane(lane);
     const leftover = idleNode({ ...process.env, SIMLOCK_HOME: join(lane, "simlock-e2e-abc") });
     const other = idleNode({ ...process.env, SIMLOCK_HOME: join(tmpdir(), "simlock-e2e-other") });
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -127,6 +133,23 @@ describe("scripts/slow-e2e.sh", () => {
     expect(alive(leftover)).toBe(false);
     expect(alive(other)).toBe(true);
     expect(existsSync(lane)).toBe(false);
+  });
+
+  it("clean, stop and a run refuse a lane folder without the marker, name SIMLOCK_SLOW_TMP, and leave it and its files", () => {
+    const { lane, lock, run } = machine();
+    mkdirSync(lane, { recursive: true });
+    writeFileSync(join(lane, "mine.txt"), "an operator's file");
+
+    const results = [run("clean"), run("stop"), run("check"), run()];
+
+    for (const result of results) {
+      expect([result.status, result.stderr]).toEqual([
+        69,
+        expect.stringContaining("SIMLOCK_SLOW_TMP"),
+      ]);
+    }
+    expect(readFileSync(join(lane, "mine.txt"), "utf8")).toBe("an operator's file");
+    expect(existsSync(lock)).toBe(false);
   });
 
   it("clean and stop delete, before removing the lane, the simulators whose durable mark names a lane instance, and no other", () => {
@@ -148,6 +171,7 @@ describe("scripts/slow-e2e.sh", () => {
     mark("UNMARKED", undefined);
     mark("CORRUPT", "{not json");
     const seedLane = () => {
+      markLane(lane);
       mkdirSync(join(lane, "simlock-e2e-abc"), { recursive: true });
       mkdirSync(join(lane, "simlock-e2e-def", "gateway"), { recursive: true });
       writeFileSync(

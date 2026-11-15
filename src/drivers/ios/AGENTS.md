@@ -20,19 +20,17 @@ Resolve and boot:
 - Slim (ADR 0060), on `prepare` of a slim spec only: the managed labels are merged into the simulator's `disabled.plist` before the boot (other entries kept; a failed write is logged and the boot goes on), and `launchctl print-disabled system` is read back after it. A label not as written returns `full`; a readback that fails returns `slim`; both call `onSlimSkipped`, logged only. Every label as written and the write ok: `slim`, and `onSlimmed` becomes `device.slimmed`.
 - Slim `except` (ADR 0066, `slim-except.ts`): an excepted category's labels are written `false`; an unknown name is `BAD_REQUEST`; a kept label not read back throws `KeptCategoriesError`.
 - A recovery boot writes no slim overrides and reads nothing back. DeviceHub clipboard isolation is configured before preparation and recovery boots; ready default-set simulators reboot under the lease claim before a grant. Active leases at upgrade are not interrupted and may retain clipboard sync until a later boot or lease end.
-- The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.
 - Volume (`ios.simulator.audio: false`): Apps keep playing at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running. Any other failure opens nothing.
 
 Seeds (ADR 0061):
 
-- A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources folder (ADR 0076): `$SIMLOCK_HOME/devices/src` followed by `_` until its real path is as long as the device set's, an owned root under both settings. When none can fit, iOS is refused `sources-path-unfit`. A row naming another set (made before) is a seed made again, or a baseline stale (`BASELINE_STALE`, save it again), deleted in the set it names. It is in no `listManaged` or `simlock simctl list`.
+- A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources folder (ADR 0076): `$SIMLOCK_HOME/devices/src` followed by `_` until its real path is as long as the device set's, an owned root under both settings. When none can fit, iOS is refused `sources-path-unfit`. A row naming another set is a seed made again, or a baseline stale (`BASELINE_STALE`); its simulator is deleted there only when the set is an earlier sources folder (`<root>/sources`, `ios-sources`), else left and logged. It is in no `listManaged` or `simlock simctl list`.
 - Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app, system apps included, under the original device's folder. A clone whose drop fails is deleted.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
 - A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and one silent 5 minutes more is killed and logged.
 - A `making` row of another process is swept at the first `listSources`; one of this process, once older than any make takes, at the next make of its kind.
-- A seed that `simctl delete` reports as `Invalid device` is already gone, so its row is dropped.
 - `removeComponent` deletes the runtime's seeds first.
 
 Physical, passthrough, screen:
@@ -45,7 +43,6 @@ Tunnels (`device-tcp.ts`):
 
 - A simulator has no network of its own: its sockets are the worker's loopback sockets. A listener is the lease's only when a word of its process's environment is exactly `SIMULATOR_UDID=<the lease's UDID>`, checked on every connection.
 - `reverse` listens on the device port itself on both loopbacks, and is refused `TUNNEL_PORT_IN_USE` when anything already answers on either, a wildcard listener included.
-- No rule sits on a simulator: `sweep` does nothing, and a `reverse`'s `close` sets `holdsDeviceRule: false`, so a lease end with an aborted signal still runs it.
 
 ## Known gaps
 

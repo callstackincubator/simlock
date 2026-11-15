@@ -333,6 +333,7 @@ export class IosSimctlDriver implements Driver {
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
+  readonly #earlierSourcesSets: readonly string[];
   #sourceMaker: string | undefined;
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -373,6 +374,14 @@ export class IosSimctlDriver implements Driver {
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = sourcesSet;
+    // why: ADR 0076 §4: the only sets a row may name besides today's are the sources folders earlier releases used.
+    this.#earlierSourcesSets = [
+      join(options.simlockHome, "devices", "ios-sources"),
+      join(
+        rootOptions === undefined ? join(options.simlockHome, "devices", "ios") : deviceRoot,
+        "sources",
+      ),
+    ];
     this.screenCapture = createScreenCaptureFor(
       options,
       deviceRoot,
@@ -415,7 +424,7 @@ export class IosSimctlDriver implements Driver {
       const ownRoot = join(options.simlockHome, "devices", "ios");
       await refuseOwnSetLeftovers(options.filesystem, ownRoot, [
         join(ownRoot, "sources"),
-        ...(await fitSourcesFolders(options, ownRoot)),
+        ...(await fitSourcesFolders(options, ownRoot, () => xcodeDeviceSetPath(options))),
       ]);
       const devices = xcodeDeviceSetPath(options);
       return new IosSimctlDriver(
@@ -429,7 +438,9 @@ export class IosSimctlDriver implements Driver {
       join(options.simlockHome, "devices", "ios-sources"),
       ...(options.coreSimulatorRoot === undefined
         ? []
-        : await fitSourcesFolders(options, xcodeDeviceSetPath(options))),
+        : await fitSourcesFolders(options, xcodeDeviceSetPath(options), () =>
+            configuredDeviceRoot(options),
+          )),
     ]);
     if (options.coreSimulatorRoot !== undefined) {
       await refuseXcodeSetLeftovers(
@@ -1154,6 +1165,13 @@ export class IosSimctlDriver implements Driver {
 
   /** why: a row made by an earlier release names the set its simulator is in; `simctl --set` of any other set answers "Invalid device" for it. */
   async #deleteSeedSimulator(udid: string, setPath: string = this.#sourcesSet): Promise<void> {
+    if (setPath !== this.#sourcesSet && !this.#earlierSourcesSets.includes(setPath)) {
+      // why: safety rule 1: a row names a path Simlock never made a sources folder of, so nothing there is its to delete.
+      this.#logger?.warn(
+        `left source ${udid} in ${setPath}, which is no sources folder of Simlock`,
+      );
+      return;
+    }
     await this.#bestEffortShutdown(udid, setPath);
     const args = ["delete", udid];
     const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, setPath);

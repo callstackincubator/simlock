@@ -429,12 +429,13 @@ describe("createCore", () => {
     const reason =
       "saved in /home/.simlock/devices/ios/sources, which copies cannot be fixed from; save it again";
     const cases = [
-      { name: "a stale source", failure: undefined, stored: reason, logged: false },
+      { name: "a stale source", failure: undefined, stored: reason, logged: false, warmed: false },
       {
         name: "the check's read fails",
         failure: new Error("catalog unreadable"),
         stored: null,
         logged: true,
+        warmed: undefined,
       },
     ];
 
@@ -449,6 +450,13 @@ describe("createCore", () => {
         .database.prepare(
           `INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id)
            VALUES ('login', 1, 'ios', 'iPhone 16', '26.5', 'full', '2026-11-03T00:00:00.000Z', 'src-login')`,
+        )
+        .run();
+      // why: a warm target naming the baseline is a learned baseline kind: the pool plans it from the baseline's newest version unless the baseline is stale.
+      testStateOf(registry)
+        .database.prepare(
+          `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at, learned)
+           VALUES ('ios', 'iPhone 16', '26.5', 'full', '', 'login', 1000, 1)`,
         )
         .run();
       driver.setSources([
@@ -500,6 +508,18 @@ describe("createCore", () => {
       ).toEqual({
         stale_reason: entry.stored,
       });
+      if (entry.warmed !== undefined) {
+        await vi.waitFor(() =>
+          expect(
+            testStateOf(registry).database.prepare("SELECT COUNT(*) AS n FROM warm_kinds").get(),
+            `${entry.name}: the pool drops the kind of a stale baseline`,
+          ).toEqual({ n: 0 }),
+        );
+        expect(
+          driver.calls.filter((call) => call.operation === "provision"),
+          `${entry.name}: no provision for the stale baseline`,
+        ).toEqual([]);
+      }
       expect(
         JSON.stringify(sink.records).includes("could not check baselines at startup"),
         entry.name,

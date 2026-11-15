@@ -12,7 +12,10 @@ never enforce them only inside an individual rule or driver.
    A driver may also destroy its own sources (ADR 0061 §1): the seeds and
    baselines it keeps in its sources set, by an id its source table holds.
    `doctor --purge-orphans` may also delete a simulator in the sources set
-   that no table row names. Nothing outside the sources set is reached this way.
+   that no table row names. Nothing outside the sources set is reached this way,
+   except a seed or `making` row naming an earlier sources folder of this worker
+   (`<root>/sources` or the `ios-sources` root, ADR 0076 §4); any other path a row
+   names is left on disk and logged.
 
    A physical device is the one kind of registry device Simlock did not
    create. It is Simlock's to act on only through its enrollment record,

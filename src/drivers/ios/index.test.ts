@@ -1716,9 +1716,9 @@ describe("IosSimctlDriver", () => {
   );
 
   it("the first listSources of a process deletes another process's making rows and their simulators, keeps a row whose delete failed, and does not sweep again", async () => {
-    const [gone, stuck, ready] = [1, 2, 3].map(
+    const [gone, stuck, ready, foreign] = [1, 2, 3, 4].map(
       (n) => `00000000-0000-0000-0000-0000000001${String(n)}0`,
-    ) as [string, string, string];
+    ) as [string, string, string, string];
     const database = await memorySourceDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
     const oldSet = `${deviceRoot}/sources`;
@@ -1728,6 +1728,14 @@ describe("IosSimctlDriver", () => {
       setPath: oldSet,
       state: "making",
       udid: gone,
+    });
+    const foreignSet = "/Volumes/other/sources";
+    plantSource(database, {
+      ...kind,
+      maker: "earlier-process",
+      setPath: foreignSet,
+      state: "making",
+      udid: foreign,
     });
     plantSource(database, { ...kind, maker: "earlier-process", state: "making" });
     plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: stuck });
@@ -1754,7 +1762,9 @@ describe("IosSimctlDriver", () => {
       ["list", "-j"],
       ["list", "-j"],
     ]);
+    // why: safety rule 1: a row naming a path that is no sources folder of Simlock loses its row, and its simulator is left where it is.
     expect(logger.warnings).toEqual([
+      expect.stringContaining(`left source ${foreign} in ${foreignSet}`),
       expect.stringContaining(`could not remove leftover source ${stuck}:`),
     ]);
     expect(database.prepare("SELECT udid, state FROM ios_source_data ORDER BY udid").all()).toEqual(

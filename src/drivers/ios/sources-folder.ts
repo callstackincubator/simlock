@@ -108,15 +108,35 @@ export function sourcesFolderOf(
   });
 }
 
-/** why: the other setting's sources folder only matters when it can exist: where its length is unfit, nothing was ever made there, and it is read to nothing. */
+/**
+ * why: the other setting's sources folder only matters when it can exist: where its length is unfit, nothing was ever made there, and it is read to nothing.
+ * A set of `todaySet` whose folder is the same one (a device set of exactly the home's length plus 12) is today's own, never a leftover.
+ */
 export async function fitSourcesFolders(
   options: SourcesFolderContext,
   deviceSet: string,
+  todaySet?: () => string,
 ): Promise<readonly string[]> {
+  const folder = await measured(options, deviceSet);
+  if (folder === undefined) return [];
+  let today: string | undefined;
   try {
-    return [await sourcesFolderOf(options, deviceSet)];
+    today = todaySet === undefined ? undefined : await measured(options, todaySet());
+  } catch {
+    // why: a setting that cannot be measured has no folder to share; its own refusal comes later.
+    today = undefined;
+  }
+  return folder === today ? [] : [folder];
+}
+
+async function measured(
+  options: SourcesFolderContext,
+  deviceSet: string,
+): Promise<string | undefined> {
+  try {
+    return await sourcesFolderOf(options, deviceSet);
   } catch {
     // why: a set that cannot be measured is one the check reads anyway, and reports as unreadable.
-    return [];
+    return undefined;
   }
 }

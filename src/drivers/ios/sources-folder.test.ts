@@ -62,6 +62,14 @@ describe("IosSimctlDriver sources folder", () => {
         sources: "/private/tmp/h/devices/src",
       },
       {
+        name: "simlock with SIMLOCK_HOME reached through a link to /private",
+        home: "/tmp/h",
+        link: "/private/tmp/h",
+        config: { deviceRoot: "/private/tmp/h/devices/ios" },
+        devices: "/private/tmp/h/devices/ios",
+        sources: "/private/tmp/h/devices/src",
+      },
+      {
         name: "default with Xcode's Devices not made yet",
         home: "/Users/al/.simlock",
         config: { deviceSet: "default" },
@@ -91,7 +99,12 @@ describe("IosSimctlDriver sources folder", () => {
         step(["clone", seed, /^simlock-/, entry.devices], `${copy}\n`),
       ]);
       const filesystem = new MemoryFilesystem();
-      await filesystem.mkdirp(entry.home);
+      if ("link" in entry) {
+        await filesystem.mkdirp(entry.link);
+        filesystem.defineSymlink(entry.home, entry.link);
+      } else {
+        await filesystem.mkdirp(entry.home);
+      }
       if ("madeBeforeCreate" in entry) await filesystem.mkdirp(entry.devices);
       const driver = await IosSimctlDriver.create({
         database: await memorySourceDatabase(),

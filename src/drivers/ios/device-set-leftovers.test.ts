@@ -168,4 +168,27 @@ describe("IosSimctlDriver device set switch", () => {
       }
     }
   });
+
+  it.each(["default", "simlock"] as const)(
+    "a worker whose %s device set is as long as its home plus 12 characters keeps its own seeds in the sources folder the other setting would share",
+    async (deviceSet) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/.simlock/devices/src/00000000-0000-0000-0000-000000000001");
+
+      const created = IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        clock: new FakeClock(),
+        // why: `/Users/me/CoreSim1/Devices` is 26 characters, as long as `/home/.simlock/devices/ios`, so both settings name `/home/.simlock/devices/src`.
+        coreSimulatorRoot: "/Users/me/CoreSim1",
+        driverConfig: { deviceSet },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: new ScriptedProcessRunner([]),
+        simlockHome: "/home/.simlock",
+      });
+
+      await expect(created).resolves.toBeInstanceOf(IosSimctlDriver);
+    },
+  );
 });

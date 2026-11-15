@@ -24,7 +24,8 @@
 # $HOME/.sls (SIMLOCK_SLOW_TMP), so `clean` and `stop` find a run's daemons, emulators and simulators by
 # that path and touch nothing else, except the simulators in Xcode's own device set whose durable
 # mark names the instance of a home under that path (a daemon run with drivers.ios.deviceSet
-# "default" keeps them there): `clean` and `stop` delete those too. A run starts by cleaning up
+# "default" keeps them there): `clean` and `stop` delete those too. The folder holds a marker file the
+# run writes; a folder without it is not the lane's, and `clean`, `stop` and a run refuse it (exit 69). A run starts by cleaning up
 # after earlier ones.
 #
 # The run is detached from the calling shell, so no tool time limit kills it halfway and
@@ -80,7 +81,16 @@ def leftovers():
             found.append((int(pid), text.split(" ")[0]))
     return found
 
+MARKER = ".simlock-slow-lane"
+
+def refuse_foreign_lane_tmp():
+    # why: lane_tmp defaults to a folder in $HOME; only one this script made (it holds the marker) is the lane's to remove or to kill processes by.
+    if os.path.exists(lane_tmp) and not os.path.exists(os.path.join(lane_tmp, MARKER)):
+        print(f"refused: {lane_tmp} was not made by the slow lane (it holds no {MARKER}); move it, or set SIMLOCK_SLOW_TMP to another folder", file=sys.stderr)
+        sys.exit(69)
+
 def clean():
+    refuse_foreign_lane_tmp()
     procs = leftovers()
     for pid, _ in procs:
         try:
@@ -250,6 +260,7 @@ echo "$root" > "$lock/root"
 echo "$log" > "$lock/log"
 echo "$log" > "$lock.last"
 mkdir -p "$lane_tmp"
+: > "$lane_tmp/.simlock-slow-lane"
 
 SIMLOCK_E2E_LOG_DIR="${log%.log}-daemons" TMPDIR="$lane_tmp/" python3 - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
 import os, subprocess, sys
