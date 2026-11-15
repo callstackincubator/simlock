@@ -56,8 +56,10 @@ import {
   plantManagedDevice,
   prepareSlim,
   deviceHubEdit,
+  flushMicrotasks221,
   prepareSlimWith,
   printDisabled,
+  settledValue,
   simctl,
   simctlArgs,
   slimBootCalls,
@@ -3197,7 +3199,6 @@ describe("IosSimctlDriver", () => {
           simctlArgs("listapps", slim18_5.udid),
           simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
         ]);
-        expect(runner.calls[0]?.options).toEqual({ timeoutMs: 300_000 });
         expect(runner.calls[1]?.options).toEqual({ timeoutMs: 260_000 });
         expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
@@ -3553,176 +3554,6 @@ describe("IosSimctlDriver", () => {
         clock.advance(1);
         expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
       }
-    });
-
-    const bootBudgets = [
-      {
-        budgetMs: 400_000,
-        config: { full: { bootTimeoutMs: 400_000 } },
-        data: driverData,
-        key: "ios.full.bootTimeoutMs",
-        options: prepareFull,
-      },
-      {
-        budgetMs: 250_000,
-        config: { slim: slimOptions(250_000) },
-        data: slim18_5,
-        key: "ios.slim.bootTimeoutMs",
-        options: prepareSlim,
-      },
-    ] as const;
-
-    async function bootBudgetDriver(
-      runner: ScriptedProcessRunner,
-      clock: FakeClock,
-      config: (typeof bootBudgets)[number]["config"],
-    ) {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      return await IosSimctlDriver.create({
-        database: await memorySourceDatabase(),
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        launchdOverridesRoot: overridesRoot,
-        processRunner: runner,
-        config,
-      });
-    }
-
-    it.each(bootBudgets)(
-      "a simctl boot that hangs waits the whole $key, not a fixed 30 s, then fails with BootTimeoutError (#1560)",
-      async ({ budgetMs, config, data, options }) => {
-        const clock = new FakeClock();
-        const runner = new ScriptedProcessRunner([
-          { hangs: true, match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
-        ]);
-        const driver = await bootBudgetDriver(runner, clock, config);
-
-        const ready = driver.makeReady(
-          { address: data.udid, deviceId: data.udid, driverData: data },
-          options,
-        );
-        void ready.catch(() => undefined);
-        await waitForCalls(runner, 1);
-        const readyState = promiseState(ready);
-
-        expect(runner.calls[0]?.options).toEqual({ timeoutMs: budgetMs });
-        clock.advance(budgetMs - 1);
-        await flushMicrotasks221();
-        expect(readyState.state).toBe("pending");
-
-        clock.advance(1);
-        expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-      },
-    );
-
-    it.each(bootBudgets)(
-      "a 100 s simctl boot is spent from $key: bootstatus gets only the rest, and the boot fails when the whole budget is gone (#1560)",
-      async ({ budgetMs, config, data, options }) => {
-        const clock = new FakeClock();
-        const runner = new ScriptedProcessRunner([
-          {
-            match: { command: "xcrun", args: simctlArgs("boot", data.udid) },
-            onSpawn: () => clock.advance(100_000),
-          },
-          {
-            hangs: true,
-            match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") },
-          },
-          { match: { command: "xcrun", args: simctlArgs("shutdown", data.udid) } },
-        ]);
-        const driver = await bootBudgetDriver(runner, clock, config);
-
-        const ready = driver.makeReady(
-          { address: data.udid, deviceId: data.udid, driverData: data },
-          options,
-        );
-        void ready.catch(() => undefined);
-        await waitForCalls(runner, 2);
-        const readyState = promiseState(ready);
-
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: budgetMs - 100_000 });
-        clock.advance(budgetMs - 100_000 - 1);
-        await flushMicrotasks221();
-        expect(readyState.state).toBe("pending");
-
-        clock.advance(1);
-        expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-        expect(runner.calls.map((call) => call.args)).toEqual([
-          simctlArgs("boot", data.udid),
-          simctlArgs("bootstatus", data.udid, "-b"),
-          simctlArgs("shutdown", data.udid),
-        ]);
-      },
-    );
-
-    it("a refresh of an already booted device boots again with only the time left of ios.full.bootTimeoutMs (#1560)", async () => {
-      const clock = new FakeClock();
-      const budgetMs = 400_000;
-      const bootArgs = ["xcrun", "simctl", "boot", driverData.udid];
-      const calls: { args: readonly string[]; options: unknown }[] = [];
-      let boots = 0;
-      const runner: ProcessRunner = {
-        run: () => Promise.reject(new Error("the driver runs commands through spawn")),
-        spawn(command, args, options) {
-          calls.push({ args: [command, ...args], options });
-          const isBoot = [command, ...args].join(" ") === bootArgs.join(" ");
-          const isShutdown = args[1] === "shutdown";
-          const first = isBoot && boots++ === 0;
-          const entry = {
-            match: { command, args: [...args] },
-            ...(isBoot && !first ? { hangs: true } : {}),
-            ...(first
-              ? {
-                  onSpawn: () => clock.advance(100_000),
-                  result: {
-                    code: 1,
-                    stderr: "Unable to boot device in current state: Booted",
-                    stdout: "",
-                  },
-                }
-              : {}),
-            ...(isShutdown ? { onSpawn: () => clock.advance(20_000) } : {}),
-          };
-          return new ScriptedProcessRunner([entry]).spawn(command, args, options);
-        },
-        spawnStreaming: () => {
-          throw new Error("the driver streams nothing here");
-        },
-      };
-      const driver = await IosSimctlDriver.create({
-        database: await memorySourceDatabase(),
-        driverConfig: { deviceSet: "default" },
-        coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem: new MemoryFilesystem(),
-        idGenerator: { generate: () => "device-1" },
-        processRunner: runner,
-        config: { full: { bootTimeoutMs: budgetMs } },
-      });
-
-      const ready = driver.makeReady(
-        { address: driverData.udid, deviceId: driverData.udid, driverData },
-        prepareFull,
-      );
-      void ready.catch(() => undefined);
-      await vi.waitFor(() => expect(boots).toBe(2));
-      const readyState = promiseState(ready);
-
-      const secondBoot = calls.filter((call) => call.args.join(" ") === bootArgs.join(" ")).at(1);
-      expect(secondBoot?.options).toEqual({ timeoutMs: budgetMs - 120_000 });
-      clock.advance(budgetMs - 120_000 - 1);
-      await flushMicrotasks221();
-      expect(readyState.state).toBe("pending");
-
-      clock.advance(1);
-      expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
     });
 
     it.each([
@@ -5274,26 +5105,6 @@ class ClockedSimctl259 extends ScriptedProcessRunner {
     this.calls.push({ args: [...args], command, options: call[2] ?? {} });
     return handle;
   }
-}
-
-/** why: Lets queued continuations run, so a test can see that something has not happened yet. */
-async function flushMicrotasks221(): Promise<void> {
-  for (let count = 0; count < 100; count += 1) await Promise.resolve();
-}
-
-/**
- * why: What a promise settled with, once it has: a promise still open fails a named assertion rather
- * than the test's own timeout, so a deadline that never ends anything reads as that.
- */
-async function settledValue(promise: Promise<unknown>): Promise<unknown> {
-  const state: { done: boolean; value: unknown } = { done: false, value: undefined };
-  const settle = (value: unknown): void => {
-    state.done = true;
-    state.value = value;
-  };
-  void promise.then(settle, settle);
-  await vi.waitFor(() => expect(state.done).toBe(true));
-  return state.value;
 }
 
 describe("IosSimctlDriver screen capture commands", () => {

@@ -1235,12 +1235,7 @@ export class IosSimctlDriver implements Driver {
     if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
-    const outcome = await this.#invokeSimctl(
-      ["bootstatus", udid, "-b"],
-      this.#msUntil(deadline),
-      set,
-    );
-
+    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], this.#left(deadline), set);
     if (outcome.kind === "finished") {
       this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
       if (await this.#waitForInstaller(udid, deadline, set)) return;
@@ -1253,7 +1248,7 @@ export class IosSimctlDriver implements Driver {
   // why: a booted simulator keeps the clipboard sync it booted with, so a lease's device that is
   // already up is shut down and booted again once DeviceHub's preference is set.
   async #boot(udid: string, deadline: number, set: string | undefined, refreshBooted: boolean) {
-    const boot = await this.#invokeSimctl(["boot", udid], this.#msUntil(deadline), set);
+    const boot = await this.#invokeSimctl(["boot", udid], this.#left(deadline), set);
     const refresh =
       refreshBooted &&
       this.#rootOptions === undefined &&
@@ -1263,10 +1258,10 @@ export class IosSimctlDriver implements Driver {
       alreadyBooted(boot.result.stderr);
     if (!refresh) return boot;
     await this.#shutdown(udid);
-    return await this.#invokeSimctl(["boot", udid], this.#msUntil(deadline));
+    return await this.#invokeSimctl(["boot", udid], this.#left(deadline));
   }
 
-  #msUntil(deadline: number): number {
+  #left(deadline: number): number {
     return Math.max(0, deadline - this.#clock.now());
   }
 
