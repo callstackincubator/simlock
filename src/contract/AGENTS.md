@@ -43,11 +43,11 @@ Errors and views:
 
 ## Adding an operation
 
-1. The `operations-*.ts` file of its family (lease request, leases, admin, fleet): `defineOperation` (`operation-definition.ts`), with `authorize` when it acts on one lease. Add it to `OPERATIONS` in `operations.ts`.
+1. Its family's `operations-*.ts`: `defineOperation`, with `authorize` when it acts on one lease. Add it to `OPERATIONS` (`operations.ts`).
 2. `operations.test.ts`: a row in the role matrix and the effect matrix.
 3. `protocol.ts`: `PROTOCOL_VERSION_RANGE` + 1.
-4. Handlers in `src/daemon/dispatcher.ts` (the table; the handler goes in its family's `dispatcher-*.ts` part) and `src/gateway/dispatcher.ts`. A gateway-only operation answers `UNSUPPORTED_IN_WORKER_MODE` on a worker; the reverse, `UNSUPPORTED_IN_GATEWAY_MODE`.
-5. Client: a method on `SimlockClient` or `SimlockAdminClient` (declared in `src/simlock-client/client-api.ts`, implemented in `client-impl.ts`), types in `src/simlock-client/types.ts`, re-exported from `src/client/index.ts` or `src/admin/index.ts`.
+4. Handlers in a `src/daemon/dispatcher-*.ts` part and `src/gateway/dispatcher.ts`. A gateway-only operation answers `UNSUPPORTED_IN_WORKER_MODE` on a worker; the reverse, `UNSUPPORTED_IN_GATEWAY_MODE`.
+5. Client: a method on `SimlockClient` or `SimlockAdminClient` (`src/simlock-client/client-api.ts`), types in `src/simlock-client/types.ts`, re-exported from `src/client/index.ts` or `src/admin/index.ts`.
 6. Frontends as needed: CLI, HTTP, MCP only for an agent session's need.
 7. A new error code: `ErrorDetailsMap` and `ERROR_TABLE` (`errors.ts`).
 8. Docs: the website pages that describe it, at least [errors.mdx](../../website/src/content/docs/docs/reference/errors.mdx) (documentation rule 9).
