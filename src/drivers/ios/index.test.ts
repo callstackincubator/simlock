@@ -919,16 +919,18 @@ describe("IosSimctlDriver", () => {
     ).toBe(0o700);
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
-      { ...seedCreate, options: { timeoutMs: 30_000 } },
+      { ...seedCreate, options: { timeoutMs: 330_000 } },
       { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
-      { ...cloneInvocation, options: { timeoutMs: 30_000 } },
+      { ...cloneInvocation, options: { timeoutMs: 330_000 } },
     ]);
 
     await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: copyUdid });
-    expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
+    expect(runner.calls.slice(7)).toEqual([
+      { ...cloneInvocation, options: { timeoutMs: 330_000 } },
+    ]);
   });
 
   it("a clone that fails makes the provision throw and keeps the seed and its row", async () => {
@@ -1663,7 +1665,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls).toEqual([
         { ...listInvocation, options: { timeoutMs: 30_000 } },
         { ...simctl("shutdown", driverData.udid), options: { timeoutMs: 30_000 } },
-        { ...cloneInvocation, options: { timeoutMs: 30_000 } },
+        { ...cloneInvocation, options: { timeoutMs: 330_000 } },
       ]);
       expect(await filesystem.readFile(overridesPath(cloneUdid))).toBe(
         overridesPlist({ "a.b": true }),

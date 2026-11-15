@@ -30,6 +30,7 @@ Seeds (ADR 0061):
 - A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` and no `simlock simctl list`.
 - Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app, system apps included, under the original device's folder. A clone whose drop fails is deleted.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
+- A `clone` or `create` of a whole simulator waits `ios.simulator.createTimeoutMs`; every other `simctl` call waits 30 s. At the limit the call fails but `simctl` is left running: the UDID it prints later is deleted (ownership is the driver's own call, never the name), the seed keeps its turn until then, and a command still silent 5 minutes later is killed and logged with its arguments.
 - A `making` row of another process is swept at the first `listSources`; one of this process, once older than any make takes, at the next make of its kind.
 - A seed that `simctl delete` reports as `Invalid device` is already gone, so its row is dropped.
 - `removeComponent` deletes the runtime's seeds first.

@@ -106,6 +106,15 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+/** why: a clone or create past its limit is left running; one still silent this long after is killed. */
+const LATE_CREATE_KILL_MS = 300_000;
+
+/** why: what `#invokeCommand` does with a command it stopped waiting for, instead of killing it at once. */
+interface LateAnswer {
+  readonly killAfterMs: number;
+  /** why: called once, only after the limit passed; `undefined` when the command was killed or failed to answer. */
+  readonly onSettled: (result: ProcessResult | undefined) => void;
+}
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -850,9 +859,9 @@ export class IosSimctlDriver implements Driver {
     try {
       await this.#ensureSourcesSet();
       await this.#shutdown(data.udid);
-      const cloned = await this.#simctl(
+      const cloned = await this.#createSimulator(
         ["clone", data.udid, `simlock-baseline-${sourceId}`, this.#sourcesSet],
-        this.#createTimeoutMs,
+        { destination: this.#sourcesSet },
       );
       cloneUdid = cloned.stdout.trim();
       if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
@@ -933,11 +942,10 @@ export class IosSimctlDriver implements Driver {
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
     const result = await this.#withSeedLock(seed.udid, () =>
-      this.#simctl(
-        ["clone", seed.udid, name, this.#deviceRoot],
-        this.#createTimeoutMs,
-        this.#sourcesSet,
-      ),
+      this.#createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
+        seedUdid: seed.udid,
+        source: this.#sourcesSet,
+      }),
     );
     const udid = result.stdout.trim();
 
@@ -1035,15 +1043,14 @@ export class IosSimctlDriver implements Driver {
     });
     try {
       await this.#ensureSourcesSet();
-      const created = await this.#simctl(
+      const created = await this.#createSimulator(
         [
           "create",
           `simlock-seed-${sourceId}`,
           resolved.deviceType.identifier,
           resolved.runtime.identifier,
         ],
-        this.#createTimeoutMs,
-        this.#sourcesSet,
+        { destination: this.#sourcesSet, source: this.#sourcesSet },
       );
       const udid = created.stdout.trim();
       this.#sources.setUdid(sourceId, udid);
@@ -2011,6 +2018,66 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
+  /**
+   * why: `simctl clone` and `simctl create` ask CoreSimulator's service for a whole simulator, and
+   * the service finishes it even when `simctl` is killed. At the limit this stops waiting but lets
+   * the command run on: the UDID it later prints is the driver's own, so ownership is proven by
+   * the call, never by the name (safety rule 8), and that simulator is deleted. The copy keeps
+   * its seed's turn until then, so the seed is not deleted under it.
+   */
+  async #createSimulator(
+    args: readonly string[],
+    sets: { readonly destination?: string; readonly seedUdid?: string; readonly source?: string },
+  ): Promise<ProcessResult> {
+    let ended!: () => void;
+    const lateEnded = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    const outcome = await this.#invokeSimctl(args, this.#createTimeoutMs, sets.source, {
+      killAfterMs: LATE_CREATE_KILL_MS,
+      onSettled: (result) => {
+        void this.#deleteLateSimulator(args, sets.destination, result).finally(ended);
+      },
+    });
+    if (outcome.kind === "timed-out" && sets.seedUdid !== undefined) {
+      this.#holdSeedLock(sets.seedUdid, lateEnded);
+    }
+    return this.#checked(args, this.#createTimeoutMs, outcome);
+  }
+
+  async #deleteLateSimulator(
+    args: readonly string[],
+    set: string | undefined,
+    result: ProcessResult | undefined,
+  ): Promise<void> {
+    const udid = result?.code === 0 ? result.stdout.trim() : "";
+    if (udid === "") {
+      this.#logger?.warn(`simctl ${args.join(" ")} gave no simulator after its limit`);
+      return;
+    }
+    try {
+      this.#checked(
+        ["delete", udid],
+        COMMAND_TIMEOUT_MS,
+        await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS, set),
+      );
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not delete simulator ${udid} that simctl ${args.join(" ")} made after its limit: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  #holdSeedLock(udid: string, until: Promise<void>): void {
+    const held = Promise.all([this.#seedLocks.get(udid) ?? Promise.resolve(), until]).then(
+      () => undefined,
+    );
+    this.#seedLocks.set(udid, held);
+    void held.then(() => {
+      if (this.#seedLocks.get(udid) === held) this.#seedLocks.delete(udid);
+    });
+  }
+
   async #simctl(args: readonly string[], timeoutMs: number, set?: string): Promise<ProcessResult> {
     return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs, set));
   }
@@ -2039,8 +2106,9 @@ export class IosSimctlDriver implements Driver {
     args: readonly string[],
     timeoutMs: number,
     set?: string,
+    late?: LateAnswer,
   ): Promise<ProcessOutcome> {
-    return this.#invokeXcrun(this.#scopedSimctlArgv(args, set), timeoutMs);
+    return this.#invokeXcrun(this.#scopedSimctlArgv(args, set), timeoutMs, late);
   }
 
   /**
@@ -2055,18 +2123,25 @@ export class IosSimctlDriver implements Driver {
     return this.#invokeXcrun(["simctl", ...args], timeoutMs);
   }
 
-  async #invokeXcrun(argv: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
-    return await this.#invokeCommand("xcrun", argv, timeoutMs);
+  async #invokeXcrun(
+    argv: readonly string[],
+    timeoutMs: number,
+    late?: LateAnswer,
+  ): Promise<ProcessOutcome> {
+    return await this.#invokeCommand("xcrun", argv, timeoutMs, late);
   }
 
   async #invokeCommand(
     command: string,
     argv: readonly string[],
     timeoutMs: number,
+    late?: LateAnswer,
   ): Promise<ProcessOutcome> {
     let process;
     try {
-      process = this.#processRunner.spawn(command, [...argv], { timeoutMs });
+      // why: the runner's own timeout is a backstop past the late kill, so it never ends a command the driver let run on.
+      const runnerTimeoutMs = late === undefined ? timeoutMs : timeoutMs + late.killAfterMs;
+      process = this.#processRunner.spawn(command, [...argv], { timeoutMs: runnerTimeoutMs });
     } catch (error: unknown) {
       throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
     }
@@ -2075,18 +2150,31 @@ export class IosSimctlDriver implements Driver {
     const timedOut = new Promise<void>((resolve) => {
       resolveTimeout = resolve;
     });
-    const timer = this.#clock.setTimer(timeoutMs, () => {
-      resolveTimeout?.();
+    const waited = process.wait();
+    const kill = (): void => {
       try {
         process.kill("SIGTERM");
       } catch {
         // why: A process that has already exited needs no timeout cleanup.
       }
+    };
+    const timer = this.#clock.setTimer(timeoutMs, () => {
+      resolveTimeout?.();
+      if (late === undefined) {
+        kill();
+        return;
+      }
+      const killTimer = this.#clock.setTimer(late.killAfterMs, kill);
+      const settled = (result: ProcessResult | undefined): void => {
+        this.#clock.cancel(killTimer);
+        late.onSettled(result);
+      };
+      waited.then(settled, () => settled(undefined));
     });
 
     try {
       return await Promise.race([
-        process.wait().then((result) => ({ kind: "finished" as const, result })),
+        waited.then((result) => ({ kind: "finished" as const, result })),
         timedOut.then(() => ({ kind: "timed-out" as const })),
       ]);
     } catch (error: unknown) {
