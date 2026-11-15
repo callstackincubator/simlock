@@ -26,9 +26,7 @@ type SizedFile = { path: string; lines: number };
  * why: ADR 0063 section 3. These files were over their limit when the size test landed; each may
  * only shrink. A PR that has to grow one raises its number here, as a visible line of its diff.
  */
-const SHRINK_ONLY: Record<string, number> = {
-  "src/cli/index.test.ts": 11674,
-};
+const SHRINK_ONLY: Record<string, number> = {};
 
 const CODE_LIMIT = 1400;
 const TEST_LIMIT = 2500;
