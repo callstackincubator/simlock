@@ -4423,6 +4423,50 @@ describe("IosSimctlDriver listComponents()", () => {
       ]);
     });
 
+    it("starts the five-minute deletion budget after the seeds are deleted, so a seed held by a late clone does not use it up", async () => {
+      const live = image("26.5", "23F77");
+      const runtimeDelete = simctl("runtime", "delete", live.id);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { hangs: true, match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot) },
+        imagesListed([live]),
+        defaultSetListed({}),
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        { match: sourcesSimctl("delete", seedUdid) },
+        { match: runtimeDelete, result: { code: 0, stderr: "", stdout: "" } },
+        imagesListed([live], "Deleting"),
+        imagesListed([]),
+        imagesListed([]),
+        defaultSetListed({}),
+      ]);
+      const clock = new FakeClock();
+      const driver = await createDriver(
+        runner,
+        clock,
+        await assetStore([]),
+        await seededDatabase(),
+      );
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      const provision = driver.provision(spec).catch((error: unknown) => error);
+      await waitForCalls(runner, 2);
+      clock.advance(30_000);
+      await provision;
+
+      const removal = driver
+        .removeComponent({ build: live.build, image: live.id }, { signal: signal() })
+        .catch((caught: unknown) => caught);
+      await flushMicrotasks221();
+      clock.advance(300_000);
+      const outcome = promiseState(removal);
+      for (let step = 0; step < 10 && outcome.state === "pending"; step += 1) {
+        await flushMicrotasks221();
+        clock.advance(1_000);
+      }
+
+      expect(await removal).toEqual({});
+      expect(runner.calls.map((call) => call.args)).toContainEqual(runtimeDelete.args);
+    });
+
     it("reports residue naming Xcode's Settings -> Platforms when the build's download is still in the asset store", async () => {
       const runner = new ScriptedProcessRunner([
         imagesListed([target]),

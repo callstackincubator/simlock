@@ -68,6 +68,8 @@ import {
   type SilenceFailedFact,
   type WindowFailedFact,
 } from "./boot-courtesies.js";
+import { deleteLateSimulator, runCommand, type LateAnswer } from "./command-run.js";
+import { SeedTurns } from "./seed-turns.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
   headlessNeedsDefaultSet,
@@ -109,12 +111,6 @@ const COMMAND_TIMEOUT_MS = 30_000;
 /** why: a clone or create past its limit is left running; one still silent this long after is killed. */
 const LATE_CREATE_KILL_MS = 300_000;
 
-/** why: what `#invokeCommand` does with a command it stopped waiting for, instead of killing it at once. */
-interface LateAnswer {
-  readonly killAfterMs: number;
-  /** why: called once, only after the limit passed; `undefined` when the command was killed or failed to answer. */
-  readonly onSettled: (result: ProcessResult | undefined) => void;
-}
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -338,8 +334,7 @@ export class IosSimctlDriver implements Driver {
   #sourceMaker: string | undefined;
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
-  readonly #seedLocks = new Map<string, Promise<unknown>>();
-  readonly #seedHolds = new Map<string, Promise<void>>();
+  readonly #seedTurns = new SeedTurns();
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -376,7 +371,8 @@ export class IosSimctlDriver implements Driver {
       headless: options.config?.simulator?.headless !== false,
       commands: {
         simctl: (args, timeoutMs) => this.#invokeSimctl(args, timeoutMs),
-        open: (args, timeoutMs) => this.#invokeCommand("open", args, timeoutMs),
+        open: (args, timeoutMs) =>
+          runCommand(this.#processRunner, this.#clock, "open", args, timeoutMs),
       },
       onSilenceFailed: options.onSilenceFailed,
       onWindowFailed: options.onWindowFailed,
@@ -603,8 +599,9 @@ export class IosSimctlDriver implements Driver {
       platform: this.platform,
       receipt,
       remove: async ({ image, unusedDevices, version }) => {
-        const deadline = this.#clock.now() + COMPONENT_REMOVAL_TIMEOUT_MS;
         await this.#destroySeedsOf(image.runtimeIdentifier);
+        // why: the budget is for the runtime's own deletion; a seed held by a late clone waits outside it.
+        const deadline = this.#clock.now() + COMPONENT_REMOVAL_TIMEOUT_MS;
         await this.#deleteRuntimeImage(image.identifier, options.signal);
         await this.#waitWhileDeleting(image.identifier, version, deadline, options.signal);
         const sentences = [
@@ -942,7 +939,7 @@ export class IosSimctlDriver implements Driver {
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
-    const result = await this.#withSeedLock(seed.udid, () =>
+    const result = await this.#seedTurns.take(seed.udid, () =>
       this.#createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
         seedUdid: seed.udid,
         source: this.#sourcesSet,
@@ -999,28 +996,8 @@ export class IosSimctlDriver implements Driver {
     return made;
   }
 
-  /**
-   * why: a copy that outlived its limit leaves its turn at the limit but still runs, so a deletion
-   * queued behind it also waits for the hold `#holdSeedLock` places there; another copy does not.
-   */
   async #deleteSeedInTurn(udid: string): Promise<void> {
-    await this.#withSeedLock(udid, async () => {
-      await this.#heldSeed(udid);
-      await this.#deleteSeedSimulator(udid);
-    });
-  }
-
-  /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
-  async #withSeedLock<T>(udid: string, run: () => Promise<T>): Promise<T> {
-    const before = this.#seedLocks.get(udid) ?? Promise.resolve();
-    const turn = before.then(run, run);
-    const settled = turn.catch(() => undefined);
-    this.#seedLocks.set(udid, settled);
-    try {
-      return await turn;
-    } finally {
-      if (this.#seedLocks.get(udid) === settled) this.#seedLocks.delete(udid);
-    }
+    await this.#seedTurns.takeToDelete(udid, () => this.#deleteSeedSimulator(udid));
   }
 
   async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
@@ -1463,7 +1440,13 @@ export class IosSimctlDriver implements Driver {
       await this.#filesystem.mkdirp(this.#overridesRoot, { mode: 0o700 });
       const staged = join(this.#overridesRoot, DEVICEHUB_STAGING_FILE);
       const run = async (command: string, args: string[]): Promise<boolean> => {
-        const outcome = await this.#invokeCommand(command, args, COMMAND_TIMEOUT_MS);
+        const outcome = await runCommand(
+          this.#processRunner,
+          this.#clock,
+          command,
+          args,
+          COMMAND_TIMEOUT_MS,
+        );
         return outcome.kind !== "timed-out" && outcome.result.code === 0;
       };
       try {
@@ -2035,7 +2018,7 @@ export class IosSimctlDriver implements Driver {
    * the service finishes it even when `simctl` is killed. At the limit this stops waiting but lets
    * the command run on: the UDID it later prints is the driver's own, so ownership is proven by
    * the call, never by the name (safety rule 8), and that simulator is deleted. A deletion of
-   * the seed waits for that copy (`#holdSeedLock`); another clone of the seed does not.
+   * the seed waits for that copy (`SeedTurns.hold`); another clone of the seed does not.
    */
   async #createSimulator(
     args: readonly string[],
@@ -2048,56 +2031,19 @@ export class IosSimctlDriver implements Driver {
     const outcome = await this.#invokeSimctl(args, this.#createTimeoutMs, sets.source, {
       killAfterMs: LATE_CREATE_KILL_MS,
       onSettled: (result) => {
-        void this.#deleteLateSimulator(args, sets.destination, result).finally(ended);
+        void deleteLateSimulator(args, result, this.#logger, async (udid) => {
+          this.#checked(
+            ["delete", udid],
+            COMMAND_TIMEOUT_MS,
+            await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS, sets.destination),
+          );
+        }).finally(ended);
       },
     });
     if (outcome.kind === "timed-out" && sets.seedUdid !== undefined) {
-      this.#holdSeedLock(sets.seedUdid, lateEnded);
+      this.#seedTurns.hold(sets.seedUdid, lateEnded);
     }
     return this.#checked(args, this.#createTimeoutMs, outcome);
-  }
-
-  async #deleteLateSimulator(
-    args: readonly string[],
-    set: string | undefined,
-    result: ProcessResult | undefined,
-  ): Promise<void> {
-    const udid = result?.code === 0 ? result.stdout.trim() : "";
-    if (udid === "") {
-      this.#logger?.warn(`simctl ${args.join(" ")} gave no simulator after its limit`);
-      return;
-    }
-    try {
-      this.#checked(
-        ["delete", udid],
-        COMMAND_TIMEOUT_MS,
-        await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS, set),
-      );
-    } catch (error: unknown) {
-      this.#logger?.warn(
-        `could not delete simulator ${udid} that simctl ${args.join(" ")} made after its limit: ${errorMessage(error)}`,
-      );
-    }
-  }
-
-  #holdSeedLock(udid: string, until: Promise<void>): void {
-    const held = Promise.all([this.#seedHolds.get(udid) ?? Promise.resolve(), until]).then(
-      () => undefined,
-    );
-    this.#seedHolds.set(udid, held);
-    void held.then(() => {
-      if (this.#seedHolds.get(udid) === held) this.#seedHolds.delete(udid);
-    });
-  }
-
-  async #heldSeed(udid: string): Promise<void> {
-    for (
-      let held = this.#seedHolds.get(udid);
-      held !== undefined;
-      held = this.#seedHolds.get(udid)
-    ) {
-      await held;
-    }
   }
 
   async #simctl(args: readonly string[], timeoutMs: number, set?: string): Promise<ProcessResult> {
@@ -2150,60 +2096,7 @@ export class IosSimctlDriver implements Driver {
     timeoutMs: number,
     late?: LateAnswer,
   ): Promise<ProcessOutcome> {
-    return await this.#invokeCommand("xcrun", argv, timeoutMs, late);
-  }
-
-  async #invokeCommand(
-    command: string,
-    argv: readonly string[],
-    timeoutMs: number,
-    late?: LateAnswer,
-  ): Promise<ProcessOutcome> {
-    let process;
-    try {
-      // why: the runner's own timeout is a backstop past the late kill, so it never ends a command the driver let run on.
-      const runnerTimeoutMs = late === undefined ? timeoutMs : timeoutMs + late.killAfterMs;
-      process = this.#processRunner.spawn(command, [...argv], { timeoutMs: runnerTimeoutMs });
-    } catch (error: unknown) {
-      throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
-    }
-
-    let resolveTimeout: (() => void) | undefined;
-    const timedOut = new Promise<void>((resolve) => {
-      resolveTimeout = resolve;
-    });
-    const waited = process.wait();
-    const kill = (): void => {
-      try {
-        process.kill("SIGTERM");
-      } catch {
-        // why: A process that has already exited needs no timeout cleanup.
-      }
-    };
-    const timer = this.#clock.setTimer(timeoutMs, () => {
-      resolveTimeout?.();
-      if (late === undefined) {
-        kill();
-        return;
-      }
-      const killTimer = this.#clock.setTimer(late.killAfterMs, kill);
-      const settled = (result: ProcessResult | undefined): void => {
-        this.#clock.cancel(killTimer);
-        late.onSettled(result);
-      };
-      waited.then(settled, () => settled(undefined));
-    });
-
-    try {
-      return await Promise.race([
-        waited.then((result) => ({ kind: "finished" as const, result })),
-        timedOut.then(() => ({ kind: "timed-out" as const })),
-      ]);
-    } catch (error: unknown) {
-      throw new DriverCrashError(`${argv.join(" ")} failed: ${errorMessage(error)}`);
-    } finally {
-      this.#clock.cancel(timer);
-    }
+    return await runCommand(this.#processRunner, this.#clock, "xcrun", argv, timeoutMs, late);
   }
 
   #assertSuccessful(args: readonly string[], result: ProcessResult): void {
