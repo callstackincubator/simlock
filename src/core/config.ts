@@ -42,7 +42,6 @@ export type {
   Config,
   ConfigOverrides,
   DaemonMode,
-  DownloadPolicy,
   DriverConfigEntry,
   LoadConfigOptions,
   MaxPerRequester,
