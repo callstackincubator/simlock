@@ -249,6 +249,8 @@ export interface IosSimctlDriverOptions {
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
   readonly coreSimulatorRoot?: string;
+  /** why: `<home>/Library/Logs/CoreSimulator`: a simulator's log folder is named in its files beside its device folder, and a copy's swap covers both (ADR 0076 §3). */
+  readonly logsRoot?: string;
   // why: where launchd_sim keeps each simulator's overrides folder; a test points it elsewhere.
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
@@ -888,7 +890,7 @@ export class IosSimctlDriver implements Driver {
       await this.#copyOverrides(data.udid, cloneUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
-      this.#sources.markReady(sourceId, sizeBytes);
+      this.#sources.markReady(sourceId, sizeBytes, []);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
     } catch (error: unknown) {
       if (cloneUdid !== undefined && cloneUdid !== "") {
@@ -1079,7 +1081,7 @@ export class IosSimctlDriver implements Driver {
         await this.#deleteSeedSimulator(udid);
         throw error;
       }
-      this.#sources.markReady(sourceId, await this.#sizeOf(udid));
+      this.#sources.markReady(sourceId, await this.#sizeOf(udid), []);
       return { sourceId, setPath: this.#sourcesSet, udid, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
       this.#sources.deleteRow(sourceId);

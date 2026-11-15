@@ -1,4 +1,4 @@
-import type { SqliteDatabase, SqliteSchemaOwner } from "../../ports/index.js";
+import { inTransaction, type SqliteDatabase, type SqliteSchemaOwner } from "../../ports/index.js";
 
 export const iosSourceDataOwner: SqliteSchemaOwner = {
   migrations: [
@@ -28,10 +28,24 @@ export const iosSourceDataOwner: SqliteSchemaOwner = {
              OR (newer.created_at = ios_source_data.created_at AND newer.source_id > ios_source_data.source_id)));
      CREATE UNIQUE INDEX ios_source_data_ready_seed ON ios_source_data (spec_key)
        WHERE kind = 'seed' AND state = 'ready';`,
+    // why: ADR 0076 §2: a source records every file and link that names a device or log folder (`indexed` tells a source that names none from one made before this step); a copy swaps only those.
+    `ALTER TABLE ios_source_data ADD COLUMN indexed INTEGER NOT NULL DEFAULT 0;
+     CREATE TABLE ios_source_files (
+       source_id TEXT NOT NULL,
+       relative_path TEXT NOT NULL CHECK (length(CAST(relative_path AS BLOB)) <= 4096),
+       kind TEXT NOT NULL CHECK (kind IN ('link', 'file')),
+       PRIMARY KEY (source_id, relative_path)
+     ) STRICT`,
   ],
   name: "ios-source-data",
-  version: 2,
+  version: 3,
 };
+
+/** why: a file or link of a source that names a device or log folder, its path under the source's own UDID folder, `/`-separated. */
+export interface SourceFile {
+  readonly relativePath: string;
+  readonly kind: "link" | "file";
+}
 
 export interface NewSourceRow {
   readonly sourceId: string;
@@ -105,14 +119,38 @@ export class IosSourceTable {
       .run(udid, sourceId);
   }
 
-  markReady(sourceId: string, sizeBytes: number | undefined): void {
-    this.#database
-      .prepare("UPDATE ios_source_data SET state = 'ready', size_bytes = ? WHERE source_id = ?")
-      .run(sizeBytes ?? null, sourceId);
+  /** why: the row turns `ready`, indexed, and holds its files in one step, so a reader never sees a ready source with half its record. */
+  markReady(sourceId: string, sizeBytes: number | undefined, files: readonly SourceFile[]): void {
+    inTransaction(this.#database, () => {
+      this.#database
+        .prepare(
+          "UPDATE ios_source_data SET state = 'ready', indexed = 1, size_bytes = ? WHERE source_id = ?",
+        )
+        .run(sizeBytes ?? null, sourceId);
+      const insert = this.#database.prepare(
+        "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES (?, ?, ?)",
+      );
+      for (const file of files) insert.run(sourceId, file.relativePath, file.kind);
+    });
+  }
+
+  filesOf(sourceId: string): readonly SourceFile[] {
+    return this.#database
+      .prepare(
+        "SELECT relative_path, kind FROM ios_source_files WHERE source_id = ? ORDER BY relative_path",
+      )
+      .all(sourceId)
+      .map((row) => ({
+        relativePath: row["relative_path"] as string,
+        kind: row["kind"] as "link" | "file",
+      }));
   }
 
   deleteRow(sourceId: string): void {
-    this.#database.prepare("DELETE FROM ios_source_data WHERE source_id = ?").run(sourceId);
+    inTransaction(this.#database, () => {
+      this.#database.prepare("DELETE FROM ios_source_files WHERE source_id = ?").run(sourceId);
+      this.#database.prepare("DELETE FROM ios_source_data WHERE source_id = ?").run(sourceId);
+    });
   }
 
   findReadySeed(specKey: string): ReadySeed | undefined {

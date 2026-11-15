@@ -1,5 +1,5 @@
 import { NodeSqliteOpener, type SqliteDatabase } from "../../ports/index.js";
-import { iosSourceDataOwner, IosSourceTable } from "./source-data.js";
+import { iosSourceDataOwner, IosSourceTable, type SourceFile } from "./source-data.js";
 
 export async function memorySourceDatabase(): Promise<SqliteDatabase> {
   const database = await new NodeSqliteOpener().open(":memory:", { readOnly: false });
@@ -9,6 +9,7 @@ export async function memorySourceDatabase(): Promise<SqliteDatabase> {
 
 export interface PlantedSource {
   readonly deviceTypeId: string;
+  readonly files?: readonly SourceFile[];
   readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
@@ -39,7 +40,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
   });
   if (source.udid !== undefined) table.setUdid(sourceId, source.udid);
-  if (source.state !== "making") table.markReady(sourceId, source.sizeBytes);
+  if (source.state !== "making") table.markReady(sourceId, source.sizeBytes, source.files ?? []);
   return database;
 }
 
