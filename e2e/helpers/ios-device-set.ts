@@ -17,6 +17,12 @@ export function iosDeviceSet(home: string): string {
   return join(home, "devices", "ios");
 }
 
+/** why: ADR 0076: the sources folder is `src` and `_` until its path is as long as the device set's. */
+export function iosSourcesFolder(home: string): string {
+  const base = join(home, "devices", "src");
+  return base + "_".repeat(Math.max(0, iosDeviceSet(home).length - base.length));
+}
+
 /** why: a simctl call that never answers would otherwise hold its test until the test's own timeout, which names nothing; the driver gives its own slowest call, the slim readback, the same 120 s. */
 const SIMCTL_CALL_TIMEOUT_MS = 120_000;
 

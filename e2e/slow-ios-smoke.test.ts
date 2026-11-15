@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { IOS, withDaemon } from "./helpers/index.js";
 import {
   iosDeviceSet,
+  iosSourcesFolder,
   setDevices,
   sweepStaleDeviceSets,
   type SimctlDevice,
@@ -295,7 +295,7 @@ describe.skipIf(process.platform !== "darwin")(
           copies.map((device) => device.udid),
           "the device set holds the copy only",
         ).toEqual([secondGrant.device.driverDeviceId]);
-        const seeds = await setDevices(join(deviceSet, "sources"));
+        const seeds = await setDevices(iosSourcesFolder(env.home));
         expect(
           seeds.map((seed) => seed.state),
           "the sources set holds the seed shut down",

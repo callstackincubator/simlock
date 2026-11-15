@@ -9,7 +9,7 @@ The device set:
 
 - Under `drivers.ios.deviceSet: simlock`, never `simctl` without `--set`, except three unscoped calls: `findLegacy`, `destroyLegacy`, and the read-only `simctl list -j devices` of `listComponents`.
 - Under `default` (ADR 0048) the set is Xcode's own: never `--set`, no owned root, and never act on a device whose durable mark does not name this instance. `listManaged` lists only those, and `findLegacy` answers `undefined`.
-- `ios.simulator.headless: false` needs `default`: the `simlock` set has no DeviceHub, so iOS is refused (`invalid-device-set`). Simulators left in the set being given up refuse iOS too (`device-set-changed`); that check reads files only, never `simctl`.
+- `ios.simulator.headless: false` needs `default`: the `simlock` set has no DeviceHub, so iOS is refused (`invalid-device-set`). Simulators left in the set being given up, or in either setting's sources folder, refuse iOS too (`device-set-changed`); that check reads files only, never `simctl`.
 - The erasable mark is written before the durable one, never both at once. Under `default` a failed mark write deletes the new simulator before the error is rethrown.
 
 Resolve and boot:
@@ -27,7 +27,7 @@ Resolve and boot:
 
 Seeds (ADR 0061):
 
-- A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` or `simlock simctl list`.
+- A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources folder (ADR 0076): `$SIMLOCK_HOME/devices/src` followed by `_` until its real path is as long as the device set's, an owned root under both settings. When none can fit, iOS is refused `sources-path-unfit`. A row naming another set (made before) is a seed made again, or a baseline stale (`BASELINE_STALE`, save it again), deleted in the set it names. It is in no `listManaged` or `simlock simctl list`.
 - Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app, system apps included, under the original device's folder. A clone whose drop fails is deleted.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
 - A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and one silent 5 minutes more is killed and logged.

@@ -70,6 +70,7 @@ This is for an admin, on the worker.
 
 2. If iOS doesn't come back, run `simlock doctor` and look for one of these reasons:
 
+   - **`sources-path-unfit`**: iOS keeps its seeds and baselines in a folder inside `SIMLOCK_HOME` whose path is as long as the device set's. With `default`, a home under `/tmp` or `/var`, or a path longer than the Xcode set's allows, turns iOS off. The message says which: set `SIMLOCK_HOME` to a shorter folder outside `/tmp` and `/var`, or remove `drivers.ios.deviceRoot`.
    - **`device-set-changed`**: simulators from the old setting are still there. Set the key back, run `simlock nuke --delete-devices` and `simlock doctor --purge-orphans`, then switch again. The message names any simulator that remains, with the `xcrun simctl delete` command for it.
    - **`invalid-device-set`**: the value isn't exactly `simlock` or `default`, or it clashes with another setting: `drivers.ios.deviceRoot` set together with `default`, or `ios.simulator.headless` set to `false` with `simlock`. Remove one of them, or set `drivers.ios.deviceSet` to `default`.
 

@@ -5,7 +5,13 @@ import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { OWNED_ROOT_MARKER_FILE } from "../../src/core/index.js";
-import { emptyDeviceSet, iosDeviceSet, setDevices, simctlInSet } from "./ios-device-set.js";
+import {
+  emptyDeviceSet,
+  iosDeviceSet,
+  iosSourcesFolder,
+  setDevices,
+  simctlInSet,
+} from "./ios-device-set.js";
 import { removeHome } from "./remove-home.js";
 
 type Row = Record<string, string | number | null>;
@@ -185,7 +191,7 @@ function folderOf(seed: KeptSeed): string {
  */
 async function pruneSources(home: string, seeds: readonly KeptSeed[]): Promise<void> {
   const kept = new Set(seeds.map((seed) => basename(folderOf(seed))));
-  const iosSources = join(iosDeviceSet(home), "sources");
+  const iosSources = iosSourcesFolder(home);
   if (existsSync(iosSources)) {
     for (const device of await setDevices(iosSources)) {
       if (kept.has(device.udid)) continue;

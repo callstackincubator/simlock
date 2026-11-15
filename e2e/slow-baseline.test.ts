@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 import { IOS } from "./helpers/agent-device-targets.js";
 import { withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
-import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
+import {
+  iosDeviceSet,
+  iosSourcesFolder,
+  setDevices,
+  sweepStaleDeviceSets,
+} from "./helpers/ios-device-set.js";
 import { DEVICE_READY_MS } from "./helpers/wait.js";
 
 const ANDROID_HOME =
@@ -79,12 +84,10 @@ describe.skipIf(process.platform !== "darwin")(
         expect(listed).toMatchObject({ name: "slow-ios", version: 1 });
         expect(listed?.sizeBytes ?? 0).toBeGreaterThan(0);
 
-        // why: the sources set sits beside the device set under a custom root, or under `ios-sources` for the default set.
-        const sourcesSets = [join(deviceSet, "sources"), join(env.home, "devices", "ios-sources")];
-        const sourcesSet = sourcesSets.find((candidate) => existsSync(candidate));
-        expect(sourcesSet, "no sources set exists after a save").toBeDefined();
+        const sourcesSet = iosSourcesFolder(env.home);
+        expect(existsSync(sourcesSet), "no sources set exists after a save").toBe(true);
         // why: the sources set also holds the seed the next device is copied from; the baseline's clone is the one named `simlock-baseline-<id>`.
-        const inSources = (await setDevices(sourcesSet as string)).filter((device) =>
+        const inSources = (await setDevices(sourcesSet)).filter((device) =>
           device.name.startsWith("simlock-baseline-"),
         );
         expect(inSources).toHaveLength(1);

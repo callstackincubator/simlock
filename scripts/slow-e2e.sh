@@ -21,7 +21,7 @@
 #
 # Before a run it sources `.slow-lane.env` from the main checkout's root, if there is one: this
 # machine's settings, such as SIMLOCK_E2E_AGENT_DEVICE. A run's temporary homes live under
-# /tmp/simlock-slow, so `clean` and `stop` find a run's daemons, emulators and simulators by
+# $HOME/.sls (SIMLOCK_SLOW_TMP), so `clean` and `stop` find a run's daemons, emulators and simulators by
 # that path and touch nothing else, except the simulators in Xcode's own device set whose durable
 # mark names the instance of a home under that path (a daemon run with drivers.ios.deviceSet
 # "default" keeps them there): `clean` and `stop` delete those too. A run starts by cleaning up
@@ -33,7 +33,8 @@ set -eu
 
 # why: the three overrides let the script's own tests use a scratch lock and home directory.
 lock=${SIMLOCK_SLOW_LOCK:-/tmp/simlock-slow-e2e.lock}
-lane_tmp=${SIMLOCK_SLOW_TMP:-/tmp/simlock-slow}
+# why: ADR 0076: the lane's `deviceSet: default` flows need a home short enough for the sources folder to match Xcode's set in length, which a path under /tmp (really /private/tmp) cannot.
+lane_tmp=${SIMLOCK_SLOW_TMP:-$HOME/.sls}
 min_free=${SIMLOCK_SLOW_MIN_FREE_GIB:-15}
 # why: the worker lock the daemon takes (ADR 0059); src/slow-e2e.test.ts keeps this default equal to defaultWorkerLockPath.
 worker_lock=${SIMLOCK_SLOW_WORKER_LOCK:-/tmp/simlock-$(id -u)/worker.lock}
