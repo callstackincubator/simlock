@@ -205,6 +205,14 @@ interface Catalog {
   runtimes: { buildversion?: string; identifier: string }[];
 }
 
+/** why: a seed of an earlier release is deleted in the set its row names, which is not always today's sources folder. */
+function simctlIn(
+  set: string,
+  ...args: readonly string[]
+): { readonly command: string; readonly args: string[] } {
+  return { args: ["simctl", "--set", set, ...args], command: "xcrun" };
+}
+
 /** why: A seed lives in the sources set, a sibling of the lease device set, and its calls are scoped to that. */
 function sourcesSimctl(...args: readonly string[]): {
   readonly command: string;
@@ -215,7 +223,7 @@ function sourcesSimctl(...args: readonly string[]): {
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
 async function seededDatabase(
-  seed: { readonly runtimeBuild?: string; readonly udid?: string } = {},
+  seed: { readonly runtimeBuild?: string; readonly setPath?: string; readonly udid?: string } = {},
 ): Promise<SqliteDatabase> {
   return plantReadySeed(await memorySourceDatabase(), {
     deviceTypeId: driverData.deviceTypeId,
@@ -1552,9 +1560,23 @@ describe("IosSimctlDriver", () => {
       runtimeBuild: undefined,
       remade: false,
     },
+    {
+      name: "its row names the old sources folder of the simlock set",
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: true,
+      setPath: `${deviceRoot}/sources`,
+    },
+    {
+      name: "its row names the old sources folder of the default set",
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: true,
+      setPath: "/home/.simlock/devices/ios-sources",
+    },
   ])(
     "makes the seed again before copying it only when it is stale: $name -> remade $remade",
-    async ({ seedBuild, runtimeBuild, remade }) => {
+    async ({ seedBuild, runtimeBuild, remade, setPath = sourcesRoot }) => {
       const staleUdid = "00000000-0000-0000-0000-0000000000bb";
       const catalog = JSON.parse(listFixture) as {
         runtimes: { buildversion?: string; identifier: string }[];
@@ -1570,8 +1592,8 @@ describe("IosSimctlDriver", () => {
         { match: listInvocation, result: { code: 0, stderr: "", stdout: JSON.stringify(catalog) } },
         ...(remade
           ? [
-              { match: sourcesSimctl("shutdown", staleUdid) },
-              { match: sourcesSimctl("delete", staleUdid) },
+              { match: simctlIn(setPath, "shutdown", staleUdid) },
+              { match: simctlIn(setPath, "delete", staleUdid) },
               {
                 match: sourcesSimctl(
                   "create",
@@ -1599,6 +1621,7 @@ describe("IosSimctlDriver", () => {
         new FakeClock(),
         filesystem,
         await seededDatabase({
+          setPath,
           udid: planted,
           ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
         }),
@@ -1691,13 +1714,20 @@ describe("IosSimctlDriver", () => {
     ) as [string, string, string];
     const database = await memorySourceDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
-    plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: gone });
+    const oldSet = `${deviceRoot}/sources`;
+    plantSource(database, {
+      ...kind,
+      maker: "earlier-process",
+      setPath: oldSet,
+      state: "making",
+      udid: gone,
+    });
     plantSource(database, { ...kind, maker: "earlier-process", state: "making" });
     plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: stuck });
     plantSource(database, { ...kind, udid: ready });
     const runner = new ScriptedProcessRunner([
-      { match: sourcesSimctl("shutdown", gone) },
-      { match: sourcesSimctl("delete", gone) },
+      { match: simctlIn(oldSet, "shutdown", gone) },
+      { match: simctlIn(oldSet, "delete", gone) },
       { match: sourcesSimctl("shutdown", stuck) },
       { match: sourcesSimctl("delete", stuck), result: { code: 1, stderr: "busy", stdout: "" } },
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },

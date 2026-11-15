@@ -15,6 +15,7 @@ export interface PlantedSource {
   readonly osVersion?: string;
   readonly runtimeBuild?: string;
   readonly runtimeId: string;
+  readonly setPath?: string;
   readonly sizeBytes?: number;
   readonly state?: "making" | "ready";
   readonly udid?: string;
@@ -33,7 +34,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     osVersion: source.osVersion ?? "26.5",
     runtimeBuild: source.runtimeBuild,
     runtimeId: source.runtimeId,
-    setPath: "/home/.simlock/devices/src",
+    setPath: source.setPath ?? "/home/.simlock/devices/src____",
     sourceId,
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
   });
