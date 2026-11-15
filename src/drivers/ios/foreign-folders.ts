@@ -38,6 +38,18 @@ function ownFolder(root: string, udid: string, found: string): string {
   return `${spelling}/${udid}`.replaceAll("/", escaped ? "\\/" : "/");
 }
 
+/** why: ADR 0076 §2: a source's index lists the files and links that name any simulator's device or log folder, its own included. */
+export function namesAnyFolder(
+  bytes: Uint8Array,
+  folders: Omit<ForeignFolders, "ownUdid">,
+): boolean {
+  const text = Buffer.from(bytes).toString("latin1");
+  return (
+    pattern([folders.deviceSet, folders.sourcesSet]).test(text) ||
+    (folders.logsRoot !== undefined && pattern([folders.logsRoot]).test(text))
+  );
+}
+
 /**
  * why: ADR 0076 §3: every device or log folder of another simulator becomes the copy's own, byte for byte,
  * so a file's length never changes and the swap needs to understand no format. Bytes map one to one to

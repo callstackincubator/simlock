@@ -85,8 +85,9 @@ import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
-import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
+import { IosSourceTable, type ReadySeed, type SourceFile, type SourceRow } from "./source-data.js";
 import { swapForeignFolders } from "./foreign-folders.js";
+import { indexSource } from "./source-index.js";
 import { seedIsStale, sourceStaleReason } from "./source-staleness.js";
 import { fitSourcesFolders, sourcesFolderOf, sourcesSetCheck } from "./sources-folder.js";
 import { createIosScreenCapture } from "./screen-capture.js";
@@ -341,6 +342,7 @@ export class IosSimctlDriver implements Driver {
   readonly #sourcesSet: string;
   readonly #ownsSourcesSet: (path: string) => boolean;
   readonly #logsRoot: string | undefined;
+  readonly #sqlite: SqliteOpener | undefined;
   #sourceMaker: string | undefined;
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -382,6 +384,7 @@ export class IosSimctlDriver implements Driver {
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = sourcesSet;
     this.#logsRoot = options.logsRoot;
+    this.#sqlite = options.sqlite;
     this.#ownsSourcesSet = sourcesSetCheck(
       sourcesSet,
       options.simlockHome,
@@ -895,8 +898,9 @@ export class IosSimctlDriver implements Driver {
       this.#sources.setUdid(sourceId, cloneUdid);
       await this.#copyOverrides(data.udid, cloneUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
+      const files = await this.#indexSource(cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
-      this.#sources.markReady(sourceId, sizeBytes, []);
+      this.#sources.markReady(sourceId, sizeBytes, files);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
     } catch (error: unknown) {
       if (cloneUdid !== undefined && cloneUdid !== "") {
@@ -1090,7 +1094,14 @@ export class IosSimctlDriver implements Driver {
         await this.#deleteSeedSimulator(udid);
         throw error;
       }
-      this.#sources.markReady(sourceId, await this.#sizeOf(udid), []);
+      let files: readonly SourceFile[];
+      try {
+        files = await this.#indexSource(udid);
+      } catch (error: unknown) {
+        await this.#deleteSeedSimulator(udid);
+        throw error;
+      }
+      this.#sources.markReady(sourceId, await this.#sizeOf(udid), files);
       return { sourceId, setPath: this.#sourcesSet, udid, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
       this.#sources.deleteRow(sourceId);
@@ -1156,6 +1167,19 @@ export class IosSimctlDriver implements Driver {
     for (const entry of await this.#filesystem.readdir(folder)) {
       if (LAUNCH_SERVICES_DATABASE.test(entry)) await this.#filesystem.rm(join(folder, entry));
     }
+  }
+
+  #indexSource(udid: string): Promise<readonly SourceFile[]> {
+    return indexSource(join(this.#sourcesSet, udid), {
+      filesystem: this.#filesystem,
+      folders: {
+        deviceSet: this.#deviceRoot,
+        logsRoot: this.#logsRoot,
+        sourcesSet: this.#sourcesSet,
+      },
+      logger: this.#logger,
+      sqlite: this.#sqlite,
+    });
   }
 
   /**
