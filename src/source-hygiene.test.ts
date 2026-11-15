@@ -30,7 +30,6 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/cli/index.test.ts": 11674,
   "src/drivers/ios/index.test.ts": 6208,
   "src/drivers/ios/index.ts": 2700,
-  "src/leasing/create-leasing.test.ts": 5389,
 };
 
 const CODE_LIMIT = 1400;
