@@ -680,7 +680,14 @@ describe("src/auth imports little", () => {
 describe("packages/ and the root code stay apart", () => {
   function packageViolations(world: Readonly<Record<string, string>>): string[] {
     const dir = join(scratch, `packages-apart-${counter++}`);
-    for (const [path, contents] of Object.entries({ "src/x.ts": "export {};\n", ...world })) {
+    // why: depcruise fails on a folder that is not there, so each one the lint names gets a file.
+    const empty = Object.fromEntries(
+      ["src/x.ts", "ui/src/none.ts", "e2e/none.ts", "packages/none.ts"].map((path) => [
+        path,
+        "export {};\n",
+      ]),
+    );
+    for (const [path, contents] of Object.entries({ ...empty, ...world })) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), contents);
     }

@@ -63,7 +63,7 @@
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/src.tsbuildinfo && tsc -p ui/tsconfig.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/ui.tsbuildinfo && tsc -p packages/e2e --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e-package.tsbuildinfo",
     "typecheck:e2e": "TURBO_TELEMETRY_DISABLED=1 turbo run //#build:ui:run //#build:capture:run && pnpm run typecheck:e2e:types",
     "typecheck:e2e:types": "TURBO_TELEMETRY_DISABLED=1 turbo run //#build:daemon:run && tsc -p e2e/tsconfig.typecheck.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e.tsbuildinfo",
-    "lint": "oxlint src e2e ui && depcruise src e2e ui --ignore-known",
+    "lint": "oxlint src e2e ui packages && depcruise src e2e ui packages --ignore-known",
     "lint:comments": "node .agents/scripts/comment-lint.mjs --base origin/main",
     "lint:tests": "node .agents/scripts/test-lint.mjs --base origin/main",
     "fallow": "fallow",
