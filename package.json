@@ -60,7 +60,7 @@
     "test:console": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && playwright test",
     "console:screenshots": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && playwright test --config playwright.screenshots.config.ts",
     "test:real-proxy": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run build:ui:run build:capture:run build:e2e:run && playwright test --config playwright.real-proxy.config.ts",
-    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/src.tsbuildinfo && tsc -p ui/tsconfig.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/ui.tsbuildinfo",
+    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/src.tsbuildinfo && tsc -p ui/tsconfig.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/ui.tsbuildinfo && tsc -p packages/e2e --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e-package.tsbuildinfo",
     "typecheck:e2e": "TURBO_TELEMETRY_DISABLED=1 turbo run build:ui:run build:capture:run && pnpm run typecheck:e2e:types",
     "typecheck:e2e:types": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run && tsc -p e2e/tsconfig.typecheck.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e.tsbuildinfo",
     "lint": "oxlint src e2e ui && depcruise src e2e ui --ignore-known",
