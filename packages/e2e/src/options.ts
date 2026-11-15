@@ -69,7 +69,9 @@ function checkUrl(value: unknown): string {
   ) {
     fail(`url must be an http(s) URL of the simlock gateway or worker; got ${show(value)}`);
   }
-  const url = value.replace(/\/+$/u, "");
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  const url = value.slice(0, end);
   if (url.endsWith("/v1")) fail(`url must not end in /v1; got ${show(value)}`);
   return url;
 }
