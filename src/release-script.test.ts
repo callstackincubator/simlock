@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -20,7 +20,10 @@ function scratch(files: Record<string, string>, version = "0.3.0"): string {
   root = mkdtempSync(join(tmpdir(), "simlock-release-"));
   const pkg = { name: "simlock", version, repository: { type: "git", url: `${REPOSITORY}.git` } };
   writeFileSync(join(root, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
-  for (const [name, content] of Object.entries(files)) writeFileSync(join(root, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, name)), { recursive: true });
+    writeFileSync(join(root, name), content);
+  }
   return root;
 }
 
@@ -70,13 +73,22 @@ describe("scripts/release.mjs plan", () => {
 });
 
 describe("scripts/release.mjs bump", () => {
-  it("writes the version into package.json and changes nothing else, keeping the formatting", () => {
-    const cwd = scratch({});
-    const before = readFileSync(join(cwd, "package.json"), "utf8");
-    expect(run(cwd, ["bump", "0.4.0"]).status).toBe(0);
-    expect(readFileSync(join(cwd, "package.json"), "utf8")).toBe(
-      before.replace('"0.3.0"', '"0.4.0"'),
+  it("writes the version into package.json and every packages/*/package.json and changes nothing else, keeping the formatting", () => {
+    const manifest = (name: string) =>
+      `${JSON.stringify({ name, version: "0.3.0", private: true }, null, 2)}\n`;
+    const packages = ["packages/e2e/package.json", "packages/other/package.json"];
+    const cwd = scratch({
+      [packages[0] as string]: manifest("@simlock/e2e"),
+      [packages[1] as string]: manifest("@simlock/other"),
+    });
+    const before = [join(cwd, "package.json"), ...packages.map((p) => join(cwd, p))].map((path) =>
+      readFileSync(path, "utf8"),
     );
+    expect(run(cwd, ["bump", "0.4.0"]).status).toBe(0);
+    const after = [join(cwd, "package.json"), ...packages.map((p) => join(cwd, p))].map((path) =>
+      readFileSync(path, "utf8"),
+    );
+    expect(after).toEqual(before.map((text) => text.replace('"0.3.0"', '"0.4.0"')));
   });
 
   it("refuses a version that is not three numbers", () => {
