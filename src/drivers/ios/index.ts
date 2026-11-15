@@ -85,6 +85,7 @@ import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
+import { swapForeignFolders } from "./foreign-folders.js";
 import { seedIsStale, sourceStaleReason } from "./source-staleness.js";
 import { fitSourcesFolders, sourcesFolderOf, sourcesSetCheck } from "./sources-folder.js";
 import { createIosScreenCapture } from "./screen-capture.js";
@@ -336,6 +337,7 @@ export class IosSimctlDriver implements Driver {
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
   readonly #ownsSourcesSet: (path: string) => boolean;
+  readonly #logsRoot: string | undefined;
   #sourceMaker: string | undefined;
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -376,6 +378,7 @@ export class IosSimctlDriver implements Driver {
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = sourcesSet;
+    this.#logsRoot = options.logsRoot;
     this.#ownsSourcesSet = sourcesSetCheck(
       sourcesSet,
       options.simlockHome,
@@ -977,6 +980,7 @@ export class IosSimctlDriver implements Driver {
     try {
       await this.#writeMark(udid);
       await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
+      await this.#swapForeignFolders(seed.sourceId, udid);
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
@@ -997,14 +1001,16 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  async #namedSource(sourceId: string): Promise<{ readonly udid: string }> {
+  async #namedSource(
+    sourceId: string,
+  ): Promise<{ readonly sourceId: string; readonly udid: string }> {
     const row = this.#sources.findRow(sourceId);
     if (row?.state !== "ready" || row.udid === undefined) {
       throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
     }
     const reason = sourceStaleReason(row, await this.#loadCatalog(), this.#sourcesSet);
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
-    return { udid: row.udid };
+    return { sourceId, udid: row.udid };
   }
 
   /** why: two provisions of one kind at once make one seed, the second waiting for the first's make. */
@@ -1146,6 +1152,26 @@ export class IosSimctlDriver implements Driver {
     if (!(await this.#filesystem.exists(folder))) return;
     for (const entry of await this.#filesystem.readdir(folder)) {
       if (LAUNCH_SERVICES_DATABASE.test(entry)) await this.#filesystem.rm(join(folder, entry));
+    }
+  }
+
+  /**
+   * why: ADR 0076 §3: a copy's files and links still name its source's device and log folders, and
+   * the copy would write into them; before its first boot each recorded one names the copy's own
+   * (a swap of the same length, so no format is parsed). A copy whose swap fails is deleted by the caller.
+   */
+  async #swapForeignFolders(sourceId: string, copyUdid: string): Promise<void> {
+    const folders = {
+      deviceSet: this.#deviceRoot,
+      logsRoot: this.#logsRoot,
+      ownUdid: copyUdid,
+      sourcesSet: this.#sourcesSet,
+    };
+    for (const file of this.#sources.filesOf(sourceId)) {
+      const path = join(this.#deviceRoot, copyUdid, file.relativePath);
+      const target = await this.#filesystem.readlink(path);
+      const swapped = Buffer.from(swapForeignFolders(Buffer.from(target), folders)).toString();
+      if (swapped !== target) await this.#filesystem.replaceSymlink(path, swapped);
     }
   }
 
