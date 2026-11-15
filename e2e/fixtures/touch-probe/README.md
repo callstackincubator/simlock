@@ -2,7 +2,7 @@
 
 A one-screen iOS simulator app for the foldable slow test (#1535). It draws a
 red dot where it is touched and appends the touch's fraction of its window to
-`Documents/touches.txt`, one `x y` line per touch, so a test reads where a tap
+`Documents/touches.txt`, one `x,y` line per touch that ends, so a test reads where a tap
 landed. The built app is committed so a test installs it without building.
 
 Its own source, MIT: `ios/src/main.swift` and `ios/Info.plist`.
@@ -20,12 +20,12 @@ codesign --force --sign - ios/TouchProbe.app
 
 ## App id
 
-`com.callstack.simlock.touchprobe`
+`dev.simlock.touch-probe`
 
 ## Reading a touch
 
 ```bash
-xcrun simctl --set <device set> get_app_container <udid> com.callstack.simlock.touchprobe data
+xcrun simctl --set <device set> get_app_container <udid> dev.simlock.touch-probe data
 # -> <container>/Documents/touches.txt
 ```
 

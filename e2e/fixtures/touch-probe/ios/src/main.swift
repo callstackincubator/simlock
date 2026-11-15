@@ -1,7 +1,7 @@
 import UIKit
 
 // A touch probe: draws a dot where it is touched and appends the touch's fraction of its window to
-// Documents/touches.txt, one "x y" line per touch that begins.
+// Documents/touches.txt, one "x,y" line per touch that ends.
 final class ProbeView: UIView {
     private let dot = UIView(frame: CGRect(x: 0, y: 0, width: 24, height: 24))
 
@@ -16,12 +16,12 @@ final class ProbeView: UIView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first, let window = window else { return }
         let point = touch.location(in: window)
         dot.center = touch.location(in: self)
         dot.isHidden = false
-        let line = String(format: "%.4f %.4f\n", point.x / window.bounds.width, point.y / window.bounds.height)
+        let line = String(format: "%.3f,%.3f\n", point.x / window.bounds.width, point.y / window.bounds.height)
         let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("touches.txt")
         if let handle = try? FileHandle(forWritingTo: file) {
             handle.seekToEndOfFile()

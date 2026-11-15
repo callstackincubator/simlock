@@ -34,7 +34,7 @@ const FOLD_SESSION = "simlock-foldable-e2e";
 // the capture's own panel read uses; a black panel reads 0.
 const LIT_ABOVE = 0.02;
 const PROBE_APP = join(REPO_ROOT, "e2e", "fixtures", "touch-probe", "ios", "TouchProbe.app");
-const PROBE_BUNDLE = "com.callstack.simlock.touchprobe";
+const PROBE_BUNDLE = "dev.simlock.touch-probe";
 const INPUT_TOUCH = 0x03;
 const INPUT_CONFIG = 0x82;
 const TAP_POINTS = [
@@ -286,7 +286,7 @@ async function touchesIn(file: string): Promise<[number, number][]> {
   return text
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => line.split(" ").map(Number) as [number, number]);
+    .map((line) => line.split(",").map(Number) as [number, number]);
 }
 
 // why: a tap is a begin and an end at one point, the way an app of T3 Code's sends it.
