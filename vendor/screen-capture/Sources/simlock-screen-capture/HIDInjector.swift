@@ -78,7 +78,10 @@ actor HIDInjector {
     private typealias IndigoDigitalCrownFunc = @convention(c) (Double) -> UnsafeMutableRawPointer?
     private var digitalCrownFunc: IndigoDigitalCrownFunc?
 
-    private var touchTarget: UInt32 = 0x32
+    /// The panel taps land on; nil on a device with one panel (#1535).
+    private var touchPanel: Panel?
+
+    func use(panel: Panel?) { touchPanel = panel }
 
     // NOTE: scroll is NOT a native HID event on the simulator — see the "Scroll
     // events" section below. Device Hub's trackpad-capture path requires private
@@ -187,8 +190,9 @@ actor HIDInjector {
         case "end":           eventType = 2  // Up
         default: return nil
         }
-        var point = CGPoint(x: x, y: y)
-        return mouseFunc(&point, nil, touchTarget, eventType, 1.0, 1.0, edge)
+        let touch = PanelTouch.map(touchPanel, x: x, y: y)
+        var point = CGPoint(x: touch.x, y: touch.y)
+        return mouseFunc(&point, nil, touch.target, eventType, 1.0, 1.0, edge)
     }
 
     /// Synchronously build + send a single touch. For use inside gesture blocks
@@ -214,9 +218,11 @@ actor HIDInjector {
         }
 
         // Pass both CGPoints to create a 3-block multi-touch message.
-        var point1 = CGPoint(x: x1, y: y1)
-        var point2 = CGPoint(x: x2, y: y2)
-        guard let rawMsg = mouseFunc(&point1, &point2, touchTarget, eventType, 1.0, 1.0, 0) else {
+        let first = PanelTouch.map(touchPanel, x: x1, y: y1)
+        let second = PanelTouch.map(touchPanel, x: x2, y: y2)
+        var point1 = CGPoint(x: first.x, y: first.y)
+        var point2 = CGPoint(x: second.x, y: second.y)
+        guard let rawMsg = mouseFunc(&point1, &point2, first.target, eventType, 1.0, 1.0, 0) else {
             print("[hid] IndigoHIDMessageForMouseNSEvent returned nil for multi-touch \(type)")
             return
         }
