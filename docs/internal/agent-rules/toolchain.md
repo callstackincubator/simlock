@@ -95,9 +95,9 @@ mutant those leave alive gets a second run with every related test file.
 
 ## Routines
 
-Claude Code routines run these skills on a schedule, each but one opening
-one PR that goes through the reviews its diff's kind gets and the merge
-gate:
+Claude Code routines run these skills on a schedule. All but the three
+named below the table open one PR that goes through the reviews its diff's
+kind gets and the merge gate:
 
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
@@ -107,9 +107,11 @@ gate:
 | Review calibration | `calibrate-reviews` | weekly |
 | Recurring findings | `recurring-findings` | weekly |
 | Refactor           | `refactor`          | weekly |
+| Upstream check     | `check-upstream`    | weekly |
 
 `recurring-findings` opens draft task issues instead of a PR, and skips
-the ending below. `refactor` opens one `refactor:new` issue from a
+the ending below. `check-upstream` only comments on `upstream` issues, and
+skips it too. `refactor` opens one `refactor:new` issue from a
 measured target and, when delivery rule 18's three conditions hold, sets
 it ready and runs `deliver` on it, whose gate ends it instead. Every other routine ends the same way; its skill adds
 only what it changes:

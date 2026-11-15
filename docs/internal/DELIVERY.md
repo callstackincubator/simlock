@@ -194,7 +194,10 @@ the pipeline at a time and compare the rows before and after.
 
 Weekly routines keep the suite and the reviews in shape: `harden-tests`,
 `audit-tests`, `garden-comments`, `calibrate-reviews` and `refactor`
-([toolchain.md](agent-rules/toolchain.md) "Routines").
+([toolchain.md](agent-rules/toolchain.md) "Routines"). `check-upstream`
+reads every `upstream` issue's `## Waiting on upstream` links each week
+and comments when they are fixed in a release; you move the issue back to
+the label it came from.
 
 ## `main` and releases
 
