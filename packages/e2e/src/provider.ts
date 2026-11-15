@@ -9,7 +9,7 @@ import type {
 import type { createAgentDeviceClient, Lease, LeaseScopedOptions } from "agent-device";
 
 import type { ProviderOptions } from "./options.js";
-import { DeviceSetupFailed, installApp, limiter, type Installation } from "./install.js";
+import { DeviceSetupFailed, installAll, limiter, type Installation } from "./install.js";
 import { messageOf } from "./errors.js";
 import { allocateQueued } from "./queue.js";
 import { startRenewal } from "./renew.js";
@@ -33,6 +33,14 @@ function wantedDevice(options: ProviderOptions) {
     ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
     ...(options.deviceBaseline === undefined ? {} : { deviceBaseline: options.deviceBaseline }),
   };
+}
+
+function deviceOf(lease: Lease): string {
+  const deviceId = lease.deviceKey?.split(":").pop();
+  if (deviceId === undefined || deviceId === "") {
+    throw new Error(`simlock: lease ${lease.leaseId} names no device`);
+  }
+  return deviceId;
 }
 
 function scopeOf(lease: Lease, runId: string, sentClientId: string) {
@@ -94,10 +102,7 @@ export function createProvider(
     });
     let stopRenewing = (): void => undefined;
     try {
-      const deviceId = lease.deviceKey?.split(":").pop();
-      if (lease.deviceKey === undefined || deviceId === undefined || deviceId === "") {
-        throw new Error(`simlock: lease ${lease.leaseId} names no device`);
-      }
+      const deviceId = deviceOf(lease);
       request.log(
         `simlock: lease ${lease.leaseId} granted in ${String(Date.now() - started)} ms (${options.device} ${deviceId})`,
       );
@@ -122,8 +127,7 @@ export function createProvider(
         signal: request.signal,
         log: request.log,
       };
-      if (request.appPath !== undefined) await installApp(on, request.appPath, request.app);
-      for (const extra of options.extraApps) await installApp(on, extra, undefined);
+      await installAll(on, request, options.extraApps);
       held.set(lease.leaseId, { stop: stopRenewing, scope: leased });
       return request.appPath !== undefined && request.app !== undefined
         ? { ...granted, installedApp: request.app }

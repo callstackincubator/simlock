@@ -60,7 +60,7 @@ export interface Installation {
   readonly log: (line: string) => void;
 }
 
-export async function installApp(
+async function installApp(
   on: Installation,
   appPath: string,
   app: string | undefined,
@@ -86,4 +86,13 @@ export async function installApp(
     throw new DeviceSetupFailed(messageOf(error), on.deviceId, error);
   }
   on.log(`simlock: installed ${app ?? appPath} in ${String(Date.now() - started)} ms`);
+}
+
+export async function installAll(
+  on: Installation,
+  request: { readonly appPath?: string | undefined; readonly app?: string | undefined },
+  extraApps: readonly string[],
+): Promise<void> {
+  if (request.appPath !== undefined) await installApp(on, request.appPath, request.app);
+  for (const extra of extraApps) await installApp(on, extra, undefined);
 }
