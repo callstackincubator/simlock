@@ -1,6 +1,6 @@
 import type { DeviceRequest } from "@e2e-dev/mobile";
 import type { createAgentDeviceClient } from "agent-device";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { checkOptions, type SimlockDevicesOptions } from "./options.js";
 import { createProvider } from "./provider.js";
@@ -188,5 +188,139 @@ describe("createProvider acquire", () => {
         request().request,
       ),
     ).rejects.toThrow("simlock: the agent-device package is not installed; add it to your project");
+  });
+});
+
+function failing(details: Record<string, unknown>): Error {
+  return Object.assign(new Error("the farm said no"), { details });
+}
+
+const hang: Handler = (options) =>
+  new Promise((_, reject) => {
+    const signal = options["signal"] as AbortSignal;
+    signal.addEventListener("abort", () => reject(signal.reason));
+  });
+
+type Outcome = { ok: true; value: unknown } | { ok: false; error: unknown };
+
+function outcome(promise: Promise<unknown>): Promise<Outcome> {
+  return promise.then(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error }),
+  );
+}
+
+const WAITING = "simlock: no free ios device on the farm; waiting for one";
+
+// why: createProvider is the seam the spec names (I7); see the first describe.
+describe("createProvider acquire on a full farm", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits and asks again under a new lease id when the farm is full or cut the request, and throws at once on a refusal, an abort or the end of queueMs", async () => {
+    for (const details of [
+      { reason: "NO_DEVICE_IN_TIME", retriable: true },
+      { reason: "SIMLOCK_UNAVAILABLE", retriable: true },
+      { reason: "WORKER_UNREACHABLE", retriable: true },
+      { reason: "daemon_response_invalid" },
+      { reason: "daemon_transport_failure" },
+    ]) {
+      const waiting = farm({
+        allocate: (options, nth) => {
+          if (nth === 0) throw failing(details);
+          return grant(options);
+        },
+      });
+      const first = request();
+      const pending = outcome(provider(waiting.load).acquire(first.request));
+      await vi.advanceTimersByTimeAsync(15_000);
+      const [one, two] = waiting.of("allocate");
+      expect(await pending).toEqual({
+        ok: true,
+        value: expect.objectContaining({ id: two?.options["leaseId"] }),
+      });
+      expect(two?.options["leaseId"]).not.toBe(one?.options["leaseId"]);
+      expect(waiting.of("release").map((call) => call.options["leaseId"])).toEqual([
+        one?.options["leaseId"],
+      ]);
+      expect(first.lines.filter((line) => line === WAITING)).toHaveLength(1);
+    }
+
+    for (const details of [
+      { reason: "REFUSED_BY_SIMLOCK", retriable: false },
+      { reason: "UNAUTHORIZED" },
+    ]) {
+      const error = failing(details);
+      const refused = farm({
+        allocate: () => {
+          throw error;
+        },
+      });
+      expect(await outcome(provider(refused.load).acquire(request().request))).toEqual({
+        ok: false,
+        error,
+      });
+      expect(refused.of("allocate")).toHaveLength(1);
+      expect(refused.of("release")).toEqual([]);
+    }
+
+    const retriable = { reason: "NO_DEVICE_IN_TIME", retriable: true };
+    const interrupted = new Error("interrupted");
+    const pausing = new AbortController();
+    const full = farm({
+      allocate: () => {
+        throw failing(retriable);
+      },
+    });
+    const inPause = outcome(
+      provider(full.load).acquire(request({ signal: pausing.signal }).request),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    pausing.abort(interrupted);
+    expect(await inPause).toEqual({ ok: false, error: interrupted });
+    expect(full.of("allocate")).toHaveLength(1);
+
+    const asking = new AbortController();
+    const stuck = farm({ allocate: hang });
+    const inAsk = outcome(provider(stuck.load).acquire(request({ signal: asking.signal }).request));
+    await vi.advanceTimersByTimeAsync(0);
+    asking.abort(interrupted);
+    expect(await inAsk).toEqual({ ok: false, error: interrupted });
+    expect(stuck.of("release").map((call) => call.options["leaseId"])).toEqual([
+      stuck.of("allocate")[0]?.options["leaseId"],
+    ]);
+
+    const over = farm({ allocate: hang });
+    const timedOut = outcome(provider(over.load, { queueMs: 60_000 }).acquire(request().request));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await timedOut).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        message: "simlock: no free ios device on the farm within 1 min",
+      }),
+    });
+    expect(over.of("release").map((call) => call.options["leaseId"])).toEqual([
+      over.of("allocate")[0]?.options["leaseId"],
+    ]);
+
+    const instant = farm({
+      allocate: (options, nth) => {
+        if (nth < 2) throw failing(retriable);
+        return grant(options);
+      },
+    });
+    const twice = request();
+    const done = outcome(provider(instant.load).acquire(twice.request));
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(instant.of("allocate")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(instant.of("allocate")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect((await done).ok).toBe(true);
+    expect(twice.lines.filter((line) => line === WAITING)).toHaveLength(1);
   });
 });
