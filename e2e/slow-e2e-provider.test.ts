@@ -10,9 +10,7 @@ import {
   IOS,
   listLeases,
   loadAgentDeviceClient,
-  makeAgent,
   newAgentToken,
-  ok,
   REPO_ROOT,
   waitForAgentDevice,
   waitForFree,
@@ -97,21 +95,27 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIosRuntime())(
         expect(lease.installedApp).toBe(IOS.bundleId);
         expect((await listLeases(env)).map((row) => row.id)).toContain(lease.id);
 
-        const runner = await makeAgent(env, "e2e-provider", { direct: true, token });
-        const session = [
-          "--session",
-          `e2e-${RUN_ID.slice(0, 12)}-0`,
-          "--run-id",
-          RUN_ID,
-          "--lease-id",
-          lease.id,
-          "--lease-backend",
-          "ios-instance",
-          "--udid",
-          lease.deviceId as string,
-        ];
-        ok(await runner.run(["open", IOS.bundleId, ...session]));
-        ok(await runner.run(["close", ...session]));
+        // why: the lease names a client id, a provider and a device key that the agent-device CLI has no flag for, so a runner drives it through the client with the scope the provider handed over, as the e2e package's consumers do.
+        const createClient = (await loadAgentDeviceClient()) as unknown as (
+          config: Record<string, unknown>,
+        ) => {
+          apps: {
+            open: (options: Record<string, unknown>) => Promise<unknown>;
+            close: (options: Record<string, unknown>) => Promise<unknown>;
+          };
+        };
+        const runner = createClient({
+          daemonBaseUrl: lease.daemon.baseUrl,
+          daemonAuthToken: lease.daemon.authToken,
+          session: `e2e-${RUN_ID.slice(0, 12)}-0`,
+          ...lease.client,
+        });
+        await runner.apps.open({
+          app: IOS.bundleId,
+          platform: "ios",
+          udid: lease.deviceId as string,
+        });
+        await runner.apps.close({ app: IOS.bundleId });
         expect(
           (await listLeases(env)).map((row) => row.id),
           "a close keeps the lease",
