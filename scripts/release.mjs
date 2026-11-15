@@ -80,16 +80,19 @@ function plan(args) {
   process.stdout.write(`version=${version}\ntag=v${version}\nbump=${chosen}\n`);
 }
 
+function manifestPaths() {
+  const manifests = ["package.json"];
+  if (!existsSync("packages")) return manifests;
+  for (const entry of readdirSync("packages", { withFileTypes: true })) {
+    const manifest = `packages/${entry.name}/package.json`;
+    if (entry.isDirectory() && existsSync(manifest)) manifests.push(manifest);
+  }
+  return manifests;
+}
+
 function bump([version]) {
   parseVersion(version, "the version to write");
-  const manifests = ["package.json"];
-  if (existsSync("packages")) {
-    for (const entry of readdirSync("packages", { withFileTypes: true })) {
-      const manifest = `packages/${entry.name}/package.json`;
-      if (entry.isDirectory() && existsSync(manifest)) manifests.push(manifest);
-    }
-  }
-  for (const manifest of manifests) {
+  for (const manifest of manifestPaths()) {
     const pkg = JSON.parse(readFileSync(manifest, "utf8"));
     pkg.version = version;
     writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);

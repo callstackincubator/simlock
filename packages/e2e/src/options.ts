@@ -96,38 +96,52 @@ function checkNumber(
   return value;
 }
 
+function checkRequired(value: unknown, message: string): string {
+  if (typeof value !== "string" || value === "") fail(message);
+  return value;
+}
+
+function checkPlatform(value: unknown): "ios" | "android" {
+  if (value !== "ios" && value !== "android") {
+    fail(`platform must be "ios" or "android"; got ${show(value)}`);
+  }
+  return value;
+}
+
+function checkDeviceMode(value: unknown): "slim" | "full" | undefined {
+  if (value !== undefined && value !== "slim" && value !== "full") {
+    fail(`deviceMode must be "slim" or "full"; got ${show(value)}`);
+  }
+  return value;
+}
+
+function checkExtraApps(value: unknown): readonly string[] {
+  const apps = value ?? [];
+  if (!Array.isArray(apps) || !apps.every((app) => typeof app === "string")) {
+    fail("extraApps must be a list of paths");
+  }
+  return apps;
+}
+
 export function checkOptions(options: SimlockDevicesOptions): ProviderOptions {
   const given = options as unknown as Record<string, unknown>;
   for (const name of Object.keys(given)) {
     if (!KNOWN.has(name)) fail(`unknown option ${show(name)}`);
   }
   const url = checkUrl(given["url"]);
-  if (typeof given["token"] !== "string" || given["token"] === "") {
-    fail("token is required (a simlock agent token)");
-  }
-  const platform = given["platform"];
-  if (platform !== "ios" && platform !== "android") {
-    fail(`platform must be "ios" or "android"; got ${show(platform)}`);
-  }
-  if (typeof given["device"] !== "string" || given["device"] === "") {
-    fail("device is required (a model the farm lists)");
-  }
-  const deviceMode = given["deviceMode"];
-  if (deviceMode !== undefined && deviceMode !== "slim" && deviceMode !== "full") {
-    fail(`deviceMode must be "slim" or "full"; got ${show(deviceMode)}`);
-  }
-  const extraApps = given["extraApps"] ?? [];
-  if (!Array.isArray(extraApps) || !extraApps.every((app) => typeof app === "string")) {
-    fail("extraApps must be a list of paths");
-  }
+  const token = checkRequired(given["token"], "token is required (a simlock agent token)");
+  const platform = checkPlatform(given["platform"]);
+  const device = checkRequired(given["device"], "device is required (a model the farm lists)");
+  const deviceMode = checkDeviceMode(given["deviceMode"]);
+  const extraApps = checkExtraApps(given["extraApps"]);
   const osVersion = checkOptionalString("osVersion", given["osVersion"]);
   const imageTag = checkOptionalString("imageTag", given["imageTag"]);
   const deviceBaseline = checkOptionalString("deviceBaseline", given["deviceBaseline"]);
   return {
     url,
-    token: given["token"],
+    token,
     platform,
-    device: given["device"],
+    device,
     ...(osVersion === undefined ? {} : { osVersion }),
     ...(imageTag === undefined ? {} : { imageTag }),
     ...(deviceMode === undefined ? {} : { deviceMode }),
