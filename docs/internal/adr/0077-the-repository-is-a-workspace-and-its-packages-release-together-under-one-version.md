@@ -1,6 +1,6 @@
 # 0077. The repository is a workspace, and its packages release together under one version
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-15
 - **Issue:** [#1562](https://github.com/callstackincubator/simlock/issues/1562) (request [#1298](https://github.com/callstackincubator/simlock/issues/1298))
 
