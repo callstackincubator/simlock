@@ -5606,6 +5606,104 @@ describe("IosSimctlDriver device set", () => {
     },
   );
 
+  it("makes the sources folder an owned root with a path as long as the device set's, under both settings", async () => {
+    const xcodeSim = "/Users/al/Library/Developer/CoreSimulator";
+    const cases = [
+      {
+        name: "simlock, default root",
+        home: "/home/.simlock",
+        config: {},
+        devices: "/home/.simlock/devices/ios",
+        sources: "/home/.simlock/devices/src",
+      },
+      {
+        name: "simlock, configured deviceRoot that fits",
+        home: "/home/.simlock",
+        config: { deviceRoot: "/Volumes/simulators/devices" },
+        devices: "/Volumes/simulators/devices",
+        sources: "/home/.simlock/devices/src_",
+      },
+      {
+        name: "default under the user's home",
+        home: "/Users/al/.simlock",
+        config: { deviceSet: "default" },
+        devices: `${xcodeSim}/Devices`,
+        sources: `/Users/al/.simlock/devices/src${"_".repeat(19)}`,
+        madeBeforeCreate: true,
+      },
+      {
+        name: "default with SIMLOCK_HOME on another volume",
+        home: "/Volumes/Fast/simlock",
+        config: { deviceSet: "default" },
+        devices: `${xcodeSim}/Devices`,
+        sources: `/Volumes/Fast/simlock/devices/src${"_".repeat(16)}`,
+        madeBeforeCreate: true,
+      },
+      {
+        name: "simlock with both under /private",
+        home: "/private/tmp/h",
+        config: {},
+        devices: "/private/tmp/h/devices/ios",
+        sources: "/private/tmp/h/devices/src",
+      },
+      {
+        name: "default with Xcode's Devices not made yet",
+        home: "/Users/al/.simlock",
+        config: { deviceSet: "default" },
+        devices: `${xcodeSim}/Devices`,
+        sources: `/Users/al/.simlock/devices/src${"_".repeat(19)}`,
+      },
+    ] as const;
+    const seed = "00000000-0000-0000-0000-0000000000aa";
+    const copy = "00000000-0000-0000-0000-0000000000bb";
+
+    for (const entry of cases) {
+      const scoped = !("deviceSet" in entry.config);
+      const step = (args: readonly (string | RegExp)[], stdout = "", anySet = true) => ({
+        match: { args: ["simctl", ...(anySet ? ["--set", /.*/] : []), ...args], command: "xcrun" },
+        result: { code: 0, stderr: "", stdout },
+      });
+      const runner = new ScriptedProcessRunner([
+        step(["list", "-j", "devicetypes", "runtimes"], listFixture, scoped),
+        step(
+          ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId],
+          `${seed}\n`,
+        ),
+        step(["boot", seed]),
+        step(["bootstatus", seed, "-b"]),
+        step(["listapps", seed]),
+        step(["shutdown", seed]),
+        step(["clone", seed, /^simlock-/, entry.devices], `${copy}\n`),
+      ]);
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp(entry.home);
+      if ("madeBeforeCreate" in entry) await filesystem.mkdirp(entry.devices);
+      const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        clock: new FakeClock(),
+        coreSimulatorRoot: xcodeSim,
+        driverConfig: entry.config,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: runner,
+        simlockHome: entry.home,
+      });
+      await filesystem.mkdirp(`${entry.devices}/${copy}/data`);
+
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      await driver.provision(spec);
+
+      const sourceSets = runner.calls.slice(1).map((call) => call.args[2]);
+      expect(sourceSets, entry.name).toEqual(Array.from({ length: 6 }, () => entry.sources));
+      expect(entry.sources.length, entry.name).toBe(entry.devices.length);
+      await expect(
+        filesystem.exists(`${entry.sources}/${OWNED_ROOT_MARKER_FILE}`),
+        entry.name,
+      ).resolves.toBe(true);
+    }
+  });
+
   it.each([
     ["Default", { deviceSet: "Default" }, "Default", 'but it is "Default"'],
     ["the empty string", { deviceSet: "" }, "", 'but it is ""'],
