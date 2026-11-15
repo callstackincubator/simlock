@@ -4463,7 +4463,7 @@ describe("IosSimctlDriver listComponents()", () => {
         clock.advance(1_000);
       }
 
-      expect(await removal).toEqual({});
+      expect(await removal).toEqual({ sizeBytes: 1_000 });
       expect(runner.calls.map((call) => call.args)).toContainEqual(runtimeDelete.args);
     });
 
