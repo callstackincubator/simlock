@@ -61,7 +61,7 @@ export function plantReadySeed(
   return plantSource(database, seed);
 }
 
-/** why: stands in for the opener that flushes a source's databases: a checkpoint empties the database's `-wal` file in the filesystem, as SQLite's does, and a path in `failing` cannot be opened. */
+/** why: stands in for the opener that flushes a source's databases: closing a checkpointed database deletes its `-wal` and `-shm` files, as SQLite does, and a path in `failing` cannot be opened. */
 export class FakeSqliteOpener implements SqliteOpener {
   readonly flushed: string[] = [];
   readonly failing = new Set<string>();
@@ -75,11 +75,14 @@ export class FakeSqliteOpener implements SqliteOpener {
     if (options.readOnly) throw new Error(`${path} is opened read-write to flush it`);
     if (this.failing.has(path)) throw new Error("database is locked");
     return {
-      close: () => undefined,
+      close: () => {
+        if (this.flushed.at(-1) !== path) return;
+        void this.#filesystem.rm(`${path}-wal`);
+        void this.#filesystem.rm(`${path}-shm`);
+      },
       exec: (sql) => {
         if (sql !== "PRAGMA wal_checkpoint(TRUNCATE)") throw new Error(`unexpected ${sql}`);
         this.flushed.push(path);
-        void this.#filesystem.writeFileAtomic(`${path}-wal`, "");
       },
       prepare: () => {
         throw new Error("a flush runs one pragma and nothing else");

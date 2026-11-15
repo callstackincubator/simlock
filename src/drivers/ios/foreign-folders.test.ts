@@ -12,7 +12,7 @@ const seed = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const usedCopy = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB";
 const own = folders.ownUdid;
 
-// why: the swap is a pure function with many byte-level cases (spellings, separators, binary neighbours) that every driver verb leans on; the driver's own test proves the files and links it is applied to.
+// why: the swap is a pure function with many byte-level cases (spellings, separators, binary neighbours) that a `provision` leans on; the driver's own test proves the files and links it is applied to.
 describe("swapForeignFolders", () => {
   it.each([
     {

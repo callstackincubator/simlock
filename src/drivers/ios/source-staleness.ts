@@ -21,8 +21,11 @@ export function sourceStaleReason(
   catalog: SimctlCatalog,
   sourcesSet: string,
 ): string | undefined {
-  if (row.setPath !== sourcesSet || !row.indexed) {
+  if (row.setPath !== sourcesSet) {
     return `saved in ${row.setPath}, which copies cannot be fixed from; save it again`;
+  }
+  if (!row.indexed) {
+    return "saved without an index of its files, which copies cannot be fixed from; save it again";
   }
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
   if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;

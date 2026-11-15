@@ -239,7 +239,7 @@ describe("IosSimctlDriver sources folder", () => {
     expect(listed.map((source) => source.staleReason)).toEqual([
       `saved in ${oldSet}, which copies cannot be fixed from; save it again`,
       undefined,
-      `saved in ${sourcesRoot}, which copies cannot be fixed from; save it again`,
+      "saved without an index of its files, which copies cannot be fixed from; save it again",
     ]);
     const oldId = listed[0]?.id ?? "";
     await driver.destroySource(oldId);

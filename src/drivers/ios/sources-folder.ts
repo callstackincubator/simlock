@@ -2,6 +2,7 @@ import { basename, dirname, join } from "node:path";
 
 import { OwnedRootError } from "../../core/index.js";
 import type { Filesystem } from "../../ports/index.js";
+import type { ForeignFolders } from "./foreign-folders.js";
 
 const SOURCES_FOLDER_NAME = "src";
 
@@ -106,6 +107,20 @@ export function sourcesFolderOf(
     filesystem: options.filesystem,
     simlockHome: options.simlockHome,
   });
+}
+
+export type SourcesLayout = Pick<ForeignFolders, "deviceSet" | "sourcesSet">;
+
+/** why: a file stores the real path of the device set (ADR 0076 §1), so the swap names a copy's folder by it, never by the path the set was configured or found under. */
+export async function sourcesLayoutOf(
+  options: SourcesFolderContext,
+  deviceSet: string,
+  configured = false,
+): Promise<SourcesLayout> {
+  return {
+    deviceSet: await realPathOf(options.filesystem, deviceSet),
+    sourcesSet: await sourcesFolderOf(options, deviceSet, configured),
+  };
 }
 
 /**

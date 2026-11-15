@@ -95,7 +95,7 @@ import {
 } from "./source-copy.js";
 import { indexSource } from "./source-index.js";
 import { seedIsStale, sourceStaleReason } from "./source-staleness.js";
-import { fitSourcesFolders, sourcesFolderOf, sourcesSetCheck } from "./sources-folder.js";
+import { fitSourcesFolders, sourcesLayoutOf, sourcesSetCheck } from "./sources-folder.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
@@ -355,7 +355,7 @@ export class IosSimctlDriver implements Driver {
     options: IosSimctlDriverOptions,
     deviceRoot: string,
     rootOptions: EnsureOwnedRootOptions | undefined,
-    sourcesSet: string,
+    sourceFolders: CopyContext["folders"],
   ) {
     this.rebootReadyBeforeGrant = rootOptions === undefined;
     this.#clock = options.clock;
@@ -385,16 +385,16 @@ export class IosSimctlDriver implements Driver {
     this.#afterBoot = this.#afterBootFor(options);
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
-    this.#sourcesSet = sourcesSet;
+    this.#sourcesSet = sourceFolders.sourcesSet;
     this.#copy = {
       clock: options.clock,
       filesystem: options.filesystem,
-      folders: { deviceSet: deviceRoot, logsRoot: options.logsRoot, sourcesSet },
+      folders: { ...sourceFolders, logsRoot: options.logsRoot },
       logger: options.logger,
       sqlite: options.sqlite,
     };
     this.#ownsSourcesSet = sourcesSetCheck(
-      sourcesSet,
+      sourceFolders.sourcesSet,
       options.simlockHome,
       rootOptions === undefined ? undefined : deviceRoot,
     );
@@ -443,8 +443,8 @@ export class IosSimctlDriver implements Driver {
         ...(await fitSourcesFolders(options, ownRoot, () => xcodeDeviceSetPath(options))),
       ]);
       const devices = xcodeDeviceSetPath(options);
-      const folder = await sourcesFolderOf(options, devices);
-      return new IosSimctlDriver(options, devices, undefined, folder);
+      const layout = await sourcesLayoutOf(options, devices);
+      return new IosSimctlDriver(options, devices, undefined, layout);
     }
     await refuseDefaultSourcesLeftovers(options.filesystem, [
       join(options.simlockHome, "devices", "ios-sources"),
@@ -472,8 +472,8 @@ export class IosSimctlDriver implements Driver {
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
 
-    const folder = await sourcesFolderOf(options, deviceRoot, true);
-    return new IosSimctlDriver(options, deviceRoot, rootOptions, folder);
+    const layout = await sourcesLayoutOf(options, deviceRoot, true);
+    return new IosSimctlDriver(options, deviceRoot, rootOptions, layout);
   }
 
   get deviceRoot(): string {

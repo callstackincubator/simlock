@@ -27,17 +27,17 @@ export async function indexSource(
   root: string,
   options: SourceIndexOptions,
 ): Promise<readonly SourceFile[]> {
-  const entries = await walk(options.filesystem, root, "");
   const unflushed = new Set<string>();
-  for (const entry of entries) {
+  for (const entry of await walk(options.filesystem, root, "")) {
     if (entry.kind === "file" && entry.path.endsWith(WAL_SUFFIX)) {
       if (!(await flush(entry.path.slice(0, -WAL_SUFFIX.length), options))) {
         unflushed.add(entry.path);
       }
     }
   }
+  // why: closing a flushed database deletes its `-wal` and `-shm`, so the files are listed again after the flush.
   const indexed: SourceFile[] = [];
-  for (const entry of entries) {
+  for (const entry of await walk(options.filesystem, root, "")) {
     if (unflushed.has(entry.path)) continue;
     const bytes =
       entry.kind === "link"

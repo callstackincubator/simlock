@@ -31,6 +31,17 @@ class SlowReadFilesystem extends MemoryFilesystem {
 
   failWrites = false;
 
+  /** why: the memory filesystem follows no link above a path's last part, so a home reached through a link is a prefix this maps to its real path. */
+  alias: { readonly from: string; readonly to: string } | undefined;
+
+  override async realpath(path: string): Promise<string> {
+    const alias = this.alias;
+    if (alias !== undefined && path.startsWith(`${alias.from}/`)) {
+      return `${alias.to}${path.slice(alias.from.length)}`;
+    }
+    return super.realpath(path);
+  }
+
   override async overwriteSameLength(path: string, bytes: Uint8Array): Promise<void> {
     if (this.failWrites) throw new Error("disk full");
     await super.overwriteSameLength(path, bytes);
@@ -67,20 +78,33 @@ async function rigWith(
   root: string,
   files: readonly { readonly relativePath: string; readonly kind: "link" | "file" }[],
   plant: (filesystem: SlowReadFilesystem, copy: string) => Promise<void>,
+  layout: {
+    readonly home: string;
+    readonly sources: string;
+    readonly alias?: { readonly from: string; readonly to: string };
+    readonly real?: string;
+  } = {
+    home: "/home/.simlock",
+    sources: sourcesRoot,
+  },
 ): Promise<Rig> {
   const clock = new FakeClock();
   const filesystem = new SlowReadFilesystem(clock);
   const logger = new LineLogger();
-  await filesystem.mkdirp(`${root}/${copyUdid}`);
+  const planted = layout.real ?? root;
+  filesystem.alias = layout.alias;
+  await filesystem.mkdirp(`${planted}/${copyUdid}`);
+  await filesystem.mkdirp(`${root}/${copyUdid}/data`);
   await filesystem.writeFileAtomic(
     `${root}/${OWNED_ROOT_MARKER_FILE}`,
     JSON.stringify({ instanceId, owner: "simlock", platform: "ios", schemaVersion: 1 }),
   );
-  await plant(filesystem, `${root}/${copyUdid}`);
+  await plant(filesystem, `${planted}/${copyUdid}`);
   const database = plantReadySeed(await memorySourceDatabase(), {
     deviceTypeId: driverData.deviceTypeId,
     files,
     runtimeId: driverData.runtimeId,
+    setPath: layout.sources,
     udid: seedUdid,
   });
   const runner = new ScriptedProcessRunner([
@@ -93,7 +117,7 @@ async function rigWith(
     },
     {
       match: {
-        args: ["simctl", "--set", sourcesRoot, "clone", seedUdid, driverData.name, root],
+        args: ["simctl", "--set", layout.sources, "clone", seedUdid, driverData.name, root],
         command: "xcrun",
       },
       result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
@@ -110,7 +134,7 @@ async function rigWith(
     logger,
     logsRoot,
     processRunner: runner,
-    simlockHome: "/home/.simlock",
+    simlockHome: layout.home,
   });
   await driver.resolveSpec(spec);
   return {
@@ -169,6 +193,27 @@ describe("a lease's copy before its first boot", () => {
       "only recorded files",
     ).toBe(`${sourcesRoot}/${seedUdid}`);
     expect(rig.logger.lines).toContain(`swapped 2 files and 1 links in 21 ms for ${copyUdid}`);
+  });
+
+  it("swaps by real paths when SIMLOCK_HOME is reached through a link", async () => {
+    const root = "/tmp/h/devices/dev-ios";
+    const real = "/private/tmp/h/devices/dev-ios";
+    const realSources = "/private/tmp/h/devices/src____";
+    const rig = await rigWith(
+      root,
+      [{ kind: "file", relativePath: "data/prefs.bin" }],
+      async (fs, copy) => {
+        await fs.mkdirp(`${copy}/data`);
+        await fs.writeFileAtomic(`${copy}/data/prefs.bin`, `${realSources}/${seedUdid}/data`);
+      },
+      { alias: { from: "/tmp", to: "/private/tmp" }, home: "/tmp/h", real, sources: realSources },
+    );
+
+    await rig.provision();
+
+    expect(await rig.filesystem.readFile(`${real}/${copyUdid}/data/prefs.bin`)).toBe(
+      `${real}/${copyUdid}/data`,
+    );
   });
 
   it("refuses a file whose swap would change its length", async () => {
