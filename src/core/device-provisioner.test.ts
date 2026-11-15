@@ -446,8 +446,11 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // doctor and registry tests split out of one file (ADR 0063).
       [join("core", "test-doctor.ts")]: 2,
       [join("core", "test-registry.ts")]: 1,
-      // why: the harness the lease-acquisition coordinator tests split out of one file share (ADR 0063).
+      [join("core", "test-registry-corrupt-row.ts")]: 1,
+      // why: the harnesses the lease-acquisition coordinator and createLeasing tests split out of one
+      // file share (ADR 0063).
       [join("leasing", "test-lease-acquisition.ts")]: 1,
+      [join("leasing", "test-create-leasing.ts")]: 1,
       // why: the dispatcher tests' seeded warm device, shared by the files that start from one.
       [join("daemon", "test-dispatcher.ts")]: 1,
     });
@@ -464,8 +467,11 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       [join("drivers", "ios", "index.ts")]: 1,
       [join("drivers", "android", "test-driver-harness.ts")]: 1,
       [join("drivers", "android", "test-seed-harness.ts")]: 1,
+      [join("drivers", "android", "test-seeds.ts")]: 1,
       // why: the harness's fixture devices, as for registerDevice above.
       [join("leasing", "test-lease-acquisition.ts")]: 1,
+      [join("leasing", "test-create-leasing.ts")]: 1,
+      [join("core", "test-quarantine-coordinator.ts")]: 1,
       [join("daemon", "test-dispatcher.ts")]: 1,
     });
   });
