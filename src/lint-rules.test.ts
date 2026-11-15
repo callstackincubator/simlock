@@ -677,6 +677,66 @@ describe("src/auth imports little", () => {
   });
 });
 
+describe("packages/ and the root code stay apart", () => {
+  function packageViolations(world: Readonly<Record<string, string>>): string[] {
+    const dir = join(scratch, `packages-apart-${counter++}`);
+    // why: depcruise fails on a folder that is not there, so each one the lint names gets a file.
+    const empty = Object.fromEntries(
+      ["src/x.ts", "ui/src/none.ts", "e2e/none.ts", "packages/none.ts"].map((path) => [
+        path,
+        "export {};\n",
+      ]),
+    );
+    for (const [path, contents] of Object.entries({ ...empty, ...world })) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src", "ui", "e2e", "packages"])
+      .filter((v) => v.rule.name.startsWith("packages-"))
+      .map((v) => `${v.rule.name} ${v.from} -> ${v.to}`)
+      .sort();
+  }
+
+  const lib = { "packages/e2e/src/lib.ts": "export const lib = 1;\n" };
+  const root = { "src/core/index.ts": "export const core = 1;\n" };
+
+  it("dependency-cruiser fails an import from src/ into packages/e2e and one back, and passes a package importing itself and an e2e test importing a package", () => {
+    expect(
+      packageViolations({
+        ...lib,
+        ...root,
+        "packages/e2e/src/index.ts": 'import "./lib.js";\nexport {};\n',
+        "e2e/provider.test.ts": 'import "../packages/e2e/src/lib.js";\nexport {};\n',
+      }),
+    ).toEqual([]);
+    expect(
+      packageViolations({
+        ...lib,
+        "src/daemon.ts": 'import "../packages/e2e/src/lib.js";\nexport {};\n',
+        "ui/src/page.ts": 'import "../../packages/e2e/src/lib.js";\nexport {};\n',
+        "e2e/helpers.ts": 'import "../packages/e2e/src/lib.js";\nexport {};\n',
+      }),
+    ).toEqual([
+      "packages-not-in-root-code e2e/helpers.ts -> packages/e2e/src/lib.ts",
+      "packages-not-in-root-code src/daemon.ts -> packages/e2e/src/lib.ts",
+      "packages-not-in-root-code ui/src/page.ts -> packages/e2e/src/lib.ts",
+    ]);
+    expect(
+      packageViolations({
+        ...root,
+        "packages/e2e/src/index.ts":
+          'import "../../../src/core/index.js";\nimport "../../../ui/src/none.js";\nimport "../../../e2e/none.js";\nexport {};\n',
+      }),
+    ).toEqual([
+      "packages-not-from-root-code packages/e2e/src/index.ts -> e2e/none.ts",
+      "packages-not-from-root-code packages/e2e/src/index.ts -> src/core/index.ts",
+      "packages-not-from-root-code packages/e2e/src/index.ts -> ui/src/none.ts",
+    ]);
+  });
+});
+
 describe("the cycle check between components", () => {
   function cycleWorld(files: Record<string, string>): Violation[] {
     const dir = join(scratch, `cycles-${counter++}`);

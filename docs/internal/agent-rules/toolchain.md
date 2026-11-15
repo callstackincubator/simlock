@@ -95,9 +95,9 @@ mutant those leave alive gets a second run with every related test file.
 
 ## Routines
 
-Claude Code routines run these skills on a schedule, each but one opening
-one PR that goes through the reviews its diff's kind gets and the merge
-gate:
+Claude Code routines run these skills on a schedule. All but the three
+named below the table open one PR that goes through the reviews its diff's
+kind gets and the merge gate:
 
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
@@ -107,9 +107,11 @@ gate:
 | Review calibration | `calibrate-reviews` | weekly |
 | Recurring findings | `recurring-findings` | weekly |
 | Refactor           | `refactor`          | weekly |
+| Upstream check     | `check-upstream`    | weekly |
 
 `recurring-findings` opens draft task issues instead of a PR, and skips
-the ending below. `refactor` opens one `refactor:new` issue from a
+the ending below. `check-upstream` only comments on `upstream` issues, and
+skips it too. `refactor` opens one `refactor:new` issue from a
 measured target and, when delivery rule 18's three conditions hold, sets
 it ready and runs `deliver` on it, whose gate ends it instead. Every other routine ends the same way; its skill adds
 only what it changes:
@@ -149,11 +151,14 @@ Swift build is skipped and iOS streams report unavailable. Neither build checks
 a CoreDevice version: the device program is the one place that enforces that
 pin.
 
-The build steps run through Turborepo (`turbo.json`): `pnpm build`,
-`pnpm build:e2e` and the test scripts that build first run the
-`build:*:run` scripts and skip each one whose inputs (listed per step in
-`turbo.json`) did not change, restoring its `dist/` files from `.turbo/cache`
-in this worktree. Any `package.json` change reruns every step. A capture
+The repository is a pnpm workspace (ADR 0077): `simlock` at the root and
+`@simlock/e2e` under `packages/e2e`. The build steps run through Turborepo
+(`turbo.json`): `pnpm build`, `pnpm build:e2e` and the test scripts that build
+first run the root package's `//#build:*:run` tasks (and `pnpm build` also
+`@simlock/e2e#build`, `tsc` to `packages/e2e/dist/`) and skip each one whose
+inputs (listed per step in `turbo.json`) did not change, restoring its
+`dist/` files from `.turbo/cache` in this worktree. A new `turbo run` call
+names the `//#` ids. Any `package.json` change reruns every step. A capture
 build that skipped Swift (no Xcode selected) is cached too: once Xcode is
 selected, run `pnpm build:capture --force`.
 

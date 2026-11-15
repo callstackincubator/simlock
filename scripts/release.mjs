@@ -10,12 +10,12 @@
 //                                    `feature` moves 0.X, `patch` moves 0.X.Y, and `auto` is `feature`
 //                                    when a message is a `feat` or a breaking change, else `patch`.
 //                                    No message at all is a failure: there is nothing to release.
-//   bump <version>                   Writes the version into package.json.
+//   bump <version>                   Writes the version into package.json and every packages/*/package.json.
 //   changelog <version> <previous-tag> <notes-file>
 //                                    Inserts the release's section into CHANGELOG.md, above the first
 //                                    released section, from the notes file (GitHub's generated
 //                                    notes); an empty previous tag means the first release.
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const VERSION = /^(\d+)\.(\d+)\.(\d+)$/u;
 const BUMPS = ["auto", "feature", "patch"];
@@ -80,11 +80,19 @@ function plan(args) {
   process.stdout.write(`version=${version}\ntag=v${version}\nbump=${chosen}\n`);
 }
 
+function manifestPaths() {
+  const packages = existsSync("packages") ? readdirSync("packages") : [];
+  const manifests = packages.map((name) => `packages/${name}/package.json`);
+  return ["package.json", ...manifests.filter((manifest) => existsSync(manifest))];
+}
+
 function bump([version]) {
   parseVersion(version, "the version to write");
-  const pkg = readPackage();
-  pkg.version = version;
-  writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+  for (const manifest of manifestPaths()) {
+    const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+    pkg.version = version;
+    writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+  }
 }
 
 function changelog([version, previousTag = "", notesFile]) {

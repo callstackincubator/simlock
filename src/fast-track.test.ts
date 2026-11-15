@@ -207,6 +207,11 @@ describe("fast-track.mjs exit check", { timeout: 30_000 }, () => {
     ],
     ["that touches the CLI tree", { files: ["src/cli/tree.ts"] }, "a surface file"],
     ["that touches an HTTP source file", { files: ["src/http/app.ts"] }, "a surface file"],
+    [
+      "that touches the e2e provider entry",
+      { files: ["packages/e2e/src/index.ts"] },
+      "a surface file",
+    ],
     ["that bumps the protocol", { files: ["src/contract/protocol.ts"] }, "the protocol version"],
     ["that changes an ADR", { files: ["docs/internal/adr/0005-x.md"] }, "an ADR"],
     [

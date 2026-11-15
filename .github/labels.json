@@ -103,5 +103,10 @@
     "name": "auto-refactor",
     "color": "d4c5f9",
     "description": "A refactor PR the refactor routine started, not the maintainer (rule 18)."
+  },
+  {
+    "name": "upstream",
+    "color": "fbca04",
+    "description": "Blocked on a dependency's issue, linked in a ## Waiting on upstream comment. Checked weekly."
   }
 ]

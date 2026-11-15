@@ -12,6 +12,7 @@
 //   http       each `declareRoute(...)` call in src/http/*.ts
 //   client     src/client/index.ts and src/admin/index.ts, the package's two exports
 //   events     the EventMap interface in src/bus/index.ts, which EventName is the keys of
+//   e2e-provider  packages/e2e/src/index.ts, the options and export of @simlock/e2e
 //
 // A part counts as changed when its code differs once comments and whitespace are dropped, so
 // a comment or a reflow is no change. A commit in the range with the trailer `Docs: none
@@ -60,6 +61,7 @@ const SURFACES = [
   { name: "http", files: httpFiles(), parts: calls(/declareRoute\(/g) },
   { name: "client", files: ["src/client/index.ts", "src/admin/index.ts"], parts: whole },
   { name: "events", files: ["src/bus/index.ts"], parts: block(/export interface EventMap \{/) },
+  { name: "e2e-provider", files: ["packages/e2e/src/index.ts"], parts: whole },
 ];
 
 const changed = [...new Set(SURFACES.filter(changes).map((s) => s.name))];

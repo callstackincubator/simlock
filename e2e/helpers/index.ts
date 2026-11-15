@@ -5,6 +5,7 @@ export {
   makeAgent,
   makeProfileAgent,
   leaseClient,
+  loadAgentDeviceClient,
   newAgentToken,
   waitForAgentDevice,
 } from "./agent-device.js";
