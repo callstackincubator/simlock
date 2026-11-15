@@ -10,6 +10,7 @@ import type { createAgentDeviceClient, LeaseScopedOptions } from "agent-device";
 
 import type { ProviderOptions } from "./options.js";
 import { DeviceSetupFailed, installApp, limiter, type Installation } from "./install.js";
+import { messageOf } from "./errors.js";
 import { allocateQueued } from "./queue.js";
 import { startRenewal } from "./renew.js";
 
@@ -157,8 +158,14 @@ export function createProvider(
     if (entry === undefined) return;
     entry.stop();
     held.delete(lease.id);
-    const farm = await client(`release-${lease.id.slice(0, 8)}`);
-    await farm.leases.release({ ...entry.scope, signal: context.signal });
+    try {
+      const farm = await client(`release-${lease.id.slice(0, 8)}`);
+      await farm.leases.release({ ...entry.scope, signal: context.signal });
+    } catch (error) {
+      context.log(
+        `simlock: releasing lease ${lease.id} failed: ${messageOf(error)}; it runs out by itself`,
+      );
+    }
   }
 
   return { name: "simlock", acquire, release };
