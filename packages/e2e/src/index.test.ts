@@ -47,6 +47,10 @@ describe("simlockDevices", () => {
         { url: `https://farm.example.com${"/".repeat(100_000)}` },
         { url: "https://farm.example.com" },
       ],
+      [
+        { url: `https://farm.example.com${"/".repeat(100_000)}x` },
+        { url: `https://farm.example.com${"/".repeat(100_000)}x` },
+      ],
       [{ url: "http://10.0.0.5:7777" }, { url: "http://10.0.0.5:7777" }],
       [{ ttlMs: 30_000 }, { ttlMs: 30_000 }],
       [{ queueMs: 1 }, { queueMs: 1 }],
