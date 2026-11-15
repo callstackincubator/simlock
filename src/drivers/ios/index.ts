@@ -84,7 +84,7 @@ import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
-import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
+import { IosSourceTable, sourcesSetFor, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
@@ -304,10 +304,6 @@ interface ResolvedIosSpec {
   readonly deviceType: DeviceType;
   readonly runtime: Runtime;
   readonly spec: VirtualSpec;
-}
-
-function sourcesSetFor(simlockHome: string, deviceRoot: string, owned: boolean): string {
-  return owned ? join(deviceRoot, "sources") : join(simlockHome, "devices", "ios-sources");
 }
 
 export class IosSimctlDriver implements Driver {
