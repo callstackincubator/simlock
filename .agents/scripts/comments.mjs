@@ -29,7 +29,32 @@ export function listComments({ base, head, all = false, files = null }) {
     const kinds = SHELL.test(path) ? shellKinds(lines) : scriptKinds(lines);
     blocks.push(...blocksIn(path, lines, kinds, added, all));
   }
-  return blocks;
+  if (all) return blocks;
+  const removed = removedLines(base, head);
+  return blocks.filter((block) => !movedVerbatim(block, removed));
+}
+
+// why: a split moves code between files unchanged, so a block the diff adds whole while it
+// removes the same lines elsewhere is not new; one removed line excuses one added line.
+function movedVerbatim(block, removed) {
+  if (block.state !== "added") return false;
+  const wanted = new Map();
+  for (const { text } of block.lines) wanted.set(text.trim(), (wanted.get(text.trim()) ?? 0) + 1);
+  if ([...wanted].some(([text, n]) => (removed.get(text) ?? 0) < n)) return false;
+  for (const [text, n] of wanted) removed.set(text, removed.get(text) - n);
+  return true;
+}
+
+function removedLines(base, head) {
+  const from = git("merge-base", base, head ?? "HEAD").trim();
+  const range = head === undefined ? [from] : [from, head];
+  const removed = new Map();
+  for (const line of git("diff", "-U0", "--no-color", ...range).split("\n")) {
+    if (!line.startsWith("-") || line.startsWith("--- ")) continue;
+    const text = line.slice(1).trim();
+    removed.set(text, (removed.get(text) ?? 0) + 1);
+  }
+  return removed;
 }
 
 export function changedFiles({ base, head, files = null }) {
