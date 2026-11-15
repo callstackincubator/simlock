@@ -425,6 +425,54 @@ describe("createCore", () => {
     expect(JSON.stringify(sink.records)).toContain("catalog unreadable");
   });
 
+  it("converge stores a baseline's stale reason before anything reads it, and logs a check that failed without failing the start", async () => {
+    const reason =
+      "saved in /home/.simlock/devices/ios/sources, which copies cannot be fixed from; save it again";
+    const cases = [
+      { name: "a stale source", failure: undefined, stored: reason, logged: false },
+      {
+        name: "the check's read fails",
+        failure: new Error("catalog unreadable"),
+        stored: null,
+        logged: true,
+      },
+    ];
+
+    for (const entry of cases) {
+      const sink = new MemoryLogSink();
+      const { core, driver, registry } = await build({ sink });
+      testStateOf(registry)
+        .database.prepare(
+          `INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id)
+           VALUES ('login', 1, 'ios', 'iPhone 16', '26.5', 'full', '2026-11-03T00:00:00.000Z', 'src-login')`,
+        )
+        .run();
+      driver.setSources([
+        {
+          id: "src-login",
+          kind: "baseline",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          staleReason: reason,
+        },
+      ]);
+      // why: the startup listing is call 1; the staleness check's read is call 2.
+      if (entry.failure !== undefined) driver.failOn("listSources", 2, entry.failure);
+      core.connect(ports());
+
+      await expect(core.converge(await core.readStartup()), entry.name).resolves.toBeUndefined();
+
+      expect(
+        testStateOf(registry).database.prepare("SELECT stale_reason FROM baselines").get(),
+        entry.name,
+      ).toEqual({ stale_reason: entry.stored });
+      expect(
+        JSON.stringify(sink.records).includes("could not check baselines at startup"),
+        entry.name,
+      ).toBe(entry.logged);
+    }
+  });
+
   it("converge shuts down and deletes a released device whose wipe was deferred, instead of wiping it", async () => {
     const harness = await build();
     const { released } = await releasedLease(harness, { deferReclaim: true });
