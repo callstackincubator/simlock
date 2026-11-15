@@ -1,5 +1,4 @@
 import { dirname, join } from "node:path";
-
 import {
   BootTimeoutError,
   KeptCategoriesError,
@@ -35,11 +34,8 @@ import {
   OwnedRootError,
   type PassthroughCommand,
   type PassthroughContext,
-  PassthroughRefusedError,
   removeListedComponent,
-  RuntimeMissingError,
   sameReceipt,
-  UnknownModelError,
   UnsupportedRequestOptionError,
   type ObservedMark,
   type DeviceClass,
@@ -79,8 +75,6 @@ import {
   UDID_PATTERN,
 } from "./device-set-leftovers.js";
 import { createIosDeviceTcpFor } from "./device-tcp.js";
-import { devicectlExecCommand } from "./devicectl-exec.js";
-import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
@@ -101,9 +95,51 @@ import {
   type DeviceType,
   type Runtime,
   type SimctlCatalog,
-  UNBOUNDED_VERSION,
 } from "./simctl-parse.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
+import { type IosDriverData, iosDriverData, requireIosPlatform } from "./simulator-data.js";
+import { IOS_PASSTHROUGH_TOOLS, passthroughCommand } from "./passthrough-rules.js";
+import {
+  IOS_RUNTIME_MIN_FREE_BYTES,
+  IOS_RUNTIME_ASSET_ROOT,
+  type RuntimeAsset,
+  runtimeMountsAsset,
+  parseRuntimeAsset,
+  type RuntimeImage,
+  isBeingDeleted,
+  parseRuntimeImages,
+  runtimeReceipt,
+  imageReceipt,
+  isIosImage,
+  type ListedImage,
+  leftoverDownloadsSentence,
+  unavailableDevicesResidue,
+  type DefaultSetDevices,
+  devicesPerRuntime,
+  installedComponent,
+  withBareMajorHint,
+} from "./runtime-images.js";
+import {
+  LATEST_COMPONENT,
+  missingRuntime,
+  belowDownloadFloor,
+  IosUnknownModelError,
+  IosVersionOutOfRangeError,
+  IosRuntimeUnpairedError,
+  IosDownloadFloorError,
+  IosRuntimeUnavailableForDownloadError,
+  runtimeForComponent,
+  findInstalledRuntime,
+  findDeviceType,
+  pairedInstalledRuntimes,
+  findPairedRuntime,
+  pairedVersions,
+  isUnboundedMax,
+  isVersionInRange,
+  majorVersionString,
+  newestRuntime,
+  compareVersions,
+} from "./runtime-versions.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
@@ -120,20 +156,6 @@ const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
 // being deleted, which it does for a few seconds after `simctl runtime delete` answers (#259).
 const DELETING_POLL_MS = 1_000;
-const LATEST_COMPONENT = "latest";
-// why: `xcodebuild -downloadPlatform iOS -buildVersion` only reaches back to iOS 16.0 (Xcode
-// 16.1+); older runtimes must be installed through Xcode itself.
-const IOS_DOWNLOAD_FLOOR: readonly [number, number, number] = [16, 0, 0];
-// why: Conservative estimate for a simulator runtime download+install (~7 GB observed, rounded up
-// with headroom) -- reserved by `ComponentInstaller` before `xcodebuild -downloadPlatform` ever
-// starts, so a full disk fails fast instead of filling up mid-download.
-const IOS_RUNTIME_MIN_FREE_BYTES = 8 * 1024 ** 3;
-// why: Where macOS's own asset daemon keeps every simulator runtime it has ever downloaded, one
-// `<uuid>.asset` bundle per build. `simctl runtime delete` only unregisters a runtime from
-// CoreSimulator; the bundle it was mounted from stays here, marked never-collected, spending
-// the same free space `IOS_RUNTIME_MIN_FREE_BYTES` measures. Nothing Simlock may do can
-// reclaim it (issue #79), so the driver only ever reads this path.
-const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
 // why: A cold `simctl boot` to `bootstatus` measures roughly 30s on a fast, idle machine and up to
 // a minute on a loaded or slower one. The upper end is the estimate, deliberately: this number
 // is what a waiting requester is quoted, and quoting 30s to someone who then waits 60s is the
@@ -161,13 +183,6 @@ async function withPasteboardWrite<T>(run: () => Promise<T>): Promise<T> {
   return await turn;
 }
 
-/**
- * why: a driver that refused to start has no instance to ask, so the `simlock <tool>` names
- * it answers to are a constant, and `DriverRejection` carries them so `simlock simctl` can
- * say why it is unavailable rather than reading as a missing SDK.
- */
-export const IOS_PASSTHROUGH_TOOLS: readonly string[] = ["simctl", "devicectl"];
-
 const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]>>> = {
   phone: ["iPhone 17", "iPhone 16", "iPhone 15", "iPhone 14", "iPhone 13"],
   tablet: [
@@ -186,37 +201,12 @@ const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]
   ],
 };
 
-/**
- * why: Verbs `simlock simctl` will not proxy. Every one of them changes a device's lifecycle,
- * which the registry -- not `simctl` -- is the record of: a device created here has no
- * registry entry and reads as an orphan, and one erased or deleted under a live lease
- * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
- * exactly the capability the device set exists to take away (ADR 0001, decision 7).
- */
-export const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
-
-export const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
-
-export const SHUTDOWN_ALL_TARGET = "all";
-
-export const REFUSED_RUNTIME_OPERATION = "delete";
-
-const RECLAIM_INSTEAD =
-  "Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead.";
-
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;
 const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
 const OVERRIDES_FILE_NAME = "disabled.plist";
 const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
 const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
-
-interface IosDriverData {
-  readonly deviceTypeId: string;
-  readonly name: string;
-  readonly runtimeId: string;
-  readonly udid: string;
-}
 
 export interface SlimmedFact {
   readonly deviceId: string;
@@ -293,12 +283,6 @@ const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new
   ["Apple TV", "tv"],
   ["Apple Vision", "vision"],
 ]);
-
-interface RuntimeAsset {
-  readonly path: string;
-  readonly version: string;
-  readonly build: string;
-}
 
 interface ResolvedIosSpec {
   readonly deviceType: DeviceType;
@@ -454,7 +438,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
-    this.#requireIosPlatform(request.platform);
+    requireIosPlatform(request.platform);
     if (request.imageTag !== undefined) {
       throw new UnsupportedRequestOptionError("ios", "imageTag");
     }
@@ -929,7 +913,7 @@ export class IosSimctlDriver implements Driver {
     spec: VirtualSpec,
     options?: { readonly source?: string },
   ): Promise<DriverDevice> {
-    this.#requireIosPlatform(spec.platform);
+    requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
     const seed =
       options?.source === undefined
@@ -1747,124 +1731,13 @@ export class IosSimctlDriver implements Driver {
 
   readonly passthroughTools = IOS_PASSTHROUGH_TOOLS;
 
-  async passthrough(
+  passthrough(
     tool: string,
     device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
     args: readonly string[],
     context?: PassthroughContext,
   ): Promise<PassthroughCommand> {
-    if (tool === "devicectl") return this.#devicectlPassthrough(device, args, context);
-    if (tool !== "simctl") {
-      throw new PassthroughRefusedError(
-        tool,
-        `Refusing \`${tool}\`: the iOS driver does not wrap it.`,
-      );
-    }
-    if (context?.platform !== undefined && context.platform !== this.platform) {
-      throw new PassthroughRefusedError(
-        tool,
-        `Refusing \`simctl\`: it only serves an iOS simulator, and this lease is on the ${context.platform} platform.`,
-      );
-    }
-    if (device !== undefined && isPhysicalDriverDevice(device)) {
-      throw new PassthroughRefusedError(
-        tool,
-        "Refusing `simctl`: it serves simulators, and this lease holds a physical device. Use `devicectl`.",
-      );
-    }
-    this.#assertProxyable(args);
-    const scopedArgs = device === undefined ? args : fillSimctlDevice(args, device.deviceId);
-    // why: No environment: simctl ignores every variable that could carry the device set.
-    return await Promise.resolve({
-      args: this.#scopedSimctlArgv(scopedArgs),
-      command: "xcrun",
-      env: {},
-    });
-  }
-
-  #devicectlPassthrough(
-    device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
-    args: readonly string[],
-    context: PassthroughContext | undefined,
-  ): PassthroughCommand {
-    const tool = "devicectl";
-    if (device === undefined) {
-      throw new PassthroughRefusedError(
-        tool,
-        "Refusing `simlock devicectl`: Simlock has no local devicectl wrapper. Run `xcrun devicectl` directly, or use `device.exec` on a lease.",
-      );
-    }
-    if (context?.platform !== undefined && context.platform !== this.platform) {
-      throw new PassthroughRefusedError(
-        tool,
-        `Refusing \`devicectl\`: it only serves a physical iOS device, and this lease is on the ${context.platform} platform.`,
-      );
-    }
-    if (!isPhysicalDriverDevice(device)) {
-      throw new PassthroughRefusedError(
-        tool,
-        "Refusing `devicectl`: it only serves a physical device, and this lease holds a simulator. Use `simctl`.",
-      );
-    }
-    return devicectlExecCommand(device.deviceId, args);
-  }
-
-  #assertProxyable(args: readonly string[]): void {
-    const [verb, ...operands] = this.#subcommand(args);
-    if (verb === undefined) return;
-    if (REFUSED_SIMCTL_VERBS.has(verb)) {
-      this.#refuse(
-        verb,
-        `it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. ${RECLAIM_INSTEAD}`,
-      );
-    }
-    if (verb === "shutdown" && operands.includes(SHUTDOWN_ALL_TARGET)) {
-      this.#refuse(
-        `shutdown ${SHUTDOWN_ALL_TARGET}`,
-        `it stops every device in Simlock's set at once -- every agent's, not just yours -- and each interrupted lease spends its recovery budget rebooting, so one that runs out ends as \`lease_lost\`. Shutting a single device down by udid is still allowed. ${RECLAIM_INSTEAD}`,
-      );
-    }
-    // why: A bare `simctl` reaches this too, so refusing it takes no capability away. The
-    // wrapper is advertised as the safe path, and being the convenient route to a
-    // multi-gigabyte deletion of a runtime Xcode shares is not that.
-    if (
-      verb === "runtime" &&
-      operands.find((operand) => !operand.startsWith("-")) === REFUSED_RUNTIME_OPERATION
-    ) {
-      this.#refuse(
-        `runtime ${REFUSED_RUNTIME_OPERATION}`,
-        "it deletes a runtime shared with Xcode and other tools. To remove a runtime Simlock added, use `simlock component remove ios <version>`; delete any other through Xcode.",
-      );
-    }
-  }
-
-  #refuse(command: string, guidance: string): never {
-    throw new PassthroughRefusedError(
-      "simctl",
-      `Refusing \`simlock simctl ${command}\`: ${guidance}`,
-    );
-  }
-
-  #subcommand(args: readonly string[]): readonly string[] {
-    for (const [index, argument] of args.entries()) {
-      if (!argument.startsWith("-")) return args.slice(index);
-      const flag = /^-+([^=]*)/.exec(argument)?.[1];
-      if (flag !== undefined && CALLER_SUPPLIED_SCOPE_FLAGS.has(flag)) {
-        throw new PassthroughRefusedError(
-          "simctl",
-          `Refusing \`simlock simctl ${argument}\`: \`simlock simctl\` supplies the device set itself, and a caller-supplied \`--${flag}\` would point simctl somewhere Simlock does not manage. Drop the flag -- the command is already scoped -- or run \`xcrun simctl\` directly if you mean to leave Simlock's set.`,
-        );
-      }
-      // why: Not `--set`/`--profiles` by name, but simctl has no other legitimate global here --
-      // refused on sight rather than skipped over as presumed harmless, the same way an
-      // unrecognized adb global is (`allowedGlobalArity`). Skipping it is exactly what let a
-      // caller-supplied `--set`/`--profiles` hide behind an unrecognized flag's *value*.
-      throw new PassthroughRefusedError(
-        "simctl",
-        `Refusing \`simlock simctl ${argument}\`: \`simlock simctl\` supplies the device set itself, and does not recognize any caller-supplied argument ahead of the subcommand. Drop the flag -- the command is already scoped -- or run \`xcrun simctl\` directly if you mean to leave Simlock's set.`,
-      );
-    }
-    return [];
+    return passthroughCommand(tool, device, args, context, (a) => this.#scopedSimctlArgv(a));
   }
 
   #deviceDirectory(udid: string): string {
@@ -2112,73 +1985,6 @@ export class IosSimctlDriver implements Driver {
       );
     }
   }
-
-  #requireIosPlatform(platform: string): void {
-    if (platform !== this.platform) {
-      throw new DriverCrashError(`iOS simctl driver cannot handle ${platform} device requests`);
-    }
-  }
-}
-
-function missingRuntime(
-  osVersion: string,
-  message: string,
-  component: string,
-): RuntimeMissingError {
-  return belowDownloadFloor(component)
-    ? new IosDownloadFloorError(component)
-    : new IosRuntimeMissingError(osVersion, message, component);
-}
-
-function belowDownloadFloor(component: string): boolean {
-  return component !== LATEST_COMPONENT && isTooOldToDownload(component);
-}
-
-class IosRuntimeMissingError extends RuntimeMissingError {
-  constructor(osVersion: string, message: string, component: string) {
-    super("ios", osVersion, { component });
-    this.message = message;
-  }
-}
-
-class IosUnknownModelError extends UnknownModelError {
-  constructor(model: string) {
-    super("ios", model);
-    this.message = `Unknown ios model: ${model}; a newer Xcode version may add this device`;
-  }
-}
-
-class IosVersionOutOfRangeError extends RuntimeMissingError {
-  constructor(model: string, requested: string, deviceType: DeviceType) {
-    super("ios", requested, { downloadable: false });
-    const range = formatVersionRange(deviceType.minRuntimeVersion, deviceType.maxRuntimeVersion);
-    this.message = `${model} supports iOS ${range}; iOS ${requested} is out of range`;
-  }
-}
-
-class IosRuntimeUnpairedError extends RuntimeMissingError {
-  constructor(model: string, requested: string) {
-    super("ios", requested, { downloadable: false });
-    this.message = `iOS ${requested} is installed but does not support ${model}`;
-  }
-}
-
-class IosDownloadFloorError extends RuntimeMissingError {
-  constructor(requested: string) {
-    super("ios", requested, { downloadable: false });
-    this.message =
-      `iOS ${requested} predates Xcode's automatic download support (introduced for iOS ` +
-      `16.0 and newer); install it manually via Xcode`;
-  }
-}
-
-class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
-  constructor(requested: string) {
-    super("ios", requested, { downloadable: false });
-    this.message =
-      `iOS ${requested} is not currently offered for download by Apple (likely superseded by a ` +
-      `newer point release); request a different --os, or omit --os for the newest available runtime`;
-  }
 }
 
 // why: the input is offered exactly when the screen capture is, because both are the one program.
@@ -2258,313 +2064,6 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
   }
 
   return configured ?? defaultIosDeviceRoot(options.simlockHome);
-}
-
-function runtimeMountsAsset(runtime: Runtime, asset: RuntimeAsset): boolean {
-  return runtime.build === undefined
-    ? runtime.version === asset.version
-    : runtime.build === asset.build;
-}
-
-/**
- * why: The build and marketing version out of an asset bundle's `Info.plist`. Read as text rather
- * than through a plist parser: these are two flat string values in a file this driver must
- * never write, and shelling out to `plutil` once per bundle would make a `doctor` run pay for
- * every runtime ever downloaded. Both keys are read from `MobileAssetProperties` onwards, so a
- * same-named key in the surrounding envelope cannot be mistaken for the asset's own.
- */
-function parseRuntimeAsset(path: string, plist: string): RuntimeAsset | undefined {
-  const propertiesAt = plist.indexOf("<key>MobileAssetProperties</key>");
-  const properties = propertiesAt === -1 ? plist : plist.slice(propertiesAt);
-  const build = /<key>Build<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
-  const version = /<key>SimulatorVersion<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
-
-  return build === undefined || version === undefined ? undefined : { build, path, version };
-}
-
-interface RuntimeImage {
-  readonly identifier: string;
-  readonly runtimeIdentifier: string;
-  readonly build?: string;
-  readonly platformIdentifier?: string;
-  readonly version?: string;
-  readonly sizeBytes?: number;
-  readonly state?: string;
-}
-
-function isBeingDeleted(image: RuntimeImage): boolean {
-  return image.state?.toLowerCase() === "deleting";
-}
-
-const IOS_SIMULATOR_PLATFORM = "com.apple.platform.iphonesimulator";
-
-function parseRuntimeImages(value: unknown): readonly RuntimeImage[] {
-  if (!isRecord(value)) {
-    throw new DriverCrashError("Invalid simctl runtime list JSON: expected an object");
-  }
-  return Object.values(value).flatMap((entry): RuntimeImage[] =>
-    isRecord(entry) &&
-    typeof entry.identifier === "string" &&
-    typeof entry.runtimeIdentifier === "string"
-      ? [
-          {
-            identifier: entry.identifier,
-            runtimeIdentifier: entry.runtimeIdentifier,
-            ...optionalString("build", entry.build),
-            ...optionalString("platformIdentifier", entry.platformIdentifier),
-            ...optionalString("version", entry.version),
-            ...optionalString("state", entry.state),
-            ...(isByteCount(entry.sizeBytes) ? { sizeBytes: entry.sizeBytes } : {}),
-          },
-        ]
-      : [],
-  );
-}
-
-function optionalString<Key extends string>(
-  key: Key,
-  value: unknown,
-): Partial<Record<Key, string>> {
-  return typeof value === "string" ? ({ [key]: value } as Record<Key, string>) : {};
-}
-
-function isByteCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function runtimeReceipt(runtime: Runtime, images: readonly RuntimeImage[]): ComponentReceipt {
-  const image = images.find(
-    (candidate) =>
-      candidate.runtimeIdentifier === runtime.identifier &&
-      (runtime.build === undefined || candidate.build === runtime.build),
-  );
-  return image === undefined
-    ? { build: runtime.build ?? "", runtime: runtime.identifier }
-    : imageReceipt(image);
-}
-
-function imageReceipt(image: RuntimeImage): ComponentReceipt {
-  return { build: image.build ?? "", image: image.identifier };
-}
-
-function isIosImage(image: RuntimeImage): boolean {
-  return image.platformIdentifier === IOS_SIMULATOR_PLATFORM;
-}
-
-type ListedImage = DriverComponent & {
-  readonly image: RuntimeImage;
-  readonly unusedDevices: number;
-};
-
-function leftoverDownloadsSentence(
-  labels: readonly string[],
-  bundles: number,
-  sizeBytes: number | undefined,
-): string {
-  const runtimes = labels.length > 1;
-  const downloads = bundles > 1;
-  const size =
-    sizeBytes === undefined
-      ? ""
-      : ` (${(sizeBytes / 1024 ** 3).toFixed(1)} GiB${downloads ? " in all" : ""})`;
-  return (
-    `iOS ${labels.join(", ")} ${runtimes ? "are" : "is"} no longer installed, but ` +
-    `${runtimes ? "their" : "its"} ${downloads ? "downloads" : "download"}${size} ` +
-    `${downloads ? "are" : "is"} still in ${IOS_RUNTIME_ASSET_ROOT}; ` +
-    `\`simctl runtime delete\` does not reclaim ${downloads ? "them" : "it"} and Simlock does ` +
-    "not delete files there -- remove the platform in Xcode's Settings -> Platforms to get " +
-    "the space back"
-  );
-}
-
-function unavailableDevicesResidue(unused: number): string | undefined {
-  if (unused === 0) return undefined;
-  const subject =
-    unused === 1
-      ? "1 never-used simulator in the default device set is"
-      : `${String(unused)} never-used simulators in the default device set are`;
-  return (
-    `${subject} now unavailable; Simlock does not delete simulators there -- ` +
-    "`xcrun simctl delete unavailable` clears them"
-  );
-}
-
-interface DefaultSetDevices {
-  readonly used: number;
-  readonly unused: number;
-}
-
-function devicesPerRuntime(
-  value: unknown,
-  owned: ReadonlySet<string>,
-): ReadonlyMap<string, DefaultSetDevices> {
-  if (!isRecord(value) || !isRecord(value.devices)) {
-    throw new DriverCrashError("Invalid simctl device list JSON");
-  }
-  return new Map(
-    Object.entries(value.devices).map(([runtime, devices]): [string, DefaultSetDevices] => {
-      const entries: readonly unknown[] = (Array.isArray(devices) ? devices : []).filter(
-        (device: unknown) => !(isRecord(device) && owned.has(String(device.udid))),
-      );
-      const used = entries.filter(
-        (device) => !isRecord(device) || device.lastUsedAt !== undefined,
-      ).length;
-      return [runtime, { unused: entries.length - used, used }];
-    }),
-  );
-}
-
-function installedComponent(runtime: Runtime, images: readonly RuntimeImage[]): InstalledComponent {
-  return { receipt: runtimeReceipt(runtime, images), version: runtime.version };
-}
-
-function withBareMajorHint(component: string, error: unknown): unknown {
-  if (component === LATEST_COMPONENT || component.includes(".")) return error;
-  if (!(error instanceof DriverCrashError)) return error;
-  return new DriverCrashError(
-    `Could not download a default iOS runtime (tried ${component}): ${error.message}; ` +
-      `pass --os <version> to request an exact release`,
-  );
-}
-
-function runtimeForComponent(catalog: SimctlCatalog, component: string): Runtime | undefined {
-  const available = catalog.runtimes.filter((runtime) => runtime.isAvailable);
-  if (component === LATEST_COMPONENT) return newestRuntime(available);
-  if (!component.includes(".")) {
-    return newestRuntime(
-      available.filter((runtime) => runtime.version.split(".")[0] === component),
-    );
-  }
-  return findInstalledRuntime(catalog, component);
-}
-
-function findInstalledRuntime(catalog: SimctlCatalog, version: string): Runtime | undefined {
-  return catalog.runtimes.find((runtime) => runtime.isAvailable && runtime.version === version);
-}
-
-function findDeviceType(catalog: SimctlCatalog, model: string): DeviceType | undefined {
-  const wanted = model.toLocaleLowerCase();
-  return catalog.deviceTypes.find((candidate) => candidate.name.toLocaleLowerCase() === wanted);
-}
-
-function pairedInstalledRuntimes(
-  catalog: SimctlCatalog,
-  deviceType: DeviceType,
-): readonly Runtime[] {
-  return catalog.runtimes.filter(
-    (runtime) =>
-      runtime.isAvailable &&
-      runtime.supportedDeviceTypeIds.has(deviceType.identifier) &&
-      isVersionInRange(runtime.version, deviceType),
-  );
-}
-
-function findPairedRuntime(
-  catalog: SimctlCatalog,
-  deviceType: DeviceType,
-  version: string,
-): Runtime | undefined {
-  return pairedInstalledRuntimes(catalog, deviceType).find(
-    (runtime) => runtime.version === version,
-  );
-}
-
-function pairedVersions(catalog: SimctlCatalog, deviceType: DeviceType | undefined): string[] {
-  if (deviceType === undefined) return [];
-  return [
-    ...new Set(pairedInstalledRuntimes(catalog, deviceType).map((runtime) => runtime.version)),
-  ];
-}
-
-function decodeVersionTriple(encoded: number): readonly [number, number, number] {
-  return [(encoded >> 16) & 0xff, (encoded >> 8) & 0xff, encoded & 0xff];
-}
-
-function formatDecodedVersion(encoded: number): string {
-  const [major, minor, patch] = decodeVersionTriple(encoded);
-  return patch === 0 ? `${major}.${minor}` : `${major}.${minor}.${patch}`;
-}
-
-function isUnboundedMax(encoded: number): boolean {
-  return encoded >= UNBOUNDED_VERSION;
-}
-
-function formatVersionRange(min: number, max: number): string {
-  const minLabel = formatDecodedVersion(min);
-  return isUnboundedMax(max) ? `${minLabel}+` : `${minLabel}-${formatDecodedVersion(max)}`;
-}
-
-function versionTriple(version: string): readonly [number, number, number] {
-  const parts = version.split(".").map(versionPart);
-  return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
-}
-
-function versionOrdinal(triple: readonly [number, number, number]): number {
-  return triple[0] * 1_000_000 + triple[1] * 1_000 + triple[2];
-}
-
-function isVersionInRange(version: string, deviceType: DeviceType): boolean {
-  const ordinal = versionOrdinal(versionTriple(version));
-  return (
-    ordinal >= versionOrdinal(decodeVersionTriple(deviceType.minRuntimeVersion)) &&
-    ordinal <= versionOrdinal(decodeVersionTriple(deviceType.maxRuntimeVersion))
-  );
-}
-
-function isTooOldToDownload(version: string): boolean {
-  return versionOrdinal(versionTriple(version)) < versionOrdinal(IOS_DOWNLOAD_FLOOR);
-}
-
-function majorVersionString(encoded: number): string {
-  return String(decodeVersionTriple(encoded)[0]);
-}
-
-function newestRuntime(runtimes: readonly Runtime[]): Runtime | undefined {
-  return [...runtimes].sort((left, right) => compareVersions(left.version, right.version)).at(-1);
-}
-
-function compareVersions(left: string, right: string): number {
-  const leftParts = left.split(".").map(versionPart);
-  const rightParts = right.split(".").map(versionPart);
-  const partCount = Math.max(leftParts.length, rightParts.length);
-
-  for (let index = 0; index < partCount; index += 1) {
-    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-
-  return left.localeCompare(right);
-}
-
-function versionPart(part: string): number {
-  const parsed = Number.parseInt(part, 10);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-function iosDriverData(device: DriverDevice): IosDriverData {
-  const value = device.driverData;
-  if (
-    !isRecord(value) ||
-    typeof value.udid !== "string" ||
-    typeof value.deviceTypeId !== "string" ||
-    typeof value.runtimeId !== "string" ||
-    typeof value.name !== "string"
-  ) {
-    throw new DriverCrashError(`Invalid iOS driver data for device ${device.deviceId}`);
-  }
-
-  return {
-    deviceTypeId: value.deviceTypeId,
-    name: value.name,
-    runtimeId: value.runtimeId,
-    udid: value.udid,
-    // why: Both are optional: absent or wrong-typed is ignored rather than rejected. A `full` key
-    // an older daemon stamped here is not read: the spec's mode is the only record of it (ADR 0007 §7).
-    ...(typeof value.slimSignature === "string" ? { slimSignature: value.slimSignature } : {}),
-    ...(typeof value.slimMarkToken === "string" ? { slimMarkToken: value.slimMarkToken } : {}),
-  };
 }
 
 export { iosRuntimeVersionFromId };
@@ -2698,3 +2197,9 @@ export { iosDeviceDataTable } from "./device-data.js";
 export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
 export { labelsFor, SLIM_CATEGORIES, slimSignature } from "./slim-labels.js";
+
+export { IOS_PASSTHROUGH_TOOLS } from "./passthrough-rules.js";
+export { REFUSED_SIMCTL_VERBS } from "./passthrough-rules.js";
+export { CALLER_SUPPLIED_SCOPE_FLAGS } from "./passthrough-rules.js";
+export { SHUTDOWN_ALL_TARGET } from "./passthrough-rules.js";
+export { REFUSED_RUNTIME_OPERATION } from "./passthrough-rules.js";
