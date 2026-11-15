@@ -5,7 +5,7 @@ import type { Filesystem } from "../../ports/index.js";
 
 const SOURCES_FOLDER_NAME = "src";
 
-export interface SourcesFolderOptions {
+interface SourcesFolderOptions {
   /** why: set only for `simlock` with a configured `deviceRoot`: the refusal names that key, where under `default` it names Xcode's set. */
   readonly configuredRoot?: string;
   readonly deviceSet: string;
@@ -17,7 +17,7 @@ export interface SourcesFolderOptions {
  * why: ADR 0076 §1: a copy's stored paths are patched byte for byte, so the folder the sources live in
  * has a real path exactly as long as the device set's: `src` followed by `_` to the needed length.
  */
-export async function sourcesFolderFor(options: SourcesFolderOptions): Promise<string> {
+async function sourcesFolderFor(options: SourcesFolderOptions): Promise<string> {
   const home = await realPathOf(options.filesystem, options.simlockHome);
   const deviceSet = await realPathOf(options.filesystem, options.deviceSet);
   const base = join(home, "devices", SOURCES_FOLDER_NAME);
