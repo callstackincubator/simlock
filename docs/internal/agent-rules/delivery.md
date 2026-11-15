@@ -29,7 +29,11 @@ it before anything else happens to it.
 | `refactor:ready`   | maintainer, or the routine (18)     | An agent may build it.                                    |
 | `refactor:blocked` | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 
-Four labels sit outside that scheme. `flaky-test` marks a bug that names a
+Five labels sit outside that scheme. `upstream` marks a `<kind>:blocked`
+issue whose blocker is an issue or PR in a dependency, linked from its
+`## Waiting on upstream` comment; the weekly `check-upstream` routine reads
+those links and says when they are fixed in a release, and only the
+maintainer moves the issue back. `flaky-test` marks a bug that names a
 test failing without a code change (testing rule 5). `needs-hardware` marks
 a pull request parked because a Done when line needs a slow-lane run that
 has not happened (rule 16). `fast-track` marks a bug the fast track set
