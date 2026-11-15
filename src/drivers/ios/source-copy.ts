@@ -4,10 +4,9 @@ import { DriverCrashError } from "../../core/index.js";
 import type { Clock, Filesystem } from "../../ports/index.js";
 import { swapForeignFolders } from "./foreign-folders.js";
 import type { SourceFile } from "./source-data.js";
-import type { SourceIndexOptions } from "./source-index.js";
+import { LAUNCH_SERVICES_DATABASE, type SourceIndexOptions } from "./source-index.js";
 
 export const OVERRIDES_FILE_NAME = "disabled.plist";
-const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
 
 export interface CopyContext extends SourceIndexOptions {
   readonly clock: Clock;
@@ -27,7 +26,9 @@ export async function dropLaunchServicesDatabase(
   const folder = join(setPath, udid, "data", "var", "db", "lsd");
   if (!(await filesystem.exists(folder))) return;
   for (const entry of await filesystem.readdir(folder)) {
-    if (LAUNCH_SERVICES_DATABASE.test(entry)) await filesystem.rm(join(folder, entry));
+    if (LAUNCH_SERVICES_DATABASE.test(`data/var/db/lsd/${entry}`)) {
+      await filesystem.rm(join(folder, entry));
+    }
   }
 }
 

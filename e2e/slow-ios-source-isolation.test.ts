@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { lstat, readdir, readFile, readlink, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -21,9 +21,21 @@ interface Lease {
   readonly deviceSet: string;
 }
 
+// why: a requester holds one lease at a time, and the first lease stays held while the others are made.
+let leasesMade = 0;
+
 async function lease(env: TestEnv, extra: readonly string[]): Promise<Lease> {
+  leasesMade += 1;
   const granted = await env.cli(
-    ["lease", "--platform", "ios", "--agent-id", "isolation", "--detach", ...extra],
+    [
+      "lease",
+      "--platform",
+      "ios",
+      "--agent-id",
+      `isolation-${String(leasesMade)}`,
+      "--detach",
+      ...extra,
+    ],
     { timeout: DEVICE_READY_MS },
   );
   expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
@@ -53,19 +65,30 @@ async function release(env: TestEnv, held: Lease): Promise<void> {
   expect(released.code, `release failed: ${released.stderr}`).toBe(0);
 }
 
-async function filesNewerThan(folder: string, since: number): Promise<string[]> {
-  const found: string[] = [];
+async function modifiedFiles(folder: string): Promise<Map<string, number>> {
+  const found = new Map<string, number>();
   const walk = async (directory: string): Promise<void> => {
     for (const name of await readdir(directory)) {
       const path = join(directory, name);
       const details = await lstat(path);
       if (relative(folder, path) === DIAGNOSTICS) continue;
       if (details.isDirectory()) await walk(path);
-      else if (details.mtimeMs > since) found.push(relative(folder, path));
+      else found.set(relative(folder, path), details.mtimeMs);
     }
   };
   if (existsSync(folder)) await walk(folder);
   return found;
+}
+
+async function filesNewerThan(folder: string, since: number): Promise<string[]> {
+  return [...(await modifiedFiles(folder))]
+    .filter(([, time]) => time > since)
+    .map(([path]) => path);
+}
+
+/** why: a seed is made when its WALs are flushed and its files indexed, which is after `simctl` wrote its last file; the newest file once the first lease is granted is that moment. */
+async function newestModification(folder: string): Promise<number> {
+  return Math.max(0, ...(await modifiedFiles(folder)).values());
 }
 
 async function expectOwnLogFolder(held: Lease): Promise<void> {
@@ -73,6 +96,19 @@ async function expectOwnLogFolder(held: Lease): Promise<void> {
   expect(target, `${held.udid}'s Logs link`).toBe(
     join(homedir(), "Library", "Logs", "CoreSimulator", held.udid),
   );
+}
+
+/** why: a lease used and released, as an agent's would be; the returned lease is the one released. */
+async function useAndRelease(env: TestEnv, extra: readonly string[]): Promise<Lease> {
+  const copy = await lease(env, extra);
+  await use(env, copy);
+  await expectOwnLogFolder(copy);
+  await release(env, copy);
+  return copy;
+}
+
+async function expectNothingNewer(folder: string, since: number, what: string): Promise<void> {
+  expect(await filesNewerThan(folder, since), what).toEqual([]);
 }
 
 async function swapMilliseconds(env: TestEnv, udid: string): Promise<number> {
@@ -106,15 +142,10 @@ describe.skipIf(process.platform !== "darwin")(
           device.name.startsWith("simlock-seed-"),
         );
         expect(seed, "the seed made for the first lease").toBeDefined();
-        const seedMadeAt = (await stat(join(sources, seed?.udid ?? "", "device.plist"))).mtimeMs;
+        const seedMadeAt = await newestModification(join(sources, seed?.udid ?? ""));
         await use(env, first);
         await expectOwnLogFolder(first);
-        for (let index = 0; index < 2; index += 1) {
-          const copy = await lease(env, []);
-          await use(env, copy);
-          await expectOwnLogFolder(copy);
-          await release(env, copy);
-        }
+        for (let index = 0; index < 2; index += 1) await useAndRelease(env, []);
 
         const saved = await env.cli(["baseline", "save", "isolation", "--lease", first.leaseId], {
           timeout: 600_000,
@@ -128,25 +159,20 @@ describe.skipIf(process.platform !== "darwin")(
 
         const copies: Lease[] = [];
         for (let index = 0; index < 2; index += 1) {
-          const copy = await lease(env, ["--baseline", "isolation"]);
-          copies.push(copy);
-          await use(env, copy);
-          await expectOwnLogFolder(copy);
-          await release(env, copy);
+          copies.push(await useAndRelease(env, ["--baseline", "isolation"]));
         }
 
-        expect(
-          await filesNewerThan(join(sources, seed?.udid ?? ""), seedMadeAt),
-          "the seed",
-        ).toEqual([]);
-        expect(
-          await filesNewerThan(join(sources, source?.udid ?? ""), savedAt),
+        await expectNothingNewer(join(sources, seed?.udid ?? ""), seedMadeAt, "the seed");
+        await expectNothingNewer(
+          join(sources, source?.udid ?? ""),
+          savedAt,
           "the baseline's source",
-        ).toEqual([]);
-        expect(
-          await filesNewerThan(join(first.deviceSet, first.udid), savedAt),
+        );
+        await expectNothingNewer(
+          join(first.deviceSet, first.udid),
+          savedAt,
           "the folder of the lease the baseline was saved from",
-        ).toEqual([]);
+        );
         for (const copy of copies) {
           expect(await swapMilliseconds(env, copy.udid), `${copy.udid}'s swap`).toBeLessThan(
             SWAP_MS_LIMIT,

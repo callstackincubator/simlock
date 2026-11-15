@@ -55,6 +55,8 @@ export interface PathDetails {
   readonly kind: "file" | "directory" | "symlink" | "other";
   readonly uid: number;
   readonly mode: number;
+  /** why: a file's length in bytes, so a caller can refuse one too large to read whole; 0 for anything that is not a file. */
+  readonly size: number;
 }
 
 /**
@@ -356,6 +358,7 @@ export class NodeFilesystem implements Filesystem {
       kind: nodeKind(details),
       uid: details.uid,
       mode: details.mode & 0o777,
+      size: details.isFile() ? details.size : 0,
     };
   }
 
@@ -714,7 +717,12 @@ export class MemoryFilesystem implements Filesystem {
     this.#failIfDefined(path);
     const entry = this.#rawEntryAt(path);
 
-    return { kind: entry.kind, uid: entry.uid, mode: entry.mode };
+    return {
+      kind: entry.kind,
+      uid: entry.uid,
+      mode: entry.mode,
+      size: entry.kind === "file" ? fileBytes(entry).byteLength : 0,
+    };
   }
 
   async mkdir(path: string, options: { readonly mode?: number } = {}): Promise<void> {

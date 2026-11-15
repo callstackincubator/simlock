@@ -19,6 +19,8 @@ const logsRoot = "/home/Library/Logs/CoreSimulator";
 const seedUdid = "00000000-0000-0000-0000-0000000000AA";
 const usedUdid = "00000000-0000-0000-0000-0000000000BB";
 const copyUdid = driverData.udid;
+/** why: well past the 64 MiB a file may be to be searched for folders. */
+const HUGE_BYTES = 1024 * 1024 * 1024;
 
 /** why: a device set of another depth than the sources folder, as long as it, so an escaped path swapped into it changes length. */
 const deepRoot = "/home/.simlock/a/b/c/devices-d";
@@ -49,6 +51,28 @@ class SlowReadFilesystem extends MemoryFilesystem {
 
   override async readBytes(path: string): Promise<Uint8Array> {
     this.clock.advance(7);
+    return super.readBytes(path);
+  }
+}
+
+/** why: macOS refuses `open` on some files of a simulator's own folder (`locationd`'s) to its owner, as `EPERM`. */
+class DeniedReadFilesystem extends MemoryFilesystem {
+  readonly denied = new Set<string>();
+
+  /** why: a file of another size than its bytes, so a huge one needs no memory. */
+  readonly sizes = new Map<string, number>();
+
+  override async lstat(path: string): ReturnType<MemoryFilesystem["lstat"]> {
+    const details = await super.lstat(path);
+    return { ...details, size: this.sizes.get(path) ?? details.size };
+  }
+
+  override async readBytes(path: string): Promise<Uint8Array> {
+    if (this.denied.has(path)) {
+      throw Object.assign(new Error(`EPERM: operation not permitted, open '${path}'`), {
+        code: "EPERM",
+      });
+    }
     return super.readBytes(path);
   }
 }
@@ -306,6 +330,8 @@ describe("a source made", () => {
       ],
       flushed: ["data/a.sqlite", "data/b.sqlite"],
       warned: [],
+      denied: [],
+      huge: [],
     },
     {
       name: "a baseline saved from a used copy names that copy's folder",
@@ -316,6 +342,8 @@ describe("a source made", () => {
       recorded: [["data/Media/state.plist", "file"]],
       flushed: [],
       warned: [],
+      denied: [],
+      huge: [],
     },
     {
       name: "a WAL that cannot be flushed is logged and left out, and the source is still made",
@@ -329,6 +357,8 @@ describe("a source made", () => {
       recorded: [],
       flushed: [],
       warned: ["data/b.sqlite"],
+      denied: [],
+      huge: [],
     },
     {
       name: "a source that names no folder has no rows and is indexed",
@@ -339,12 +369,60 @@ describe("a source made", () => {
       recorded: [],
       flushed: [],
       warned: [],
+      denied: [],
+      huge: [],
+    },
+    {
+      name: "the LaunchServices database every clone drops is not recorded",
+      make: "seed",
+      failing: [],
+      tree: {
+        "data/var/db/lsd/com.apple.LaunchServices-1-v2.csstore": (udid: string) =>
+          `${sourceFolder(udid)}/data`,
+        "data/Media/state.plist": (udid: string) => `${sourceFolder(udid)}/data`,
+      },
+      link: false,
+      recorded: [["data/Media/state.plist", "file"]],
+      flushed: [],
+      warned: [],
+      denied: [],
+      huge: [],
+    },
+    {
+      name: "a file past the limit is not searched, and is logged",
+      make: "baseline",
+      failing: [],
+      tree: {
+        "data/Media/huge.db": (udid: string) => `${sourceFolder(udid)}/data`,
+        "data/Media/state.plist": (udid: string) => `${sourceFolder(udid)}/data`,
+      },
+      link: false,
+      recorded: [["data/Media/state.plist", "file"]],
+      flushed: [],
+      warned: [],
+      denied: [],
+      huge: ["data/Media/huge.db"],
+    },
+    {
+      name: "a file the system refuses to read is left out, and the source is still made",
+      make: "baseline",
+      failing: [],
+      tree: {
+        "data/Library/Caches/locationd/locScoreInfo/secondary-1": () => "private",
+        "data/Media/state.plist": (udid: string) => `${sourceFolder(udid)}/data`,
+      },
+      link: false,
+      recorded: [["data/Media/state.plist", "file"]],
+      flushed: [],
+      warned: [],
+      denied: ["data/Library/Caches/locationd/locScoreInfo/secondary-1"],
+      huge: [],
     },
   ] as const)(
     "flushes its WALs and records the files and links that name a folder: $name",
-    async ({ make, failing, tree, link, recorded, flushed, warned }) => {
+    async ({ make, failing, tree, link, recorded, flushed, warned, denied, huge }) => {
       const udid = make === "seed" ? seedUdid : cloneUdid;
-      const filesystem = new MemoryFilesystem();
+      const filesystem = new DeniedReadFilesystem();
       const sqlite = new FakeSqliteOpener(filesystem);
       const warnings: string[] = [];
       const logger = Object.assign(new LineLogger(), {
@@ -371,6 +449,10 @@ describe("a source made", () => {
           filesystem.defineSymlink(`${folder}/data/Library/Logs`, `${logsRoot}/${udid}`);
         }
       }
+      for (const path of huge) {
+        filesystem.sizes.set(`${sourceFolder(udid)}/${path}`, HUGE_BYTES);
+      }
+      for (const path of denied) filesystem.denied.add(`${sourceFolder(udid)}/${path}`);
       for (const path of failing) sqlite.failing.add(`${sourceFolder(udid)}/${path}`);
       const database = await memorySourceDatabase();
       const runner = new ScriptedProcessRunner([
@@ -435,9 +517,15 @@ describe("a source made", () => {
       expect(sqlite.flushed, "the databases whose WAL was flushed").toEqual(
         flushed.map((path) => `${sourceFolder(udid)}/${path}`),
       );
-      expect(warnings).toEqual(
-        warned.map((path) => `could not flush ${sourceFolder(udid)}/${path}: database is locked`),
-      );
+      expect(warnings).toEqual([
+        ...warned.map(
+          (path) => `could not flush ${sourceFolder(udid)}/${path}: database is locked`,
+        ),
+        ...huge.map(
+          (path) =>
+            `not searching ${sourceFolder(udid)}/${path} for folders to swap: its ${String(HUGE_BYTES)} bytes are past 67108864`,
+        ),
+      ]);
     },
   );
 });

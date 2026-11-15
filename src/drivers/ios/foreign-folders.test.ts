@@ -41,6 +41,11 @@ describe("swapForeignFolders", () => {
       after: `{"p":"\\/private\\/tmp\\/h\\/devices\\/ios\\/${own}\\/x"}`,
     },
     {
+      name: "a backslash before a plain path is no escape and is kept",
+      before: `\\${folders.deviceSet}/${usedCopy}/x`,
+      after: `\\${folders.deviceSet}/${own}/x`,
+    },
+    {
       name: "a path already naming the copy is unchanged",
       before: `${folders.deviceSet}/${own}/data ${folders.logsRoot}/${own}`,
       after: `${folders.deviceSet}/${own}/data ${folders.logsRoot}/${own}`,

@@ -324,8 +324,11 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
     await expect(filesystem.lstat(root)).resolves.toEqual({
       kind: "directory",
       mode: 0o700,
+      size: 0,
       uid: process.getuid?.() ?? 0,
     });
+    await filesystem.writeFileAtomic(`${root}/note.txt`, "four");
+    expect((await filesystem.lstat(`${root}/note.txt`)).size, "a file's length").toBe(4);
   });
 
   it("reports the permission bits a path was last given, not the ones it was created with", async () => {
@@ -422,6 +425,7 @@ describe("MemoryFilesystem", () => {
     await expect(filesystem.lstat("/devices/ios")).resolves.toEqual({
       kind: "directory",
       mode: 0o755,
+      size: 0,
       uid: 4242,
     });
   });

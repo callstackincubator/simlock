@@ -8,19 +8,25 @@ export interface ForeignFolders {
 
 const UDID = "[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}";
 const PRIVATE = "/private";
-const SEPARATOR = "(?:\\\\/|/)";
+// why: the regular expression for one separator: a plain `/`, or a backslash and a `/`.
+const SEPARATORS = ["/", "\\\\/"] as const;
 
 /** why: iOS writes a folder under `/private` in two spellings (`/private/tmp/x` and `/tmp/x`), and each is matched and kept. */
 function spellings(root: string): readonly string[] {
   return root.startsWith(`${PRIVATE}/`) ? [root, root.slice(PRIVATE.length)] : [root];
 }
 
+/** why: a path is written with plain separators or with all of them escaped, never a mix; a stray backslash before a plain `/` in binary data is not part of a path, and swapping it as one would change a length. */
 function pattern(roots: readonly string[]): RegExp {
   const alternatives = roots
     .flatMap(spellings)
     .sort((a, b) => b.length - a.length)
-    .map((root) => root.split("/").map(escapeRegExp).join(SEPARATOR));
-  return new RegExp(`(?:${alternatives.join("|")})${SEPARATOR}(${UDID})`, "g");
+    .flatMap((root) =>
+      SEPARATORS.map(
+        (separator) => `${root.split("/").map(escapeRegExp).join(separator)}${separator}`,
+      ),
+    );
+  return new RegExp(`(?:${alternatives.join("|")})(${UDID})`, "g");
 }
 
 function escapeRegExp(text: string): string {
