@@ -4404,7 +4404,9 @@ describe("IosSimctlDriver listComponents()", () => {
         deviceTypeId: driverData.deviceTypeId,
         runtimeId: target.runtime,
       };
-      plantSource(database, { ...removed, udid: goneSeed });
+      // why: a seed made by an earlier release sits in the set its row names, and is deleted there.
+      const oldSet = `${deviceRoot}/sources`;
+      plantSource(database, { ...removed, setPath: oldSet, udid: goneSeed });
       plantSource(database, {
         ...removed,
         deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPad",
@@ -4418,8 +4420,8 @@ describe("IosSimctlDriver listComponents()", () => {
       const runner = new ScriptedProcessRunner([
         imagesListed([target, other]),
         defaultSetListed({}),
-        { match: sourcesSimctl("shutdown", goneSeed) },
-        { match: sourcesSimctl("delete", goneSeed) },
+        { match: simctlIn(oldSet, "shutdown", goneSeed) },
+        { match: simctlIn(oldSet, "delete", goneSeed) },
         { match: sourcesSimctl("shutdown", stuckSeed) },
         {
           match: sourcesSimctl("delete", stuckSeed),

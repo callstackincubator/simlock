@@ -425,7 +425,7 @@ describe("createCore", () => {
     expect(JSON.stringify(sink.records)).toContain("catalog unreadable");
   });
 
-  it("converge stores a baseline's stale reason before anything reads it, and logs a check that failed without failing the start", async () => {
+  it("converge stores a baseline's stale reason before the warm pool first resolves a target, and logs a check that failed without failing the start", async () => {
     const reason =
       "saved in /home/.simlock/devices/ios/sources, which copies cannot be fixed from; save it again";
     const cases = [
@@ -440,7 +440,11 @@ describe("createCore", () => {
 
     for (const entry of cases) {
       const sink = new MemoryLogSink();
-      const { core, driver, registry } = await build({ sink });
+      const { clock, core, driver, registry } = await build({
+        sink,
+        warmTargets: [{ count: 1, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
+      });
+      const storedWhenWarmPoolFirstResolves: unknown[] = [];
       testStateOf(registry)
         .database.prepare(
           `INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id)
@@ -458,14 +462,44 @@ describe("createCore", () => {
       ]);
       // why: the startup listing is call 1; the staleness check's read is call 2.
       if (entry.failure !== undefined) driver.failOn("listSources", 2, entry.failure);
-      core.connect(ports());
+      // why: the check's read takes a turn of the event loop and a warm pool tick falls in it: a pool already started would resolve its target before the reason is stored.
+      const listSources = driver.listSources.bind(driver);
+      let listed = 0;
+      vi.spyOn(driver, "listSources").mockImplementation(async () => {
+        listed += 1;
+        if (listed === 2) {
+          clock.advance(31_000);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return await listSources();
+      });
+      const connected = ports();
+      core.connect({
+        ...connected,
+        warmPoolDemand: {
+          ...connected.warmPoolDemand,
+          resolve: async () => {
+            storedWhenWarmPoolFirstResolves.push(
+              testStateOf(registry).database.prepare("SELECT stale_reason FROM baselines").get(),
+            );
+            return { message: "no driver", refusal: "no-driver" };
+          },
+        },
+      });
 
       await expect(core.converge(await core.readStartup()), entry.name).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(storedWhenWarmPoolFirstResolves.length).toBeGreaterThan(0));
 
       expect(
         testStateOf(registry).database.prepare("SELECT stale_reason FROM baselines").get(),
         entry.name,
       ).toEqual({ stale_reason: entry.stored });
+      expect(
+        storedWhenWarmPoolFirstResolves[0],
+        `${entry.name}: before the warm pool starts`,
+      ).toEqual({
+        stale_reason: entry.stored,
+      });
       expect(
         JSON.stringify(sink.records).includes("could not check baselines at startup"),
         entry.name,
