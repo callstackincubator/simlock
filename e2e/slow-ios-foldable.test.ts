@@ -664,6 +664,9 @@ describe.skipIf(notRunnable !== undefined)(
             "unfolded after a fold, on the socket left open",
           );
 
+          // why: the lease's sockets share one device input, so the socket left open is closed first;
+          // a fresh socket then starts a helper that finds the Duo already unfolded.
+          held.close();
           const fresh = await openInputSocket(port, lease.id, token);
           try {
             await fresh.waitForTag(INPUT_CONFIG);
