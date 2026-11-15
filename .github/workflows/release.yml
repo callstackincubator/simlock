@@ -323,19 +323,30 @@ jobs:
           echo "npm $npm_version"
           node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }' "$npm_version"
       # why: @simlock/e2e goes first, so a failure there leaves simlock unpublished and the release
-      # can be run again (ADR 0077 §4).
+      # can be run again (ADR 0077 §4). A run again skips a package whose version is on npm, so a
+      # release that stopped between the two publishes finishes by re-running the failed job.
       - name: Publish @simlock/e2e
         working-directory: ${{ runner.temp }}/package
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
-        run: npm publish "simlock-e2e-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
+        run: |
+          if npm view "@simlock/e2e@$VERSION" version >/dev/null 2>&1; then
+            echo "@simlock/e2e@$VERSION is on npm already, skipping"
+            exit 0
+          fi
+          npm publish "simlock-e2e-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
       - name: Publish simlock
         working-directory: ${{ runner.temp }}/package
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
-        run: npm publish "simlock-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
+        run: |
+          if npm view "simlock@$VERSION" version >/dev/null 2>&1; then
+            echo "simlock@$VERSION is on npm already, skipping"
+            exit 0
+          fi
+          npm publish "simlock-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
 
   release:
     name: GitHub release
