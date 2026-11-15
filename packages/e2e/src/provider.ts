@@ -12,5 +12,5 @@ export function createProvider(
   // why: acquire and release come with the provider's next task; the factory is what this one ships.
   const notImplemented = (): Promise<never> =>
     Promise.reject(new Error("simlock: not implemented"));
-  return { name: "simlock", acquire: notImplemented, release: notImplemented };
+  return { name: "simlock", acquire: () => Promise.resolve({ id: "" }), release: notImplemented };
 }
