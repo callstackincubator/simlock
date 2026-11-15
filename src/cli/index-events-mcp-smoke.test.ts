@@ -36,7 +36,7 @@ import {
   sequence,
   settle,
   temporaryDirectories,
-  testConfig,
+  cliTestConfig,
 } from "./test-index.js";
 
 afterEach(async () => {
@@ -681,7 +681,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     idGenerator: sequence(),
   });
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  const config = testConfig();
+  const config = cliTestConfig();
   const wiring = testComponentWiring({
     clock: clock,
     drivers: [driver],

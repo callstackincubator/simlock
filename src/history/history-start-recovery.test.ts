@@ -7,7 +7,6 @@ import { SqliteUnavailableError, type SqliteOpener } from "../ports/index.js";
 import { ProbeSqliteOpener } from "./testing.js";
 import {
   NOW,
-  HOUR,
   JUNK,
   directories,
   type Rig,
@@ -20,6 +19,7 @@ import {
   readHistoryOf,
   countRows,
 } from "./test-history.js";
+import { HOUR } from "./testing.js";
 
 afterEach(async () => {
   await Promise.all(

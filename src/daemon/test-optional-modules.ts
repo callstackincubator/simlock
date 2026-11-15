@@ -157,5 +157,3 @@ export async function leaseAndRelease(daemon: DaemonServer): Promise<string> {
   await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
   return grant.lease.id;
 }
-
-export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

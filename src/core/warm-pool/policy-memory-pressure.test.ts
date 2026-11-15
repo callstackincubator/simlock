@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { VirtualDevice } from "../domain.js";
 import { evaluate as plan } from "./policy.js";
 import {
-  evaluate,
+  proposalsOf,
   minute,
   spec,
   device,
@@ -88,7 +88,7 @@ describe("warm pool policy", () => {
         options: Parameters<typeof view>[1] = {},
         pressure: NonNullable<NonNullable<Parameters<typeof view>[1]>["pressure"]> = {},
       ): string[] =>
-        evaluate(
+        proposalsOf(
           view(devices, { targets, ...options, pressure: { step: "warming-paused", ...pressure } }),
         ).flatMap((proposal) =>
           proposal.action === "shutdown" && proposal.reason === "memory-pressure"
@@ -127,7 +127,7 @@ describe("warm pool policy", () => {
       expect(sheds([keptOldest, olderOther], {}, { step: "none" }), "step none").toEqual([]);
       expect(sheds([device("busy", "leased")]), "nothing idle").toEqual([]);
 
-      const overBudget = evaluate(
+      const overBudget = proposalsOf(
         view([keptOldest, olderOther, newerOther], {
           limit: 2,
           pressure: { step: "warming-paused" },

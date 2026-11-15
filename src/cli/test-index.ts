@@ -442,7 +442,7 @@ export async function startInMemoryDaemon(options: {
     idGenerator: sequence(),
   });
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  const config = testConfig();
+  const config = cliTestConfig();
   const wiring = testComponentWiring({
     clock: clock,
     drivers: [driver],
@@ -515,7 +515,7 @@ export async function startInMemoryDaemon(options: {
   return { daemon, adminSecret: auth.adminSecret };
 }
 
-export function testConfig(): Config {
+export function cliTestConfig(): Config {
   return configWithDefaults({
     capacity: {
       strategy: "resource",

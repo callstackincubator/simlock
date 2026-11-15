@@ -1,3 +1,4 @@
+import { HOUR } from "./testing.js";
 import { mkdtemp, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,6 @@ import {
 import { plainProjection } from "./testing.js";
 
 export const NOW = 1_760_605_920_000;
-export const HOUR = 3_600_000;
 export const JUNK = "this is not a sqlite database ".repeat(20);
 export const directories: string[] = [];
 

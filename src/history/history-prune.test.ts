@@ -6,7 +6,6 @@ import { type EventEnvelope } from "../bus/index.js";
 import { plainProjection } from "./testing.js";
 import {
   NOW,
-  HOUR,
   directories,
   rig,
   stopping,
@@ -15,6 +14,7 @@ import {
   settle,
   sizeOf,
 } from "./test-history.js";
+import { HOUR } from "./testing.js";
 
 afterEach(async () => {
   await Promise.all(

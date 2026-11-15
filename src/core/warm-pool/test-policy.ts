@@ -9,7 +9,7 @@ import type {
 import { sameSpec } from "../domain.js";
 import { evaluate as plan, type ResolvedTarget, type WarmPolicyView } from "./policy.js";
 
-export const evaluate = (policyView: WarmPolicyView) => plan(policyView).proposals;
+export const proposalsOf = (policyView: WarmPolicyView) => plan(policyView).proposals;
 
 export const minute = 60_000;
 export const now = 1_000 * minute;

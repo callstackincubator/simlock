@@ -39,7 +39,9 @@ export function listComments({ base, head, all = false, files = null }) {
 function movedVerbatim(block, removed) {
   if (block.state !== "added") return false;
   const wanted = new Map();
-  for (const { text } of block.lines) wanted.set(text.trim(), (wanted.get(text.trim()) ?? 0) + 1);
+  for (const { text } of block.lines.filter((l) => !DIRECTIVE.test(l.text.trim()))) {
+    wanted.set(text.trim(), (wanted.get(text.trim()) ?? 0) + 1);
+  }
   if ([...wanted].some(([text, n]) => (removed.get(text) ?? 0) < n)) return false;
   for (const [text, n] of wanted) removed.set(text, removed.get(text) - n);
   return true;

@@ -76,6 +76,7 @@ export class QuarantineCoordinator {
   }
 
   // No `notifyAvailability`: a quarantined virtual device still counts as running, and a physical device counts toward no capacity, so no waiter can be satisfied by this.
+  // fallow-ignore-next-line unused-class-member -- called through core's quarantine port, and by its tests through the test-* harness.
   async enter(failure: QuarantinePurgeFailure): Promise<void> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     await this.options.decisions.run(async () => {

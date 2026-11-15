@@ -25,9 +25,9 @@ import {
   leaseAndRelease,
   prepare,
   servers,
-  sleep,
   start,
 } from "./test-optional-modules.js";
+import { sleep } from "./test-relay-support.js";
 
 afterEach(async () => {
   await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test").catch(() => undefined)));

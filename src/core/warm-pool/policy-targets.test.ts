@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { VirtualDevice, VirtualSpec } from "../domain.js";
 import { evaluate as plan, type ResolvedTarget, targetedDevices } from "./policy.js";
 import {
-  evaluate,
+  proposalsOf,
   minute,
   now,
   shutdownAfterMs,
@@ -30,7 +30,7 @@ describe("warm pool policy", () => {
       const ready = ofKind("ready", "ready");
       const shut = ofKind("shut", "shutdown");
 
-      const proposals = evaluate(view([ready, shut], { targets: [target(2)] }));
+      const proposals = proposalsOf(view([ready, shut], { targets: [target(2)] }));
 
       expect(proposals).toEqual([
         { action: "boot", deviceId: "shut", reason: "target", target: kind },
@@ -40,7 +40,7 @@ describe("warm pool policy", () => {
     it("with a target and no device of its kind, proposes one provision with the resolved spec", () => {
       const other = device("other", "ready", { endedAgo: minute, spec: spec("iPad Pro") });
 
-      const proposals = evaluate(view([other], { targets: [target(1)] }));
+      const proposals = proposalsOf(view([other], { targets: [target(1)] }));
 
       expect(proposals).toEqual([
         { action: "provision", reason: "target", spec: kind, target: kind },
@@ -51,15 +51,15 @@ describe("warm pool policy", () => {
       const first = ofKind("first", "ready");
       const second = ofKind("second", "ready");
 
-      expect(evaluate(view([first, second], { targets: [target(2)] }))).toEqual([]);
+      expect(proposalsOf(view([first, second], { targets: [target(2)] }))).toEqual([]);
     });
 
     it("counts a boot or creation of its kind still in flight toward the target's count", () => {
       expect(
-        evaluate(view([], { inFlight: [kind], maxConcurrentBoots: 2, targets: [target(1)] })),
+        proposalsOf(view([], { inFlight: [kind], maxConcurrentBoots: 2, targets: [target(1)] })),
       ).toEqual([]);
       expect(
-        evaluate(view([], { inFlight: [kind], maxConcurrentBoots: 2, targets: [target(2)] })),
+        proposalsOf(view([], { inFlight: [kind], maxConcurrentBoots: 2, targets: [target(2)] })),
       ).toHaveLength(1);
     });
 
@@ -72,7 +72,7 @@ describe("warm pool policy", () => {
       });
       const reset = ofKind("reset", "shutdown");
 
-      const proposals = evaluate(
+      const proposals = proposalsOf(
         view([claimed, spent, reset], {
           claimed: ["claimed"],
           reset: ["reset"],
@@ -94,7 +94,7 @@ describe("warm pool policy", () => {
         spent: true,
       });
 
-      const proposals = evaluate(
+      const proposals = proposalsOf(
         view([leased, claimed, spent], { claimed: ["claimed"], limit: 10, targets: [target(1)] }),
       );
 
@@ -107,12 +107,12 @@ describe("warm pool policy", () => {
       const shut = ofKind("shut", "shutdown");
 
       expect(
-        evaluate(view([shut], { inFlight: [spec("iPad Pro")], targets: [target(1)] })),
+        proposalsOf(view([shut], { inFlight: [spec("iPad Pro")], targets: [target(1)] })),
       ).toEqual([]);
-      expect(evaluate(view([], { inFlight: [spec("iPad Pro")], targets: [target(1)] }))).toEqual(
+      expect(proposalsOf(view([], { inFlight: [spec("iPad Pro")], targets: [target(1)] }))).toEqual(
         [],
       );
-      expect(evaluate(view([shut], { targets: [target(1)] }))).toHaveLength(1);
+      expect(proposalsOf(view([shut], { targets: [target(1)] }))).toHaveLength(1);
     });
 
     it("with maxConcurrentBoots 2 proposes two of a target of three and counts a waiter's boot against the cap", () => {
@@ -120,14 +120,14 @@ describe("warm pool policy", () => {
       const two = ofKind("two", "shutdown");
       const three = ofKind("three", "shutdown");
 
-      const proposals = evaluate(
+      const proposals = proposalsOf(
         view([one, two, three], { maxConcurrentBoots: 2, targets: [target(3)] }),
       );
       expect(proposals).toHaveLength(2);
       expect(proposals.every((proposal) => proposal.reason === "target")).toBe(true);
 
       const tablet = device("tablet", "shutdown", { endedAgo: minute, spec: spec("iPad Pro") });
-      const withWaiter = evaluate(
+      const withWaiter = proposalsOf(
         view([tablet, one, two], {
           maxConcurrentBoots: 2,
           targets: [target(2)],
@@ -141,9 +141,9 @@ describe("warm pool policy", () => {
       const shut = ofKind("shut", "shutdown");
       const queued = modelDemand("iPad Pro");
 
-      expect(evaluate(view([shut], { targets: [target(1)], waiting: [queued] }))).toEqual([]);
+      expect(proposalsOf(view([shut], { targets: [target(1)], waiting: [queued] }))).toEqual([]);
       expect(
-        evaluate(
+        proposalsOf(
           view([shut], {
             maxConcurrentBoots: 2,
             targets: [target(1)],
@@ -152,7 +152,7 @@ describe("warm pool policy", () => {
         ),
       ).toEqual([{ action: "boot", deviceId: "shut", reason: "target", target: kind }]);
       expect(
-        evaluate(
+        proposalsOf(
           view([shut], {
             maxConcurrentBoots: 2,
             targets: [target(1)],
@@ -176,7 +176,7 @@ describe("warm pool policy", () => {
       expect(capped.targets[0]).not.toHaveProperty("short");
 
       expect(
-        evaluate(
+        proposalsOf(
           view([phone, shut], {
             maxConcurrentBoots: 2,
             targets: [target(1)],
@@ -205,7 +205,7 @@ describe("warm pool policy", () => {
         readyAt: now - shutdownAfterMs * 3,
       });
 
-      const proposals = evaluate(view([stale, boundary, fresh, leasedBefore]));
+      const proposals = proposalsOf(view([stale, boundary, fresh, leasedBefore]));
 
       expect(proposals).toEqual([
         { action: "shutdown", deviceId: "stale", reason: "never-leased-idle" },
@@ -216,7 +216,7 @@ describe("warm pool policy", () => {
       const old = device("old", "ready", { createdAt: now - shutdownAfterMs - 1 });
       const young = device("young", "ready", { createdAt: now - 1_000 });
 
-      expect(evaluate(view([old, young]))).toEqual([
+      expect(proposalsOf(view([old, young]))).toEqual([
         { action: "shutdown", deviceId: "old", reason: "never-leased-idle" },
       ]);
     });
@@ -226,12 +226,12 @@ describe("warm pool policy", () => {
       const extra = ofKind("extra", "ready", { readyAt: 2, createdAt: 2 });
 
       // A target of one counts the older device only; the other one is not targeted and goes.
-      expect(evaluate(view([counted, extra], { targets: [target(1)] }))).toEqual([
+      expect(proposalsOf(view([counted, extra], { targets: [target(1)] }))).toEqual([
         { action: "shutdown", deviceId: "extra", reason: "never-leased-idle" },
       ]);
       // A queued request the extra device serves keeps it: it is about to be granted.
       expect(
-        evaluate(
+        proposalsOf(
           view([counted, extra], { targets: [target(1)], waiting: [modelDemand("iPhone 17")] }),
         ),
       ).toEqual([]);
@@ -242,7 +242,7 @@ describe("warm pool policy", () => {
       const claimed = device("claimed", "ready", { readyAt: 1 });
       const booting = device("booting", "provisioning", { readyAt: 1 });
 
-      expect(evaluate(view([leased, claimed, booting], { claimed: ["claimed"] }))).toEqual([]);
+      expect(proposalsOf(view([leased, claimed, booting], { claimed: ["claimed"] }))).toEqual([]);
     });
 
     it("proposes nothing for a target when the running limit is full, and reports running-limit", () => {
@@ -366,8 +366,8 @@ describe("warm pool policy", () => {
       ]);
       expect(result.targets[0]).toMatchObject({ booting: 1, ready: 0 });
       const pad = { count: 1, spec: spec("iPad Pro") };
-      expect(evaluate(view([idle], { limit: 1, targets: [target(1), pad] }))).toEqual([]);
-      expect(evaluate(view([idle], { limit: 1, targets: [pad, target(1)] }))).toEqual([]);
+      expect(proposalsOf(view([idle], { limit: 1, targets: [target(1), pad] }))).toEqual([]);
+      expect(proposalsOf(view([idle], { limit: 1, targets: [pad, target(1)] }))).toEqual([]);
     });
 
     it("shuts down a copy past another configured kind's count, for a slot the reserve holds too, and fills every configured count before a learned peak", () => {
@@ -378,22 +378,24 @@ describe("warm pool policy", () => {
       const both = [{ count: 1, spec: pad }, target(1)];
       const make = { action: "provision", reason: "target", spec: kind, target: kind };
 
-      expect(evaluate(view(pads, { limit: 2, targets: both }))).toEqual([
+      expect(proposalsOf(view(pads, { limit: 2, targets: both }))).toEqual([
         { action: "shutdown", deviceId: "b", reason: "displaced" },
         make,
       ]);
       expect(
-        evaluate(view(pads, { limits: { ios: 3 }, reserve: { ios: 1 }, targets: both })),
+        proposalsOf(view(pads, { limits: { ios: 3 }, reserve: { ios: 1 }, targets: both })),
       ).toEqual([{ action: "shutdown", deviceId: "b", reason: "displaced" }, make]);
       expect(
-        evaluate(view([pads[0]!], { learned: [learnedOf(pad, 2, now)], limit: 2, targets: both })),
+        proposalsOf(
+          view([pads[0]!], { learned: [learnedOf(pad, 2, now)], limit: 2, targets: both }),
+        ),
       ).toEqual([make]);
     });
 
     it("counts two targets resolving to one spec as one with the summed count", () => {
       const ready = ofKind("ready", "ready");
 
-      const proposals = evaluate(
+      const proposals = proposalsOf(
         view([ready], { maxConcurrentBoots: 5, targets: [target(1), target(2)] }),
       );
 
@@ -407,7 +409,7 @@ describe("warm pool policy", () => {
     it("does not count a slim device toward a full target of the same model", () => {
       const slim = device("slim", "ready", { endedAgo: minute, spec: { ...kind, mode: "slim" } });
 
-      const proposals = evaluate(view([slim], { targets: [target(1)] }));
+      const proposals = proposalsOf(view([slim], { targets: [target(1)] }));
 
       expect(proposals).toEqual([
         { action: "provision", reason: "target", spec: kind, target: kind },
@@ -472,7 +474,7 @@ describe("warm pool policy", () => {
 
       expect(result.proposals).toEqual([]);
       expect(result.targets).toEqual([]);
-      expect(evaluate(view([stale]))).toEqual([
+      expect(proposalsOf(view([stale]))).toEqual([
         { action: "shutdown", deviceId: "stale", reason: "never-leased-idle" },
       ]);
     });
@@ -505,7 +507,9 @@ describe("warm pool policy", () => {
       const one = ofKind("one", "shutdown");
       const two = ofKind("two", "shutdown");
 
-      const proposals = evaluate(view([one, two], { maxConcurrentBoots: 3, targets: [target(3)] }));
+      const proposals = proposalsOf(
+        view([one, two], { maxConcurrentBoots: 3, targets: [target(3)] }),
+      );
 
       expect(proposals).toEqual([
         { action: "boot", deviceId: "one", reason: "target", target: kind },
@@ -592,7 +596,7 @@ describe("warm pool policy", () => {
     );
 
     it("does not count a boot in flight for another kind toward the target's count", () => {
-      const result = evaluate(
+      const result = proposalsOf(
         view([], { inFlight: [spec("iPad Pro")], maxConcurrentBoots: 2, targets: [target(1)] }),
       );
 
@@ -604,7 +608,7 @@ describe("warm pool policy", () => {
         spec: spec("Pixel 9", { osVersion: "36", platform: "android" }),
       });
 
-      expect(evaluate(view([], { limit: 1, targets: [target(1)] }))).toHaveLength(1);
+      expect(proposalsOf(view([], { limit: 1, targets: [target(1)] }))).toHaveLength(1);
       const global = plan(
         view([busyAndroid], { limit: 1, limits: { ios: 5 }, targets: [target(1)] }),
       );
@@ -621,14 +625,14 @@ describe("warm pool policy", () => {
       const machine = plan(view([], { limit: 2, reserve, targets: [target(1)] }));
       expect(machine.proposals).toEqual([]);
       expect(machine.targets[0]).toMatchObject({ short: "reserve" });
-      expect(evaluate(view([], { limit: 3, reserve, targets: [target(1)] }))).toHaveLength(1);
+      expect(proposalsOf(view([], { limit: 3, reserve, targets: [target(1)] }))).toHaveLength(1);
 
       const platform = plan(
         view([], { limits: { ios: 1 }, reserve: { ios: 1 }, targets: [target(1)] }),
       );
       expect(platform.targets[0]).toMatchObject({ short: "reserve" });
       expect(
-        evaluate(view([], { limits: { ios: 2 }, reserve: { ios: 1 }, targets: [target(1)] })),
+        proposalsOf(view([], { limits: { ios: 2 }, reserve: { ios: 1 }, targets: [target(1)] })),
       ).toHaveLength(1);
     });
 
@@ -645,7 +649,7 @@ describe("warm pool policy", () => {
     it("frees the slot of a never-leased device it shuts down for a target of another kind in the same pass", () => {
       const stale = device("stale", "ready", { readyAt: 1, spec: spec("iPad Pro") });
 
-      const proposals = evaluate(view([stale], { limit: 1, targets: [target(1)] }));
+      const proposals = proposalsOf(view([stale], { limit: 1, targets: [target(1)] }));
 
       expect(proposals).toEqual([
         { action: "shutdown", deviceId: "stale", reason: "never-leased-idle" },
@@ -657,7 +661,7 @@ describe("warm pool policy", () => {
       const first = device("first", "ready", { readyAt: 1 });
       const second = device("second", "ready", { readyAt: 1 });
 
-      const proposals = evaluate(view([first, second], { limit: 1 }));
+      const proposals = proposalsOf(view([first, second], { limit: 1 }));
 
       expect(proposals).toEqual([
         { action: "shutdown", deviceId: "first", reason: "over-budget" },
@@ -669,11 +673,13 @@ describe("warm pool policy", () => {
       const stale = device("stale", "ready", { readyAt: 1 });
       const shutdown = { action: "shutdown", deviceId: "stale", reason: "never-leased-idle" };
 
-      expect(evaluate(view([stale], { waiting: [modelDemand("iPhone 15")] }))).toEqual([]);
+      expect(proposalsOf(view([stale], { waiting: [modelDemand("iPhone 15")] }))).toEqual([]);
       expect(
-        evaluate(view([stale], { waiting: [{ ...modelDemand("iPhone 15"), inFlight: true }] })),
+        proposalsOf(view([stale], { waiting: [{ ...modelDemand("iPhone 15"), inFlight: true }] })),
       ).toEqual([shutdown]);
-      expect(evaluate(view([stale], { waiting: [modelDemand("iPad Pro")] }))).toEqual([shutdown]);
+      expect(proposalsOf(view([stale], { waiting: [modelDemand("iPad Pro")] }))).toEqual([
+        shutdown,
+      ]);
     });
 
     it("does not name a device with a lease record as targeted even when its state still reads ready", () => {

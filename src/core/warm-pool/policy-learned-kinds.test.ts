@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { VirtualDevice, VirtualSpec } from "../domain.js";
 import { evaluate as plan } from "./policy.js";
 import {
-  evaluate,
+  proposalsOf,
   minute,
   now,
   shutdownAfterMs,
@@ -43,11 +43,11 @@ describe("warm pool policy", () => {
 
         const configured = spec("iPhone 15");
         expect(
-          evaluate(view([], { learned, limit: 1, targets: [{ count: 1, spec: configured }] })),
+          proposalsOf(view([], { learned, limit: 1, targets: [{ count: 1, spec: configured }] })),
         ).toEqual([provision(configured)]);
 
         const shut = ofKind("shut", "shutdown");
-        expect(evaluate(view([shut], { learned: [learnedOf(kind, 1, now)] }))).toEqual([
+        expect(proposalsOf(view([shut], { learned: [learnedOf(kind, 1, now)] }))).toEqual([
           { action: "boot", deviceId: "shut", reason: "target", target: kind },
         ]);
 
@@ -158,7 +158,7 @@ describe("warm pool policy", () => {
 
         for (const [name, devices, peak, wanted, claimed, expected, inFlight = []] of cases) {
           expect(
-            evaluate(
+            proposalsOf(
               view(devices, {
                 claimed,
                 inFlight,
@@ -180,7 +180,7 @@ describe("warm pool policy", () => {
 
         for (const [name, configuredCount, peak, created] of cases) {
           expect(
-            evaluate(
+            proposalsOf(
               view([ofKind("a", "leased")], {
                 learned: [learnedOf(kind, peak, now)],
                 maxConcurrentBoots: 3,
@@ -199,12 +199,14 @@ describe("warm pool policy", () => {
         const young = ofKind("young", "ready", { createdAt: 3, readyAt: now - 1_000 });
         const learned = [learnedOf(kind, 1, now)];
 
-        expect(evaluate(view([wanted], { learned }))).toEqual([]);
-        expect(evaluate(view([wanted, extra], { learned }))).toEqual([
+        expect(proposalsOf(view([wanted], { learned }))).toEqual([]);
+        expect(proposalsOf(view([wanted, extra], { learned }))).toEqual([
           { action: "shutdown", deviceId: "extra", reason: "never-leased-idle" },
         ]);
-        expect(evaluate(view([wanted, young], { learned }))).toEqual([]);
-        expect(evaluate(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual([]);
+        expect(proposalsOf(view([wanted, young], { learned }))).toEqual([]);
+        expect(proposalsOf(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual(
+          [],
+        );
       });
 
       it("keeps a learned kind and its devices but plans nothing for it while it is unplanned, and still plans a configured target of its spec", () => {
@@ -212,11 +214,13 @@ describe("warm pool policy", () => {
         const old = now - shutdownAfterMs - 1;
         const spare = ofKind("spare", "ready", { createdAt: 1, readyAt: old });
 
-        expect(evaluate(view([], { learned, unplanned: [kind] }))).toEqual([]);
-        expect(evaluate(view([spare], { learned, unplanned: [kind] }))).toEqual([]);
-        expect(evaluate(view([], { learned }))).toEqual([provision(kind)]);
+        expect(proposalsOf(view([], { learned, unplanned: [kind] }))).toEqual([]);
+        expect(proposalsOf(view([spare], { learned, unplanned: [kind] }))).toEqual([]);
+        expect(proposalsOf(view([], { learned }))).toEqual([provision(kind)]);
         expect(
-          evaluate(view([], { learned, targets: [{ count: 1, spec: kind }], unplanned: [kind] })),
+          proposalsOf(
+            view([], { learned, targets: [{ count: 1, spec: kind }], unplanned: [kind] }),
+          ),
         ).toEqual([provision(kind)]);
       });
 
@@ -234,18 +238,18 @@ describe("warm pool policy", () => {
         ]);
 
         const refused = (options: Parameters<typeof view>[1]) =>
-          evaluate(view([recent, stale], { learned, maxConcurrentBoots: 2, ...options }));
+          proposalsOf(view([recent, stale], { learned, maxConcurrentBoots: 2, ...options }));
         expect(refused({ limit: 2 })).toEqual([displace, provision(kind)]);
         expect(refused({ limit: 2, targets: [{ count: 1, spec: older }] })).toEqual([]);
         expect(refused({ limit: 2, waiting: [modelDemand("iPad Pro")] })).toEqual([]);
-        expect(evaluate(view([recent], { learned, limit: 1, maxConcurrentBoots: 2 }))).toEqual([
+        expect(proposalsOf(view([recent], { learned, limit: 1, maxConcurrentBoots: 2 }))).toEqual([
           { ...displace, deviceId: "recent" },
           provision(kind),
         ]);
         expect(refused({ handoffInFlight: true, limit: 2 })).toEqual([]);
         const holder = device("holder", "leased", { spec: spec("iPad Air") });
         expect(
-          evaluate(
+          proposalsOf(
             view([holder, stale], {
               learned: [learnedOf(kind, 2, now - minute), learnedOf(older, 1, now - 2 * minute)],
               limit: 1,
@@ -258,7 +262,7 @@ describe("warm pool policy", () => {
           spec: spec("Pixel 8", { platform: "android" }),
         });
         expect(
-          evaluate(
+          proposalsOf(
             view([droid], {
               learned: [learnedOf(kind, 1, now), learnedOf(droid.spec, 1, now - minute)],
               limit: 2,
@@ -280,7 +284,7 @@ describe("warm pool policy", () => {
 
         const newer = device("newer", "ready", { endedAgo: 30 * minute, spec: kind });
         expect(
-          evaluate(
+          proposalsOf(
             view([newer], {
               learned,
               limit: 1,
@@ -290,7 +294,7 @@ describe("warm pool policy", () => {
         ).toEqual([]);
         const phone = spec("iPhone 15");
         expect(
-          evaluate(
+          proposalsOf(
             view([recent], {
               learned: [learnedOf(older, 1, now)],
               limit: 1,

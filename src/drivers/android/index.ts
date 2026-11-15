@@ -752,6 +752,7 @@ export class AndroidDriver implements Driver {
           : SNAPSHOT_RECLAIM_ESTIMATE_MS;
     }
   }
+  // fallow-ignore-next-line unused-class-member -- called through the Driver interface, and by its tests through a test-* harness.
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     return this.#systemImages.toolVersions();
   }
