@@ -420,11 +420,25 @@ export class NodeFilesystem implements Filesystem {
     return readlink(path);
   }
 
-  async readBytes(_path: string): Promise<Uint8Array> {
-    return new Uint8Array();
+  async readBytes(path: string): Promise<Uint8Array> {
+    return readFile(path);
   }
 
-  async overwriteSameLength(_path: string, _bytes: Uint8Array): Promise<void> {}
+  async overwriteSameLength(path: string, bytes: Uint8Array): Promise<void> {
+    const handle = await open(path, "r+");
+    try {
+      const details = await handle.stat();
+      if (details.size !== bytes.length) {
+        throw new Error(
+          `Refusing to write ${String(bytes.length)} bytes over ${String(details.size)} in ${path}`,
+        );
+      }
+      await handle.write(bytes, 0, bytes.length, 0);
+      await handle.utimes(details.atime, details.mtime);
+    } finally {
+      await handle.close();
+    }
+  }
 
   async replaceSymlink(path: string, target: string): Promise<void> {
     const staged = `${path}.simlock-swap-${String(process.pid)}`;
@@ -805,11 +819,25 @@ export class MemoryFilesystem implements Filesystem {
     this.#failures.set(path, code);
   }
 
-  async readBytes(_path: string): Promise<Uint8Array> {
-    return new Uint8Array();
+  async readBytes(path: string): Promise<Uint8Array> {
+    this.#failIfDefined(path);
+    const entry = this.#entryAt(path);
+    if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
+    return fileBytes(entry);
   }
 
-  async overwriteSameLength(_path: string, _bytes: Uint8Array): Promise<void> {}
+  async overwriteSameLength(path: string, bytes: Uint8Array): Promise<void> {
+    this.#failIfDefined(path);
+    const entry = this.#entryAt(path);
+    if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
+    if (fileBytes(entry).byteLength !== bytes.length) {
+      throw new Error(
+        `Refusing to write ${String(bytes.length)} bytes over ${path}: another length`,
+      );
+    }
+    entry.bytes = Uint8Array.from(bytes);
+    entry.contents = Buffer.from(bytes).toString("utf8");
+  }
 
   async readlink(path: string): Promise<string> {
     this.#failIfDefined(path);
