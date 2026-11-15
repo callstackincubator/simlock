@@ -404,4 +404,44 @@ describe("createProvider acquire installs", () => {
     expect(slow.of("install")).toHaveLength(5);
     expect(most).toBe(3);
   });
+
+  it("sends an install again to the same device when simlock gave no answer or said retriable, at most three tries", async () => {
+    const cuts = [
+      failing({ reason: "daemon_transport_failure" }),
+      failing({ retriable: true, reason: "SIMLOCK_UNAVAILABLE" }),
+      new Error("Invalid upload response: error code: 524"),
+    ];
+    for (const cut of cuts) {
+      const once = farm({
+        install: (_options, nth) => {
+          if (nth === 0) throw cut;
+          return {};
+        },
+      });
+      const pending = outcome(
+        provider(once.load).acquire(request({ appPath: "/p/Example.app" }).request),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await pending).toEqual({
+        ok: true,
+        value: expect.objectContaining({ deviceId: UDID }),
+      });
+      expect(once.of("allocate")).toHaveLength(1);
+      expect(once.of("install").map((call) => call.options["udid"])).toEqual([UDID, UDID]);
+    }
+
+    const last = failing({ reason: "daemon_response_invalid" });
+    const always = farm({
+      install: () => {
+        throw last;
+      },
+    });
+    const failed = outcome(
+      provider(always.load).acquire(request({ appPath: "/p/Example.app" }).request),
+    );
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(await failed).toEqual({ ok: false, error: last });
+    expect(always.of("install")).toHaveLength(3);
+    expect(always.of("allocate")).toHaveLength(1);
+  });
 });
