@@ -6,7 +6,7 @@ import type {
   DeviceReleaseContext,
   DeviceRequest,
 } from "@e2e-dev/mobile";
-import type { createAgentDeviceClient, LeaseScopedOptions } from "agent-device";
+import type { createAgentDeviceClient, Lease, LeaseScopedOptions } from "agent-device";
 
 import type { ProviderOptions } from "./options.js";
 import { DeviceSetupFailed, installApp, limiter, type Installation } from "./install.js";
@@ -20,6 +20,32 @@ type ClientConfig = NonNullable<Parameters<AgentDeviceClientFactory>[0]>;
 
 // why: the agent-device client wants a tenant; simlock overwrites it with one made from the token and the lease.
 const TENANT = "simlock-e2e";
+
+function wantedDevice(options: ProviderOptions) {
+  return {
+    platform: options.platform,
+    target: "mobile" as const,
+    device: options.device,
+    ttlMs: options.ttlMs,
+    retainOnClose: true,
+    ...(options.osVersion === undefined ? {} : { osVersion: options.osVersion }),
+    ...(options.imageTag === undefined ? {} : { imageTag: options.imageTag }),
+    ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
+    ...(options.deviceBaseline === undefined ? {} : { deviceBaseline: options.deviceBaseline }),
+  };
+}
+
+function scopeOf(lease: Lease, runId: string, sentClientId: string) {
+  return {
+    tenant: lease.tenantId,
+    runId,
+    leaseId: lease.leaseId,
+    leaseBackend: lease.backend,
+    leaseProvider: "proxy",
+    clientId: lease.clientId ?? sentClientId,
+    ...(lease.deviceKey === undefined ? {} : { deviceKey: lease.deviceKey }),
+  } satisfies LeaseScopedOptions;
+}
 
 export function createProvider(
   options: ProviderOptions,
@@ -45,11 +71,11 @@ export function createProvider(
     const started = Date.now();
     const clientId = randomBytes(8).toString("hex");
     const farm = await client(session);
-    const scope = (leaseId: string, id = clientId) => ({
+    const scope = (leaseId: string) => ({
       tenant: TENANT,
       runId: request.runId,
       leaseId,
-      clientId: id,
+      clientId,
       leaseBackend,
       leaseProvider: "proxy" as const,
     });
@@ -62,18 +88,8 @@ export function createProvider(
       allocate: (leaseId, signal) =>
         farm.leases.allocate({
           ...scope(leaseId),
-          platform: options.platform,
-          target: "mobile",
-          device: options.device,
-          ttlMs: options.ttlMs,
-          retainOnClose: true,
+          ...wantedDevice(options),
           signal,
-          ...(options.osVersion === undefined ? {} : { osVersion: options.osVersion }),
-          ...(options.imageTag === undefined ? {} : { imageTag: options.imageTag }),
-          ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
-          ...(options.deviceBaseline === undefined
-            ? {}
-            : { deviceBaseline: options.deviceBaseline }),
         }),
     });
     let stopRenewing = (): void => undefined;
@@ -85,15 +101,7 @@ export function createProvider(
       request.log(
         `simlock: lease ${lease.leaseId} granted in ${String(Date.now() - started)} ms (${options.device} ${deviceId})`,
       );
-      const leased = {
-        tenant: lease.tenantId,
-        runId: request.runId,
-        leaseId: lease.leaseId,
-        leaseBackend: lease.backend,
-        leaseProvider: "proxy",
-        clientId: lease.clientId ?? clientId,
-        deviceKey: lease.deviceKey,
-      } satisfies LeaseScopedOptions;
+      const leased = scopeOf(lease, request.runId, clientId);
       const granted: DeviceLease = {
         id: lease.leaseId,
         daemon: { baseUrl: daemonBaseUrl, authToken: options.token },
@@ -123,7 +131,7 @@ export function createProvider(
     } catch (error) {
       stopRenewing();
       await farm.leases
-        .release(scope(lease.leaseId, lease.clientId ?? clientId))
+        .release({ ...scope(lease.leaseId), clientId: lease.clientId ?? clientId })
         .catch(() => undefined);
       throw error;
     }
