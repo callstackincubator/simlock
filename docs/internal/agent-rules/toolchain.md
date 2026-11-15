@@ -95,9 +95,9 @@ mutant those leave alive gets a second run with every related test file.
 
 ## Routines
 
-Claude Code routines run these skills on a schedule, each but one opening
-one PR that goes through the reviews its diff's kind gets and the merge
-gate:
+Claude Code routines run these skills on a schedule. All but the three
+named below the table open one PR that goes through the reviews its diff's
+kind gets and the merge gate:
 
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
