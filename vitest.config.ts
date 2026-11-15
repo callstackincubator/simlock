@@ -17,10 +17,15 @@ export default defineConfig({
           name: "unit",
           // why: `ui/` holds the console's own unit tests: plain functions and static markup, no DOM.
           // Pages in a DOM are the `ui-dom` project's; the browser lane is Playwright's.
-          include: ["src/**/*.test.ts", "ui/**/*.test.{ts,tsx}"],
+          include: ["src/**/*.test.ts", "packages/*/src/**/*.test.ts", "ui/**/*.test.{ts,tsx}"],
           // why: the timing files measure throughput and latency of GiB transfers: they run one
           // at a time (`pnpm test:timing`) so another file's load cannot move a number.
-          exclude: ["**/node_modules/**", "src/**/*.timing.test.ts", "ui/**/*.dom.test.tsx"],
+          exclude: [
+            "**/node_modules/**",
+            "src/**/*.timing.test.ts",
+            "packages/*/src/**/*.timing.test.ts",
+            "ui/**/*.dom.test.tsx",
+          ],
           // why: the script tests under src/ spawn node, git and a fake gh per case; under a full
           // parallel run the default five seconds times three of them out (lint-rules, claim,
           // mutate) while each passes alone in under a second. A hang still fails within 20 s.
@@ -47,7 +52,7 @@ export default defineConfig({
       {
         test: {
           name: "timing",
-          include: ["src/**/*.timing.test.ts"],
+          include: ["src/**/*.timing.test.ts", "packages/*/src/**/*.timing.test.ts"],
           fileParallelism: false,
           testTimeout: 300_000,
           hookTimeout: 120_000,

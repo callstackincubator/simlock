@@ -151,11 +151,14 @@ Swift build is skipped and iOS streams report unavailable. Neither build checks
 a CoreDevice version: the device program is the one place that enforces that
 pin.
 
-The build steps run through Turborepo (`turbo.json`): `pnpm build`,
-`pnpm build:e2e` and the test scripts that build first run the
-`build:*:run` scripts and skip each one whose inputs (listed per step in
-`turbo.json`) did not change, restoring its `dist/` files from `.turbo/cache`
-in this worktree. Any `package.json` change reruns every step. A capture
+The repository is a pnpm workspace (ADR 0077): `simlock` at the root and
+`@simlock/e2e` under `packages/e2e`. The build steps run through Turborepo
+(`turbo.json`): `pnpm build`, `pnpm build:e2e` and the test scripts that build
+first run the root package's `//#build:*:run` tasks (and `pnpm build` also
+`@simlock/e2e#build`, `tsc` to `packages/e2e/dist/`) and skip each one whose
+inputs (listed per step in `turbo.json`) did not change, restoring its
+`dist/` files from `.turbo/cache` in this worktree. A new `turbo run` call
+names the `//#` ids. Any `package.json` change reruns every step. A capture
 build that skipped Swift (no Xcode selected) is cached too: once Xcode is
 selected, run `pnpm build:capture --force`.
 
