@@ -125,7 +125,7 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
   );
 
   it.each(seedTables)(
-    "$table: a state.db at version 1 moves to version 2 at open, keeping the newest ready seed of each kind (a tie kept by the larger source id), demoting the others to making, leaving baselines and making rows out of the comparison, and refusing a second ready seed afterwards",
+    "$table: a state.db at version 1 moves to the current version at open, keeping the newest ready seed of each kind (a tie kept by the larger source id), demoting the others to making, leaving baselines and making rows out of the comparison, and refusing a second ready seed afterwards",
     async ({ owner, table, insert }) => {
       const directory = await newDirectory();
       const versionOne: SqliteSchemaOwner = {
@@ -163,7 +163,7 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
           state.database
             .prepare("SELECT version FROM schema_versions WHERE owner = ?")
             .get(owner.name),
-        ).toEqual({ version: 2 });
+        ).toEqual({ version: owner.version });
         expect(
           state.database
             .prepare(`SELECT source_id, kind, state FROM ${table} ORDER BY source_id`)

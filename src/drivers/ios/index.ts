@@ -86,7 +86,13 @@ import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceFile, type SourceRow } from "./source-data.js";
-import { swapForeignFolders } from "./foreign-folders.js";
+import {
+  copyOverrides,
+  dropLaunchServicesDatabase,
+  OVERRIDES_FILE_NAME,
+  swapCopyFolders,
+  type CopyContext,
+} from "./source-copy.js";
 import { indexSource } from "./source-index.js";
 import { seedIsStale, sourceStaleReason } from "./source-staleness.js";
 import { fitSourcesFolders, sourcesFolderOf, sourcesSetCheck } from "./sources-folder.js";
@@ -211,8 +217,6 @@ const RECLAIM_INSTEAD =
 
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;
-const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
-const OVERRIDES_FILE_NAME = "disabled.plist";
 const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
 const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
 
@@ -341,8 +345,7 @@ export class IosSimctlDriver implements Driver {
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
   readonly #ownsSourcesSet: (path: string) => boolean;
-  readonly #logsRoot: string | undefined;
-  readonly #sqlite: SqliteOpener | undefined;
+  readonly #copy: CopyContext;
   #sourceMaker: string | undefined;
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -383,8 +386,13 @@ export class IosSimctlDriver implements Driver {
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = sourcesSet;
-    this.#logsRoot = options.logsRoot;
-    this.#sqlite = options.sqlite;
+    this.#copy = {
+      clock: options.clock,
+      filesystem: options.filesystem,
+      folders: { deviceSet: deviceRoot, logsRoot: options.logsRoot, sourcesSet },
+      logger: options.logger,
+      sqlite: options.sqlite,
+    };
     this.#ownsSourcesSet = sourcesSetCheck(
       sourcesSet,
       options.simlockHome,
@@ -896,9 +904,9 @@ export class IosSimctlDriver implements Driver {
       cloneUdid = cloned.stdout.trim();
       if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
       this.#sources.setUdid(sourceId, cloneUdid);
-      await this.#copyOverrides(data.udid, cloneUdid);
-      await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
-      const files = await this.#indexSource(cloneUdid);
+      await copyOverrides(this.#copy, (udid) => this.#overridesFolder(udid), data.udid, cloneUdid);
+      await dropLaunchServicesDatabase(this.#filesystem, this.#sourcesSet, cloneUdid);
+      const files = await indexSource(join(this.#sourcesSet, cloneUdid), this.#copy);
       const sizeBytes = await this.#sizeOf(cloneUdid);
       this.#sources.markReady(sourceId, sizeBytes, files);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
@@ -986,15 +994,15 @@ export class IosSimctlDriver implements Driver {
 
     try {
       await this.#writeMark(udid);
-      await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
-      await this.#swapForeignFolders(seed.sourceId, udid);
+      await dropLaunchServicesDatabase(this.#filesystem, this.#deviceRoot, udid);
+      await swapCopyFolders(this.#copy, this.#sources.filesOf(seed.sourceId), udid);
     } catch (error: unknown) {
       // why: a clone whose mark, database drop or folder swap failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
       await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
       throw error;
     }
-    await this.#copyOverrides(seed.udid, udid);
+    await copyOverrides(this.#copy, (folder) => this.#overridesFolder(folder), seed.udid, udid);
 
     return {
       address: udid,
@@ -1088,15 +1096,10 @@ export class IosSimctlDriver implements Driver {
         if (error instanceof BootTimeoutError) throw error;
         throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
       }
-      try {
-        await this.#shutdown(udid, this.#sourcesSet);
-      } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
-        throw error;
-      }
       let files: readonly SourceFile[];
       try {
-        files = await this.#indexSource(udid);
+        await this.#shutdown(udid, this.#sourcesSet);
+        files = await indexSource(join(this.#sourcesSet, udid), this.#copy);
       } catch (error: unknown) {
         await this.#deleteSeedSimulator(udid);
         throw error;
@@ -1142,89 +1145,6 @@ export class IosSimctlDriver implements Driver {
   #maker(): string {
     this.#sourceMaker ??= this.#idGenerator.generate();
     return this.#sourceMaker;
-  }
-
-  /** why: ADR 0060 §1: the slim file is in place before the copy's first boot, so the copy boots with what the seed was given. */
-  async #copyOverrides(seedUdid: string, copyUdid: string): Promise<void> {
-    const from = join(this.#overridesFolder(seedUdid), OVERRIDES_FILE_NAME);
-    try {
-      if (!(await this.#filesystem.exists(from))) return;
-      await this.#filesystem.mkdirp(this.#overridesFolder(copyUdid), { mode: 0o700 });
-      await this.#filesystem.copyFile(
-        from,
-        join(this.#overridesFolder(copyUdid), OVERRIDES_FILE_NAME),
-      );
-    } catch (error: unknown) {
-      this.#logger?.warn(
-        `could not copy the launchd overrides of seed ${seedUdid} to ${copyUdid}: ${errorMessage(error)}`,
-      );
-    }
-  }
-
-  /**
-   * why: `simctl clone` keeps the LaunchServices database, which records each app (system apps
-   * included) by its absolute path under the original device's folder; a copy then uses the
-   * original's data, or fails once that folder is gone. Dropped from every clone before its first
-   * boot, LaunchServices rebuilds it from the clone's own container folders (ADR 0061 §3).
-   */
-  async #dropLaunchServicesDatabase(setPath: string, udid: string): Promise<void> {
-    const folder = join(setPath, udid, "data", "var", "db", "lsd");
-    if (!(await this.#filesystem.exists(folder))) return;
-    for (const entry of await this.#filesystem.readdir(folder)) {
-      if (LAUNCH_SERVICES_DATABASE.test(entry)) await this.#filesystem.rm(join(folder, entry));
-    }
-  }
-
-  #indexSource(udid: string): Promise<readonly SourceFile[]> {
-    return indexSource(join(this.#sourcesSet, udid), {
-      filesystem: this.#filesystem,
-      folders: {
-        deviceSet: this.#deviceRoot,
-        logsRoot: this.#logsRoot,
-        sourcesSet: this.#sourcesSet,
-      },
-      logger: this.#logger,
-      sqlite: this.#sqlite,
-    });
-  }
-
-  /**
-   * why: ADR 0076 §3: a copy's files and links still name its source's device and log folders, and
-   * the copy would write into them; before its first boot each recorded one names the copy's own
-   * (a swap of the same length, so no format is parsed). A copy whose swap fails is deleted by the caller.
-   */
-  async #swapForeignFolders(sourceId: string, copyUdid: string): Promise<void> {
-    const folders = {
-      deviceSet: this.#deviceRoot,
-      logsRoot: this.#logsRoot,
-      ownUdid: copyUdid,
-      sourcesSet: this.#sourcesSet,
-    };
-    const startedAt = this.#clock.now();
-    let files = 0;
-    let links = 0;
-    for (const file of this.#sources.filesOf(sourceId)) {
-      const path = join(this.#deviceRoot, copyUdid, file.relativePath);
-      const before =
-        file.kind === "link"
-          ? Buffer.from(await this.#filesystem.readlink(path))
-          : await this.#filesystem.readBytes(path);
-      const after = swapForeignFolders(before, folders);
-      if (after.length !== before.length) {
-        throw new DriverCrashError(`swapping the folders in ${path} would change its length`);
-      }
-      if (Buffer.compare(before, after) === 0) continue;
-      if (file.kind === "link") {
-        await this.#filesystem.replaceSymlink(path, Buffer.from(after).toString());
-        links += 1;
-      } else {
-        await this.#filesystem.overwriteSameLength(path, after);
-        files += 1;
-      }
-    }
-    this.#logger?.debug(
-      `swapped ${String(files)} files and ${String(links)} links in ${String(this.#clock.now() - startedAt)} ms for ${copyUdid}`,
-    );
   }
 
   async #destroySeed(seed: ReadySeed): Promise<void> {
