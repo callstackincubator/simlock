@@ -6005,7 +6005,7 @@ describe("IosSimctlDriver simulator audio", () => {
         processRunner: runner,
         simlockHome: "/home/.simlock",
         config: {
-          simulator: { audio: c.audio ?? false, headless: true },
+          simulator: { audio: c.audio ?? false, createTimeoutMs: 30_000, headless: true },
           slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
         },
       });

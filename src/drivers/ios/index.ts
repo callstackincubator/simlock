@@ -320,6 +320,7 @@ export class IosSimctlDriver implements Driver {
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
+  readonly #createTimeoutMs: number;
   readonly #fullBootTimeoutMs: number;
   readonly #afterBoot: AfterBoot;
   readonly #slimByDefault: boolean;
@@ -358,6 +359,7 @@ export class IosSimctlDriver implements Driver {
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.config?.slim;
+    this.#createTimeoutMs = options.config?.simulator?.createTimeoutMs ?? COMMAND_TIMEOUT_MS;
     this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
     this.#afterBoot = {
       silent: options.config?.simulator?.audio === false,
@@ -850,7 +852,7 @@ export class IosSimctlDriver implements Driver {
       await this.#shutdown(data.udid);
       const cloned = await this.#simctl(
         ["clone", data.udid, `simlock-baseline-${sourceId}`, this.#sourcesSet],
-        COMMAND_TIMEOUT_MS,
+        this.#createTimeoutMs,
       );
       cloneUdid = cloned.stdout.trim();
       if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
@@ -933,7 +935,7 @@ export class IosSimctlDriver implements Driver {
     const result = await this.#withSeedLock(seed.udid, () =>
       this.#simctl(
         ["clone", seed.udid, name, this.#deviceRoot],
-        COMMAND_TIMEOUT_MS,
+        this.#createTimeoutMs,
         this.#sourcesSet,
       ),
     );
@@ -1040,7 +1042,7 @@ export class IosSimctlDriver implements Driver {
           resolved.deviceType.identifier,
           resolved.runtime.identifier,
         ],
-        COMMAND_TIMEOUT_MS,
+        this.#createTimeoutMs,
         this.#sourcesSet,
       );
       const udid = created.stdout.trim();
