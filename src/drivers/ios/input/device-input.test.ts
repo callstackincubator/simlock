@@ -200,13 +200,25 @@ describe("iOS device input", () => {
     launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
     await flush();
     expect(logger.warnings).toEqual([]);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2500, width: 3000 }));
+    await flush();
+    const taller = { height: 2500, orientation: "portrait", width: 3000 };
+    expect(early).toEqual([
+      { height: 2000, orientation: "portrait", width: 1000 },
+      unfolded,
+      taller,
+    ]);
     launcher.last.write(envelope(INPUT_TAG.config, { height: "tall" }));
     await flush();
     expect(logger.warnings).toHaveLength(1);
     launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
     await flush();
-    expect(early).toHaveLength(3);
-    expect(late).toEqual([unfolded, { height: 2000, orientation: "portrait", width: 1000 }]);
+    expect(early).toHaveLength(4);
+    expect(late).toEqual([
+      unfolded,
+      taller,
+      { height: 2000, orientation: "portrait", width: 1000 },
+    ]);
     expect(logger.warnings).toHaveLength(1);
   });
 
