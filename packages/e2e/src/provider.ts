@@ -4,6 +4,8 @@ import type { DeviceLease, DeviceProvider, DeviceRequest } from "@e2e-dev/mobile
 import type { createAgentDeviceClient } from "agent-device";
 
 import type { ProviderOptions } from "./options.js";
+import { limiter } from "./install.js";
+import { allocateQueued } from "./queue.js";
 
 type AgentDeviceClientFactory = typeof createAgentDeviceClient;
 type Client = ReturnType<AgentDeviceClientFactory>;
@@ -18,6 +20,7 @@ export function createProvider(
 ): DeviceProvider {
   const daemonBaseUrl = `${options.url}/v1/agent-device`;
   const leaseBackend = `${options.platform}-instance` as const;
+  const withinLimit = limiter(options.installConcurrency);
 
   const client = async (session: string, scope?: ClientConfig): Promise<Client> => {
     let factory: AgentDeviceClientFactory;
@@ -37,42 +40,48 @@ export function createProvider(
     }
     const session = `e2e-${request.runId.slice(0, 12)}-${request.slot}`;
     const started = Date.now();
-    const leaseId = randomBytes(16).toString("hex");
     const clientId = randomBytes(8).toString("hex");
     const farm = await client(session);
-    const lease = await farm.leases.allocate({
+    const scope = (leaseId: string) => ({
       tenant: TENANT,
       runId: request.runId,
       leaseId,
       clientId,
       leaseBackend,
-      leaseProvider: "proxy",
+      leaseProvider: "proxy" as const,
+    });
+    const lease = await allocateQueued({
       platform: options.platform,
-      target: "mobile",
-      device: options.device,
-      ttlMs: options.ttlMs,
-      retainOnClose: true,
-      ...(options.osVersion === undefined ? {} : { osVersion: options.osVersion }),
-      ...(options.imageTag === undefined ? {} : { imageTag: options.imageTag }),
-      ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
-      ...(options.deviceBaseline === undefined ? {} : { deviceBaseline: options.deviceBaseline }),
+      queueMs: options.queueMs,
+      signal: request.signal,
+      log: request.log,
+      release: (leaseId) => farm.leases.release(scope(leaseId)),
+      allocate: (leaseId, signal) =>
+        farm.leases.allocate({
+          ...scope(leaseId),
+          platform: options.platform,
+          target: "mobile",
+          device: options.device,
+          ttlMs: options.ttlMs,
+          retainOnClose: true,
+          signal,
+          ...(options.osVersion === undefined ? {} : { osVersion: options.osVersion }),
+          ...(options.imageTag === undefined ? {} : { imageTag: options.imageTag }),
+          ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
+          ...(options.deviceBaseline === undefined
+            ? {}
+            : { deviceBaseline: options.deviceBaseline }),
+        }),
     });
     const deviceId = lease.deviceKey?.split(":").pop();
     if (lease.deviceKey === undefined || deviceId === undefined || deviceId === "") {
-      await farm.leases.release({
-        tenant: TENANT,
-        runId: request.runId,
-        leaseId: lease.leaseId,
-        leaseBackend,
-        leaseProvider: "proxy",
-        clientId: lease.clientId ?? clientId,
-      });
+      await farm.leases.release({ ...scope(lease.leaseId), clientId: lease.clientId ?? clientId });
       throw new Error(`simlock: lease ${lease.leaseId} names no device`);
     }
     request.log(
       `simlock: lease ${lease.leaseId} granted in ${String(Date.now() - started)} ms (${options.device} ${deviceId})`,
     );
-    return {
+    const granted: DeviceLease = {
       id: lease.leaseId,
       daemon: { baseUrl: daemonBaseUrl, authToken: options.token },
       client: {
@@ -86,6 +95,26 @@ export function createProvider(
       },
       deviceId,
     };
+    const selection = options.platform === "android" ? { serial: deviceId } : { udid: deviceId };
+    const scoped = await client(session, granted.client as ClientConfig);
+    const install = async (appPath: string, app?: string): Promise<void> => {
+      request.signal.throwIfAborted();
+      const installing = Date.now();
+      await withinLimit(() =>
+        scoped.apps.install({
+          platform: options.platform,
+          ...selection,
+          appPath,
+          ...(app === undefined ? {} : { app }),
+        }),
+      );
+      request.log(`simlock: installed ${app ?? appPath} in ${String(Date.now() - installing)} ms`);
+    };
+    if (request.appPath !== undefined) await install(request.appPath, request.app);
+    for (const extra of options.extraApps) await install(extra);
+    return request.appPath !== undefined && request.app !== undefined
+      ? { ...granted, installedApp: request.app }
+      : granted;
   }
 
   // why: release comes with the provider's release task; the factory is what this one ships.

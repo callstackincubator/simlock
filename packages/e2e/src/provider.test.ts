@@ -324,3 +324,84 @@ describe("createProvider acquire on a full farm", () => {
     expect(twice.lines.filter((line) => line === WAITING)).toHaveLength(1);
   });
 });
+
+const UDID = "6B1E0000-AAAA-BBBB-CCCC-000000000001";
+
+// why: createProvider is the seam the spec names (I7); see the first describe.
+describe("createProvider acquire installs", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("installs the app and each extra app on the leased device, reports installedApp only for a named app, and runs at most installConcurrency installs at once", async () => {
+    const withApp = farm();
+    const named = request({ appPath: "/p/Example.app", app: "com.example.app" });
+    const lease = await provider(withApp.load, { extraApps: ["/x/a.app", "/x/b.app"] }).acquire(
+      named.request,
+    );
+    const installs = withApp.of("install");
+    expect(installs.map((call) => call.options)).toEqual([
+      { platform: "ios", udid: UDID, appPath: "/p/Example.app", app: "com.example.app" },
+      { platform: "ios", udid: UDID, appPath: "/x/a.app" },
+      { platform: "ios", udid: UDID, appPath: "/x/b.app" },
+    ]);
+    expect(installs[0]?.config).toMatchObject({
+      daemonBaseUrl: "https://farm.example.com/v1/agent-device",
+      daemonAuthToken: "agent-token",
+      session: "e2e-0123456789ab-0",
+      tenant: "tenant-of-lease",
+      runId: "0123456789abcdef-run",
+      leaseId: lease.id,
+      leaseBackend: "ios-instance",
+      leaseProvider: "proxy",
+      deviceKey: IOS_KEY,
+    });
+    expect(lease.installedApp).toBe("com.example.app");
+    expect(named.lines.slice(1)).toEqual([
+      expect.stringMatching(/^simlock: installed com\.example\.app in \d+ ms$/u),
+      expect.stringMatching(/^simlock: installed \/x\/a\.app in \d+ ms$/u),
+      expect.stringMatching(/^simlock: installed \/x\/b\.app in \d+ ms$/u),
+    ]);
+
+    const unnamed = farm();
+    const bare = await provider(unnamed.load).acquire(
+      request({ appPath: "/p/Example.app" }).request,
+    );
+    expect(unnamed.of("install").map((call) => call.options)).toEqual([
+      { platform: "ios", udid: UDID, appPath: "/p/Example.app" },
+    ]);
+    expect(bare).not.toHaveProperty("installedApp");
+
+    const extrasOnly = farm();
+    const droid = await provider(extrasOnly.load, {
+      platform: "android",
+      extraApps: ["/x/a.apk"],
+    }).acquire(request({ platform: "android" }).request);
+    expect(extrasOnly.of("install").map((call) => call.options)).toEqual([
+      { platform: "android", serial: "emulator-5554", appPath: "/x/a.apk" },
+    ]);
+    expect(droid).not.toHaveProperty("installedApp");
+
+    let running = 0;
+    let most = 0;
+    const slow = farm({
+      install: async () => {
+        running += 1;
+        most = Math.max(most, running);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        running -= 1;
+      },
+    });
+    const limited = provider(slow.load, { installConcurrency: 3 });
+    const slots = [0, 1, 2, 3, 4].map((slot) =>
+      limited.acquire(request({ slot, slots: 5, appPath: "/p/Example.app" }).request),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await Promise.all(slots)).toHaveLength(5);
+    expect(slow.of("install")).toHaveLength(5);
+    expect(most).toBe(3);
+  });
+});
