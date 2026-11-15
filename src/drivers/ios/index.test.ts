@@ -5708,6 +5708,74 @@ describe("IosSimctlDriver device set", () => {
     }
   });
 
+  it("refuses iOS with sources-path-unfit and one message per cause where no sources folder can have the device set's path length, and starts where one can", async () => {
+    const xcodeSim = "/Users/al/Library/Developer/CoreSimulator";
+    const xcodeDevices = `${xcodeSim}/Devices`;
+    const longHome = "/Users/al/very-long-folder-name/ssssss";
+    const cases = [
+      {
+        name: "default, home under /private (a)",
+        home: "/private/tmp/h",
+        config: { deviceSet: "default" },
+        message: `Refusing the ios device set: /private/tmp/h is under /private, where iOS stores each path in two spellings, but Xcode's set ${xcodeDevices} is not. Set SIMLOCK_HOME to a folder outside /tmp and /var.`,
+      },
+      {
+        name: "default, home too long (b)",
+        home: longHome,
+        config: { deviceSet: "default" },
+        message: `Refusing the ios device set: the sources folder must have a path as long as ${xcodeDevices} (49 characters), but ${longHome}/devices/ leaves 2 characters for its name, fewer than 3. Set SIMLOCK_HOME to a folder whose real path is at most 37 characters.`,
+      },
+      {
+        name: "simlock, deviceRoot too short (c)",
+        home: "/home/.simlock",
+        config: { deviceRoot: "/d" },
+        message:
+          "Refusing the ios device set: the sources folder must have a path as long as drivers.ios.deviceRoot /d (2 characters), but /home/.simlock/devices/ leaves 0 characters for its name, fewer than 3. Remove drivers.ios.deviceRoot, or set it to a path of at least 26 characters that is under /private only when SIMLOCK_HOME is.",
+      },
+      {
+        name: "simlock, only the root under /private (c)",
+        home: "/home/.simlock",
+        config: { deviceRoot: "/private/tmp/simlock-devices" },
+        message:
+          "Refusing the ios device set: the sources folder must have a path as long as drivers.ios.deviceRoot /private/tmp/simlock-devices (28 characters), but only one of /private/tmp/simlock-devices and /home/.simlock is under /private. Remove drivers.ios.deviceRoot, or set it to a path of at least 26 characters that is under /private only when SIMLOCK_HOME is.",
+      },
+      {
+        name: "default, home that fits",
+        home: "/Users/al/.simlock",
+        config: { deviceSet: "default" },
+      },
+    ] as const;
+
+    for (const entry of cases) {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp(entry.home);
+      const failure = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        clock: new FakeClock(),
+        coreSimulatorRoot: xcodeSim,
+        driverConfig: entry.config,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: new ScriptedProcessRunner([]),
+        simlockHome: entry.home,
+      })
+        .then(() => undefined)
+        .catch((error: unknown) => error);
+
+      if ("message" in entry) {
+        expect(failure, entry.name).toBeInstanceOf(OwnedRootError);
+        expect(failure, entry.name).toMatchObject({
+          message: entry.message,
+          platform: "ios",
+          reason: "sources-path-unfit",
+        });
+      } else {
+        expect(failure, entry.name).toBeUndefined();
+      }
+    }
+  });
+
   it.each([
     ["Default", { deviceSet: "Default" }, "Default", 'but it is "Default"'],
     ["the empty string", { deviceSet: "" }, "", 'but it is ""'],
