@@ -16,7 +16,7 @@ export function mayAnswerLater(error: unknown): boolean {
   return retriable === true || (typeof reason === "string" && NO_ANSWER_REASONS.has(reason));
 }
 
-// why: simlock puts a string `details.reason` on every answer it gives, so an error without one did not come from simlock.
+// why: an error with no string `details.reason` means simlock gave no answer the client kept: a proxy or connection error, a sign-in error (UNAUTHENTICATED, FORBIDDEN carry no reason: website/src/content/docs/docs/using-devices/agent-device.mdx:225), or a refused upload whose flat `reason` beside `code` (agent-device.mdx:214) never reaches `details`; callers treat all three as a cut (issue #1567, Tests B6).
 export function saidNothing(error: unknown): boolean {
   return typeof detailsOf(error).reason !== "string";
 }

@@ -38,7 +38,7 @@ export function limiter(
 const TRIES = 3;
 const BACKOFF_MS = 15_000;
 
-// why: an app upload that a proxy cut off (a 524 page) reaches agent-device's client as an error with no details, so the missing simlock reason is what tells it from a refused install.
+// why: a missing simlock reason counts as a cut, sent three times and then thrown with no swap: a proxy's 524 page, and also a sign-in error (website/src/content/docs/docs/using-devices/agent-device.mdx:225) or an upload simlock refused (agent-device.mdx:214), which reach the client without a reason in `details`; only an error carrying a reason is judged a refused install.
 function cut(error: unknown): boolean {
   return mayAnswerLater(error) || saidNothing(error);
 }
