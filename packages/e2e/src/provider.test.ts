@@ -587,3 +587,43 @@ describe("createProvider renewals", () => {
     );
   });
 });
+
+// why: createProvider is the seam the spec names (I7); see the first describe.
+describe("createProvider release", () => {
+  it("releases a held lease at the farm, logs and resolves when that fails, and does nothing for a lease it does not hold", async () => {
+    const held = farm();
+    const first = provider(held.load);
+    const lease = await first.acquire(request().request);
+    const lines: string[] = [];
+    await first.release(lease, ending(lines));
+    expect(held.of("release").map((call) => call.options)).toEqual([
+      expect.objectContaining({
+        tenant: "tenant-of-lease",
+        runId: "0123456789abcdef-run",
+        leaseId: lease.id,
+        leaseBackend: "ios-instance",
+        leaseProvider: "proxy",
+      }),
+    ]);
+    expect(lines).toEqual([]);
+
+    const broken = farm({
+      release: () => {
+        throw new Error("farm unreachable");
+      },
+    });
+    const second = provider(broken.load);
+    const stuck = await second.acquire(request().request);
+    const failed: string[] = [];
+    await expect(second.release(stuck, ending(failed))).resolves.toBeUndefined();
+    expect(failed).toEqual([
+      `simlock: releasing lease ${stuck.id} failed: farm unreachable; it runs out by itself`,
+    ]);
+
+    const idle = farm();
+    await expect(
+      provider(idle.load).release({ id: "0".repeat(32) }, ending()),
+    ).resolves.toBeUndefined();
+    expect(idle.calls).toEqual([]);
+  });
+});
