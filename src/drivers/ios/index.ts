@@ -633,7 +633,7 @@ export class IosSimctlDriver implements Driver {
       if (row.kind !== "seed" || row.runtimeId !== runtimeId || row.udid === undefined) continue;
       const udid = row.udid;
       try {
-        await this.#deleteSeedInTurn(udid);
+        await this.#deleteSeedInTurn(udid, row.setPath);
         this.#sources.deleteRow(row.sourceId);
       } catch (error: unknown) {
         this.#logger?.warn(
@@ -899,12 +899,12 @@ export class IosSimctlDriver implements Driver {
       if (!(await this.#isOrphanSource(sourceId))) {
         throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
       }
-      await this.#deleteSeedInTurn(sourceId);
+      await this.#deleteSeedInTurn(sourceId, this.#sourcesSet);
       return;
     }
     if (row.udid !== undefined) {
       const udid = row.udid;
-      await this.#deleteSeedInTurn(udid);
+      await this.#deleteSeedInTurn(udid, row.setPath);
     }
     this.#sources.deleteRow(sourceId);
   }
@@ -1010,13 +1010,13 @@ export class IosSimctlDriver implements Driver {
     return made;
   }
 
-  async #deleteSeedInTurn(udid: string): Promise<void> {
-    await this.#seedTurns.takeToDelete(udid, () => this.#deleteSeedSimulator(udid));
+  async #deleteSeedInTurn(udid: string, setPath: string): Promise<void> {
+    await this.#seedTurns.takeToDelete(udid, () => this.#deleteSeedSimulator(udid, setPath));
   }
 
   async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     const seed = this.#sources.findReadySeed(specKey);
-    if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
+    if (seed !== undefined && !seedIsStale(seed, resolved, this.#sourcesSet)) return seed;
     if (seed !== undefined) await this.#destroySeed(seed);
     return this.#makeSeed(resolved, specKey);
   }
@@ -1072,7 +1072,7 @@ export class IosSimctlDriver implements Driver {
         throw error;
       }
       this.#sources.markReady(sourceId, await this.#sizeOf(udid));
-      return { sourceId, udid, runtimeBuild: resolved.runtime.build };
+      return { sourceId, setPath: this.#sourcesSet, udid, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
       this.#sources.deleteRow(sourceId);
       throw error;
@@ -1094,7 +1094,7 @@ export class IosSimctlDriver implements Driver {
 
   async #removeLeftover(row: SourceRow): Promise<void> {
     try {
-      if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+      if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid, row.setPath);
       this.#sources.deleteRow(row.sourceId);
     } catch (error: unknown) {
       this.#logger?.warn(
@@ -1140,14 +1140,15 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #destroySeed(seed: ReadySeed): Promise<void> {
-    await this.#deleteSeedInTurn(seed.udid);
+    await this.#deleteSeedInTurn(seed.udid, seed.setPath);
     this.#sources.deleteRow(seed.sourceId);
   }
 
-  async #deleteSeedSimulator(udid: string): Promise<void> {
-    await this.#bestEffortShutdown(udid, this.#sourcesSet);
+  /** why: a row made by an earlier release names the set its simulator is in; `simctl --set` of any other set answers "Invalid device" for it. */
+  async #deleteSeedSimulator(udid: string, setPath: string = this.#sourcesSet): Promise<void> {
+    await this.#bestEffortShutdown(udid, setPath);
     const args = ["delete", udid];
-    const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, setPath);
     // why: a seed deleted by hand is already gone, and its row must still be dropped.
     if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
     this.#checked(args, COMMAND_TIMEOUT_MS, outcome);
@@ -2682,8 +2683,9 @@ function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
 }
 
-/** why: a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
-function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
+/** why: a seed in another set than today's sources folder was made before ADR 0076, and a copy of it cannot be fixed from; a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
+function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec, sourcesSet: string): boolean {
+  if (seed.setPath !== sourcesSet) return true;
   const current = resolved.runtime.build;
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }

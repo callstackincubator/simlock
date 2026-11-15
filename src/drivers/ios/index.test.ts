@@ -182,7 +182,12 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, sourcesRoot]).toContain(call.args[2]);
+    expect([
+      deviceRoot,
+      sourcesRoot,
+      `${deviceRoot}/sources`,
+      "/home/.simlock/devices/ios-sources",
+    ]).toContain(call.args[2]);
   }
 });
 
@@ -1202,7 +1207,9 @@ describe("IosSimctlDriver", () => {
       await plantManagedDevice(filesystem);
       const clock = new FakeClock();
       const driver = await IosSimctlDriver.create({
-        database: seeded ? await seededDatabase() : await memorySourceDatabase(),
+        database: seeded
+          ? await seededDatabase({ setPath: isDefault ? xcodeSourcesRoot : sourcesRoot })
+          : await memorySourceDatabase(),
         clock,
         ...(isDefault ? { coreSimulatorRoot } : {}),
         driverConfig: isDefault ? { deviceSet: "default" } : { deviceRoot },
@@ -6007,7 +6014,7 @@ describe("IosSimctlDriver device set", () => {
         if (scoped) await plantManagedDevice(filesystem);
         else await filesystem.mkdirp(`${devicesDir}/${driverData.udid}/data`);
         const driver = await IosSimctlDriver.create({
-          database: await seededDatabase(),
+          database: await seededDatabase({ setPath: scoped ? sourcesRoot : xcodeSourcesRoot }),
           clock: new FakeClock(),
           coreSimulatorRoot,
           driverConfig: config,

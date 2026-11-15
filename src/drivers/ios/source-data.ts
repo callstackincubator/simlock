@@ -49,6 +49,7 @@ export interface NewSourceRow {
 
 export interface SourceRow {
   readonly sourceId: string;
+  readonly setPath: string;
   readonly kind: "seed" | "baseline";
   readonly udid: string | undefined;
   readonly deviceTypeId: string;
@@ -63,6 +64,7 @@ export interface SourceRow {
 
 export interface ReadySeed {
   readonly sourceId: string;
+  readonly setPath: string;
   readonly udid: string;
   readonly runtimeBuild: string | undefined;
 }
@@ -116,12 +118,13 @@ export class IosSourceTable {
   findReadySeed(specKey: string): ReadySeed | undefined {
     const row = this.#database
       .prepare(
-        "SELECT source_id, udid, runtime_build FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?",
+        "SELECT source_id, set_path, udid, runtime_build FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?",
       )
       .get(specKey);
     if (row === undefined) return undefined;
     return {
       sourceId: row["source_id"] as string,
+      setPath: row["set_path"] as string,
       udid: row["udid"] as string,
       runtimeBuild: (row["runtime_build"] as string | null) ?? undefined,
     };
@@ -161,12 +164,13 @@ export class IosSourceTable {
   #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
-        `SELECT source_id, kind, udid, device_type_id, runtime_id, runtime_build, model, os_version,
+        `SELECT source_id, set_path, kind, udid, device_type_id, runtime_id, runtime_build, model, os_version,
            state, maker, size_bytes FROM ios_source_data ${where}`,
       )
       .all(...parameters)
       .map((row) => ({
         sourceId: row["source_id"] as string,
+        setPath: row["set_path"] as string,
         kind: row["kind"] as "seed" | "baseline",
         udid: (row["udid"] as string | null) ?? undefined,
         deviceTypeId: row["device_type_id"] as string,
