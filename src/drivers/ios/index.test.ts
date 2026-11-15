@@ -230,7 +230,12 @@ function sourcesSimctl(...args: readonly string[]): {
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
 async function seededDatabase(
-  seed: { readonly runtimeBuild?: string; readonly setPath?: string; readonly udid?: string } = {},
+  seed: {
+    readonly indexed?: false;
+    readonly runtimeBuild?: string;
+    readonly setPath?: string;
+    readonly udid?: string;
+  } = {},
 ): Promise<SqliteDatabase> {
   return plantReadySeed(await memorySourceDatabase(), {
     deviceTypeId: driverData.deviceTypeId,
@@ -1583,9 +1588,16 @@ describe("IosSimctlDriver", () => {
       remade: true,
       setPath: "/home/.simlock/devices/ios-sources",
     },
-  ])(
+    {
+      name: "it is not indexed",
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: true,
+      indexed: false,
+    },
+  ] as const)(
     "makes the seed again before copying it only when it is stale: $name -> remade $remade",
-    async ({ seedBuild, runtimeBuild, remade, setPath = sourcesRoot }) => {
+    async ({ seedBuild, runtimeBuild, remade, setPath = sourcesRoot, ...planting }) => {
       const staleUdid = "00000000-0000-0000-0000-0000000000bb";
       const catalog = JSON.parse(listFixture) as {
         runtimes: { buildversion?: string; identifier: string }[];
@@ -1632,6 +1644,7 @@ describe("IosSimctlDriver", () => {
         await seededDatabase({
           setPath,
           udid: planted,
+          ...("indexed" in planting ? { indexed: planting.indexed } : {}),
           ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
         }),
       );

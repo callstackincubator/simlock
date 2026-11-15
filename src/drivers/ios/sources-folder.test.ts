@@ -200,16 +200,24 @@ describe("IosSimctlDriver sources folder", () => {
     }
   });
 
-  it("lists a baseline saved in another set as stale with the reason to save it again, one in the sources folder as fresh, and destroys the old one in its own set", async () => {
-    const [old, fresh] = [
+  it("lists a baseline saved in another set, or not indexed, as stale with the reason to save it again, one in the sources folder as fresh, and destroys the old one in its own set", async () => {
+    const [old, fresh, unindexed] = [
       "00000000-0000-0000-0000-0000000002a0",
       "00000000-0000-0000-0000-0000000002b0",
-    ] as [string, string];
+      "00000000-0000-0000-0000-0000000002c0",
+    ] as [string, string, string];
     const oldSet = "/home/.simlock/devices/ios-sources";
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
     const database = await memorySourceDatabase();
     plantSource(database, { ...kind, kind: "baseline", setPath: oldSet, udid: old });
     plantSource(database, { ...kind, kind: "baseline", setPath: sourcesRoot, udid: fresh });
+    plantSource(database, {
+      ...kind,
+      indexed: false,
+      kind: "baseline",
+      setPath: sourcesRoot,
+      udid: unindexed,
+    });
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
       { match: simctlIn(oldSet, "shutdown", old) },
@@ -231,6 +239,7 @@ describe("IosSimctlDriver sources folder", () => {
     expect(listed.map((source) => source.staleReason)).toEqual([
       `saved in ${oldSet}, which copies cannot be fixed from; save it again`,
       undefined,
+      `saved in ${sourcesRoot}, which copies cannot be fixed from; save it again`,
     ]);
     const oldId = listed[0]?.id ?? "";
     await driver.destroySource(oldId);

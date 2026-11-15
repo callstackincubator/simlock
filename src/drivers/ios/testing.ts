@@ -15,6 +15,8 @@ export async function memorySourceDatabase(): Promise<SqliteDatabase> {
 export interface PlantedSource {
   readonly deviceTypeId: string;
   readonly files?: readonly SourceFile[];
+  /** why: a source made before ADR 0076's index, which only a row of an earlier release has; absent means indexed. */
+  readonly indexed?: false;
   readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
@@ -46,6 +48,9 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
   });
   if (source.udid !== undefined) table.setUdid(sourceId, source.udid);
   if (source.state !== "making") table.markReady(sourceId, source.sizeBytes, source.files ?? []);
+  if (source.indexed === false) {
+    database.prepare("UPDATE ios_source_data SET indexed = 0 WHERE source_id = ?").run(sourceId);
+  }
   return database;
 }
 
