@@ -60,7 +60,10 @@ The lint holds this.
 
 One release run sets one version in every manifest, builds and checks every
 tarball before anything is published, makes one commit and one tag, and
-publishes every tarball. A package's version therefore names the simlock
+publishes every tarball, the packages under `packages/` first and `simlock`
+last. A release does not start while a package has no version on npm: npm
+binds a trusted publisher only to a package that exists, so a new package's
+first, empty version is published by hand. A package's version therefore names the simlock
 release it was built and tested with. There is one `CHANGELOG.md`.
 
 ```mermaid
@@ -73,12 +76,12 @@ sequenceDiagram
   N-->>W: one is taken
   W-->>M: fails, nothing tagged or published
   M->>W: start a release
-  W->>N: is the version free for every package?
+  W->>N: does every package exist, and is the version free for each?
   N-->>W: yes
   W->>W: set one version, build and check every tarball
   W->>W: commit and tag once
-  W->>N: publish simlock
   W->>N: publish @simlock/e2e
+  W->>N: publish simlock
 ```
 
 ### 5. The repository's checks cover `packages/`
@@ -93,7 +96,8 @@ change to it updates the website in the same change.
   and the matching version is worth more to a user than a quiet package.
 - A release that publishes the first tarball and fails on the second leaves
   npm with two versions until the run is repeated. The workflow checks both
-  before it publishes either, so only an npm failure can cause it.
+  before it publishes either and publishes `simlock` last, so only an npm
+  failure can cause it, and `simlock` is then the one left behind.
 - The root package stays special: its paths have no `packages/` prefix.
   Scripts, hooks and agent docs that name `src/` keep working unchanged.
 - The self-updater is untouched. It installs `simlock`; a package under
