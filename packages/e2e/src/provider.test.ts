@@ -322,6 +322,39 @@ describe("createProvider acquire on a full farm", () => {
       over.of("allocate")[0]?.options["leaseId"],
     ]);
 
+    // why: queueMs bounds the whole acquire; the device swap after a failed install does not start a second one.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const swapping = farm({
+      allocate: (options, nth) => {
+        if (nth === 0) throw failing(retriable);
+        if (nth === 1) return grant(options);
+        return hang(options, nth);
+      },
+      install: () => {
+        throw failing({ reason: "SIMLOCK_FAILED" });
+      },
+    });
+    const late = outcome(
+      provider(swapping.load, { queueMs: 60_000 }).acquire(
+        request({ appPath: "/p/Example.app" }).request,
+      ),
+    );
+    let lateEnded = false;
+    void late.then(() => {
+      lateEnded = true;
+    });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(lateEnded, "still asking one millisecond before queueMs").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lateEnded, "given up at queueMs, swap included").toBe(true);
+    expect(await late).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        message: "simlock: no free ios device on the farm within 1 min",
+      }),
+    });
+    vi.restoreAllMocks();
+
     const instant = farm({
       allocate: (options, nth) => {
         if (nth < 2) throw failing(retriable);

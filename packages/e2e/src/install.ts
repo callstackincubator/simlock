@@ -26,8 +26,6 @@ export function limiter(
       });
     }
     try {
-      // why: a slot handed over after the abort must not start the task.
-      signal.throwIfAborted();
       return await task(signal);
     } finally {
       const next = waiting.shift();
