@@ -444,4 +444,70 @@ describe("createProvider acquire installs", () => {
     expect(always.of("install")).toHaveLength(3);
     expect(always.of("allocate")).toHaveLength(1);
   });
+
+  it("releases a device whose install failed and leases one other, once, and does not swap for a cut install", async () => {
+    const SECOND_KEY = "ios:mobile:6B1E0000-AAAA-BBBB-CCCC-000000000002";
+    const refused = failing({ reason: "SIMLOCK_FAILED" });
+    const swap = farm({
+      allocate: (options, nth) => grant(options, nth === 0 ? {} : { deviceKey: SECOND_KEY }),
+      install: (_options, nth) => {
+        if (nth === 0) throw refused;
+        return {};
+      },
+    });
+    const swapped = request({ appPath: "/p/Example.app" });
+    const lease = await provider(swap.load).acquire(swapped.request);
+    const [one, two] = swap.of("allocate");
+    expect(lease.id).toBe(two?.options["leaseId"]);
+    expect(lease.deviceId).toBe("6B1E0000-AAAA-BBBB-CCCC-000000000002");
+    expect(swap.of("release").map((call) => call.options["leaseId"])).toEqual([
+      one?.options["leaseId"],
+    ]);
+    expect(two?.config["session"]).toBe("e2e-0123456789ab-0-r1");
+    expect(swap.of("install").map((call) => call.options["udid"])).toEqual([
+      UDID,
+      "6B1E0000-AAAA-BBBB-CCCC-000000000002",
+    ]);
+    expect(swapped.lines).toContain(
+      `simlock: install on ${UDID} failed (the farm said no); leasing another device`,
+    );
+
+    const never = farm({
+      install: () => {
+        throw refused;
+      },
+    });
+    expect(
+      await outcome(provider(never.load).acquire(request({ appPath: "/p/Example.app" }).request)),
+    ).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        message: "simlock: could not set up a device after 2 tries: the farm said no",
+      }),
+    });
+    expect(never.of("allocate")).toHaveLength(2);
+    expect(never.of("release").map((call) => call.options["leaseId"])).toEqual(
+      never.of("allocate").map((call) => call.options["leaseId"]),
+    );
+
+    for (const cut of [
+      failing({ reason: "daemon_transport_failure" }),
+      failing({ reason: "NO_DEVICE_IN_TIME", retriable: true }),
+    ]) {
+      const cutting = farm({
+        install: () => {
+          throw cut;
+        },
+      });
+      const pending = outcome(
+        provider(cutting.load).acquire(request({ appPath: "/p/Example.app" }).request),
+      );
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(await pending).toEqual({ ok: false, error: cut });
+      expect(cutting.of("allocate")).toHaveLength(1);
+      expect(cutting.of("release").map((call) => call.options["leaseId"])).toEqual([
+        cutting.of("allocate")[0]?.options["leaseId"],
+      ]);
+    }
+  });
 });
