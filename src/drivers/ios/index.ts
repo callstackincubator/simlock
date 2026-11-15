@@ -85,7 +85,8 @@ import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
-import { sourcesFolderFor } from "./sources-folder.js";
+import { seedIsStale, sourceStaleReason } from "./source-staleness.js";
+import { fitSourcesFolders, sourcesFolderOf } from "./sources-folder.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
@@ -414,7 +415,7 @@ export class IosSimctlDriver implements Driver {
       const ownRoot = join(options.simlockHome, "devices", "ios");
       await refuseOwnSetLeftovers(options.filesystem, ownRoot, [
         join(ownRoot, "sources"),
-        ...(await fitSourcesFolder(options, ownRoot)),
+        ...(await fitSourcesFolders(options, ownRoot)),
       ]);
       const devices = xcodeDeviceSetPath(options);
       return new IosSimctlDriver(
@@ -428,7 +429,7 @@ export class IosSimctlDriver implements Driver {
       join(options.simlockHome, "devices", "ios-sources"),
       ...(options.coreSimulatorRoot === undefined
         ? []
-        : await fitSourcesFolder(options, xcodeDeviceSetPath(options))),
+        : await fitSourcesFolders(options, xcodeDeviceSetPath(options))),
     ]);
     if (options.coreSimulatorRoot !== undefined) {
       await refuseXcodeSetLeftovers(
@@ -452,7 +453,7 @@ export class IosSimctlDriver implements Driver {
       options,
       deviceRoot,
       rootOptions,
-      await sourcesFolderOf(options, deviceRoot, configuredRoot(options)),
+      await sourcesFolderOf(options, deviceRoot, true),
     );
   }
 
@@ -1022,7 +1023,8 @@ export class IosSimctlDriver implements Driver {
 
   async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     const seed = this.#sources.findReadySeed(specKey);
-    if (seed !== undefined && !seedIsStale(seed, resolved, this.#sourcesSet)) return seed;
+    if (seed !== undefined && !seedIsStale(seed, resolved.runtime.build, this.#sourcesSet))
+      return seed;
     if (seed !== undefined) await this.#destroySeed(seed);
     return this.#makeSeed(resolved, specKey);
   }
@@ -2247,37 +2249,6 @@ function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "defa
   return "default";
 }
 
-/** why: the other setting's sources folder only matters when it can exist: where its length is unfit, nothing was ever made there, and it is read to nothing. */
-async function fitSourcesFolder(
-  options: IosSimctlDriverOptions,
-  deviceSet: string,
-): Promise<readonly string[]> {
-  try {
-    return [await sourcesFolderOf(options, deviceSet)];
-  } catch {
-    // why: a set that cannot be measured is one the check reads anyway, and reports as unreadable.
-    return [];
-  }
-}
-
-function configuredRoot(options: IosSimctlDriverOptions): string | undefined {
-  const configured = options.driverConfig["deviceRoot"];
-  return typeof configured === "string" ? configured : undefined;
-}
-
-function sourcesFolderOf(
-  options: IosSimctlDriverOptions,
-  deviceSet: string,
-  configuredRoot?: string,
-): Promise<string> {
-  return sourcesFolderFor({
-    ...(configuredRoot === undefined ? {} : { configuredRoot }),
-    deviceSet,
-    filesystem: options.filesystem,
-    simlockHome: options.simlockHome,
-  });
-}
-
 function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
   return join(options.coreSimulatorRoot ?? ".", "Devices");
 }
@@ -2700,37 +2671,6 @@ function readBackFailure(
 
 function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
-}
-
-/** why: a seed in another set than today's sources folder was made before ADR 0076, and a copy of it cannot be fixed from; a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
-function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec, sourcesSet: string): boolean {
-  if (seed.setPath !== sourcesSet) return true;
-  const current = resolved.runtime.build;
-  return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
-}
-
-/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
-function sourceStaleReason(
-  row: SourceRow,
-  catalog: SimctlCatalog,
-  sourcesSet: string,
-): string | undefined {
-  if (row.setPath !== sourcesSet) {
-    return `saved in ${row.setPath}, which copies cannot be fixed from; save it again`;
-  }
-  const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
-  if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
-  if (
-    row.runtimeBuild !== undefined &&
-    runtime.build !== undefined &&
-    row.runtimeBuild !== runtime.build
-  ) {
-    return `runtime ${row.runtimeId} changed from build ${row.runtimeBuild} to ${runtime.build}`;
-  }
-  if (!catalog.deviceTypes.some((entry) => entry.identifier === row.deviceTypeId)) {
-    return `device type ${row.deviceTypeId} is not available`;
-  }
-  return undefined;
 }
 
 function seedSpecKey(resolved: ResolvedIosSpec): string {

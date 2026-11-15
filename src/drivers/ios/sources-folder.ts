@@ -86,3 +86,37 @@ async function realPathOf(filesystem: Filesystem, path: string): Promise<string>
 function isMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
+
+export interface SourcesFolderContext {
+  readonly driverConfig: Readonly<Record<string, unknown>>;
+  readonly filesystem: Filesystem;
+  readonly simlockHome: string;
+}
+
+/** why: `configured` is true only for `simlock`, where a `deviceRoot` the operator set is what the refusal names. */
+export function sourcesFolderOf(
+  options: SourcesFolderContext,
+  deviceSet: string,
+  configured = false,
+): Promise<string> {
+  const root = options.driverConfig["deviceRoot"];
+  return sourcesFolderFor({
+    ...(configured && typeof root === "string" ? { configuredRoot: root } : {}),
+    deviceSet,
+    filesystem: options.filesystem,
+    simlockHome: options.simlockHome,
+  });
+}
+
+/** why: the other setting's sources folder only matters when it can exist: where its length is unfit, nothing was ever made there, and it is read to nothing. */
+export async function fitSourcesFolders(
+  options: SourcesFolderContext,
+  deviceSet: string,
+): Promise<readonly string[]> {
+  try {
+    return [await sourcesFolderOf(options, deviceSet)];
+  } catch {
+    // why: a set that cannot be measured is one the check reads anyway, and reports as unreadable.
+    return [];
+  }
+}
