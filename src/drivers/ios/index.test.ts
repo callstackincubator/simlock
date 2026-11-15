@@ -1709,6 +1709,56 @@ describe("IosSimctlDriver", () => {
     );
   });
 
+  it("a provision leaves no link or file in the copy that names the seed's folders", async () => {
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    const seed = `${deviceRoot}/sources/${seedUdid}`;
+    const copy = `${deviceRoot}/${driverData.udid}`;
+    const logs = "/home/Library/Logs/CoreSimulator";
+    const tools = "data/Library/Shortcuts/ToolKit";
+    const history = "data/private/var/db/assetsubscriptiond/history/com.apple.siri.tts.cur.json";
+    const historyNaming = (device: string): string =>
+      JSON.stringify({ lock: `${device}/data/private/var/MobileAsset/latest.locker` });
+    // why: `simctl clone` copies a booted seed's stored paths byte for byte, so the copy starts with the seed's.
+    for (const device of [seed, copy]) {
+      await filesystem.mkdirp(`${device}/${tools}`);
+      await filesystem.writeFileAtomic(`${device}/${tools}/Tools-prod.sqlite`, "");
+      filesystem.defineSymlink(
+        `${device}/${tools}/Tools-active`,
+        `${seed}/${tools}/Tools-prod.sqlite`,
+      );
+      filesystem.defineSymlink(`${device}/data/Library/Logs`, `${logs}/${seedUdid}`);
+      await filesystem.mkdirp(`${device}/${history.slice(0, history.lastIndexOf("/"))}`);
+      await filesystem.writeFileAtomic(`${device}/${history}`, historyNaming(seed));
+    }
+    await filesystem.mkdirp(`${logs}/${seedUdid}`);
+    await filesystem.mkdirp(`${logs}/${driverData.udid}`);
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: driverData.udid });
+
+    expect(
+      {
+        logsLink: await filesystem.realpath(`${copy}/data/Library/Logs`),
+        toolsLink: await filesystem.realpath(`${copy}/${tools}/Tools-active`),
+        historyFile: await filesystem.readFile(`${copy}/${history}`),
+      },
+      "every stored path in the copy names the copy's own folders, none the seed's",
+    ).toEqual({
+      logsLink: `${logs}/${driverData.udid}`,
+      toolsLink: `${copy}/${tools}/Tools-prod.sqlite`,
+      historyFile: historyNaming(copy),
+    });
+  });
+
   it("keeps no copy of a slim spec's mode in driver data", async () => {
     const runner = new ScriptedProcessRunner([
       {
