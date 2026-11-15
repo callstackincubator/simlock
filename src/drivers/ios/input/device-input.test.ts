@@ -8,7 +8,12 @@ import {
   type InputScreenConfig,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
-import { FakeBytePipeLauncher, FakeClock, ScriptedProcessRunner } from "../../../ports/index.js";
+import {
+  FakeBytePipeLauncher,
+  FakeClock,
+  ScriptedProcessRunner,
+  type Logger,
+} from "../../../ports/index.js";
 import { createIosDeviceInput } from "./index.js";
 
 const COMMAND = "/opt/simlock/simlock-screen-capture";
@@ -28,7 +33,21 @@ function simulator(runtimeId?: string): VirtualDriverDevice {
   };
 }
 
+class RecordingLogger implements Logger {
+  readonly warnings: string[] = [];
+  debug(): void {}
+  info(): void {}
+  error(): void {}
+  warn(message: string): void {
+    this.warnings.push(message);
+  }
+  child(): Logger {
+    return this;
+  }
+}
+
 function setup(inOwnSet = true) {
+  const logger = new RecordingLogger();
   const launcher = new FakeBytePipeLauncher();
   const clock = new FakeClock();
   const processRunner = new ScriptedProcessRunner([
@@ -46,9 +65,10 @@ function setup(inOwnSet = true) {
     command: COMMAND,
     ...(inOwnSet ? { deviceSet: DEVICE_SET } : {}),
     launcher,
+    logger,
     processRunner,
   });
-  return { clock, factory, launcher, processRunner };
+  return { clock, factory, launcher, logger, processRunner };
 }
 
 function envelope(tag: number, body: unknown): Uint8Array {
@@ -157,6 +177,37 @@ describe("iOS device input", () => {
         { body: { orientation: "landscape_left" }, tag: 0x07 },
       ]);
     }
+  });
+
+  it("a socket left open across a fold tells every listener the new panel's size, a late listener the latest, and a repeated or malformed frame nothing", async () => {
+    const { factory, launcher, logger } = setup();
+    const opening = factory.open(simulator(), new AbortController().signal);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+    const input = (await opening) as DeviceInput;
+    const early: InputScreenConfig[] = [];
+    input.onConfig((config) => early.push(config));
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+    await flush();
+    const unfolded = { height: 2000, orientation: "portrait", width: 3000 };
+    expect(early).toEqual([{ height: 2000, orientation: "portrait", width: 1000 }, unfolded]);
+
+    const late: InputScreenConfig[] = [];
+    input.onConfig((config) => late.push(config));
+    expect(late).toEqual([unfolded]);
+
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+    await flush();
+    expect(logger.warnings).toEqual([]);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: "tall" }));
+    await flush();
+    expect(logger.warnings).toHaveLength(1);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+    await flush();
+    expect(early).toHaveLength(3);
+    expect(late).toEqual([unfolded, { height: 2000, orientation: "portrait", width: 1000 }]);
+    expect(logger.warnings).toHaveLength(1);
   });
 
   it("an open rejects when the helper is missing, exits first or reports no size within 10 s, and a helper that exits later fails the input", async () => {
