@@ -103,6 +103,7 @@ export default defineConfig({
             doc("using-devices/watching-the-screen", "Watch the screen"),
             doc("using-devices/agent-device", "agent-device"),
             doc("using-devices/remote-agents", "Remote agents over HTTP"),
+            doc("using-devices/ci", "Run tests from CI"),
             doc("using-devices/programmatic-client", "Programmatic client"),
             doc("using-devices/errors", "When a lease fails"),
           ],

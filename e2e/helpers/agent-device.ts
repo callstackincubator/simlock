@@ -194,17 +194,24 @@ export interface LeaseClient {
 }
 
 // why: agent-device's CLI has no flag that sends `retainOnClose`; its client library does, and a runner such as budgie allocates that way, so a test that proves a runner's flow loads the same library from the pinned install.
-export async function leaseClient(env: SharedTestEnv, secret: string): Promise<LeaseClient> {
+export async function loadAgentDeviceClient(): Promise<
+  (config: Record<string, unknown>) => unknown
+> {
   const entry = realpathSync(agentDeviceEntry());
   const library = (await import(
     pathToFileURL(join(dirname(entry), "..", "dist", "src", "index.js")).href
-  )) as {
-    createAgentDeviceClient(config: Record<string, unknown>): { leases: LeaseClient };
-  };
-  return library.createAgentDeviceClient({
-    daemonAuthToken: secret,
-    daemonBaseUrl: proxyUrl(env),
-  }).leases;
+  )) as { createAgentDeviceClient: (config: Record<string, unknown>) => unknown };
+  return library.createAgentDeviceClient;
+}
+
+export async function leaseClient(env: SharedTestEnv, secret: string): Promise<LeaseClient> {
+  const createClient = await loadAgentDeviceClient();
+  return (
+    createClient({
+      daemonAuthToken: secret,
+      daemonBaseUrl: proxyUrl(env),
+    }) as { leases: LeaseClient }
+  ).leases;
 }
 
 const PROFILE_TOKEN_LABEL = "agent-device on this Mac";
