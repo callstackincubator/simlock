@@ -94,7 +94,7 @@ function request(patch: Partial<DeviceRequest> = {}): { request: DeviceRequest; 
 
 // why: createProvider is the seam the spec names (I7): `simlockDevices` only adds the real agent-device loader, and a fake client here cannot be passed through index.ts.
 describe("createProvider acquire", () => {
-  it("leases one device from the farm and returns the lease the worker drives", async () => {
+  it("asks the farm for one lease and returns a lease the worker can drive, or refuses what it cannot lease", async () => {
     const ios = farm();
     const first = request();
     const lease = await provider(ios.load).acquire(first.request);
@@ -139,5 +139,54 @@ describe("createProvider acquire", () => {
         /^simlock: lease [0-9a-f]{32} granted in \d+ ms \(iPhone 17 Pro 6B1E0000-AAAA-BBBB-CCCC-000000000001\)$/u,
       ),
     ]);
+
+    const android = farm();
+    const droid = await provider(android.load, { platform: "android", device: "Pixel 6" }).acquire(
+      request({ platform: "android" }).request,
+    );
+    expect(droid.deviceId).toBe("emulator-5554");
+    expect(droid.client).toMatchObject({
+      leaseBackend: "android-instance",
+      deviceKey: ANDROID_KEY,
+    });
+
+    const tuned = farm();
+    await provider(tuned.load, {
+      osVersion: "26.0",
+      imageTag: "google_apis",
+      deviceMode: "full",
+      deviceBaseline: "warm",
+      ttlMs: 60_000,
+    }).acquire(request().request);
+    expect(tuned.of("allocate")[0]?.options).toMatchObject({
+      osVersion: "26.0",
+      imageTag: "google_apis",
+      deviceMode: "full",
+      deviceBaseline: "warm",
+      ttlMs: 60_000,
+    });
+
+    const wrong = farm();
+    await expect(
+      provider(wrong.load).acquire(request({ platform: "android" }).request),
+    ).rejects.toThrow("simlockDevices leases ios devices; the target asked for android");
+    expect(wrong.calls).toEqual([]);
+
+    const nameless = farm({
+      allocate: (options) => ({ ...(grant(options) as object), deviceKey: undefined }),
+    });
+    await expect(provider(nameless.load).acquire(request().request)).rejects.toThrow(
+      /^simlock: lease [0-9a-f]{32} names no device$/u,
+    );
+    const [asked] = nameless.of("allocate");
+    expect(nameless.of("release").map((call) => call.options["leaseId"])).toEqual([
+      asked?.options["leaseId"],
+    ]);
+
+    await expect(
+      provider(() => Promise.reject(new Error("Cannot find package 'agent-device'"))).acquire(
+        request().request,
+      ),
+    ).rejects.toThrow("simlock: the agent-device package is not installed; add it to your project");
   });
 });
