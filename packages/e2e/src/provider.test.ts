@@ -1,4 +1,4 @@
-import type { DeviceRequest } from "@e2e-dev/mobile";
+import type { DeviceReleaseContext, DeviceRequest } from "@e2e-dev/mobile";
 import type { createAgentDeviceClient } from "agent-device";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -509,5 +509,81 @@ describe("createProvider acquire installs", () => {
         cutting.of("allocate")[0]?.options["leaseId"],
       ]);
     }
+  });
+});
+
+function ending(lines: string[] = []): DeviceReleaseContext {
+  return {
+    runId: "0123456789abcdef-run",
+    targetName: "ios",
+    env: {},
+    signal: new AbortController().signal,
+    log: (line) => lines.push(line),
+  };
+}
+
+// why: createProvider is the seam the spec names (I7); see the first describe.
+describe("createProvider renewals", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renews a held lease every third of ttlMs, logs a failed renewal and keeps going, stops when the farm ended the lease, and stops after release", async () => {
+    for (const [ttlMs, every] of [
+      [180_000, 60_000],
+      [30_000, 10_000],
+    ] as const) {
+      const steady = farm();
+      const held = provider(steady.load, { ttlMs });
+      const lease = await held.acquire(request().request);
+      await vi.advanceTimersByTimeAsync(every - 1);
+      expect(steady.of("heartbeat")).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(steady.of("heartbeat").map((call) => call.options)).toEqual([
+        expect.objectContaining({
+          tenant: "tenant-of-lease",
+          runId: "0123456789abcdef-run",
+          leaseId: lease.id,
+          leaseBackend: "ios-instance",
+          leaseProvider: "proxy",
+          ttlMs,
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(every);
+      expect(steady.of("heartbeat")).toHaveLength(2);
+      await held.release(lease, ending());
+      await vi.advanceTimersByTimeAsync(every * 3);
+      expect(steady.of("heartbeat")).toHaveLength(2);
+    }
+
+    const blip = farm({
+      heartbeat: (_options, nth) => {
+        if (nth === 0) throw new Error("connection reset");
+        return {};
+      },
+    });
+    const flaky = request();
+    const lease = await provider(blip.load).acquire(flaky.request);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(flaky.lines).toContain(`simlock: renewing lease ${lease.id} failed: connection reset`);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(blip.of("heartbeat")).toHaveLength(2);
+
+    const gone = farm({
+      heartbeat: () => {
+        throw failing({ reason: "LEASE_ENDED_BY_HOST", retriable: false });
+      },
+    });
+    const ended = request();
+    const goneLease = await provider(gone.load).acquire(ended.request);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(gone.of("heartbeat")).toHaveLength(1);
+    expect(ended.lines.filter((line) => line.includes("renewing"))).toEqual([]);
+    expect(ended.lines.at(-1)).toBe(
+      `simlock: lease ${goneLease.id} was ended by the farm; failures on its device are infrastructure, not tests`,
+    );
   });
 });
