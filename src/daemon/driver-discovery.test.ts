@@ -826,7 +826,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
 
       expect((globalThis as Record<string, unknown>)[key]).toEqual({
         emulator,
-        simulator,
+        simulator: { ...simulator, createTimeoutMs: 30_000 },
         slim: { bootTimeoutMs: 600_000 },
       });
     } finally {

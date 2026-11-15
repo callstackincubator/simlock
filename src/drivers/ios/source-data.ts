@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { SqliteDatabase, SqliteSchemaOwner } from "../../ports/index.js";
 
 export const iosSourceDataOwner: SqliteSchemaOwner = {
@@ -179,4 +180,8 @@ export class IosSourceTable {
         sizeBytes: (row["size_bytes"] as number | null) ?? undefined,
       }));
   }
+}
+
+export function sourcesSetFor(simlockHome: string, deviceRoot: string, owned: boolean): string {
+  return owned ? join(deviceRoot, "sources") : join(simlockHome, "devices", "ios-sources");
 }

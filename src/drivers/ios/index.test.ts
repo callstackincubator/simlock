@@ -25,7 +25,10 @@ import {
   SystemClock,
   type Filesystem,
   type Logger,
+  type ProcessHandle,
   type ProcessResult,
+  type ProcessRunner,
+  type ProcessRunOptions,
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
@@ -916,16 +919,18 @@ describe("IosSimctlDriver", () => {
     ).toBe(0o700);
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
-      { ...seedCreate, options: { timeoutMs: 30_000 } },
+      { ...seedCreate, options: { timeoutMs: 330_000 } },
       { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
-      { ...cloneInvocation, options: { timeoutMs: 30_000 } },
+      { ...cloneInvocation, options: { timeoutMs: 330_000 } },
     ]);
 
     await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: copyUdid });
-    expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
+    expect(runner.calls.slice(7)).toEqual([
+      { ...cloneInvocation, options: { timeoutMs: 330_000 } },
+    ]);
   });
 
   it("a clone that fails makes the provision throw and keeps the seed and its row", async () => {
@@ -994,6 +999,289 @@ describe("IosSimctlDriver", () => {
     expect(await firstSettled).toBeInstanceOf(DriverCrashError);
     await expect(second).resolves.toMatchObject({ deviceId: copyUdid });
     expect(clones()).toBe(2);
+  });
+
+  it.each([
+    {
+      call: "a provision's clone",
+      act: (driver: IosSimctlDriver) => driver.provision(spec),
+      seeded: true,
+      steps: [
+        { hangs: true, match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot) },
+      ],
+    },
+    {
+      call: "a seed's create",
+      act: (driver: IosSimctlDriver) => driver.provision(spec),
+      seeded: false,
+      steps: [
+        {
+          hangs: true,
+          match: sourcesSimctl(
+            "create",
+            "simlock-seed-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ),
+        },
+      ],
+    },
+    {
+      call: "a baseline's clone",
+      act: (driver: IosSimctlDriver) =>
+        driver.saveSource({
+          address: driverData.udid,
+          deviceId: driverData.udid,
+          driverData,
+          physical: false,
+        }),
+      seeded: false,
+      steps: [
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        {
+          hangs: true,
+          match: simctl(
+            "clone",
+            driverData.udid,
+            "simlock-baseline-device-1",
+            `${deviceRoot}/sources`,
+          ),
+        },
+      ],
+    },
+  ])("$call waits ios.simulator.createTimeoutMs", async ({ act, seeded, steps }) => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ...steps,
+    ]);
+    scopedRunners.push(runner);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    const clock = new FakeClock();
+    const config = { simulator: { audio: true, createTimeoutMs: 120_000, headless: true } };
+    const driver = await IosSimctlDriver.create({
+      clock,
+      config,
+      database: seeded ? await seededDatabase() : await memorySourceDatabase(),
+      driverConfig: { deviceRoot },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: runner,
+      simlockHome: "/home/.simlock",
+    });
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    const outcome = act(driver);
+    const settled = outcome.catch((error: unknown) => error);
+    const state = promiseState(outcome);
+    await waitForCalls(runner, steps.length + 1);
+    clock.advance(119_999);
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+
+    expect(state.state).toBe("pending");
+    clock.advance(1);
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+    expect(state.state).toBe("rejected");
+    expect(await settled).toMatchObject({
+      message: expect.stringMatching(/timed out after 120000ms$/),
+    });
+  });
+
+  const coreSimulatorRoot = "/CoreSim";
+
+  it.each([
+    {
+      call: "a provision's clone under deviceSet default",
+      act: (driver: IosSimctlDriver) => driver.provision(spec),
+      deleteArgs: (udid: string) => ["simctl", "delete", udid],
+      hung: [
+        "simctl",
+        "--set",
+        "/home/.simlock/devices/ios-sources",
+        "clone",
+        seedUdid,
+        driverData.name,
+        `${coreSimulatorRoot}/Devices`,
+      ],
+      isDefault: true,
+      seeded: true,
+      steps: [],
+    },
+    {
+      call: "a seed's create",
+      act: (driver: IosSimctlDriver) => driver.provision(spec),
+      deleteArgs: (udid: string) => sourcesSimctl("delete", udid).args,
+      hung: sourcesSimctl(
+        "create",
+        "simlock-seed-device-1",
+        driverData.deviceTypeId,
+        driverData.runtimeId,
+      ).args,
+      isDefault: false,
+      seeded: false,
+      steps: [],
+    },
+    {
+      call: "a baseline's clone",
+      act: (driver: IosSimctlDriver) =>
+        driver.saveSource({
+          address: driverData.udid,
+          deviceId: driverData.udid,
+          driverData,
+          physical: false,
+        }),
+      deleteArgs: (udid: string) => sourcesSimctl("delete", udid).args,
+      hung: simctl("clone", driverData.udid, "simlock-baseline-device-1", `${deviceRoot}/sources`)
+        .args,
+      isDefault: false,
+      seeded: false,
+      steps: [
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+      ],
+    },
+  ])(
+    "a create or clone that answers after its limit deletes the simulator it names in its own set ($call)",
+    async ({ act, deleteArgs, hung, isDefault, seeded, steps }) => {
+      const devicesDir = `${coreSimulatorRoot}/Devices`;
+      const lateUdid = "00000000-0000-0000-0000-0000000000c1";
+      const list = isDefault
+        ? { args: ["simctl", "list", "-j", "devicetypes", "runtimes"], command: "xcrun" }
+        : listInvocation;
+      const scripted = new ScriptedProcessRunner([
+        { match: list, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...steps,
+        { match: { args: deleteArgs(lateUdid), command: "xcrun" } },
+      ]);
+      if (!isDefault) scopedRunners.push(scripted);
+      let answer: ((result: ProcessResult) => void) | undefined;
+      const runner: ProcessRunner = {
+        run: scripted.run.bind(scripted),
+        spawnStreaming: scripted.spawnStreaming.bind(scripted),
+        spawn(
+          command: string,
+          args: readonly string[],
+          options?: ProcessRunOptions,
+        ): ProcessHandle {
+          if (args.join(" ") !== hung.join(" ")) {
+            return scripted.spawn(command, args, options);
+          }
+          scripted.calls.push({ args: [...args], command, options: options ?? {} });
+          // why: `simctl clone` asks CoreSimulator's service for the copy; a signal ends only the
+          // `simctl` process, so the copy still finishes, and it prints the UDID only if it is alive.
+          const result = new Promise<ProcessResult>((resolve) => {
+            answer = resolve;
+          });
+          const empty = (async function* () {})();
+          return {
+            kill() {
+              answer?.({ code: null, stderr: "", stdout: "" });
+            },
+            pid: 99,
+            stderr: empty,
+            stdout: empty,
+            unref() {},
+            wait: () => result,
+          };
+        },
+      };
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      const clock = new FakeClock();
+      const driver = await IosSimctlDriver.create({
+        database: seeded ? await seededDatabase() : await memorySourceDatabase(),
+        clock,
+        ...(isDefault ? { coreSimulatorRoot } : {}),
+        driverConfig: isDefault ? { deviceSet: "default" } : { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      const call = act(driver).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(answer).toBeDefined());
+      clock.advance(30_000);
+      const failure = await call;
+      await filesystem.mkdirp(`${devicesDir}/${lateUdid}/data`);
+      answer?.({ code: 0, stderr: "", stdout: `${lateUdid}\n` });
+      for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+
+      expect(failure).toBeInstanceOf(DriverCrashError);
+      expect((failure as Error).message).toMatch(/timed out after 30000ms$/);
+      expect(
+        scripted.calls.filter((entry) => entry.args.includes("delete")).map((entry) => entry.args),
+      ).toEqual([deleteArgs(lateUdid)]);
+    },
+  );
+
+  it("a create command still silent after the second limit is killed and logged with the name it was asked to create", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { hangs: true, match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot) },
+    ]);
+    const logger = new RecordingLogger();
+    const clock = new FakeClock();
+    const driver = await createDriver(runner, clock, undefined, await seededDatabase(), logger);
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    const provision = driver.provision(spec).catch((error: unknown) => error);
+    await waitForCalls(runner, 2);
+    const clone = promiseState(runner.handles[1]!.wait());
+    clock.advance(30_000);
+    await provision;
+    clock.advance(299_999);
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+    expect(clone.state).toBe("pending");
+    expect(logger.warnings).toEqual([]);
+
+    clock.advance(1);
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+
+    expect(clone.state).toBe("fulfilled");
+    expect(logger.warnings).toEqual([
+      `simctl clone ${seedUdid} ${driverData.name} ${deviceRoot} gave no simulator after its limit`,
+    ]);
+  });
+
+  it("a seed is not deleted, even by a deletion queued during the clone, while a clone that answered late is still running", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { hangs: true, match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot) },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      { match: sourcesSimctl("delete", seedUdid) },
+    ]);
+    const clock = new FakeClock();
+    const driver = await createDriver(runner, clock, undefined, await seededDatabase());
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+    const [listed] = await driver.listSources();
+
+    const provision = driver.provision(spec).catch((error: unknown) => error);
+    await waitForCalls(runner, 3);
+    const destroyed = driver.destroySource(listed?.id ?? "");
+    const destroy = promiseState(destroyed);
+    clock.advance(30_000);
+    await provision;
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+
+    expect(destroy.state).toBe("pending");
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list", "clone"]);
+
+    clock.advance(300_000);
+    await destroyed;
+
+    expect(runner.calls.map((call) => call.args[3])).toEqual([
+      "list",
+      "list",
+      "clone",
+      "shutdown",
+      "delete",
+    ]);
   });
 
   it("provision deletes the clone and throws when the LaunchServices database cannot be dropped", async () => {
@@ -1572,7 +1860,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls).toEqual([
         { ...listInvocation, options: { timeoutMs: 30_000 } },
         { ...simctl("shutdown", driverData.udid), options: { timeoutMs: 30_000 } },
-        { ...cloneInvocation, options: { timeoutMs: 30_000 } },
+        { ...cloneInvocation, options: { timeoutMs: 330_000 } },
       ]);
       expect(await filesystem.readFile(overridesPath(cloneUdid))).toBe(
         overridesPlist({ "a.b": true }),
@@ -4135,6 +4423,50 @@ describe("IosSimctlDriver listComponents()", () => {
       ]);
     });
 
+    it("starts the five-minute deletion budget after the seeds are deleted, so a seed held by a late clone does not use it up", async () => {
+      const live = image("26.5", "23F77");
+      const runtimeDelete = simctl("runtime", "delete", live.id);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { hangs: true, match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot) },
+        imagesListed([live]),
+        defaultSetListed({}),
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        { match: sourcesSimctl("delete", seedUdid) },
+        { match: runtimeDelete, result: { code: 0, stderr: "", stdout: "" } },
+        imagesListed([live], "Deleting"),
+        imagesListed([]),
+        imagesListed([]),
+        defaultSetListed({}),
+      ]);
+      const clock = new FakeClock();
+      const driver = await createDriver(
+        runner,
+        clock,
+        await assetStore([]),
+        await seededDatabase(),
+      );
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      const provision = driver.provision(spec).catch((error: unknown) => error);
+      await waitForCalls(runner, 2);
+      clock.advance(30_000);
+      await provision;
+
+      const removal = driver
+        .removeComponent({ build: live.build, image: live.id }, { signal: signal() })
+        .catch((caught: unknown) => caught);
+      await flushMicrotasks221();
+      clock.advance(300_000);
+      const outcome = promiseState(removal);
+      for (let step = 0; step < 10 && outcome.state === "pending"; step += 1) {
+        await flushMicrotasks221();
+        clock.advance(1_000);
+      }
+
+      expect(await removal).toEqual({ sizeBytes: 1_000 });
+      expect(runner.calls.map((call) => call.args)).toContainEqual(runtimeDelete.args);
+    });
+
     it("reports residue naming Xcode's Settings -> Platforms when the build's download is still in the asset store", async () => {
       const runner = new ScriptedProcessRunner([
         imagesListed([target]),
@@ -5845,7 +6177,7 @@ describe("IosSimctlDriver simulator audio", () => {
         processRunner: runner,
         simlockHome: "/home/.simlock",
         config: {
-          simulator: { audio: c.audio ?? false, headless: true },
+          simulator: { audio: c.audio ?? false, createTimeoutMs: 30_000, headless: true },
           slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
         },
       });
