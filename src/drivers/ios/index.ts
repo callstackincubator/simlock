@@ -1167,12 +1167,31 @@ export class IosSimctlDriver implements Driver {
       ownUdid: copyUdid,
       sourcesSet: this.#sourcesSet,
     };
+    const startedAt = this.#clock.now();
+    let files = 0;
+    let links = 0;
     for (const file of this.#sources.filesOf(sourceId)) {
       const path = join(this.#deviceRoot, copyUdid, file.relativePath);
-      const target = await this.#filesystem.readlink(path);
-      const swapped = Buffer.from(swapForeignFolders(Buffer.from(target), folders)).toString();
-      if (swapped !== target) await this.#filesystem.replaceSymlink(path, swapped);
+      const before =
+        file.kind === "link"
+          ? Buffer.from(await this.#filesystem.readlink(path))
+          : await this.#filesystem.readBytes(path);
+      const after = swapForeignFolders(before, folders);
+      if (after.length !== before.length) {
+        throw new DriverCrashError(`swapping the folders in ${path} would change its length`);
+      }
+      if (Buffer.compare(before, after) === 0) continue;
+      if (file.kind === "link") {
+        await this.#filesystem.replaceSymlink(path, Buffer.from(after).toString());
+        links += 1;
+      } else {
+        await this.#filesystem.overwriteSameLength(path, after);
+        files += 1;
+      }
     }
+    this.#logger?.debug(
+      `swapped ${String(files)} files and ${String(links)} links in ${String(this.#clock.now() - startedAt)} ms for ${copyUdid}`,
+    );
   }
 
   async #destroySeed(seed: ReadySeed): Promise<void> {
