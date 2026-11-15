@@ -3554,6 +3554,111 @@ describe("IosSimctlDriver", () => {
       }
     });
 
+    const bootBudgets = [
+      {
+        budgetMs: 400_000,
+        config: { full: { bootTimeoutMs: 400_000 } },
+        data: driverData,
+        key: "ios.full.bootTimeoutMs",
+        options: prepareFull,
+      },
+      {
+        budgetMs: 250_000,
+        config: { slim: slimOptions(250_000) },
+        data: slim18_5,
+        key: "ios.slim.bootTimeoutMs",
+        options: prepareSlim,
+      },
+    ] as const;
+
+    async function bootBudgetDriver(
+      runner: ScriptedProcessRunner,
+      clock: FakeClock,
+      config: (typeof bootBudgets)[number]["config"],
+    ) {
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      return await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceRoot },
+        instanceId,
+        simlockHome: "/home/.simlock",
+        clock,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        launchdOverridesRoot: overridesRoot,
+        processRunner: runner,
+        config,
+      });
+    }
+
+    it.each(bootBudgets)(
+      "a simctl boot that hangs waits the whole $key, not a fixed 30 s, then fails with BootTimeoutError (#1560)",
+      async ({ budgetMs, config, data, options }) => {
+        const clock = new FakeClock();
+        const runner = new ScriptedProcessRunner([
+          { hangs: true, match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
+        ]);
+        const driver = await bootBudgetDriver(runner, clock, config);
+
+        const ready = driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          options,
+        );
+        void ready.catch(() => undefined);
+        await waitForCalls(runner, 1);
+        const readyState = promiseState(ready);
+
+        expect(runner.calls[0]?.options).toEqual({ timeoutMs: budgetMs });
+        clock.advance(budgetMs - 1);
+        await flushMicrotasks221();
+        expect(readyState.state).toBe("pending");
+
+        clock.advance(1);
+        expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
+      },
+    );
+
+    it.each(bootBudgets)(
+      "a 100 s simctl boot is spent from $key: bootstatus gets only the rest, and the boot fails when the whole budget is gone (#1560)",
+      async ({ budgetMs, config, data, options }) => {
+        const clock = new FakeClock();
+        const runner = new ScriptedProcessRunner([
+          {
+            match: { command: "xcrun", args: simctlArgs("boot", data.udid) },
+            onSpawn: () => clock.advance(100_000),
+          },
+          {
+            hangs: true,
+            match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") },
+          },
+          { match: { command: "xcrun", args: simctlArgs("shutdown", data.udid) } },
+        ]);
+        const driver = await bootBudgetDriver(runner, clock, config);
+
+        const ready = driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          options,
+        );
+        void ready.catch(() => undefined);
+        await waitForCalls(runner, 2);
+        const readyState = promiseState(ready);
+
+        expect(runner.calls[1]?.options).toEqual({ timeoutMs: budgetMs - 100_000 });
+        clock.advance(budgetMs - 100_000 - 1);
+        await flushMicrotasks221();
+        expect(readyState.state).toBe("pending");
+
+        clock.advance(1);
+        expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
+        expect(runner.calls.map((call) => call.args)).toEqual([
+          simctlArgs("boot", data.udid),
+          simctlArgs("bootstatus", data.udid, "-b"),
+          simctlArgs("shutdown", data.udid),
+        ]);
+      },
+    );
+
     it.each([
       { name: "slim spec", spec: { ...spec, mode: "slim" } as const },
       { name: "full spec", spec },
