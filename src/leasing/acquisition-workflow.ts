@@ -221,7 +221,7 @@ export class AcquisitionWorkflow {
         return;
       }
       waiter.timing = estimatedTiming(this.options.drivers.get(spec.platform), spec);
-      await this.provision(waiter, action.reservation);
+      await this.#provision(waiter, action.reservation);
       return;
     }
     if (action.kind === "boot-shutdown") {
@@ -247,7 +247,7 @@ export class AcquisitionWorkflow {
     await this.evictManaged(waiter, action.device, action.claim, action.reason);
   }
 
-  async provision(waiter: AcquisitionWaiter, reservation: CapacityReservation): Promise<void> {
+  async #provision(waiter: AcquisitionWaiter, reservation: CapacityReservation): Promise<void> {
     const spec = waiter.spec;
     if (spec === undefined) {
       reservation.release();
