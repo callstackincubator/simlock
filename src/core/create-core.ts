@@ -444,6 +444,7 @@ export function createCore(options: CoreOptions): Core {
       await startup.converge(read);
       await dropReplacedBaselines();
       await listStartupSources(options.drivers, options.logger);
+      await checkBaselinesAtStartup(baselines, options.logger);
       warmPool.start();
       capacityObserver.start();
     },
@@ -484,6 +485,23 @@ export function createCore(options: CoreOptions): Core {
       quarantine.dispose();
     },
   };
+}
+
+/**
+ * why: a stored stale reason is what a request names a baseline against, so it is stored before the
+ * first request and the warm pool; a failed check is logged and the start goes on.
+ */
+async function checkBaselinesAtStartup(
+  baselines: BaselineService,
+  logger: Logger | undefined,
+): Promise<void> {
+  try {
+    await baselines.checkStale();
+  } catch (error: unknown) {
+    logger?.warn(
+      `could not check baselines at startup: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /**

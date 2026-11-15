@@ -829,7 +829,7 @@ export class IosSimctlDriver implements Driver {
     const catalog = await this.#loadCatalog();
     return [
       ...rows.map((row) => {
-        const staleReason = sourceStaleReason(row, catalog);
+        const staleReason = sourceStaleReason(row, catalog, this.#sourcesSet);
         return {
           id: row.sourceId,
           kind: row.kind,
@@ -993,7 +993,7 @@ export class IosSimctlDriver implements Driver {
     if (row?.state !== "ready" || row.udid === undefined) {
       throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
     }
-    const reason = sourceStaleReason(row, await this.#loadCatalog());
+    const reason = sourceStaleReason(row, await this.#loadCatalog(), this.#sourcesSet);
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
     return { udid: row.udid };
   }
@@ -2691,7 +2691,14 @@ function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec, sourcesSet: str
 }
 
 /** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
-function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+function sourceStaleReason(
+  row: SourceRow,
+  catalog: SimctlCatalog,
+  sourcesSet: string,
+): string | undefined {
+  if (row.setPath !== sourcesSet) {
+    return `saved in ${row.setPath}, which copies cannot be fixed from; save it again`;
+  }
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
   if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
   if (

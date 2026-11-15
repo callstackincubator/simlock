@@ -1715,6 +1715,37 @@ describe("IosSimctlDriver", () => {
     },
   );
 
+  it("lists a baseline saved in another set as stale with the reason to save it again, one in the sources folder as fresh, and destroys the old one in its own set", async () => {
+    const [old, fresh] = [
+      "00000000-0000-0000-0000-0000000002a0",
+      "00000000-0000-0000-0000-0000000002b0",
+    ] as [string, string];
+    const oldSet = "/home/.simlock/devices/ios-sources";
+    const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
+    const database = await memorySourceDatabase();
+    plantSource(database, { ...kind, kind: "baseline", setPath: oldSet, udid: old });
+    plantSource(database, { ...kind, kind: "baseline", setPath: sourcesRoot, udid: fresh });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: simctlIn(oldSet, "shutdown", old) },
+      { match: simctlIn(oldSet, "delete", old) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), undefined, database);
+
+    const listed = await driver.listSources();
+
+    expect(listed.map((source) => source.staleReason)).toEqual([
+      `saved in ${oldSet}, which copies cannot be fixed from; save it again`,
+      undefined,
+    ]);
+    const oldId = listed[0]?.id ?? "";
+    await driver.destroySource(oldId);
+    expect(runner.calls.slice(1).map((call) => [call.args[2], call.args[3]])).toEqual([
+      [oldSet, "shutdown"],
+      [oldSet, "delete"],
+    ]);
+  });
+
   it("the first listSources of a process deletes another process's making rows and their simulators, keeps a row whose delete failed, and does not sweep again", async () => {
     const [gone, stuck, ready] = [1, 2, 3].map(
       (n) => `00000000-0000-0000-0000-0000000001${String(n)}0`,
