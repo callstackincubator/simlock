@@ -131,9 +131,12 @@ describe("the Release workflow's plan, tag, publish and release steps (.github/w
   // why: the run script of a step with the YAML indent removed, so a block is compared line by line.
   const script = (name: string): string =>
     (/\n {8}run: \|\n((?: {10}.*\n?|\n)*)/.exec(step(name))?.[1] ?? "").replace(/^ {10}/gm, "");
+  // why: the match stops at the next job key, so a job without an `if:` reads as empty instead of borrowing the next job's.
   const jobCondition = (jobName: string): string =>
-    new RegExp(`\\n {4}name: ${jobName}\\n[\\s\\S]*?\\n {4}if: (.*)\\n`, "u").exec(workflow)?.[1] ??
-    "";
+    new RegExp(
+      `\\n {4}name: ${jobName}\\n(?:(?! {2}[a-z-]+:\\n)[^\\n]*\\n)*? {4}if: (.*)\\n`,
+      "u",
+    ).exec(workflow)?.[1] ?? "";
   const block = (...lines: string[]): string => lines.join("\n");
   const inLoop = (text: string): string => text.replace(/^/gmu, "  ");
 
