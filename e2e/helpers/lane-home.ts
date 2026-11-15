@@ -96,10 +96,15 @@ export async function restoreKeptSeeds(home: string): Promise<void> {
   }
 }
 
+/** why: the driver's record of its adb server is the only handle on a server that outlives its daemon (it stays while an emulator is attached); removed with the rest, the flow's own daemon finds the port listening with no record and refuses Android as `occupied`. */
+const ADB_SERVER_RECORD = "adb-server.json";
+
 /** why: what the daemon made between a restore's start and stop (its event history, log and admin secret) is not the flow's, and `state.db` holds the tables the seeds go back into. */
 export async function clearAllButState(home: string): Promise<void> {
   for (const entry of await readdir(home)) {
-    if (KEPT_ENTRIES.has(entry) || entry.startsWith("state.db")) continue;
+    if (KEPT_ENTRIES.has(entry) || entry === ADB_SERVER_RECORD || entry.startsWith("state.db")) {
+      continue;
+    }
     await removeHome(join(home, entry));
   }
 }
