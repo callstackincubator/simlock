@@ -19,17 +19,28 @@ export function createProvider(
   const daemonBaseUrl = `${options.url}/v1/agent-device`;
   const leaseBackend = `${options.platform}-instance` as const;
 
-  const client = async (session: string, scope?: ClientConfig): Promise<Client> =>
-    (await loadClient())({ daemonBaseUrl, daemonAuthToken: options.token, session, ...scope });
+  const client = async (session: string, scope?: ClientConfig): Promise<Client> => {
+    let factory: AgentDeviceClientFactory;
+    try {
+      factory = await loadClient();
+    } catch {
+      throw new Error("simlock: the agent-device package is not installed; add it to your project");
+    }
+    return factory({ daemonBaseUrl, daemonAuthToken: options.token, session, ...scope });
+  };
 
   async function acquire(request: DeviceRequest): Promise<DeviceLease> {
+    if (request.platform !== options.platform) {
+      throw new Error(
+        `simlockDevices leases ${options.platform} devices; the target asked for ${request.platform}`,
+      );
+    }
     const session = `e2e-${request.runId.slice(0, 12)}-${request.slot}`;
     const started = Date.now();
     const leaseId = randomBytes(16).toString("hex");
     const clientId = randomBytes(8).toString("hex");
-    const lease = await (
-      await client(session)
-    ).leases.allocate({
+    const farm = await client(session);
+    const lease = await farm.leases.allocate({
       tenant: TENANT,
       runId: request.runId,
       leaseId,
@@ -41,10 +52,25 @@ export function createProvider(
       device: options.device,
       ttlMs: options.ttlMs,
       retainOnClose: true,
+      ...(options.osVersion === undefined ? {} : { osVersion: options.osVersion }),
+      ...(options.imageTag === undefined ? {} : { imageTag: options.imageTag }),
+      ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
+      ...(options.deviceBaseline === undefined ? {} : { deviceBaseline: options.deviceBaseline }),
     });
     const deviceId = lease.deviceKey?.split(":").pop();
+    if (lease.deviceKey === undefined || deviceId === undefined || deviceId === "") {
+      await farm.leases.release({
+        tenant: TENANT,
+        runId: request.runId,
+        leaseId: lease.leaseId,
+        leaseBackend,
+        leaseProvider: "proxy",
+        clientId: lease.clientId ?? clientId,
+      });
+      throw new Error(`simlock: lease ${lease.leaseId} names no device`);
+    }
     request.log(
-      `simlock: lease ${lease.leaseId} granted in ${String(Date.now() - started)} ms (${options.device} ${String(deviceId)})`,
+      `simlock: lease ${lease.leaseId} granted in ${String(Date.now() - started)} ms (${options.device} ${deviceId})`,
     );
     return {
       id: lease.leaseId,
@@ -56,9 +82,9 @@ export function createProvider(
         leaseBackend: lease.backend,
         leaseProvider: "proxy",
         clientId: lease.clientId ?? clientId,
-        ...(lease.deviceKey === undefined ? {} : { deviceKey: lease.deviceKey }),
+        deviceKey: lease.deviceKey,
       },
-      ...(deviceId === undefined ? {} : { deviceId }),
+      deviceId,
     };
   }
 
