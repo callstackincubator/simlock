@@ -27,10 +27,10 @@ Resolve and boot:
 
 Seeds (ADR 0061):
 
-- A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` and no `simlock simctl list`.
+- A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` or `simlock simctl list`.
 - Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app, system apps included, under the original device's folder. A clone whose drop fails is deleted.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
-- A `clone` or `create` of a whole simulator waits `ios.simulator.createTimeoutMs`; every other `simctl` call waits 30 s. At the limit the call fails but `simctl` is left running: the UDID it prints later is deleted (ownership is the driver's own call, never the name), the seed keeps its turn until then, and a command still silent 5 minutes later is killed and logged with its arguments.
+- A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and one silent 5 minutes more is killed and logged.
 - A `making` row of another process is swept at the first `listSources`; one of this process, once older than any make takes, at the next make of its kind.
 - A seed that `simctl delete` reports as `Invalid device` is already gone, so its row is dropped.
 - `removeComponent` deletes the runtime's seeds first.
@@ -52,14 +52,12 @@ Tunnels (`device-tcp.ts`):
 - **A restart between `simctl clone` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
 - **Runtime downloads outlive deletion (#79).** Simlock reports retained assets; reclaim them in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync. Use `--mode full` when a test needs them.
-- **Overrides folders of simulators deleted before ADR 0060 remain.**
 - **The overrides file is an undocumented CoreSimulator file.** If Apple ignores it, the readback grants `full`.
 - **A recovered slim device runs full but its record says `slim` (#174)** until its next `makeReady`.
-- **A cold slim lease takes a full cold boot.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
-- **Concurrent Simulator.app windows:** the second may not appear or warn.
+- **A cold slim lease takes a full cold boot.** MCP clients need a longer timeout.
 - **A screen stream can freeze after a reboot under its lease.** The capture checks the simulator is booted only at start, so after a crash reboot the viewer sees the old picture until the Screen tab is reopened.
 - **An iPhone's rotation has not run on hardware**; only a Duo's panel switch is proven. A silent iPhone shows its last picture until the lease ends.
 - **A foldable's stream follows SpringBoard's `DisplayContentMode` log** (ADR 0075): another wording leaves it on the panel picked at open, and taps with it; a tap sent between a fold and the new size lands on the panel left.
 - **A capture killed by SIGKILL cannot stop its CoreDevice stream**; CoreDevice is left to notice its client is gone. The same for a stop while `startMediaStream` is still running past its limit.
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked against that release and the pin moves.
-- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. The slow lane proves only that the process is gone and the device streams again. Two viewers of one lease ask for two streams (#602).
+- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. Two viewers ask for two streams (#602).

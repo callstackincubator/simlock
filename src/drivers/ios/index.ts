@@ -339,6 +339,7 @@ export class IosSimctlDriver implements Driver {
   #swept = false;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
   readonly #seedLocks = new Map<string, Promise<unknown>>();
+  readonly #seedHolds = new Map<string, Promise<void>>();
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -621,7 +622,7 @@ export class IosSimctlDriver implements Driver {
       if (row.kind !== "seed" || row.runtimeId !== runtimeId || row.udid === undefined) continue;
       const udid = row.udid;
       try {
-        await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
+        await this.#deleteSeedInTurn(udid);
         this.#sources.deleteRow(row.sourceId);
       } catch (error: unknown) {
         this.#logger?.warn(
@@ -887,12 +888,12 @@ export class IosSimctlDriver implements Driver {
       if (!(await this.#isOrphanSource(sourceId))) {
         throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
       }
-      await this.#withSeedLock(sourceId, () => this.#deleteSeedSimulator(sourceId));
+      await this.#deleteSeedInTurn(sourceId);
       return;
     }
     if (row.udid !== undefined) {
       const udid = row.udid;
-      await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
+      await this.#deleteSeedInTurn(udid);
     }
     this.#sources.deleteRow(sourceId);
   }
@@ -999,6 +1000,17 @@ export class IosSimctlDriver implements Driver {
   }
 
   /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
+  /**
+   * why: a copy that outlived its limit leaves its turn at the limit but still runs, so a deletion
+   * queued behind it also waits for the hold `#holdSeedLock` places there; another copy does not.
+   */
+  async #deleteSeedInTurn(udid: string): Promise<void> {
+    await this.#withSeedLock(udid, async () => {
+      await this.#heldSeed(udid);
+      await this.#deleteSeedSimulator(udid);
+    });
+  }
+
   async #withSeedLock<T>(udid: string, run: () => Promise<T>): Promise<T> {
     const before = this.#seedLocks.get(udid) ?? Promise.resolve();
     const turn = before.then(run, run);
@@ -1137,7 +1149,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #destroySeed(seed: ReadySeed): Promise<void> {
-    await this.#deleteSeedSimulator(seed.udid);
+    await this.#deleteSeedInTurn(seed.udid);
     this.#sources.deleteRow(seed.sourceId);
   }
 
@@ -2069,13 +2081,23 @@ export class IosSimctlDriver implements Driver {
   }
 
   #holdSeedLock(udid: string, until: Promise<void>): void {
-    const held = Promise.all([this.#seedLocks.get(udid) ?? Promise.resolve(), until]).then(
+    const held = Promise.all([this.#seedHolds.get(udid) ?? Promise.resolve(), until]).then(
       () => undefined,
     );
-    this.#seedLocks.set(udid, held);
+    this.#seedHolds.set(udid, held);
     void held.then(() => {
-      if (this.#seedLocks.get(udid) === held) this.#seedLocks.delete(udid);
+      if (this.#seedHolds.get(udid) === held) this.#seedHolds.delete(udid);
     });
+  }
+
+  async #heldSeed(udid: string): Promise<void> {
+    for (
+      let held = this.#seedHolds.get(udid);
+      held !== undefined;
+      held = this.#seedHolds.get(udid)
+    ) {
+      await held;
+    }
   }
 
   async #simctl(args: readonly string[], timeoutMs: number, set?: string): Promise<ProcessResult> {

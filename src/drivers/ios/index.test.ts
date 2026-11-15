@@ -1248,7 +1248,7 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("a seed is not deleted while a clone of it that answered late is still running", async () => {
+  it("a seed is not deleted, even by a deletion queued during the clone, while a clone that answered late is still running", async () => {
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
@@ -1263,10 +1263,10 @@ describe("IosSimctlDriver", () => {
 
     const provision = driver.provision(spec).catch((error: unknown) => error);
     await waitForCalls(runner, 3);
-    clock.advance(30_000);
-    await provision;
     const destroyed = driver.destroySource(listed?.id ?? "");
     const destroy = promiseState(destroyed);
+    clock.advance(30_000);
+    await provision;
     for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
 
     expect(destroy.state).toBe("pending");

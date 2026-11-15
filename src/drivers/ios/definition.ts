@@ -22,7 +22,7 @@ export interface IosDriverConfig {
   readonly simulator: {
     /** why: `false` sets each simulator's volume to 0 after every boot. */
     readonly audio: boolean;
-    /** why: a `simctl clone` or `simctl create` of a whole simulator may take this long before the driver stops waiting; every other `simctl` call keeps 30 s. */
+    /** why: a `simctl clone` or `simctl create` of a whole simulator may take this long before the driver stops waiting. */
     readonly createTimeoutMs: number;
     /** why: `false` shows each simulator Simlock boots in DeviceHub or Simulator.app; it needs `drivers.ios.deviceSet: default`. */
     readonly headless: boolean;
