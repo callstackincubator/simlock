@@ -726,7 +726,6 @@ describe.skipIf(process.platform !== "darwin")(
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port: httpPort } },
           driver: "real",
         }));
-        const work = await mkdtemp(join(tmpdir(), "simlock-iphone-taps-"));
         try {
           const granted = await env.cli(
             [
@@ -768,8 +767,6 @@ describe.skipIf(process.platform !== "darwin")(
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);
-          await env.teardown();
-          await rm(work, { force: true, recursive: true });
         }
       },
     );
