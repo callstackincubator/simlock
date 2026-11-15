@@ -13,8 +13,10 @@ export interface StreamModuleConfig {
 const STREAM_HEADERS = {
   "simlock-stream-codec": "The codec of the body: h264 or mjpeg.",
   "simlock-stream-fps": "Frames per second.",
-  "simlock-stream-height": "Picture height in pixels.",
-  "simlock-stream-width": "Picture width in pixels.",
+  "simlock-stream-height":
+    "Picture height in pixels when the stream opens; a meta frame in the body gives each later size.",
+  "simlock-stream-width":
+    "Picture width in pixels when the stream opens; a meta frame in the body gives each later size.",
 };
 
 export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
