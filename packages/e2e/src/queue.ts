@@ -9,6 +9,7 @@ const PAUSE_JITTER_MS = 5_000;
 export interface Ask<Lease> {
   readonly platform: string;
   readonly queueMs: number;
+  readonly deadline: number;
   readonly signal: AbortSignal;
   readonly log: (line: string) => void;
   allocate(leaseId: string, signal: AbortSignal): Promise<Lease>;
@@ -18,7 +19,7 @@ export interface Ask<Lease> {
 type Attempt<Lease> = { lease: Lease } | { retry: true };
 
 export async function allocateQueued<Lease>(ask: Ask<Lease>): Promise<Lease> {
-  const deadline = Date.now() + ask.queueMs;
+  const { deadline } = ask;
   const minutes = Math.max(1, Math.round(ask.queueMs / 60_000));
   const noDevice = (cause?: unknown): Error =>
     new Error(`simlock: no free ${ask.platform} device on the farm within ${String(minutes)} min`, {

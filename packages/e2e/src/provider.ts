@@ -74,7 +74,11 @@ export function createProvider(
     return factory({ daemonBaseUrl, daemonAuthToken: options.token, session, ...scope });
   };
 
-  async function leaseOnce(request: DeviceRequest, attempt: number): Promise<DeviceLease> {
+  async function leaseOnce(
+    request: DeviceRequest,
+    attempt: number,
+    deadline: number,
+  ): Promise<DeviceLease> {
     const session = `e2e-${request.runId.slice(0, 12)}-${String(request.slot)}${attempt === 0 ? "" : `-r${String(attempt)}`}`;
     const started = Date.now();
     const clientId = randomBytes(8).toString("hex");
@@ -90,6 +94,7 @@ export function createProvider(
     const lease = await allocateQueued({
       platform: options.platform,
       queueMs: options.queueMs,
+      deadline,
       signal: request.signal,
       log: request.log,
       release: (leaseId) => farm.leases.release(scope(leaseId)),
@@ -147,15 +152,17 @@ export function createProvider(
         `simlockDevices leases ${options.platform} devices; the target asked for ${request.platform}`,
       );
     }
+    // why: queueMs bounds the whole acquire, so a swap to another device keeps the first ask's deadline.
+    const deadline = Date.now() + options.queueMs;
     try {
-      return await leaseOnce(request, 0);
+      return await leaseOnce(request, 0, deadline);
     } catch (first) {
       if (!(first instanceof DeviceSetupFailed)) throw first;
       request.log(
         `simlock: install on ${first.deviceId} failed (${first.message}); leasing another device`,
       );
       try {
-        return await leaseOnce(request, 1);
+        return await leaseOnce(request, 1, deadline);
       } catch (second) {
         if (!(second instanceof DeviceSetupFailed)) throw second;
         throw new Error(`simlock: could not set up a device after 2 tries: ${second.message}`, {

@@ -304,7 +304,14 @@ describe("createProvider acquire on a full farm", () => {
 
     const over = farm({ allocate: hang });
     const timedOut = outcome(provider(over.load, { queueMs: 60_000 }).acquire(request().request));
-    await vi.advanceTimersByTimeAsync(60_000);
+    let ended = false;
+    void timedOut.then(() => {
+      ended = true;
+    });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(ended, "still asking one millisecond before queueMs").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ended, "given up at queueMs").toBe(true);
     expect(await timedOut).toEqual({
       ok: false,
       error: expect.objectContaining({
@@ -344,17 +351,18 @@ describe("createProvider acquire installs", () => {
     vi.useRealTimers();
   });
 
-  it("installs the app and each extra app on the leased device, reports installedApp only for a named app, and runs at most installConcurrency installs at once", async () => {
+  it("installs the app and each extra app on the leased device, reports installedApp only for a named app, and runs at most installConcurrency installs at once, and starts no queued install once the run aborts", async () => {
     const withApp = farm();
     const named = request({ appPath: "/p/Example.app", app: "com.example.app" });
     const lease = await provider(withApp.load, { extraApps: ["/x/a.app", "/x/b.app"] }).acquire(
       named.request,
     );
     const installs = withApp.of("install");
+    const signal = named.request.signal;
     expect(installs.map((call) => call.options)).toStrictEqual([
-      { platform: "ios", udid: UDID, appPath: "/p/Example.app", app: "com.example.app" },
-      { platform: "ios", udid: UDID, appPath: "/x/a.app" },
-      { platform: "ios", udid: UDID, appPath: "/x/b.app" },
+      { platform: "ios", udid: UDID, appPath: "/p/Example.app", app: "com.example.app", signal },
+      { platform: "ios", udid: UDID, appPath: "/x/a.app", signal },
+      { platform: "ios", udid: UDID, appPath: "/x/b.app", signal },
     ]);
     expect(installs[0]?.config).toMatchObject({
       daemonBaseUrl: "https://farm.example.com/v1/agent-device",
@@ -375,21 +383,26 @@ describe("createProvider acquire installs", () => {
     ]);
 
     const unnamed = farm();
-    const bare = await provider(unnamed.load).acquire(
-      request({ appPath: "/p/Example.app" }).request,
-    );
+    const plain = request({ appPath: "/p/Example.app" });
+    const bare = await provider(unnamed.load).acquire(plain.request);
     expect(unnamed.of("install").map((call) => call.options)).toStrictEqual([
-      { platform: "ios", udid: UDID, appPath: "/p/Example.app" },
+      { platform: "ios", udid: UDID, appPath: "/p/Example.app", signal: plain.request.signal },
     ]);
     expect(bare).not.toHaveProperty("installedApp");
 
     const extrasOnly = farm();
+    const extras = request({ platform: "android", app: "com.example.app" });
     const droid = await provider(extrasOnly.load, {
       platform: "android",
       extraApps: ["/x/a.apk"],
-    }).acquire(request({ platform: "android" }).request);
+    }).acquire(extras.request);
     expect(extrasOnly.of("install").map((call) => call.options)).toEqual([
-      { platform: "android", serial: "emulator-5554", appPath: "/x/a.apk" },
+      {
+        platform: "android",
+        serial: "emulator-5554",
+        appPath: "/x/a.apk",
+        signal: extras.request.signal,
+      },
     ]);
     expect(droid).not.toHaveProperty("installedApp");
 
@@ -411,13 +424,48 @@ describe("createProvider acquire installs", () => {
     expect(await Promise.all(slots)).toHaveLength(5);
     expect(slow.of("install")).toHaveLength(5);
     expect(most).toBe(3);
+
+    const stopping = new AbortController();
+    const stopped = new Error("run stopped");
+    const blocked = farm({
+      install: (options) =>
+        new Promise((_, reject) => {
+          const signal = options["signal"] as AbortSignal;
+          signal.addEventListener("abort", () => reject(signal.reason));
+        }),
+    });
+    const serial = provider(blocked.load, { installConcurrency: 1 });
+    const queued = [0, 1, 2].map((slot) =>
+      outcome(
+        serial.acquire(
+          request({ slot, slots: 3, appPath: "/p/Example.app", signal: stopping.signal }).request,
+        ),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    stopping.abort(stopped);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(await Promise.all(queued)).toEqual(Array(3).fill({ ok: false, error: stopped }));
+    expect(blocked.of("install"), "no queued install starts after the abort").toHaveLength(1);
+    expect(blocked.of("install")[0]?.options["signal"]).toBe(stopping.signal);
+    expect(
+      blocked
+        .of("release")
+        .map((call) => call.options["leaseId"])
+        .sort(),
+    ).toEqual(
+      blocked
+        .of("allocate")
+        .map((call) => call.options["leaseId"])
+        .sort(),
+    );
   });
 
   it("sends an install again to the same device when simlock gave no answer or said retriable, at most three tries", async () => {
     const cuts = [
       failing({ reason: "daemon_transport_failure" }),
       failing({ retriable: true, reason: "SIMLOCK_UNAVAILABLE" }),
-      new Error("Invalid upload response: error code: 524"),
+      new Error("the upload came back as something that is not JSON"),
     ];
     for (const cut of cuts) {
       const once = farm({
@@ -430,6 +478,7 @@ describe("createProvider acquire installs", () => {
         provider(once.load).acquire(request({ appPath: "/p/Example.app" }).request),
       );
       await vi.advanceTimersByTimeAsync(15_000);
+      expect(once.of("install"), "sent again after one backoff").toHaveLength(2);
       expect(await pending).toEqual({
         ok: true,
         value: expect.objectContaining({ deviceId: UDID }),
@@ -448,8 +497,8 @@ describe("createProvider acquire installs", () => {
       provider(always.load).acquire(request({ appPath: "/p/Example.app" }).request),
     );
     await vi.advanceTimersByTimeAsync(45_000);
+    expect(always.of("install"), "three tries after backoffs of 15 s and 30 s").toHaveLength(3);
     expect(await failed).toEqual({ ok: false, error: last });
-    expect(always.of("install")).toHaveLength(3);
     expect(always.of("allocate")).toHaveLength(1);
   });
 
@@ -516,6 +565,7 @@ describe("createProvider acquire installs", () => {
         provider(cutting.load).acquire(request({ appPath: "/p/Example.app" }).request),
       );
       await vi.advanceTimersByTimeAsync(45_000);
+      expect(cutting.of("install"), "three tries after backoffs of 15 s and 30 s").toHaveLength(3);
       expect(await pending).toEqual({ ok: false, error: cut });
       expect(cutting.of("allocate")).toHaveLength(1);
       expect(cutting.of("release").map((call) => call.options["leaseId"])).toEqual([

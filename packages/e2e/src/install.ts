@@ -1,16 +1,34 @@
 import type { createAgentDeviceClient } from "agent-device";
 
-import { mayAnswerLater, messageOf } from "./errors.js";
+import { mayAnswerLater, messageOf, saidNothing } from "./errors.js";
 import { pause } from "./pause.js";
 
-export function limiter(max: number): <T>(task: () => Promise<T>) => Promise<T> {
+export function limiter(
+  max: number,
+): <T>(task: (signal: AbortSignal) => Promise<T>, signal: AbortSignal) => Promise<T> {
   let active = 0;
   const waiting: (() => void)[] = [];
-  return async (task) => {
+  return async (task, signal) => {
+    signal.throwIfAborted();
     if (active < max) active += 1;
-    else await new Promise<void>((resolve) => waiting.push(resolve));
+    else {
+      await new Promise<void>((resolve, reject) => {
+        const turn = (): void => {
+          signal.removeEventListener("abort", leave);
+          resolve();
+        };
+        const leave = (): void => {
+          waiting.splice(waiting.indexOf(turn), 1);
+          reject(signal.reason);
+        };
+        waiting.push(turn);
+        signal.addEventListener("abort", leave, { once: true });
+      });
+    }
     try {
-      return await task();
+      // why: a slot handed over after the abort must not start the task.
+      signal.throwIfAborted();
+      return await task(signal);
     } finally {
       const next = waiting.shift();
       if (next === undefined) active -= 1;
@@ -22,11 +40,9 @@ export function limiter(max: number): <T>(task: () => Promise<T>) => Promise<T> 
 const TRIES = 3;
 const BACKOFF_MS = 15_000;
 
-// why: an app upload that a proxy cut off (a 524 page) reaches agent-device's client as an error with no details, so its message is all that tells it from a refused install.
-const UPLOAD_CUT = /^Invalid upload response/u;
-
+// why: an app upload that a proxy cut off (a 524 page) reaches agent-device's client as an error with no details, so the missing simlock reason is what tells it from a refused install.
 function cut(error: unknown): boolean {
-  return mayAnswerLater(error) || (error instanceof Error && UPLOAD_CUT.test(error.message));
+  return mayAnswerLater(error) || saidNothing(error);
 }
 
 async function sendAgain<T>(send: () => Promise<T>, signal: AbortSignal): Promise<T> {
@@ -34,7 +50,7 @@ async function sendAgain<T>(send: () => Promise<T>, signal: AbortSignal): Promis
     try {
       return await send();
     } catch (error) {
-      if (attempt >= TRIES || !cut(error)) throw error;
+      if (signal.aborted || attempt >= TRIES || !cut(error)) throw error;
       await pause(BACKOFF_MS * attempt, signal);
     }
   }
@@ -71,13 +87,16 @@ async function installApp(
   try {
     await sendAgain(
       () =>
-        on.limit(() =>
-          on.apps.install({
-            platform: on.platform,
-            ...device,
-            appPath,
-            ...(app === undefined ? {} : { app }),
-          }),
+        on.limit(
+          (signal) =>
+            on.apps.install({
+              platform: on.platform,
+              ...device,
+              appPath,
+              ...(app === undefined ? {} : { app }),
+              signal,
+            }),
+          on.signal,
         ),
       on.signal,
     );

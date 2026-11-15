@@ -16,6 +16,11 @@ export function mayAnswerLater(error: unknown): boolean {
   return retriable === true || (typeof reason === "string" && NO_ANSWER_REASONS.has(reason));
 }
 
+// why: simlock puts a string `details.reason` on every answer it gives, so an error without one did not come from simlock.
+export function saidNothing(error: unknown): boolean {
+  return typeof detailsOf(error).reason !== "string";
+}
+
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
