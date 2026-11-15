@@ -478,6 +478,14 @@ describe("createProvider acquire installs", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     stopping.abort(stopped);
     await vi.advanceTimersByTimeAsync(300_000);
+    let ended = 0;
+    for (const one of queued) {
+      void one.then(() => {
+        ended += 1;
+      });
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ended, "every acquire, queued or not, ends at the abort").toBe(3);
     expect(await Promise.all(queued)).toEqual(Array(3).fill({ ok: false, error: stopped }));
     expect(blocked.of("install"), "no queued install starts after the abort").toHaveLength(1);
     expect(blocked.of("install")[0]?.options["signal"]).toBe(stopping.signal);
