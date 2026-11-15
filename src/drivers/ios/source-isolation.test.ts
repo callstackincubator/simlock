@@ -62,6 +62,14 @@ class DeniedReadFilesystem extends MemoryFilesystem {
   /** why: a file of another size than its bytes, so a huge one needs no memory. */
   readonly sizes = new Map<string, number>();
 
+  plantFaults(
+    folder: string,
+    faults: { readonly denied: readonly string[]; readonly huge: readonly string[] },
+  ): void {
+    for (const path of faults.denied) this.denied.add(`${folder}/${path}`);
+    for (const path of faults.huge) this.sizes.set(`${folder}/${path}`, HUGE_BYTES);
+  }
+
   override async lstat(path: string): ReturnType<MemoryFilesystem["lstat"]> {
     const details = await super.lstat(path);
     return { ...details, size: this.sizes.get(path) ?? details.size };
@@ -449,10 +457,7 @@ describe("a source made", () => {
           filesystem.defineSymlink(`${folder}/data/Library/Logs`, `${logsRoot}/${udid}`);
         }
       }
-      for (const path of huge) {
-        filesystem.sizes.set(`${sourceFolder(udid)}/${path}`, HUGE_BYTES);
-      }
-      for (const path of denied) filesystem.denied.add(`${sourceFolder(udid)}/${path}`);
+      filesystem.plantFaults(sourceFolder(udid), { denied, huge });
       for (const path of failing) sqlite.failing.add(`${sourceFolder(udid)}/${path}`);
       const database = await memorySourceDatabase();
       const runner = new ScriptedProcessRunner([
