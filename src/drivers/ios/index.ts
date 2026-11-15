@@ -57,6 +57,7 @@ import type {
   ProcessResult,
   ProcessRunner,
   SqliteDatabase,
+  SqliteOpener,
   TcpListenerFactory,
   TcpProbe,
   TcpStreamConnector,
@@ -252,6 +253,8 @@ export interface IosSimctlDriverOptions {
   readonly coreSimulatorRoot?: string;
   /** why: `<home>/Library/Logs/CoreSimulator`: a simulator's log folder is named in its files beside its device folder, and a copy's swap covers both (ADR 0076 §3). */
   readonly logsRoot?: string;
+  /** why: a made source has the write-ahead log of each of its databases flushed before its files are indexed (ADR 0076 §2); with none, such a log is left out of the index and logged. */
+  readonly sqlite?: SqliteOpener;
   // why: where launchd_sim keeps each simulator's overrides folder; a test points it elsewhere.
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;

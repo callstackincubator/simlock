@@ -1,4 +1,9 @@
-import { NodeSqliteOpener, type SqliteDatabase } from "../../ports/index.js";
+import {
+  NodeSqliteOpener,
+  type Filesystem,
+  type SqliteDatabase,
+  type SqliteOpener,
+} from "../../ports/index.js";
 import { iosSourceDataOwner, IosSourceTable, type SourceFile } from "./source-data.js";
 
 export async function memorySourceDatabase(): Promise<SqliteDatabase> {
@@ -49,4 +54,31 @@ export function plantReadySeed(
   seed: Omit<PlantedSource, "state"> & { readonly udid: string },
 ): SqliteDatabase {
   return plantSource(database, seed);
+}
+
+/** why: stands in for the opener that flushes a source's databases: a checkpoint empties the database's `-wal` file in the filesystem, as SQLite's does, and a path in `failing` cannot be opened. */
+export class FakeSqliteOpener implements SqliteOpener {
+  readonly flushed: string[] = [];
+  readonly failing = new Set<string>();
+  readonly #filesystem: Filesystem;
+
+  constructor(filesystem: Filesystem) {
+    this.#filesystem = filesystem;
+  }
+
+  async open(path: string, options: { readonly readOnly: boolean }): Promise<SqliteDatabase> {
+    if (options.readOnly) throw new Error(`${path} is opened read-write to flush it`);
+    if (this.failing.has(path)) throw new Error("database is locked");
+    return {
+      close: () => undefined,
+      exec: (sql) => {
+        if (sql !== "PRAGMA wal_checkpoint(TRUNCATE)") throw new Error(`unexpected ${sql}`);
+        this.flushed.push(path);
+        void this.#filesystem.writeFileAtomic(`${path}-wal`, "");
+      },
+      prepare: () => {
+        throw new Error("a flush runs one pragma and nothing else");
+      },
+    };
+  }
 }
