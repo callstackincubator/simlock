@@ -271,11 +271,16 @@ interface ProbeDevice {
 }
 
 // why: the probe app is installed once and brought to the front each time, because a fold can leave
-// another app in front of it; `launch` of a running app only foregrounds it.
+// another app in front of it; `launch` of a running app only foregrounds it. A second install gives
+// the app a new data container, so the file a test reads would no longer be the one the app writes.
 async function showProbe(device: ProbeDevice): Promise<string> {
   const simctl = (...args: string[]) =>
     execFileAsync("xcrun", ["simctl", "--set", device.deviceSet, ...args]);
-  await simctl("install", device.udid, PROBE_APP);
+  const installed = await simctl("get_app_container", device.udid, PROBE_BUNDLE, "app").then(
+    () => true,
+    () => false,
+  );
+  if (!installed) await simctl("install", device.udid, PROBE_APP);
   await simctl("launch", device.udid, PROBE_BUNDLE);
   const container = await simctl("get_app_container", device.udid, PROBE_BUNDLE, "data");
   return join(container.stdout.trim(), "Documents", "touches.txt");
@@ -364,6 +369,8 @@ describe.skipIf(notRunnable !== undefined)(
             // on agent-device's 3 s reads of the leased one, and proves nothing.
             warmPool: { enabled: false },
             capabilities: {
+              // why: the taps cases open the lease's input socket, which exists only with the module on.
+              input: { enabled: true },
               stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
             },
           },
@@ -725,7 +732,10 @@ describe.skipIf(process.platform !== "darwin")(
       { timeout: 600_000 },
       async () => {
         const { env, port } = await withHttpDaemon((httpPort) => ({
-          configOverrides: { http: { enabled: true, host: "127.0.0.1", port: httpPort } },
+          configOverrides: {
+            capabilities: { input: { enabled: true } },
+            http: { enabled: true, host: "127.0.0.1", port: httpPort },
+          },
           driver: "real",
         }));
         try {

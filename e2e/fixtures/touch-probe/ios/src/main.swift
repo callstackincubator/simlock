@@ -33,18 +33,22 @@ final class ProbeView: UIView {
     }
 }
 
-final class AppDelegate: UIResponder, UIApplicationDelegate {
+// iOS 27 ends an app that does not adopt the scene lifecycle, so the window is made in a scene.
+@objc(TouchProbeSceneDelegate)
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
 
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        let window = UIWindow(frame: UIScreen.main.bounds)
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: windowScene)
         let controller = UIViewController()
         controller.view = ProbeView(frame: window.bounds)
         window.rootViewController = controller
         window.makeKeyAndVisible()
         self.window = window
-        return true
     }
 }
+
+final class AppDelegate: UIResponder, UIApplicationDelegate {}
 
 UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(AppDelegate.self))

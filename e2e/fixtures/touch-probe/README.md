@@ -31,6 +31,7 @@ xcrun simctl --set <device set> get_app_container <udid> dev.simlock.touch-probe
 
 ## Notes
 
+- Adopts the scene lifecycle, which iOS 27 requires.
 - Any orientation (the inner panel of a Duo is wider than tall), iPhone family, unsigned except for the ad hoc signature the
   simulator accepts.
 - Built with Xcode 27 (Swift 6.4).
