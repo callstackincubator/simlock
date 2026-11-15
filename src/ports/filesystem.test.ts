@@ -235,6 +235,49 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     );
   });
 
+  it("reads a link's target without following it and replaces it, and reads a file's bytes and overwrites them in place with as many", async () => {
+    const filesystem = create();
+    const dir = `${temporaryDirectory}/bytes`;
+    const file = `${dir}/state.bin`;
+    const bytes = Uint8Array.from([0, 255, 128, 65, 10]);
+    await filesystem.mkdirp(dir);
+    await filesystem.writeFileStream(
+      file,
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    );
+    await filesystem.chmod(file, 0o640);
+    await link(filesystem, `${dir}/logs`, `${dir}/old`);
+
+    expect(await filesystem.readlink(`${dir}/logs`), "a link is read, not followed").toBe(
+      `${dir}/old`,
+    );
+    await filesystem.replaceSymlink(`${dir}/logs`, `${dir}/new`);
+    expect(await filesystem.readlink(`${dir}/logs`), "the link points at the new target").toBe(
+      `${dir}/new`,
+    );
+    expect((await filesystem.lstat(`${dir}/logs`)).kind, "it is still a link").toBe("symlink");
+    expect(await filesystem.readdir(dir), "no staged link is left").toEqual(["logs", "state.bin"]);
+
+    expect(Array.from(await filesystem.readBytes(file)), "every byte, binary ones too").toEqual(
+      Array.from(bytes),
+    );
+    await filesystem.overwriteSameLength(file, Uint8Array.from([1, 2, 3, 4, 5]));
+    expect(Array.from(await filesystem.readBytes(file))).toEqual([1, 2, 3, 4, 5]);
+    expect((await filesystem.lstat(file)).mode, "the mode is kept").toBe(0o640);
+    await expect(
+      filesystem.overwriteSameLength(file, Uint8Array.from([1, 2, 3])),
+      "another length is refused",
+    ).rejects.toThrow();
+    expect(Array.from(await filesystem.readBytes(file)), "and the file is left as it was").toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+  });
+
   it("refuses to answer for a path that runs through a file", async () => {
     // why: A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
     // that is simply not there yet, and callers can only tell them apart by the errno.
@@ -322,6 +365,21 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
 
     expect(resolved.endsWith("/devices/ios")).toBe(true);
     await expect(filesystem.realpath(resolved)).resolves.toBe(resolved);
+  });
+});
+
+describe("NodeFilesystem.overwriteSameLength", () => {
+  it("keeps the file's modification time", async () => {
+    const filesystem = new NodeFilesystem();
+    const file = `${temporaryDirectory}/stamp.bin`;
+    await filesystem.mkdirp(temporaryDirectory);
+    await writeFile(file, "abc");
+    await utimes(file, new Date(1_000_000), new Date(1_000_000));
+
+    await filesystem.overwriteSameLength(file, Buffer.from("xyz"));
+
+    expect((await filesystem.stat(file)).modifiedAtMs).toBe(1_000_000);
+    await expect(filesystem.readFile(file)).resolves.toBe("xyz");
   });
 });
 

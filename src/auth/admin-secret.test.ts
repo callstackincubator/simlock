@@ -84,6 +84,12 @@ describe("AdminSecretManager", () => {
       replaceSymlink: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      readBytes: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      overwriteSameLength: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
       mkdirp: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -175,6 +181,12 @@ describe("AdminSecretManager", () => {
         throw new Error("verify() must not touch the filesystem");
       },
       replaceSymlink: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      readBytes: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      overwriteSameLength: () => {
         throw new Error("verify() must not touch the filesystem");
       },
       mkdirp: () => {

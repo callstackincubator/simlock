@@ -127,6 +127,10 @@ export interface Filesystem {
   readlink(path: string): Promise<string>;
   /** why: the link at `path` points at `target` from one step to the next, with no moment when it is missing. */
   replaceSymlink(path: string, target: string): Promise<void>;
+  /** why: a file's bytes as they are, for a caller that must not read them as text. */
+  readBytes(path: string): Promise<Uint8Array>;
+  /** why: a file written in place with bytes of its own length, keeping its mode and modification time; another length is refused and the file left as it was. */
+  overwriteSameLength(path: string, bytes: Uint8Array): Promise<void>;
 }
 
 // why: only the directories that are absent get the mode, so one that is already there keeps its own.
@@ -415,6 +419,12 @@ export class NodeFilesystem implements Filesystem {
   async readlink(path: string): Promise<string> {
     return readlink(path);
   }
+
+  async readBytes(_path: string): Promise<Uint8Array> {
+    return new Uint8Array();
+  }
+
+  async overwriteSameLength(_path: string, _bytes: Uint8Array): Promise<void> {}
 
   async replaceSymlink(path: string, target: string): Promise<void> {
     const staged = `${path}.simlock-swap-${String(process.pid)}`;
@@ -794,6 +804,12 @@ export class MemoryFilesystem implements Filesystem {
   defineFailure(path: string, code: string): void {
     this.#failures.set(path, code);
   }
+
+  async readBytes(_path: string): Promise<Uint8Array> {
+    return new Uint8Array();
+  }
+
+  async overwriteSameLength(_path: string, _bytes: Uint8Array): Promise<void> {}
 
   async readlink(path: string): Promise<string> {
     this.#failIfDefined(path);
