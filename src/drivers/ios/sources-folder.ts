@@ -95,7 +95,7 @@ export interface SourcesFolderContext {
 }
 
 /** why: `configured` is true only for `simlock`, where a `deviceRoot` the operator set is what the refusal names. */
-export function sourcesFolderOf(
+function sourcesFolderOf(
   options: SourcesFolderContext,
   deviceSet: string,
   configured = false,
