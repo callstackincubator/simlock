@@ -455,7 +455,7 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // The driver call itself.
       [join("core", "device-provisioner.ts")]: 1,
       // `provisioner.provision(...)`: the lease path asking this module, not a driver.
-      [join("leasing", "lease-acquisition-coordinator.ts")]: 1,
+      [join("leasing", "acquisition-workflow.ts")]: 1,
       // The same, for a device the warm pool creates for a target.
       [join("core", "warm-pool", "converger.ts")]: 1,
       // why: not a second creator: the Android driver's own `provision` hands the call to its seeds
