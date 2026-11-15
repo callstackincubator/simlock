@@ -1,13 +1,13 @@
 import type { SimctlCatalog } from "./simctl-parse.js";
 import type { ReadySeed, SourceRow } from "./source-data.js";
 
-/** why: a seed in another set than today's sources folder was made before ADR 0076, and a copy of it cannot be fixed from; a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
+/** why: a seed in another set than today's sources folder, or without an index of its files, was made before ADR 0076, and a copy of it cannot be fixed from; a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
 export function seedIsStale(
   seed: ReadySeed,
   currentBuild: string | undefined,
   sourcesSet: string,
 ): boolean {
-  if (seed.setPath !== sourcesSet) return true;
+  if (seed.setPath !== sourcesSet || !seed.indexed) return true;
   return (
     seed.runtimeBuild !== undefined &&
     currentBuild !== undefined &&
@@ -21,7 +21,7 @@ export function sourceStaleReason(
   catalog: SimctlCatalog,
   sourcesSet: string,
 ): string | undefined {
-  if (row.setPath !== sourcesSet) {
+  if (row.setPath !== sourcesSet || !row.indexed) {
     return `saved in ${row.setPath}, which copies cannot be fixed from; save it again`;
   }
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);

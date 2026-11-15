@@ -1102,7 +1102,13 @@ export class IosSimctlDriver implements Driver {
         throw error;
       }
       this.#sources.markReady(sourceId, await this.#sizeOf(udid), files);
-      return { sourceId, setPath: this.#sourcesSet, udid, runtimeBuild: resolved.runtime.build };
+      return {
+        indexed: true,
+        runtimeBuild: resolved.runtime.build,
+        setPath: this.#sourcesSet,
+        sourceId,
+        udid,
+      };
     } catch (error: unknown) {
       this.#sources.deleteRow(sourceId);
       throw error;
