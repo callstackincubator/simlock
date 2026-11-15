@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   afterAll,
   afterEach,
@@ -144,6 +145,21 @@ function forLease(leaseId: string | undefined): (event: RecordedEvent) => boolea
   return (event) => (event.payload as { leaseId?: string }).leaseId === leaseId;
 }
 
+/** why: the ready, indexed iOS seeds the flow's daemon holds; the lane put the earlier flows' back before the daemon served. */
+function keptIosSeeds(home: string): string[] {
+  const database = new DatabaseSync(join(home, "state.db"), { readOnly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT source_id FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND indexed = 1",
+      )
+      .all()
+      .map((row) => String(row["source_id"]));
+  } finally {
+    database.close();
+  }
+}
+
 const sharedEnvs = new Set<SharedTestEnv>();
 afterAll(async () => {
   await Promise.allSettled([...sharedEnvs].map((env) => env.teardown()));
@@ -191,7 +207,12 @@ function defineSuite(target: Target): void {
     });
     sharedEnvs.add(env);
     await awaitAgentDevice();
+    const kept = keptIosSeeds(env.home);
     await warmUp(env, target, 1);
+    // why: a seed an earlier `keepSeeds` flow left, with its file rows, is copied by this flow; a seed made again has another id.
+    expect(keptIosSeeds(env.home), "the seeds the lane kept are copied, not made again").toEqual(
+      expect.arrayContaining(kept),
+    );
   }, 420_000);
 
   afterAll(async () => {
