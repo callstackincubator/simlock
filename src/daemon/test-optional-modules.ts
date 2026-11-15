@@ -37,7 +37,7 @@ export const directories: string[] = [];
 
 export const servers: Server[] = [];
 
-export class NotingDriver extends FakeDriver {
+class NotingDriver extends FakeDriver {
   constructor(
     options: ConstructorParameters<typeof FakeDriver>[0],
     readonly notes: string[],

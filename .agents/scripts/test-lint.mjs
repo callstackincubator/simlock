@@ -190,6 +190,10 @@ function takeMovedLine(removed, line) {
 function splitTests(base, head) {
   const from = gitText(["merge-base", base, head ?? "HEAD"]).trim();
   const range = head === undefined ? [from] : [from, head];
+  return { removed: removedTestLines(range), imported: internalImportsBefore(from, range) };
+}
+
+function removedTestLines(range) {
   const removed = new Map();
   const diff = gitText([
     "diff",
@@ -201,11 +205,14 @@ function splitTests(base, head) {
     "*.test.ts",
     "*.test.tsx",
   ]);
-  for (const line of diff.split("\n")) {
-    if (!line.startsWith("-") || line.startsWith("--- ")) continue;
-    const text = line.slice(1).trim();
-    if (text !== "") removed.set(text, (removed.get(text) ?? 0) + 1);
+  const lines = diff.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("--- "));
+  for (const text of lines.map((line) => line.slice(1).trim()).filter((text) => text !== "")) {
+    removed.set(text, (removed.get(text) ?? 0) + 1);
   }
+  return removed;
+}
+
+function internalImportsBefore(from, range) {
   const imported = new Map();
   const shrunk = gitText(["diff", "--name-only", "--no-renames", "--diff-filter=MD", ...range]);
   for (const file of shrunk.split("\n").filter((f) => TEST_FILE.test(f))) {
@@ -216,7 +223,7 @@ function splitTests(base, head) {
     for (const m of text.matchAll(IMPORT_RE)) if (isInternalValueImport(m, code)) names.add(m[2]);
     imported.set(dir, names);
   }
-  return { removed, imported };
+  return imported;
 }
 
 function contractFindings(changed, moved) {

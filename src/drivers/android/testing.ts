@@ -23,7 +23,7 @@ export {
   WorkingDirectoryFilesystem,
 } from "./test-sdk-fixtures.js";
 
-export type { FitImage, Refusal, CustomFitProfile } from "./test-sdk-fixtures.js";
+export type { FitImage, Refusal } from "./test-sdk-fixtures.js";
 
 export {
   EmulatorExitingRunner,
@@ -43,7 +43,7 @@ export {
   taggedHarness,
 } from "./test-seed-harness.js";
 
-export type { SeedProvisioner, BuildProvisioner } from "./test-seed-harness.js";
+export type { BuildProvisioner } from "./test-seed-harness.js";
 
 export {
   bootProbes,

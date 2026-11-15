@@ -3,8 +3,6 @@ import { constants } from "node:os";
 import type { StreamingProcessResult } from "./process-runner-types.js";
 
 export type {
-  LineEnd,
-  NodeProcessRunnerOptions,
   ProcessHandle,
   ProcessResult,
   ProcessRunner,
@@ -15,11 +13,7 @@ export type {
 } from "./process-runner-types.js";
 export { InputStreamFailedError, ProcessSpawnError } from "./process-runner-types.js";
 export { ExecOutputDeliveryStalledError, NodeProcessRunner } from "./node-process-runner.js";
-export type {
-  ProcessInvocation,
-  ProcessMatcher,
-  ScriptedProcessExpectation,
-} from "./scripted-process-runner.js";
+export type { ScriptedProcessExpectation } from "./scripted-process-runner.js";
 export { ScriptedProcessRunner } from "./scripted-process-runner.js";
 
 /**

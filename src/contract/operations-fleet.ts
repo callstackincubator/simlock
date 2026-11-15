@@ -11,7 +11,6 @@ import {
   workerViewSchema,
 } from "./schemas.js";
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerList = defineOperation({
   name: "worker.list",
   role: "admin",
@@ -31,7 +30,6 @@ export const workerList = defineOperation({
  * a typo, and answering "done" would leave an operator believing a machine was taken out of
  * service when nothing was.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerDrain = defineOperation({
   name: "worker.drain",
   role: "admin",
@@ -40,7 +38,6 @@ export const workerDrain = defineOperation({
   output: z.object({ workerId: z.string(), drained: z.literal(true) }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerUndrain = defineOperation({
   name: "worker.undrain",
   role: "admin",
@@ -59,7 +56,6 @@ export const workerUndrain = defineOperation({
  * already true of something the gateway has never heard of or has already forgotten, so it is
  * an outcome to report rather than an error to raise (the same shape `token.revoke` uses).
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerRemove = defineOperation({
   name: "worker.remove",
   role: "admin",
@@ -69,7 +65,6 @@ export const workerRemove = defineOperation({
 });
 
 // why: ADR 0042 §2: the gateway sends `daemon.update` over that worker's uplink and answers with the worker's own answer plus the id.
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerUpdate = defineOperation({
   name: "worker.update",
   role: "admin",
@@ -89,7 +84,6 @@ export const workerUpdate = defineOperation({
  * and running it again is the recovery. `component` echoes the version asked for; `version` is
  * the exact one installed or found.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const componentInstall = defineOperation({
   name: "component.install",
   role: "admin",
@@ -112,7 +106,6 @@ export const componentInstall = defineOperation({
  * counts the devices outside Simlock that use it. `variant` tells two components of one
  * version apart, in the platform's own words; `sizeBytes` is absent when it could not be read.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const componentList = defineOperation({
   name: "component.list",
   role: "agent",
@@ -169,7 +162,6 @@ const workerInstallResultSchema = z.object({
  * ascending worker id. Progress arrives as `component-progress` pushes carrying `workerId`.
  * A worker answers `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerInstallComponent = defineOperation({
   name: "worker.install-component",
   role: "admin",
@@ -182,7 +174,6 @@ export const workerInstallComponent = defineOperation({
   output: z.object({ results: z.array(workerInstallResultSchema) }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const componentRemove = defineOperation({
   name: "component.remove",
   role: "admin",
@@ -218,7 +209,6 @@ function isControlCharacter(character: string): boolean {
   return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
 }
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const deviceAdd = defineOperation({
   name: "device.add",
   role: "admin",
@@ -236,7 +226,6 @@ export const deviceAdd = defineOperation({
   }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const deviceRemove = defineOperation({
   name: "device.remove",
   role: "admin",
@@ -267,7 +256,6 @@ const relayUrlSchema = z
  * effect. With `twoWay` (GET, no body) both directions of the channel stay open: the answer comes once
  * both have ended. Admin only, and on a worker only the gateway's own uplink session may call it.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const relayRequest = defineOperation({
   name: "relay.request",
   role: "admin",
@@ -295,7 +283,6 @@ export const relayRequest = defineOperation({
   output: z.object({ cancelled: z.literal(true).optional() }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const relayCancel = defineOperation({
   name: "relay.cancel",
   role: "admin",
@@ -309,7 +296,6 @@ export const relayCancel = defineOperation({
  * once, outside the destination's queue. `destination` is only looked up by name among the
  * configured ones, never used in a URL.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const alertsTest = defineOperation({
   name: "alerts.test",
   role: "admin",
@@ -318,7 +304,6 @@ export const alertsTest = defineOperation({
   output: z.object({ destination: z.string(), status: z.number() }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const inboxGet = defineOperation({
   name: "inbox.get",
   role: "admin",

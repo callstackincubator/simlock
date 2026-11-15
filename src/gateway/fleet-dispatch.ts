@@ -157,6 +157,7 @@ export class FleetDispatch {
     }
   }
 
+  // fallow-ignore-next-line unused-class-member -- FleetAdmission calls it through its options' Pick<FleetDispatch>.
   noteCreated(waiter: FleetWaiter): void {
     this.#createdAt.set(waiter, this.options.clock.now());
   }

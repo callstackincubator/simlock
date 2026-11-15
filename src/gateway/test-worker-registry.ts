@@ -7,7 +7,7 @@ export const RETENTION_MS = 24 * 60 * 60_000;
 
 /** Matches `core/config.ts`'s own default, so a test that does not care about ADR 0005 §15's
  * warning gets a cap no fixture's `ttlMs` ever comes near. */
-export const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
+const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
 /** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
  * prefix is that principal plus a trailing `:`. */

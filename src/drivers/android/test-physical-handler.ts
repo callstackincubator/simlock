@@ -18,11 +18,11 @@ import { memoryAndroidSourceDatabase } from "./testing.js";
 
 export const sdk = "/android-sdk";
 
-export const home = "/home/simlock";
+const home = "/home/simlock";
 
-export const simlockHome = "/home/simlock/.simlock";
+const simlockHome = "/home/simlock/.simlock";
 
-export const instanceId = "instance-1";
+const instanceId = "instance-1";
 
 export const adb = `${sdk}/platform-tools/adb`;
 
@@ -174,7 +174,7 @@ export class PhoneAdb implements ProcessRunner {
   }
 }
 
-export class LoggingTcpProbe extends FakeTcpProbe {
+class LoggingTcpProbe extends FakeTcpProbe {
   readonly #log: string[];
 
   constructor(log: string[], listening: readonly number[]) {

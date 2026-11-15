@@ -12,7 +12,7 @@ export const phoneModels = {
   modelClasses: { "iPhone 16": "phone" },
 } as const;
 
-export const endedMessage = "lease ended by simlock; run disconnect, then open";
+const endedMessage = "lease ended by simlock; run disconnect, then open";
 
 export function expectEndedBySimlock(answer: Envelope): void {
   expect(answer.result).toBeUndefined();

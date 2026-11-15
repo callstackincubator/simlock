@@ -273,7 +273,6 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({
   name: "lease.request",
   role: "agent",

@@ -24,7 +24,7 @@ export const HOUR = 3_600_000;
 export const JUNK = "this is not a sqlite database ".repeat(20);
 export const directories: string[] = [];
 
-export class RecordingFilesystem extends NodeFilesystem {
+class RecordingFilesystem extends NodeFilesystem {
   readonly renames: Array<{ readonly from: string; readonly to: string }> = [];
   beforeRename: (() => Promise<void>) | undefined;
 

@@ -15,11 +15,11 @@ export type Json = string | number | boolean | null | undefined | Json[] | { [ke
 
 export type Fields = Record<string, Json>;
 
-export const lockFixture = JSON.parse(
+const lockFixture = JSON.parse(
   readFileSync(new URL("./fixtures/devicectl-lock-state.json", import.meta.url), "utf8"),
 ) as Fields;
 
-export const appsFixture = JSON.parse(
+const appsFixture = JSON.parse(
   readFileSync(new URL("./fixtures/devicectl-info-apps.json", import.meta.url), "utf8"),
 ) as { readonly result: { readonly apps: readonly Fields[] } };
 
@@ -57,7 +57,7 @@ export const PHONE: Fields = {
   udid: PHONE_UDID,
 };
 
-export const DEPRECATED_GROUP: Readonly<Record<string, string>> = {
+const DEPRECATED_GROUP: Readonly<Record<string, string>> = {
   deviceType: "hardwareProperties",
   developerModeStatus: "deviceProperties",
   ecid: "hardwareProperties",
@@ -166,7 +166,7 @@ export function lockArgv(udid: string): string[] {
   ];
 }
 
-export class UmaskFilesystem extends MemoryFilesystem {
+class UmaskFilesystem extends MemoryFilesystem {
   override async mkdirp(path: string): Promise<void> {
     const existed = await this.exists(path);
     await super.mkdirp(path);

@@ -156,6 +156,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * `ComponentInstaller` calls it once the driver removed the component, before it emits
    * `component.removed`. Deleting a record that is not there commits nothing.
    */
+  // fallow-ignore-next-line unused-class-member -- called by ComponentInstaller through its Pick<Registry> port and by the registry tests.
   async deleteComponent(platform: Platform, version: string): Promise<void> {
     const components = this.#components.filter(
       (existing) => existing.platform !== platform || existing.version !== version,

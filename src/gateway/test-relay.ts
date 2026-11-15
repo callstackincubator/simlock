@@ -83,6 +83,7 @@ export class FakeChannel implements LinkChannel {
   }
 
   // why: the real channel errors its writable at once on a peer's STOP (src/link/channel.ts onStop → #failOutgoing).
+  // fallow-ignore-next-line unused-class-member -- the relay tests call it on the fake channel this file builds.
   stopWriting(): void {
     this.#writeController.error(new LinkChannelError("stopped"));
   }

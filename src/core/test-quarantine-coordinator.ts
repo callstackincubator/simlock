@@ -88,6 +88,7 @@ export class FakeRegistry implements QuarantineRegistry {
     });
   }
   /** Test-only escape hatch to simulate a device leaving quarantine out of band. */
+  // fallow-ignore-next-line unused-class-member -- the quarantine tests call it on the harness this file builds.
   forceState(deviceId: string, state: VirtualDevice["state"]): void {
     this.#update(deviceId, (device) => ({ ...device, state }));
   }

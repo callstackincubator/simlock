@@ -106,12 +106,14 @@ function blocksIn(path, lines, kinds, added, all) {
 function blockAt(path, lines, added, start, end, trailing) {
   const block = lines.slice(start - 1, end);
   if (block.every((l) => DIRECTIVE.test(l.trim()) || l.trim() === "")) return null;
-  const changed = block.filter((_, i) => added.has(start + i)).length;
+  // why: a tool directive added beside a comment edits nothing that comment says.
+  const said = block.map((l, i) => i).filter((i) => !DIRECTIVE.test(block[i].trim()));
+  const changed = said.filter((i) => added.has(start + i)).length;
   return {
     path,
     start,
     end,
-    state: changed === block.length ? "added" : changed > 0 ? "edited" : "unchanged",
+    state: changed === said.length ? "added" : changed > 0 ? "edited" : "unchanged",
     trailing,
     lines: block.map((l, i) => ({ n: start + i, text: l })),
     next: trailing ? null : nextCode(lines, end),

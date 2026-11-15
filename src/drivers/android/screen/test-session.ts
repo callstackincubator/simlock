@@ -15,11 +15,11 @@ import {
 import { createAndroidScreenCapture, type ScreenTarget } from "./session.js";
 import { codecId, concatBytes, sessionPacket } from "./test-scrcpy.js";
 
-export const ADB = "/sdk/platform-tools/adb";
+const ADB = "/sdk/platform-tools/adb";
 export const SERVER = "/simlock/scrcpy-server-v5.0.1";
-export const SERIAL = "emulator-5586";
-export const PHONE_SERIAL = "R58M123ABC";
-export const SCID = 0x1234abcd;
+const SERIAL = "emulator-5586";
+const PHONE_SERIAL = "R58M123ABC";
+const SCID = 0x1234abcd;
 export const DEVICE_JAR = "/data/local/tmp/simlock-scrcpy-1234abcd.jar";
 export const SETTINGS = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 export const SCREEN_READ_MS = 10_000;
@@ -45,11 +45,11 @@ export const GATE_REFUSAL =
   "No command goes to physical Android devices until they match, and Simlock will not restart that server.";
 export const SCREEN_OFF =
   "The phone's screen is off and did not turn on. Turn it on and ask for the stream again.";
-export const WAKE_ARGS = "shell input keyevent KEYCODE_WAKEUP";
+const WAKE_ARGS = "shell input keyevent KEYCODE_WAKEUP";
 
 export type Behaviour = "accept" | "refuse" | "no-transport" | "connection-refused" | "silent";
 
-export class Peer {
+class Peer {
   readonly written: string[] = [];
   closed = false;
   pulls = 0;
@@ -185,6 +185,7 @@ export class FakeTarget implements ScreenTarget {
     this.server = server ?? new AdbServer();
   }
 
+  // fallow-ignore-next-line unused-class-member -- the session tests read it on the harness this file builds.
   get steps(): string[] {
     return this.log.map((entry) => (entry.includes("app_process") ? "server" : entry));
   }
@@ -241,7 +242,7 @@ export class FakeTarget implements ScreenTarget {
   }
 }
 
-export function isScreenRead(args: readonly string[]): boolean {
+function isScreenRead(args: readonly string[]): boolean {
   return args.join(" ") === "shell dumpsys power";
 }
 

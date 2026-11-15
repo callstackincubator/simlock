@@ -34,16 +34,12 @@ import { reservedRunning, type WarmTargetFigures } from "./warm-pool/index.js";
 import type { StartupRead } from "./startup-read.js";
 
 export type {
-  DoctorBaselines,
   DoctorConfig,
   DoctorFinding,
   DoctorOptions,
-  DoctorQuarantine,
   DoctorReconcileOptions,
   DoctorReport,
-  DoctorSource,
   OptionalModuleFinding,
-  ProvenanceDrift,
   ServiceCheck,
 } from "./doctor-types.js";
 export { isStalledTransition } from "./doctor-findings.js";

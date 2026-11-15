@@ -51,7 +51,7 @@ export type Behaviour = "dies" | "ignores-sigterm" | "immortal";
 
 export type DaemonJson = "ready" | "none" | "other-pid";
 
-export class ProcessTable extends FakeProcessSupervisor {
+class ProcessTable extends FakeProcessSupervisor {
   readonly behaviours = new Map<number, Behaviour>();
   readonly onDeath = new Map<number, () => void>();
 
@@ -69,7 +69,7 @@ export class ProcessTable extends FakeProcessSupervisor {
   }
 }
 
-export interface Child {
+interface Child {
   readonly pid: number;
   readonly args: readonly string[];
   exit(code: number | null): void;
@@ -102,7 +102,7 @@ export function stemOf(role: AgentDeviceRole | undefined): string {
   return role === "phones" ? "agent-device-phones" : "agent-device";
 }
 
-export function supervisorRole(options: Options): {
+function supervisorRole(options: Options): {
   readonly ios?: AgentDeviceIosSigning;
   readonly role: AgentDeviceRole;
 } {
@@ -248,7 +248,7 @@ export function isDaemonEntry(arg: string | undefined): boolean {
   return arg === internalEntry || arg === fallbackEntry;
 }
 
-export async function installAgentDevice(
+async function installAgentDevice(
   filesystem: MemoryFilesystem,
   simlockHome: string,
   options: Options,

@@ -64,17 +64,7 @@ import { validationHook } from "./routes.js";
 import { pipeSse } from "./sse.js";
 import { LeaseRequestTracker } from "./tracker.js";
 
-export type {
-  HttpAppDisposable,
-  HttpGatewayDeps,
-  HttpLeaseFiles,
-  HttpLeaseRoute,
-  HttpLeaseSocketAccept,
-  HttpLeaseSocketOutcome,
-  HttpMount,
-  HttpRegistryDevice,
-  HttpRegistryReader,
-} from "./app-types.js";
+export type { HttpAppDisposable, HttpGatewayDeps, HttpLeaseFiles, HttpMount } from "./app-types.js";
 
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
 export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpAppDisposable {

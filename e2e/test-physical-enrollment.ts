@@ -7,7 +7,7 @@ export const UDID = "00008110-001A2B3C4D5E";
 
 export const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
 
-export const APPS = Array.from({ length: 12 }, (_, index) => `com.example.app${String(index)}`);
+const APPS = Array.from({ length: 12 }, (_, index) => `com.example.app${String(index)}`);
 
 export const IPHONE: ScriptedPhysicalDevice = {
   apps: APPS,
@@ -32,7 +32,7 @@ export const IOS_BASE = {
   modelClasses: { "iPhone 15 Pro": "phone", "iPhone 16": "phone" },
 } as const;
 
-export const ANDROID_BASE = {
+const ANDROID_BASE = {
   availableOsVersions: ["35"],
   defaultModels: { phone: ["Pixel 9"] },
   knownModels: ["Pixel 9"],

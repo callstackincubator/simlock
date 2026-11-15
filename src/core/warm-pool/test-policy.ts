@@ -15,8 +15,8 @@ export const minute = 60_000;
 export const now = 1_000 * minute;
 export const shutdownAfterMs = 10 * minute;
 
-export const phones = new Set(["iPhone 15", "iPhone 17"]);
-export const classOf = (model: string): DeviceClass | undefined =>
+const phones = new Set(["iPhone 15", "iPhone 17"]);
+const classOf = (model: string): DeviceClass | undefined =>
   phones.has(model) ? "phone" : "tablet";
 
 export function spec(model: string, overrides: Partial<VirtualSpec> = {}): VirtualSpec {
@@ -32,9 +32,7 @@ export interface DeviceOptions {
   spent?: boolean;
 }
 
-export function readyStamp(
-  options: DeviceOptions,
-): Pick<VirtualDevice, "readyAt"> | Record<never, never> {
+function readyStamp(options: DeviceOptions): Pick<VirtualDevice, "readyAt"> | Record<never, never> {
   return options.readyAt === undefined && options.endedAgo === undefined
     ? {}
     : { readyAt: options.readyAt ?? now };
@@ -43,7 +41,7 @@ export function readyStamp(
 // why: a virtual device that ended a lease is spent (ADR 0061 §2) and never grantable; `endedAgo`
 // only orders idle devices (least recently used), so it moves createdAt, and only a spent device
 // carries the end stamp. Such a device counts as freshly ready, so the never-leased idle rule leaves it be.
-export function endStamp(
+function endStamp(
   options: DeviceOptions,
 ): Pick<VirtualDevice, "lastLeaseEndedAt"> | Record<never, never> {
   return options.spent === true && options.endedAgo !== undefined

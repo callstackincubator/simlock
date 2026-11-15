@@ -197,7 +197,7 @@ export const rejected = (
   requester: "alice",
   ...over,
 });
-export const figures = (running: number, reserved: number, maxRunning: number) => ({
+const figures = (running: number, reserved: number, maxRunning: number) => ({
   maxRunning,
   reserved,
   running,

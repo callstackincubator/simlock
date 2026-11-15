@@ -15,6 +15,7 @@ export class AcquisitionGates {
     return this.#updateHold;
   }
 
+  // fallow-ignore-next-line unused-class-member -- AcquisitionWorkflow reads it through its options' gates.
   get stopPlanning(): boolean {
     return this.#stopPlanning;
   }

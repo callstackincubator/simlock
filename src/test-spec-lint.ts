@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 
 import { expect } from "vitest";
 
-export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-export const SCRIPT = join(ROOT, ".agents", "scripts", "spec-lint.mjs");
+const SCRIPT = join(ROOT, ".agents", "scripts", "spec-lint.mjs");
 
 export const SHA = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: ROOT,
@@ -19,7 +19,7 @@ export const FOOTER = "*Written by an agent.*";
 
 export const FENCE = "```";
 
-export const PARENT = `Request: none
+const PARENT = `Request: none
 
 ## Behaviours
 

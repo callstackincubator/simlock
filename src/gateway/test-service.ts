@@ -14,7 +14,7 @@ export const RETENTION_MS = 24 * 60 * 60_000;
 
 export const REFRESH_MS = 30_000;
 
-export const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
+const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
 export class RecordingLogger implements Logger {
   readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];

@@ -38,11 +38,7 @@ import {
   type DaemonServerOptions,
 } from "./server-options.js";
 import { acceptRelayChannel, ConnectionRequests } from "./server-requests.js";
-export type {
-  DaemonServerCommonOptions,
-  DaemonServerEngineOptions,
-  DaemonServerOptions,
-} from "./server-options.js";
+export type { DaemonServerOptions } from "./server-options.js";
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();

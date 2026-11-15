@@ -22,6 +22,7 @@ export type WaiterOutcomesOptions = Pick<
 export class WaiterOutcomes {
   constructor(private readonly options: WaiterOutcomesOptions) {}
 
+  // fallow-ignore-next-line unused-class-member -- AcquisitionWorkflow calls it through its options' outcomes.
   async grant(
     waiter: AcquisitionWaiter,
     device: DeviceRecord,
@@ -50,6 +51,7 @@ export class WaiterOutcomes {
 
   /** One `warn` line for a device step that failed in the background and is handled here by
    * deferring the waiter or destroying the device. The waiter only ever sees a generic outcome. */
+  // fallow-ignore-next-line unused-class-member -- AcquisitionWorkflow calls it through its options' outcomes.
   logFailure(
     message: string,
     waiter: AcquisitionWaiter,
@@ -65,6 +67,7 @@ export class WaiterOutcomes {
     });
   }
 
+  // fallow-ignore-next-line unused-class-member -- AcquisitionWorkflow calls it through its options' outcomes.
   defer(waiter: AcquisitionWaiter, reason: WaitingReason): void {
     if (waiter.options.noWait) {
       this.reject(waiter, new NoCapacityError(reason), "no-wait");

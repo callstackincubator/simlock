@@ -11,7 +11,12 @@ import {
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { CallHooks, LeaseScopedPush, SimlockWire } from "./wire.js";
-import type { OperationInput, OperationOutput, SimlockAdminClient } from "./client-api.js";
+import type {
+  OperationInput,
+  OperationOutput,
+  SimlockAdminClient,
+  SimlockClient,
+} from "./client-api.js";
 import { cancelledError, toSimlockError } from "./client-errors.js";
 import type {
   AlertsTestInput,
@@ -94,7 +99,19 @@ import type {
   WorkerUpdateOutput,
 } from "./types.js";
 
-export class SimlockClientImpl {
+// why: the class stays private to this file, as it was in client.ts: callers hold it only as the
+// client interface, so they reach its members through that interface.
+export function createSimlockClient(
+  wire: SimlockWire,
+  role: Role,
+  principal: string,
+  daemonVersion: string,
+  link?: LinkConnection,
+): SimlockClient & { asAdmin(): SimlockAdminClient } {
+  return new SimlockClientImpl(wire, role, principal, daemonVersion, link);
+}
+
+class SimlockClientImpl {
   readonly #wire: SimlockWire;
   readonly #link: LinkConnection | undefined;
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();

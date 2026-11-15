@@ -30,16 +30,7 @@ export {
   NoCapacityError,
   ProvisionFailedError,
 } from "./acquisition-errors.js";
-export type {
-  AcquisitionClaims,
-  AcquisitionDecision,
-  AcquisitionDrivers,
-  AcquisitionPlannerPort,
-  AcquisitionQueue,
-  AcquisitionQuarantine,
-  LeaseAcquisitionCoordinatorOptions,
-  LeaseAcquisitionRegistry,
-} from "./acquisition-ports.js";
+export type { LeaseAcquisitionCoordinatorOptions } from "./acquisition-ports.js";
 
 export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #logger: Logger;

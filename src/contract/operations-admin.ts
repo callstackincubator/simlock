@@ -46,7 +46,6 @@ const doctorRunInputSchema = z.object({
   purgeOrphans: z.boolean().optional(),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const doctorRun = defineOperation({
   name: "doctor.run",
   /**
@@ -70,7 +69,6 @@ export const doctorRun = defineOperation({
 });
 
 /** Arm order is load-bearing: a full record matches the first arm, so a worker's answer is unchanged. */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const listGet = defineOperation({
   name: "list.get",
   role: "admin",
@@ -85,7 +83,6 @@ export const listGet = defineOperation({
   ]),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const cleanupRun = defineOperation({
   name: "cleanup.run",
   role: "admin",
@@ -94,7 +91,6 @@ export const cleanupRun = defineOperation({
   output: z.array(proposalSchema),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const nukeRun = defineOperation({
   name: "nuke.run",
   role: "admin",
@@ -112,7 +108,6 @@ const warmKindSchema = z.object({
   baseline: baselineNameSchema.optional(),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const warmForget = defineOperation({
   name: "warm.forget",
   role: "admin",
@@ -127,7 +122,6 @@ export const warmForget = defineOperation({
   output: z.object({ forgotten: z.array(warmKindSchema).max(WARM_POOL_LEARNED_KINDS_MAX) }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const baselineSave = defineOperation({
   name: "baseline.save",
   role: "admin",
@@ -142,7 +136,6 @@ export const baselineSave = defineOperation({
   output: z.object({ baseline: baselineEntrySchema, leaseId: z.string().max(256) }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const baselineList = defineOperation({
   name: "baseline.list",
   role: "agent",
@@ -151,7 +144,6 @@ export const baselineList = defineOperation({
   output: z.object({ baselines: z.array(baselineEntrySchema).max(1000) }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const baselineRemove = defineOperation({
   name: "baseline.remove",
   role: "admin",
@@ -170,7 +162,6 @@ export const baselineRemove = defineOperation({
   }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
@@ -179,7 +170,6 @@ export const configGet = defineOperation({
   output: configSchema,
 });
 
-// fallow-ignore-next-line unused-export -- see the comment above.
 export const daemonStop = defineOperation({
   name: "daemon.stop",
   role: "admin",
@@ -189,7 +179,6 @@ export const daemonStop = defineOperation({
 });
 
 // why: `DaemonServer` dispatches it on a connection whose protocol range does not overlap (like `daemon.stop`), so its input and answer never change shape.
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const daemonUpdate = defineOperation({
   name: "daemon.update",
   role: "admin",
@@ -218,7 +207,6 @@ export const daemonUpdate = defineOperation({
   }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
@@ -234,7 +222,6 @@ export const eventsReplay = defineOperation({
   output: z.array(eventEnvelopeSchema),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const usageGet = defineOperation({
   name: "usage.get",
   role: "admin",
@@ -243,7 +230,6 @@ export const usageGet = defineOperation({
   output: usageOutputSchema,
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsSubscribe = defineOperation({
   name: "events.subscribe",
   role: "admin",
@@ -252,7 +238,6 @@ export const eventsSubscribe = defineOperation({
   output: z.object({ subscribed: z.literal(true), subscriptionId: z.string() }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsUnsubscribe = defineOperation({
   name: "events.unsubscribe",
   role: "admin",
@@ -266,7 +251,6 @@ export const eventsUnsubscribe = defineOperation({
 // `src/cli/commands/token.ts`, and no CLI code reads the token store itself. The declarations live
 // here because the `OPERATIONS` map every dispatcher validates against is built from this file.
 
-// fallow-ignore-next-line unused-export -- reachable from outside this file only through OPERATIONS.
 export const tokenCreate = defineOperation({
   name: "token.create",
   role: "admin",
@@ -275,7 +259,6 @@ export const tokenCreate = defineOperation({
   output: z.object({ secret: z.string(), token: tokenRecordSchema }),
 });
 
-// fallow-ignore-next-line unused-export -- same as tokenCreate above.
 export const tokenList = defineOperation({
   name: "token.list",
   role: "admin",
@@ -284,7 +267,6 @@ export const tokenList = defineOperation({
   output: z.object({ tokens: z.array(tokenRecordSchema) }),
 });
 
-// fallow-ignore-next-line unused-export -- same as tokenCreate above.
 export const tokenRevoke = defineOperation({
   name: "token.revoke",
   role: "admin",

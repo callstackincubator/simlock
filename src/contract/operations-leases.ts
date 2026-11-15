@@ -10,7 +10,6 @@ import {
   statusLeaseSchema,
 } from "./schemas.js";
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
@@ -52,7 +51,6 @@ export const leaseCancel = defineOperation({
  * `ttlMs` above `lease.maxTtlMs` is `BAD_REQUEST`, checked in the dispatcher's handler where
  * that config value is visible.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRenew = defineOperation({
   name: "lease.renew",
   role: "agent",
@@ -83,7 +81,6 @@ export const leaseRelease = defineOperation({
  * what comes back is a command the caller could have written had it known the root path, which
  * ADR 0001 is explicit is an accident boundary rather than a security one.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const driverPassthrough = defineOperation({
   name: "driver.passthrough",
   role: "agent",
@@ -140,7 +137,6 @@ export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
  * which would say the request was malformed when it was merely aimed at a tool this host does
  * not have. `BAD_REQUEST` on this operation means the body's shape is wrong, nothing more.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const deviceExec = defineOperation({
   name: "device.exec",
   role: "agent",
@@ -207,7 +203,6 @@ export const deviceExec = defineOperation({
  * answer, set by a gateway, which lists the leases its worker views report. Additive, so a
  * client that never talks to a gateway sees exactly what it saw before.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseList = defineOperation({
   name: "lease.list",
   role: "agent",
@@ -217,7 +212,6 @@ export const leaseList = defineOperation({
 });
 
 // why: no `authorize` hook -- the handler answers `UNKNOWN_LEASE` for a lease the caller does not own, as `lease.list` hides it (ADR 0044 §3), so "not yours" and "not there" look the same.
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseGet = defineOperation({
   name: "lease.get",
   role: "agent",
@@ -226,7 +220,6 @@ export const leaseGet = defineOperation({
   output: z.object({ lease: statusLeaseSchema }),
 });
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseReleaseAll = defineOperation({
   name: "lease.release-all",
   role: "admin",

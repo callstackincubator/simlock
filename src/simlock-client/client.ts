@@ -18,7 +18,7 @@ import type { IpcConnection, IpcConnector } from "../ports/index.js";
 import { SimlockWire } from "./wire.js";
 import type { SimlockAdminClient, SimlockClient } from "./client-api.js";
 import { buildDegradedClient } from "./client-degraded.js";
-import { SimlockClientImpl } from "./client-impl.js";
+import { createSimlockClient } from "./client-impl.js";
 
 export type {
   BaselineListOutput,
@@ -169,7 +169,7 @@ export async function connectSimlockClient(
     await connection.close();
     throw error;
   }
-  const impl = new SimlockClientImpl(
+  const impl = createSimlockClient(
     wire,
     hello.role,
     hello.principal,
