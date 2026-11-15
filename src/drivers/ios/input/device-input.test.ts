@@ -210,7 +210,7 @@ describe("iOS device input", () => {
     ]);
     launcher.last.write(envelope(INPUT_TAG.config, { height: "tall" }));
     await flush();
-    expect(logger.warnings).toHaveLength(1);
+    expect(logger.warnings).toEqual(["The input helper sent a screen size that did not parse"]);
     launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
     await flush();
     expect(early).toHaveLength(4);
@@ -219,7 +219,25 @@ describe("iOS device input", () => {
       taller,
       { height: 2000, orientation: "portrait", width: 1000 },
     ]);
-    expect(logger.warnings).toHaveLength(1);
+    expect(logger.warnings).toEqual(["The input helper sent a screen size that did not parse"]);
+
+    const keyless = setup();
+    const keylessOpen = keyless.factory.open(
+      simulator("com.apple.CoreSimulator.SimRuntime.iOS-27-0"),
+      new AbortController().signal,
+    );
+    keyless.launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+    const keylessInput = (await keylessOpen) as DeviceInput;
+    const keylessConfigs: InputScreenConfig[] = [];
+    keylessInput.onConfig((config) => keylessConfigs.push(config));
+    keyless.launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+    await flush();
+    expect(keylessConfigs.at(-1)).toEqual({
+      height: 2000,
+      keyboardUnavailable: true,
+      orientation: "portrait",
+      width: 3000,
+    });
   });
 
   it("an open rejects when the helper is missing, exits first or reports no size within 10 s, and a helper that exits later fails the input", async () => {

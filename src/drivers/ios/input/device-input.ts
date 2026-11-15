@@ -118,7 +118,8 @@ async function* sizesOf(
       const payload = buffered.subarray(FRAME_HEADER_BYTES + 1, FRAME_HEADER_BYTES + length);
       buffered = buffered.slice(FRAME_HEADER_BYTES + length);
       const size = parseSize(payload);
-      if (size === undefined) logger?.warn("The input helper sent a screen size that is not one");
+      if (size === undefined)
+        logger?.warn("The input helper sent a screen size that did not parse");
       else yield size;
     }
   }
