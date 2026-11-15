@@ -76,6 +76,7 @@ describe("IosSimctlDriver ios.simulator.headless refusal", () => {
 });
 
 describe("IosSimctlDriver simulator window", () => {
+  const coreSimulatorRoot = "/Users/me/CoreSimulator";
   const udid = driverData.udid;
   const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
   const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
@@ -140,6 +141,7 @@ describe("IosSimctlDriver simulator window", () => {
         })),
       );
       const driver = await IosSimctlDriver.create({
+        coreSimulatorRoot,
         clock: new FakeClock(),
         database: await memorySourceDatabase(),
         driverConfig: { deviceSet: "default" },
@@ -216,6 +218,7 @@ describe("IosSimctlDriver simulator window", () => {
       const failures: WindowFailedFact[] = [];
       const driver = await IosSimctlDriver.create({
         clock,
+        coreSimulatorRoot,
         database: await memorySourceDatabase(),
         driverConfig: { deviceSet: "default" },
         filesystem: new MemoryFilesystem(),

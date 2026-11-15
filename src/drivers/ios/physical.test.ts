@@ -40,7 +40,7 @@ const simctlListFixture = readFileSync(
 
 const SIMLOCK_HOME = "/home/.simlock";
 const JSON_DIR = `${SIMLOCK_HOME}/devicectl`;
-const DEVICE_ROOT = "/Devices";
+const DEVICE_ROOT = "/home/.simlock/devices/dev-ios";
 const READ_LIMIT_MS = 30_000;
 const UNINSTALL_LIMIT_MS = 60_000;
 

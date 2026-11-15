@@ -446,7 +446,7 @@ export class IosSimctlDriver implements Driver {
       options,
       deviceRoot,
       rootOptions,
-      await sourcesFolderOf(options, deviceRoot),
+      await sourcesFolderOf(options, deviceRoot, configuredRoot(options)),
     );
   }
 
@@ -2240,8 +2240,18 @@ function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "defa
   return "default";
 }
 
-function sourcesFolderOf(options: IosSimctlDriverOptions, deviceSet: string): Promise<string> {
+function configuredRoot(options: IosSimctlDriverOptions): string | undefined {
+  const configured = options.driverConfig["deviceRoot"];
+  return typeof configured === "string" ? configured : undefined;
+}
+
+function sourcesFolderOf(
+  options: IosSimctlDriverOptions,
+  deviceSet: string,
+  configuredRoot?: string,
+): Promise<string> {
   return sourcesFolderFor({
+    ...(configuredRoot === undefined ? {} : { configuredRoot }),
     deviceSet,
     filesystem: options.filesystem,
     simlockHome: options.simlockHome,

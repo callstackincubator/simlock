@@ -18,7 +18,8 @@ export type RootRejectionReason =
   | "non-empty-unowned-root"
   | "unreadable"
   | "invalid-device-set"
-  | "device-set-changed";
+  | "device-set-changed"
+  | "sources-path-unfit";
 
 export interface OwnedRootMarker {
   readonly schemaVersion: 1;
