@@ -19,6 +19,5 @@ Flows: [iOS driver](../AGENTS.md), [input](../../../input/AGENTS.md).
 
 - **No app switcher or Lock, and no keys on iOS 27 runtimes (#1024).**
 - **A screen that does not rotate ignores a rotation, and nothing tells the client** (the iPhone home screen, upside down on a Face ID iPhone). Rotation was checked on Xcode 26.4 (iOS 26.4 runtime) and Xcode 27.0 (iOS 26.4 and 27.0 runtimes) (#1080).
-- **The input follows the device's native frame**, so after a rotation taps and picture stay in the same frame.
-- **A foldable's panel follows SpringBoard's `DisplayContentMode` log** (see the [iOS driver](../AGENTS.md)): a tap sent in the moment between a fold and the new size lands on the panel left.
+- **A one-panel device's input follows its native frame**, so after a rotation taps and picture stay in the same frame; a foldable's follow the upright picture.
 - **Taps may vanish after a reboot under the lease.** After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, until the lease's input reopens.
