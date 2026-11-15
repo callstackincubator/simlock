@@ -4,7 +4,7 @@
   "cacheMaxSize": "2GB",
   "noUpdateNotifier": true,
   "tasks": {
-    "build:daemon:run": {
+    "//#build:daemon:run": {
       "inputs": [
         "src/**/*.ts",
         "!src/**/*.test.ts",
@@ -17,7 +17,7 @@
       "outputs": ["dist/**", "!dist/ui/**", "!dist/vendor/**", "!dist/bin/**", "!dist/e2e/**"],
       "outputLogs": "new-only"
     },
-    "build:ui:run": {
+    "//#build:ui:run": {
       "inputs": [
         "ui/**",
         "!ui/**/*.test.ts",
@@ -32,14 +32,14 @@
       "outputs": ["dist/ui/**"],
       "outputLogs": "new-only"
     },
-    "build:capture:run": {
+    "//#build:capture:run": {
       "inputs": ["vendor/**", "!vendor/screen-capture/.build/**", "scripts/build-capture.mjs"],
       "outputs": ["dist/vendor/**", "dist/bin/**"],
       "env": ["DEVELOPER_DIR"],
       "outputLogs": "new-only"
     },
-    "build:e2e:run": {
-      "dependsOn": ["build:daemon:run"],
+    "//#build:e2e:run": {
+      "dependsOn": ["//#build:daemon:run"],
       "inputs": [
         "e2e/fake-driver/*.ts",
         "e2e/fake-driver/tsconfig.json",
@@ -48,6 +48,20 @@
         "pnpm-lock.yaml"
       ],
       "outputs": ["dist/e2e/**"],
+      "outputLogs": "new-only"
+    },
+    "@simlock/e2e#build": {
+      "inputs": [
+        "src/**/*.ts",
+        "!src/**/*.test.ts",
+        "!src/config.sample.ts",
+        "tsconfig.json",
+        "tsconfig.build.json",
+        "package.json",
+        "../../tsconfig.json",
+        "../../pnpm-lock.yaml"
+      ],
+      "outputs": ["dist/**"],
       "outputLogs": "new-only"
     }
   }
