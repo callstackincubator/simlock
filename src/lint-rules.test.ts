@@ -726,9 +726,14 @@ describe("packages/ and the root code stay apart", () => {
     expect(
       packageViolations({
         ...root,
-        "packages/e2e/src/index.ts": 'import "../../../src/core/index.js";\nexport {};\n',
+        "packages/e2e/src/index.ts":
+          'import "../../../src/core/index.js";\nimport "../../../ui/src/none.js";\nimport "../../../e2e/none.js";\nexport {};\n',
       }),
-    ).toEqual(["packages-not-from-root-code packages/e2e/src/index.ts -> src/core/index.ts"]);
+    ).toEqual([
+      "packages-not-from-root-code packages/e2e/src/index.ts -> e2e/none.ts",
+      "packages-not-from-root-code packages/e2e/src/index.ts -> src/core/index.ts",
+      "packages-not-from-root-code packages/e2e/src/index.ts -> ui/src/none.ts",
+    ]);
   });
 });
 

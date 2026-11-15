@@ -77,6 +77,7 @@ describe("simlockDevices", () => {
       [{ ttlMs: NaN }, "simlockDevices: ttlMs must be a number of at least 30000; got NaN"],
       [{ ttlMs: 29_999 }, "simlockDevices: ttlMs must be a number of at least 30000; got 29999"],
       [{ queueMs: -1 }, "simlockDevices: queueMs must be a positive number; got -1"],
+      [{ queueMs: 0 }, "simlockDevices: queueMs must be a positive number; got 0"],
       [
         { installConcurrency: 0 },
         "simlockDevices: installConcurrency must be a whole number of at least 1; got 0",
