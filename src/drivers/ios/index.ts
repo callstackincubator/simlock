@@ -999,7 +999,6 @@ export class IosSimctlDriver implements Driver {
     return made;
   }
 
-  /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
   /**
    * why: a copy that outlived its limit leaves its turn at the limit but still runs, so a deletion
    * queued behind it also waits for the hold `#holdSeedLock` places there; another copy does not.
@@ -1011,6 +1010,7 @@ export class IosSimctlDriver implements Driver {
     });
   }
 
+  /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
   async #withSeedLock<T>(udid: string, run: () => Promise<T>): Promise<T> {
     const before = this.#seedLocks.get(udid) ?? Promise.resolve();
     const turn = before.then(run, run);
@@ -2034,8 +2034,8 @@ export class IosSimctlDriver implements Driver {
    * why: `simctl clone` and `simctl create` ask CoreSimulator's service for a whole simulator, and
    * the service finishes it even when `simctl` is killed. At the limit this stops waiting but lets
    * the command run on: the UDID it later prints is the driver's own, so ownership is proven by
-   * the call, never by the name (safety rule 8), and that simulator is deleted. The copy keeps
-   * its seed's turn until then, so the seed is not deleted under it.
+   * the call, never by the name (safety rule 8), and that simulator is deleted. A deletion of
+   * the seed waits for that copy (`#holdSeedLock`); another clone of the seed does not.
    */
   async #createSimulator(
     args: readonly string[],
