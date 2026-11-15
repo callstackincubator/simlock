@@ -461,7 +461,8 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // why: not a second creator: the Android driver's own `provision` hands the call to its seeds
       // part, and its test helpers (never loaded in production) drive the driver to build fixtures.
       [join("drivers", "android", "index.ts")]: 1,
-      [join("drivers", "android", "testing.ts")]: 2,
+      [join("drivers", "android", "test-driver-harness.ts")]: 1,
+      [join("drivers", "android", "test-seed-harness.ts")]: 1,
       // why: the harness's fixture devices, as for registerDevice above.
       [join("leasing", "test-lease-acquisition.ts")]: 1,
       [join("daemon", "test-dispatcher.ts")]: 1,
