@@ -155,7 +155,8 @@ worse than no slim pass.
 ### 8. The boot deadline accounts for the second boot
 
 `ios.slim.bootTimeoutMs` (default ten minutes, matching simslim on CI
-runners) replaces the ordinary combined `bootstatus` and installer-probe deadline, but only for a boot
+runners) replaces the ordinary deadline, one budget that starts before `simctl boot` and is shared by it,
+`bootstatus` and the installer probe, but only for a boot
 that will actually slim: a `--full` device, a runtime below the floor, or a
 recovery boot keeps the normal deadline. `Driver.estimate` quotes the
 double-boot cost for the same boots so `doctor` does not read a slim boot

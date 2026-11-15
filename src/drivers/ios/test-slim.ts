@@ -259,3 +259,23 @@ export function deviceHubEdit(command: string) {
     { command: "defaults", args: ["import", "com.apple.dt.Devices", deviceHubStaging] },
   ];
 }
+
+/** why: Lets queued continuations run, so a test can see that something has not happened yet. */
+export async function flushMicrotasks221(): Promise<void> {
+  for (let count = 0; count < 100; count += 1) await Promise.resolve();
+}
+
+/**
+ * why: What a promise settled with, once it has: a promise still open fails a named assertion rather
+ * than the test's own timeout, so a deadline that never ends anything reads as that.
+ */
+export async function settledValue(promise: Promise<unknown>): Promise<unknown> {
+  const state: { done: boolean; value: unknown } = { done: false, value: undefined };
+  const settle = (value: unknown): void => {
+    state.done = true;
+    state.value = value;
+  };
+  void promise.then(settle, settle);
+  await vi.waitFor(() => expect(state.done).toBe(true));
+  return state.value;
+}

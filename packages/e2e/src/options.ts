@@ -56,6 +56,12 @@ function fail(message: string): never {
   throw new Error(`simlockDevices: ${message}`);
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
 function checkUrl(value: unknown): string {
   let parsed: URL | undefined;
   try {
@@ -69,9 +75,7 @@ function checkUrl(value: unknown): string {
   ) {
     fail(`url must be an http(s) URL of the simlock gateway or worker; got ${show(value)}`);
   }
-  let end = value.length;
-  while (end > 0 && value[end - 1] === "/") end -= 1;
-  const url = value.slice(0, end);
+  const url = stripTrailingSlashes(value);
   if (url.endsWith("/v1")) fail(`url must not end in /v1; got ${show(value)}`);
   return url;
 }
