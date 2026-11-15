@@ -39,4 +39,4 @@ Socket:
 
 1. A directory under `strategies/`, and one line in `strategies/index.ts`: its place in the list is its priority.
 2. A fixture in `strategies/conformance.test.ts`.
-3. If it owns a config key under `http`: the mirror in the contract's `configSchema`. `src/core/config.ts` validates and defaults the key from the definition.
+3. If it owns a config key under `http`: the mirror in the contract's `configSchema`. `src/core/config-validators.ts` validates and `config-defaults.ts` defaults the key from the definition.
