@@ -105,8 +105,8 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIosRuntime())(
           };
         };
         const runner = createClient({
-          daemonBaseUrl: lease.daemon.baseUrl,
-          daemonAuthToken: lease.daemon.authToken,
+          daemonBaseUrl: lease.daemon?.baseUrl,
+          daemonAuthToken: lease.daemon?.authToken,
           session: `e2e-${RUN_ID.slice(0, 12)}-0`,
           ...lease.client,
         });
