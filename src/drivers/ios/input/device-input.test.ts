@@ -210,16 +210,29 @@ describe("iOS device input", () => {
     ]);
     launcher.last.write(envelope(INPUT_TAG.config, { height: "tall" }));
     await flush();
-    expect(logger.warnings).toEqual(["The input helper sent a screen size that did not parse"]);
+    const parseWarning = "The input helper sent a screen size that did not parse";
+    expect(logger.warnings).toEqual([parseWarning]);
+    for (const bad of [
+      { height: 2000, width: 0 },
+      { height: 2000, width: 1.5 },
+      { height: 2000, width: 100_001 },
+    ]) {
+      launcher.last.write(envelope(INPUT_TAG.config, bad));
+      await flush();
+    }
+    expect(logger.warnings).toEqual([parseWarning, parseWarning, parseWarning, parseWarning]);
+    const gone: InputScreenConfig[] = [];
+    input.onConfig((config) => gone.push(config))();
     launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
     await flush();
+    expect(gone).toEqual([taller]);
     expect(early).toHaveLength(4);
     expect(late).toEqual([
       unfolded,
       taller,
       { height: 2000, orientation: "portrait", width: 1000 },
     ]);
-    expect(logger.warnings).toEqual(["The input helper sent a screen size that did not parse"]);
+    expect(logger.warnings).toHaveLength(4);
 
     const keyless = setup();
     const keylessOpen = keyless.factory.open(

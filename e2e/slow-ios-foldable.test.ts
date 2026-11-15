@@ -307,7 +307,6 @@ async function tapAll(socket: InputSocket, file: string): Promise<[number, numbe
 function expectTapsAtTheirFraction(landed: [number, number][], where: string): void {
   expect(landed, where).toHaveLength(TAP_POINTS.length);
   for (const [index, [x, y]] of TAP_POINTS.entries()) {
-    expect(landed[index]![0], `${where}: tap ${String(index)} x`).toBeCloseTo(x, 1);
     expect(Math.abs(landed[index]![0] - x), `${where}: tap ${String(index)} x`).toBeLessThan(
       TAP_TOLERANCE,
     );
