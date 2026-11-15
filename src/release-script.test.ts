@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -95,6 +95,21 @@ describe("scripts/release.mjs bump", () => {
     const cwd = scratch({});
     expect(run(cwd, ["bump", "v0.4.0"]).status).toBe(1);
     expect(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).version).toBe("0.3.0");
+  });
+});
+
+describe("the repository's manifests", () => {
+  it("hold one version: the root package and every package under packages/", () => {
+    const repo = join(import.meta.dirname, "..");
+    const versionOf = (path: string): unknown =>
+      (JSON.parse(readFileSync(join(repo, path), "utf8")) as { version: unknown }).version;
+    const packages = readdirSync(join(repo, "packages")).map(
+      (name) => `packages/${name}/package.json`,
+    );
+    expect(packages).toContain("packages/e2e/package.json");
+    expect(Object.fromEntries(packages.map((path) => [path, versionOf(path)]))).toEqual(
+      Object.fromEntries(packages.map((path) => [path, versionOf("package.json")])),
+    );
   });
 });
 
