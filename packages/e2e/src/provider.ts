@@ -4,7 +4,7 @@ import type { DeviceLease, DeviceProvider, DeviceRequest } from "@e2e-dev/mobile
 import type { createAgentDeviceClient } from "agent-device";
 
 import type { ProviderOptions } from "./options.js";
-import { limiter } from "./install.js";
+import { limiter, sendAgain } from "./install.js";
 import { allocateQueued } from "./queue.js";
 
 type AgentDeviceClientFactory = typeof createAgentDeviceClient;
@@ -100,13 +100,17 @@ export function createProvider(
     const install = async (appPath: string, app?: string): Promise<void> => {
       request.signal.throwIfAborted();
       const installing = Date.now();
-      await withinLimit(() =>
-        scoped.apps.install({
-          platform: options.platform,
-          ...selection,
-          appPath,
-          ...(app === undefined ? {} : { app }),
-        }),
+      await sendAgain(
+        () =>
+          withinLimit(() =>
+            scoped.apps.install({
+              platform: options.platform,
+              ...selection,
+              appPath,
+              ...(app === undefined ? {} : { app }),
+            }),
+          ),
+        request.signal,
       );
       request.log(`simlock: installed ${app ?? appPath} in ${String(Date.now() - installing)} ms`);
     };
