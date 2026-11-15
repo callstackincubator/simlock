@@ -989,7 +989,7 @@ export class IosSimctlDriver implements Driver {
       await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
       await this.#swapForeignFolders(seed.sourceId, udid);
     } catch (error: unknown) {
-      // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
+      // why: a clone whose mark, database drop or folder swap failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
       await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
       throw error;

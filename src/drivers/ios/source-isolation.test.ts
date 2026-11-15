@@ -29,6 +29,13 @@ class SlowReadFilesystem extends MemoryFilesystem {
     super();
   }
 
+  failWrites = false;
+
+  override async overwriteSameLength(path: string, bytes: Uint8Array): Promise<void> {
+    if (this.failWrites) throw new Error("disk full");
+    await super.overwriteSameLength(path, bytes);
+  }
+
   override async readBytes(path: string): Promise<Uint8Array> {
     this.clock.advance(7);
     return super.readBytes(path);
@@ -50,7 +57,8 @@ class LineLogger implements Logger {
 }
 
 interface Rig {
-  readonly filesystem: MemoryFilesystem;
+  readonly filesystem: SlowReadFilesystem;
+  readonly simctlCalls: () => readonly string[];
   readonly logger: LineLogger;
   provision(): Promise<unknown>;
 }
@@ -58,7 +66,7 @@ interface Rig {
 async function rigWith(
   root: string,
   files: readonly { readonly relativePath: string; readonly kind: "link" | "file" }[],
-  plant: (filesystem: MemoryFilesystem, copy: string) => Promise<void>,
+  plant: (filesystem: SlowReadFilesystem, copy: string) => Promise<void>,
 ): Promise<Rig> {
   const clock = new FakeClock();
   const filesystem = new SlowReadFilesystem(clock);
@@ -105,7 +113,12 @@ async function rigWith(
     simlockHome: "/home/.simlock",
   });
   await driver.resolveSpec(spec);
-  return { filesystem, logger, provision: () => driver.provision(spec) };
+  return {
+    filesystem,
+    logger,
+    provision: () => driver.provision(spec),
+    simctlCalls: () => runner.calls.map((call) => call.args.slice(3).join(" ")),
+  };
 }
 
 describe("a lease's copy before its first boot", () => {
@@ -173,6 +186,35 @@ describe("a lease's copy before its first boot", () => {
 
     expect(failed).toBeInstanceOf(DriverCrashError);
     expect((failed as Error).message).toContain("data/escaped.json");
+  });
+});
+
+describe("a copy whose swap fails", () => {
+  it.each([
+    {
+      name: "a recorded file is gone",
+      plantFile: false,
+      failWrites: false,
+      message: "data/prefs.bin",
+    },
+    { name: "a write fails", plantFile: true, failWrites: true, message: "disk full" },
+  ])("is deleted and fails the provision: $name", async ({ plantFile, failWrites, message }) => {
+    const copy = `${deviceRoot}/${copyUdid}`;
+    const rig = await rigWith(
+      deviceRoot,
+      [{ kind: "file", relativePath: "data/prefs.bin" }],
+      async (fs) => {
+        await fs.mkdirp(`${copy}/data`);
+        if (plantFile) {
+          await fs.writeFileAtomic(`${copy}/data/prefs.bin`, `${sourcesRoot}/${seedUdid}`);
+        }
+        fs.failWrites = failWrites;
+      },
+    );
+
+    await expect(rig.provision()).rejects.toThrow(message);
+
+    expect(rig.simctlCalls()).toContain(`delete ${copyUdid}`);
   });
 });
 
