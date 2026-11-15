@@ -16,7 +16,10 @@ import { memorySourceDatabase } from "./testing.js";
 
 // why: the slim boot's fixtures, shared by the driver's two test files (index.test.ts is at its size limit).
 
-export const deviceRoot = "/Devices";
+export const deviceRoot = "/home/.simlock/devices/dev-ios";
+
+/** why: ADR 0076: the sources folder is as long as the device set (30 characters), `src` and four underscores under this home. */
+export const sourcesRoot = "/home/.simlock/devices/src____";
 
 export const instanceId = "instance-1";
 

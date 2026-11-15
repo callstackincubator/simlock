@@ -61,6 +61,7 @@ import {
   simctl,
   simctlArgs,
   slimBootCalls,
+  sourcesRoot,
   waitForCalls,
 } from "./test-slim.js";
 
@@ -181,11 +182,23 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesRoot]).toContain(call.args[2]);
   }
 });
 
+/** why: Xcode's set under the tests' core-simulator root is 31 characters, so under this home the sources folder is `src` and 5 underscores. */
+const xcodeSourcesRoot = "/home/.simlock/devices/src_____";
+
 const seedUdid = "00000000-0000-0000-0000-0000000000aa";
+
+/** why: a sources folder an earlier run of this instance made, so a test can plant simulators in it. */
+async function plantOwnedRoot(filesystem: Filesystem, path: string): Promise<void> {
+  await filesystem.mkdirp(path, { mode: 0o700 });
+  await filesystem.writeFileAtomic(
+    `${path}/${OWNED_ROOT_MARKER_FILE}`,
+    JSON.stringify({ schemaVersion: 1, owner: "simlock", instanceId, platform: "ios" }),
+  );
+}
 
 interface Catalog {
   devicetypes: { identifier: string }[];
@@ -197,7 +210,7 @@ function sourcesSimctl(...args: readonly string[]): {
   readonly command: string;
   readonly args: string[];
 } {
-  return { args: ["simctl", "--set", `${deviceRoot}/sources`, ...args], command: "xcrun" };
+  return { args: ["simctl", "--set", sourcesRoot, ...args], command: "xcrun" };
 }
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
@@ -913,10 +926,6 @@ describe("IosSimctlDriver", () => {
       rowsWhenCreated,
       "the seed's row is making, with no simulator yet, when create runs",
     ).toEqual([{ state: "making", udid: null }]);
-    expect(
-      filesystem.mkdirpModes.get(`${deviceRoot}/sources`),
-      "under deviceSet simlock the sources set is asked for private to the user",
-    ).toBe(0o700);
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 330_000 } },
@@ -1041,12 +1050,7 @@ describe("IosSimctlDriver", () => {
         { match: simctl("shutdown", driverData.udid) },
         {
           hangs: true,
-          match: simctl(
-            "clone",
-            driverData.udid,
-            "simlock-baseline-device-1",
-            `${deviceRoot}/sources`,
-          ),
+          match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesRoot),
         },
       ],
     },
@@ -1089,7 +1093,7 @@ describe("IosSimctlDriver", () => {
     });
   });
 
-  const coreSimulatorRoot = "/CoreSim";
+  const coreSimulatorRoot = "/Users/me/CoreSimulator";
 
   it.each([
     {
@@ -1099,7 +1103,7 @@ describe("IosSimctlDriver", () => {
       hung: [
         "simctl",
         "--set",
-        "/home/.simlock/devices/ios-sources",
+        xcodeSourcesRoot,
         "clone",
         seedUdid,
         driverData.name,
@@ -1133,8 +1137,7 @@ describe("IosSimctlDriver", () => {
           physical: false,
         }),
       deleteArgs: (udid: string) => sourcesSimctl("delete", udid).args,
-      hung: simctl("clone", driverData.udid, "simlock-baseline-device-1", `${deviceRoot}/sources`)
-        .args,
+      hung: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesRoot).args,
       isDefault: false,
       seeded: false,
       steps: [
@@ -1481,7 +1484,7 @@ describe("IosSimctlDriver", () => {
         ...tail,
       ]);
       expect(runner.calls.slice(1).map((call) => call.args[2])).toEqual(
-        runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
+        runner.calls.slice(1).map(() => sourcesRoot),
       );
       expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
     },
@@ -1729,8 +1732,8 @@ describe("IosSimctlDriver", () => {
     const orphanUdid = "00000000-0000-0000-0000-0000000000ee";
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
-    await filesystem.mkdirp(`${deviceRoot}/sources/${seedUdid}`);
-    await filesystem.mkdirp(`${deviceRoot}/sources/${orphanUdid}`);
+    await filesystem.mkdirp(`${sourcesRoot}/${seedUdid}`);
+    await filesystem.mkdirp(`${sourcesRoot}/${orphanUdid}`);
     const database = await seededDatabase();
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
@@ -1812,7 +1815,7 @@ describe("IosSimctlDriver", () => {
   describe("saveSource", () => {
     const cloneUdid = "00000000-0000-0000-0000-0000000000bb";
     const baselineName = "simlock-baseline-device-1";
-    const sourcesSet = `${deviceRoot}/sources`;
+    const sourcesSet = sourcesRoot;
     const device = {
       address: driverData.udid,
       deviceId: driverData.udid,
@@ -1831,6 +1834,7 @@ describe("IosSimctlDriver", () => {
         overridesPath(driverData.udid),
         overridesPlist({ "a.b": true }),
       );
+      await plantOwnedRoot(filesystem, sourcesSet);
       await filesystem.mkdirp(`${sourcesSet}/${cloneUdid}/data`);
       await filesystem.writeFileAtomic(`${sourcesSet}/${cloneUdid}/data/state`, "12345");
       await plantLaunchServices(filesystem, `${sourcesSet}/${cloneUdid}`);
@@ -5473,7 +5477,7 @@ const recoverFull = { mode: "full", purpose: "recover" } as const;
 const recoverSlim = { mode: "slim", purpose: "recover" } as const;
 
 describe("IosSimctlDriver device set", () => {
-  const coreSimulatorRoot = "/CoreSim";
+  const coreSimulatorRoot = "/Users/me/CoreSimulator";
   const runtimeImage = {
     build: "23E244",
     identifier: "IMG-26.4-23E244",
@@ -5498,14 +5502,14 @@ describe("IosSimctlDriver device set", () => {
   }
 
   it.each([
-    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`, false],
-    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`, false],
+    ["unset", {}, deviceRoot, true, sourcesRoot, false],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, sourcesRoot, false],
     [
       "default",
       { deviceSet: "default" },
       `${coreSimulatorRoot}/Devices`,
       false,
-      "/home/.simlock/devices/ios-sources",
+      xcodeSourcesRoot,
       true,
     ],
   ] as const)(
@@ -5590,7 +5594,7 @@ describe("IosSimctlDriver device set", () => {
       ).resolves.toBeDefined();
       await driver.provision(spec);
       await expect(filesystem.exists(`${sourcesSet}/${OWNED_ROOT_MARKER_FILE}`)).resolves.toBe(
-        !scoped,
+        true,
       );
       await driver.makeReady(device, prepareFull);
       await driver.destroy(device);
@@ -5922,7 +5926,7 @@ describe("IosSimctlDriver device set", () => {
         [
           "simctl",
           "--set",
-          scoped ? `${deviceRoot}/sources` : "/home/.simlock/devices/ios-sources",
+          scoped ? sourcesRoot : xcodeSourcesRoot,
           "clone",
           seedUdid,
           driverData.name,

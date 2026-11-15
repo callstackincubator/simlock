@@ -33,7 +33,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     osVersion: source.osVersion ?? "26.5",
     runtimeBuild: source.runtimeBuild,
     runtimeId: source.runtimeId,
-    setPath: "/Devices/sources",
+    setPath: "/home/.simlock/devices/src",
     sourceId,
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
   });

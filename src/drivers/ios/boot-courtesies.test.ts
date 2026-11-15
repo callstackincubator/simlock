@@ -30,7 +30,7 @@ async function waitForCalls(runner: ScriptedProcessRunner, count: number): Promi
 }
 
 describe("IosSimctlDriver ios.simulator.headless refusal", () => {
-  const coreSimulatorRoot = "/CoreSim";
+  const coreSimulatorRoot = "/Users/me/CoreSimulator";
 
   it.each([
     ["false with default", { deviceSet: "default" }, false, undefined],

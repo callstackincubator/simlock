@@ -84,7 +84,8 @@ import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
-import { IosSourceTable, sourcesSetFor, type ReadySeed, type SourceRow } from "./source-data.js";
+import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
+import { sourcesFolderFor } from "./sources-folder.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { defaultIosDeviceRoot, type IosDriverConfig } from "./definition.js";
 import {
@@ -340,6 +341,7 @@ export class IosSimctlDriver implements Driver {
     options: IosSimctlDriverOptions,
     deviceRoot: string,
     rootOptions: EnsureOwnedRootOptions | undefined,
+    sourcesSet: string,
   ) {
     this.rebootReadyBeforeGrant = rootOptions === undefined;
     this.#clock = options.clock;
@@ -369,7 +371,7 @@ export class IosSimctlDriver implements Driver {
     this.#afterBoot = this.#afterBootFor(options);
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
-    this.#sourcesSet = sourcesSetFor(options.simlockHome, deviceRoot, rootOptions !== undefined);
+    this.#sourcesSet = sourcesSet;
     this.screenCapture = createScreenCaptureFor(
       options,
       deviceRoot,
@@ -410,7 +412,13 @@ export class IosSimctlDriver implements Driver {
     const deviceSet = configuredDeviceSet(options);
     if (deviceSet === "default") {
       await refuseOwnSetLeftovers(options.filesystem, join(options.simlockHome, "devices", "ios"));
-      return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
+      const devices = xcodeDeviceSetPath(options);
+      return new IosSimctlDriver(
+        options,
+        devices,
+        undefined,
+        await sourcesFolderOf(options, devices),
+      );
     }
     await refuseDefaultSourcesLeftovers(
       options.filesystem,
@@ -434,7 +442,12 @@ export class IosSimctlDriver implements Driver {
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
 
-    return new IosSimctlDriver(options, deviceRoot, rootOptions);
+    return new IosSimctlDriver(
+      options,
+      deviceRoot,
+      rootOptions,
+      await sourcesFolderOf(options, deviceRoot),
+    );
   }
 
   get deviceRoot(): string {
@@ -1141,10 +1154,6 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #ensureSourcesSet(): Promise<void> {
-    if (this.#rootOptions !== undefined) {
-      await this.#filesystem.mkdirp(this.#sourcesSet, { mode: 0o700 });
-      return;
-    }
     await ensureOwnedRoot({
       filesystem: this.#filesystem,
       idGenerator: this.#idGenerator,
@@ -2229,6 +2238,14 @@ function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "defa
     );
   }
   return "default";
+}
+
+function sourcesFolderOf(options: IosSimctlDriverOptions, deviceSet: string): Promise<string> {
+  return sourcesFolderFor({
+    deviceSet,
+    filesystem: options.filesystem,
+    simlockHome: options.simlockHome,
+  });
 }
 
 function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
