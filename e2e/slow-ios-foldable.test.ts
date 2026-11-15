@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,10 +11,13 @@ import {
   SCREEN_TAGS,
   deviceStreamUrl,
   freeLoopbackPort,
+  openInputSocket,
   readScreenFrames,
   waitFor,
+  withHttpDaemon,
   withSharedDaemon,
 } from "./helpers/index.js";
+import type { InputSocket } from "./helpers/input-socket.js";
 import type { ScreenFrame } from "./helpers/screen-frames.js";
 import type { SharedTestEnv as TestEnv } from "./helpers/env.js";
 
@@ -30,6 +33,18 @@ const FOLD_SESSION = "simlock-foldable-e2e";
 // why: a decoded picture counts as lit when its mean luminance is above 2% of white, the same line
 // the capture's own panel read uses; a black panel reads 0.
 const LIT_ABOVE = 0.02;
+const PROBE_APP = join(REPO_ROOT, "e2e", "fixtures", "touch-probe", "ios", "TouchProbe.app");
+const PROBE_BUNDLE = "dev.simlock.touch-probe";
+const INPUT_TOUCH = 0x03;
+const INPUT_CONFIG = 0x82;
+const TAP_POINTS = [
+  [0.2, 0.1],
+  [0.8, 0.3],
+  [0.5, 0.9],
+] as const;
+// why: the probe prints the fraction of its window to four places, and a tap is rounded to a whole
+// pixel of the panel's digitizer.
+const TAP_TOLERANCE = 0.02;
 const COMPARE_WIDTH = 64;
 const COMPARE_HEIGHT = 45;
 const SAME_PICTURE_BELOW = 0.1;
@@ -233,6 +248,79 @@ async function survivors(udid: string): Promise<string> {
   return listed.stdout.trim();
 }
 
+// why: the log children of a process that ended are checked the same way for the capture and for the
+// input helper: both under a watchdog, both inside the simulator.
+async function expectLogChildrenEnd(how: string, udid: string): Promise<void> {
+  await waitFor(async () => (await logChildren(udid)).length === 0, {
+    interval: 250,
+    label: `${how}: the log children of the ended program`,
+    timeout: 5_000,
+  });
+  await waitFor(async () => (await simulatorLogStreams(udid)) === 0, {
+    interval: 250,
+    label: `${how}: the log stream inside the simulator of the ended program`,
+    timeout: 5_000,
+  }).catch(async (error: unknown) => {
+    throw new Error(`${(error as Error).message}; still running: ${await survivors(udid)}`);
+  });
+}
+
+interface ProbeDevice {
+  readonly deviceSet: string;
+  readonly udid: string;
+}
+
+// why: the probe app is installed once and brought to the front each time, because a fold can leave
+// another app in front of it; `launch` of a running app only foregrounds it. A second install gives
+// the app a new data container, so the file a test reads would no longer be the one the app writes.
+async function showProbe(device: ProbeDevice): Promise<string> {
+  const simctl = (...args: string[]) =>
+    execFileAsync("xcrun", ["simctl", "--set", device.deviceSet, ...args]);
+  const installed = await simctl("get_app_container", device.udid, PROBE_BUNDLE, "app").then(
+    () => true,
+    () => false,
+  );
+  if (!installed) await simctl("install", device.udid, PROBE_APP);
+  await simctl("launch", device.udid, PROBE_BUNDLE);
+  const container = await simctl("get_app_container", device.udid, PROBE_BUNDLE, "data");
+  return join(container.stdout.trim(), "Documents", "touches.txt");
+}
+
+async function touchesIn(file: string): Promise<[number, number][]> {
+  const text = await readFile(file, "utf8").catch(() => "");
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => line.split(",").map(Number) as [number, number]);
+}
+
+// why: a tap is a begin and an end at one point, the way an app of T3 Code's sends it.
+async function tapAll(socket: InputSocket, file: string): Promise<[number, number][]> {
+  await rm(file, { force: true });
+  for (const [x, y] of TAP_POINTS) {
+    socket.send(INPUT_TOUCH, { type: "begin", x, y });
+    socket.send(INPUT_TOUCH, { type: "end", x, y });
+  }
+  await waitFor(async () => (await touchesIn(file)).length >= TAP_POINTS.length, {
+    interval: 200,
+    label: "the probe app to read the taps",
+    timeout: 30_000,
+  });
+  return touchesIn(file);
+}
+
+function expectTapsAtTheirFraction(landed: [number, number][], where: string): void {
+  expect(landed, where).toHaveLength(TAP_POINTS.length);
+  for (const [index, [x, y]] of TAP_POINTS.entries()) {
+    expect(Math.abs(landed[index]![0] - x), `${where}: tap ${String(index)} x`).toBeLessThan(
+      TAP_TOLERANCE,
+    );
+    expect(Math.abs(landed[index]![1] - y), `${where}: tap ${String(index)} y`).toBeLessThan(
+      TAP_TOLERANCE,
+    );
+  }
+}
+
 interface Lease {
   readonly id: string;
   readonly deviceId: string;
@@ -281,6 +369,8 @@ describe.skipIf(notRunnable !== undefined)(
             // on agent-device's 3 s reads of the leased one, and proves nothing.
             warmPool: { enabled: false },
             capabilities: {
+              // why: the taps cases open the lease's input socket, which exists only with the module on.
+              input: { enabled: true },
               stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
             },
           },
@@ -535,26 +625,160 @@ describe.skipIf(notRunnable !== undefined)(
           expect(capture, `${how}: no capture is running`).toBeDefined();
           if (how === "stdin closed") viewer.abort();
           else process.kill(capture!, how);
-          await waitFor(async () => (await logChildren(lease.udid)).length === 0, {
-            interval: 250,
-            label: `${how}: the log children of the ended capture`,
-            timeout: 5_000,
-          });
-          await waitFor(async () => (await simulatorLogStreams(lease.udid)) === 0, {
-            interval: 250,
-            label: `${how}: the log stream inside the simulator of the ended capture`,
-            timeout: 5_000,
-          }).catch(async (error: unknown) => {
-            throw new Error(
-              `${(error as Error).message}; still running: ${await survivors(lease.udid)}`,
-            );
-          });
+          await expectLogChildrenEnd(how, lease.udid);
           viewer.abort();
           await waitFor(async () => (await capturePids()).length === 0, {
             interval: 250,
             label: `${how}: the capture to be gone`,
             timeout: 15_000,
           });
+        }
+      },
+    );
+
+    it(
+      "a lease holder's taps on a leased Duo land at their fraction of the panel in use, folded or unfolded, and keep landing after a fold with the socket left open",
+      { timeout: 900_000 },
+      async () => {
+        const { authorization, baseUrl, lease } = await setup();
+        const port = Number(new URL(baseUrl).port);
+        const token = authorization.replace("Bearer ", "");
+
+        await fold("closed");
+        const file = await showProbe(lease);
+        const held = await openInputSocket(port, lease.id, token);
+        try {
+          const cover = (await held.waitForTag(INPUT_CONFIG)) as Meta;
+          expect(cover.width, "the cover is narrower than tall").toBeLessThan(cover.height);
+          expectTapsAtTheirFraction(await tapAll(held, file), "folded, on the cover");
+
+          await fold("open");
+          await showProbe(lease);
+          await waitFor(
+            () => held.messages.filter((message) => message.tag === INPUT_CONFIG).length >= 2,
+            {
+              interval: 200,
+              label: "the held socket's second screen config",
+              timeout: 30_000,
+            },
+          );
+          const inner = held.messages.filter((message) => message.tag === INPUT_CONFIG)[1]!
+            .body as Meta;
+          expect(inner.width, "the inner panel is wider than tall").toBeGreaterThan(inner.height);
+          expectTapsAtTheirFraction(
+            await tapAll(held, file),
+            "unfolded after a fold, on the socket left open",
+          );
+
+          // why: the lease's sockets share one device input, so the socket left open is closed first;
+          // a fresh socket then starts a helper that finds the Duo already unfolded.
+          held.close();
+          const fresh = await openInputSocket(port, lease.id, token);
+          try {
+            await fresh.waitForTag(INPUT_CONFIG);
+            expectTapsAtTheirFraction(await tapAll(fresh, file), "unfolded, on the inner panel");
+          } finally {
+            fresh.close();
+          }
+        } finally {
+          held.close();
+        }
+      },
+    );
+
+    it(
+      "the input helper's log children end within 5 s of its stdin closing, a SIGTERM and a SIGKILL",
+      { timeout: 600_000 },
+      async () => {
+        const { authorization, baseUrl, lease } = await setup();
+        const port = Number(new URL(baseUrl).port);
+        const token = authorization.replace("Bearer ", "");
+        for (const how of ["stdin closed", "SIGTERM", "SIGKILL"] as const) {
+          const socket = await openInputSocket(port, lease.id, token);
+          await socket.waitForTag(INPUT_CONFIG);
+          await waitFor(async () => (await logChildren(lease.udid)).length > 0, {
+            interval: 250,
+            label: `${how}: the input helper started its log children`,
+            timeout: 30_000,
+          });
+          await waitFor(async () => (await simulatorLogStreams(lease.udid)) > 0, {
+            interval: 250,
+            label: `${how}: the simulator runs the input helper's log stream`,
+            timeout: 30_000,
+          });
+          const [helper] = await capturePids();
+          expect(helper, `${how}: no input helper is running`).toBeDefined();
+          if (how === "stdin closed") socket.close();
+          else process.kill(helper!, how);
+          await expectLogChildrenEnd(how, lease.udid);
+          socket.close();
+          await waitFor(async () => (await capturePids()).length === 0, {
+            interval: 250,
+            label: `${how}: the input helper to be gone`,
+            timeout: 15_000,
+          });
+        }
+      },
+    );
+  },
+);
+
+describe.skipIf(process.platform !== "darwin")(
+  "iOS one-panel simulator taps (real simulator)",
+  { tags: ["slow", "ios"] },
+  () => {
+    it(
+      "a lease holder's taps on an iPhone 16 land at their fraction of the screen",
+      { timeout: 600_000 },
+      async () => {
+        const { env, port } = await withHttpDaemon((httpPort) => ({
+          configOverrides: {
+            capabilities: { input: { enabled: true } },
+            http: { enabled: true, host: "127.0.0.1", port: httpPort },
+          },
+          driver: "real",
+        }));
+        try {
+          const granted = await env.cli(
+            [
+              "lease",
+              "--platform",
+              "ios",
+              "--device",
+              "iPhone 16",
+              "--agent-id",
+              "ios-taps",
+              "--detach",
+            ],
+            { timeout: DEVICE_READY_MS },
+          );
+          expect(granted.code, `lease failed: ${granted.stdout} ${granted.stderr}`).toBe(0);
+          const grant = granted.json as {
+            device: { driverDeviceId: string };
+            environment: Record<string, string>;
+            lease: { id: string };
+          };
+          const created = await env.cli(["token", "create", "--role", "operator"]);
+          expect(created.code, created.stderr).toBe(0);
+          const file = await showProbe({
+            deviceSet: grant.environment.SIMLOCK_IOS_DEVICE_SET as string,
+            udid: grant.device.driverDeviceId,
+          });
+          const socket = await openInputSocket(
+            port,
+            grant.lease.id,
+            (created.json as { secret: string }).secret,
+          );
+          try {
+            await socket.waitForTag(INPUT_CONFIG);
+            expectTapsAtTheirFraction(await tapAll(socket, file), "on an iPhone 16");
+          } finally {
+            socket.close();
+          }
+        } finally {
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
         }
       },
     );
