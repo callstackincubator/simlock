@@ -100,6 +100,22 @@ export default {
       from: { path: "^src/link/", pathNot: linkTestFile },
       to: { path: "^src/ports/", dependencyTypesNot: ["type-only"] },
     },
+    {
+      name: "packages-not-from-root-code",
+      comment:
+        "a package under packages/ never imports src/, ui/ or e2e/: it reaches simlock the way a user does, over its published addresses (ADR 0077 §3)",
+      severity: "error",
+      from: { path: "^packages/" },
+      to: { path: "^(src|ui|e2e)/" },
+    },
+    {
+      name: "packages-not-in-root-code",
+      comment:
+        "src/, ui/ and e2e/ never import packages/; an e2e test file may, to drive a package against a real daemon (ADR 0077 §3)",
+      severity: "error",
+      from: { path: "^(src|ui|e2e)/", pathNot: "^e2e/.*\\.test\\.tsx?$" },
+      to: { path: "^packages/" },
+    },
     direction(
       "core-not-leasing",
       "core never imports leasing: where it needs something from leasing it declares a port, and the composition root connects it",

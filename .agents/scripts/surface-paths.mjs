@@ -6,7 +6,7 @@
 export const SURFACE_PATHS = [
   [
     "a surface file",
-    /^src\/(?:cli\/tree|core\/config|contract\/errors|mcp\/(?:server|contracts)|(?:client|admin)\/index|bus\/index)\.ts$/,
+    /^(?:src\/(?:cli\/tree|core\/config|contract\/errors|mcp\/(?:server|contracts)|(?:client|admin)\/index|bus\/index)|packages\/e2e\/src\/index)\.ts$/,
   ],
   ["a surface file", /^src\/http\/(?!.*\.test\.ts$)[^/]+\.ts$/],
   ["the protocol version", /^src\/contract\/protocol\.ts$/],

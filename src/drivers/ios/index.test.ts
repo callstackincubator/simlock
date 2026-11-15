@@ -56,8 +56,10 @@ import {
   plantManagedDevice,
   prepareSlim,
   deviceHubEdit,
+  flushMicrotasks221,
   prepareSlimWith,
   printDisabled,
+  settledValue,
   simctl,
   simctlArgs,
   slimBootCalls,
@@ -942,7 +944,7 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 330_000 } },
-      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
@@ -2126,7 +2128,7 @@ describe("IosSimctlDriver", () => {
       mode: "full",
     });
     expect(runner.calls).toEqual([
-      { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
+      { ...simctl("boot", driverData.udid), options: { timeoutMs: 300_000 } },
       { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 300_000 } },
       { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
     ]);
@@ -3248,7 +3250,7 @@ describe("IosSimctlDriver", () => {
           simctlArgs("listapps", slim18_5.udid),
           simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
         ]);
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 260_000 });
         expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
         expect(onSlimmed).toHaveBeenCalledWith({
@@ -5156,26 +5158,6 @@ class ClockedSimctl259 extends ScriptedProcessRunner {
     this.calls.push({ args: [...args], command, options: call[2] ?? {} });
     return handle;
   }
-}
-
-/** why: Lets queued continuations run, so a test can see that something has not happened yet. */
-async function flushMicrotasks221(): Promise<void> {
-  for (let count = 0; count < 100; count += 1) await Promise.resolve();
-}
-
-/**
- * why: What a promise settled with, once it has: a promise still open fails a named assertion rather
- * than the test's own timeout, so a deadline that never ends anything reads as that.
- */
-async function settledValue(promise: Promise<unknown>): Promise<unknown> {
-  const state: { done: boolean; value: unknown } = { done: false, value: undefined };
-  const settle = (value: unknown): void => {
-    state.done = true;
-    state.value = value;
-  };
-  void promise.then(settle, settle);
-  await vi.waitFor(() => expect(state.done).toBe(true));
-  return state.value;
 }
 
 describe("IosSimctlDriver screen capture commands", () => {

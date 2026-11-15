@@ -101,8 +101,11 @@ deleted, as one whose drop fails is.
 
 ### 4. Sources made before this are not copied as they are
 
-A seed whose row names another set, or has no record of §2, is destroyed
-and made again by the existing stale-seed path. A baseline whose row names
+A seed whose row names another set (ready or `making`), or has no record
+of §2, is deleted in the set its row names, as a baseline is, and its row is
+dropped; the seed is then made again in the sources folder. The existing
+stale-seed path alone would not do: it deletes in the current sources set,
+where a seed of another set is not found. A baseline whose row names
 another set is stale (`saved in <set>, which copies cannot be fixed from;
 save it again`) and answers `BASELINE_STALE` from the first request after
 the worker starts, since core now checks baselines for staleness at

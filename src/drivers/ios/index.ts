@@ -1252,16 +1252,15 @@ export class IosSimctlDriver implements Driver {
     set?: string,
     refreshBooted = false,
   ): Promise<void> {
-    const boot = await this.#boot(udid, set, refreshBooted);
+    const deadline = this.#clock.now() + bootstatusTimeoutMs;
+    const boot = await this.#boot(udid, deadline, set, refreshBooted);
     if (boot.kind === "timed-out") {
       throw new BootTimeoutError(deviceId);
     }
     if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
-    const deadline = this.#clock.now() + bootstatusTimeoutMs;
-    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs, set);
-
+    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], this.#left(deadline), set);
     if (outcome.kind === "finished") {
       this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
       if (await this.#waitForInstaller(udid, deadline, set)) return;
@@ -1273,8 +1272,8 @@ export class IosSimctlDriver implements Driver {
 
   // why: a booted simulator keeps the clipboard sync it booted with, so a lease's device that is
   // already up is shut down and booted again once DeviceHub's preference is set.
-  async #boot(udid: string, set: string | undefined, refreshBooted: boolean) {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+  async #boot(udid: string, deadline: number, set: string | undefined, refreshBooted: boolean) {
+    const boot = await this.#invokeSimctl(["boot", udid], this.#left(deadline), set);
     const refresh =
       refreshBooted &&
       this.#rootOptions === undefined &&
@@ -1284,7 +1283,11 @@ export class IosSimctlDriver implements Driver {
       alreadyBooted(boot.result.stderr);
     if (!refresh) return boot;
     await this.#shutdown(udid);
-    return await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
+    return await this.#invokeSimctl(["boot", udid], this.#left(deadline));
+  }
+
+  #left(deadline: number): number {
+    return Math.max(0, deadline - this.#clock.now());
   }
 
   async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {

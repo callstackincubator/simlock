@@ -26,6 +26,8 @@ const BASE: Record<string, string> = {
     'const internal = 1;\nexport const healthz = declareRoute({ method: "get", path: "/v1/healthz" });\n',
   "src/client/index.ts": "export { connect } from './x.js';\n",
   "src/admin/index.ts": "export { admin } from './y.js';\n",
+  "packages/e2e/src/index.ts":
+    "export function simlockDevices(options: Options) {\n  return createProvider(options);\n}\n",
   "src/bus/index.ts":
     'export interface EventMap {\n  "lease.granted": { readonly id: string };\n}\nexport const bus = 1;\n',
   "website/src/content/docs/docs/reference/cli.mdx": "# CLI\n",
@@ -82,6 +84,14 @@ describe("docs-surface-check.mjs", () => {
     ],
     ["client", edit("src/admin/index.ts", "admin", "admin, nuke")],
     ["events", edit("src/bus/index.ts", '"lease.granted"', '"lease.given"')],
+    [
+      "e2e-provider",
+      edit(
+        "packages/e2e/src/index.ts",
+        "createProvider(options)",
+        "createProvider(checked(options))",
+      ),
+    ],
   ])("fails a %s change with no website page changed, and passes it with one", (name, files) => {
     const bare = check(repo(files));
     const documented = check(
