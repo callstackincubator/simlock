@@ -121,3 +121,42 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
     ).toEqual([`simlock-${VERSION}.tgz`, `simlock-e2e-${VERSION}.tgz`]);
   });
 });
+
+describe("the Release workflow's plan, tag, publish and release steps (.github/workflows/release.yml)", () => {
+  const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/release.yml"), "utf8");
+  const step = (name: string): string =>
+    new RegExp(`\\n {6}- name: ${name}\\n[\\s\\S]*?(?=\\n {6}- |\\n\\n)`, "u").exec(
+      workflow,
+    )?.[0] ?? "";
+
+  it("checks both package names on npm before any tag, commits both manifests, publishes @simlock/e2e before simlock, and attaches both tarballs", () => {
+    const plan = step("The tag and the npm versions are free");
+    expect(plan).toContain("for name in simlock @simlock/e2e");
+    expect(plan).toContain('"::error::$name@$VERSION is on npm already"');
+    expect(plan).toContain(
+      "::error::@simlock/e2e is not on npm yet: create the simlock organisation, publish a 0.0.0 placeholder by hand and add its trusted publisher, then run the release again",
+    );
+
+    expect(step("Release commit and tag")).toContain(
+      "git add package.json packages/e2e/package.json CHANGELOG.md",
+    );
+
+    const check = step("The tarballs are the planned version, and npm can publish without a token");
+    expect(check).toContain("simlock-e2e-$VERSION.tgz");
+    expect(check).toContain("the tarball is $name@$packed, not $VERSION");
+
+    const publishE2e = step("Publish @simlock/e2e");
+    const publishSimlock = step("Publish simlock");
+    expect(publishE2e).toContain(
+      'npm publish "simlock-e2e-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"',
+    );
+    expect(publishSimlock).toContain(
+      'npm publish "simlock-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"',
+    );
+    expect(workflow.indexOf(publishE2e)).toBeLessThan(workflow.indexOf(publishSimlock));
+
+    expect(step("Create the release")).toContain(
+      '"simlock-$VERSION.tgz" "simlock-e2e-$VERSION.tgz" SHA256SUMS.txt',
+    );
+  });
+});
