@@ -172,16 +172,22 @@ describe("createProvider acquire", () => {
     ).rejects.toThrow("simlockDevices leases ios devices; the target asked for android");
     expect(wrong.calls).toEqual([]);
 
-    const nameless = farm({
-      allocate: (options) => ({ ...(grant(options) as object), deviceKey: undefined }),
-    });
-    await expect(provider(nameless.load).acquire(request().request)).rejects.toThrow(
-      /^simlock: lease [0-9a-f]{32} names no device$/u,
-    );
-    const [asked] = nameless.of("allocate");
-    expect(nameless.of("release").map((call) => call.options["leaseId"])).toEqual([
-      asked?.options["leaseId"],
-    ]);
+    const named = farm({ allocate: (options) => grant(options, { clientId: "farm-client" }) });
+    const farmed = await provider(named.load).acquire(request().request);
+    expect(farmed.client).toMatchObject({ clientId: "farm-client" });
+
+    for (const deviceKey of [undefined, "ios:mobile:"]) {
+      const nameless = farm({
+        allocate: (options) => ({ ...(grant(options) as object), deviceKey }),
+      });
+      await expect(provider(nameless.load).acquire(request().request)).rejects.toThrow(
+        /^simlock: lease [0-9a-f]{32} names no device$/u,
+      );
+      const [asked] = nameless.of("allocate");
+      expect(nameless.of("release").map((call) => call.options["leaseId"])).toEqual([
+        asked?.options["leaseId"],
+      ]);
+    }
 
     await expect(
       provider(() => Promise.reject(new Error("Cannot find package 'agent-device'"))).acquire(
@@ -227,7 +233,9 @@ describe("createProvider acquire on a full farm", () => {
       { reason: "SIMLOCK_UNAVAILABLE", retriable: true },
       { reason: "WORKER_UNREACHABLE", retriable: true },
       { reason: "daemon_response_invalid" },
+      { reason: "daemon_response_read_failure" },
       { reason: "daemon_transport_failure" },
+      { reason: "daemon_transport_timeout" },
     ]) {
       const waiting = farm({
         allocate: (options, nth) => {
@@ -343,7 +351,7 @@ describe("createProvider acquire installs", () => {
       named.request,
     );
     const installs = withApp.of("install");
-    expect(installs.map((call) => call.options)).toEqual([
+    expect(installs.map((call) => call.options)).toStrictEqual([
       { platform: "ios", udid: UDID, appPath: "/p/Example.app", app: "com.example.app" },
       { platform: "ios", udid: UDID, appPath: "/x/a.app" },
       { platform: "ios", udid: UDID, appPath: "/x/b.app" },
@@ -370,7 +378,7 @@ describe("createProvider acquire installs", () => {
     const bare = await provider(unnamed.load).acquire(
       request({ appPath: "/p/Example.app" }).request,
     );
-    expect(unnamed.of("install").map((call) => call.options)).toEqual([
+    expect(unnamed.of("install").map((call) => call.options)).toStrictEqual([
       { platform: "ios", udid: UDID, appPath: "/p/Example.app" },
     ]);
     expect(bare).not.toHaveProperty("installedApp");
@@ -471,6 +479,11 @@ describe("createProvider acquire installs", () => {
     expect(swapped.lines).toContain(
       `simlock: install on ${UDID} failed (the farm said no); leasing another device`,
     );
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(
+      swap.of("heartbeat").map((call) => call.options["leaseId"]),
+      "the device given back is no longer renewed",
+    ).toEqual([two?.options["leaseId"], two?.options["leaseId"]]);
 
     const never = farm({
       install: () => {
