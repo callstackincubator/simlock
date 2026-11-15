@@ -5908,7 +5908,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`.`,
           path: ownRoot,
           reason: "device-set-changed",
         },
@@ -5922,7 +5922,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in a sources folder, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
           path: ownRoot,
           reason: "device-set-changed",
         },
@@ -5936,6 +5936,30 @@ describe("IosSimctlDriver device set", () => {
         {
           message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
           path: `${ownRoot}-sources`,
+          reason: "device-set-changed",
+        },
+      ],
+      [
+        "default with a seed in the simlock sources folder",
+        { deviceSet: "default" },
+        async (fs) => {
+          await fs.mkdirp(`/home/.simlock/devices/src/${third}`);
+        },
+        {
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 1 simulator(s) (${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in a sources folder, \`xcrun simctl --set /home/.simlock/devices/src delete <udid>\`.`,
+          path: ownRoot,
+          reason: "device-set-changed",
+        },
+      ],
+      [
+        "simlock with a seed in the default sources folder",
+        { deviceSet: "simlock" },
+        async (fs) => {
+          await fs.mkdirp(`/home/.simlock/devices/src_____/${second}`);
+        },
+        {
+          message: `Refusing the ios device set: Simlock's sources set at /home/.simlock/devices/src_____ still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set /home/.simlock/devices/src_____ delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
+          path: "/home/.simlock/devices/src_____",
           reason: "device-set-changed",
         },
       ],
