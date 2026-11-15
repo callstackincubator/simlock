@@ -3,7 +3,8 @@
 // drop what simlock does not use or does elsewhere: the Duo hinge and cover paths, the Device Hub
 // keyboard bridge, the fold pose, and the Home, app switcher and Lock buttons (Home is the daemon's
 // `simctl launch` of SpringBoard, so it has one owner), and the orientation error no longer says
-// Simulator.app must be running, which it need not be; everything else here is upstream's.
+// Simulator.app must be running, which it need not be; upstream's touch target is replaced by
+// `PanelTouch.map` and `touchPanel` (ours, ADR 0075 §4); everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
