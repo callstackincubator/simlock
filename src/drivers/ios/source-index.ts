@@ -27,7 +27,7 @@ interface Entry extends SourceFile {
  * holds files of hundreds of megabytes (past the limit of one string); none of them is a settings file, so
  * a larger one is left out and logged.
  */
-export const MAX_INDEXED_BYTES = 64 * 1024 * 1024;
+const MAX_INDEXED_BYTES = 64 * 1024 * 1024;
 
 /**
  * why: ADR 0076 §2: a WAL frame carries a checksum a swap would break, so every WAL of a made source is
@@ -50,13 +50,7 @@ export async function indexSource(
   const indexed: SourceFile[] = [];
   for (const entry of await walk(options.filesystem, root, "")) {
     if (unflushed.has(entry.path) || LAUNCH_SERVICES_DATABASE.test(entry.relativePath)) continue;
-    if (entry.kind === "file" && entry.size > MAX_INDEXED_BYTES) {
-      options.logger?.warn(
-        `not searching ${entry.path} for folders to swap: its ${String(entry.size)} bytes are past ${String(MAX_INDEXED_BYTES)}`,
-      );
-      continue;
-    }
-    const bytes = await readEntry(entry, options.filesystem);
+    const bytes = await readEntry(entry, options);
     if (bytes === undefined) continue;
     if (namesAnyFolder(bytes, options.folders)) {
       indexed.push({ kind: entry.kind, relativePath: entry.relativePath });
@@ -70,11 +64,20 @@ export async function indexSource(
  * owner, as `EPERM`; the simulator's own daemon writes them, so a file we cannot read is one no
  * swap could patch either, and it is left out rather than failing the make.
  */
-async function readEntry(entry: Entry, filesystem: Filesystem): Promise<Uint8Array | undefined> {
+async function readEntry(
+  entry: Entry,
+  options: SourceIndexOptions,
+): Promise<Uint8Array | undefined> {
+  if (entry.kind === "file" && entry.size > MAX_INDEXED_BYTES) {
+    options.logger?.warn(
+      `not searching ${entry.path} for folders to swap: its ${String(entry.size)} bytes are past ${String(MAX_INDEXED_BYTES)}`,
+    );
+    return undefined;
+  }
   try {
     return entry.kind === "link"
-      ? Buffer.from(await filesystem.readlink(entry.path))
-      : await filesystem.readBytes(entry.path);
+      ? Buffer.from(await options.filesystem.readlink(entry.path))
+      : await options.filesystem.readBytes(entry.path);
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "EPERM" || code === "EACCES") return undefined;

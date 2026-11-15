@@ -91,6 +91,13 @@ async function newestModification(folder: string): Promise<number> {
   return Math.max(0, ...(await modifiedFiles(folder)).values());
 }
 
+/** why: the UDID of the one device in the sources folder whose name starts so. */
+async function sourceUdid(sources: string, prefix: string, what: string): Promise<string> {
+  const found = (await setDevices(sources)).find((device) => device.name.startsWith(prefix));
+  expect(found, what).toBeDefined();
+  return join(sources, found?.udid ?? "");
+}
+
 async function expectOwnLogFolder(held: Lease): Promise<void> {
   const target = await readlink(join(held.deviceSet, held.udid, "data", "Library", "Logs"));
   expect(target, `${held.udid}'s Logs link`).toBe(
@@ -138,11 +145,12 @@ describe.skipIf(process.platform !== "darwin")(
         const sources = iosSourcesFolder(env.home);
 
         const first = await lease(env, []);
-        const seed = (await setDevices(sources)).find((device) =>
-          device.name.startsWith("simlock-seed-"),
+        const seed = await sourceUdid(
+          sources,
+          "simlock-seed-",
+          "the seed made for the first lease",
         );
-        expect(seed, "the seed made for the first lease").toBeDefined();
-        const seedMadeAt = await newestModification(join(sources, seed?.udid ?? ""));
+        const seedMadeAt = await newestModification(seed);
         await use(env, first);
         await expectOwnLogFolder(first);
         for (let index = 0; index < 2; index += 1) await useAndRelease(env, []);
@@ -152,22 +160,15 @@ describe.skipIf(process.platform !== "darwin")(
         });
         expect(saved.code, `baseline save failed: ${saved.stderr}`).toBe(0);
         const savedAt = Date.now();
-        const source = (await setDevices(sources)).find((device) =>
-          device.name.startsWith("simlock-baseline-"),
-        );
-        expect(source, "the baseline's source").toBeDefined();
+        const source = await sourceUdid(sources, "simlock-baseline-", "the baseline's source");
 
         const copies: Lease[] = [];
         for (let index = 0; index < 2; index += 1) {
           copies.push(await useAndRelease(env, ["--baseline", "isolation"]));
         }
 
-        await expectNothingNewer(join(sources, seed?.udid ?? ""), seedMadeAt, "the seed");
-        await expectNothingNewer(
-          join(sources, source?.udid ?? ""),
-          savedAt,
-          "the baseline's source",
-        );
+        await expectNothingNewer(seed, seedMadeAt, "the seed");
+        await expectNothingNewer(source, savedAt, "the baseline's source");
         await expectNothingNewer(
           join(first.deviceSet, first.udid),
           savedAt,
