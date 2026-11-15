@@ -81,13 +81,9 @@ function plan(args) {
 }
 
 function manifestPaths() {
-  const manifests = ["package.json"];
-  if (!existsSync("packages")) return manifests;
-  for (const entry of readdirSync("packages", { withFileTypes: true })) {
-    const manifest = `packages/${entry.name}/package.json`;
-    if (entry.isDirectory() && existsSync(manifest)) manifests.push(manifest);
-  }
-  return manifests;
+  const packages = existsSync("packages") ? readdirSync("packages") : [];
+  const manifests = packages.map((name) => `packages/${name}/package.json`);
+  return ["package.json", ...manifests.filter((manifest) => existsSync(manifest))];
 }
 
 function bump([version]) {
