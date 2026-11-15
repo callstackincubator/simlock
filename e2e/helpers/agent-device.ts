@@ -145,7 +145,10 @@ export async function makeAgent(
     AGENT_DEVICE_STATE_DIR: home,
     AGENT_DEVICE_DAEMON_AUTH_TOKEN: token.secret,
     AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1",
-    ...(options.direct ? { AGENT_DEVICE_DAEMON_BASE_URL: proxyUrl(env) } : {}),
+    // why: agent-device 0.21.36 refuses a command on a leased connection (`connect proxy`) with no session named (REMOTE_SESSION_REQUIRED); a direct agent names its session on each command.
+    ...(options.direct
+      ? { AGENT_DEVICE_DAEMON_BASE_URL: proxyUrl(env) }
+      : { AGENT_DEVICE_SESSION: name }),
   };
   const background = new Set<CliBackgroundHandle>();
   const agent: Agent = {
