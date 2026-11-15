@@ -920,7 +920,7 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 330_000 } },
-      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
@@ -2075,7 +2075,7 @@ describe("IosSimctlDriver", () => {
       mode: "full",
     });
     expect(runner.calls).toEqual([
-      { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
+      { ...simctl("boot", driverData.udid), options: { timeoutMs: 300_000 } },
       { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 300_000 } },
       { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
     ]);
@@ -3197,7 +3197,8 @@ describe("IosSimctlDriver", () => {
           simctlArgs("listapps", slim18_5.udid),
           simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
         ]);
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[0]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 260_000 });
         expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
         expect(onSlimmed).toHaveBeenCalledWith({
