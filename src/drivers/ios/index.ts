@@ -306,6 +306,10 @@ interface ResolvedIosSpec {
   readonly spec: VirtualSpec;
 }
 
+function sourcesSetFor(simlockHome: string, deviceRoot: string, owned: boolean): string {
+  return owned ? join(deviceRoot, "sources") : join(simlockHome, "devices", "ios-sources");
+}
+
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly rebootReadyBeforeGrant: boolean;
@@ -366,7 +370,22 @@ export class IosSimctlDriver implements Driver {
     this.#slim = options.config?.slim;
     this.#createTimeoutMs = options.config?.simulator?.createTimeoutMs ?? COMMAND_TIMEOUT_MS;
     this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
-    this.#afterBoot = {
+    this.#afterBoot = this.#afterBootFor(options);
+    this.#slimByDefault = options.slimByDefault === true;
+    this.#sources = new IosSourceTable(options.database);
+    this.#sourcesSet = sourcesSetFor(options.simlockHome, deviceRoot, rootOptions !== undefined);
+    this.screenCapture = createScreenCaptureFor(
+      options,
+      deviceRoot,
+      rootOptions !== undefined,
+      (udid) => this.#physical.osVersion(udid),
+    );
+    this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
+    this.deviceTcp = createIosDeviceTcpFor(options);
+  }
+
+  #afterBootFor(options: IosSimctlDriverOptions): AfterBoot {
+    return {
       silent: options.config?.simulator?.audio === false,
       headless: options.config?.simulator?.headless !== false,
       commands: {
@@ -377,20 +396,6 @@ export class IosSimctlDriver implements Driver {
       onSilenceFailed: options.onSilenceFailed,
       onWindowFailed: options.onWindowFailed,
     };
-    this.#slimByDefault = options.slimByDefault === true;
-    this.#sources = new IosSourceTable(options.database);
-    this.#sourcesSet =
-      rootOptions === undefined
-        ? join(options.simlockHome, "devices", "ios-sources")
-        : join(deviceRoot, "sources");
-    this.screenCapture = createScreenCaptureFor(
-      options,
-      deviceRoot,
-      rootOptions !== undefined,
-      (udid) => this.#physical.osVersion(udid),
-    );
-    this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
-    this.deviceTcp = createIosDeviceTcpFor(options);
   }
 
   readonly screenCapture: ScreenCapture | undefined;
