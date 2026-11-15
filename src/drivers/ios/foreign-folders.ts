@@ -7,14 +7,35 @@ export interface ForeignFolders {
 }
 
 const UDID = "[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}";
+const PRIVATE = "/private";
+const SEPARATOR = "(?:\\\\/|/)";
+
+/** why: iOS writes a folder under `/private` in two spellings (`/private/tmp/x` and `/tmp/x`), and each is matched and kept. */
+function spellings(root: string): readonly string[] {
+  return root.startsWith(`${PRIVATE}/`) ? [root, root.slice(PRIVATE.length)] : [root];
+}
 
 function pattern(roots: readonly string[]): RegExp {
-  const alternatives = roots.map((root) => root.split("/").map(escapeRegExp).join("/"));
-  return new RegExp(`(?:${alternatives.join("|")})/(${UDID})`, "g");
+  const alternatives = roots
+    .flatMap(spellings)
+    .sort((a, b) => b.length - a.length)
+    .map((root) => root.split("/").map(escapeRegExp).join(SEPARATOR));
+  return new RegExp(`(?:${alternatives.join("|")})${SEPARATOR}(${UDID})`, "g");
 }
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** why: the copy's own folder in the spelling and with the separators of the path it replaces. */
+function ownFolder(root: string, udid: string, found: string): string {
+  const escaped = found.includes("\\/");
+  const plain = escaped ? found.replaceAll("\\/", "/") : found;
+  const spelling =
+    spellings(root).find(
+      (candidate) => !plain.startsWith(PRIVATE) === !candidate.startsWith(PRIVATE),
+    ) ?? root;
+  return `${spelling}/${udid}`.replaceAll("/", escaped ? "\\/" : "/");
 }
 
 /**
@@ -26,7 +47,7 @@ export function swapForeignFolders(bytes: Uint8Array, folders: ForeignFolders): 
   const text = Buffer.from(bytes).toString("latin1");
   const devices = pattern([folders.deviceSet, folders.sourcesSet]);
   const own = (root: string) => (match: string, udid: string) =>
-    udid === folders.ownUdid ? match : `${root}/${folders.ownUdid}`;
+    udid === folders.ownUdid ? match : ownFolder(root, folders.ownUdid, match);
   let swapped = text.replace(devices, own(folders.deviceSet));
   if (folders.logsRoot !== undefined) {
     swapped = swapped.replace(pattern([folders.logsRoot]), own(folders.logsRoot));
