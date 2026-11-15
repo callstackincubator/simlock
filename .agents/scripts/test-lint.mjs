@@ -84,17 +84,18 @@ function sourceOf({ path: file, lines, added }) {
   return { file, lines, added, text, code, codeLines: code.split("\n"), starts: lineStarts(text) };
 }
 
-function testFindings(changed) {
+function testFindings(changed, split) {
   const source = sourceOf(changed);
   const rules = LINE_RULES.filter((entry) => entry.applies(source.file));
   const out = [...source.added]
     .sort((a, b) => a - b)
+    .filter((n) => !takeMovedLine(split.removed, source.lines[n - 1]))
     .flatMap((n) =>
       rules
         .filter((entry) => entry.breaks(source, n))
         .map((entry) => ({ path: source.file, line: n, rule: entry.rule })),
     );
-  const internal = internalImportLine(source);
+  const internal = internalImportLine(source, split.imported);
   if (internal !== undefined) out.push({ path: source.file, line: internal, rule: "internal" });
   return out;
 }
@@ -143,20 +144,22 @@ function optionalCallInExpect(code, offset, line) {
   });
 }
 
-function internalImportLine(source) {
-  if (!exists(`${path.posix.dirname(source.file)}/index.ts`)) return undefined;
-  const line = firstAddedInternalImport(source);
+function internalImportLine(source, imported) {
+  const dir = path.posix.dirname(source.file);
+  if (!exists(`${dir}/index.ts`)) return undefined;
+  const line = firstAddedInternalImport(source, imported.get(dir) ?? new Set());
   if (line === undefined) return undefined;
   const first = firstTestBlock(source.codeLines);
   if (first === -1) return undefined;
   return hasWhyAbove(source.lines, source.codeLines, first) ? undefined : line;
 }
 
-function firstAddedInternalImport({ text, code, starts, added }) {
-  const importRe =
-    /^[ \t]*import\s+(type\s+)?(?:[^;]*?)\bfrom\s*["']\.\/([^"'/]+?)(?:\.[jt]sx?)?["']/gm;
-  return [...text.matchAll(importRe)]
-    .filter((m) => isInternalValueImport(m, code))
+const IMPORT_RE =
+  /^[ \t]*import\s+(type\s+)?(?:[^;]*?)\bfrom\s*["']\.\/([^"'/]+?)(?:\.[jt]sx?)?["']/gm;
+
+function firstAddedInternalImport({ text, code, starts, added }, carried) {
+  return [...text.matchAll(IMPORT_RE)]
+    .filter((m) => isInternalValueImport(m, code) && !carried.has(m[2]))
     .map((m) => lineOf(starts, m.index + m[0].length - 1))
     .find((line) => added.has(line));
 }
@@ -170,6 +173,50 @@ function firstTestBlock(codeLines) {
   const first = codeLines.findIndex((l) => /^\s*describe\b[\w.]*\s*\(/.test(l));
   if (first !== -1) return first;
   return codeLines.findIndex((l) => /^\s*(?:it|test)\b[\w.]*\s*\(/.test(l));
+}
+
+function takeMovedLine(removed, line) {
+  const text = line.trim();
+  const n = removed.get(text) ?? 0;
+  if (n === 0) return false;
+  removed.set(text, n - 1);
+  return true;
+}
+
+// why: a split moves tests between files unchanged, so a line the diff adds to one test file while
+// it removes the same line from another is not new (one removal excuses one addition), and a test
+// file that imports an internal sibling a test file of its directory already imported before the
+// split carries that file's reason with it rather than adding a new one.
+function splitTests(base, head) {
+  const from = gitText(["merge-base", base, head ?? "HEAD"]).trim();
+  const range = head === undefined ? [from] : [from, head];
+  const removed = new Map();
+  const diff = gitText([
+    "diff",
+    "-U0",
+    "--no-color",
+    "--no-renames",
+    ...range,
+    "--",
+    "*.test.ts",
+    "*.test.tsx",
+  ]);
+  for (const line of diff.split("\n")) {
+    if (!line.startsWith("-") || line.startsWith("--- ")) continue;
+    const text = line.slice(1).trim();
+    if (text !== "") removed.set(text, (removed.get(text) ?? 0) + 1);
+  }
+  const imported = new Map();
+  const shrunk = gitText(["diff", "--name-only", "--no-renames", "--diff-filter=MD", ...range]);
+  for (const file of shrunk.split("\n").filter((f) => TEST_FILE.test(f))) {
+    const text = revisionText(from, file);
+    const code = mask(text);
+    const dir = path.posix.dirname(file);
+    const names = imported.get(dir) ?? new Set();
+    for (const m of text.matchAll(IMPORT_RE)) if (isInternalValueImport(m, code)) names.add(m[2]);
+    imported.set(dir, names);
+  }
+  return { removed, imported };
 }
 
 function contractFindings(changed, moved) {
@@ -503,9 +550,10 @@ if (base === undefined || (args.includes("--head") && head === undefined)) usage
 
 const findings = [];
 const moved = movedContractDeclarations(base, head);
+const split = splitTests(base, head);
 for (const file of changedFiles({ base, head, files: files.length > 0 ? files : null })) {
   if (PIN_FILE.test(file.path)) continue;
-  if (TEST_FILE.test(file.path)) findings.push(...testFindings(file));
+  if (TEST_FILE.test(file.path)) findings.push(...testFindings(file, split));
   else if (CONTRACT_FILE.test(file.path) && !HELPER_FILE.test(file.path)) {
     findings.push(...contractFindings(file, moved));
   }
