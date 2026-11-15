@@ -34,7 +34,18 @@ const EXIT_TO_CLOSE_MAX_DEFERRAL_MS = 5_000;
 // termination-cleanup budget, not a scaled fraction of the operation's own timeout.
 const SIGTERM_TO_SIGKILL_GRACE_MS = 10_000;
 
+// why: the deadline of a `run` whose caller names none, so a child that never exits cannot hold
+// its caller, and every lock that caller holds, for ever. 60 s is the longest deadline a caller
+// in this tree gives a command that is not an install, a copy or a boot; a command that needs
+// longer says so itself.
+const DEFAULT_RUN_TIMEOUT_MS = 60_000;
+
 export interface ProcessRunOptions {
+  /**
+   * why: `run` always has a deadline: absent, this is the runner's default, and no value turns it
+   * off, since Node fires at once a timer set to 0 or to more than 2^31 ms. `spawn` applies none:
+   * its caller holds the handle and ends the child itself.
+   */
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
@@ -192,17 +203,20 @@ export interface ProcessRunner {
 }
 
 export interface NodeProcessRunnerOptions {
+  readonly defaultRunTimeoutMs?: number;
   readonly sigkillGraceMs?: number;
   readonly exitDeferralCapMs?: number;
   readonly exitGraceMs?: number;
 }
 
 export class NodeProcessRunner implements ProcessRunner {
+  readonly defaultRunTimeoutMs: number;
   readonly sigkillGraceMs: number;
   readonly exitDeferralCapMs: number;
   readonly exitGraceMs: number;
 
   constructor(options: NodeProcessRunnerOptions = {}) {
+    this.defaultRunTimeoutMs = options.defaultRunTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
     this.sigkillGraceMs = options.sigkillGraceMs ?? SIGTERM_TO_SIGKILL_GRACE_MS;
     this.exitDeferralCapMs = options.exitDeferralCapMs ?? EXIT_TO_CLOSE_MAX_DEFERRAL_MS;
     this.exitGraceMs = options.exitGraceMs ?? EXIT_TO_CLOSE_GRACE_MS;
@@ -215,35 +229,30 @@ export class NodeProcessRunner implements ProcessRunner {
   ): Promise<ProcessResult> {
     const process = this.#launch(command, args, options);
     let killTimeout: NodeJS.Timeout | undefined;
-    const timeout =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            try {
-              process.kill("SIGTERM", "timeout");
-            } catch {
-              // why: The child may have exited between the timer firing and the kill.
-            }
-            // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
-            // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
-            // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
-            // itself the moment `process.wait()` actually settles, so a child that does exit
-            // promptly after SIGTERM never sees the follow-up signal.
-            killTimeout = setTimeout(() => {
-              try {
-                process.kill("SIGKILL");
-              } catch {
-                // why: The child may have exited between the timer firing and the kill.
-              }
-            }, this.sigkillGraceMs);
-          }, options.timeoutMs);
+    const timeout = setTimeout(() => {
+      try {
+        process.kill("SIGTERM", "timeout");
+      } catch {
+        // why: The child may have exited between the timer firing and the kill.
+      }
+      // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
+      // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
+      // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
+      // itself the moment `process.wait()` actually settles, so a child that does exit
+      // promptly after SIGTERM never sees the follow-up signal.
+      killTimeout = setTimeout(() => {
+        try {
+          process.kill("SIGKILL");
+        } catch {
+          // why: The child may have exited between the timer firing and the kill.
+        }
+      }, this.sigkillGraceMs);
+    }, options.timeoutMs ?? this.defaultRunTimeoutMs);
 
     try {
       return await process.wait();
     } finally {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       if (killTimeout !== undefined) {
         clearTimeout(killTimeout);
       }

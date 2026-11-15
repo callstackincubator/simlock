@@ -36,7 +36,9 @@ export const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
 const STALE_REASON_MAX_LENGTH = 300;
-// why: avdmanager create has no limit of its own, so this is the ceiling of one seed make: two boots plus the steps between them, which are bounded at 600 s in all.
+// why: avdmanager create writes a config and an empty data image, in seconds; past this it is taken as hung.
+const AVD_CREATE_TIMEOUT_MS = 60_000;
+// why: the ceiling of one seed make: two boots plus avdmanager create and the steps between the boots, which are bounded at 600 s in all.
 const SEED_MAKE_MIN_CEILING_MS = 900_000;
 const SEED_MAKE_STEPS_MS = 600_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
@@ -554,7 +556,10 @@ export class Seeds {
       await this.#adbTools.runOrThrow(
         this.#avdmanager,
         ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
-        { env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder } },
+        {
+          env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder },
+          timeoutMs: AVD_CREATE_TIMEOUT_MS,
+        },
       );
       if (profile.kind === "properties") {
         await this.#avdConfig.applyHardwareProperties(avdFolder, profile.hardwareProperties);

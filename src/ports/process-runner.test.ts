@@ -696,35 +696,43 @@ describe("NodeProcessRunner", () => {
     ).rejects.toBeInstanceOf(ProcessSpawnError);
   });
 
-  it("kills a process that exceeds its timeout", async () => {
-    const runner = new NodeProcessRunner();
+  it.each([
+    { deadline: "its timeoutMs", options: { timeoutMs: 100 } },
+    { deadline: "the runner's default when the call names none", options: {} },
+    { deadline: "once when its timeoutMs is 0", options: { timeoutMs: 0 } },
+    { deadline: "once when its timeoutMs is Infinity", options: { timeoutMs: Infinity } },
+  ])("run ends a child that never exits, at $deadline", async ({ options }) => {
+    const runner = new NodeProcessRunner({ defaultRunTimeoutMs: 100 });
 
-    await expect(
-      runner.run(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
-        timeoutMs: 100,
-      }),
-    ).resolves.toMatchObject({ code: null, stderr: "", stdout: "" });
+    // why: the child exits on its own after 2 s, so a run with no deadline fails on the assertion instead of waiting out vitest's timeout.
+    const outcome = await runner.run(
+      process.execPath,
+      ["-e", "setTimeout(() => process.exit(0), 2_000)"],
+      options,
+    );
+
+    expect(outcome).toMatchObject({ code: null, endedBy: "timeout", signal: "SIGTERM" });
+  });
+
+  it("a runner built with no options gives run a default deadline of 60 s", () => {
+    expect(new NodeProcessRunner().defaultRunTimeoutMs).toBe(60_000);
   });
 
   // why: real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
   // no-op SIGTERM handler survives the initial signal `run()` sends on timeout, so this only
   // resolves at all if the follow-up SIGKILL actually lands once the grace period elapses.
   // The grace is shortened through the constructor; the child is still real.
-  it("escalates to SIGKILL when a timed-out process ignores SIGTERM, within the configured grace", async () => {
-    const runner = new NodeProcessRunner({ sigkillGraceMs: 100 });
+  it("escalates to SIGKILL when a process that ran past the default deadline ignores SIGTERM, within the configured grace", async () => {
+    const runner = new NodeProcessRunner({ defaultRunTimeoutMs: 100, sigkillGraceMs: 100 });
     const startedAt = Date.now();
 
     // why: the child outlives the 2 s bound below by exiting on its own after 4 s, so a missing
     // SIGKILL fails on the assertion instead of waiting out vitest's timeout or leaking it.
     const outcome = await Promise.race([
-      runner.run(
-        process.execPath,
-        [
-          "-e",
-          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 4_000)",
-        ],
-        { timeoutMs: 100 },
-      ),
+      runner.run(process.execPath, [
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 4_000)",
+      ]),
       new Promise<"still running after 2 s">((resolve) => {
         setTimeout(() => resolve("still running after 2 s"), 2_000).unref();
       }),

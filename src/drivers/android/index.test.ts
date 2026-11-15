@@ -615,13 +615,16 @@ describe("AndroidDriver", () => {
     expect((await harness.filesystem.lstat(logPath)).mode & 0o777).toBe(0o600);
   });
 
-  it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError", async () => {
-    for (const { key, waitsMs } of [
+  it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError, whether adb keeps answering that it has not booted or one of its three probes never exits", async () => {
+    for (const { key, waitsMs, hung } of [
       { key: undefined, waitsMs: 300_000 },
       { key: 600_000, waitsMs: 600_000 },
+      { key: 30_000, waitsMs: 30_000, hung: "getprop sys.boot_completed" },
+      { key: 30_000, waitsMs: 30_000, hung: "getprop init.svc.bootanim" },
+      { key: 30_000, waitsMs: 30_000, hung: "pm path android" },
     ]) {
       const harness = await provisionedHarness({
-        bootCompleted: "0\n",
+        ...(hung === undefined ? { bootCompleted: "0\n" } : {}),
         ...(key === undefined ? {} : { bootTimeoutMs: key }),
       });
       const kills: string[] = [];
@@ -644,18 +647,22 @@ describe("AndroidDriver", () => {
 
       // why: the script answers one poll; a boot that outlasts minutes keeps being told it is not done.
       const scripted = harness.runner.run.bind(harness.runner);
-      vi.spyOn(harness.runner, "run").mockImplementation((command, args, options) =>
-        args.at(-1) === "sys.boot_completed"
+      vi.spyOn(harness.runner, "run").mockImplementation((command, args, options) => {
+        const probe = args.slice(3).join(" ");
+        if (probe === hung) return endedOnlyByItsDeadline(harness.clock, options);
+        return hung === undefined && probe === "getprop sys.boot_completed"
           ? Promise.resolve({ code: 0, stderr: "", stdout: "0\n" })
-          : scripted(command, args, options),
-      );
+          : scripted(command, args, options);
+      });
 
       const ready = harness.driver.makeReady(harness.device);
       const state = promiseState(ready);
       const failed = expect(ready).rejects.toMatchObject({ name: "BootTimeoutError" });
       // why: each poll arms the next delay only after the previous one fired, so the clock moves in steps.
       for (let elapsed = 0; elapsed < waitsMs - 1; elapsed += 1_000) {
-        await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+        await vi.waitFor(() =>
+          expect(harness.clock.pendingTimerCount, "timers the boot waits on").toBeGreaterThan(0),
+        );
         harness.clock.advance(Math.min(1_000, waitsMs - 1 - elapsed));
         for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
       }
@@ -664,6 +671,9 @@ describe("AndroidDriver", () => {
 
       await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
       harness.clock.advance(1);
+      await vi.waitFor(() =>
+        expect(state.state, `ended at ${String(waitsMs)} ms`).toBe("rejected"),
+      );
       await failed;
       expect(kills).toContain("SIGKILL");
     }
@@ -2126,6 +2136,19 @@ function installFor(
   return driver.installComponent(component, {
     onProgress: options.onProgress ?? (() => undefined),
     signal: options.signal ?? new AbortController().signal,
+  });
+}
+
+// why: `ScriptedProcessRunner` ignores `timeoutMs`; this is a child that never exits under a runner that honours it, on the driver's fake clock.
+function endedOnlyByItsDeadline(
+  clock: FakeClock,
+  options: ProcessRunOptions | undefined,
+): Promise<ProcessResult> {
+  return new Promise((resolve) => {
+    if (options?.timeoutMs === undefined) return;
+    clock.setTimer(options.timeoutMs, () => {
+      resolve({ code: null, endedBy: "timeout", stderr: "", stdout: "" });
+    });
   });
 }
 

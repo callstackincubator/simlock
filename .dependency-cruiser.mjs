@@ -136,6 +136,17 @@ export default {
       from: { path: "^src/", pathNot: `^src/(ports|test-support)/|${testFile}` },
       to: { dependencyTypes: ["core"], path: fsOrProcess },
     },
+    {
+      name: "child-process-owners",
+      comment:
+        "inside src/ports/ only the process runner and the launchers of processes that outlive their caller start a child; every other adapter calls ProcessRunner.run, which ends the child at a deadline",
+      severity: "error",
+      from: {
+        path: "^src/ports/",
+        pathNot: `^src/ports/(process-runner|byte-pipe|daemon-launcher|updater-launcher)\\.ts$|${testFile}`,
+      },
+      to: { dependencyTypes: ["core"], path: "^(node:)?child_process$" },
+    },
     direction(
       "not-agent-device",
       "the core, leasing and the drivers import nothing from the agent-device edge",

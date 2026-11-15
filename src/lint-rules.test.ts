@@ -196,6 +196,18 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
+    "fails a ports file importing child_process, and passes the process runner, the three launchers of long-lived processes and a ports test file",
+    [
+      ["fails", "src/ports/x.ts", "node:child_process"],
+      ["fails", "src/ports/x.ts", "child_process"],
+      ["passes", "src/ports/process-runner.ts", "node:child_process"],
+      ["passes", "src/ports/byte-pipe.ts", "node:child_process"],
+      ["passes", "src/ports/daemon-launcher.ts", "node:child_process"],
+      ["passes", "src/ports/updater-launcher.ts", "node:child_process"],
+      ["passes", "src/ports/x.test.ts", "node:child_process"],
+    ],
+  ],
+  [
     "fails a core or leasing file importing fs, child_process or a driver",
     [
       ["fails", "src/core/x.ts", "fs"],
