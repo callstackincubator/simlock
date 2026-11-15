@@ -130,6 +130,7 @@ describe("a lease's copy before its first boot", () => {
         { kind: "link", relativePath: "data/Library/Logs" },
         { kind: "file", relativePath: "data/prefs.bin" },
         { kind: "file", relativePath: "data/Media/state.json" },
+        { kind: "file", relativePath: "data/own.txt" },
       ],
       async (fs) => {
         await fs.mkdirp(`${copy}/data/Library`);
@@ -143,6 +144,7 @@ describe("a lease's copy before its first boot", () => {
           `${copy}/data/Media/state.json`,
           `{"from":"${deviceRoot}/${usedUdid}/data"}`,
         );
+        await fs.writeFileAtomic(`${copy}/data/own.txt`, `${deviceRoot}/${copyUdid}/data`);
         await fs.writeFileAtomic(`${copy}/data/unrecorded.txt`, `${sourcesRoot}/${seedUdid}`);
       },
     );
@@ -159,11 +161,14 @@ describe("a lease's copy before its first boot", () => {
       await rig.filesystem.readFile(`${copy}/data/Media/state.json`),
       "a saved-from folder",
     ).toBe(`{"from":"${deviceRoot}/${copyUdid}/data"}`);
+    expect(await rig.filesystem.readFile(`${copy}/data/own.txt`), "a path naming the copy").toBe(
+      `${deviceRoot}/${copyUdid}/data`,
+    );
     expect(
       await rig.filesystem.readFile(`${copy}/data/unrecorded.txt`),
       "only recorded files",
     ).toBe(`${sourcesRoot}/${seedUdid}`);
-    expect(rig.logger.lines).toContain(`swapped 2 files and 1 links in 14 ms for ${copyUdid}`);
+    expect(rig.logger.lines).toContain(`swapped 2 files and 1 links in 21 ms for ${copyUdid}`);
   });
 
   it("refuses a file whose swap would change its length", async () => {

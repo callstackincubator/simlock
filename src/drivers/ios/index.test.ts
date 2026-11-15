@@ -231,6 +231,7 @@ function sourcesSimctl(...args: readonly string[]): {
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
 async function seededDatabase(
   seed: {
+    readonly files?: readonly { readonly kind: "link" | "file"; readonly relativePath: string }[];
     readonly indexed?: false;
     readonly runtimeBuild?: string;
     readonly setPath?: string;
@@ -1637,17 +1638,15 @@ describe("IosSimctlDriver", () => {
       ]);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
-      const driver = await createDriver(
-        runner,
-        new FakeClock(),
-        filesystem,
-        await seededDatabase({
-          setPath,
-          udid: planted,
-          ...("indexed" in planting ? { indexed: planting.indexed } : {}),
-          ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
-        }),
-      );
+      const database = await seededDatabase({
+        // why: a seed made again takes its file rows with it; a kept one's would be swapped in the copy, which holds no such file here.
+        ...(remade ? { files: [{ kind: "file", relativePath: "data/prefs.bin" }] as const } : {}),
+        setPath,
+        udid: planted,
+        ...("indexed" in planting ? { indexed: planting.indexed } : {}),
+        ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
+      });
+      const driver = await createDriver(runner, new FakeClock(), filesystem, database);
       await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
 
       await driver.provision(spec);
@@ -1657,6 +1656,12 @@ describe("IosSimctlDriver", () => {
           ? ["shutdown", "delete", "create", "boot", "bootstatus", "listapps", "shutdown", "clone"]
           : ["clone"],
       );
+      expect(
+        database
+          .prepare("SELECT source_id FROM ios_source_files WHERE relative_path = 'data/prefs.bin'")
+          .all(),
+        "the made-again seed's old file rows",
+      ).toEqual([]);
     },
   );
 
