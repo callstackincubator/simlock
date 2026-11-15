@@ -3660,6 +3660,71 @@ describe("IosSimctlDriver", () => {
       },
     );
 
+    it("a refresh of an already booted device boots again with only the time left of ios.full.bootTimeoutMs (#1560)", async () => {
+      const clock = new FakeClock();
+      const budgetMs = 400_000;
+      const bootArgs = ["xcrun", "simctl", "boot", driverData.udid];
+      const calls: { args: readonly string[]; options: unknown }[] = [];
+      let boots = 0;
+      const runner: ProcessRunner = {
+        run: () => Promise.reject(new Error("the driver runs commands through spawn")),
+        spawn(command, args, options) {
+          calls.push({ args: [command, ...args], options });
+          const isBoot = [command, ...args].join(" ") === bootArgs.join(" ");
+          const isShutdown = args[1] === "shutdown";
+          const first = isBoot && boots++ === 0;
+          const entry = {
+            match: { command, args: [...args] },
+            ...(isBoot && !first ? { hangs: true } : {}),
+            ...(first
+              ? {
+                  onSpawn: () => clock.advance(100_000),
+                  result: {
+                    code: 1,
+                    stderr: "Unable to boot device in current state: Booted",
+                    stdout: "",
+                  },
+                }
+              : {}),
+            ...(isShutdown ? { onSpawn: () => clock.advance(20_000) } : {}),
+          };
+          return new ScriptedProcessRunner([entry]).spawn(command, args, options);
+        },
+        spawnStreaming: () => {
+          throw new Error("the driver streams nothing here");
+        },
+      };
+      const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceSet: "default" },
+        coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
+        instanceId,
+        simlockHome: "/home/.simlock",
+        clock,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        processRunner: runner,
+        config: { full: { bootTimeoutMs: budgetMs } },
+      });
+
+      const ready = driver.makeReady(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        prepareFull,
+      );
+      void ready.catch(() => undefined);
+      await vi.waitFor(() => expect(boots).toBe(2));
+      const readyState = promiseState(ready);
+
+      const secondBoot = calls.filter((call) => call.args.join(" ") === bootArgs.join(" ")).at(1);
+      expect(secondBoot?.options).toEqual({ timeoutMs: budgetMs - 120_000 });
+      clock.advance(budgetMs - 120_000 - 1);
+      await flushMicrotasks221();
+      expect(readyState.state).toBe("pending");
+
+      clock.advance(1);
+      expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
+    });
+
     it.each([
       { name: "slim spec", spec: { ...spec, mode: "slim" } as const },
       { name: "full spec", spec },
