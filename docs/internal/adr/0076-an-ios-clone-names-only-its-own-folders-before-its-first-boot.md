@@ -85,8 +85,9 @@ When a seed is made, and when a baseline is saved, after the clean
 shutdown and before the row turns `ready`: every SQLite WAL in it is
 flushed into its database (`wal_checkpoint(TRUNCATE)`), because a WAL
 frame carries a checksum a swap would break; then every file and link
-that names a foreign folder is found once and recorded with the source.
-A WAL that cannot be flushed is logged and never patched.
+that names any device folder or log folder, the source's own included, is
+found once and recorded with the source, and the source is marked as
+indexed. A WAL that cannot be flushed is logged and never patched.
 
 ### 3. Every lease's copy swaps foreign folders for its own before its first boot
 
@@ -103,8 +104,9 @@ deleted, as one whose drop fails is.
 A seed whose row names another set, or has no record of §2, is destroyed
 and made again by the existing stale-seed path. A baseline whose row names
 another set is stale (`saved in <set>, which copies cannot be fixed from;
-save it again`) and answers `BASELINE_STALE`; it is deleted in its own set
-when removed.
+save it again`) and answers `BASELINE_STALE` from the first request after
+the worker starts, since core now checks baselines for staleness at
+startup; it is deleted in its own set when removed.
 
 Shapes, messages and the table live in #1561's design tables.
 
