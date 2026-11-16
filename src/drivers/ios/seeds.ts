@@ -22,13 +22,13 @@ import { UDID_PATTERN } from "./device-set-leftovers.js";
 
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 
-import { swapCopyFiles } from "./lineage-files.js";
+import { recordLineageFiles, swapCopyFiles } from "./lineage-files.js";
 
 import { type SimctlCatalog } from "./simctl-parse.js";
 
 import { type IosDriverData, iosDriverData } from "./simulator-data.js";
 
-import type { SqliteDatabase } from "../../ports/index.js";
+import type { SqliteDatabase, SqliteOpener } from "../../ports/index.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
@@ -53,6 +53,7 @@ interface SeedsOptions {
   readonly seedTurns: SeedTurns;
   readonly simctl: Simctl;
   readonly sourcesSet: string;
+  readonly sqliteOpener: SqliteOpener | undefined;
 }
 
 /** why: the part of IosSimctlDriver (ADR 0063) that makes, keeps and deletes the seeds every provision copies (ADR 0061), and lists them as sources. */
@@ -75,6 +76,7 @@ export class Seeds {
   readonly #simctl: Simctl;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
+  readonly #sqliteOpener: SqliteOpener | undefined;
   #sourceMaker: string | undefined;
   #swept = false;
 
@@ -96,6 +98,7 @@ export class Seeds {
     this.#simctl = options.simctl;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = options.sourcesSet;
+    this.#sqliteOpener = options.sqliteOpener;
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
@@ -162,8 +165,16 @@ export class Seeds {
       this.#sources.setUdid(sourceId, cloneUdid);
       await this.#slimBoot.copyOverrides(data.udid, cloneUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
+      // why: ADR 0076 §2: the baseline's lineage is its lease's UDID and the lineage the lease was copied with; a lease made before lineages were kept has none, so the baseline is never copied.
+      const lineage =
+        data.lineage === undefined ? undefined : [data.udid.toUpperCase(), ...data.lineage];
+      const files = lineage === undefined ? [] : await this.#recordFiles(cloneUdid, lineage);
       const sizeBytes = await this.#sizeOf(cloneUdid);
-      this.#sources.markReady(sourceId, sizeBytes, { files: [], lineage: [] });
+      this.#sources.markReady(sourceId, sizeBytes, {
+        files,
+        lineage,
+        savedWithoutLineage: lineage === undefined,
+      });
       // why: ADR 0076: the lease is destroyed next, and `simctl delete` leaves its log folder behind for the baseline's copies to inherit.
       await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
@@ -386,10 +397,8 @@ export class Seeds {
       keepRow = true;
       await this.#deleteThrowaway(done, false);
       keepRow = false;
-      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone), {
-        files: [],
-        lineage,
-      });
+      const files = await this.#recordFiles(seedClone, lineage);
+      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone), { files, lineage });
       return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build, lineage };
     } catch (error: unknown) {
       if (seedClone !== undefined)
@@ -482,6 +491,17 @@ export class Seeds {
       instanceId: this.#instanceId,
       path: this.#sourcesSet,
       platform: "ios",
+    });
+  }
+
+  #recordFiles(udid: string, lineage: readonly string[]): ReturnType<typeof recordLineageFiles> {
+    return recordLineageFiles({
+      filesystem: this.#filesystem,
+      folder: join(this.#sourcesSet, udid),
+      lineage,
+      logger: this.#logger,
+      sqlite: this.#sqliteOpener,
+      udid,
     });
   }
 

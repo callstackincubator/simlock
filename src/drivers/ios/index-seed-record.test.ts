@@ -70,9 +70,11 @@ async function provisionNewSeed(options: {
   const database = await memorySourceDatabase();
   const filesystem = new UnreadableFiles();
   await plantManagedDevice(filesystem);
-  await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
   await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
   await options.plant(filesystem);
+  // why: `simctl clone` gives the copy what the seed holds, and the scripted runner cannot.
+  await filesystem.mkdirp(seedFolder);
+  await filesystem.copyTree(seedFolder, `${deviceRoot}/${copyUdid}`, { timeoutMs: 1 });
   for (const path of options.failingPaths ?? []) filesystem.defineFailure(path, "EACCES");
   for (const path of options.unreadablePaths ?? []) filesystem.unreadable.add(path);
   const opener = new FakeSqliteOpener(filesystem, {

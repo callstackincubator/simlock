@@ -16,6 +16,7 @@ import {
   logsRoot,
   scopedRunners,
   listInvocation,
+  plantSeedClone,
   seedUdid,
   sourcesSimctl,
   spec,
@@ -107,7 +108,12 @@ describe("IosSimctlDriver seed throwaway", () => {
         step(inSet("bootstatus", throwawayUdid, "-b")),
         step(inSet("listapps", throwawayUdid)),
         step(inSet("shutdown", throwawayUdid)),
-        step(inSet("clone", throwawayUdid, name, world.sourcesSet), `${seedUdid}\n`),
+        {
+          ...step(inSet("clone", throwawayUdid, name, world.sourcesSet), `${seedUdid}\n`),
+          onSpawn: () => {
+            void filesystem.mkdirp(`${world.sourcesSet}/${seedUdid}`);
+          },
+        },
         step(inSet("delete", throwawayUdid)),
         ...hub(`Delete :DevicePreferences:${throwawayUdid}`),
         step(
@@ -233,6 +239,7 @@ describe("IosSimctlDriver seed throwaway", () => {
       ]);
       scopedRunners.push(runner);
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
       if (failure.absent !== true) await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
       const driver = await IosSimctlDriver.create({

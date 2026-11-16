@@ -26,6 +26,7 @@ import {
   listFixture,
   listInvocation,
   scopedRunners,
+  plantSeedClone,
   seedUdid,
   seededDatabase,
   sourcesSimctl,
@@ -76,6 +77,7 @@ describe("IosSimctlDriver", () => {
         full,
       );
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
 
       await driver.provision(spec);
 
@@ -116,6 +118,7 @@ describe("IosSimctlDriver", () => {
     const filesystem = new ModeRecordingFilesystem();
     const driver = await createDriver(runner, new FakeClock(), filesystem, database);
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
 
     await expect(driver.provision(spec)).resolves.toEqual({
@@ -163,6 +166,7 @@ describe("IosSimctlDriver", () => {
     ]);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     const driver = await createDriver(runner, new FakeClock(), filesystem, database);
 
     const error = await driver.provision(spec).catch((caught: unknown) => caught);
@@ -189,6 +193,7 @@ describe("IosSimctlDriver", () => {
     const clock = new FakeClock();
     const driver = await createDriver(runner, clock, filesystem);
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
     const clones = (): number =>
       runner.calls.filter((call) => call.args[3] === "clone" && call.args[4] === seedUdid).length;
@@ -266,6 +271,7 @@ describe("IosSimctlDriver", () => {
     scopedRunners.push(runner);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     const clock = new FakeClock();
     const config = { simulator: { audio: true, createTimeoutMs: 120_000, headless: true } };
     const driver = await IosSimctlDriver.create({
@@ -393,6 +399,7 @@ describe("IosSimctlDriver", () => {
       };
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       const clock = new FakeClock();
       const driver = await IosSimctlDriver.create({
         database: seeded ? await seededDatabase() : await memorySourceDatabase(),

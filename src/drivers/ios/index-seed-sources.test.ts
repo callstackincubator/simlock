@@ -20,6 +20,7 @@ import {
   listInvocation,
   plantLaunchServices,
   scopedRunners,
+  plantSeedClone,
   seedUdid,
   seededDatabase,
   sourcesSimctl,
@@ -122,6 +123,7 @@ describe("IosSimctlDriver", () => {
   it("provision deletes the clone and throws when the LaunchServices database cannot be dropped", async () => {
     const filesystem = new FaultyFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
     filesystem.failing = "rm";
     const runner = new ScriptedProcessRunner([
@@ -159,6 +161,7 @@ describe("IosSimctlDriver", () => {
       .run(oldUdid);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
     const catalog = JSON.parse(listFixture) as {
       runtimes: { buildversion?: string; identifier: string }[];
@@ -225,6 +228,7 @@ describe("IosSimctlDriver", () => {
       ]);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
       const driver = await createDriver(runner, new FakeClock(now), filesystem, database);
 
@@ -418,6 +422,7 @@ describe("IosSimctlDriver", () => {
       ]);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       const driver = await createDriver(
         runner,
         new FakeClock(),
@@ -567,6 +572,7 @@ describe("IosSimctlDriver", () => {
     const orphanUdid = "00000000-0000-0000-0000-0000000000ee";
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/sources/${seedUdid}`);
     await filesystem.mkdirp(`${deviceRoot}/sources/${orphanUdid}`);
     const database = await seededDatabase();

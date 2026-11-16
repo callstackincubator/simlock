@@ -9,6 +9,7 @@ import {
   open,
   readdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
@@ -121,6 +122,8 @@ export interface Filesystem {
   diskFree(path: string): Promise<number>;
   diskSpace(path: string): Promise<{ readonly freeBytes: number; readonly totalBytes: number }>;
   directorySize(path: string): Promise<number>;
+  /** why: what a symbolic link points at, without following it. */
+  readlink(path: string): Promise<string>;
   /** why: `bytes` written into an existing file at `offset`, with no truncation, keeping its mode and modification time. */
   writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void>;
 }
@@ -406,6 +409,10 @@ export class NodeFilesystem implements Filesystem {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
       throw error;
     }
+  }
+
+  async readlink(path: string): Promise<string> {
+    return readlink(path);
   }
 
   async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
@@ -777,6 +784,13 @@ export class MemoryFilesystem implements Filesystem {
       else if (entry.kind === "file") total += fileBytes(entry).byteLength;
     }
     return total;
+  }
+
+  async readlink(path: string): Promise<string> {
+    this.#failIfDefined(path);
+    const entry = this.#rawEntryAt(this.#underResolvedParent(path));
+    if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
+    return entry.target;
   }
 
   async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {

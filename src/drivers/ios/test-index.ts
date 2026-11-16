@@ -397,3 +397,12 @@ export function throwawaySeedSteps(
     { match: simctl("delete", throwawayUdid) },
   ];
 }
+
+/** why: `simctl clone` made the seed's folder in the sources set, which the scripted runner cannot do, and a make walks it before the seed turns ready. */
+export async function plantSeedClone(
+  filesystem: Filesystem,
+  sourcesSet: string = `${deviceRoot}/sources`,
+  udid: string = seedUdid,
+): Promise<void> {
+  await filesystem.mkdirp(`${sourcesSet}/${udid}`);
+}
