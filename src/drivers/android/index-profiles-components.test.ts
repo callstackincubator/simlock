@@ -188,9 +188,9 @@ describe("AndroidDriver", () => {
 
     it("warns when no installed system image for the host CPU has `android.defaultImageTag`, naming the tag, the host CPU and the host CPU's tags sorted and once each", async () => {
       const host = [
-        ["35", "google_apis_playstore", "arm64-v8a"],
-        ["34", "google_apis", "arm64-v8a"],
+        ["34", "google_apis_playstore", "arm64-v8a"],
         ["35", "google_apis", "arm64-v8a"],
+        ["36", "google_apis", "arm64-v8a"],
       ] as const;
       const cases = [
         { name: "installed for the host CPU", images: host, tag: "google_apis", expected: [] },
