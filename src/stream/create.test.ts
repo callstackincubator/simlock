@@ -31,6 +31,7 @@ function worker(
     [{ deviceId: "dev_leased", id: "lse_1" }],
   );
   const feeds: ScriptedFeed[] = [];
+  const signals: AbortSignal[] = [];
   let opened = 0;
   const handlers = new Map<string, ((envelope: { payload: { deviceId: string } }) => void)[]>();
   const stream = createWorkerStream({
@@ -48,8 +49,9 @@ function worker(
     name: "stream",
     registry,
     screens: {
-      openScreen: async () => {
+      openScreen: async (_platform, _device, _settings, signal) => {
         opened += 1;
+        signals.push(signal);
         await openGate;
         if (unsupported) throw new ScreenNotSupportedError("no capture here");
         const feed = new ScriptedFeed();
@@ -66,7 +68,7 @@ function worker(
       handler({ payload: { deviceId, ...payload } } as Parameters<typeof handler>[0]);
     }
   };
-  return { clock, emit, feeds, opened: () => opened, registry, stream };
+  return { clock, emit, feeds, opened: () => opened, registry, signals, stream };
 }
 
 const STREAM_HEADERS = {
@@ -850,6 +852,99 @@ describe("createWorkerStream", () => {
       expect(reading.frames.length).toBeLessThan(1500);
       expect(reading.frames).not.toContain("delta 0,0,0,0");
       expect(reading.frames.at(-1)).toBe("delta 7,208,0,0");
+    }
+  });
+
+  it("closes the capture once, when its last viewer leaves: a viewer that leaves, or whose expiresAt passes, closes nothing while another watches", async () => {
+    {
+      const { feeds, stream } = worker();
+      const first = await openOnRoute(stream, "device");
+      const second = await openOnRoute(stream, "lease");
+      await first.body!.cancel();
+      await flush();
+      expect(feeds[0]?.closes, "the first leaves").toBe(0);
+      await second.body!.cancel();
+      await flush();
+      expect(feeds[0]?.closes, "the second leaves").toBe(1);
+    }
+
+    for (const [label, other] of [
+      ["one viewer's expiresAt", true],
+      ["the last viewer's expiresAt", false],
+    ] as const) {
+      const { clock, feeds, stream } = worker();
+      const expiring = watch(await openOnRoute(stream, "device", clock.now() + 60_000));
+      const staying = other ? watch(await openOnRoute(stream, "lease")) : undefined;
+      // why: a capture that writes nothing for 30 s ends on its own, so frames keep arriving.
+      for (let step = 0; step < 3; step += 1) {
+        clock.advance(20_000);
+        feeds[0]!.keyframe([step]);
+        await flush();
+      }
+      expect(expiring.ended, label).toBe(true);
+      if (staying === undefined) {
+        expect(feeds[0]?.closes, label).toBe(1);
+      } else {
+        expect(feeds[0]?.closes, label).toBe(0);
+        expect(staying.ended).toBe(false);
+        feeds[0]!.keyframe([9]);
+        await flush();
+        expect(staying.frames.at(-1)).toBe("key 9");
+      }
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { feeds, signals, stream } = worker([], true, false, gate);
+      const aborts = [new AbortController(), new AbortController()];
+      const asked = [
+        stream.mount.handle(
+          new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+            signal: aborts[0]!.signal,
+          }),
+          OPERATOR,
+        ),
+        stream.leaseRoute(
+          new Request("http://daemon/v1/leases/lse_1/stream", { signal: aborts[1]!.signal }),
+          { principal: "tok_agent", role: "agent" },
+          { deviceId: "dev_leased", id: "lse_1" },
+        ),
+      ];
+      await flush();
+      aborts[0]!.abort();
+      await flush();
+      expect(signals[0]?.aborted, "one leaves during the open and another stays").toBe(false);
+      aborts[1]!.abort();
+      await flush();
+      expect(signals[0]?.aborted, "every viewer leaves during the open").toBe(true);
+      openIt();
+      await Promise.all(asked);
+      await flush();
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { feeds, signals, stream } = worker([], true, false, gate);
+      const leaving = new AbortController();
+      const first = stream.mount.handle(
+        new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+          signal: leaving.signal,
+        }),
+        OPERATOR,
+      );
+      const staying = openOnRoute(stream, "lease");
+      await flush();
+      leaving.abort();
+      openIt();
+      await first;
+      const watching = watch(await staying);
+      await flush();
+      expect(signals[0]?.aborted).toBe(false);
+      expect(watching.frames).toEqual(["meta 330x720"]);
+      expect(feeds[0]?.closes).toBe(0);
     }
   });
 
