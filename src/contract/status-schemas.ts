@@ -305,6 +305,7 @@ export const platformCatalogSchema = z.object({
     .max(CATALOG_SLIM_CATEGORIES_MAX)
     .optional(),
   defaultMode: deviceModeSchema.optional(),
+  defaultImageTag: imageTagSchema.optional(),
 });
 
 /**
