@@ -5,9 +5,13 @@ import {
   adb,
   androidFilesystem,
   devicesListing,
+  FAILED,
+  TIMED_OUT,
+  PHONE,
   isGetprop,
   PhoneAdb,
   sdk,
+  USB_LINE,
   VERSION_REPLY_41,
 } from "./test-physical-handler.js";
 
@@ -166,5 +170,51 @@ describe("Android physical handler under android.networkDevices: inspectPhysical
       enrollable: false,
       reason: "network-only",
     });
+  });
+});
+
+describe("Android physical handler under android.networkDevices: listPresentPhysical", () => {
+  const enrolled = { driverDeviceId: ADDRESS, hardwareSerial: "R58Y61A60HN" };
+
+  it("reads an enrolled network phone present only when the phone answering has the recorded hardware serial", async () => {
+    const present = await networkHandler(devicesListing(NETWORK_LINE));
+    expect(await present.handler.listPresentPhysical([enrolled])).toEqual([
+      { driverDeviceId: ADDRESS, osVersion: "34", present: true },
+    ]);
+
+    const other = await networkHandler(devicesListing(NETWORK_LINE));
+    other.runner.hardwareSerial = "ZZZ999";
+    other.runner.calls.length = 0;
+    expect(await other.handler.listPresentPhysical([enrolled])).toEqual([
+      { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
+    ]);
+    expect(other.runner.rests.at(-1)).toEqual(["-s", ADDRESS, "shell", "getprop", "ro.serialno"]);
+
+    const unauthorized = await networkHandler(
+      devicesListing(`${ADDRESS} unauthorized transport_id:4`),
+    );
+    expect(await unauthorized.handler.listPresentPhysical([enrolled])).toEqual([
+      { driverDeviceId: ADDRESS, present: false, reason: "untrusted" },
+    ]);
+
+    for (const failure of [FAILED, TIMED_OUT]) {
+      const unreadable = await networkHandler(devicesListing(NETWORK_LINE));
+      unreadable.runner.override((rest) => (rest.includes("ro.serialno") ? failure : undefined));
+      expect(await unreadable.handler.listPresentPhysical([enrolled])).toEqual([
+        { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
+      ]);
+    }
+
+    const usb = await networkHandler(devicesListing(USB_LINE));
+    expect(await usb.handler.listPresentPhysical([{ driverDeviceId: PHONE }])).toEqual([
+      { driverDeviceId: PHONE, osVersion: "34", present: true },
+    ]);
+    expect(usb.runner.rests.flat()).not.toContain("ro.serialno");
+
+    const off = await networkHandler(devicesListing(NETWORK_LINE), { networkDevices: false });
+    expect(await off.handler.listPresentPhysical([enrolled])).toEqual([
+      { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
+    ]);
+    expect(off.runner.rests.flat()).not.toContain("connect");
   });
 });
