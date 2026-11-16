@@ -69,6 +69,11 @@ function formatCatalog(response: CatalogGetOutput): string {
       );
       return [
         `Platform: ${entry.platform}`,
+        ...(entry.virtualDevices === false
+          ? [
+              `  Virtual devices: off (${entry.platform}.virtualDevices is false); only enrolled physical devices are leased`,
+            ]
+          : []),
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
         ...(entry.defaultImageTag === undefined
           ? []
