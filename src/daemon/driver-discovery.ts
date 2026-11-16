@@ -63,6 +63,8 @@ const PACKAGED_SCRCPY_SERVER = fileURLToPath(
 export interface DriverDiscoveryContext {
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  /** why: the worker's `android.defaultImageTag`, which the Android driver checks against its installed images. */
+  readonly defaultImageTag?: string;
   readonly database: SqliteDatabase;
   readonly driversConfig: Config["drivers"];
   readonly eventBus: Pick<EventBus, "emit">;

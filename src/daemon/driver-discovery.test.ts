@@ -279,6 +279,28 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
+  it("hands the Android driver the worker's default image tag, which its advisories check against the installed images", async () => {
+    const filesystem = await androidSdk();
+    await filesystem.mkdirp("/android-sdk/system-images/android-35/google_apis/arm64-v8a");
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+
+    const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+      defaultImageTag: "gogle_apis",
+      processRunner: new ScriptedProcessRunner([]),
+    });
+    const advisories = await drivers
+      .find((driver) => driver.platform === "android")
+      ?.advisories?.();
+
+    expect(advisories?.map((advisory) => advisory.code)).toContain(
+      "default-image-tag-not-installed",
+    );
+  });
+
   it.each([
     { abi: "x86_64", hostArch: "x64" },
     { abi: "arm64-v8a", hostArch: "arm64" },
@@ -510,7 +532,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     overrides: Partial<
       Pick<
         DriverDiscoveryContext,
-        "androidConfig" | "clock" | "hostArch" | "logger" | "processRunner"
+        "androidConfig" | "clock" | "defaultImageTag" | "hostArch" | "logger" | "processRunner"
       >
     > = {},
   ) {
