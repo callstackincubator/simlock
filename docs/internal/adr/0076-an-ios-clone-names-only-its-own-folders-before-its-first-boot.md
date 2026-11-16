@@ -113,8 +113,10 @@ cloning it, unbooted, into the sources set as the seed; the throwaway and
 its log folder are deleted. The throwaway is in neither the registry nor
 the sources set (under `deviceSet: "default"` it sits in Xcode's own set),
 so the source's `making` row stores its UDID as soon as `simctl create`
-returns it, the throwaway is deleted only through that row, and a restart
-mid-make deletes it ([ADR 0001](0001-simlock-owned-device-roots.md) §6). This is one case beside
+returns it: without the row, [ADR 0001](0001-simlock-owned-device-roots.md)
+§6's provision-then-register window would leave it an unrecorded orphan. The
+throwaway is deleted only through that row, and a restart mid-make deletes it
+by the recorded UDID, not as orphan reaping. This is one case beside
 sources in [safety rule 1](../agent-rules/safety.md). A baseline is saved as ADR 0061 §4 says, and
 the leased device's log folder (`simctl delete` leaves it) is deleted with
 the device. A source therefore never names itself, and every path it
