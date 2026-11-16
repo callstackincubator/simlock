@@ -370,6 +370,7 @@ export async function composeWorker(
     components,
     config,
     core,
+    defaultImageTags: deviceModeWiring(config).defaultImageTags,
     defaultModes: deviceModeWiring(config).defaultModes,
     describeFailure: describeLeaseRequestFailure,
     eventBus,
@@ -766,7 +767,10 @@ export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
   readonly slimByDefault: boolean;
 } {
   return {
-    defaultImageTags: {},
+    defaultImageTags:
+      config.android.defaultImageTag === undefined
+        ? {}
+        : { android: config.android.defaultImageTag },
     defaultModes: { ios: config.ios.defaultMode },
     slimByDefault: config.ios.defaultMode === "slim",
   };

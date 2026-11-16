@@ -391,6 +391,17 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     ]);
   });
 
+  it("config.get carries android.defaultImageTag when set and leaves it out when not", async () => {
+    const withTag = await buildDispatcher({ androidDefaultImageTag: "google_apis_playstore" });
+    const without = await buildDispatcher({});
+
+    const set = await withTag.dispatcher.dispatch("config.get", {}, admin);
+    const unset = await without.dispatcher.dispatch("config.get", {}, admin);
+
+    expect(set.android["defaultImageTag"]).toBe("google_apis_playstore");
+    expect(unset.android).not.toHaveProperty("defaultImageTag");
+  });
+
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
     const { components, dispatcher, driver } = await buildDispatcher({
       driverOptions: { knownModels: ["iPhone 17 Pro"] },
