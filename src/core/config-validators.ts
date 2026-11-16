@@ -334,7 +334,7 @@ const endWaitValidator: Validator = (value, path) => {
   return wait;
 };
 
-/** why: the bounds of `imageTagSchema` (contract), so a tag the operator sets is one a request could name; core cannot import the contract. */
+/** why: the bounds of `imageTagSchema` (contract), so a tag the operator sets is one a request could name; the pattern is repeated here, not imported. */
 const imageTagValidator: Validator = (value, path) => {
   if (typeof value !== "string" || !/^[A-Za-z0-9_.-]{1,64}$/.test(value)) {
     throw invalidValue(path, "an image tag: 1 to 64 letters, digits, '_', '.' or '-'");

@@ -160,17 +160,62 @@ describe("LeaseAcquisitionCoordinator: a worker's default image tag", () => {
     ] as const;
 
     for (const { defaultImageTags, expected, input, label } of cases) {
+      const android = fleetDriver();
       const harness = await createHarness({
         defaultImageTags,
-        drivers: [fleetDriver(), iosDriver],
+        drivers: [android, iosDriver],
       });
 
       const granted = await harness.coordinator.request(input, owner("agent"));
+
+      // why: a fake iOS driver tolerates an image tag the real one refuses, so the request the driver saw is what proves the default stayed off.
+      const asked = [...android.calls, ...iosDriver.calls].filter(
+        (call) => call.operation === "resolveSpec",
+      );
+      for (const call of asked) {
+        expect(call.arguments[0], label).not.toHaveProperty("defaultTag");
+      }
+      if (label === "iOS" || label === "the setting unset") {
+        for (const call of asked) expect(call.arguments[0], label).not.toHaveProperty("imageTag");
+      }
 
       expect(granted.device.spec, label).toMatchObject(expected);
       expect(granted.device.spec.imageTag, label).toBe(
         "imageTag" in expected ? expected.imageTag : undefined,
       );
     }
+  });
+
+  it("gives a baseline request the baseline's own spec, with no default tag asked of the driver", async () => {
+    const driver = fleetDriver();
+    const baseline = {
+      mode: "full" as const,
+      model: "Pixel 9",
+      name: "checkout",
+      osVersion: "37",
+      platform: "android" as const,
+      sourceId: "source-1",
+      version: 1,
+    };
+    const harness = await createHarness({
+      baselines: { current: () => baseline },
+      defaultImageTags: { android: tag },
+      drivers: [driver],
+    });
+    await seedReady(harness, {
+      ...pixel9,
+      baseline: { name: "checkout", version: 1 },
+      osVersion: "37",
+    });
+
+    const granted = await harness.coordinator.request(
+      { baseline: "checkout", platform: "android" },
+      owner("agent"),
+    );
+
+    expect(granted.device.spec).toMatchObject({ baseline: { name: "checkout", version: 1 } });
+    expect(granted.device.spec.imageTag).toBeUndefined();
+    const asked = driver.calls.filter((call) => call.operation === "resolveSpec");
+    for (const call of asked) expect(call.arguments[0]).not.toHaveProperty("defaultTag");
   });
 });
