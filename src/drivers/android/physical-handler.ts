@@ -297,7 +297,7 @@ export class AndroidPhysicalHandler {
       throw new Error("could not read the device list (adb devices -l)");
     }
     const serials = parseDevices(listing.stdout, this.#platform)
-      .filter((entry) => entry.usb)
+      .filter((entry) => entry.usb || (this.#networkDevices && !entry.emulator))
       .map((entry) => entry.serial);
     return [...new Set(serials)].sort();
   }
