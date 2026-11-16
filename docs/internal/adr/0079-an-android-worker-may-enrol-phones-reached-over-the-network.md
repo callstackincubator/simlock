@@ -64,11 +64,20 @@ flowchart LR
 ```
 
 - Every presence read of a network phone reads the hardware serial again.
-  A different one reads not present, so no lease, reclaim or uninstall
-  reaches another phone at the same address.
+  A different one reads not present, so no grant reaches another phone at
+  the same address.
+- A reclaim reads it first too, because a lease can end before the watcher
+  sees the address change hands. A different one fails the reclaim before
+  any uninstall, and the phone goes absent until it is back.
+- `device.exec`, the screen and tunnels on a leased phone do not read it
+  before each command. Between the address changing hands and the
+  watcher ending the lease `device-lost`, those commands can reach the
+  other phone. They delete nothing Simlock cannot put back, and a read
+  before each would double every command's cost.
 - A phone whose hardware serial is already enrolled, as a USB serial or as
-  another record's hardware serial, is refused. One phone keeps one record
-  (ADR 0022 §6 step 3).
+  another record's hardware serial, is refused, whatever the key says. One
+  phone keeps one record (ADR 0022 §6 step 3); two would uninstall each
+  other's apps.
 - A phone that moves to a new address reads absent. The operator removes
   it and adds it at its new address.
 
@@ -79,9 +88,11 @@ need a rule for which transport to use.
 
 ### 3. The worker reconnects the phones it enrolled
 
-On every watcher tick, the worker runs `adb connect <host:port>` for each
-enrolled `host:port` phone that the default server does not list, behind
-the protocol check and within a time limit. It connects only enrolled
+Inside every presence read (the watcher's, a grant's, a reclaim's or a
+quarantine retry's), the driver runs `adb connect <host:port>` for each
+enrolled `host:port` phone that the default server does not list, all at
+once, behind the protocol check and within a time limit, then reads the
+list again. It connects only enrolled
 addresses. It never runs `disconnect`, `pair` or `tcpip`, and it still
 never starts or stops the server on purpose. A wireless-debugging phone
 listed under an mDNS name is left to adb, which connects it again itself.
@@ -121,8 +132,11 @@ Safety rules 1, 7 and 8 gain one exception each, under this key only:
 - Anyone on the network who can reach a phone's adb port and has an
   authorized key can drive it outside Simlock. adb over TCP is as open as
   the network it runs on; this is the operator's to secure.
-- Every presence read of a network phone costs one more `getprop`.
+- Every presence read and every reclaim of a network phone costs one more
+  `getprop`. A presence read that has to reconnect waits up to the
+  reconnect's time limit, which also delays grants of the worker's other
+  Android phones.
 - The physical record gains one optional field in the core's schema. The
   contract does not carry it, and the driver's new key is no contract
-  shape change.
+  shape change. The new refusal reason is one, so the protocol is bumped.
 - A phone that changes address needs a `device remove` and a `device add`.
