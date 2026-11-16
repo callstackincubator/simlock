@@ -1,4 +1,4 @@
-# 0079. An Android worker may enrol phones reached over the network
+# 0080. An Android worker may enrol phones reached over the network
 
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-16
@@ -40,8 +40,9 @@ first passes the default server's protocol check (ADR 0022 §5).
 
 The Android driver gains a worker key (named in the feature's design).
 Off, the default, nothing changes: a network-only phone is refused
-`network-only`. On, a network transport in state `device` counts as a
-phone the driver may enrol, list as present and list for auto-enrolment.
+`network-only`. On, a network transport, in any state, counts as a
+phone the driver may enrol and list for auto-enrolment; it is present
+only in state `device`.
 An emulator is never one, whatever transport it is on. USB phones are
 unchanged.
 
