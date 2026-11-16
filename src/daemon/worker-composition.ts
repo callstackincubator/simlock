@@ -213,7 +213,7 @@ export async function composeWorker(
           database: state.database,
           ...(config.android.defaultImageTag === undefined
             ? {}
-            : { defaultImageTag: config.android.defaultImageTag }),
+            : { androidDefaultImageTag: config.android.defaultImageTag }),
           driversConfig: config.drivers,
           eventBus,
           filesystem,

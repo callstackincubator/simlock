@@ -168,7 +168,7 @@ describe("AndroidDriver", () => {
   describe("default-image-tag-not-installed advisory", () => {
     const missing = (tag: string, installed: string) => ({
       code: "default-image-tag-not-installed",
-      message: `android.defaultImageTag "${tag}" matches no installed system image built for arm64-v8a (installed tags: ${installed}), so a lease that names no image tag gets today's image. Install one with sdkmanager, or correct the setting.`,
+      message: `android.defaultImageTag is "${tag}", but no installed system image for this machine's CPU (arm64-v8a) has that tag (installed for arm64-v8a: ${installed}). Android leases that name no image tag get the image they would get without it.`,
     });
 
     async function tagAdvisories(
@@ -210,7 +210,7 @@ describe("AndroidDriver", () => {
           name: "no image for the host CPU",
           images: [["35", "default", "x86_64"]] as const,
           tag: "google_apis",
-          expected: [],
+          expected: [missing("google_apis", "none")],
         },
         { name: "setting unset", images: host, tag: undefined, expected: [] },
       ];

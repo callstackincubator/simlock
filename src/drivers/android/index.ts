@@ -733,12 +733,13 @@ export class AndroidDriver implements Driver {
     const tag = this.#defaultImageTag;
     if (tag === undefined) return [];
     const hostImages = this.#systemImages.builtForHost(await this.#systemImages.installedImages());
-    if (hostImages.length === 0 || hostImages.some((image) => image.tag === tag)) return [];
-    const installed = [...new Set(hostImages.map((image) => image.tag))].sort().join(", ");
+    if (hostImages.some((image) => image.tag === tag)) return [];
+    const installed =
+      [...new Set(hostImages.map((image) => image.tag))].sort().join(", ") || "none";
     return [
       {
         code: "default-image-tag-not-installed",
-        message: `android.defaultImageTag "${tag}" matches no installed system image built for ${this.#hostAbi} (installed tags: ${installed}), so a lease that names no image tag gets today's image. Install one with sdkmanager, or correct the setting.`,
+        message: `android.defaultImageTag is "${tag}", but no installed system image for this machine's CPU (${this.#hostAbi}) has that tag (installed for ${this.#hostAbi}: ${installed}). Android leases that name no image tag get the image they would get without it.`,
       },
     ];
   }

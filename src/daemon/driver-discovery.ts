@@ -64,7 +64,7 @@ export interface DriverDiscoveryContext {
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
   /** why: the worker's `android.defaultImageTag`, which the Android driver checks against its installed images. */
-  readonly defaultImageTag?: string;
+  readonly androidDefaultImageTag?: string;
   readonly database: SqliteDatabase;
   readonly driversConfig: Config["drivers"];
   readonly eventBus: Pick<EventBus, "emit">;
@@ -275,9 +275,9 @@ async function discoverAndroidDriver(
       database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       config: options.androidConfig,
-      ...(options.defaultImageTag === undefined
+      ...(options.androidDefaultImageTag === undefined
         ? {}
-        : { defaultImageTag: options.defaultImageTag }),
+        : { defaultImageTag: options.androidDefaultImageTag }),
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),

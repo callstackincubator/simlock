@@ -289,7 +289,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     );
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-      defaultImageTag: "gogle_apis",
+      androidDefaultImageTag: "gogle_apis",
       processRunner: new ScriptedProcessRunner([]),
     });
     const advisories = await drivers
@@ -532,7 +532,12 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     overrides: Partial<
       Pick<
         DriverDiscoveryContext,
-        "androidConfig" | "clock" | "defaultImageTag" | "hostArch" | "logger" | "processRunner"
+        | "androidConfig"
+        | "clock"
+        | "androidDefaultImageTag"
+        | "hostArch"
+        | "logger"
+        | "processRunner"
       >
     > = {},
   ) {

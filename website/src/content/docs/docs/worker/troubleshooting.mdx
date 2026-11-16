@@ -67,7 +67,7 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 
 **Symptom.** `simlock doctor` prints `Warning [android] default-image-tag-not-installed` on stderr, and Android leases that name no image tag get the same image as without `android.defaultImageTag`.
 
-**Cause.** No installed system image built for this machine's CPU has the tag the setting names, for example a typo, or an image installed only for another CPU. The message lists the tags that are installed for this CPU. Doctor says nothing when no image for this CPU is installed at all, or when the setting is not set.
+**Cause.** No installed system image built for this machine's CPU has the tag the setting names, for example a typo, or an image installed only for another CPU. The message lists the tags that are installed for this CPU. When no image for this CPU is installed at all, the message lists `none`. Doctor says nothing when the setting is not set.
 
 **Fix.** Install an image with that tag, such as `sdkmanager "system-images;android-35;google_apis_playstore;arm64-v8a"` (use your CPU's ABI), or correct `android.defaultImageTag`. See [Choose the system image](/simlock/docs/using-devices/choosing-a-device#choose-the-system-image-android).
 
