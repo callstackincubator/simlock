@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
-import { deviceRoot, driverData, instanceId, plantManagedDevice, simctl } from "./test-slim.js";
+import { deviceRoot, driverData, instanceId, plantManagedDevice } from "./test-slim.js";
 import {
   listFixture,
   listInvocation,
@@ -11,6 +11,7 @@ import {
   seedUdid,
   sourcesSimctl,
   spec,
+  throwawaySeedSteps,
   throwawayUdid,
 } from "./test-index.js";
 
@@ -21,25 +22,10 @@ afterEach(() => {
 describe("IosSimctlDriver seed throwaway", () => {
   it("the first provision of a kind makes its seed from a throwaway", async () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
-    const name = "simlock-seed-device-1";
     const cases = [
       {
         label: "simlock set",
-        steps: [
-          {
-            match: simctl("create", name, driverData.deviceTypeId, driverData.runtimeId),
-            result: { code: 0, stderr: "", stdout: `${throwawayUdid}\n` },
-          },
-          { match: simctl("boot", throwawayUdid) },
-          { match: simctl("bootstatus", throwawayUdid, "-b") },
-          { match: simctl("listapps", throwawayUdid) },
-          { match: simctl("shutdown", throwawayUdid) },
-          {
-            match: simctl("clone", throwawayUdid, name, `${deviceRoot}/sources`),
-            result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-          },
-          { match: simctl("delete", throwawayUdid) },
-        ],
+        steps: throwawaySeedSteps(),
       },
     ];
     for (const scenario of cases) {

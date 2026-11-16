@@ -29,6 +29,7 @@ import {
   seededDatabase,
   simctlPassthrough,
   spec,
+  throwawayUdid,
 } from "./test-index.js";
 
 describe("IosSimctlDriver device set", () => {
@@ -75,13 +76,18 @@ describe("IosSimctlDriver device set", () => {
         {
           args: ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId],
           scoped: true,
-          sources: true,
+          stdout: `${throwawayUdid}\n`,
+        },
+        { args: ["boot", throwawayUdid], scoped: true },
+        { args: ["bootstatus", throwawayUdid, "-b"], scoped: true },
+        { args: ["listapps", throwawayUdid], scoped: true },
+        { args: ["shutdown", throwawayUdid], scoped: true },
+        {
+          args: ["clone", throwawayUdid, "simlock-seed-device-1", sourcesSet],
+          scoped: true,
           stdout: `${seedUdid}\n`,
         },
-        { args: ["boot", seedUdid], scoped: true, sources: true },
-        { args: ["bootstatus", seedUdid, "-b"], scoped: true, sources: true },
-        { args: ["listapps", seedUdid], scoped: true, sources: true },
-        { args: ["shutdown", seedUdid], scoped: true, sources: true },
+        { args: ["delete", throwawayUdid], scoped: true },
         {
           args: ["clone", seedUdid, driverData.name, devicesDir],
           scoped: true,
@@ -109,7 +115,7 @@ describe("IosSimctlDriver device set", () => {
             : ["simctl", ...step.args];
       const runner = new ScriptedProcessRunner(
         steps.flatMap((step) => [
-          ...(!scoped && step.args[0] === "boot" && step.sources !== true
+          ...(!scoped && step.args[0] === "boot" && step.args[1] === driverData.udid
             ? deviceHubEdit(
                 `Set :DevicePreferences:${driverData.udid}:pasteboardSyncEnabled false`,
               ).map((match) => ({ match }))
@@ -120,7 +126,7 @@ describe("IosSimctlDriver device set", () => {
               ? {}
               : { result: { code: 0, stderr: "", stdout: step.stdout } }),
           },
-          ...(!scoped && step.args[0] === "delete"
+          ...(!scoped && step.args[0] === "delete" && step.args[1] === driverData.udid
             ? deviceHubEdit(`Delete :DevicePreferences:${driverData.udid}`).map((match) => ({
                 match,
               }))

@@ -218,6 +218,7 @@ export class IosSimctlDriver implements Driver {
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       logger: options.logger,
+      logsRoot: options.logsRoot,
       marks: this.#marks,
       ownsDeviceSet: rootOptions !== undefined,
       seedTurns: this.#seedTurns,

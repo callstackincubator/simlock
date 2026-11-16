@@ -362,3 +362,23 @@ export const prepareFull = { mode: "full", purpose: "prepare" } as const;
 export const throwawayUdid = "00000000-0000-0000-0000-0000000000bb";
 
 export const logsRoot = "/Logs/CoreSimulator";
+
+/** why: the calls that make a seed from a throwaway under the `simlock` set, in order; a test starts its script with these, after the catalog read. */
+export function throwawaySeedSteps(seed: string = seedUdid) {
+  const name = "simlock-seed-device-1";
+  return [
+    {
+      match: simctl("create", name, driverData.deviceTypeId, driverData.runtimeId),
+      result: { code: 0, stderr: "", stdout: `${throwawayUdid}\n` },
+    },
+    { match: simctl("boot", throwawayUdid) },
+    { match: simctl("bootstatus", throwawayUdid, "-b") },
+    { match: simctl("listapps", throwawayUdid) },
+    { match: simctl("shutdown", throwawayUdid) },
+    {
+      match: simctl("clone", throwawayUdid, name, `${deviceRoot}/sources`),
+      result: { code: 0, stderr: "", stdout: `${seed}\n` },
+    },
+    { match: simctl("delete", throwawayUdid) },
+  ];
+}

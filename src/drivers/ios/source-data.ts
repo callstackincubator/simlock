@@ -29,9 +29,11 @@ export const iosSourceDataOwner: SqliteSchemaOwner = {
              OR (newer.created_at = ios_source_data.created_at AND newer.source_id > ios_source_data.source_id)));
      CREATE UNIQUE INDEX ios_source_data_ready_seed ON ios_source_data (spec_key)
        WHERE kind = 'seed' AND state = 'ready';`,
+    // why: ADR 0076: the throwaway a seed was copied from, kept so a restart mid-make can delete it through the row.
+    "ALTER TABLE ios_source_data ADD COLUMN throwaway_udid TEXT",
   ],
   name: "ios-source-data",
-  version: 2,
+  version: 3,
 };
 
 export interface NewSourceRow {
@@ -52,6 +54,7 @@ export interface SourceRow {
   readonly sourceId: string;
   readonly kind: "seed" | "baseline";
   readonly udid: string | undefined;
+  readonly throwawayUdid: string | undefined;
   readonly deviceTypeId: string;
   readonly runtimeId: string;
   readonly runtimeBuild: string | undefined;
@@ -101,6 +104,12 @@ export class IosSourceTable {
   setUdid(sourceId: string, udid: string): void {
     this.#database
       .prepare("UPDATE ios_source_data SET udid = ? WHERE source_id = ?")
+      .run(udid, sourceId);
+  }
+
+  setThrowaway(sourceId: string, udid: string): void {
+    this.#database
+      .prepare("UPDATE ios_source_data SET throwaway_udid = ? WHERE source_id = ?")
       .run(udid, sourceId);
   }
 
@@ -162,7 +171,7 @@ export class IosSourceTable {
   #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
-        `SELECT source_id, kind, udid, device_type_id, runtime_id, runtime_build, model, os_version,
+        `SELECT source_id, kind, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
            state, maker, size_bytes FROM ios_source_data ${where}`,
       )
       .all(...parameters)
@@ -170,6 +179,7 @@ export class IosSourceTable {
         sourceId: row["source_id"] as string,
         kind: row["kind"] as "seed" | "baseline",
         udid: (row["udid"] as string | null) ?? undefined,
+        throwawayUdid: (row["throwaway_udid"] as string | null) ?? undefined,
         deviceTypeId: row["device_type_id"] as string,
         runtimeId: row["runtime_id"] as string,
         runtimeBuild: (row["runtime_build"] as string | null) ?? undefined,

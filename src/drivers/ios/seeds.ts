@@ -43,6 +43,7 @@ interface SeedsOptions {
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly logger: Logger | undefined;
+  readonly logsRoot: string | undefined;
   readonly marks: DeviceMarks;
   readonly ownsDeviceSet: boolean;
   readonly seedTurns: SeedTurns;
@@ -61,6 +62,7 @@ export class Seeds {
   readonly #idGenerator: IdGenerator;
   readonly #instanceId: string;
   readonly #logger: Logger | undefined;
+  readonly #logsRoot: string | undefined;
   readonly #marks: DeviceMarks;
   readonly #ownsDeviceSet: boolean;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -81,6 +83,7 @@ export class Seeds {
     this.#idGenerator = options.idGenerator;
     this.#instanceId = options.instanceId;
     this.#logger = options.logger;
+    this.#logsRoot = options.logsRoot;
     this.#marks = options.marks;
     this.#ownsDeviceSet = options.ownsDeviceSet;
     this.#seedTurns = options.seedTurns;
@@ -310,6 +313,9 @@ export class Seeds {
       sourceId,
       specKey,
     });
+    let throwaway: string | undefined;
+    let keepRow = false;
+    let seedClone: string | undefined;
     try {
       await this.#ensureSourcesSet();
       const created = await this.#simctl.createSimulator(
@@ -319,28 +325,41 @@ export class Seeds {
           resolved.deviceType.identifier,
           resolved.runtime.identifier,
         ],
-        { destination: this.#sourcesSet, source: this.#sourcesSet },
+        {},
       );
-      const udid = created.stdout.trim();
-      this.#sources.setUdid(sourceId, udid);
+      throwaway = created.stdout.trim();
+      this.#sources.setThrowaway(sourceId, throwaway);
       try {
-        await this.#boot.bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
+        await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
       } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
         // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
         if (error instanceof BootTimeoutError) throw error;
-        throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
+        throw new DriverCrashError(`seed ${throwaway} did not boot: ${errorMessage(error)}`);
       }
-      try {
-        await this.#simctl.shutdown(udid, this.#sourcesSet);
-      } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
-        throw error;
-      }
-      this.#sources.markReady(sourceId, await this.#sizeOf(udid));
-      return { sourceId, udid, runtimeBuild: resolved.runtime.build };
+      await this.#simctl.shutdown(throwaway);
+      const cloned = await this.#simctl.createSimulator(
+        ["clone", throwaway, `simlock-seed-${sourceId}`, this.#sourcesSet],
+        { destination: this.#sourcesSet },
+      );
+      seedClone = cloned.stdout.trim();
+      this.#sources.setUdid(sourceId, seedClone);
+      const done = throwaway;
+      throwaway = undefined;
+      keepRow = true;
+      await this.#deleteThrowaway(done, false);
+      keepRow = false;
+      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone));
+      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
-      this.#sources.deleteRow(sourceId);
+      if (seedClone !== undefined)
+        await this.#deleteSeedSimulator(seedClone).catch(() => undefined);
+      if (throwaway !== undefined) {
+        keepRow = !(await this.#deleteThrowaway(throwaway, true).then(
+          () => true,
+          () => false,
+        ));
+      }
+      if (!keepRow) this.#sources.deleteRow(sourceId);
       throw error;
     }
   }
@@ -361,6 +380,7 @@ export class Seeds {
   async #removeLeftover(row: SourceRow): Promise<void> {
     try {
       if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+      if (row.throwawayUdid !== undefined) await this.#deleteThrowaway(row.throwawayUdid, true);
       this.#sources.deleteRow(row.sourceId);
     } catch (error: unknown) {
       this.#logger?.warn(
@@ -381,8 +401,29 @@ export class Seeds {
 
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#simctl.bestEffortShutdown(udid, this.#sourcesSet);
+    await this.#deleteIn(udid, this.#sourcesSet);
+  }
+
+  /** why: ADR 0076 §1: the throwaway lives in the device set and is deleted only through the `making` row that names it (ADR 0001 §6), with its log folder, which `simctl delete` leaves behind. */
+  async #deleteThrowaway(udid: string, shutdownFirst: boolean): Promise<void> {
+    if (shutdownFirst) await this.#simctl.bestEffortShutdown(udid);
+    await this.#deleteIn(udid, undefined);
+    await this.#deleteLogFolder(udid);
+  }
+
+  async #deleteLogFolder(udid: string): Promise<void> {
+    if (this.#logsRoot === undefined) return;
+    const path = join(this.#logsRoot, udid);
+    try {
+      await this.#filesystem.rm(path);
+    } catch (error: unknown) {
+      this.#logger?.warn(`could not delete log folder ${path}: ${errorMessage(error)}`);
+    }
+  }
+
+  async #deleteIn(udid: string, set: string | undefined): Promise<void> {
     const args = ["delete", udid];
-    const outcome = await this.#simctl.invoke(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const outcome = await this.#simctl.invoke(args, COMMAND_TIMEOUT_MS, set);
     // why: a seed deleted by hand is already gone, and its row must still be dropped.
     if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
     this.#simctl.checked(args, COMMAND_TIMEOUT_MS, outcome);

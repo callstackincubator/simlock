@@ -24,6 +24,8 @@ import {
   seededDatabase,
   sourcesSimctl,
   spec,
+  throwawaySeedSteps,
+  throwawayUdid,
 } from "./test-index.js";
 
 /**
@@ -214,19 +216,7 @@ describe("IosSimctlDriver", () => {
               { match: sourcesSimctl("delete", stuckUdid) },
             ]
           : []),
-        {
-          match: sourcesSimctl(
-            "create",
-            "simlock-seed-device-1",
-            driverData.deviceTypeId,
-            driverData.runtimeId,
-          ),
-          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-        },
-        { match: sourcesSimctl("boot", seedUdid) },
-        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-        { match: sourcesSimctl("listapps", seedUdid) },
-        { match: sourcesSimctl("shutdown", seedUdid) },
+        ...throwawaySeedSteps(),
         { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
       ]);
       const filesystem = new MemoryFilesystem();
@@ -254,7 +244,7 @@ describe("IosSimctlDriver", () => {
     },
     {
       name: "the seed's boot fails",
-      message: `seed ${seedUdid} did not boot: `,
+      message: `seed ${throwawayUdid} did not boot: `,
       script: [{ code: 1, op: "bootstatus" }],
       tail: ["shutdown", "delete"],
     },
@@ -271,16 +261,16 @@ describe("IosSimctlDriver", () => {
       const steps = ["create", "boot", "bootstatus", "listapps", "shutdown"];
       const upTo = steps.indexOf(failing.op);
       const results = new Map<string, { code: number; stderr: string; stdout: string }>([
-        ["create", { code: 0, stderr: "", stdout: `${seedUdid}\n` }],
+        ["create", { code: 0, stderr: "", stdout: `${throwawayUdid}\n` }],
       ]);
       const database = await memorySourceDatabase();
       const entries = steps.slice(0, upTo + 1).map((op) => {
-        const match = sourcesSimctl(
+        const match = simctl(
           ...(op === "create"
             ? ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId]
             : op === "bootstatus"
-              ? [op, seedUdid, "-b"]
-              : [op, seedUdid]),
+              ? [op, throwawayUdid, "-b"]
+              : [op, throwawayUdid]),
         );
         if (op !== failing.op)
           return { match, ...(results.has(op) ? { result: results.get(op)! } : {}) };
@@ -291,7 +281,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
         ...entries,
-        ...tail.map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+        ...tail.map((op) => ({ match: simctl(op, throwawayUdid) })),
       ]);
       const clock = new FakeClock();
       const driver = await createDriver(runner, clock, undefined, database);
@@ -314,7 +304,7 @@ describe("IosSimctlDriver", () => {
         ...tail,
       ]);
       expect(runner.calls.slice(1).map((call) => call.args[2])).toEqual(
-        runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
+        runner.calls.slice(1).map(() => deviceRoot),
       );
       expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
     },
@@ -332,21 +322,21 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
         {
-          match: sourcesSimctl(
+          match: simctl(
             "create",
             "simlock-seed-device-1",
             driverData.deviceTypeId,
             driverData.runtimeId,
           ),
-          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+          result: { code: 0, stderr: "", stdout: `${throwawayUdid}\n` },
         },
         ...ran.map((op) => {
-          const match = sourcesSimctl(
-            ...(op === "bootstatus" ? [op, seedUdid, "-b"] : [op, seedUdid]),
+          const match = simctl(
+            ...(op === "bootstatus" ? [op, throwawayUdid, "-b"] : [op, throwawayUdid]),
           );
           return op === hangs ? { hangs: true, match } : { match };
         }),
-        ...["shutdown", "shutdown", "delete"].map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+        ...["shutdown", "shutdown", "delete"].map((op) => ({ match: simctl(op, throwawayUdid) })),
       ]);
       const clock = new FakeClock();
       const driver = await createDriver(runner, clock, undefined, database, undefined, 2_000);
@@ -395,6 +385,7 @@ describe("IosSimctlDriver", () => {
         }
       }
       const planted = staleUdid;
+      const throwaway = throwawaySeedSteps();
       const cloneOf = (udid: string) => sourcesSimctl("clone", udid, driverData.name, deviceRoot);
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: JSON.stringify(catalog) } },
@@ -402,19 +393,7 @@ describe("IosSimctlDriver", () => {
           ? [
               { match: sourcesSimctl("shutdown", staleUdid) },
               { match: sourcesSimctl("delete", staleUdid) },
-              {
-                match: sourcesSimctl(
-                  "create",
-                  "simlock-seed-device-1",
-                  driverData.deviceTypeId,
-                  driverData.runtimeId,
-                ),
-                result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-              },
-              { match: sourcesSimctl("boot", seedUdid) },
-              { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-              { match: sourcesSimctl("listapps", seedUdid) },
-              { match: sourcesSimctl("shutdown", seedUdid) },
+              ...throwaway,
             ]
           : []),
         {
@@ -439,7 +418,18 @@ describe("IosSimctlDriver", () => {
 
       expect(runner.calls.map((call) => call.args[3]).filter((verb) => verb !== "list")).toEqual(
         remade
-          ? ["shutdown", "delete", "create", "boot", "bootstatus", "listapps", "shutdown", "clone"]
+          ? [
+              "shutdown",
+              "delete",
+              "create",
+              "boot",
+              "bootstatus",
+              "listapps",
+              "shutdown",
+              "clone",
+              "delete",
+              "clone",
+            ]
           : ["clone"],
       );
     },
