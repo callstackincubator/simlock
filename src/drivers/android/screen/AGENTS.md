@@ -38,11 +38,9 @@ The body:
 
 ## Known gaps
 
-- **A fresh emulator answers its first resets slowly.** In its first 15 s of streaming, the emulator takes 2 to 5 s to
-  restart its encoder after a reset (0.2 to 0.5 s afterwards), so a joiner then waits up to 9 s for a key frame, not 5.
+- **A fresh emulator answers its first resets slowly**, so a joiner then waits longer than the ADR's bound for a key frame.
 - **The slow-lane stream test has not passed yet.** `e2e/slow-android-stream.test.ts` failed at the
-  lease on a nearly full disk. A live check on a Pixel 9 emulator streamed, and once the host
-  `adb shell` died no scrcpy process and no jar were left on the device.
+  lease on a nearly full disk.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **A phone that is not charging is woken but not held awake**: stay awake does nothing without power. When its
   screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on
