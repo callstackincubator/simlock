@@ -102,6 +102,7 @@ export class PhysicalEnrollment {
         return "skipped" as const;
       }
       if (existing === undefined) {
+        this.#requireOneRecord(platform, id, read);
         return {
           created: await this.options.registry.enrollPhysical({ ...read, initiator, platform }),
         };
@@ -199,7 +200,34 @@ export class PhysicalEnrollment {
       driverDeviceId: inspection.driverDeviceId,
       model: inspection.model,
       osVersion: inspection.osVersion,
+      ...(inspection.hardwareSerial === undefined
+        ? {}
+        : { hardwareSerial: inspection.hardwareSerial }),
     };
+  }
+
+  /** why: one phone keeps one record whatever address it is reached at; this runs under the lock at each commit, never on a stale read (ADR 0079 §2). */
+  #requireOneRecord(
+    platform: Platform,
+    id: string,
+    read: Omit<PhysicalEnrollmentInput, "platform">,
+  ): void {
+    const { hardwareSerial } = read;
+    const holder = this.options.registry.snapshot.devices.find(
+      (device): device is PhysicalDevice =>
+        device.physical &&
+        device.state !== "deleted" &&
+        device.driverDeviceId !== read.driverDeviceId &&
+        device.driverDeviceId === hardwareSerial,
+    );
+    if (holder === undefined || hardwareSerial === undefined) return;
+    throw new DeviceNotEnrollableError(
+      platform,
+      id,
+      "enrolled-under-other-id",
+      `this phone (hardware serial ${hardwareSerial}) is enrolled as ${holder.driverDeviceId}; remove that record first`,
+      holder.driverDeviceId,
+    );
   }
 
   #recordIds(driverDeviceId: string): Set<string> {
