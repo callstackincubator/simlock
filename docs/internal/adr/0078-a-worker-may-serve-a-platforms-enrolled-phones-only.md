@@ -36,7 +36,8 @@ as today, so the phones of that platform are served as today.
 
 - A request that does not pass `--physical` is refused at once, before
   any catalog read or download: `UNKNOWN_MODEL`, with a message that
-  names the key and `--physical`. It never waits.
+  names the key and both ways to ask for a physical device (`--physical`,
+  or `physical: true`). It never waits.
 - Warm targets and learned kinds resolve through the same step, so they
   are refused there too and boot nothing.
 - At start, every idle virtual device of that platform is destroyed. A
@@ -51,7 +52,7 @@ flowchart TD
   F -- yes --> P[Phone path, as today]
   F -- no --> K{P.virtualDevices}
   K -- true --> V[Virtual path, as today]
-  K -- false --> X[UNKNOWN_MODEL: phones only, pass --physical]
+  K -- false --> X[UNKNOWN_MODEL: phones only, ask for a physical one]
 ```
 
 ### 3. A worker says so in its catalog, and a gateway gives the same answer
@@ -82,8 +83,8 @@ known worker that has the platform reports `virtualDevices: false`.
 
 ## Consequences
 
-- An agent behind a phones-only worker reads one message and passes
-  `--physical`.
+- An agent behind a phones-only worker reads one message and asks for a
+  physical device.
 - A phones-only Android worker still needs the whole Android SDK, because
   the driver starts only when the emulator tools are there. Starting
   Android with only `adb` is left to a later request.
