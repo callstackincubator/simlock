@@ -51,7 +51,7 @@ export const ALIVE_AFTER_MS = 5_000;
 const ALIVE_FRAME = encodeScreenFrame(SCREEN_FRAME_TAG.alive, new Uint8Array(0));
 // why: ADR 0079 §5 bounds the gap between key frames at 5 s; scrcpy's encoder sends none for a still screen
 // and the reset (control message 17) makes it send a session, parameters and a key frame at once.
-export const RESET_VIDEO_AFTER_MS = 5_000;
+const RESET_VIDEO_AFTER_MS = 5_000;
 const RESET_VIDEO = new Uint8Array([17]);
 const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
