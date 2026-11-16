@@ -154,5 +154,13 @@ describe("FrameSplitter", () => {
         ),
       "a frame of exactly the bound",
     ).not.toThrow();
+    const oneOver = new FrameSplitter();
+    expect(
+      () =>
+        oneOver.push(
+          Uint8Array.from([...metaFrame(), ...header(MAX_FRAME_BYTES - 3, CAPTURE_TAG.keyframe)]),
+        ),
+      "a frame of one byte over the bound",
+    ).toThrow(`over the 8388608 a frame may be`);
   });
 });
