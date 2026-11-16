@@ -130,6 +130,8 @@ What the routes answer:
 - A lease that isn't yours, or doesn't exist, answers `404 UNKNOWN_LEASE`.
 - With streaming off on the daemon you call, the route answers a plain `404`. Through a gateway, streaming must also be on for the lease's worker, or the answer is `503 STREAM_UNAVAILABLE`.
 
+A worker's answer carries `simlock-stream-keyframe-ms: 5000`, its promise of a key frame at least every 5 seconds. A gateway shares one relayed stream between the viewers of a device or lease only for a worker that makes the promise, and its own answer to you never carries the header. A client can ignore it.
+
 The body is H.264 frames in Simlock's own framing, made for the console's player. It runs until you close the request, or until the device stops or its lease ends. When a lease end stops the stream, the last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Other ends send no such frame.
 
 ## Send input to your own lease
