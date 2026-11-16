@@ -21,15 +21,21 @@ export function namesLineage(chunk: Uint8Array, lineage: readonly string[]): boo
   return lineage.some((udid) => forms(udid).some((form) => bytes.includes(form)));
 }
 
-/** why: the UDID swap (ADR 0076 §4) replaces each lineage UDID with the copy's own, byte for byte, so the output has the input's length. */
+/** why: the UDID swap (ADR 0076 §4) replaces each lineage UDID with the copy's own; a UDID has one length, so the output has the input's length, and a caller checks it. */
 export function swapLineage(chunk: Uint8Array, swap: LineageSwap): Uint8Array {
-  const out = Buffer.from(chunk);
+  let out = Buffer.from(chunk);
   const own = Buffer.from(swap.own, "latin1");
   for (const udid of swap.lineage) {
     const needle = Buffer.from(udid, "latin1");
-    for (let at = out.indexOf(needle); at !== -1; at = out.indexOf(needle, at + needle.length)) {
-      own.copy(out, at);
+    if (needle.length === 0) continue;
+    const pieces: Buffer[] = [];
+    let from = 0;
+    for (let at = out.indexOf(needle); at !== -1; at = out.indexOf(needle, from)) {
+      pieces.push(out.subarray(from, at), own);
+      from = at + needle.length;
     }
+    pieces.push(out.subarray(from));
+    out = Buffer.concat(pieces);
   }
   return out;
 }
