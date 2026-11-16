@@ -41,11 +41,28 @@ export type ModelPreferences = Readonly<
 export interface PlatformCatalog extends DriverCatalogEntry {
   readonly platform: Platform;
   readonly classDefaults: Readonly<Partial<Record<DeviceClass, string>>>;
+  /** why: `false` for a platform whose `<platform>.virtualDevices` is off (ADR 0078 §3); absent otherwise. */
+  readonly virtualDevices?: false;
 }
 
 export interface ScreenAvailability {
   readonly platform: Platform;
   readonly reason?: string;
+}
+
+/** why: the catalog entry of a platform whose virtual devices are off: the platform stays so a gateway still routes phone requests to this worker (ADR 0078 §3). */
+function phonesOnlyEntry(platform: Platform): PlatformCatalog {
+  return {
+    classDefaults: {},
+    defaultRuntime: undefined,
+    modelAliases: {},
+    modelClasses: {},
+    modelRuntimes: {},
+    models: [],
+    platform,
+    runtimes: [],
+    virtualDevices: false,
+  };
 }
 
 export class DriverCatalog {
@@ -204,6 +221,7 @@ export class DriverCatalog {
   async listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]> {
     const listed = await Promise.all(
       this.select(platform).map(async (driver): Promise<PlatformCatalog | undefined> => {
+        if (!this.virtualDevices(driver.platform)) return phonesOnlyEntry(driver.platform);
         try {
           const entry = await driver.listCatalog();
           return {

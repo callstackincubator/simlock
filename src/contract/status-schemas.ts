@@ -306,6 +306,8 @@ export const platformCatalogSchema = z.object({
     .optional(),
   defaultMode: deviceModeSchema.optional(),
   defaultImageTag: imageTagSchema.optional(),
+  /** why: ADR 0078 §3: `false` says this worker serves only enrolled physical devices of the platform; absent means it makes virtual devices. */
+  virtualDevices: z.literal(false).optional(),
 });
 
 /**
