@@ -27,6 +27,13 @@ afterEach(() => {
   scopedRunners.length = 0;
 });
 
+class BrokenLogRemoval extends MemoryFilesystem {
+  override async rm(path: string): Promise<void> {
+    if (path.startsWith(logsRoot)) throw new Error("denied");
+    await super.rm(path);
+  }
+}
+
 const copyUdid = "00000000-0000-0000-0000-000000000002";
 const name = "simlock-seed-device-1";
 const coreSimulatorRoot = "/CoreSim";
@@ -147,12 +154,6 @@ describe("IosSimctlDriver seed throwaway", () => {
       match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
       result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
     };
-    class BrokenLogRemoval extends MemoryFilesystem {
-      override async rm(path: string): Promise<void> {
-        if (path.startsWith(logsRoot)) throw new Error("denied");
-        await super.rm(path);
-      }
-    }
     const failures = [
       {
         label: "boot fails",
@@ -390,6 +391,70 @@ describe("IosSimctlDriver seed throwaway", () => {
         n: 0,
       });
       await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), label).resolves.toBe(false);
+    }
+  });
+
+  it("baseline.save deletes the saved-from lease's log folder", async () => {
+    const baselineName = "simlock-baseline-device-1";
+    const leaseLogs = `${logsRoot}/${driverData.udid}`;
+    const clone = simctl("clone", driverData.udid, baselineName, `${deviceRoot}/sources`);
+    const cloneUdid = "00000000-0000-0000-0000-0000000000cc";
+    const cases = [
+      { label: "present", plant: true, clone: "ok", logs: false, warnings: [] },
+      { label: "absent", plant: false, clone: "ok", logs: false, warnings: [] },
+      {
+        label: "delete fails",
+        plant: true,
+        clone: "ok",
+        fs: new BrokenLogRemoval(),
+        logs: true,
+        warnings: [`could not delete log folder ${leaseLogs}: denied`],
+      },
+      { label: "clone fails", plant: true, clone: "fails", logs: true, warnings: [] },
+    ] as const;
+    for (const scenario of cases) {
+      const database = await memorySourceDatabase();
+      const logger = new RecordingLogger();
+      const filesystem = "fs" in scenario ? scenario.fs : new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(`${deviceRoot}/sources/${cloneUdid}`);
+      if (scenario.plant) await filesystem.mkdirp(leaseLogs);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        scenario.clone === "ok"
+          ? { match: clone, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } }
+          : { match: clone, result: { code: 1, stderr: "no space", stdout: "" } },
+      ]);
+      scopedRunners.push(runner);
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        database,
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        logger,
+        logsRoot,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+
+      const saved = await driver
+        .saveSource({
+          address: driverData.udid,
+          deviceId: driverData.udid,
+          driverData,
+          physical: false,
+        })
+        .then(
+          () => "saved",
+          () => "failed",
+        );
+
+      expect(saved, scenario.label).toBe(scenario.clone === "ok" ? "saved" : "failed");
+      await expect(filesystem.exists(leaseLogs), scenario.label).resolves.toBe(scenario.logs);
+      expect(logger.warnings, scenario.label).toEqual(scenario.warnings);
     }
   });
 });
