@@ -304,6 +304,16 @@ export class AndroidPhysicalHandler {
 
   async reclaim(device: PhysicalDriverDevice): Promise<ReclaimResult> {
     const serial = device.deviceId;
+    if (device.hardwareSerial !== undefined) {
+      // why: a lease can end before the watcher sees the address change hands, so nothing is uninstalled before the phone proves it is the enrolled one (ADR 0080 §2).
+      const read = await this.#readText(serial, ["shell", "getprop", "ro.serialno"]);
+      if (read.kind !== "ok") throw failure("the hardware serial", read.ran);
+      if (read.value !== device.hardwareSerial) {
+        throw new Error(
+          `the phone at ${serial} is not the enrolled one (hardware serial ${read.value}, enrolled ${device.hardwareSerial})`,
+        );
+      }
+    }
     const user = await this.#readUser(serial);
     if (user.kind !== "ok") throw failure("the current user id", user.ran);
     const before = await this.#readPackages(serial, user.value);
