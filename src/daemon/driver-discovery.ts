@@ -36,6 +36,7 @@ import {
   type IdGenerator,
   type Logger,
   NodeBytePipeLauncher,
+  NodeSqliteOpener,
   NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   type ProcessRunner,
@@ -203,6 +204,7 @@ async function discoverIosDriver(
       onSilenceFailed: logSilenceFailure(logger),
       onWindowFailed: logWindowFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
+      sqliteOpener: new NodeSqliteOpener(),
       screenCapture: {
         baseEnvironment: process.env,
         command: PACKAGED_SCREEN_CAPTURE,
