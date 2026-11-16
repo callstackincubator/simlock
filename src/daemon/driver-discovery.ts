@@ -275,6 +275,9 @@ async function discoverAndroidDriver(
       database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       config: options.androidConfig,
+      ...(options.defaultImageTag === undefined
+        ? {}
+        : { defaultImageTag: options.defaultImageTag }),
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),
