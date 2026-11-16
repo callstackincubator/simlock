@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { StreamCaller } from "./caller.js";
 import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import { StreamRefusalError } from "./refusal.js";
+import { ScriptedFeed } from "./test-fixtures.js";
 
 const OPERATOR: StreamCaller = { principal: "tok_op", role: "operator" };
 const DEVICE = { deviceId: "dev_9", workerId: "w1" };
@@ -192,5 +193,85 @@ describe("the gateway's stream link", () => {
       "UNKNOWN_LEASE",
       "Unknown lease: w1.lse_7",
     ]);
+  });
+});
+
+const PROMISE = { "simlock-stream-keyframe-ms": "5000" };
+const LEASE = { leaseId: "w1.lse_7", workerId: "w1", workerLeaseId: "lse_7" };
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+interface RelayCall {
+  readonly signal: AbortSignal;
+  readonly tenant: string;
+  readonly url: string;
+}
+
+// why: each relay gets a body of its own, as a worker's answer does, so a test sees which viewers share one.
+function relaying(headers: Record<string, string>, gate?: Promise<void>) {
+  const calls: RelayCall[] = [];
+  const port: FleetPort = {
+    knowsWorker: (workerId) => workerId === "w1",
+    relay: async (_workerId, call) => {
+      calls.push({ signal: call.request.signal, tenant: call.tenant, url: call.request.url });
+      if (calls.length === 1) await gate;
+      const feed = new ScriptedFeed();
+      feed.meta();
+      return new Response(feed.body, { headers: streamHeaders(headers) });
+    },
+    requesterPrefix: "gw:inst:",
+  };
+  return { calls, link: createGatewayStreamLink({ fleet: port }) };
+}
+
+describe("viewers of one target through the gateway's stream link", () => {
+  it("share one relay per worker and target once the worker promises key frames, and each of a worker that does not has its own", async () => {
+    const shared = relaying(PROMISE);
+    for (let viewer = 0; viewer < 3; viewer += 1) {
+      await shared.link.serve(DEVICE, OPERATOR, signal());
+    }
+    expect(shared.calls.map((call) => call.url)).toEqual([
+      "http://simlock-worker/stream/devices/dev_9",
+    ]);
+
+    await shared.link.serve(LEASE, HOLDER, signal());
+    await shared.link.serve(LEASE, OPERATOR, signal());
+    expect(shared.calls.map((call) => call.url)).toEqual([
+      "http://simlock-worker/stream/devices/dev_9",
+      "http://simlock-worker/stream/leases/lse_7",
+    ]);
+
+    await refusalOf(shared.link.serve(DEVICE, HOLDER, signal()));
+    await refusalOf(shared.link.serve({ ...DEVICE, workerId: "w_nobody" }, OPERATOR, signal()));
+    expect(shared.calls).toHaveLength(2);
+
+    for (const headers of [{}, { "simlock-stream-keyframe-ms": "4999" }]) {
+      const alone = relaying(headers);
+      const first = new AbortController();
+      const second = new AbortController();
+      await alone.link.serve(DEVICE, OPERATOR, first.signal);
+      await alone.link.serve(DEVICE, OPERATOR, second.signal);
+      expect(alone.calls).toHaveLength(2);
+      first.abort();
+      expect(alone.calls.map((call) => call.signal.aborted)).toEqual([true, false]);
+      second.abort();
+      expect(alone.calls.map((call) => call.signal.aborted)).toEqual([true, true]);
+    }
+
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const waiting = relaying({}, gate);
+    const first = new AbortController();
+    const second = new AbortController();
+    const a = waiting.link.serve(DEVICE, OPERATOR, first.signal);
+    const b = waiting.link.serve(DEVICE, OPERATOR, second.signal);
+    await flush();
+    expect(waiting.calls).toHaveLength(1);
+    release();
+    await Promise.all([a, b]);
+    expect(waiting.calls).toHaveLength(2);
+    first.abort();
+    expect(waiting.calls.map((call) => call.signal.aborted)).toEqual([true, false]);
+    second.abort();
+    expect(waiting.calls.map((call) => call.signal.aborted)).toEqual([true, true]);
   });
 });
