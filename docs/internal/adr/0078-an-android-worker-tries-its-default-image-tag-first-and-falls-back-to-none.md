@@ -1,6 +1,6 @@
 # 0078. An Android worker tries its default image tag first, and a lease falls back to none
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-16
 - **Issue:** [#1590](https://github.com/callstackincubator/simlock/issues/1590) (request [#1220](https://github.com/callstackincubator/simlock/issues/1220))
 - **Supersedes:** nothing. Narrows [ADR 0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md)
