@@ -963,11 +963,37 @@ describe("createWorkerStream", () => {
     expect(feeds[0]?.closes).toBe(0);
   };
 
+  const leaves5 = async () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    const { feeds, opened, stream } = worker([], true, false, gate);
+    const leaving = new AbortController();
+    const first = stream.mount.handle(
+      new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+        signal: leaving.signal,
+      }),
+      OPERATOR,
+    );
+    await flush();
+    leaving.abort();
+    await flush();
+    const next = openOnRoute(stream, "lease");
+    await flush();
+    expect(opened(), "a new viewer after every viewer left during the open").toBe(2);
+    openIt();
+    await first;
+    const watching = watch(await next);
+    await flush();
+    expect(watching.frames).toEqual(["meta 330x720"]);
+    expect(feeds.map((feed) => feed.closes)).toEqual([1, 0]);
+  };
+
   it("closes the capture once, when its last viewer leaves: a viewer that leaves, or whose expiresAt passes, closes nothing while another watches", async () => {
     await leaves1();
     await leaves2();
     await leaves3();
     await leaves4();
+    await leaves5();
   });
 
   it("a lease end or a device stop ends every viewer of the device as it ends one: each gets the lease-end frame when there is a reason, then the end, and the capture closes once", async () => {
@@ -1049,6 +1075,30 @@ describe("createWorkerStream", () => {
       const refused = await openOnRoute(stream, "device");
       expect(refused.status).toBe(409);
       expect(opened()).toBe(2);
+    }
+
+    {
+      let closeIt = () => {};
+      const closing = new Promise<void>((resolve) => (closeIt = resolve));
+      const { emit, feeds, opened, stream } = worker();
+      await watchers(stream, 1);
+      const old = feeds[0]!;
+      const close = old.close.bind(old);
+      // why: a capture whose close is slow is stopped but still in flight, the window a late viewer must not join.
+      old.close = async () => {
+        await closing;
+        await close();
+      };
+      emit("device.shutdown", "dev_leased");
+      await flush();
+      const again = watch(await openOnRoute(stream, "device"));
+      await flush();
+      expect(opened(), "a viewer that asks while the stopped capture is still closing").toBe(2);
+      expect(again.frames).toEqual(["meta 330x720"]);
+      closeIt();
+      await flush();
+      expect(again.ended).toBe(false);
+      expect(feeds[0]?.closes).toBe(1);
     }
   });
 
