@@ -5,7 +5,10 @@
 - **Issue:** [#1590](https://github.com/callstackincubator/simlock/issues/1590) (request [#1220](https://github.com/callstackincubator/simlock/issues/1220))
 - **Supersedes:** nothing. Narrows [ADR 0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md)
   §4: on a worker with a default image tag, an Android lease that names no
-  tag does not start from the newest level with any fitting image. ADR 0015
+  tag does not start from the newest level with any fitting image. Also
+  narrows [ADR 0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md)
+  §9: one config-set field, the Android default image tag, joins the catalog
+  (as ADR 0066 did for the iOS slim set). ADR 0015
   §5 and §7 stand: the level is picked as for a tagged request, and the
   grant names the tag the device has.
 

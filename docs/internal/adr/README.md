@@ -46,7 +46,7 @@ the status is stale.
 | [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by 0039; §19c's piped stdin narrowed by 0058; items 10 and 11, decision 5 and requirements 14 and 30 narrowed by 0074; Non-goals (port forwarding) narrowed by 0054 and 0064; Non-goals (file transfer) and §19b′ narrowed by 0067 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted; §2 narrowed by 0032 (the event record is a database) |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted |
-| [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android |
+| [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android, §9 by 0078 |
 | [0009](0009-gateway-routing-is-a-list-of-stages.md) | Gateway routing is a list of stages, and a request that cannot be served fails at once | Accepted — partly implemented: §6's `defaultRuntime` rule |
 | [0010](0010-components-have-one-owner-in-the-core.md) | Components are installed, recorded and removed through one owner in the core | Accepted |
 | [0011](0011-the-console-is-a-built-app-the-daemon-serves.md) | The console is a built app the daemon serves at `/` | Accepted |
