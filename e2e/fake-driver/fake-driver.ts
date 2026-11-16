@@ -649,6 +649,7 @@ export class OutOfProcessFakeDriver implements Driver {
       enrollable: true,
       model: device.model ?? "Fake Phone",
       osVersion: device.osVersion ?? "1.0",
+      ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
     };
   }
 

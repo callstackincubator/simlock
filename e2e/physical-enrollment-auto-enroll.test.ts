@@ -270,6 +270,30 @@ describe("devices.autoEnroll", () => {
     ).toEqual(["operator"]);
   });
 
+  it("enrols a listed network ID with no record as auto, and refuses one whose hardware serial is already enrolled as enrolled-under-other-id, logged once, with no event", async () => {
+    const network = (address: string): ScriptedPhysicalDevice => ({
+      ...PIXEL,
+      hardwareSerial: "R58M123ABC",
+      ids: [address],
+    });
+    const env = await autoDaemon({ android: { physicalDevices: [network("192.168.1.5:5555")] } });
+    await waitFor(async () => (await named(env, "device.enrolled")).length === 1, {
+      label: "the network phone is enrolled",
+    });
+
+    await plug(env, "android", [network("192.168.1.5:5555"), network("192.168.1.9:5555")]);
+    await waitFor(async () => (await autoEnrollLog(env)).length === 1, { label: "the refusal" });
+    await observeFor(700, async () => {
+      expect(await autoEnrollLog(env), "several runs at one reason write one line").toEqual([
+        "auto-enroll: android 192.168.1.9:5555 not enrolled: this phone (hardware serial R58M123ABC) is enrolled as 192.168.1.5:5555; remove that record first",
+      ]);
+    });
+
+    expect((await named(env, "device.enrolled")).map((entry) => entry.payload)).toEqual([
+      expect.objectContaining({ driverDeviceId: "192.168.1.5:5555", initiator: "auto" }),
+    ]);
+  });
+
   it("forgets which phones are held out when the daemon restarts, so a removed phone still plugged in is enrolled on the first run", async () => {
     const env = await autoDaemon({ ios: { physicalDevices: [IPHONE] } });
     await waitFor(async () => (await named(env, "device.enrolled")).length === 1, {
