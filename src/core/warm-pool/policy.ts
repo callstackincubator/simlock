@@ -229,10 +229,9 @@ export function reserveOnVirtualPlatforms(
   reserve: { readonly ios: number; readonly android: number },
   virtualDevices: (platform: "ios" | "android") => boolean,
 ): { readonly ios: number; readonly android: number } {
-  return {
-    android: virtualDevices("android") ? reserve.android : 0,
-    ios: virtualDevices("ios") ? reserve.ios : 0,
-  };
+  const kept = (platform: "ios" | "android"): number =>
+    virtualDevices(platform) ? reserve[platform] : 0;
+  return { android: kept("android"), ios: kept("ios") };
 }
 
 /**
