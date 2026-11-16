@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SCREEN_FRAME_TAG } from "../core/index.js";
+import { encodeScreenFrame, encodeScreenMeta, SCREEN_FRAME_TAG } from "../core/index.js";
 import type { StreamCaller } from "./caller.js";
 import type { CapturedStream } from "./feed.js";
 import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
@@ -235,6 +235,27 @@ function relaying(headers: Record<string, string>, gate?: Promise<void>) {
   return { calls, feeds, link: createGatewayStreamLink({ fleet: port }) };
 }
 
+// why: a fleet that answers whatever the test says, to every relay.
+function relayingAs(answer: () => Response | Promise<Response>) {
+  const calls: RelayCall[] = [];
+  const port: FleetPort = {
+    knowsWorker: () => true,
+    relay: async (_workerId, call) => {
+      let aborted = 0;
+      call.request.signal.addEventListener("abort", () => (aborted += 1));
+      calls.push({
+        aborts: () => aborted,
+        signal: call.request.signal,
+        tenant: call.tenant,
+        url: call.request.url,
+      });
+      return await answer();
+    },
+    requesterPrefix: "gw:inst:",
+  };
+  return { calls, link: createGatewayStreamLink({ fleet: port }) };
+}
+
 describe("viewers of one target through the gateway's stream link", () => {
   it("share one relay per worker and target once the worker promises key frames, and each of a worker that does not has its own", async () => {
     const shared = relaying(PROMISE);
@@ -423,5 +444,131 @@ describe("a shared relay's viewers", () => {
     release();
     await flush();
     expect(waiting.calls.map((call) => call.aborts())).toEqual([1, 0]);
+  });
+});
+
+const META = { codec: "h264", fps: 30, height: 720, width: 330 } as const;
+const frameHeader = (length: number, tag: number) => {
+  const bytes = new Uint8Array(5);
+  new DataView(bytes.buffer).setUint32(0, length);
+  bytes[4] = tag;
+  return bytes;
+};
+const bodyOf = (...chunks: Uint8Array[]) =>
+  new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+
+// why: a viewer read to its end, whatever ends it, so a test compares what two viewers were each told.
+async function told(stream: CapturedStream): Promise<{ frames: number; error?: string }> {
+  const reader = stream.body.getReader();
+  let frames = 0;
+  try {
+    for (let step = await reader.read(); !step.done; step = await reader.read()) frames += 1;
+    return { frames };
+  } catch (error) {
+    return { error: (error as Error).message, frames };
+  }
+}
+
+describe("a shared relay that is refused or fails", () => {
+  it("refuses or ends every viewer waiting on it the same way", async () => {
+    const refusals: [string, () => Response | Promise<Response>, number, string, string][] = [
+      [
+        "a refusal",
+        () =>
+          Response.json(
+            { error: { code: "DEVICE_NOT_RUNNING", message: "The device is shutdown" } },
+            { status: 409 },
+          ),
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is shutdown",
+      ],
+      [
+        "an unreachable worker",
+        () => {
+          throw new CodedError("WORKER_UNREACHABLE", "worker w1 is not connected");
+        },
+        503,
+        "WORKER_UNREACHABLE",
+        "worker w1 is not connected",
+      ],
+    ];
+    for (const [label, answer, status, code, message] of refusals) {
+      const shared = relayingAs(answer);
+      const both = await Promise.all([
+        refusalOf(shared.link.serve(DEVICE, OPERATOR, signal())),
+        refusalOf(shared.link.serve(DEVICE, OPERATOR, signal())),
+      ]);
+      expect(shared.calls, label).toHaveLength(1);
+      for (const refusal of both) {
+        expect([refusal.status, refusal.code, refusal.message], label).toEqual([
+          status,
+          code,
+          message,
+        ]);
+      }
+    }
+
+    const meta = encodeScreenMeta(META);
+    const key = encodeScreenFrame(SCREEN_FRAME_TAG.keyframe, Uint8Array.of(1));
+    const ended = encodeScreenFrame(
+      SCREEN_FRAME_TAG.ended,
+      new TextEncoder().encode('{"reason":"explicit"}'),
+    );
+    const brokenMeta = encodeScreenFrame(
+      SCREEN_FRAME_TAG.meta,
+      new TextEncoder().encode(JSON.stringify({ ...META, codec: "vp9" })),
+    );
+    const bodies: [string, Uint8Array[], string | undefined][] = [
+      [
+        "a frame over the bound",
+        [meta, frameHeader(9_000_000, SCREEN_FRAME_TAG.delta)],
+        "The screen stream sent a frame of 9000004 bytes, over the 8388608 a frame may be",
+      ],
+      [
+        "a frame of length 0",
+        [meta, frameHeader(0, SCREEN_FRAME_TAG.delta)],
+        "The screen stream's output is not a frame envelope",
+      ],
+      [
+        "a first frame that is not meta",
+        [key],
+        "The screen stream does not begin with a meta frame",
+      ],
+      [
+        "a later meta frame that fails the check",
+        [meta, brokenMeta],
+        "The screen capture names a codec this stream cannot carry: vp9",
+      ],
+      ["the body ending", [meta, key, ended], undefined],
+    ];
+    for (const [label, chunks, error] of bodies) {
+      const shared = relayingAs(
+        () => new Response(bodyOf(...chunks), { headers: streamHeaders(PROMISE) }),
+      );
+      const both = await Promise.all([
+        shared.link.serve(DEVICE, OPERATOR, signal()),
+        shared.link.serve(DEVICE, OPERATOR, signal()),
+      ]);
+      const outcomes = await Promise.all(both.map(told));
+      expect(outcomes, label).toEqual(
+        error === undefined
+          ? [{ frames: 3 }, { frames: 3 }]
+          : [
+              { error, frames: 0 },
+              { error, frames: 0 },
+            ],
+      );
+      await flush();
+      expect(
+        shared.calls.map((call) => call.aborts()),
+        label,
+      ).toEqual([1]);
+    }
   });
 });

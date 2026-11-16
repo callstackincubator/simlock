@@ -143,7 +143,7 @@ async function openShared(
     );
     captured = await fromResponse(workerId, subject, response);
   } catch (error) {
-    if (relays.get(key) === entry) relays.delete(key);
+    drop(relays, key, entry);
     const waiters = [...entry.waiters];
     entry.waiters.clear();
     for (const waiter of waiters) waiter.reject(withCallersLeaseId(waiter.target, error));
@@ -152,7 +152,7 @@ async function openShared(
   const waiters = [...entry.waiters];
   entry.waiters.clear();
   if (waiters.length === 0) {
-    if (relays.get(key) === entry) relays.delete(key);
+    drop(relays, key, entry);
     await captured.close();
     return;
   }
@@ -161,14 +161,14 @@ async function openShared(
     entry.broadcast = broadcast;
     void broadcast.done.then(() => {
       entry.controller.abort();
-      if (relays.get(key) === entry) relays.delete(key);
+      drop(relays, key, entry);
     });
     for (const waiter of waiters) waiter.resolve(broadcast.join(waiter.signal));
     return;
   }
   // why: a worker that makes no promise cannot start a joiner, so its first viewer takes this relay as its
   // own -- its leaving ends it -- and each other viewer asks for one of its own, as before sharing.
-  if (relays.get(key) === entry) relays.delete(key);
+  drop(relays, key, entry);
   const [taker, ...others] = waiters;
   if (taker === undefined) return;
   taker.signal.addEventListener("abort", () => entry.controller.abort(), { once: true });
