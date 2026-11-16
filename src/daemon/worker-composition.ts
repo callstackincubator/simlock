@@ -211,6 +211,9 @@ export async function composeWorker(
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
           clock,
           database: state.database,
+          ...(config.android.defaultImageTag === undefined
+            ? {}
+            : { androidDefaultImageTag: config.android.defaultImageTag }),
           driversConfig: config.drivers,
           eventBus,
           filesystem,
