@@ -512,6 +512,7 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     options: {
       readonly driver?: FakeDriver;
       readonly drivers?: (driver: FakeDriver) => ReclaimDriverCatalog;
+      readonly hardwareSerial?: string;
       readonly logger?: Logger;
       readonly realQuarantine?: boolean;
     } = {},
@@ -538,6 +539,7 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
       apps: [],
       class: "phone",
       driverDeviceId: PHYSICAL_ID,
+      ...(options.hardwareSerial === undefined ? {} : { hardwareSerial: options.hardwareSerial }),
       model: "iPhone 15 Pro",
       osVersion: "18.4",
       platform: "ios",
@@ -653,6 +655,20 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     expect(harness.device()).toMatchObject({
       quarantineCause: { kind: "purge-failed", message: "Error: uninstall exploded" },
     });
+  });
+
+  it("a failed physical reclaim reads presence with the record's driverDeviceId and hardwareSerial", async () => {
+    const harness = await physicalHarness("reclaiming", { hardwareSerial: "SER-1" });
+    harness.driver.setPhysicalPresence(PHYSICAL_ID, true);
+    harness.driver.failOn("reclaim", 1, new Error("uninstall exploded"));
+
+    await harness.coordinator.reclaim(releasedPhysical(harness.device()));
+
+    expect(
+      harness.driver.calls
+        .filter((call) => call.operation === "listPresentPhysical")
+        .map((call) => call.arguments[0]),
+    ).toEqual([[{ driverDeviceId: PHYSICAL_ID, hardwareSerial: "SER-1" }]]);
   });
 
   it("a physical device's purge that fails while present after its lease is handed to quarantine as purge-failed", async () => {
