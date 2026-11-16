@@ -51,9 +51,14 @@ async function fingerprint(folder: string): Promise<Record<string, string>> {
     if (entry.isSymbolicLink()) result[path] = `link ${await readlink(path)}`;
     else if (entry.isFile()) {
       const { mtimeMs, size } = await stat(path);
-      const hash = createHash("sha256")
-        .update(await readFile(path))
-        .digest("hex");
+      // why: a system service's cache file inside a source can be unreadable to the test (EPERM); the product records it as unreadable too, so its size and time stand for it.
+      const hash = await readFile(path).then(
+        (bytes) => createHash("sha256").update(bytes).digest("hex"),
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "EPERM" || error.code === "EACCES") return "unreadable";
+          throw error;
+        },
+      );
       result[path] = `${size} ${mtimeMs} ${hash}`;
     }
   }
