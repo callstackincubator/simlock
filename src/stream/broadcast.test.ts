@@ -21,6 +21,14 @@ function source() {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+// why: a broadcast that never stops would leave `await done` to time out; racing it against a short
+// wait makes that a named assertion on "settled" instead.
+const outcome = (promise: Promise<void>) =>
+  Promise.race([
+    promise.then(() => "settled"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 500)),
+  ]);
+
 // why: `viewers`, `done` and a viewer's `close` are the broadcast's own surface, which the worker's
 // stream shows only through what it does with them; here they are checked one by one.
 describe("createBroadcast", () => {
@@ -52,7 +60,7 @@ describe("createBroadcast", () => {
       expect(calls.closes, last).toBe(0);
 
       await leave[last]();
-      await broadcast.done;
+      expect(await outcome(broadcast.done), last).toBe("settled");
       expect(broadcast.viewers, last).toBe(0);
       expect(calls.closes, last).toBe(1);
     }
@@ -73,7 +81,7 @@ describe("createBroadcast", () => {
       tags.push(step.value[4]);
     }
     expect(tags).toEqual([SCREEN_FRAME_TAG.meta, SCREEN_FRAME_TAG.keyframe]);
-    await broadcast.done;
+    expect(await outcome(broadcast.done)).toBe("settled");
     expect(calls.closes).toBe(1);
   });
 });
