@@ -553,12 +553,18 @@ export class Seeds {
 
 /** why: a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
 function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
+  if (seed.lineage === undefined) return true;
   const current = resolved.runtime.build;
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }
 
 /** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
 function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+  if (row.kind === "baseline" && row.lineage === undefined) {
+    return row.savedWithoutLineage
+      ? "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease"
+      : "saved before simulators stopped sharing folders; save it again";
+  }
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
   if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
   if (

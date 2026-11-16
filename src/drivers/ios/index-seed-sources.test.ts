@@ -486,6 +486,7 @@ describe("IosSimctlDriver", () => {
     name: string;
     edit: (catalog: Catalog) => void;
     planted?: Partial<PlantedSource>;
+    persists?: true;
     reason: string | undefined;
   }>([
     { name: "healthy", edit: () => undefined, reason: undefined },
@@ -499,12 +500,14 @@ describe("IosSimctlDriver", () => {
       name: "a baseline was saved before lineages were kept",
       edit: () => undefined,
       planted: { kind: "baseline", lineage: null },
+      persists: true,
       reason: "saved before simulators stopped sharing folders; save it again",
     },
     {
       name: "a baseline was saved from a simulator made before lineages were kept",
       edit: () => undefined,
       planted: { kind: "baseline", lineage: null, savedWithoutLineage: true },
+      persists: true,
       reason:
         "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease",
     },
@@ -543,7 +546,7 @@ describe("IosSimctlDriver", () => {
     },
   ])(
     "lists a ready source with its model, version and size, and its staleReason when $name, which clears once it is back",
-    async ({ edit, planted, reason }) => {
+    async ({ edit, persists, planted, reason }) => {
       const catalogOf = (change: (catalog: Catalog) => void) => {
         const catalog = JSON.parse(listFixture) as Catalog;
         for (const entry of catalog.runtimes) {
@@ -578,7 +581,10 @@ describe("IosSimctlDriver", () => {
           ...(reason === undefined ? {} : { staleReason: reason }),
         },
       ]);
-      expect((await driver.listSources())[0]).not.toHaveProperty("staleReason");
+      // why: a lineage the source never had does not come back with the catalog, so its reason stays.
+      const again = (await driver.listSources())[0];
+      if (persists === true) expect(again).toHaveProperty("staleReason", reason);
+      else expect(again).not.toHaveProperty("staleReason");
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list"]);
     },
   );
