@@ -70,6 +70,12 @@ type Ran =
 
 type Refusal = Extract<PhysicalInspection, { enrollable: false }>;
 
+const EMULATOR_REFUSAL: Refusal = {
+  enrollable: false,
+  message: "an emulator is not a phone, whatever it is connected through",
+  reason: "unsupported-kind",
+};
+
 export class AndroidPhysicalHandler {
   readonly #gate: DefaultAdbServerGate;
   readonly #adb: string;
@@ -205,11 +211,7 @@ export class AndroidPhysicalHandler {
       const ran = await this.#run(["-s", id, "shell", "getprop", property], READ_TIMEOUT_MS);
       if (ran.kind !== "ok") return this.#refusal(ran, `the emulator flag (getprop ${property})`);
       if (ran.stdout.trim() === "1") {
-        return {
-          enrollable: false,
-          message: "an emulator is not a phone, whatever it is connected through",
-          reason: "unsupported-kind",
-        };
+        return EMULATOR_REFUSAL;
       }
     }
     return undefined;
@@ -477,11 +479,7 @@ function unenrollable(
   if (usb.some((entry) => entry.state === "device")) return undefined;
   const network = networkDevices ? matching.filter((entry) => !entry.usb && !entry.emulator) : [];
   if (networkDevices && usb.length === 0 && matching.some((entry) => entry.emulator)) {
-    return {
-      enrollable: false,
-      message: "an emulator is not a phone, whatever it is connected through",
-      reason: "unsupported-kind",
-    };
+    return EMULATOR_REFUSAL;
   }
   if (network.some((entry) => entry.state === "device")) return undefined;
   if (usb.concat(network).some((entry) => entry.state === "unauthorized")) {
