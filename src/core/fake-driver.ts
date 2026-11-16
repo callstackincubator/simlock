@@ -77,6 +77,7 @@ export interface FakePhysicalDevice {
   readonly osVersion?: string;
   readonly class?: PhysicalClass;
   readonly apps?: readonly string[];
+  readonly hardwareSerial?: string;
   readonly refusal?: { readonly reason: DriverRefusalReason; readonly message: string };
 }
 
@@ -898,6 +899,7 @@ function readPhysical(device: FakePhysicalDevice, id: string): PhysicalInspectio
     enrollable: true,
     model: device.model ?? "Fake Phone",
     osVersion: device.osVersion ?? "1.0",
+    ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
   };
 }
 

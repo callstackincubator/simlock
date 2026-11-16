@@ -4,7 +4,10 @@ import type { Driver, DriverRefusalReason } from "./driver.js";
 import type { PhysicalEnrollmentInput, RegistrySnapshot } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
-export type DeviceNotEnrollableReason = DriverRefusalReason | "enrolled-on-other-platform";
+export type DeviceNotEnrollableReason =
+  | DriverRefusalReason
+  | "enrolled-on-other-platform"
+  | "enrolled-under-other-id";
 
 export class DeviceNotEnrollableError extends Error {
   constructor(

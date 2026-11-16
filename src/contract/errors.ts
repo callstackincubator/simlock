@@ -11,6 +11,7 @@ const DEVICE_NOT_ENROLLABLE_REASONS = [
   "unreadable",
   "virtual-device",
   "enrolled-on-other-platform",
+  "enrolled-under-other-id",
 ] as const;
 
 export type DeviceNotEnrollableReason = (typeof DEVICE_NOT_ENROLLABLE_REASONS)[number];

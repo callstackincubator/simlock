@@ -597,6 +597,28 @@ describe("PhysicalEnrollment", () => {
     expect(physicalRecords(harness)).toHaveLength(2);
   });
 
+  it("refuses a phone whose hardware serial another live record already holds, naming that record, and writes nothing", async () => {
+    const harness = await build([
+      { ids: ["R58Y61A60HN"] },
+      { hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.5:5555"] },
+    ]);
+    const control = await build([{ hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.5:5555"] }]);
+    await control.core.enrollment.add("ios", "192.168.1.5:5555");
+    expect(live(control)).toHaveLength(1);
+    await harness.core.enrollment.add("ios", "R58Y61A60HN");
+
+    const refused = harness.core.enrollment.add("ios", "192.168.1.5:5555");
+
+    await expect(refused).rejects.toMatchObject({
+      canonicalId: "R58Y61A60HN",
+      message:
+        "this phone (hardware serial R58Y61A60HN) is enrolled as R58Y61A60HN; remove that record first",
+      name: "DeviceNotEnrollableError",
+      reason: "enrolled-under-other-id",
+    });
+    expect(live(harness).map((device) => device.driverDeviceId)).toEqual(["R58Y61A60HN"]);
+  });
+
   it("names the device in its error when the second read names another device or a read fails", async () => {
     const harness = await build();
     await harness.core.enrollment.add("ios", UDID);

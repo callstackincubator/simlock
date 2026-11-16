@@ -228,6 +228,8 @@ export type PhysicalInspection =
       readonly osVersion: string;
       readonly class: PhysicalClass;
       readonly apps: readonly string[];
+      /** why: a network phone's `ro.serialno`, so one phone keeps one record whatever address it is reached at (ADR 0079 §2); absent for USB phones. */
+      readonly hardwareSerial?: string;
     }
   | {
       readonly enrollable: false;
