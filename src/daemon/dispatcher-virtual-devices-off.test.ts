@@ -67,6 +67,13 @@ describe("a worker whose <platform>.virtualDevices is false", () => {
       expect(operations).not.toContain("resolveSpec");
       expect(operations).not.toContain("listCatalog");
       expect(operations).not.toContain("installComponent");
+
+      const served = await dispatcher.dispatch(
+        "lease.request",
+        { model: "Other", platform: OTHER[off], requesterId: "agent-other" },
+        session(),
+      );
+      expect(served.device.spec.platform).toBe(OTHER[off]);
     },
   );
 

@@ -395,7 +395,7 @@ export function createCore(options: CoreOptions): Core {
     claims,
     decisions,
     idleDeletion: {
-      // why: a failed shutdown or delete must not stop the daemon from starting: the device stays as it was and the next start tries again (ADR 0080 §2).
+      // why: a failed shutdown or delete must not stop the daemon from starting: the device stays in the state it reached and the next start tries again (ADR 0080 §2).
       deleteIdle: async (device) => {
         try {
           const stopped =
