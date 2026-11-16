@@ -17,6 +17,7 @@ export interface PlantedSource {
   readonly runtimeId: string;
   readonly sizeBytes?: number;
   readonly state?: "making" | "ready";
+  readonly throwawayUdid?: string;
   readonly udid?: string;
 }
 
@@ -38,6 +39,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
   });
   if (source.udid !== undefined) table.setUdid(sourceId, source.udid);
+  if (source.throwawayUdid !== undefined) table.setThrowaway(sourceId, source.throwawayUdid);
   if (source.state !== "making") table.markReady(sourceId, source.sizeBytes);
   return database;
 }

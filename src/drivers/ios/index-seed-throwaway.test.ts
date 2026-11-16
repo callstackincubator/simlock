@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
-import { memorySourceDatabase } from "./testing.js";
+import { memorySourceDatabase, plantSource } from "./testing.js";
 import {
   deviceHubEdit,
   deviceRoot,
@@ -253,6 +253,77 @@ describe("IosSimctlDriver seed throwaway", () => {
         failure.logFolder,
       );
       expect(logger.warnings, failure.label).toEqual(failure.warnings);
+    }
+  });
+
+  it("listManaged leaves out a throwaway a making row names", async () => {
+    const runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5";
+    const own = "00000000-0000-0000-0000-0000000000e1";
+    const listed = JSON.stringify({
+      devices: {
+        [runtime]: [throwawayUdid, own].map((udid) => ({
+          dataPath: `/x/${udid}/data`,
+          name: udid,
+          state: "Shutdown",
+          udid,
+        })),
+      },
+    });
+    const cases = [
+      { label: "simlock set, a making row", world: worlds[0]!, state: "making", left: [own] },
+      { label: "default set, a making row", world: worlds[1]!, state: "making", left: [own] },
+      {
+        label: "simlock set, a ready row",
+        world: worlds[0]!,
+        state: "ready",
+        left: [throwawayUdid, own],
+      },
+    ] as const;
+    for (const { label, left, state, world } of cases) {
+      const database = plantSource(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeId: driverData.runtimeId,
+        state,
+        throwawayUdid,
+        udid: seedUdid,
+      });
+      const filesystem = new MemoryFilesystem();
+      if (!world.isDefault) await plantManagedDevice(filesystem);
+      for (const udid of [throwawayUdid, own]) {
+        await filesystem.mkdirp(`${world.devicesDir}/${udid}/data`);
+        if (world.isDefault) {
+          const mark = JSON.stringify({ instanceId, token: "t", udid });
+          await filesystem.writeFileAtomic(`${world.devicesDir}/${udid}/simlock-mark.json`, mark);
+          await filesystem.writeFileAtomic(
+            `${world.devicesDir}/${udid}/data/simlock-mark.json`,
+            mark,
+          );
+        }
+      }
+      const runner = new ScriptedProcessRunner([
+        {
+          match: simctlIn(world, undefined, "list", "-j", "devices"),
+          result: { code: 0, stderr: "", stdout: listed },
+        },
+      ]);
+      scopedRunners.push(runner);
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        coreSimulatorRoot,
+        database,
+        driverConfig: world.config,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+
+      const reality = await driver.listManaged();
+
+      expect(reality.devices.map((device) => device.deviceId).sort(), label).toEqual(
+        [...left].sort(),
+      );
     }
   });
 });
