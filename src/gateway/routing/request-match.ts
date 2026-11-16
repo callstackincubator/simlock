@@ -84,17 +84,18 @@ export function deviceFit(
   const narrowed = withBaseline(worker, request);
   const catalog = catalogOf(worker, narrowed);
   if (catalog === undefined) return undefined;
-  const model = servingModel(catalog, narrowed);
+  if (servingModel(catalog, narrowed) === undefined) return undefined;
+  const effective = withDefaultImageTag(catalog, narrowed);
+  const model = servingModel(catalog, effective);
   if (model === undefined) return undefined;
   const entry = baselineEntry(worker, request);
-  const defaultTag = defaultImageTagOf(catalog, narrowed);
   const requirement: DeviceRequirement = {
-    imageTag: narrowed.imageTag ?? defaultTag,
-    osVersion: osRequirement(catalog, model, narrowed, defaultTag !== undefined),
-    platform: narrowed.platform,
+    imageTag: effective.imageTag,
+    osVersion: osRequirement(catalog, model, effective),
+    platform: effective.platform,
     target:
-      narrowed.model === undefined
-        ? { class: wantedClass(narrowed), kind: "class" }
+      effective.model === undefined
+        ? { class: wantedClass(effective), kind: "class" }
         : { kind: "model", model },
     ...(entry === undefined ? {} : { baseline: { name: entry.name, version: entry.version } }),
   };
@@ -102,26 +103,27 @@ export function deviceFit(
 }
 
 /**
- * why: ADR 0078 §3: a worker resolves a tagless virtual Android request, with no baseline, as if
- * it named the worker's default image tag, so a ready device is warm for it only with that tag.
+ * why: ADR 0078 I4: a worker resolves a tagless virtual Android request, with no baseline, as if
+ * it named the worker's default image tag when a serving model has an image of it, else as the
+ * request came, so a ready device is warm for it with that tag only then.
  */
-function defaultImageTagOf(catalog: PlatformEntry, request: RoutableRequest): string | undefined {
-  if (request.platform !== "android" || request.imageTag !== undefined) return undefined;
-  return request.baseline === undefined ? catalog.defaultImageTag : undefined;
+function withDefaultImageTag(catalog: PlatformEntry, request: RoutableRequest): RoutableRequest {
+  const { defaultImageTag } = catalog;
+  if (request.platform !== "android" || request.imageTag !== undefined) return request;
+  if (request.baseline !== undefined || defaultImageTag === undefined) return request;
+  const tagged = { ...request, imageTag: defaultImageTag };
+  return servingModel(catalog, tagged) === undefined ? request : tagged;
 }
 
 function osRequirement(
   catalog: PlatformEntry,
   model: string,
   request: RoutableRequest,
-  tagOutranksLevel: boolean,
 ): DeviceRequirement["osVersion"] {
   const constraint = osConstraintOf(request);
   if (constraint !== undefined) return constraint;
   if (request.model === undefined) return { kind: "installed", versions: catalog.runtimes };
   const runtimes = pairedRuntimesOf(catalog, model, request);
-  // why: the default tag steers the level (ADR 0078 §2), and the gateway cannot tell which level has an image of it, so any paired level counts.
-  if (tagOutranksLevel) return { kind: "installed", versions: runtimes };
   const newest = [...runtimes].sort(compareVersions).at(-1);
   return { kind: "installed", versions: newest === undefined ? [] : [newest] };
 }

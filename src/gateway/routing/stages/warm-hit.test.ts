@@ -61,7 +61,7 @@ describe("warm-hit", () => {
     expect(warmHit.score(view([physical, deviceFixture("dev_v", "ready")]), request)).toBe(1);
   });
 
-  it("ranks a tagless Android request by a ready device with the worker's default image tag, on any level", () => {
+  it("ranks a tagless Android request by a ready device with the worker's default image tag on the newest level that has an image of it, else as it came", () => {
     const device = (id: string, osVersion: string, imageTag?: string) => ({
       ...deviceFixture(id, "ready"),
       spec: {
@@ -76,19 +76,20 @@ describe("warm-hit", () => {
       devices: NonNullable<WorkerView["devices"]>,
       defaultImageTag: string | undefined,
       baselines?: WorkerView["baselines"],
+      images = [
+        { abi: "arm64-v8a", runtime: "36", tag: "google_apis_playstore" },
+        { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
+      ],
     ): WorkerView => ({
       ...(baselines === undefined ? {} : { baselines }),
       capacity: statusFixture().capacity,
       catalog: catalogFixture([
         {
           ...(defaultImageTag === undefined ? {} : { defaultImageTag }),
-          images: [
-            { abi: "arm64-v8a", runtime: "36", tag: "google_apis_playstore" },
-            { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
-          ],
+          images,
           models: ["Pixel 9"],
           platform: "android",
-          runtimes: ["36", "37"],
+          runtimes: ["35", "36", "37"],
         },
       ]).platforms,
       connection: "connected",
@@ -124,6 +125,18 @@ describe("warm-hit", () => {
     };
     const baselined = { ...request, baseline: "smoke" };
     expect(warmHit.score(view([copy], playstore, [saved]), baselined)).toBe(1);
+    // why: I4 — no serving model has an image of the default tag, so the request ranks as it came.
+    const onlyApis = [{ abi: "arm64-v8a", runtime: "37", tag: "google_apis" }];
+    expect(warmHit.score(view([device("d1", "37")], playstore, undefined, onlyApis), request)).toBe(
+      1,
+    );
+    // why: I4 — the tag steers to the newest level with an image of it, so an older level is no hit.
+    const twoLevels = [
+      { abi: "arm64-v8a", runtime: "35", tag: playstore },
+      { abi: "arm64-v8a", runtime: "36", tag: playstore },
+    ];
+    const old = view([device("d1", "35", playstore)], playstore, undefined, twoLevels);
+    expect(warmHit.score(old, request)).toBe(0);
   });
 
   it("counts no device as warm on a worker whose devices were never read", () => {
