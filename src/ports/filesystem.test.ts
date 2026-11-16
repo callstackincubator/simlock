@@ -235,6 +235,23 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     );
   });
 
+  it("reads where a link points, repoints it in one step, and writes bytes into a file at an offset without truncating it, and refuses to read a file as a link or write into a file that is not there", async () => {
+    const filesystem = create();
+    const dir = temporaryDirectory;
+    await filesystem.mkdirp(dir);
+    await filesystem.writeFileAtomic(`${dir}/file`, "abcdef");
+    await link(filesystem, `${dir}/link`, `${dir}/old`);
+
+    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/old`);
+    await filesystem.replaceSymlink(`${dir}/link`, `${dir}/new`);
+    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/new`);
+    await filesystem.writeAt(`${dir}/file`, 2, new TextEncoder().encode("XY"));
+    await expect(filesystem.readFile(`${dir}/file`)).resolves.toBe("abXYef");
+
+    await expect(filesystem.readlink(`${dir}/file`)).rejects.toThrow();
+    await expect(filesystem.writeAt(`${dir}/missing`, 0, new Uint8Array(1))).rejects.toThrow();
+  });
+
   it("refuses to answer for a path that runs through a file", async () => {
     // why: A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
     // that is simply not there yet, and callers can only tell them apart by the errno.
