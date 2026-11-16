@@ -167,6 +167,10 @@ export class AndroidPhysicalHandler {
   }
 
   async #readDevice(id: string, network: boolean): Promise<PhysicalInspection> {
+    if (network) {
+      const emulator = await this.#refuseEmulator(id);
+      if (emulator !== undefined) return emulator;
+    }
     const serial = network ? await this.#readHardwareSerial(id) : undefined;
     if (serial?.kind === "refused") return serial.refusal;
     const model = await this.#readText(id, ["shell", "getprop", "ro.product.model"]);
@@ -190,6 +194,22 @@ export class AndroidPhysicalHandler {
       osVersion: level.value,
       ...(serial === undefined ? {} : { hardwareSerial: serial.value }),
     };
+  }
+
+  // why: `adb connect 127.0.0.1:<port>` makes an emulator look like a network phone, so the emulator's own flags decide.
+  async #refuseEmulator(id: string): Promise<Refusal | undefined> {
+    for (const property of ["ro.boot.qemu", "ro.kernel.qemu"]) {
+      const ran = await this.#run(["-s", id, "shell", "getprop", property], READ_TIMEOUT_MS);
+      if (ran.kind !== "ok") return this.#refusal(ran, `the emulator flag (getprop ${property})`);
+      if (ran.stdout.trim() === "1") {
+        return {
+          enrollable: false,
+          message: "an emulator is not a phone, whatever it is connected through",
+          reason: "unsupported-kind",
+        };
+      }
+    }
+    return undefined;
   }
 
   async #readHardwareSerial(
