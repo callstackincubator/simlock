@@ -75,7 +75,9 @@ describe("warm-hit", () => {
     const view = (
       devices: NonNullable<WorkerView["devices"]>,
       defaultImageTag: string | undefined,
+      baselines?: WorkerView["baselines"],
     ): WorkerView => ({
+      ...(baselines === undefined ? {} : { baselines }),
       capacity: statusFixture().capacity,
       catalog: catalogFixture([
         {
@@ -106,6 +108,22 @@ describe("warm-hit", () => {
     const named = { ...request, imageTag: "google_apis" };
     expect(warmHit.score(view([device("d1", "37", "google_apis")], playstore), named)).toBe(1);
     expect(warmHit.score(view([device("d1", "36", playstore)], playstore), named)).toBe(0);
+    // why: B7 — a request naming a baseline ranks as today, so the default tag does not narrow it.
+    const saved = {
+      mode: "full" as const,
+      model: "Pixel 9",
+      name: "smoke",
+      osVersion: "37",
+      platform: "android" as const,
+      savedAt: "2026-11-02T13:10:00Z",
+      version: 2,
+    };
+    const copy = {
+      ...device("d1", "37"),
+      spec: { ...device("d1", "37").spec, baseline: { name: "smoke", version: 2 } },
+    };
+    const baselined = { ...request, baseline: "smoke" };
+    expect(warmHit.score(view([copy], playstore, [saved]), baselined)).toBe(1);
   });
 
   it("counts no device as warm on a worker whose devices were never read", () => {
