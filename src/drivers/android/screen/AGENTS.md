@@ -30,7 +30,7 @@ Start and stop:
 The body:
 
 - It is pull-based (`highWaterMark: 0`): the socket is read only when the body's reader pulls, so nothing is dropped.
-- The control socket is the server's second connection, made once before the video is read. A refused control connection refuses the open; its end before `close`, or a failed write to it, ends the stream like the video's end.
+- The control socket is the server's second connection, made before the video is read. A refused control connection refuses the open; its end before `close`, or a failed write to it, ends the stream like the video's end.
 - A still screen sends no key frame, so `RESET_VIDEO_AFTER_MS` (ADR 0079 §5) without one makes the session write reset video; the answer is relayed as for a rotation.
 - After `ALIVE_AFTER_MS` of quiet the body sends an empty `alive` frame, only after the first key frame, so an encoder that never paints meets the stream's silence bound.
 - A rotation starts a new scrcpy session: a new meta frame, then a new description before the next picture. The browser decoder re-reads both mid-stream.
