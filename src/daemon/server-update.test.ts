@@ -226,7 +226,7 @@ describe("daemon.update", () => {
   });
 
   it("accepts daemon.update from an admin on a connection whose protocol range does not overlap, refuses an agent there, and lets the updater's probe read health and version through query", async () => {
-    const previous = { min: PROTOCOL_VERSION_RANGE.min - 1, max: PROTOCOL_VERSION_RANGE.max - 1 };
+    const previous = { min: PROTOCOL_VERSION_RANGE.min - 2, max: PROTOCOL_VERSION_RANGE.min - 1 };
     const mismatched = (role: "admin" | "agent") =>
       createHarness({
         protocolVersion: previous,

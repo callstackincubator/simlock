@@ -9,8 +9,8 @@ import {
 import { eventNames, fleet, REFRESH_MS, RecordingLogger } from "./test-service.js";
 
 const previousProtocol = {
-  min: PROTOCOL_VERSION_RANGE.min - 1,
-  max: PROTOCOL_VERSION_RANGE.max - 1,
+  min: PROTOCOL_VERSION_RANGE.min - 2,
+  max: PROTOCOL_VERSION_RANGE.min - 1,
 };
 
 describe("GatewayService", () => {
@@ -501,6 +501,7 @@ describe("GatewayService", () => {
   });
 
   it("marks a worker incompatible when hello finds no overlapping range, and asks it nothing else", async () => {
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previousProtocol)).toBeUndefined();
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();

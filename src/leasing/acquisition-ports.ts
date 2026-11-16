@@ -64,6 +64,8 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly components: Pick<ComponentInstaller, "install">;
   readonly decisions: AcquisitionDecision;
   readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
+  /** why: the image tag a worker gives an Android lease that names none (ADR 0078 §1). */
+  readonly defaultImageTags: Readonly<Partial<Record<Platform, string>>>;
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
   /** Mints a request's id before admission checks, so a request refused there still has one. */
