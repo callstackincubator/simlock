@@ -107,7 +107,7 @@ function describeFrame(frame: Uint8Array): string {
   const name = FRAME_NAMES[frame[4] ?? 0] ?? "?";
   return frame[4] === SCREEN_FRAME_TAG.ended
     ? `${name} ${new TextDecoder().decode(payload)}`
-    : `${name} ${[...payload].join(",")}`;
+    : `${name} ${[...payload.subarray(0, 4)].join(",")}`;
 }
 
 // why: a viewer that reads whatever arrives, so a test asserts on what a viewer got instead of
@@ -770,6 +770,86 @@ describe("createWorkerStream", () => {
       await viewer.body!.cancel();
       await flush();
       expect(feeds[0]?.closes, "the refused viewers joined nothing").toBe(1);
+    }
+  });
+
+  it("a stalled viewer never delays the capture or another viewer: past 2 MiB it drops its queued pictures and skips to the next key frame, and keeps meta, parameter sets and the lease-end frame", async () => {
+    // why: 2 KiB a picture, so 1,100 of them are past the 2 MiB a viewer may queue.
+    const picture = (index: number) => [
+      index >> 8,
+      index & 255,
+      ...Array.from({ length: 2044 }, () => 0),
+    ];
+    const lease = (reason: string) =>
+      ({ deviceId: "dev_leased", leaseId: "lse_1", reason }) as Parameters<
+        ReturnType<typeof worker>["stream"]["leaseEnd"]["leaseEnded"]
+      >[0];
+
+    {
+      const { feeds, stream } = worker();
+      const fast = watch(await openOnRoute(stream, "device"));
+      const stalled = await openOnRoute(stream, "lease");
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([0, 1]);
+      feeds[0]!.frame(SCREEN_FRAME_TAG.alive, []);
+      for (let index = 0; index < 2000; index += 1) feeds[0]!.delta(picture(index));
+      feeds[0]!.meta({ height: 800, width: 400 });
+      feeds[0]!.description([8]);
+      feeds[0]!.keyframe([9, 9]);
+      feeds[0]!.delta([9, 10]);
+      await flush();
+      expect(fast.frames, "another viewer reads every frame").toHaveLength(2008);
+      expect(fast.frames).toContain("alive ");
+      expect(fast.frames.at(-1)).toBe("delta 9,10");
+
+      const reading = watch(stalled);
+      await flush();
+      expect(reading.frames, "the stalled viewer reading again").toEqual([
+        "meta 330x720",
+        "desc 7",
+        "meta 400x800",
+        "desc 8",
+        "key 9,9",
+        "delta 9,10",
+      ]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const stalled = await openOnRoute(stream, "lease");
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([0, 1]);
+      for (let index = 0; index < 1100; index += 1) feeds[0]!.delta(picture(index));
+      await flush();
+      await stream.leaseEnd.leaseEnded(lease("killed"), new AbortController().signal);
+      const reading = watch(stalled);
+      await flush();
+      expect(reading.frames, "a full queue at a lease end").toEqual([
+        "meta 330x720",
+        "desc 7",
+        'ended {"reason":"killed"}',
+      ]);
+      expect(reading.ended).toBe(true);
+    }
+
+    {
+      const { feeds, stream } = worker([], false);
+      const first = openOnRoute(stream, "device");
+      const second = openOnRoute(stream, "lease");
+      await flush();
+      feeds[0]!.meta({ codec: "mjpeg" });
+      watch(await first);
+      const stalled = await second;
+      for (let index = 0; index < 2000; index += 1) feeds[0]!.delta(picture(index));
+      await flush();
+      const reading = watch(stalled);
+      feeds[0]!.delta(picture(2000));
+      await flush();
+      expect(reading.frames[0], "an MJPEG viewer past the bound").toBe("meta 330x720");
+      expect(reading.frames.length).toBeLessThan(1500);
+      expect(reading.frames).not.toContain("delta 0,0,0,0");
+      expect(reading.frames.at(-1)).toBe("delta 7,208,0,0");
     }
   });
 
