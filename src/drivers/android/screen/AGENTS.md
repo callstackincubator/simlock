@@ -39,8 +39,6 @@ The body:
 ## Known gaps
 
 - **A fresh emulator answers its first resets slowly**, so a joiner then waits longer than the ADR's bound for a key frame.
-- **The slow-lane stream test has not passed yet.** `e2e/slow-android-stream.test.ts` failed at the
-  lease on a nearly full disk.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **A phone that is not charging is woken but not held awake**: stay awake does nothing without power. When its
   screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on
