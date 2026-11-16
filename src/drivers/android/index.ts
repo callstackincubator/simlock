@@ -187,6 +187,8 @@ export class AndroidDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
   readonly #systemImages: SystemImages;
+  readonly #defaultImageTag: string | undefined;
+  readonly #hostAbi: string;
   readonly #seeds: Seeds;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
@@ -259,6 +261,8 @@ export class AndroidDriver implements Driver {
     // read by `SystemImages.listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
+    this.#defaultImageTag = options.defaultImageTag;
+    this.#hostAbi = options.hostAbi;
     this.#systemImages = new SystemImages({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
@@ -716,10 +720,26 @@ export class AndroidDriver implements Driver {
     const hidden = await this.#catalog.hiddenProfiles();
     return [
       ...physical,
+      ...(await this.#defaultImageTagAdvisories()),
       ...hidden.map(({ libraryName, userName }) => ({
         code: "device-profile-hidden",
         message: `"${userName}" in devices.xml is not used: Simlock's own ${libraryName} profile answers to that name`,
       })),
+    ];
+  }
+
+  // why: ADR 0078 §4 -- a setting no image meets is advice, never a refusal; only host-CPU images count, since the worker's default tag never picks another CPU's.
+  async #defaultImageTagAdvisories(): Promise<readonly DriverAdvisory[]> {
+    const tag = this.#defaultImageTag;
+    if (tag === undefined) return [];
+    const hostImages = this.#systemImages.builtForHost(await this.#systemImages.installedImages());
+    if (hostImages.length === 0 || hostImages.some((image) => image.tag === tag)) return [];
+    const installed = [...new Set(hostImages.map((image) => image.tag))].sort().join(", ");
+    return [
+      {
+        code: "default-image-tag-not-installed",
+        message: `android.defaultImageTag "${tag}" matches no installed system image built for ${this.#hostAbi} (installed tags: ${installed}), so a lease that names no image tag gets today's image. Install one with sdkmanager, or correct the setting.`,
+      },
     ];
   }
 
