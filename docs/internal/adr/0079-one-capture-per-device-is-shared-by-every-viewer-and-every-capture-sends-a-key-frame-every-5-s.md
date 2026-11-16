@@ -160,7 +160,8 @@ sequenceDiagram
 ## Consequences
 
 - `src/stream/AGENTS.md` loses its two Known gaps. Its gateway rule becomes
-  "reads the headers and each frame's length and tag, never a payload".
+  "reads the headers, each frame's length and tag, and meta frames, never a
+  picture".
 - The Android screen manual's rules gain the control socket and the reset.
   Its gaps about scrcpy's key-frame interval and about two viewers' stay-awake
   setting go, and the dark-phone gap above is added.
