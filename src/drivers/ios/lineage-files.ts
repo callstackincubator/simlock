@@ -14,24 +14,48 @@ const WINDOW_BYTES = 1_048_576;
 
 const WAL_SUFFIX = "-wal";
 
-/** why: ADR 0076 §4: before its first boot a copy's recorded files name its own UDID in place of the lineage's, each file keeping its length. */
+export interface SwapCounts {
+  readonly files: number;
+  readonly links: number;
+  readonly unreadable: number;
+}
+
+/** why: ADR 0076 §4: before its first boot a copy's recorded files and links name its own UDID in place of the lineage's, each keeping its length; an unreadable file is left. */
 export async function swapCopyFiles(
   filesystem: Filesystem,
   folder: string,
   files: readonly SourceFile[],
   swap: LineageSwap,
-): Promise<void> {
+): Promise<SwapCounts> {
+  const counts = { files: 0, links: 0, unreadable: 0 };
   for (const file of files) {
-    if (file.kind !== "file") continue;
     const path = `${folder}/${file.relativePath}`;
-    await eachWindow(filesystem, path, async (window, start) => {
-      const swapped = swapLineage(window, swap);
-      if (swapped.length !== window.length) {
-        throw new DriverCrashError(`swapping UDIDs in ${path} changed its length`);
+    if (file.kind === "unreadable") {
+      counts.unreadable += 1;
+    } else if (file.kind === "link") {
+      counts.links += 1;
+      const target = Buffer.from(await filesystem.readlink(path));
+      const swapped = swapLineage(target, swap);
+      checkLength(path, target, swapped);
+      if (!target.equals(swapped)) {
+        await filesystem.replaceSymlink(path, Buffer.from(swapped).toString());
       }
-      if (!Buffer.from(swapped).equals(window)) await filesystem.writeAt(path, start, swapped);
-      return false;
-    });
+    } else {
+      counts.files += 1;
+      await eachWindow(filesystem, path, async (window, start) => {
+        const swapped = swapLineage(window, swap);
+        checkLength(path, window, swapped);
+        if (!window.equals(swapped)) await filesystem.writeAt(path, start, swapped);
+        return false;
+      });
+    }
+  }
+  return counts;
+}
+
+function checkLength(path: string, before: Uint8Array, after: Uint8Array): void {
+  if (before.length !== after.length) {
+    throw new DriverCrashError(`swapping UDIDs in ${path} changed its length`);
   }
 }
 

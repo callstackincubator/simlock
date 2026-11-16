@@ -232,14 +232,7 @@ export class Seeds {
     try {
       await this.#marks.writeMark(udid);
       await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
-      if (seed.lineage !== undefined) {
-        await swapCopyFiles(
-          this.#filesystem,
-          join(this.#deviceRoot, udid),
-          this.#sources.filesOf(seed.sourceId),
-          { lineage: seed.lineage, own: udid },
-        );
-      }
+      if (seed.lineage !== undefined) await this.#swapLineage(seed.sourceId, seed.lineage, udid);
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
@@ -492,6 +485,19 @@ export class Seeds {
       path: this.#sourcesSet,
       platform: "ios",
     });
+  }
+
+  async #swapLineage(sourceId: string, lineage: readonly string[], udid: string): Promise<void> {
+    const started = this.#clock.now();
+    const counts = await swapCopyFiles(
+      this.#filesystem,
+      join(this.#deviceRoot, udid),
+      this.#sources.filesOf(sourceId),
+      { lineage, own: udid },
+    );
+    this.#logger?.debug(
+      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable`,
+    );
   }
 
   #recordFiles(udid: string, lineage: readonly string[]): ReturnType<typeof recordLineageFiles> {

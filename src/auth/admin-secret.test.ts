@@ -108,6 +108,9 @@ describe("AdminSecretManager", () => {
       readlink: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      replaceSymlink: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
       writeFileExclusive: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -199,6 +202,9 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       readlink: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      replaceSymlink: () => {
         throw new Error("must not touch the filesystem");
       },
       writeFileExclusive: () => {

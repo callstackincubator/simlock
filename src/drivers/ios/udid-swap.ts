@@ -21,21 +21,27 @@ export function namesLineage(chunk: Uint8Array, lineage: readonly string[]): boo
   return lineage.some((udid) => forms(udid).some((form) => bytes.includes(form)));
 }
 
-/** why: the UDID swap (ADR 0076 §4) replaces each lineage UDID with the copy's own; a UDID has one length, so the output has the input's length, and a caller checks it. */
+/** why: the UDID swap (ADR 0076 §4) replaces each lineage UDID with the copy's own in the same case and encoding; a UDID has one length, so the output has the input's length, and a caller checks it. */
 export function swapLineage(chunk: Uint8Array, swap: LineageSwap): Uint8Array {
   let out = Buffer.from(chunk);
-  const own = Buffer.from(swap.own, "latin1");
+  const ownForms = forms(swap.own);
   for (const udid of swap.lineage) {
-    const needle = Buffer.from(udid, "latin1");
-    if (needle.length === 0) continue;
-    const pieces: Buffer[] = [];
-    let from = 0;
-    for (let at = out.indexOf(needle); at !== -1; at = out.indexOf(needle, from)) {
-      pieces.push(out.subarray(from, at), own);
-      from = at + needle.length;
+    if (udid.toUpperCase() === swap.own.toUpperCase()) continue;
+    const replacements = forms(udid).map((form, index) => ({
+      form,
+      own: ownForms[index] ?? form,
+    }));
+    for (const { form, own } of replacements) {
+      if (form.length === 0) continue;
+      const pieces: Buffer[] = [];
+      let from = 0;
+      for (let at = out.indexOf(form); at !== -1; at = out.indexOf(form, from)) {
+        pieces.push(out.subarray(from, at), own);
+        from = at + form.length;
+      }
+      pieces.push(out.subarray(from));
+      out = Buffer.concat(pieces);
     }
-    pieces.push(out.subarray(from));
-    out = Buffer.concat(pieces);
   }
   return out;
 }
