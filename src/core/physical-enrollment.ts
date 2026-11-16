@@ -212,20 +212,23 @@ export class PhysicalEnrollment {
     id: string,
     read: Omit<PhysicalEnrollmentInput, "platform">,
   ): void {
-    const { hardwareSerial } = read;
+    const { driverDeviceId, hardwareSerial } = read;
     const holder = this.options.registry.snapshot.devices.find(
       (device): device is PhysicalDevice =>
         device.physical &&
         device.state !== "deleted" &&
-        device.driverDeviceId !== read.driverDeviceId &&
-        device.driverDeviceId === hardwareSerial,
+        device.driverDeviceId !== driverDeviceId &&
+        (device.hardwareSerial === driverDeviceId ||
+          (hardwareSerial !== undefined &&
+            (device.driverDeviceId === hardwareSerial ||
+              device.hardwareSerial === hardwareSerial))),
     );
-    if (holder === undefined || hardwareSerial === undefined) return;
+    if (holder === undefined) return;
     throw new DeviceNotEnrollableError(
       platform,
       id,
       "enrolled-under-other-id",
-      `this phone (hardware serial ${hardwareSerial}) is enrolled as ${holder.driverDeviceId}; remove that record first`,
+      `this phone (hardware serial ${hardwareSerial ?? driverDeviceId}) is enrolled as ${holder.driverDeviceId}; remove that record first`,
       holder.driverDeviceId,
     );
   }
