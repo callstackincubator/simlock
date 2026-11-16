@@ -161,7 +161,7 @@ export class Seeds {
       await this.#slimBoot.copyOverrides(data.udid, cloneUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
-      this.#sources.markReady(sourceId, sizeBytes);
+      this.#sources.markReady(sourceId, sizeBytes, { files: [], lineage: [] });
       // why: ADR 0076: the lease is destroyed next, and `simctl delete` leaves its log folder behind for the baseline's copies to inherit.
       await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
@@ -369,8 +369,11 @@ export class Seeds {
       keepRow = true;
       await this.#deleteThrowaway(done, false);
       keepRow = false;
-      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone));
-      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build };
+      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone), {
+        files: [],
+        lineage: [],
+      });
+      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build, lineage: [] };
     } catch (error: unknown) {
       if (seedClone !== undefined)
         await this.#deleteSeedSimulator(seedClone).catch(() => undefined);

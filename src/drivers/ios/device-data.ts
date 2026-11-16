@@ -1,4 +1,5 @@
 import type { DeviceDataTable } from "../../core/index.js";
+import { UDID_PATTERN } from "./device-set-leftovers.js";
 
 interface IosDeviceDataRow {
   readonly udid: string;
@@ -7,6 +8,7 @@ interface IosDeviceDataRow {
   readonly runtime_id: string;
   readonly slim_signature: string | null;
   readonly slim_mark_token: string | null;
+  readonly lineage: string | null;
 }
 
 interface IosDriverData {
@@ -16,19 +18,23 @@ interface IosDriverData {
   readonly slimMarkToken?: string;
   readonly slimSignature?: string;
   readonly udid: string;
+  readonly lineage?: readonly string[];
 }
 
 const REQUIRED_KEYS = ["deviceTypeId", "name", "runtimeId", "udid"] as const;
 const OPTIONAL_KEYS = ["slimMarkToken", "slimSignature"] as const;
+const KNOWN_KEYS = new Set<string>([...REQUIRED_KEYS, ...OPTIONAL_KEYS, "lineage"]);
 
 function isIosDriverData(value: unknown): value is IosDriverData {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  const known = new Set<string>([...REQUIRED_KEYS, ...OPTIONAL_KEYS]);
   return (
-    Object.keys(record).every((key) => known.has(key)) &&
+    Object.keys(record).every((key) => KNOWN_KEYS.has(key)) &&
     REQUIRED_KEYS.every((key) => typeof record[key] === "string") &&
-    OPTIONAL_KEYS.every((key) => record[key] === undefined || typeof record[key] === "string")
+    OPTIONAL_KEYS.every((key) => record[key] === undefined || typeof record[key] === "string") &&
+    (record["lineage"] === undefined ||
+      (Array.isArray(record["lineage"]) &&
+        record["lineage"].every((udid) => typeof udid === "string" && UDID_PATTERN.test(udid))))
   );
 }
 
@@ -43,12 +49,14 @@ export const iosDeviceDataTable: DeviceDataTable = {
        slim_signature TEXT,
        slim_mark_token TEXT
      ) STRICT`,
+    // why: ADR 0076: the lineage of the source this device was copied from, kept so a save knows it without reading the copy; null on a device made before.
+    "ALTER TABLE ios_device_data ADD COLUMN lineage TEXT",
   ],
   name: "ios-device-data",
   read(database, deviceId) {
     const row = database
       .prepare(
-        "SELECT udid, name, device_type_id, runtime_id, slim_signature, slim_mark_token FROM ios_device_data WHERE device_id = ?",
+        "SELECT udid, name, device_type_id, runtime_id, slim_signature, slim_mark_token, lineage FROM ios_device_data WHERE device_id = ?",
       )
       .get(deviceId) as IosDeviceDataRow | undefined;
     if (row === undefined) throw new Error(`No ios driver data for device ${deviceId}`);
@@ -58,10 +66,11 @@ export const iosDeviceDataTable: DeviceDataTable = {
       runtimeId: row.runtime_id,
       ...(row.slim_mark_token === null ? {} : { slimMarkToken: row.slim_mark_token }),
       ...(row.slim_signature === null ? {} : { slimSignature: row.slim_signature }),
+      ...(row.lineage === null ? {} : { lineage: JSON.parse(row.lineage) as string[] }),
       udid: row.udid,
     };
   },
-  version: 1,
+  version: 2,
   write(database, deviceId, driverData) {
     if (!isIosDriverData(driverData)) {
       throw new Error(`Invalid ios driver data for device ${deviceId}`);
@@ -69,11 +78,12 @@ export const iosDeviceDataTable: DeviceDataTable = {
     const data = driverData;
     database
       .prepare(
-        `INSERT INTO ios_device_data (device_id, udid, name, device_type_id, runtime_id, slim_signature, slim_mark_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO ios_device_data (device_id, udid, name, device_type_id, runtime_id, slim_signature, slim_mark_token, lineage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (device_id) DO UPDATE SET udid = excluded.udid, name = excluded.name,
            device_type_id = excluded.device_type_id, runtime_id = excluded.runtime_id,
-           slim_signature = excluded.slim_signature, slim_mark_token = excluded.slim_mark_token`,
+           slim_signature = excluded.slim_signature, slim_mark_token = excluded.slim_mark_token,
+           lineage = excluded.lineage`,
       )
       .run(
         deviceId,
@@ -83,6 +93,7 @@ export const iosDeviceDataTable: DeviceDataTable = {
         data.runtimeId,
         data.slimSignature ?? null,
         data.slimMarkToken ?? null,
+        data.lineage === undefined ? null : JSON.stringify(data.lineage),
       );
   },
 };

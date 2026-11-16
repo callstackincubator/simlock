@@ -9,7 +9,7 @@ import {
   type Logger,
 } from "../../ports/index.js";
 import { IosSimctlDriver, SLIM_CATEGORIES } from "./index.js";
-import { plantReadySeed, memorySourceDatabase } from "./testing.js";
+import { plantReadySeed, memorySourceDatabase, type PlantedSource } from "./testing.js";
 import {
   simctl,
   deviceRoot,
@@ -94,7 +94,7 @@ export function sourcesSimctl(...args: readonly string[]): {
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
 export async function seededDatabase(
-  seed: { readonly runtimeBuild?: string; readonly udid?: string } = {},
+  seed: Partial<Pick<PlantedSource, "files" | "lineage" | "runtimeBuild" | "udid">> = {},
 ): Promise<SqliteDatabase> {
   return plantReadySeed(await memorySourceDatabase(), {
     deviceTypeId: driverData.deviceTypeId,
