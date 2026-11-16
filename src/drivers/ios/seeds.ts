@@ -162,6 +162,8 @@ export class Seeds {
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
       this.#sources.markReady(sourceId, sizeBytes);
+      // why: ADR 0076: the lease is destroyed next, and `simctl delete` leaves its log folder behind for the baseline's copies to inherit.
+      await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
     } catch (error: unknown) {
       if (cloneUdid !== undefined && cloneUdid !== "") {

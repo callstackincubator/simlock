@@ -28,6 +28,8 @@ Resolve and boot:
 Seeds (ADR 0061):
 
 - A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` or `simlock simctl list`.
+- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is created in the device set, booted once and shut down, cloned unbooted into the sources set, then deleted with its log folder (`logsRoot`), so a seed never names its own folder. Under `default` the throwaway carries this instance's marks and DeviceHub clipboard sync is off before its boot. `saveSource` deletes the saved-from lease's log folder the same way. A log folder that cannot be deleted is logged and the make or save goes on; a throwaway that cannot be deleted fails the make.
+- A throwaway is deleted only through the `making` row that names it (`throwaway_udid`): `listManaged` leaves it out, and the first `listSources` of a later process (or the next make of its kind) deletes it with its log folder and the row.
 - Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app, system apps included, under the original device's folder. A clone whose drop fails is deleted.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
 - A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and one silent 5 minutes more is killed and logged.
