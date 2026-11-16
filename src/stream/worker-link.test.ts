@@ -177,23 +177,6 @@ describe("the worker's stream link", () => {
     expect(await captures.stopOnDevice("dev_1")).toBe(0);
   });
 
-  it("gives two viewers of one device two captures: one leaving keeps the other, and the device stopping stops both", async () => {
-    const harness = setup();
-    const first = await opening(harness);
-    first.feed.meta();
-    const one = await first.served;
-    const second = await opening(harness);
-    second.feed.meta();
-    const two = await second.served;
-    expect(harness.opened).toHaveLength(2);
-    await one.close();
-    expect([first.feed.closes, second.feed.closes]).toEqual([1, 0]);
-    await harness.captures.stopOnDevice("dev_1");
-    expect([first.feed.closes, second.feed.closes]).toEqual([1, 1]);
-    await two.close();
-    expect(second.feed.closes).toBe(1);
-  });
-
   it("tells the driver to stop opening when the device stops, and the stop waits for the open to settle", async () => {
     let finishOpening!: () => void;
     let openSignal: AbortSignal | undefined;

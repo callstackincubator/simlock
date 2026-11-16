@@ -23,7 +23,7 @@ Resolve and boot:
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.
 - Volume (`ios.simulator.audio: false`): Apps keep playing at volume 0. A baseline source is not silenced.
-- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running. Any other failure opens nothing.
+- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running.
 
 Seeds (ADR 0061):
 
@@ -38,7 +38,7 @@ Seeds (ADR 0061):
 Physical, passthrough, screen:
 
 - `devicectl` over `device.exec` is an allow-list (`devicectlExecCommand`): what is not on the reviewed list is refused, and so is every option that names a host path.
-- Screen (`screen-capture.ts`): stdout is the frames, stdin the program's liveness, and closing stdin is the stop. The daemon's own `SIMLOCK_IOS_DEVICE_SET` and `SIMLOCK_COREDEVICE_INFO_PLIST` reach neither program; the driver sets the first for a simulator under `simlock` only.
+- Screen (`screen-capture.ts`): stdout is the frames, stdin the program's liveness, and closing stdin is the stop. Key frames keep coming on a still screen. The daemon's own `SIMLOCK_IOS_DEVICE_SET` and `SIMLOCK_COREDEVICE_INFO_PLIST` reach neither program; the driver sets the first for a simulator under `simlock` only.
 - An iPhone below iOS 27 is `ScreenUnavailableError`; an unreadable version goes on. The iPhone program enforces its CoreDevice pin itself: another major exits 69 with the reason, a 503 for the viewer.
 
 Tunnels (`device-tcp.ts`):
@@ -60,4 +60,4 @@ Tunnels (`device-tcp.ts`):
 - **A foldable's stream follows SpringBoard's `DisplayContentMode` log** (ADR 0075): another wording leaves it on the panel picked at open, and taps with it; a tap sent between a fold and the new size lands on the panel left.
 - **A capture killed by SIGKILL cannot stop its CoreDevice stream**; CoreDevice is left to notice its client is gone. The same for a stop while `startMediaStream` is still running past its limit.
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked against that release and the pin moves.
-- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. Two viewers ask for two streams (#602).
+- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream.

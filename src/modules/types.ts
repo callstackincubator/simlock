@@ -325,6 +325,8 @@ export interface ModuleHttpResponse {
   readonly description: string;
   readonly contentTypes?: readonly string[];
   readonly headers?: Readonly<Record<string, string>>;
+  // why: a header the answer may leave out is published `required: false`; `headers` are always sent.
+  readonly optionalHeaders?: Readonly<Record<string, string>>;
   readonly errorCodes?: readonly string[];
 }
 

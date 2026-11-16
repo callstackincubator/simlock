@@ -81,6 +81,7 @@ export async function createHarness(
     /** why: stands in for the baselines a request names, when a test scripts the versions. */
     readonly baselines?: Pick<BaselineService, "current">;
     readonly components?: Pick<ComponentInstaller, "install">;
+    readonly defaultImageTags?: Readonly<Partial<Record<Platform, string>>>;
     readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
     readonly drivers?: readonly Driver[];
     readonly freeDiskBytes?: number;
@@ -204,6 +205,7 @@ export async function createHarness(
     claims,
     components,
     decisions,
+    defaultImageTags: options.defaultImageTags ?? {},
     defaultModes: options.defaultModes ?? {},
     drivers: catalog,
     eventBus: bus,

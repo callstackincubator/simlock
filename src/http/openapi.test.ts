@@ -406,8 +406,19 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "simlock-stream-codec",
       "simlock-stream-fps",
       "simlock-stream-height",
+      "simlock-stream-keyframe-ms",
       "simlock-stream-width",
     ]);
+    expect(
+      Object.entries(okHeaders(device))
+        .filter(([, header]) => (header as { required?: boolean }).required === false)
+        .map(([name]) => name),
+    ).toEqual(["simlock-stream-keyframe-ms"]);
+    expect(
+      Object.entries(okHeaders(device)).filter(
+        ([, header]) => (header as { required?: boolean }).required !== false,
+      ).length,
+    ).toBe(4);
     expect(
       sortedKeys(document.paths).filter(
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",

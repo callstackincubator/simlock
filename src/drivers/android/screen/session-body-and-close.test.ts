@@ -18,7 +18,74 @@ import {
   waitThenStart,
   opened,
 } from "./test-session.js";
-import { mediaPacket, SAMPLE } from "./test-scrcpy.js";
+import { mediaPacket, SAMPLE, sessionPacket } from "./test-scrcpy.js";
+
+const RESET_VIDEO = "\u0011";
+
+async function settle(): Promise<void> {
+  for (let flush = 0; flush < 10; flush += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+describe("Android screen capture: the key frame bound", () => {
+  it("sends reset video on the control socket when no key frame came for 4 s", async () => {
+    // why: a still screen: a reset at 4 s and again at 8 s, none before.
+    const still = await setup();
+    await opened(still);
+    const stillControl = still.target.server.controls[0]!;
+    still.clock.advance(3_999);
+    await settle();
+    expect(stillControl.written.slice(2)).toEqual([]);
+    still.clock.advance(1);
+    await settle();
+    expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO]);
+    still.clock.advance(4_000);
+    await settle();
+    expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO, RESET_VIDEO]);
+
+    // why: a key frame at 3 s moves the reset from 4 s to 7 s, and the session the reset starts is relayed whole.
+    const moving = await setup();
+    const feed = await opened(moving);
+    const peer = moving.target.server.last;
+    const control = moving.target.server.controls[0]!;
+    const reader = feed.body.getReader();
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+    moving.clock.advance(3_000);
+    peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.description);
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.keyframe);
+    moving.clock.advance(3_999);
+    await settle();
+    expect(control.written.slice(2)).toEqual([]);
+    moving.clock.advance(1);
+    await settle();
+    expect(control.written.slice(2)).toEqual([RESET_VIDEO]);
+    peer.send(
+      sessionPacket(96, 64),
+      mediaPacket({ config: true }, SAMPLE.config),
+      mediaPacket({ key: true }, SAMPLE.idr),
+    );
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.description);
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.keyframe);
+
+    // why: once the viewer goes, the timer is gone with the session: no reset is written to a closed socket.
+    reader.releaseLock();
+    await drive(moving.clock, feed.body.cancel());
+    moving.clock.advance(10_000);
+    await settle();
+    expect(control.written.slice(2)).toEqual([RESET_VIDEO]);
+
+    // why: a write that fails ends the stream: its promise is gone, so it does not go on without it.
+    const failing = await setup();
+    const failingFeed = await opened(failing);
+    const failingReader = failingFeed.body.getReader();
+    expect(frameTag((await failingReader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+    failing.target.server.controls[0]!.failWrites = true;
+    const ended = failingReader.read();
+    failing.clock.advance(4_000);
+    await expect(ended).rejects.toBeInstanceOf(ScreenUnavailableError);
+  });
+});
 
 describe("Android screen capture: the body", () => {
   it("reads the socket only when its reader asks for a frame", async () => {

@@ -167,7 +167,7 @@ function sumRamBudget(
 }
 
 /**
- * ADR 0005 §21: the union of the connected workers' catalogs, each model and runtime annotated
+ * why: ADR 0005 §21: the union of the connected workers' catalogs, each model and runtime annotated
  * with the workers that have it.
  *
  * Connected workers only: a catalog answers "what can this fleet give me", and a machine whose
@@ -176,7 +176,8 @@ function sumRamBudget(
  * new dispatches, but it is a temporary operator state, and a catalog that shrank while a
  * machine was drained would read as models having been uninstalled.
  *
- * `defaultRuntime` survives only when every worker offering that platform names the same one.
+ * `defaultRuntime` survives only when every worker offering that platform names the same one;
+ * so does `defaultImageTag`, where a worker that names none is a disagreement.
  * A fleet whose machines default differently has no single default, and picking one at random
  * would make `simlock lease` non-deterministic across an unchanged fleet.
  *
@@ -221,6 +222,8 @@ interface CatalogBucket {
   readonly customModels: Set<string>;
   readonly slimCategories: Set<string>;
   readonly defaults: Set<string | undefined>;
+  /** why: absent ones count as `undefined`, so one worker without a default image tag is a disagreement (ADR 0078 §3). */
+  readonly imageTagDefaults: Set<string | undefined>;
   /** Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
   readonly classDefaults: Partial<Record<DeviceClass, string>>[];
 }
@@ -253,6 +256,7 @@ function addCatalogEntry(
     classDefaults: [],
     customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
+    imageTagDefaults: new Set<string | undefined>(),
     images: undefined,
     modelAliases: new Map<string, Map<string, string>>(),
     modelClasses: new Map<string, DeviceClass>(),
@@ -271,6 +275,7 @@ function addCatalogEntry(
   for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
+  bucket.imageTagDefaults.add(entry.defaultImageTag);
   bucket.classDefaults.push(listedClassDefaults(entry));
 }
 
@@ -364,6 +369,8 @@ function agreedClassDefaults(
 
 function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
+  const agreedImageTag =
+    bucket.imageTagDefaults.size === 1 ? [...bucket.imageTagDefaults][0] : undefined;
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
     classDefaults: agreedClassDefaults(bucket.classDefaults),
@@ -410,6 +417,7 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
             .slice(0, CATALOG_LIST_LIMITS.slimCategories),
         }),
     ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
+    ...(agreedImageTag === undefined ? {} : { defaultImageTag: agreedImageTag }),
   };
 }
 
