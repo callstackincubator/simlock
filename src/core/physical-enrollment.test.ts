@@ -597,26 +597,37 @@ describe("PhysicalEnrollment", () => {
     expect(physicalRecords(harness)).toHaveLength(2);
   });
 
-  it("refuses a phone whose hardware serial another live record already holds, naming that record, and writes nothing", async () => {
-    const harness = await build([
-      { ids: ["R58Y61A60HN"] },
-      { hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.5:5555"] },
-    ]);
-    const control = await build([{ hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.5:5555"] }]);
-    await control.core.enrollment.add("ios", "192.168.1.5:5555");
-    expect(live(control)).toHaveLength(1);
-    await harness.core.enrollment.add("ios", "R58Y61A60HN");
+  it("refuses a phone whose hardware serial another live record already holds, whatever either one's transport, naming that record, and writes nothing; a deleted holder refuses nothing", async () => {
+    const usb = { ids: ["R58Y61A60HN"] };
+    const network = { hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.5:5555"] };
+    const otherAddress = { hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.9:5555"] };
+    const cases = [
+      { candidate: network, holder: usb, holds: "R58Y61A60HN" },
+      { candidate: otherAddress, holder: network, holds: "192.168.1.5:5555" },
+      { candidate: usb, holder: network, holds: "192.168.1.5:5555" },
+    ];
 
-    const refused = harness.core.enrollment.add("ios", "192.168.1.5:5555");
+    for (const { candidate, holder, holds } of cases) {
+      const control = await build([candidate]);
+      await control.core.enrollment.add("ios", candidate.ids[0] as string);
+      expect(live(control)).toHaveLength(1);
+      const harness = await build([holder, candidate]);
+      await harness.core.enrollment.add("ios", holder.ids[0] as string);
 
-    await expect(refused).rejects.toMatchObject({
-      canonicalId: "R58Y61A60HN",
-      message:
-        "this phone (hardware serial R58Y61A60HN) is enrolled as R58Y61A60HN; remove that record first",
-      name: "DeviceNotEnrollableError",
-      reason: "enrolled-under-other-id",
-    });
-    expect(live(harness).map((device) => device.driverDeviceId)).toEqual(["R58Y61A60HN"]);
+      const refused = harness.core.enrollment.add("ios", candidate.ids[0] as string);
+
+      await expect(refused).rejects.toMatchObject({
+        canonicalId: holds,
+        message: `this phone (hardware serial R58Y61A60HN) is enrolled as ${holds}; remove that record first`,
+        name: "DeviceNotEnrollableError",
+        reason: "enrolled-under-other-id",
+      });
+      expect(live(harness).map((device) => device.driverDeviceId)).toEqual([holder.ids[0]]);
+
+      await harness.core.enrollment.remove(holder.ids[0] as string);
+      await harness.core.enrollment.add("ios", candidate.ids[0] as string);
+      expect(live(harness).map((device) => device.driverDeviceId)).toEqual([candidate.ids[0]]);
+    }
   });
 
   it("names the device in its error when the second read names another device or a read fails", async () => {
