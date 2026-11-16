@@ -142,15 +142,34 @@ describe.skipIf(process.platform !== "darwin")(
           );
           // why: nothing touches the simulator here, so its screen is still; the stream must stay
           // open well past the 30 s silence bound on the capture's own idle repaints.
-          const stillUntil = Date.now() + 35_000;
+          const stillFrom = Date.now();
+          const stillUntil = stillFrom + 35_000;
+          // why: the stream is endless, so a key frame's arrival is stamped as the read that
+          // brought it ends; `enough` runs after every read.
+          const keyArrivals = [stillFrom];
+          let keysSeen = 0;
           const held = await within(
-            readFrames(second.reader, () => Date.now() > stillUntil),
+            readFrames(second.reader, (read) => {
+              const keys = read.filter((frame) => frame.tag === TAG.keyframe).length;
+              if (keys > keysSeen) keyArrivals.push(Date.now());
+              keysSeen = keys;
+              return Date.now() > stillUntil;
+            }),
             KEY_FRAME_BOUND,
             "the still stream's frames",
           );
           expect(held.length, "a still simulator's stream sent nothing for 35 s").toBeGreaterThan(
             0,
           );
+          expect(
+            keysSeen,
+            "a still simulator's stream sent too few key frames",
+          ).toBeGreaterThanOrEqual(3);
+          const gaps = [...keyArrivals, Date.now()].slice(1).map((at, i) => at - keyArrivals[i]!);
+          expect(
+            Math.max(...gaps.slice(0, -1)),
+            "a still simulator's stream went over 5.5 s without a key frame",
+          ).toBeLessThanOrEqual(5_500);
           expect(
             [...opening, ...held].filter((frame) => frame.tag === TAG.meta).length,
             "a one-panel device's stream sent more than one meta frame",
