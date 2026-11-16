@@ -105,7 +105,7 @@ MJPEG capture has no key frames; see section 4):
   chose it.
 - **Android** (emulator and phone): the stream's scrcpy server runs with its
   control channel on, and the driver sends reset video when 4 s pass with
-  no key frame, so an emulator's answer lands inside the 5 s. scrcpy's own interval is set to 2, so a moving screen
+  no key frame, leaving 1 s of the 5 s for the answer. scrcpy's own interval is set to 2, so a moving screen
   rarely needs a reset. The server is also told not to power the screen on
   and not to sync the clipboard, so a stream still changes no device
   setting beyond today's stay-awake on a phone.
