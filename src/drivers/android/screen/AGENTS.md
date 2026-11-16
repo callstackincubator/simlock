@@ -44,8 +44,7 @@ The body:
   screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on
   again or the lease ends. Nothing ends the stream for it.
 - **A phone woken to its lock screen streams the lock screen.** simlock does not unlock it.
-- **Two viewers of one lease**: the second's server finds the stay-awake setting already on and remembers nothing; when the
-  first viewer's stream ends, the old value comes back while the second still streams.
+- **A viewer that joins a phone that went dark mid-stream sees no picture.** A joiner opens nothing, so nothing wakes it.
 - **The stay-awake setting stays on** if the phone loses power or reboots before the clean-up process writes the old value back.
 - **A holder's own stay-awake change is overwritten**: a holder that changes `stay_on_while_plugged_in` over
   passthrough `adb` while a stream is open has it replaced when the stream ends, since scrcpy writes back the value it found.

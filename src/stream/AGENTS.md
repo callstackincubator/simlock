@@ -15,7 +15,9 @@ Captures:
 
 - No platform name here: a driver offers `screenCapture` or not (`core/screen.ts`).
 - A capture is registered before it starts and its slot is read again after its first frame, so a capture never outlives its device's running state (`worker-link.test.ts`, `create.test.ts`).
-- Every end closes the capture once: the viewer leaves, the capture ends or errors, the silence bound passes, the lease ends, the device stops.
+- One capture per device is shared by its viewers, by either path: the first opens it, the rest join. A joiner gets the current meta and parameter sets, then the next key frame on.
+- A viewer that stops reading skips frames and slows nobody, and is never cut off. A failure reaches every viewer; the next starts a fresh capture.
+- Every end closes the capture once: the last viewer leaves, the capture ends or errors, the silence bound passes, the lease ends, the device stops.
 - The lease end (`beforeDeviceReclaim`) waits for every close before the device is reclaimed, bounded by the driver and by leasing's signal.
 - A device that stops with no lease end runs no reclaim hook, so the device events in `create.ts` stop its captures.
 - A lease granted while streaming ends nothing.
@@ -44,7 +46,7 @@ On a worker:
 
 1. The HTTP layer hands the module a device path (the mount) or a resolved lease (the lease route).
 2. The worker link checks the caller, the worker id and the device's state, or finds the lease's device in the worker's own registry.
-3. It registers a capture slot for the device, then opens the screen through the driver catalog the daemon passed in.
+3. It joins the device's capture, or registers a capture slot and opens the screen through the driver catalog the daemon passed in.
 4. It waits for the meta frame within the start bound, then reads the slot again: a device that stopped meanwhile is refused.
 5. It answers with the picture's description in headers and the frames as the body, meta first.
 
@@ -54,8 +56,3 @@ Through a gateway:
 2. It relays the request to the worker's `stream` relay target, by device id or by the worker's own lease id.
 3. The worker serves it through the same link, slots and checks as a local request.
 4. The gateway checks the answer's headers and passes the body on; its relay bounds the body by inactivity, and by the caller's `expiresAt`.
-
-## Known gaps
-
-- **Each viewer is its own capture.** Two tabs on one device run two captures.
-- **A frame skipped by a slow viewer is not dropped, it is waited for.** A viewer that stops reading slows the capture behind it to its pace.

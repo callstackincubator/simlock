@@ -75,7 +75,10 @@ A device that isn't running has no picture, and the page says why: shut down, st
 - **The picture ends when the device stops or is handed back.** When the device shuts down, loses its connection, is quarantined or deleted, or its lease ends, the stream stops. So nobody can watch a device after it is handed back or reset. When a lease end stops it, the page says why: "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost."
 - **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the page opens it again.
 - **A frozen device doesn't look live.** A stream that gets no new frames for 30 seconds ends with an error.
-- **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
+- **Viewers of a device share one capture.** Two browser tabs on one device capture it once, and the capture stops when the last tab leaves.
+- **A viewer that joins can wait up to 5 seconds for its picture.** It starts at the next key frame, which every capture sends at least every 5 seconds.
+- **A slow viewer skips frames.** A tab that stops reading, such as one in the background, misses frames up to the next key frame and slows nobody else.
+- **A phone that went dark off its charger shows no picture to a viewer that joins.** Nothing wakes it for the joiner; the picture comes when its screen is on again.
 - **Rotation.** An Android device's picture follows the rotation. So does an iOS simulator's or an iPhone's whenever its picture changes size: a new meta frame gives the new size, and nobody has run it on a physical iPhone yet.
 - **Foldables.** An iPhone Duo simulator shows the panel in use, upright, and the open stream switches panels within about 5 seconds after the device folds or unfolds, with no reconnect. A stream opened while the screen is all black can show the cover for a few seconds before it switches. If SpringBoard's log never names the move, the stream stays on the panel it opened on.
 - **The size can change.** The size headers give the picture's size when the stream opens; a meta frame in the body gives each later size. A viewer that reads the size once draws a stretched picture after a fold until it reconnects.

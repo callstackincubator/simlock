@@ -60,4 +60,4 @@ Tunnels (`device-tcp.ts`):
 - **A foldable's stream follows SpringBoard's `DisplayContentMode` log** (ADR 0075): another wording leaves it on the panel picked at open, and taps with it; a tap sent between a fold and the new size lands on the panel left.
 - **A capture killed by SIGKILL cannot stop its CoreDevice stream**; CoreDevice is left to notice its client is gone. The same for a stop while `startMediaStream` is still running past its limit.
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked against that release and the pin moves.
-- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. Two viewers ask for two streams (#602).
+- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream.
