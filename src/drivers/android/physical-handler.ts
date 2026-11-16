@@ -212,6 +212,11 @@ export class AndroidPhysicalHandler {
     return undefined;
   }
 
+  async #hasHardwareSerial(id: string, recorded: string | undefined): Promise<boolean> {
+    const read = await this.#readText(id, ["shell", "getprop", "ro.serialno"]);
+    return read.kind === "ok" && read.value === recorded;
+  }
+
   async #readHardwareSerial(
     id: string,
   ): Promise<
@@ -234,20 +239,22 @@ export class AndroidPhysicalHandler {
     const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
     const entries = listing.kind === "ok" ? parseDevices(listing.stdout, this.#platform) : [];
     const answers: PresentPhysical[] = [];
-    for (const { driverDeviceId } of enrolled) {
-      const usb = entries.filter((entry) => entry.serial === driverDeviceId && entry.usb);
-      if (usb.some((entry) => entry.state === "device")) {
-        const level = await this.#readText(driverDeviceId, [
-          "shell",
-          "getprop",
-          "ro.build.version.sdk",
-        ]);
+    for (const { driverDeviceId, hardwareSerial } of enrolled) {
+      const network = this.#networkDevices && hardwareSerial !== undefined;
+      const matching = entries.filter(
+        (entry) => entry.serial === driverDeviceId && (entry.usb || (network && !entry.emulator)),
+      );
+      if (matching.some((entry) => entry.state === "device")) {
+        const same = !network || (await this.#hasHardwareSerial(driverDeviceId, hardwareSerial));
+        const level = same
+          ? await this.#readText(driverDeviceId, ["shell", "getprop", "ro.build.version.sdk"])
+          : undefined;
         answers.push(
-          level.kind === "ok"
+          level?.kind === "ok"
             ? { driverDeviceId, osVersion: level.value, present: true }
             : { driverDeviceId, present: false, reason: "not-present" },
         );
-      } else if (usb.some((entry) => entry.state === "unauthorized")) {
+      } else if (matching.some((entry) => entry.state === "unauthorized")) {
         answers.push({ driverDeviceId, present: false, reason: "untrusted" });
       } else {
         answers.push({ driverDeviceId, present: false, reason: "not-present" });
