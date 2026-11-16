@@ -50,8 +50,8 @@ export class NodeSqliteOpener implements SqliteOpener {
 
 /**
  * why: a fake for a caller that opens a database only to flush its WAL: it records each database
- * a checkpoint ran on, can fail one, and empties the `-wal` file in a memory filesystem unless told
- * to leave its frames.
+ * a checkpoint ran on, can fail one, and a checkpoint moves the `-wal` file's bytes onto the end of
+ * its database in a memory filesystem and empties the WAL, unless told to leave its frames.
  */
 export class FakeSqliteOpener implements SqliteOpener {
   readonly checkpoints: string[] = [];
@@ -73,9 +73,19 @@ export class FakeSqliteOpener implements SqliteOpener {
 
   async open(path: string): Promise<SqliteDatabase> {
     if (this.#failing.has(path)) throw new Error(`unable to open database file ${path}`);
+    // why: `exec` is synchronous, so what a checkpoint moves is read here, and the filesystem calls
+    // below run their bodies at once.
+    const wal = `${path}-wal`;
+    const frames = await this.#filesystem.readFile(wal).then(
+      (text) => Buffer.from(text),
+      () => undefined,
+    );
+    const size = frames === undefined ? 0 : (await this.#filesystem.stat(path)).size;
     const checkpoint = (): void => {
       this.checkpoints.push(path);
-      if (!this.#keepingFrames.has(path)) void this.#filesystem.rm(`${path}-wal`);
+      if (this.#keepingFrames.has(path)) return;
+      if (frames !== undefined) void this.#filesystem.writeAt(path, size, frames);
+      void this.#filesystem.rm(wal);
     };
     return {
       close: () => undefined,

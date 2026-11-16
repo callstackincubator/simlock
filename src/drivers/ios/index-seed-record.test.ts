@@ -203,6 +203,8 @@ describe("IosSimctlDriver source records", () => {
       { kind: "link", relative_path: "data/Logs" },
       { kind: "file", relative_path: "data/a.plist" },
       { kind: "file", relative_path: "data/big.bin" },
+      { kind: "file", relative_path: "data/one.db" },
+      { kind: "file", relative_path: "data/two.db" },
       { kind: "file", relative_path: "data/wide.bin" },
     ]);
     expect(seed.logger.warnings).toEqual([]);
@@ -222,7 +224,10 @@ describe("IosSimctlDriver source records", () => {
       `could not flush ${seedFolder}/data/one.db: unable to open database file ${seedFolder}/data/one.db`,
       `WAL ${seedFolder}/data/two.db-wal still holds frames after the flush; left unpatched`,
     ]);
-    expect(recorded(unflushed.database), "a WAL is never recorded").toEqual([]);
+    expect(
+      recorded(unflushed.database),
+      "a WAL is never recorded, and a database whose frames stayed names nothing",
+    ).toEqual([]);
 
     const unreadable = await provisionNewSeed({
       plant: async (filesystem) => {
@@ -287,6 +292,7 @@ describe("IosSimctlDriver source records", () => {
     });
     expect(recorded(fromUsedLease.database)).toEqual([
       { kind: "file", relative_path: "data/lease.plist" },
+      { kind: "file", relative_path: "data/one.db" },
       { kind: "file", relative_path: "data/seed.plist" },
     ]);
 

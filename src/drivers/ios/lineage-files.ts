@@ -9,7 +9,7 @@ import { errorMessage } from "./command-run.js";
 import type { SourceFile } from "./source-data.js";
 import { SWAP_OVERLAP_BYTES, namesLineage, swapLineage, type LineageSwap } from "./udid-swap.js";
 
-/** why: a window is read whole, so this bounds memory at any file size (ADR 0076 §3). */
+/** why: a window is read whole, so this bounds memory at any file size. */
 const WINDOW_BYTES = 1_048_576;
 
 const WAL_SUFFIX = "-wal";
@@ -20,7 +20,7 @@ export interface SwapCounts {
   readonly unreadable: number;
 }
 
-/** why: ADR 0076 §4: before its first boot a copy's recorded files and links name its own UDID in place of the lineage's, each keeping its length; an unreadable file is left. */
+/** why: ADR 0076 §3: before its first boot a copy's recorded files and links name its own UDID in place of the lineage's, each keeping its length; an unreadable file is left. */
 export async function swapCopyFiles(
   filesystem: Filesystem,
   folder: string,
@@ -70,7 +70,7 @@ export interface RecordOptions {
 }
 
 /**
- * why: ADR 0076 §3: when a source is made every WAL in it is flushed into its database, and the files and links that name a lineage UDID are found once and recorded, so a copy patches only those.
+ * why: ADR 0076 §2: when a source is made every WAL in it is flushed into its database, and the files and links that name a lineage UDID are found once and recorded, so a copy patches only those.
  */
 export async function recordLineageFiles(options: RecordOptions): Promise<readonly SourceFile[]> {
   const files: SourceFile[] = [];
@@ -84,7 +84,13 @@ async function visitFolder(
   relative: string,
   files: SourceFile[],
 ): Promise<void> {
-  for (const name of (await options.filesystem.readdir(directory)).sort()) {
+  const names = (await options.filesystem.readdir(directory)).sort();
+  // why: a database and its WAL are siblings, and a database is read only after its WAL is flushed into it (ADR 0076 §2).
+  const ordered = [
+    ...names.filter((name) => name.endsWith(WAL_SUFFIX)),
+    ...names.filter((name) => !name.endsWith(WAL_SUFFIX)),
+  ];
+  for (const name of ordered) {
     const path = `${directory}/${name}`;
     const relativePath = relative === "" ? name : `${relative}/${name}`;
     const details = await options.filesystem.lstat(path);
