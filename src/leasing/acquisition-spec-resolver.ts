@@ -39,7 +39,13 @@ import { type LeaseRequestOptions } from "./wait-queue.js";
 
 export type AcquisitionSpecResolverOptions = Pick<
   LeaseAcquisitionCoordinatorOptions,
-  "baselines" | "catalog" | "components" | "defaultModes" | "drivers" | "modelPreferences"
+  | "baselines"
+  | "catalog"
+  | "components"
+  | "defaultImageTags"
+  | "defaultModes"
+  | "drivers"
+  | "modelPreferences"
 >;
 
 /** why: turns a request into the exact spec a driver resolves, and a baseline request into that baseline's spec, so the root and the workflow never resolve a spec themselves. */
