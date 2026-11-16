@@ -544,7 +544,11 @@ export class Doctor {
     const figures = warmPool.figures().targets.filter((target) => target.origin === "configured");
     const catalogs = await this.#catalogsOfMissingRuntimes(figures);
     const findings = figures.flatMap((target) =>
-      unreachableTarget(target, catalogs.get(target.platform)),
+      unreachableTarget(
+        target,
+        catalogs.get(target.platform),
+        this.options.config[target.platform].virtualDevices,
+      ),
     );
     const { android, ios } = this.options.config;
     const reserves = reservedRunning(

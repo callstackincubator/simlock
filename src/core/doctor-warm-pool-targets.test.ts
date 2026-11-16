@@ -191,6 +191,21 @@ describe("Doctor: warm pool targets", () => {
     ]);
   });
 
+  it("leaves a phones-only platform's reserveRunning out of the room the targets are checked against", async () => {
+    const ask = (virtualDevices: boolean) =>
+      findings({
+        limit: { global: 2 },
+        reserve: { android: 2, ios: 0 },
+        targets: [{ count: 2, model: "iPhone 17", platform: "ios" }],
+        virtualDevices: { android: virtualDevices },
+      });
+
+    expect(await ask(true)).toStrictEqual([
+      expect.objectContaining({ reason: "over-limit", target: "all targets" }),
+    ]);
+    expect(await ask(false)).toStrictEqual([]);
+  });
+
   it("reports a target short with unknown-model as unreachable", async () => {
     const found = await findings({
       figures: figuresOf([{ model: "iPhone 99", osVersion: "26.0", short: "unknown-model" }]),
