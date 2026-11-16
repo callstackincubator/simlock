@@ -557,6 +557,40 @@ describe("createWorkerStream", () => {
     }
   });
 
+  it("viewers of one device share one capture: each gets 200 with the current meta and the same frames", async () => {
+    const routes: [string, "device" | "lease", "device" | "lease"][] = [
+      ["two device-path viewers", "device", "device"],
+      ["a device-path and a lease-path viewer", "device", "lease"],
+    ];
+    for (const [label, first, second] of routes) {
+      const { feeds, opened, stream } = worker();
+      const a = await openOnRoute(stream, first);
+      const b = await openOnRoute(stream, second);
+      expect(opened(), label).toBe(1);
+      for (const served of [a, b]) {
+        expect(served.status, label).toBe(200);
+        expect(Object.fromEntries(served.headers), label).toMatchObject(STREAM_HEADERS);
+      }
+      const readers = [a, b].map((served) => served.body!.getReader());
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([1]);
+      feeds[0]!.delta([2]);
+      for (const reader of readers) {
+        const frames: [number | undefined, number | undefined][] = [];
+        for (let frame = 0; frame < 4; frame += 1) {
+          const read = await reader.read();
+          frames.push([read.value?.[4], read.value?.[5]]);
+        }
+        expect(frames, label).toEqual([
+          [SCREEN_FRAME_TAG.meta, 0x7b],
+          [SCREEN_FRAME_TAG.description, 7],
+          [SCREEN_FRAME_TAG.keyframe, 1],
+          [SCREEN_FRAME_TAG.delta, 2],
+        ]);
+      }
+    }
+  });
+
   it("a viewer of either stream route sees a 0x07 frame with the reason, then the end, when the lease ends", async () => {
     const routes = {
       device: (stream: ReturnType<typeof worker>["stream"]) =>

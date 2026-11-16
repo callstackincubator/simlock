@@ -73,7 +73,19 @@ export class ScriptedFeed implements ScreenFeed {
   }
 
   keyframe(payload: readonly number[] = [1, 2, 3]): void {
-    this.write(encodeScreenFrame(SCREEN_FRAME_TAG.keyframe, Uint8Array.from(payload)));
+    this.frame(SCREEN_FRAME_TAG.keyframe, payload);
+  }
+
+  description(payload: readonly number[] = [9, 9]): void {
+    this.frame(SCREEN_FRAME_TAG.description, payload);
+  }
+
+  delta(payload: readonly number[] = [4, 5]): void {
+    this.frame(SCREEN_FRAME_TAG.delta, payload);
+  }
+
+  frame(tag: number, payload: readonly number[]): void {
+    this.write(encodeScreenFrame(tag, Uint8Array.from(payload)));
   }
 
   end(): void {
