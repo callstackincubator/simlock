@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FakeTcpProbe } from "../../ports/index.js";
+import { PassthroughRefusedError } from "../../core/index.js";
+import { FakeTcpProbe, FakeTcpStreamConnector } from "../../ports/index.js";
 import { AndroidPhysicalHandler } from "./physical-handler.js";
 import {
   adb,
@@ -8,7 +9,10 @@ import {
   FAILED,
   TIMED_OUT,
   PHONE,
+  passthroughOf,
+  rejectionOf,
   restOf,
+  world,
   isGetprop,
   PhoneAdb,
   sdk,
@@ -374,5 +378,44 @@ describe("Android physical handler under android.networkDevices: reclaim", () =>
     const { hardwareSerial: _none, ...usbRecord } = { ...device, address: PHONE, deviceId: PHONE };
     await expect(usb.handler.reclaim(usbRecord)).resolves.toMatchObject({ state: "ready" });
     expect(usb.runner.rests.flat()).not.toContain("ro.serialno");
+  });
+});
+
+describe("Android driver under android.networkDevices: a leased network phone", () => {
+  const leased = {
+    address: ADDRESS,
+    deviceId: ADDRESS,
+    driverData: {},
+    enrolledApps: [],
+    hardwareSerial: "R58Y61A60HN",
+    physical: true,
+  } as const;
+
+  it("is read from android.networkDevices by the driver, and hands its holder the address as the serial, scopes passthrough to it, still refuses transport subcommands and aims the screen at it", async () => {
+    const off = await world();
+    off.runner.devicesOutput = devicesListing(NETWORK_LINE);
+    expect(await off.driver.inspectPhysical(ADDRESS)).toMatchObject({ reason: "network-only" });
+    const { driver, runner } = await world({ config: { networkDevices: true } });
+    runner.devicesOutput = devicesListing(NETWORK_LINE);
+    expect(await driver.inspectPhysical(ADDRESS)).toMatchObject({
+      driverDeviceId: ADDRESS,
+      enrollable: true,
+      hardwareSerial: "R58Y61A60HN",
+    });
+
+    expect(driver.leaseEnvironment(leased)).toEqual({
+      ANDROID_ADB_SERVER_PORT: "5037",
+      ANDROID_SERIAL: ADDRESS,
+    });
+    expect(await passthroughOf(driver, ["shell", "getprop"], leased)).toMatchObject({
+      args: ["-P", "5037", "-s", ADDRESS, "shell", "getprop"],
+    });
+    for (const subcommand of ["connect", "disconnect", "pair", "tcpip", "usb"]) {
+      const error = await rejectionOf(passthroughOf(driver, [subcommand, ADDRESS], leased));
+      expect(error, subcommand).toBeInstanceOf(PassthroughRefusedError);
+    }
+
+    const { handler } = await networkHandler(devicesListing(NETWORK_LINE));
+    expect(handler.screenTargetFor(leased, new FakeTcpStreamConnector()).serial).toBe(ADDRESS);
   });
 });
