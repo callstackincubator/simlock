@@ -2,16 +2,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
-import { deviceRoot, driverData, instanceId, plantManagedDevice } from "./test-slim.js";
+import {
+  deviceHubEdit,
+  deviceRoot,
+  driverData,
+  instanceId,
+  plantManagedDevice,
+} from "./test-slim.js";
 import {
   listFixture,
-  listInvocation,
   logsRoot,
   scopedRunners,
   seedUdid,
-  sourcesSimctl,
   spec,
-  throwawaySeedSteps,
   throwawayUdid,
 } from "./test-index.js";
 
@@ -19,34 +22,97 @@ afterEach(() => {
   scopedRunners.length = 0;
 });
 
+const copyUdid = "00000000-0000-0000-0000-000000000002";
+const name = "simlock-seed-device-1";
+const coreSimulatorRoot = "/CoreSim";
+
+interface World {
+  readonly label: string;
+  readonly config: Record<string, string>;
+  readonly devicesDir: string;
+  readonly sourcesSet: string;
+  readonly isDefault: boolean;
+}
+
+const worlds: readonly World[] = [
+  {
+    config: { deviceRoot },
+    devicesDir: deviceRoot,
+    isDefault: false,
+    label: "simlock set",
+    sourcesSet: `${deviceRoot}/sources`,
+  },
+  {
+    config: { deviceSet: "default" },
+    devicesDir: `${coreSimulatorRoot}/Devices`,
+    isDefault: true,
+    label: "default set",
+    sourcesSet: "/home/.simlock/devices/ios-sources",
+  },
+];
+
+function simctlIn(world: World, set: string | undefined, ...args: readonly string[]) {
+  const scoped = set ?? (world.isDefault ? undefined : world.devicesDir);
+  return {
+    args: scoped === undefined ? ["simctl", ...args] : ["simctl", "--set", scoped, ...args],
+    command: "xcrun",
+  };
+}
+
 describe("IosSimctlDriver seed throwaway", () => {
   it("the first provision of a kind makes its seed from a throwaway", async () => {
-    const copyUdid = "00000000-0000-0000-0000-000000000002";
-    const cases = [
-      {
-        label: "simlock set",
-        steps: throwawaySeedSteps(),
-      },
-    ];
-    for (const scenario of cases) {
+    for (const world of worlds) {
+      const step = (match: { command: string; args: readonly string[] }, stdout?: string) => ({
+        match,
+        ...(stdout === undefined ? {} : { result: { code: 0, stderr: "", stdout } }),
+      });
+      const inSet = (...args: string[]) => simctlIn(world, undefined, ...args);
+      const hub = (command: string) =>
+        world.isDefault ? deviceHubEdit(command).map((match) => ({ match })) : [];
       const database = await memorySourceDatabase();
+      const markedAtBoot: Promise<boolean>[] = [];
+      const filesystem = new MemoryFilesystem();
       const runner = new ScriptedProcessRunner([
-        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
-        ...scenario.steps,
+        step(
+          world.isDefault
+            ? { args: ["simctl", "list", "-j", "devicetypes", "runtimes"], command: "xcrun" }
+            : inSet("list", "-j", "devicetypes", "runtimes"),
+          listFixture,
+        ),
+        step(
+          inSet("create", name, driverData.deviceTypeId, driverData.runtimeId),
+          `${throwawayUdid}\n`,
+        ),
+        ...hub(`Set :DevicePreferences:${throwawayUdid}:pasteboardSyncEnabled false`),
         {
-          match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
-          result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+          match: inSet("boot", throwawayUdid),
+          onSpawn: () => {
+            markedAtBoot.push(
+              filesystem.exists(`${world.devicesDir}/${throwawayUdid}/simlock-mark.json`),
+            );
+          },
         },
+        step(inSet("bootstatus", throwawayUdid, "-b")),
+        step(inSet("listapps", throwawayUdid)),
+        step(inSet("shutdown", throwawayUdid)),
+        step(inSet("clone", throwawayUdid, name, world.sourcesSet), `${seedUdid}\n`),
+        step(inSet("delete", throwawayUdid)),
+        ...hub(`Delete :DevicePreferences:${throwawayUdid}`),
+        step(
+          simctlIn(world, world.sourcesSet, "clone", seedUdid, driverData.name, world.devicesDir),
+          `${copyUdid}\n`,
+        ),
       ]);
       scopedRunners.push(runner);
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
+      if (!world.isDefault) await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(`${world.devicesDir}/${throwawayUdid}/data`);
+      await filesystem.mkdirp(`${world.devicesDir}/${copyUdid}/data`);
       await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
       const driver = await IosSimctlDriver.create({
         clock: new FakeClock(),
+        coreSimulatorRoot,
         database,
-        driverConfig: { deviceRoot },
+        driverConfig: world.config,
         filesystem,
         idGenerator: { generate: () => "device-1" },
         instanceId,
@@ -55,16 +121,16 @@ describe("IosSimctlDriver seed throwaway", () => {
         simlockHome: "/home/.simlock",
       });
 
-      await expect(driver.provision(spec), scenario.label).resolves.toMatchObject({
+      await expect(driver.provision(spec), world.label).resolves.toMatchObject({
         deviceId: copyUdid,
       });
 
-      expect(runner.calls.length, scenario.label).toBe(scenario.steps.length + 2);
+      expect(await Promise.all(markedAtBoot), world.label).toEqual([world.isDefault]);
       expect(
         database.prepare("SELECT state, udid, throwaway_udid FROM ios_source_data").all(),
-        scenario.label,
+        world.label,
       ).toEqual([{ state: "ready", throwaway_udid: throwawayUdid, udid: seedUdid }]);
-      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), scenario.label).resolves.toBe(
+      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), world.label).resolves.toBe(
         false,
       );
     }
