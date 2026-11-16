@@ -66,7 +66,7 @@ export class AcquisitionSpecResolver {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
-    // why: before the baseline branch, any catalog read, download or wait: a phones-only platform makes no virtual device (ADR 0078 §2).
+    // why: before the baseline branch, any catalog read, download or wait: a phones-only platform makes no virtual device (ADR 0080 §2).
     if (!this.options.catalog.virtualDevices(request.platform)) {
       throw new VirtualDevicesOffError(request);
     }

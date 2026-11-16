@@ -31,7 +31,7 @@ Never read: the sdkmanager catalog. A preference list is merged in `daemon/worke
 
 ## Virtual: request → spec
 
-In `AcquisitionSpecResolver` (`leasing/acquisition-spec-resolver.ts`), a part of `LeaseAcquisitionCoordinator`, no lock held. A platform whose `<platform>.virtualDevices` is `false` is refused first, with `VirtualDevicesOffError` (`UNKNOWN_MODEL`), before the baseline branch, any catalog read or download (ADR 0078 §2):
+In `AcquisitionSpecResolver` (`leasing/acquisition-spec-resolver.ts`), a part of `LeaseAcquisitionCoordinator`, no lock held. A platform whose `<platform>.virtualDevices` is `false` is refused first, with `VirtualDevicesOffError` (`UNKNOWN_MODEL`), before the baseline branch, any catalog read or download (ADR 0080 §2):
 
 1. `physical: true` → skip to the physical branch.
    A virtual Android request with no `imageTag` on a worker with `android.defaultImageTag` is tried first as if it named that tag, with downloads off and `defaultTag` set so only host-CPU images count; a `RuntimeMissingError` runs steps 2 to 9 again on the request as it came (ADR 0078).

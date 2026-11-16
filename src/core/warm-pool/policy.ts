@@ -224,7 +224,7 @@ function reservedOf(view: WarmPolicyView): Slots {
   return { android: reserve.android, global: reserve.ios + reserve.android, ios: reserve.ios };
 }
 
-/** why: a platform with virtual devices off holds no running slot for idle devices, so its reserve counts as 0 (ADR 0078 §2). */
+/** why: a platform with virtual devices off holds no running slot for idle devices, so its reserve counts as 0 (ADR 0080 §2). */
 export function reserveOnVirtualPlatforms(
   reserve: { readonly ios: number; readonly android: number },
   virtualDevices: (platform: "ios" | "android") => boolean,

@@ -189,7 +189,7 @@ export async function buildDispatcher(
     readonly iosDefaultMode?: "slim" | "full";
     /** why: the `android.defaultImageTag` `config.get` reports. */
     readonly androidDefaultImageTag?: string;
-    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0078). */
+    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0080). */
     readonly virtualDevices?: Readonly<Partial<Record<"ios" | "android", boolean>>>;
     /** why: the two boot deadlines `config.get` reports. */
     readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };

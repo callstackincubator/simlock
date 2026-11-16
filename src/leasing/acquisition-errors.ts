@@ -42,7 +42,7 @@ export class PhysicalUnknownModelError extends UnknownModelError {
   }
 }
 
-/** why: a plain lease on a platform whose `<platform>.virtualDevices` is false; the message names the key and both ways to ask for a physical device (ADR 0078 §2). */
+/** why: a plain lease on a platform whose `<platform>.virtualDevices` is false; the message names the key and both ways to ask for a physical device (ADR 0080 §2). */
 export class VirtualDevicesOffError extends UnknownModelError {
   constructor(request: Pick<DeviceRequest, "class" | "model" | "platform">) {
     super(request.platform, request.model, request.model === undefined ? request.class : undefined);
