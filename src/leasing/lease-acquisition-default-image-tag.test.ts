@@ -28,9 +28,10 @@ describe("LeaseAcquisitionCoordinator: a worker's default image tag", () => {
   const tagged = { ...pixel9, imageTag: tag, osVersion: "36" } as const;
 
   it("gives a tagless Android lease the newest level that has the default tag, and an idle ready device of that spec before a new one", async () => {
+    const driver = fleetDriver();
     const harness = await createHarness({
       defaultImageTags: { android: tag },
-      drivers: [fleetDriver()],
+      drivers: [driver],
       maxDevices: 6,
       maxRunning: 6,
       preferences: { android: { phone: ["Pixel 9", "Pixel 6"] } },
@@ -46,6 +47,10 @@ describe("LeaseAcquisitionCoordinator: a worker's default image tag", () => {
       const granted = await harness.coordinator.request(input, owner(label));
       expect(granted.device.spec, label).toEqual(tagged);
     }
+
+    // why: the host-CPU rule (ADR 0078 §2) reaches the driver only on the worker's own attempt.
+    const firstResolve = driver.calls.find((call) => call.operation === "resolveSpec");
+    expect(firstResolve?.arguments[0]).toMatchObject({ defaultTag: true, imageTag: tag });
 
     const idle = await seedReady(harness, tagged);
     const reused = await harness.coordinator.request(pixel9, owner("reuse"));

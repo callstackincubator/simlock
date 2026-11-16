@@ -639,7 +639,9 @@ describe("deviceModeWiring", () => {
         ios,
       }).defaultImageTags,
     ).toEqual({ android: "google_apis_playstore" });
-    expect(deviceModeWiring({ android: { defaultModels: {} }, ios }).defaultImageTags).toEqual({});
+    expect(
+      deviceModeWiring({ android: { defaultModels: {} }, ios }).defaultImageTags,
+    ).toStrictEqual({});
   });
 });
 
