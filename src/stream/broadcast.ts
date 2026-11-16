@@ -11,6 +11,8 @@ export interface Broadcast {
   // that match the first meta frame of its body.
   join(signal: AbortSignal): CapturedStream;
   readonly viewers: number;
+  // why: a stopped broadcast is going away until `done` settles, so a viewer that asks now needs a fresh one.
+  readonly stopped: boolean;
   readonly done: Promise<void>;
 }
 
@@ -188,6 +190,9 @@ export function createBroadcast(source: CapturedStream): Broadcast {
         },
         meta,
       };
+    },
+    get stopped() {
+      return over;
     },
     get viewers() {
       return viewers.size;

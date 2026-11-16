@@ -118,9 +118,11 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
       // another for one it does not, which is a way of listing the fleet's devices.
       const device = requireDevice(options, target, caller);
       let entry = shared.get(device.id);
-      // why: a capture whose slot was stopped is going away even if its last frame is still in flight, so
-      // a viewer that asks now gets a fresh one rather than the end of the old.
-      if (entry?.slot.ended.aborted === true) entry = undefined;
+      // why: a capture whose slot was stopped, or whose broadcast stopped because its last viewer left or
+      // its source ended, is going away until its close settles, so a viewer that asks now gets a fresh
+      // one rather than the end of the old.
+      if (entry?.slot.ended.aborted === true || entry?.broadcast?.stopped === true)
+        entry = undefined;
       entry ??= start(device);
       if (entry.broadcast !== undefined) return entry.broadcast.join(signal);
       return await new Promise<CapturedStream>((resolve, reject) => {

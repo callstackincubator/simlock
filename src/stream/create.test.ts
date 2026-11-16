@@ -848,6 +848,39 @@ describe("createWorkerStream", () => {
     }
 
     {
+      // why: 700 pictures of 2 KiB are about 1.4 MiB, past 1 MiB and under the 2 MiB bound, so nothing is dropped.
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const stalled = await openOnRoute(stream, "lease");
+      const feed = feeds[0]!;
+      feed.keyframe([0, 1]);
+      for (let index = 0; index < 700; index += 1) feed.delta(picture(index));
+      await flush();
+      const reading = watch(stalled);
+      await flush();
+      expect(reading.frames, "an H.264 viewer under the bound keeps every picture").toHaveLength(
+        702,
+      );
+      expect(reading.frames).toContain("key 0,1");
+    }
+
+    {
+      const { feeds, stream } = worker([], false);
+      const first = openOnRoute(stream, "device");
+      const second = openOnRoute(stream, "lease");
+      await flush();
+      const feed = feeds[0]!;
+      feed.meta({ codec: "mjpeg" });
+      watch(await first);
+      const underBound = await second;
+      for (let index = 0; index < 700; index += 1) feed.delta(picture(index));
+      await flush();
+      const kept = watch(underBound);
+      await flush();
+      expect(kept.frames, "an MJPEG viewer under the bound keeps every picture").toHaveLength(701);
+    }
+
+    {
       const { feeds, stream } = worker([], false);
       const first = openOnRoute(stream, "device");
       const second = openOnRoute(stream, "lease");
@@ -1077,11 +1110,11 @@ describe("createWorkerStream", () => {
       expect(opened()).toBe(2);
     }
 
-    {
+    for (const way of ["device stop", "last viewer leaves"]) {
       let closeIt = () => {};
       const closing = new Promise<void>((resolve) => (closeIt = resolve));
       const { emit, feeds, opened, stream } = worker();
-      await watchers(stream, 1);
+      const first = await openOnRoute(stream, "device");
       const old = feeds[0]!;
       const close = old.close.bind(old);
       // why: a capture whose close is slow is stopped but still in flight, the window a late viewer must not join.
@@ -1089,16 +1122,17 @@ describe("createWorkerStream", () => {
         await closing;
         await close();
       };
-      emit("device.shutdown", "dev_leased");
+      if (way === "device stop") emit("device.shutdown", "dev_leased");
+      else if (way === "last viewer leaves") await first.body!.cancel();
       await flush();
       const again = watch(await openOnRoute(stream, "device"));
       await flush();
-      expect(opened(), "a viewer that asks while the stopped capture is still closing").toBe(2);
-      expect(again.frames).toEqual(["meta 330x720"]);
+      expect(opened(), `a viewer that asks while the capture stopped by ${way} is closing`).toBe(2);
+      expect(again.frames, way).toEqual(["meta 330x720"]);
       closeIt();
       await flush();
-      expect(again.ended).toBe(false);
-      expect(feeds[0]?.closes).toBe(1);
+      expect(again.ended, way).toBe(false);
+      expect(feeds[0]?.closes, way).toBe(1);
     }
   });
 

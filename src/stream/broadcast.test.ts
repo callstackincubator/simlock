@@ -24,27 +24,38 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 // why: `viewers`, `done` and a viewer's `close` are the broadcast's own surface, which the worker's
 // stream shows only through what it does with them; here they are checked one by one.
 describe("createBroadcast", () => {
-  it("counts its viewers, closes the source once when the last leaves by any of its three ways, and settles done", async () => {
-    const { calls, controller, stream } = source();
-    const broadcast = createBroadcast(stream);
-    controller().enqueue(encodeScreenMeta(META));
-    const abort = new AbortController();
-    const byAbort = broadcast.join(abort.signal);
-    const byClose = broadcast.join(new AbortController().signal);
-    const byCancel = broadcast.join(new AbortController().signal);
-    expect(byAbort.meta).toEqual(META);
-    expect(broadcast.viewers).toBe(3);
+  it("counts its viewers, closes the source once when the last leaves by abort, close or cancel, and settles done", async () => {
+    for (const last of ["abort", "close", "cancel"] as const) {
+      const { calls, controller, stream } = source();
+      const broadcast = createBroadcast(stream);
+      controller().enqueue(encodeScreenMeta(META));
+      const abort = new AbortController();
+      const ways = {
+        abort: broadcast.join(abort.signal),
+        cancel: broadcast.join(new AbortController().signal),
+        close: broadcast.join(new AbortController().signal),
+      };
+      expect(ways.abort.meta, last).toEqual(META);
+      expect(broadcast.viewers, last).toBe(3);
 
-    abort.abort();
-    await byClose.close();
-    await byClose.close();
-    expect(broadcast.viewers).toBe(1);
-    expect(calls.closes).toBe(0);
+      const leave = {
+        abort: async () => abort.abort(),
+        cancel: () => ways.cancel.body.cancel(),
+        close: async () => {
+          await ways.close.close();
+          await ways.close.close();
+        },
+      };
+      const others = (["abort", "close", "cancel"] as const).filter((way) => way !== last);
+      for (const way of others) await leave[way]();
+      expect(broadcast.viewers, last).toBe(1);
+      expect(calls.closes, last).toBe(0);
 
-    await byCancel.body.cancel();
-    await broadcast.done;
-    expect(broadcast.viewers).toBe(0);
-    expect(calls.closes).toBe(1);
+      await leave[last]();
+      await broadcast.done;
+      expect(broadcast.viewers, last).toBe(0);
+      expect(calls.closes, last).toBe(1);
+    }
   });
 
   it("ends every body after what is queued when the source ends, and settles done", async () => {
