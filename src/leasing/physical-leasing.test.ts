@@ -173,10 +173,18 @@ function stateOf(harness: Harness, device: PhysicalDevice): string | undefined {
   return harness.registry.snapshot.devices.find((candidate) => candidate.id === device.id)?.state;
 }
 
-function presenceReads(harness: Harness): unknown[] {
+function presenceEntries(harness: Harness): unknown[] {
   return harness.driver.calls
     .filter((call) => call.operation === "listPresentPhysical")
     .map((call) => call.arguments[0]);
+}
+
+function presenceReads(harness: Harness): unknown[] {
+  return presenceEntries(harness).map((entries) =>
+    (entries as readonly { readonly driverDeviceId: string }[]).map(
+      (entry) => entry.driverDeviceId,
+    ),
+  );
 }
 
 function claimKind(harness: Harness, device: PhysicalDevice): string | undefined {
@@ -253,7 +261,7 @@ describe("createLeasing with physical devices", () => {
     const result = await outcome(harness.engine.request(physicalRequest, asking("agent")));
 
     expect(result).toMatchObject({ device: { driverDeviceId: "UDID-A" } });
-    expect(presenceReads(harness)).toEqual([
+    expect(presenceEntries(harness)).toEqual([
       [{ driverDeviceId: "UDID-A", hardwareSerial: "SER-A" }],
     ]);
   });

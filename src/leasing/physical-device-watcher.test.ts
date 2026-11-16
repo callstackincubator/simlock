@@ -13,6 +13,7 @@ import {
   harnesses,
   holdNextReclaim,
   physicalRequest,
+  readEntriesOf,
   readsOf,
   recordStateWrites,
   startWatcher,
@@ -109,8 +110,8 @@ describe("PhysicalDeviceWatcher counting", () => {
 
     await tick(harness);
 
-    expect(readsOf(harness.driver)).toEqual([[{ driverDeviceId: "UDID-A" }]]);
-    expect(readsOf(harness.androidDriver)).toEqual([
+    expect(readEntriesOf(harness.driver)).toEqual([[{ driverDeviceId: "UDID-A" }]]);
+    expect(readEntriesOf(harness.androidDriver)).toEqual([
       [{ driverDeviceId: "EMU-1", hardwareSerial: "SER-1" }],
     ]);
   });
