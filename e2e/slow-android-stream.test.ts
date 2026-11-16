@@ -85,6 +85,9 @@ describe.skipIf(!hasAndroidSdk)(
           expect(lease.code, `lease failed: ${lease.stdout} ${lease.stderr}`).toBe(0);
           const leaseId = (lease.json as { lease: { id: string } }).lease.id;
           const deviceId = (lease.json as { device: { id: string } }).device.id;
+          // why: Simlock's adb server lists every emulator it announced, so a command without
+          // `-s` answers "more than one device" and the device checks below would never hold.
+          const serial = (lease.json as { device: { address: string } }).device.address;
           const streamUrl = await deviceStreamUrl(baseUrl, env.home, deviceId);
           const created = await env.cli(["token", "create", "--role", "operator"]);
           expect(created.code, created.stderr).toBe(0);
@@ -130,8 +133,17 @@ describe.skipIf(!hasAndroidSdk)(
 
           await waitFor(
             async () => {
-              const processes = await env.cli(["adb", "shell", "ps", "-A", "-o", "ARGS"]);
-              const files = await env.cli(["adb", "shell", "ls", "/data/local/tmp"]);
+              const processes = await env.cli([
+                "adb",
+                "-s",
+                serial,
+                "shell",
+                "ps",
+                "-A",
+                "-o",
+                "ARGS",
+              ]);
+              const files = await env.cli(["adb", "-s", serial, "shell", "ls", "/data/local/tmp"]);
               return (
                 processes.code === 0 &&
                 !processes.stdout.includes("com.genymobile.scrcpy.Server") &&
@@ -199,8 +211,17 @@ describe.skipIf(!hasAndroidSdk)(
           await reading;
           await waitFor(
             async () => {
-              const processes = await env.cli(["adb", "shell", "ps", "-A", "-o", "ARGS"]);
-              const files = await env.cli(["adb", "shell", "ls", "/data/local/tmp"]);
+              const processes = await env.cli([
+                "adb",
+                "-s",
+                serial,
+                "shell",
+                "ps",
+                "-A",
+                "-o",
+                "ARGS",
+              ]);
+              const files = await env.cli(["adb", "-s", serial, "shell", "ls", "/data/local/tmp"]);
               return (
                 processes.code === 0 &&
                 !processes.stdout.includes("com.genymobile.scrcpy.Server") &&
