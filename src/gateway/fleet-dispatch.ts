@@ -370,7 +370,7 @@ export class FleetDispatch {
             // connection (`WorkerLink#connect`, via `acceptUplink` on the worker's own end, see
             // `session.isGatewayUplink`'s doc). The worker stores this verbatim as the lease's
             // `ownerId` instead of deriving it from the connection -- see
-            // `daemon/dispatcher.ts`'s `#leaseRequest`.
+            // `daemon/dispatcher-leases.ts`'s `leaseRequest`.
             owner: waiter.options.ownerId,
             // why: ADR 0009 §3: a download is never triggered through a gateway.
             allowDownload: false,

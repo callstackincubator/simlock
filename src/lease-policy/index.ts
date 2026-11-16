@@ -178,11 +178,8 @@ type Attempt =
   | { readonly attemptId: number; readonly ok: false; readonly error: unknown };
 
 /**
- * A rejection that answers "this lease is not yours to renew" rather than "that attempt did
- * not work". Both codes are the daemon's final word: `UNKNOWN_LEASE` means the record is gone
- * (expired, released, force-released), `FORBIDDEN` that it belongs to another principal
- * (`ownsLease` in `src/contract/operations.ts`). Retrying either just prints the same answer
- * until the deadline.
+ * why: both codes are the daemon's final word -- `UNKNOWN_LEASE` the record is gone, `FORBIDDEN`
+ * it belongs to another principal -- so retrying either only repeats the answer until the deadline.
  */
 function isLeaseGone(error: unknown): boolean {
   return isSimlockError(error) && (error.code === "UNKNOWN_LEASE" || error.code === "FORBIDDEN");

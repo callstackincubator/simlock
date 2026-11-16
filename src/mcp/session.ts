@@ -242,7 +242,7 @@ export class McpSession {
   /**
    * why: This session's current lease, or an explicit "no lease held" result -- one `lease.list`
    * call (ADR 0003 §9), never a cache of lease state. `lease.list` filters by **owner principal
-   * only** (see `src/daemon/dispatcher.ts`'s `lease.list` handler), so it can return leases
+   * only** (see `src/daemon/dispatcher-leases.ts`'s `lease.list` handler), so it can return leases
    * this connection never requested: one a `simlock lease --detach` left behind under the same
    * principal (`SIMLOCK_AGENT_ID` or the agent session's id), or one left over from an earlier session under that
    * principal. Taking `leases[0]` unconditionally would report a lease this session neither

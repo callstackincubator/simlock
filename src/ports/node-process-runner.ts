@@ -292,7 +292,7 @@ export class ExecOutputDeliveryStalledError extends Error {
  * grandchild with **no** pending delivery hitting the same deadline still settles as before:
  * nothing of the command's own output is waiting on anyone in that case, only unrelated noise
  * this handle was never going to forward to a live consumer anyway (see `#execDevice` in
- * `daemon/server.ts`, torn down by then).
+ * `daemon/server-requests.ts`, torn down by then).
  */
 class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly pid: number;

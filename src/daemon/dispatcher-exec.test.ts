@@ -644,7 +644,7 @@ describe("Dispatcher: device.exec", () => {
     // already exited and closed its pipe while a chunk's delivery to a slow consumer is still
     // outstanding" -- exactly the state a real OS pipe can be in (verified against real Node:
     // `close` can fire in the same tick as the `data` event for a chunk this process runner
-    // just paused on). `#deviceExec` (`server.ts`) and the HTTP exec route (`app.ts`) both just
+    // just paused on). `#execDevice` (`server-requests.ts`) and the HTTP exec route (`app-lease-routes.ts`) both just
     // hand their transport's own backpressured `onOutput` straight to this same dispatcher
     // call, so a real reproduction here against a real child process is the one place this
     // defect -- and its fix, in `NodeStreamingProcessHandle` -- is actually exercised, for

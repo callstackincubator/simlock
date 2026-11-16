@@ -29,7 +29,7 @@ export const leaseCancel = defineOperation({
    * *lease's* recorded `ownerId` from the registry; a pending, not-yet-granted request has no
    * lease yet to look up -- `pendingRequestOwner` is the wait-queue equivalent). An omitted
    * `requesterId` defaults to the principal the same way the handler's own default does (see
-   * `dispatcher.ts`'s `#leaseCancel`), so it always resolves to a request this principal owns.
+   * `dispatcher-leases.ts`'s `leaseCancel`), so it always resolves to a request this principal owns.
    * A `requesterId` with no pending request resolves `pendingRequestOwner` to `undefined`,
    * which is treated as authorized (same convention as `ownsLease`) so the handler's own
    * `not-found` surfaces instead of a misleading `FORBIDDEN`.

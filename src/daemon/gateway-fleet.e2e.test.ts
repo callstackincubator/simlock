@@ -574,15 +574,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const workerBId = beforeDrain.find((worker) => worker.label === "worker-b")?.id;
     if (workerBId === undefined) throw new Error("worker-b never connected");
 
-    // Lease worker-a's own device -- the fleet client below must still be able to renew this
-    // exact lease after everything that follows.
-    // P2 (round 1 review, #119): `requesterId` set explicitly, distinct from the session
-    // principal -- `agentSession({ principal: "fleet-owner" })` alone makes `ownerId` and
-    // `requesterId` the same string (`dispatcher.ts` defaults both to `session.principal`), so
-    // the §27a assertion below (owner authorizes, requester does not) could not tell the two
-    // fields apart: mutating `lease-index.ts` to re-derive `ownerId` from `requesterId` on
-    // rebuild would still pass. With a distinct `requesterId`, only a genuinely separate
-    // `ownerId` on the rebuilt entry can authorize the renew below.
+    // why: a `requesterId` distinct from the session principal, because with both defaulted to
+    // `session.principal` the renew below would still pass if the rebuilt index re-derived
+    // `ownerId` from `requesterId`.
     const grant = await firstGateway.dispatch(
       "lease.request",
       {

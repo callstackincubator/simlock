@@ -417,20 +417,8 @@ describe("loadConfig", () => {
 });
 
 describe("configSchema agrees with the config the daemon actually loads", () => {
-  /**
-   * `config.get` declares `configSchema` as its output (`contract/operations.ts`), and zod's
-   * object mode strips unknown keys -- so a key this schema does not list is not a type error
-   * anywhere, it simply vanishes on the way to the caller.
-   *
-   * Round 6 review found `gateway.leaseRequestTimeoutMs` doing exactly that: declared on
-   * `Config`, validated by `loadConfig`, documented in CONFIGURATION.md as inspectable via
-   * `simlock config get`, and silently dropped. Nothing referenced `configSchema` from any test,
-   * so the drift was invisible in both directions.
-   *
-   * This compares key sets per block rather than asserting one key, so the next block that gains
-   * a field fails here instead of shipping a `config get` that quietly omits it (testing rule 4:
-   * a test that enforces a rule has to see everything the rule covers).
-   */
+  /** why: zod's object mode strips a key `configSchema` does not list, so a config key missing
+   * from it vanishes from `config get` with no type error anywhere. */
   it("strips no key from any block of a freshly loaded config", async () => {
     const config = await loadConfig({
       configPath,

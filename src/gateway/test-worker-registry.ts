@@ -5,8 +5,8 @@ import { WorkerRegistry } from "./worker-registry.js";
 
 export const RETENTION_MS = 24 * 60 * 60_000;
 
-/** Matches `core/config.ts`'s own default, so a test that does not care about ADR 0005 §15's
- * warning gets a cap no fixture's `ttlMs` ever comes near. */
+/** why: the config default's cap, so no fixture's `ttlMs` comes near it and a test that does not
+ * care about the max-TTL warning never sees one. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
 /** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
