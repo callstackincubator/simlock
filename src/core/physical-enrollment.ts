@@ -136,9 +136,10 @@ export class PhysicalEnrollment {
           `${existing.driverDeviceId} was read again as ${again.driverDeviceId}`,
         );
       }
-      const device = await this.options.decisions.run(() =>
-        this.options.registry.reenrollPhysical(existing.id, { ...again, platform }),
-      );
+      const device = await this.options.decisions.run(() => {
+        this.#requireOneRecord(platform, id, again);
+        return this.options.registry.reenrollPhysical(existing.id, { ...again, platform });
+      });
       this.options.physicalDeviceReady?.(device.id);
       return { device, reenrolled: true };
     } finally {
