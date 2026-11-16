@@ -61,6 +61,49 @@ describe("warm-hit", () => {
     expect(warmHit.score(view([physical, deviceFixture("dev_v", "ready")]), request)).toBe(1);
   });
 
+  it("ranks a tagless Android request by a ready device with the worker's default image tag, on any level", () => {
+    const device = (id: string, osVersion: string, imageTag?: string) => ({
+      ...deviceFixture(id, "ready"),
+      spec: {
+        physical: false,
+        model: "Pixel 9",
+        osVersion,
+        platform: "android" as const,
+        ...(imageTag === undefined ? {} : { imageTag }),
+      },
+    });
+    const view = (
+      devices: NonNullable<WorkerView["devices"]>,
+      defaultImageTag: string | undefined,
+    ): WorkerView => ({
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([
+        {
+          ...(defaultImageTag === undefined ? {} : { defaultImageTag }),
+          models: ["Pixel 9"],
+          platform: "android",
+          runtimes: ["36", "37"],
+        },
+      ]).platforms,
+      connection: "connected",
+      devices,
+      drained: false,
+      id: "wrk_a",
+      lastSeenAt: 1,
+      leases: [],
+    });
+    const playstore = "google_apis_playstore";
+    const request = { model: "Pixel 9", platform: "android" as const };
+
+    expect(warmHit.score(view([device("d1", "36", playstore)], playstore), request)).toBe(1);
+    expect(warmHit.score(view([device("d1", "37")], playstore), request)).toBe(0);
+    expect(warmHit.score(view([device("d1", "37")], undefined), request)).toBe(1);
+    expect(warmHit.score(view([device("d1", "36", playstore)], undefined), request)).toBe(0);
+    const named = { ...request, imageTag: "google_apis" };
+    expect(warmHit.score(view([device("d1", "37", "google_apis")], playstore), named)).toBe(1);
+    expect(warmHit.score(view([device("d1", "36", playstore)], playstore), named)).toBe(0);
+  });
+
   it("counts no device as warm on a worker whose devices were never read", () => {
     const unread: WorkerView = {
       capacity: statusFixture().capacity,
