@@ -760,11 +760,13 @@ export async function composeWorker(
   return daemon;
 }
 
-export function deviceModeWiring(config: Pick<Config, "ios">): {
+export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
+  readonly defaultImageTags: Readonly<Partial<Record<"android", string>>>;
   readonly defaultModes: Readonly<Partial<Record<"ios" | "android", DeviceMode>>>;
   readonly slimByDefault: boolean;
 } {
   return {
+    defaultImageTags: {},
     defaultModes: { ios: config.ios.defaultMode },
     slimByDefault: config.ios.defaultMode === "slim",
   };

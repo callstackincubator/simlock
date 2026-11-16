@@ -168,6 +168,8 @@ export interface Config {
     readonly defaultModels: DefaultModels;
   } & DriverConfigSection;
   readonly android: {
+    /** why: the image tag an Android lease that names none gets where an image of it fits (ADR 0078 §1). */
+    readonly defaultImageTag?: string;
     readonly defaultModels: DefaultModels;
   } & DriverConfigSection;
   /**
