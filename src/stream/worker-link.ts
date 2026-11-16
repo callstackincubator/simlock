@@ -12,7 +12,8 @@ import {
   toDriverDevice,
   type VirtualDriverDevice,
 } from "../core/index.js";
-import type { CaptureRegistry } from "./captures.js";
+import { type Broadcast, createBroadcast } from "./broadcast.js";
+import type { CaptureRegistry, CaptureSlot } from "./captures.js";
 import type { StreamCaller } from "./caller.js";
 import { type CapturedStream, type FeedBounds, readScreenFeed } from "./feed.js";
 import {
@@ -52,49 +53,128 @@ export interface WorkerStreamLinkOptions {
   readonly bounds: FeedBounds;
 }
 
+interface Waiter {
+  readonly signal: AbortSignal;
+  readonly resolve: (stream: CapturedStream) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+// why: a device's capture, from the moment the first viewer asks for it until its last viewer leaves
+// or it ends. Viewers that ask while it is still starting wait on it as a group.
+interface SharedCapture {
+  readonly slot: CaptureSlot;
+  readonly abort: AbortController;
+  readonly waiters: Waiter[];
+  broadcast: Broadcast | undefined;
+}
+
 export function createWorkerStreamLink(options: WorkerStreamLinkOptions): StreamLink {
+  const shared = new Map<string, SharedCapture>();
+
+  const start = (device: DeviceRecord): SharedCapture => {
+    const entry: SharedCapture = {
+      abort: new AbortController(),
+      broadcast: undefined,
+      slot: options.captures.beginOnDevice(device.id),
+      waiters: [],
+    };
+    shared.set(device.id, entry);
+    const forget = () => {
+      if (shared.get(device.id) === entry) shared.delete(device.id);
+    };
+    void open(options, device, entry).then(
+      async (stream) => {
+        const waiters = entry.waiters.splice(0);
+        const viewers = waiters.filter((waiter) => !waiter.signal.aborted);
+        if (viewers.length > 0) {
+          const broadcast = createBroadcast(stream);
+          entry.broadcast = broadcast;
+          void broadcast.done.then(() => {
+            forget();
+            return entry.slot.release();
+          });
+          for (const waiter of viewers) waiter.resolve(broadcast.join(waiter.signal));
+        } else {
+          forget();
+          void stream.body.cancel().catch(() => undefined);
+          await entry.slot.release();
+        }
+        for (const waiter of waiters) {
+          if (waiter.signal.aborted) waiter.reject(viewerGone());
+        }
+      },
+      (error: unknown) => {
+        forget();
+        for (const waiter of entry.waiters.splice(0)) waiter.reject(error);
+      },
+    );
+    return entry;
+  };
+
   return {
     async serve(target, caller, signal): Promise<CapturedStream> {
       // why: the caller and the device are checked before anything is asked of the machine. A link that
       // looked for its capture first would answer an agent one way for a device this worker has and
       // another for one it does not, which is a way of listing the fleet's devices.
       const device = requireDevice(options, target, caller);
-      const slot = options.captures.beginOnDevice(device.id);
-      // why: the listener, and not only the body's cancel, because a request aborted before its
-      // first frame has no body being read yet -- which is what a page opened and closed quickly does.
-      if (signal.aborted) void slot.release();
-      else signal.addEventListener("abort", () => void slot.release(), { once: true });
-
-      let stream: CapturedStream;
-      try {
-        const feed = closedOnce(
-          await options.screens.openScreen(
-            device.spec.platform,
-            toDriverDevice(device),
-            options.settings,
-            AbortSignal.any([signal, slot.ended]),
-          ),
-        );
-        slot.attach(feed.close);
-        stream = await readScreenFeed(feed, options.bounds, () => endedFrame(slot.endedReason()));
-      } catch (error) {
-        slot.abandon();
-        if (slot.ended.aborted) throw deviceStopped();
-        throw refusalFor(error);
-      }
-      // why: a capture can take seconds to start and the device can stop meanwhile; a slot that was
-      // stopped says so, so the viewer is refused rather than handed a picture of a device that is gone.
-      if (signal.aborted) {
-        await slot.release();
-        throw streamUnavailable("The viewer went away before the picture started");
-      }
-      if (slot.ended.aborted) {
-        await slot.release();
-        throw deviceStopped();
-      }
-      return { ...stream, close: () => slot.release() };
+      let entry = shared.get(device.id);
+      // why: a capture whose slot was stopped is going away even if its last frame is still in flight, so
+      // a viewer that asks now gets a fresh one rather than the end of the old.
+      if (entry?.slot.ended.aborted === true) entry = undefined;
+      entry ??= start(device);
+      if (entry.broadcast !== undefined) return entry.broadcast.join(signal);
+      return await new Promise<CapturedStream>((resolve, reject) => {
+        const waiter: Waiter = { reject, resolve, signal };
+        const pending = entry;
+        pending.waiters.push(waiter);
+        const leave = () => {
+          // why: the last viewer to leave a capture that is still starting stops it, as a lone viewer
+          // does today; what the open attached is closed once it settles, and every viewer is answered
+          // then.
+          // why: once the open has settled the waiters are gone and the broadcast owns its viewers.
+          if (pending.waiters.length === 0) return;
+          if (!pending.waiters.every((other) => other.signal.aborted)) return;
+          pending.abort.abort();
+          if (shared.get(device.id) === pending) shared.delete(device.id);
+          void pending.slot.release();
+        };
+        if (signal.aborted) leave();
+        else signal.addEventListener("abort", leave, { once: true });
+      });
     },
   };
+}
+
+async function open(
+  options: WorkerStreamLinkOptions,
+  device: DeviceRecord,
+  entry: SharedCapture,
+): Promise<CapturedStream> {
+  const { slot } = entry;
+  let stream: CapturedStream;
+  try {
+    const feed = closedOnce(
+      await options.screens.openScreen(
+        device.spec.platform,
+        toDriverDevice(device),
+        options.settings,
+        AbortSignal.any([entry.abort.signal, slot.ended]),
+      ),
+    );
+    slot.attach(feed.close);
+    stream = await readScreenFeed(feed, options.bounds, () => endedFrame(slot.endedReason()));
+  } catch (error) {
+    slot.abandon();
+    if (slot.ended.aborted) throw deviceStopped();
+    throw refusalFor(error);
+  }
+  // why: a capture can take seconds to start and the device can stop meanwhile; a slot that was
+  // stopped says so, so the viewer is refused rather than handed a picture of a device that is gone.
+  if (slot.ended.aborted) {
+    await slot.release();
+    throw deviceStopped();
+  }
+  return stream;
 }
 
 // why: the feed's reader, the viewer and the device's end can each close a capture, and a driver's
@@ -102,6 +182,10 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
 function closedOnce(feed: ScreenFeed): ScreenFeed {
   let closing: Promise<void> | undefined;
   return { body: feed.body, close: () => (closing ??= feed.close()) };
+}
+
+function viewerGone(): StreamRefusalError {
+  return streamUnavailable("The viewer went away before the picture started");
 }
 
 function refusalFor(error: unknown): StreamRefusalError {
