@@ -49,6 +49,10 @@ const SCREEN_OFF_MESSAGE =
 // the socket is open the session says so with an empty `alive` frame, well inside those bounds.
 export const ALIVE_AFTER_MS = 5_000;
 const ALIVE_FRAME = encodeScreenFrame(SCREEN_FRAME_TAG.alive, new Uint8Array(0));
+// why: ADR 0079 §5 bounds the gap between key frames at 5 s; scrcpy's encoder sends none for a still screen
+// and the reset (control message 17) makes it send a session, parameters and a key frame at once.
+export const RESET_VIDEO_AFTER_MS = 5_000;
+const RESET_VIDEO = new Uint8Array([17]);
 const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
 const SCID_LIMIT = 2 ** 31;
@@ -121,6 +125,7 @@ class ScrcpySession {
   #collected: Promise<void> | undefined;
   #stream: TcpStream | undefined;
   #control: TcpStream | undefined;
+  #resetTimer: ReturnType<Clock["setTimer"]> | undefined;
   #closing: Promise<void> | undefined;
 
   constructor(
@@ -167,6 +172,7 @@ class ScrcpySession {
       const parser = new ScrcpyVideoParser();
       const mapper = new EnvelopeMapper(this.#settings.fps);
       const pending = await this.#untilSized(reader, parser, mapper);
+      this.#armReset();
       return { body: this.#body(reader, parser, mapper, pending), close: () => this.close() };
     } catch (error) {
       await this.close();
@@ -361,6 +367,17 @@ class ScrcpySession {
       : `${message}. Its last output:\n${this.#tail.join("\n")}`;
   }
 
+  // why: every key frame the body delivers restarts the 5 s, so a moving screen is never reset and a still one
+  // is reset every 5 s; the timer lives apart from the reads, which a slow viewer stops.
+  #armReset(): void {
+    if (this.#closing !== undefined) return;
+    if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
+    this.#resetTimer = this.#clock.setTimer(RESET_VIDEO_AFTER_MS, () => {
+      this.#armReset();
+      this.#control?.write(RESET_VIDEO).catch(() => this.#abort.abort());
+    });
+  }
+
   #body(
     reader: ChunkReader,
     parser: ScrcpyVideoParser,
@@ -404,7 +421,10 @@ class ScrcpySession {
             }
             const frame = pending.shift();
             if (frame !== undefined) {
-              if (frame[4] === SCREEN_FRAME_TAG.keyframe) started = true;
+              if (frame[4] === SCREEN_FRAME_TAG.keyframe) {
+                started = true;
+                this.#armReset();
+              }
               controller.enqueue(frame);
             }
           } catch (error) {
@@ -450,6 +470,7 @@ class ScrcpySession {
 
   async #teardown(): Promise<void> {
     this.#abort.abort();
+    if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
     // why: the server exits when a write to its video socket fails, which is the stop it was built
     // for; the kill below only covers a screen so still that the server has nothing to write.
     this.#stream?.close();

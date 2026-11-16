@@ -14,10 +14,10 @@ The target:
 
 What a stream does to the device:
 
-- A screen stream changes no device setting and drops no frame. One exception: a phone's stream sets stay awake (`stay_awake=true`, scrcpy's `stay_on_while_plugged_in`) while it runs, and scrcpy's clean-up process puts the old value back when the server ends. An emulator's server never gets the option.
+- A screen stream changes no device setting and drops no frame: the server runs with `power_on=false` and `clipboard_autosync=false`, which its control channel would otherwise act on. One exception: a phone's stream sets stay awake (`stay_awake=true`, scrcpy's `stay_on_while_plugged_in`) while it runs, and scrcpy's clean-up process puts the old value back when the server ends. An emulator's server never gets the option.
 - A phone's screen state is read before anything is pushed (`mWakefulness` in `dumpsys power`). `Asleep` or `Dozing`: one `KEYCODE_WAKEUP`, then the same read again; still off is `ScreenUnavailableError`, and nothing is pushed. The wake's exit is not looked at.
 - Only a read that names one of those two words is a fact about the screen. Another word, no line, a non-zero exit or a timed-out read goes on, with no wake. The word can be printed with a trailing blank (`Dozing `).
-- The wake is the only key this stream sends: with `control=false` the server never powers the screen on. Emulators skip the read and the wake.
+- The wake is the only key this stream sends: `power_on=false` keeps the server from powering the screen on. Emulators skip the read and the wake.
 
 Start and stop:
 
@@ -31,7 +31,9 @@ Start and stop:
 The body:
 
 - It is pull-based (`highWaterMark: 0`): the socket is read only when the body's reader pulls, so nothing is dropped.
-- scrcpy sends nothing for a still screen, so after `ALIVE_AFTER_MS` of quiet the body sends an empty `alive` frame. `alive` frames begin only after the first key frame, so an encoder that never paints meets the stream's silence bound.
+- The server runs with its control channel on and `i-frame-interval:int=2`. The control socket is the second connection to the server's socket: made once, after the video's zero byte and before the video is read, and never asked for a zero byte. Its bytes are read and discarded. A refused control connection refuses the open; its end before `close`, or a failed write to it, ends the stream like the video's end.
+- A still screen sends no key frame, so every `RESET_VIDEO_AFTER_MS` (5 s, ADR 0079 §5) without a delivered key frame the session writes reset video (the byte `17`) to the control socket. The server answers with a session packet, parameter sets and a key frame, which the body relays as a new meta frame, description and picture, as for a rotation.
+- Between resets a still screen is quiet, so after `ALIVE_AFTER_MS` of quiet the body sends an empty `alive` frame. `alive` frames begin only after the first key frame, so an encoder that never paints meets the stream's silence bound.
 - A rotation starts a new scrcpy session: a new meta frame, then a new description before the next picture. The browser decoder re-reads both mid-stream.
 - A body whose socket ends errors with the server's last output and closes the feed.
 
@@ -40,7 +42,6 @@ The body:
 - **The slow-lane stream test has not passed yet.** `e2e/slow-android-stream.test.ts` failed at the
   lease on a nearly full disk. A live check on a Pixel 9 emulator streamed, and once the host
   `adb shell` died no scrcpy process and no jar were left on the device.
-- **Key frames come at scrcpy's default interval**: a viewer that resets its decoder waits for the next one.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **A phone that is not charging is woken but not held awake**: stay awake does nothing without power. When its
   screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on

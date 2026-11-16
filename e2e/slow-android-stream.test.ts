@@ -55,7 +55,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with alive frames, and ends when its lease is released under a viewer",
+      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with alive frames and a key frame at least every 5.5 s, and ends when its lease is released under a viewer",
       { timeout: 480_000 },
       async () => {
         const { env, port } = await withHttpDaemon((httpPort) => ({
@@ -154,6 +154,7 @@ describe.skipIf(!hasAndroidSdk)(
           if (watching.body === null) throw new Error("the stream answered without a body");
           const watched = watching.body.getReader();
           const tags: number[] = [];
+          const keyFrameAt: number[] = [];
           let buffered = new Uint8Array(0);
           let ended = false;
           const reading = (async () => {
@@ -168,6 +169,7 @@ describe.skipIf(!hasAndroidSdk)(
                 const length = new DataView(buffered.buffer, buffered.byteOffset).getUint32(0);
                 if (buffered.length < 4 + length) break;
                 tags.push(buffered[4]!);
+                if (buffered[4] === TAG.keyframe) keyFrameAt.push(Date.now());
                 buffered = buffered.slice(4 + length);
               }
             }
@@ -179,6 +181,17 @@ describe.skipIf(!hasAndroidSdk)(
           // why: an `alive` frame is the evidence the screen went still and the stream was kept open
           // for it; a screen that kept painting would pass the line above without proving anything.
           expect(tags, "no alive frame: the screen never went still").toContain(TAG.alive);
+
+          // why: ADR 0079 §5: the driver's reset video makes a still screen's encoder send a key frame
+          // at least every 5 s, so a viewer that joins or resets its decoder never waits longer.
+          expect(
+            keyFrameAt.length,
+            "fewer than 3 key frames in 45 s of a still screen",
+          ).toBeGreaterThanOrEqual(3);
+          const gaps = keyFrameAt.slice(1).map((at, index) => at - keyFrameAt[index]!);
+          expect(Math.max(...gaps), `key frame gaps in ms: ${gaps.join(", ")}`).toBeLessThanOrEqual(
+            5_500,
+          );
 
           // why: the viewer leaves while the screen is still, the case where the server writes
           // nothing and only the close can end it; the device must be left with no server and no jar.
