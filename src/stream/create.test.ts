@@ -5,6 +5,7 @@ import {
   type ScreenAvailability,
   SCREEN_FRAME_TAG,
   ScreenNotSupportedError,
+  ScreenUnavailableError,
 } from "../core/index.js";
 import { FakeClock, NoopLogger } from "../ports/index.js";
 import { createGatewayStream, createWorkerStream } from "./create.js";
@@ -15,6 +16,7 @@ function worker(
   sendsMeta = true,
   unsupported = false,
   openGate: Promise<void> = Promise.resolve(),
+  failWith?: Error,
 ) {
   const clock = new FakeClock();
   const registry = new TestRegistry(
@@ -53,6 +55,7 @@ function worker(
         opened += 1;
         signals.push(signal);
         await openGate;
+        if (failWith !== undefined) throw failWith;
         if (unsupported) throw new ScreenNotSupportedError("no capture here");
         const feed = new ScriptedFeed();
         if (sendsMeta) feed.meta();
@@ -1027,6 +1030,109 @@ describe("createWorkerStream", () => {
       const refused = await openOnRoute(stream, "device");
       expect(refused.status).toBe(409);
       expect(opened()).toBe(2);
+    }
+  });
+
+  it("a capture that fails fails every viewer it serves the same way, and the next viewer starts a fresh capture", async () => {
+    const gated = () => {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      return { gate, openIt: () => openIt() };
+    };
+    const refusal = async (answer: Response) => ({
+      body: await answer.json(),
+      status: answer.status,
+    });
+
+    {
+      const { gate, openIt } = gated();
+      const { opened, stream } = worker(
+        [],
+        true,
+        false,
+        gate,
+        new ScreenUnavailableError("no encoder"),
+      );
+      const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+      await flush();
+      openIt();
+      const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+      for (const answer of answers) {
+        expect(answer, "a start that fails").toEqual({
+          body: { error: { code: "STREAM_UNAVAILABLE", message: "no encoder" } },
+          status: 503,
+        });
+      }
+      expect(opened()).toBe(1);
+    }
+
+    {
+      const { clock, feeds, opened, stream } = worker([], false);
+      const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+      await flush();
+      clock.advance(30_000);
+      const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+      expect(
+        answers.map((answer) => answer.status),
+        "the start bound",
+      ).toEqual([503, 503]);
+      expect(answers[1]).toEqual(answers[0]);
+      expect(opened()).toBe(1);
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      const { gate, openIt } = gated();
+      const { emit, feeds, stream } = worker([], true, false, gate);
+      const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+      await flush();
+      emit("device.shutdown", "dev_leased");
+      openIt();
+      const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+      for (const answer of answers) {
+        expect(answer.status, "the device stopping during a shared start").toBe(409);
+      }
+      expect(answers[1]).toEqual(answers[0]);
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      const { feeds, opened, stream } = worker();
+      const viewers = [
+        watch(await openOnRoute(stream, "device")),
+        watch(await openOnRoute(stream, "lease")),
+      ];
+      const unread = await openOnRoute(stream, "device");
+      feeds[0]!.fail(new Error("encoder crashed"));
+      await flush();
+      for (const viewer of viewers) {
+        expect(viewer.error, "a mid-stream read error").toBe("encoder crashed");
+      }
+      expect(feeds[0]?.closes).toBe(1);
+      const fresh = watch(await openOnRoute(stream, "device"));
+      await flush();
+      expect(opened(), "a new open after a failure, while an errored body is unread").toBe(2);
+      expect(fresh.frames).toEqual(["meta 330x720"]);
+      await expect(unread.body!.getReader().read()).rejects.toThrow("encoder crashed");
+    }
+
+    {
+      const { clock, feeds, stream } = worker();
+      const viewers = [
+        watch(await openOnRoute(stream, "device")),
+        watch(await openOnRoute(stream, "lease")),
+      ];
+      clock.advance(29_999);
+      await flush();
+      expect(viewers.map((viewer) => viewer.error)).toEqual([undefined, undefined]);
+      clock.advance(1);
+      await flush();
+      for (const viewer of viewers) {
+        expect(viewer.error, "the silence bound").toBe(
+          "The screen capture wrote nothing for 30000ms while waiting for the next frame",
+        );
+      }
+      expect(feeds[0]?.closes).toBe(1);
     }
   });
 

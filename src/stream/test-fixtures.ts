@@ -95,6 +95,12 @@ export class ScriptedFeed implements ScreenFeed {
     this.#controller.close();
   }
 
+  fail(error: Error): void {
+    if (this.#done) return;
+    this.#done = true;
+    this.#controller.error(error);
+  }
+
   async close(): Promise<void> {
     this.closes += 1;
     this.end();
