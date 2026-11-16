@@ -74,19 +74,12 @@ async function serveDevice(
   }
   const workerId = target.workerId ?? "";
   if (!options.fleet.knowsWorker(workerId)) throw unknownWorker(workerId);
-  // why: a lease is shared by the worker's own id for it, and a device by its id; the two never share,
-  // because the gateway does not know a lease's device before the worker answers.
-  const key = `${workerId}\u0000${
-    target.leaseId === undefined
-      ? `device:${target.deviceId}`
-      : `lease:${target.workerLeaseId ?? target.leaseId}`
-  }`;
+  const key = relayKey(workerId, target);
   const existing = relays.get(key);
-  if (existing?.broadcast !== undefined && !existing.broadcast.stopped) {
-    return existing.broadcast.join(signal);
-  }
-  if (existing !== undefined && existing.broadcast === undefined) {
-    return waitFor(existing, { caller, signal, target }, () => drop(relays, key, existing));
+  if (existing !== undefined) {
+    const viewer = { caller, signal, target };
+    const joined = joinExisting(existing, viewer, () => drop(relays, key, existing));
+    if (joined !== undefined) return joined;
   }
   const entry: SharedRelay = {
     broadcast: undefined,
@@ -97,6 +90,26 @@ async function serveDevice(
   const stream = waitFor(entry, { caller, signal, target }, () => drop(relays, key, entry));
   void openShared(options, relays, key, entry, workerId, target, caller);
   return stream;
+}
+
+// why: a lease is shared by the worker's own id for it, and a device by its id; the two never share,
+// because the gateway does not know a lease's device before the worker answers.
+function relayKey(workerId: string, target: StreamTarget): string {
+  const subject =
+    target.leaseId === undefined
+      ? `device:${target.deviceId}`
+      : `lease:${target.workerLeaseId ?? target.leaseId}`;
+  return `${workerId}\u0000${subject}`;
+}
+
+function joinExisting(
+  existing: SharedRelay,
+  viewer: Pick<Waiter, "caller" | "signal" | "target">,
+  forget: () => void,
+): CapturedStream | Promise<CapturedStream> | undefined {
+  if (existing.broadcast === undefined) return waitFor(existing, viewer, forget);
+  if (!existing.broadcast.stopped) return existing.broadcast.join(viewer.signal);
+  return undefined;
 }
 
 function drop(relays: Map<string, SharedRelay>, key: string, entry: SharedRelay): void {
