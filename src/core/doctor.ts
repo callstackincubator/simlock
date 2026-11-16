@@ -30,7 +30,11 @@ import {
   stalledTransitionFinding,
   unreachableTarget,
 } from "./doctor-findings.js";
-import { reservedRunning, type WarmTargetFigures } from "./warm-pool/index.js";
+import {
+  reservedRunning,
+  reserveOnVirtualPlatforms,
+  type WarmTargetFigures,
+} from "./warm-pool/index.js";
 import type { StartupRead } from "./startup-read.js";
 
 export type {
@@ -542,7 +546,16 @@ export class Doctor {
     const findings = figures.flatMap((target) =>
       unreachableTarget(target, catalogs.get(target.platform)),
     );
-    const reserves = reservedRunning(this.options.config.warmPool, limits);
+    const { android, ios } = this.options.config;
+    const reserves = reservedRunning(
+      {
+        reserveRunning: reserveOnVirtualPlatforms(
+          this.options.config.warmPool.reserveRunning,
+          (platform) => (platform === "ios" ? ios : android).virtualDevices,
+        ),
+      },
+      limits,
+    );
     let wanted = 0;
     for (const platform of ["ios", "android"] as const) {
       const sum = targets
