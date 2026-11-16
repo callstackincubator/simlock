@@ -126,4 +126,46 @@ describe("LeaseAcquisitionCoordinator: a worker's default image tag", () => {
       }
     }
   });
+
+  it("leaves a request the setting does not apply to as it was", async () => {
+    const iosDriver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    const cases = [
+      {
+        defaultImageTags: { android: tag },
+        expected: { ...pixel9, imageTag: "google_apis", osVersion: "37" },
+        input: { ...pixel9, imageTag: "google_apis" },
+        label: "an explicit tag",
+      },
+      {
+        defaultImageTags: { android: tag },
+        expected: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+        input: { model: "iPhone 16", platform: "ios" },
+        label: "iOS",
+      },
+      {
+        defaultImageTags: {},
+        expected: { ...pixel9, osVersion: "37" },
+        input: pixel9,
+        label: "the setting unset",
+      },
+    ] as const;
+
+    for (const { defaultImageTags, expected, input, label } of cases) {
+      const harness = await createHarness({
+        defaultImageTags,
+        drivers: [fleetDriver(), iosDriver],
+      });
+
+      const granted = await harness.coordinator.request(input, owner("agent"));
+
+      expect(granted.device.spec, label).toMatchObject(expected);
+      expect(granted.device.spec.imageTag, label).toBe(
+        "imageTag" in expected ? expected.imageTag : undefined,
+      );
+    }
+  });
 });
