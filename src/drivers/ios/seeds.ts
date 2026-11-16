@@ -372,17 +372,24 @@ export class Seeds {
       this.#sources.markReady(sourceId, await this.#sizeOf(seedClone));
       return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
-      if (seedClone !== undefined)
-        await this.#deleteSeedSimulator(seedClone).catch(() => undefined);
-      if (throwaway !== undefined) {
-        keepRow = !(await this.#deleteThrowaway(throwaway, true).then(
-          () => true,
-          () => false,
-        ));
-      }
+      keepRow = await this.#undoFailedMake(seedClone, throwaway, keepRow);
       if (!keepRow) this.#sources.deleteRow(sourceId);
       throw error;
     }
+  }
+
+  /** why: a failed make deletes what it created; the row stays only while a throwaway it could not delete still needs it. */
+  async #undoFailedMake(
+    seedClone: string | undefined,
+    throwaway: string | undefined,
+    keepRow: boolean,
+  ): Promise<boolean> {
+    if (seedClone !== undefined) await this.#deleteSeedSimulator(seedClone).catch(() => undefined);
+    if (throwaway === undefined) return keepRow;
+    return !(await this.#deleteThrowaway(throwaway, true).then(
+      () => true,
+      () => false,
+    ));
   }
 
   /**
