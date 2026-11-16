@@ -1064,6 +1064,9 @@ describe("createWorkerStream", () => {
         });
       }
       expect(opened()).toBe(1);
+      const again = await settledWithin(openOnRoute(stream, "device"));
+      expect(again === "pending" ? again : again.status, "a viewer after a failed start").toBe(503);
+      expect(opened()).toBe(2);
     }
 
     {
