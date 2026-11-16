@@ -28,6 +28,7 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   uninstallPlan,
   PassthroughRefusedError,
@@ -604,9 +605,11 @@ export class OutOfProcessFakeDriver implements Driver {
     };
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    const script = await this.#beforeCall("listPresentPhysical", [enrolledIds]);
-    return enrolledIds.map((driverDeviceId) => {
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    const script = await this.#beforeCall("listPresentPhysical", [enrolled]);
+    return enrolled.map(({ driverDeviceId }) => {
       const scripted = script.physicalDevices?.find((candidate) =>
         candidate.ids.includes(driverDeviceId),
       );

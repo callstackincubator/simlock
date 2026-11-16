@@ -206,7 +206,7 @@ export class PhysicalEnrollment {
     };
   }
 
-  /** why: one phone keeps one record whatever address it is reached at; this runs under the lock at each commit, never on a stale read (ADR 0079 §2). */
+  /** why: one phone keeps one record whatever address it is reached at; this runs under the lock at each commit, never on a stale read (ADR 0080 §2). */
   #requireOneRecord(
     platform: Platform,
     id: string,

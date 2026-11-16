@@ -59,7 +59,9 @@ describe("Android physical handler on Windows", () => {
     async (platform, expected) => {
       const handler = await windowsHandler(devicesListing(WINDOWS_LINE), platform);
 
-      await expect(handler.listPresentPhysical([PHONE])).resolves.toEqual([expected]);
+      await expect(handler.listPresentPhysical([{ driverDeviceId: PHONE }])).resolves.toEqual([
+        expected,
+      ]);
     },
   );
 

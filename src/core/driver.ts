@@ -60,6 +60,12 @@ export function isPhysicalDriverDevice(device: DriverDevice): device is Physical
   return (device as Partial<PhysicalDriverDevice>).physical === true;
 }
 
+/** why: what a presence read asks about one enrolled phone; the hardware serial lets a driver tell a phone from another one at the same network address (ADR 0080 §2). */
+export interface EnrolledPhysical {
+  readonly driverDeviceId: string;
+  readonly hardwareSerial?: string;
+}
+
 export interface PresentPhysical {
   readonly driverDeviceId: string;
   readonly present: boolean;
@@ -228,7 +234,7 @@ export type PhysicalInspection =
       readonly osVersion: string;
       readonly class: PhysicalClass;
       readonly apps: readonly string[];
-      /** why: a network phone's `ro.serialno`, so one phone keeps one record whatever address it is reached at (ADR 0079 §2); absent for USB phones. */
+      /** why: a network phone's `ro.serialno`, so one phone keeps one record whatever address it is reached at (ADR 0080 §2); absent for USB phones. */
       readonly hardwareSerial?: string;
     }
   | {
@@ -324,7 +330,7 @@ export interface Driver {
   destroy(device: VirtualDriverDevice): Promise<void>;
   listManaged(): Promise<DriverReality>;
   inspectPhysical(id: string): Promise<PhysicalInspection>;
-  listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]>;
+  listPresentPhysical(enrolled: readonly EnrolledPhysical[]): Promise<readonly PresentPhysical[]>;
   /** why: a read made beyond enrolled IDs; canonical IDs of the phones on USB in any state, sorted, no duplicates, and a throw (never an empty list) when the platform cannot be read. */
   listAttachedPhysical(): Promise<readonly string[]>;
   listCatalog(): Promise<DriverCatalogEntry>;
