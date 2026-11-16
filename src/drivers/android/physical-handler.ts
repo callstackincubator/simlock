@@ -24,6 +24,7 @@ export const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
 
 const READ_TIMEOUT_MS = 30_000;
 const UNINSTALL_TIMEOUT_MS = 60_000;
+const CONNECT_TIMEOUT_MS = 10_000;
 const PORT = String(DEFAULT_ADB_PORT);
 
 const STRIPPED_ENV_KEYS = ["ANDROID_ADB_SERVER_ADDRESS", "ADB_SERVER_SOCKET", "ANDROID_SERIAL"];
@@ -50,6 +51,8 @@ const REFUSED_REBOOT_TARGETS = new Set([
   "fastboot",
 ]);
 
+// why: ADR 0080 §3: only a `host:port` address is connected again; an mDNS name is left to adb.
+const NETWORK_ADDRESS = /^[^\s:]+:\d{1,5}$/;
 const USER_ID = /^\d{1,6}$/;
 const PACKAGE_LINE = /^package:([A-Za-z0-9_.]+)$/;
 
@@ -236,8 +239,7 @@ export class AndroidPhysicalHandler {
   async listPresentPhysical(
     enrolled: readonly EnrolledPhysical[],
   ): Promise<readonly PresentPhysical[]> {
-    const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
-    const entries = listing.kind === "ok" ? parseDevices(listing.stdout, this.#platform) : [];
+    const entries = await this.#listWithReconnects(enrolled);
     const answers: PresentPhysical[] = [];
     for (const { driverDeviceId, hardwareSerial } of enrolled) {
       const network = this.#networkDevices && hardwareSerial !== undefined;
@@ -261,6 +263,31 @@ export class AndroidPhysicalHandler {
       }
     }
     return answers;
+  }
+
+  // why: ADR 0080 §3: adb forgets a `host:port` transport when its server restarts, so every presence read connects the enrolled addresses the listing lacks, then lists again.
+  async #listWithReconnects(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly ListedTransport[]> {
+    const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
+    if (listing.kind !== "ok") return [];
+    const first = parseDevices(listing.stdout, this.#platform);
+    const missing = this.#networkDevices
+      ? enrolled.filter(
+          ({ driverDeviceId }) =>
+            NETWORK_ADDRESS.test(driverDeviceId) &&
+            !first.some((entry) => entry.serial === driverDeviceId),
+        )
+      : [];
+    if (missing.length === 0) return first;
+    // why: `adb connect` exits 0 when it fails, so its result is ignored and the next listing is the outcome.
+    await Promise.all(
+      missing.map(({ driverDeviceId }) =>
+        this.#run(["connect", driverDeviceId], CONNECT_TIMEOUT_MS),
+      ),
+    );
+    const again = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
+    return again.kind === "ok" ? parseDevices(again.stdout, this.#platform) : [];
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
