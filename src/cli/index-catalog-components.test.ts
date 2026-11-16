@@ -60,6 +60,39 @@ describe("CLI: catalog", () => {
     );
   });
 
+  it("prints the phones-only line right after the platform line, and --json carries virtualDevices false", async () => {
+    const entry = {
+      classDefaults: {},
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      platform: "android" as const,
+      runtimes: [],
+      virtualDevices: false as const,
+    };
+    const run = async (arguments_: string[]) => {
+      const output = outputCapture();
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ getCatalog: () => Promise.resolve({ platforms: [entry] }) }),
+      });
+      await expect(runCli(arguments_, environment)).resolves.toBe(0);
+      return output.stdout;
+    };
+
+    expect(await run(["catalog", "--platform", "android"])).toBe(
+      [
+        "Platform: android",
+        "  Virtual devices: off (android.virtualDevices is false); only enrolled physical devices are leased",
+        "  Runtimes: (none) (default: (none))",
+        "  Models: (none)",
+        "",
+      ].join("\n"),
+    );
+    expect(JSON.parse(await run(["catalog", "--json"]))).toEqual({ platforms: [entry] });
+  });
+
   it("prints each model with the runtimes it pairs with", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({
