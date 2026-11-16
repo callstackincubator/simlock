@@ -123,6 +123,8 @@ export async function createHarness(
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
     readonly state?: StateDatabase;
+    /** why: the first id this process mints, so a second process on the same `state` does not mint the first one's ids. */
+    readonly firstId?: number;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     /** why: a participant holds a released device in `reclaiming` until it returns. */
@@ -150,7 +152,7 @@ export async function createHarness(
   const bus = new EventBus(clock);
   const driver =
     options.driver ?? new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  let nextId = options.state === undefined ? 1 : 1_000;
+  let nextId = options.firstId ?? (options.state === undefined ? 1 : 1_000);
   const registry = await loadTestRegistry({
     clock,
     eventBus: bus,

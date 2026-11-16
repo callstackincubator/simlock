@@ -4,7 +4,13 @@ import { FakeDriver, openTestState } from "../core/testing.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { androidRequest, createHarness, flush, request, seedReady } from "./test-create-leasing.js";
 
-const ANDROID = { ...androidRequest, physical: false } as const;
+// why: a model no lease below asks for, so the leases make their own devices and leave these idle.
+const ANDROID = {
+  model: "Pixel 7",
+  osVersion: "36",
+  physical: false,
+  platform: "android",
+} as const;
 const IOS = { ...request, physical: false } as const;
 const LIMITS = {
   android: { maxDevices: 8, maxRunning: 8 },
@@ -25,17 +31,7 @@ async function restartedPhonesOnly(failure: Failure = undefined) {
     lease: { defaultTtlMs: 900_000 },
     limits: LIMITS,
     state,
-    warmPoolEnabled: false,
   });
-  const ready = await seedReady(before, ANDROID, "full", android);
-  const claimed = await seedReady(before, ANDROID, "full", android);
-  const shutdown = await seedReady(before, ANDROID, "full", android);
-  await android.shutdown(toDriverDevice(shutdown));
-  await before.registry.transitionDevice(shutdown.id, "shutdown", {
-    event: "device.shutdown",
-    payload: { deviceId: shutdown.id, initiator: "test" },
-  });
-  const iosIdle = await seedReady(before, IOS, "full", ios);
   const phone = await before.registry.enrollPhysical({
     apps: [],
     class: "phone",
@@ -62,13 +58,23 @@ async function restartedPhonesOnly(failure: Failure = undefined) {
   const sink = new MemoryLogSink();
   const after = await createHarness({
     drivers: [ios, android],
+    firstId: 5_000,
     lease: { defaultTtlMs: 900_000 },
     limits: LIMITS,
-    logger: new JsonLinesLogger({ clock: clock, sink }),
+    logger: new JsonLinesLogger({ clock, sink }),
     state,
     virtualDevices: { android: false },
-    warmPoolEnabled: false,
   });
+
+  const ready = await seedReady(after, ANDROID, "full", android);
+  const claimed = await seedReady(after, ANDROID, "full", android);
+  const shutdown = await seedReady(after, ANDROID, "full", android);
+  await android.shutdown(toDriverDevice(shutdown));
+  await after.registry.transitionDevice(shutdown.id, "shutdown", {
+    event: "device.shutdown",
+    payload: { deviceId: shutdown.id, initiator: "test" },
+  });
+  const iosIdle = await seedReady(after, IOS, "full", ios);
   after.engine.core.claims.tryClaim(claimed.id, "boot");
   const next = (operation: "destroy" | "shutdown") =>
     android.calls.filter((call) => call.operation === operation).length + 1;
