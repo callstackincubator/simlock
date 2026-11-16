@@ -235,11 +235,14 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     );
   });
 
-  it("reads where a link points, repoints it in one step, and writes bytes into a file at an offset without truncating it, and refuses to read a file as a link or write into a file that is not there", async () => {
+  it("reads where a link points, repoints it, and writes bytes into a file at an offset without truncating it or touching its modification time, and refuses to read a file as a link or write into a file that is not there", async () => {
     const filesystem = create();
     const dir = temporaryDirectory;
     await filesystem.mkdirp(dir);
     await filesystem.writeFileAtomic(`${dir}/file`, "abcdef");
+    // why: the memory filesystem has no disk file to age, and its write never touches the time.
+    if (filesystem instanceof NodeFilesystem) await utimes(`${dir}/file`, 1_000_000, 1_000_000);
+    const modifiedBefore = (await filesystem.stat(`${dir}/file`)).modifiedAtMs;
     await link(filesystem, `${dir}/link`, `${dir}/old`);
 
     await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/old`);
@@ -247,6 +250,7 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/new`);
     await filesystem.writeAt(`${dir}/file`, 2, new TextEncoder().encode("XY"));
     await expect(filesystem.readFile(`${dir}/file`)).resolves.toBe("abXYef");
+    expect((await filesystem.stat(`${dir}/file`)).modifiedAtMs).toBe(modifiedBefore);
 
     await expect(filesystem.readlink(`${dir}/file`)).rejects.toThrow();
     await expect(filesystem.writeAt(`${dir}/missing`, 0, new Uint8Array(1))).rejects.toThrow();

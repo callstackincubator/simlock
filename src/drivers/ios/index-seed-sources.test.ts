@@ -2,7 +2,13 @@ import { afterEach, expect, it, describe } from "vitest";
 import { DriverCrashError, BootTimeoutError } from "../../core/index.js";
 import { ScriptedProcessRunner, FakeClock, MemoryFilesystem } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
-import { type PlantedSource, plantSource, memorySourceDatabase } from "./testing.js";
+import {
+  type PlantedSource,
+  plantBytes,
+  plantSource,
+  memorySourceDatabase,
+  readBytes,
+} from "./testing.js";
 import {
   deviceRoot,
   driverData,
@@ -143,7 +149,11 @@ describe("IosSimctlDriver", () => {
   });
 
   it.each([
-    { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
+    {
+      name: "a named source is copied instead of the seed, with its lineage swapped for the copy's own UDID",
+      id: "planted-named",
+      cloned: true,
+    },
     { name: "an unknown source is refused", id: "nope", cloned: false },
     { name: "a stale source is refused", id: "planted-old", cloned: false },
     { name: "a source with no lineage is refused", id: "planted-unlineaged", cloned: false },
@@ -153,10 +163,18 @@ describe("IosSimctlDriver", () => {
     const unlineagedUdid = "00000000-0000-0000-0000-0000000000dd";
     const database = await seededDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
-    const planted = plantSource(database, { ...kind, kind: "baseline", udid: namedUdid });
+    const namedLineage = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
+    const planted = plantSource(database, {
+      ...kind,
+      files: [{ kind: "file", relativePath: "data/note.plist" }],
+      kind: "baseline",
+      lineage: [namedLineage],
+      udid: namedUdid,
+    });
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-named' WHERE udid = ?")
       .run(namedUdid);
+    database.prepare("UPDATE ios_source_files SET source_id = 'planted-named'").run();
     plantSource(planted, { ...kind, kind: "baseline", runtimeBuild: "23F77", udid: oldUdid });
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-old' WHERE udid = ?")
@@ -169,6 +187,8 @@ describe("IosSimctlDriver", () => {
     await plantManagedDevice(filesystem);
     await plantSeedClone(filesystem);
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    const note = `${deviceRoot}/${driverData.udid}/data/note.plist`;
+    await plantBytes(filesystem, note, Buffer.from(`root /Devices/${namedLineage}/data`));
     const catalog = JSON.parse(listFixture) as {
       runtimes: { buildversion?: string; identifier: string }[];
     };
@@ -189,8 +209,15 @@ describe("IosSimctlDriver", () => {
     const provisioned = driver.provision(spec, { source: id });
 
     if (cloned) {
-      await expect(provisioned).resolves.toMatchObject({ deviceId: driverData.udid });
+      await expect(provisioned).resolves.toMatchObject({
+        deviceId: driverData.udid,
+        driverData: { lineage: [namedLineage] },
+      });
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list", "clone"]);
+      expect(
+        (await readBytes(filesystem, note)).toString(),
+        "the copy of a baseline names its own folder in place of the baseline's lineage",
+      ).toBe(`root /Devices/${driverData.udid.toUpperCase()}/data`);
       expect(
         await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
         "the copy of a source loses the LaunchServices database that names the source's folder",

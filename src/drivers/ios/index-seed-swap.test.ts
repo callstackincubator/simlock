@@ -69,6 +69,11 @@ describe("IosSimctlDriver copy swap", () => {
         before: spanning(utf16le(lineageUdid), window - 36),
         after: spanning(utf16le(copyUdid), window - 36),
       },
+      {
+        name: "edge-utf16",
+        before: spanning(utf16le(lineageUdid), window - 1),
+        after: spanning(utf16le(copyUdid), window - 1),
+      },
       { name: "big", before: big, after: bigSwapped },
       { name: "own", before: ascii(`own ${copyUdid}`), after: ascii(`own ${copyUdid}`) },
       {
@@ -117,7 +122,7 @@ describe("IosSimctlDriver copy swap", () => {
     );
     expect(device.driverData).toMatchObject({ lineage: [lineageUdid] });
     expect(logger.debugs).toEqual([
-      `swapped 8 files and 1 links in 35 ms for ${copyUdid}; 1 unreadable`,
+      `swapped 9 files and 1 links in 40 ms for ${copyUdid}; 1 unreadable`,
     ]);
   });
 
