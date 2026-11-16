@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   catalogFixture,
   deviceFixture,
+  hostFixture,
   physicalDeviceFixture,
   statusFixture,
 } from "../../test-support.js";
@@ -95,6 +96,7 @@ describe("warm-hit", () => {
       connection: "connected",
       devices,
       drained: false,
+      host: hostFixture(),
       id: "wrk_a",
       lastSeenAt: 1,
       leases: [],
@@ -137,6 +139,14 @@ describe("warm-hit", () => {
     ];
     const old = view([device("d1", "35", playstore)], playstore, undefined, twoLevels);
     expect(warmHit.score(old, request)).toBe(0);
+    // why: I7 — only an image built for the worker's CPU (arm64 here) counts for the default tag, so an x86_64 image of it leaves the request as it came.
+    const otherCpu = [
+      { abi: "x86_64", runtime: "37", tag: playstore },
+      { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
+    ];
+    expect(warmHit.score(view([device("d1", "37")], playstore, undefined, otherCpu), request)).toBe(
+      1,
+    );
   });
 
   it("counts no device as warm on a worker whose devices were never read", () => {

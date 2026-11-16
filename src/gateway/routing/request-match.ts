@@ -85,13 +85,14 @@ export function deviceFit(
   const catalog = catalogOf(worker, narrowed);
   if (catalog === undefined) return undefined;
   if (servingModel(catalog, narrowed) === undefined) return undefined;
-  const effective = withDefaultImageTag(catalog, narrowed);
-  const model = servingModel(catalog, effective);
+  const defaulted = withDefaultImageTag(worker, catalog, narrowed);
+  const effective = defaulted.request;
+  const model = servingModel(defaulted.catalog, effective);
   if (model === undefined) return undefined;
   const entry = baselineEntry(worker, request);
   const requirement: DeviceRequirement = {
     imageTag: effective.imageTag,
-    osVersion: osRequirement(catalog, model, effective),
+    osVersion: osRequirement(defaulted.catalog, model, effective),
     platform: effective.platform,
     target:
       effective.model === undefined
@@ -103,16 +104,35 @@ export function deviceFit(
 }
 
 /**
- * why: ADR 0078 I4: a worker resolves a tagless virtual Android request, with no baseline, as if
- * it named the worker's default image tag when a serving model has an image of it, else as the
- * request came, so a ready device is warm for it with that tag only then.
+ * why: ADR 0078 I4, I7: a worker resolves a tagless virtual Android request, with no baseline, as
+ * if it named the worker's default image tag when a serving model has an image of it built for the
+ * worker's CPU, else as the request came, so a ready device is warm for it with that tag only
+ * then. The catalog returned is the one the attempt reads: host-CPU images only when it took the
+ * tag; a worker that reports no host keeps them all.
  */
-function withDefaultImageTag(catalog: PlatformEntry, request: RoutableRequest): RoutableRequest {
+function withDefaultImageTag(
+  worker: WorkerView,
+  catalog: PlatformEntry,
+  request: RoutableRequest,
+): { readonly request: RoutableRequest; readonly catalog: PlatformEntry } {
+  const asCame = { request, catalog };
   const { defaultImageTag } = catalog;
-  if (request.platform !== "android" || request.imageTag !== undefined) return request;
-  if (request.baseline !== undefined || defaultImageTag === undefined) return request;
+  if (request.platform !== "android" || request.imageTag !== undefined) return asCame;
+  if (request.baseline !== undefined || defaultImageTag === undefined) return asCame;
+  const abi = worker.host === undefined ? undefined : hostAbiOf(worker.host.arch);
+  const hostCatalog =
+    abi === undefined
+      ? catalog
+      : { ...catalog, images: (catalog.images ?? []).filter((image) => image.abi === abi) };
   const tagged = { ...request, imageTag: defaultImageTag };
-  return servingModel(catalog, tagged) === undefined ? request : tagged;
+  return servingModel(hostCatalog, tagged) === undefined
+    ? asCame
+    : { request: tagged, catalog: hostCatalog };
+}
+
+/** why: the worker's `hostAbiFor` (src/drivers/android/index.ts:898), which the gateway cannot import: arm64 runs `arm64-v8a` images, any other CPU `x86_64`. */
+function hostAbiOf(arch: string): string {
+  return arch === "arm64" ? "arm64-v8a" : "x86_64";
 }
 
 function osRequirement(
