@@ -60,24 +60,34 @@ viewer and a lease-path viewer of the same device use two relays, because
 a gateway does not know a lease's device before the worker answers. The
 worker still runs one capture for both.
 
+A gateway shares a relay only when the worker's answer promises §5's key
+frames, in a response header. A worker that has not been updated yet makes
+no promise, and each of its viewers keeps a relay of its own, as today.
+Workers update one at a time, after their leases end, so such a worker can
+sit behind an updated gateway for hours.
+
 The relay belongs to the gateway, not to the first viewer. It ends when its
 last viewer leaves or the worker ends it. Each viewer's access is still
 checked before it joins, and each viewer's own `expiresAt` deadline ends
 only that viewer.
 
-### 3. A gateway reads frame headers, never a picture
+### 3. A gateway reads frame headers and meta frames, never a picture
 
 To start a joiner and to drop frames for a slow viewer, the gateway splits
 the relayed body into frames. It reads each frame's 4-byte length and its
-tag byte, and nothing of the payload. The bound on a frame's size is the
-same one a worker applies to a capture. A body that breaks the envelope
+tag byte. It reads a meta frame's JSON (codec, size, frame rate) with the
+same check a worker gives a capture's first meta frame, so that a joiner's
+headers give the size after a fold. It never reads a picture's bytes. The
+bound on a frame's size is the same one a worker applies to a capture. A
+body that breaks the envelope or carries a meta frame that fails the check
 ends the relay and every viewer on it.
 
 ### 4. A joiner waits for the next key frame
 
 A joiner's stream starts with the current meta frame and the current
 parameter sets, then the next key frame. The frames before that key frame
-are skipped on the server. The response headers give the current size. No
+are skipped on the server, but meta frames, parameter sets and the lease-end
+frame that come during the wait are passed on. The response headers give the current size. No
 frames are replayed and no key frame is asked for, so a joiner can see
 "starting" for up to 5 s.
 
@@ -153,12 +163,15 @@ sequenceDiagram
   "reads the headers and each frame's length and tag, never a payload".
 - The Android screen manual's rules gain the control socket and the reset.
   Its gaps about scrcpy's key-frame interval and about two viewers' stay-awake
-  setting go.
+  setting go, and the dark-phone gap above is added.
 - A viewer that joins a still device sees its first picture up to 5 s later
   than today, where it got a capture of its own.
 - On a still Android screen, scrcpy's encoder restarts every 5 s.
 - While moving, key frames come more often at the same bitrate, so the
   picture is slightly softer.
+- A viewer that joins a phone whose screen went dark mid-stream (off its
+  charger) gets no picture until the screen is on again or the lease ends.
+  Today its own capture would wake the phone first. Accepted as a known gap.
 - A third-party viewer needs no change: its stream still starts with meta,
   parameter sets and a key frame.
 
