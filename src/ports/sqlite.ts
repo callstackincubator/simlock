@@ -81,14 +81,19 @@ export class FakeSqliteOpener implements SqliteOpener {
       () => undefined,
     );
     const size = frames === undefined ? 0 : (await this.#filesystem.stat(path)).size;
+    let emptied = false;
     const checkpoint = (): void => {
       this.checkpoints.push(path);
       if (this.#keepingFrames.has(path)) return;
       if (frames !== undefined) void this.#filesystem.writeAt(path, size, frames);
       void this.#filesystem.rm(wal);
+      emptied = true;
     };
     return {
-      close: () => undefined,
+      // why: like SQLite, the last connection to close after a full checkpoint removes the `-shm` beside the emptied WAL.
+      close: () => {
+        if (emptied) void this.#filesystem.rm(`${path}-shm`);
+      },
       exec: (sql) => {
         if (sql === "PRAGMA wal_checkpoint(TRUNCATE)") checkpoint();
       },

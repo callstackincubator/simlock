@@ -184,6 +184,7 @@ describe("IosSimctlDriver source records", () => {
         await plantBytes(filesystem, `${seedFolder}/data/none.txt`, Buffer.from("nothing"));
         await plantBytes(filesystem, `${seedFolder}/data/one.db`, SQLITE_HEADER);
         await plantBytes(filesystem, `${seedFolder}/data/one.db-wal`, naming);
+        await plantBytes(filesystem, `${seedFolder}/data/one.db-shm`, Buffer.from("index"));
         await plantBytes(filesystem, `${seedFolder}/data/two.db`, SQLITE_HEADER);
         await plantBytes(filesystem, `${seedFolder}/data/two.db-wal`, naming);
         filesystem.defineSymlink(`${seedFolder}/data/Logs`, `${logsRoot}/${lineageUdid}`);

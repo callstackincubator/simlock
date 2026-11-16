@@ -84,13 +84,14 @@ async function visitFolder(
   relative: string,
   files: SourceFile[],
 ): Promise<void> {
+  // why: a database and its WAL are siblings, and a database is read only after its WAL is flushed into it (ADR 0076 §2); a flush closes SQLite, which deletes the `-shm`, so the folder is listed again once every WAL in it is flushed.
+  for (const name of (await options.filesystem.readdir(directory)).sort()) {
+    if (!name.endsWith(WAL_SUFFIX)) continue;
+    const path = `${directory}/${name}`;
+    if ((await options.filesystem.lstat(path)).kind === "file") await flushWal(options, path);
+  }
   const names = (await options.filesystem.readdir(directory)).sort();
-  // why: a database and its WAL are siblings, and a database is read only after its WAL is flushed into it (ADR 0076 §2).
-  const ordered = [
-    ...names.filter((name) => name.endsWith(WAL_SUFFIX)),
-    ...names.filter((name) => !name.endsWith(WAL_SUFFIX)),
-  ];
-  for (const name of ordered) {
+  for (const name of names) {
     const path = `${directory}/${name}`;
     const relativePath = relative === "" ? name : `${relative}/${name}`;
     const details = await options.filesystem.lstat(path);
@@ -103,7 +104,7 @@ async function visitFolder(
   }
 }
 
-/** why: a link is recorded when its target names the lineage; a WAL is flushed and never recorded; any other file is recorded when its bytes name it or cannot be read. */
+/** why: a link is recorded when its target names the lineage; a WAL is never recorded; any other file is recorded when its bytes name it or cannot be read. */
 async function recordedKind(
   options: RecordOptions,
   path: string,
@@ -114,10 +115,7 @@ async function recordedKind(
     return namesLineage(Buffer.from(target), options.lineage) ? "link" : undefined;
   }
   if (entry !== "file") return undefined;
-  if (path.endsWith(WAL_SUFFIX)) {
-    await flushWal(options, path);
-    return undefined;
-  }
+  if (path.endsWith(WAL_SUFFIX)) return undefined;
   return classify(options, path);
 }
 
