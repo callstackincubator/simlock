@@ -214,7 +214,7 @@ function relaying(headers: Record<string, string>, gate?: Promise<void>) {
   const calls: RelayCall[] = [];
   const feeds: ScriptedFeed[] = [];
   const port: FleetPort = {
-    knowsWorker: (workerId) => workerId === "w1",
+    knowsWorker: (workerId) => workerId === "w1" || workerId === "w2",
     relay: async (_workerId, call) => {
       let aborted = 0;
       call.request.signal.addEventListener("abort", () => (aborted += 1));
@@ -276,6 +276,16 @@ describe("viewers of one target through the gateway's stream link", () => {
     await refusalOf(shared.link.serve(DEVICE, HOLDER, signal()));
     await refusalOf(shared.link.serve({ ...DEVICE, workerId: "w_nobody" }, OPERATOR, signal()));
     expect(shared.calls).toHaveLength(2);
+
+    // why: another device, another lease and another worker are other targets, each with its own relay.
+    await shared.link.serve({ ...DEVICE, deviceId: "dev_10" }, OPERATOR, signal());
+    await shared.link.serve({ ...LEASE, workerLeaseId: "lse_8" }, OPERATOR, signal());
+    await shared.link.serve({ ...DEVICE, workerId: "w2" }, OPERATOR, signal());
+    expect(shared.calls.map((call) => call.url).slice(2)).toEqual([
+      "http://simlock-worker/stream/devices/dev_10",
+      "http://simlock-worker/stream/leases/lse_8",
+      "http://simlock-worker/stream/devices/dev_9",
+    ]);
 
     for (const headers of [{}, { "simlock-stream-keyframe-ms": "4999" }]) {
       const alone = relaying(headers);
@@ -444,6 +454,14 @@ describe("a shared relay's viewers", () => {
     release();
     await flush();
     expect(waiting.calls.map((call) => call.aborts())).toEqual([1, 0]);
+
+    // why: a viewer whose signal is already aborted never waits on the worker's head.
+    const never = new Promise<void>(() => undefined);
+    const gone = new AbortController();
+    gone.abort();
+    expect(await ended(relaying(PROMISE, never).link.serve(DEVICE, OPERATOR, gone.signal))).toBe(
+      "AbortError",
+    );
   });
 });
 
@@ -505,6 +523,17 @@ describe("a shared relay that is refused or fails", () => {
         refusalOf(shared.link.serve(DEVICE, OPERATOR, signal())),
       ]);
       expect(shared.calls, label).toHaveLength(1);
+      // why: a failed relay is forgotten, so the next viewer asks the worker again.
+      const again = shared.link.serve(DEVICE, OPERATOR, signal());
+      const outcome = await Promise.race([
+        again.then(
+          () => "served",
+          () => "refused",
+        ),
+        flush().then(() => "waiting"),
+      ]);
+      expect(outcome, label).toBe("refused");
+      expect(shared.calls, label).toHaveLength(2);
       for (const refusal of both) {
         expect([refusal.status, refusal.code, refusal.message], label).toEqual([
           status,
@@ -569,6 +598,9 @@ describe("a shared relay that is refused or fails", () => {
         shared.calls.map((call) => call.aborts()),
         label,
       ).toEqual([1]);
+      // why: an ended relay is forgotten, so the next viewer opens a fresh one.
+      await shared.link.serve(DEVICE, OPERATOR, signal());
+      expect(shared.calls, label).toHaveLength(2);
     }
   });
 });
