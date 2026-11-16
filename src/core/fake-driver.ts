@@ -89,6 +89,8 @@ export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   /** why: the image tag a device made for a request naming none really carries, which a saved source reports. */
   readonly defaultImageTag?: string;
+  /** why: models whose resolve with an image tag is refused as a missing runtime, as a real driver refuses a misfit or an image built for another CPU. */
+  readonly taggedRefusals?: readonly string[];
   readonly clock: Clock;
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
   readonly installProgress?: readonly number[];
