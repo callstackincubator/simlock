@@ -200,25 +200,23 @@ function onlyProvided(options: {
   readonly tcpStreamConnector?: FakeTcpStreamConnector;
 }) {
   return {
-    ...(options.defaultImageTag === undefined ? {} : { defaultImageTag: options.defaultImageTag }),
-    ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
-    ...(options.scrcpyServerPath === undefined
-      ? {}
-      : { scrcpyServerPath: options.scrcpyServerPath }),
-    ...(options.tcpStreamConnector === undefined
-      ? {}
-      : { tcpStreamConnector: options.tcpStreamConnector }),
-    ...(options.acceptAndroidLicenses === undefined
-      ? {}
-      : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
-    ...(options.deviceProfileSources === undefined
-      ? {}
-      : { deviceProfileSources: options.deviceProfileSources }),
-    config: {
-      ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
-      ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
-    },
-    ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
+    ...omitUndefined({
+      defaultImageTag: options.defaultImageTag,
+      tcpListener: options.tcpListener,
+      scrcpyServerPath: options.scrcpyServerPath,
+      tcpStreamConnector: options.tcpStreamConnector,
+      acceptAndroidLicenses: options.acceptAndroidLicenses,
+      deviceProfileSources: options.deviceProfileSources,
+      onDiagnostic: options.onDiagnostic,
+    }),
+    config: omitUndefined({ emulator: options.emulator, bootTimeoutMs: options.bootTimeoutMs }),
+  };
+}
+
+/** why: under `exactOptionalPropertyTypes` an absent option must be absent, not `undefined`. */
+function omitUndefined<T extends object>(value: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
   };
 }
 
