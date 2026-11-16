@@ -21,7 +21,8 @@ never enforce them only inside an individual rule or driver.
    erases, reboots, shuts down or unpairs a physical device, and never runs
    a command on one that is not enrolled, except `device add`'s read-only
    inspection, which a worker with `devices.autoEnroll` runs on a phone plugged in
-   by USB ([ADR 0073](../adr/0073-a-worker-may-enrol-the-phones-plugged-into-it.md) §5),
+   by USB ([ADR 0073](../adr/0073-a-worker-may-enrol-the-phones-plugged-into-it.md) §5), or under
+   `android.networkDevices` one reached over the network ([ADR 0080](../adr/0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) §4),
    and, under `android.networkDevices`, `adb connect` for an enrolled
    address and the read-only inspection and hardware-serial read that may
    reach a phone answering at an enrolled address that is not the enrolled
@@ -103,7 +104,7 @@ never enforce them only inside an individual rule or driver.
    scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
    default device locations. (Under iOS `deviceSet: "default"`, reality is Xcode's set read through
    devices whose durable mark names this instance, ADR 0048 §2.) For a physical device, reality is the platform
-   tool's list of USB devices, read only for enrolled IDs. The one read made beyond
+   tool's list of USB devices (under `android.networkDevices`, network phones too), read only for enrolled IDs. The one read made beyond
    enrolled IDs is the host-level USB list, `listAttachedPhysical()` (ADR 0073 §5); under
    `android.networkDevices` it also lists network transports, never an emulator (ADR 0080 §5).
 8. **Ownership is proven, never inferred.** A device is Simlock's because it

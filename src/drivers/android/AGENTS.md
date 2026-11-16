@@ -1,6 +1,6 @@
 # Android driver
 
-Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server (network phones too, under `android.networkDevices`).
+Does: emulators in an owned AVD home behind Simlock's own adb server, and phones on the default adb server.
 Flows: [device selection](../../../docs/internal/flows/device-selection.md), [drivers](../AGENTS.md), [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
 ## Rules
@@ -43,7 +43,7 @@ Boot:
 
 Physical phones:
 
-- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it as a side effect when nothing listens. Phones are USB transports, except under `android.networkDevices` (ADR 0080): then a transport with no `usb:` field that is not `emulator-N` is a phone too, its ID is its address and its `ro.serialno` is kept on the record. An emulator is never a phone (`ro.boot.qemu` or `ro.kernel.qemu` is `1`). Every presence read of a network phone reads `ro.serialno` and a different one is not present; a reclaim reads it first and throws before any `pm`; an enrolled `host:port` the listing lacks gets `adb connect` (10 s, all at once, outcome read from the next listing, never the exit code); an mDNS name is left to adb.
+- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it as a side effect when nothing listens. Phones are USB transports; under `android.networkDevices` (ADR 0080) a phone is told by `ro.serialno`, not its address.
 - Before every command `DefaultAdbServerGate.check`: the 5037 server's protocol must equal Simlock's `adb version`; nothing listening is open. A mismatch or an unreadable answer sends no command and shows as advisory `adb-protocol-mismatch`.
 
 Profiles and components:

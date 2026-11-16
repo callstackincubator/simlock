@@ -85,7 +85,7 @@ export class PhoneAdb implements ProcessRunner {
   sdkLevel = "34";
   hardwareSerial = "R58Y61A60HN";
   qemuBoot = "";
-  qemuKernel = "";
+  qemuKernel = "0";
   onCall: ((rest: readonly string[]) => void) | undefined;
   readonly #overrides: Override[] = [];
 

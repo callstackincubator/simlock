@@ -160,8 +160,8 @@ describe("Android physical handler under android.networkDevices: inspectPhysical
     ] as const;
     for (const { id, line, name, ...flags } of cases) {
       const { handler, runner } = await networkHandler(devicesListing(line));
-      runner.qemuBoot = "boot" in flags ? flags.boot : "";
-      runner.qemuKernel = "kernel" in flags ? flags.kernel : "";
+      runner.qemuBoot = "boot" in flags ? flags.boot : "0";
+      runner.qemuKernel = "kernel" in flags ? flags.kernel : "0";
 
       const inspection = await handler.inspectPhysical(id);
 
