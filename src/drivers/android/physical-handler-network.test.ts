@@ -317,3 +317,24 @@ describe("Android physical handler under android.networkDevices: reconnecting", 
     }
   });
 });
+
+describe("Android physical handler under android.networkDevices: listAttachedPhysical", () => {
+  it("lists host:port and mDNS network phones in any state beside the USB phones, once each, and never an emulator; key off lists USB only", async () => {
+    const listing = devicesListing(
+      USB_LINE,
+      NETWORK_LINE,
+      `${MDNS} offline transport_id:5`,
+      "192.168.1.6:5555 unauthorized transport_id:6",
+      `${ADDRESS} device product:o1s transport_id:7`,
+      "emulator-5554 device product:sdk transport_id:8",
+    );
+
+    const on = await networkHandler(listing);
+    await expect(on.handler.listAttachedPhysical()).resolves.toEqual(
+      [PHONE, ADDRESS, MDNS, "192.168.1.6:5555"].sort(),
+    );
+
+    const off = await networkHandler(listing, { networkDevices: false });
+    await expect(off.handler.listAttachedPhysical()).resolves.toEqual([PHONE]);
+  });
+});
