@@ -87,9 +87,10 @@ export function deviceFit(
   const model = servingModel(catalog, narrowed);
   if (model === undefined) return undefined;
   const entry = baselineEntry(worker, request);
+  const defaultTag = defaultImageTagOf(catalog, narrowed);
   const requirement: DeviceRequirement = {
-    imageTag: narrowed.imageTag,
-    osVersion: osRequirement(catalog, model, narrowed),
+    imageTag: narrowed.imageTag ?? defaultTag,
+    osVersion: osRequirement(catalog, model, narrowed, defaultTag !== undefined),
     platform: narrowed.platform,
     target:
       narrowed.model === undefined
@@ -100,15 +101,27 @@ export function deviceFit(
   return (spec) => fits(requirement, spec, (listed) => modelClass(catalog, listed));
 }
 
+/**
+ * why: ADR 0078 §3: a worker resolves a tagless virtual Android request, with no baseline, as if
+ * it named the worker's default image tag, so a ready device is warm for it only with that tag.
+ */
+function defaultImageTagOf(catalog: PlatformEntry, request: RoutableRequest): string | undefined {
+  if (request.platform !== "android" || request.imageTag !== undefined) return undefined;
+  return request.baseline === undefined ? catalog.defaultImageTag : undefined;
+}
+
 function osRequirement(
   catalog: PlatformEntry,
   model: string,
   request: RoutableRequest,
+  tagOutranksLevel: boolean,
 ): DeviceRequirement["osVersion"] {
   const constraint = osConstraintOf(request);
   if (constraint !== undefined) return constraint;
   if (request.model === undefined) return { kind: "installed", versions: catalog.runtimes };
   const runtimes = pairedRuntimesOf(catalog, model, request);
+  // why: the default tag steers the level (ADR 0078 §2), and the gateway cannot tell which level has an image of it, so any paired level counts.
+  if (tagOutranksLevel) return { kind: "installed", versions: runtimes };
   const newest = [...runtimes].sort(compareVersions).at(-1);
   return { kind: "installed", versions: newest === undefined ? [] : [newest] };
 }

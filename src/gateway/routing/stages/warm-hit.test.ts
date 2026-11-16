@@ -80,6 +80,10 @@ describe("warm-hit", () => {
       catalog: catalogFixture([
         {
           ...(defaultImageTag === undefined ? {} : { defaultImageTag }),
+          images: [
+            { abi: "arm64-v8a", runtime: "36", tag: "google_apis_playstore" },
+            { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
+          ],
           models: ["Pixel 9"],
           platform: "android",
           runtimes: ["36", "37"],
