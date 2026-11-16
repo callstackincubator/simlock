@@ -338,7 +338,12 @@ export class Seeds {
         ],
         {},
       );
-      throwaway = created.stdout.trim();
+      const printed = created.stdout.trim();
+      // why: safety: the throwaway's UDID is joined onto the logs root and deleted, so a value that is not a UDID (an empty one would name the root itself) is refused before anything is recorded.
+      if (!UDID_PATTERN.test(printed)) {
+        throw new DriverCrashError("simctl create returned no device UDID");
+      }
+      throwaway = printed;
       this.#sources.setThrowaway(sourceId, throwaway);
       if (!this.#ownsDeviceSet) {
         // why: ADR 0048: in Xcode's set a simulator is Simlock's only by its mark, and a booted one keeps the clipboard sync it booted with.

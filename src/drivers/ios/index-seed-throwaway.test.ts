@@ -155,6 +155,14 @@ describe("IosSimctlDriver seed throwaway", () => {
       result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
     };
     const failures = [
+      ...["", "../.."].map((printed) => ({
+        label: `create prints ${JSON.stringify(printed)}`,
+        steps: [{ ...create, result: { code: 0, stderr: "", stdout: `${printed}\n` } }],
+        error: /no device UDID/,
+        rows: [],
+        logFolder: true,
+        warnings: [],
+      })),
       {
         label: "boot fails",
         steps: [create, boot, { ...bootstatus, result: failed }, shutdown, remove],
