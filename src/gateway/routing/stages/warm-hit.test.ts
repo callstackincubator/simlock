@@ -116,14 +116,14 @@ describe("warm-hit", () => {
       mode: "full" as const,
       model: "Pixel 9",
       name: "smoke",
-      osVersion: "37",
+      osVersion: "36",
       platform: "android" as const,
       savedAt: "2026-11-02T13:10:00Z",
       version: 2,
     };
     const copy = {
-      ...device("d1", "37"),
-      spec: { ...device("d1", "37").spec, baseline: { name: "smoke", version: 2 } },
+      ...device("d1", "36"),
+      spec: { ...device("d1", "36").spec, baseline: { name: "smoke", version: 2 } },
     };
     const baselined = { ...request, baseline: "smoke" };
     expect(warmHit.score(view([copy], playstore, [saved]), baselined)).toBe(1);
@@ -147,6 +147,23 @@ describe("warm-hit", () => {
     expect(warmHit.score(view([device("d1", "37")], playstore, undefined, otherCpu), request)).toBe(
       1,
     );
+    // why: I4, I7 — the newest level is the newest of the worker's CPU, so another CPU's newer image does not move it.
+    const cpuLevels = [
+      { abi: "arm64-v8a", runtime: "35", tag: playstore },
+      { abi: "x86_64", runtime: "36", tag: playstore },
+    ];
+    const armView = view([device("d1", "35", playstore)], playstore, undefined, cpuLevels);
+    expect(warmHit.score(armView, request)).toBe(1);
+    // why: I7 — a host that is not arm64 counts x86_64 images, not arm64-v8a ones.
+    const x86Levels = [
+      { abi: "arm64-v8a", runtime: "37", tag: playstore },
+      { abi: "x86_64", runtime: "36", tag: playstore },
+    ];
+    const x86View = {
+      ...view([device("d1", "36", playstore)], playstore, undefined, x86Levels),
+      host: hostFixture({ arch: "x64" }),
+    };
+    expect(warmHit.score(x86View, request)).toBe(1);
   });
 
   it("counts no device as warm on a worker whose devices were never read", () => {
