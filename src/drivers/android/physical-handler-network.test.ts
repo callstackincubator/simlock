@@ -5,6 +5,7 @@ import {
   adb,
   androidFilesystem,
   devicesListing,
+  isGetprop,
   PhoneAdb,
   sdk,
   VERSION_REPLY_41,
@@ -121,5 +122,49 @@ describe("Android physical handler under android.networkDevices: inspectPhysical
     expect(inspected).toMatchObject({ driverDeviceId: ADDRESS, enrollable: true });
     expect(inspected).not.toHaveProperty("hardwareSerial");
     expect(usb.runner.rests.flat()).not.toContain("ro.serialno");
+  });
+
+  it("refuses an emulator as unsupported-kind whatever its transport, and a network phone that reports neither emulator flag is enrollable", async () => {
+    const cases = [
+      {
+        id: "emulator-5554",
+        line: "emulator-5554 device product:sdk transport_id:1",
+        name: "emulator-N",
+      },
+      {
+        id: "127.0.0.1:5555",
+        line: "127.0.0.1:5555 device transport_id:2",
+        name: "ro.boot.qemu",
+        boot: "1",
+      },
+      {
+        id: "127.0.0.1:5555",
+        line: "127.0.0.1:5555 device transport_id:2",
+        name: "ro.kernel.qemu",
+        kernel: "1",
+      },
+    ] as const;
+    for (const { id, line, name, ...flags } of cases) {
+      const { handler, runner } = await networkHandler(devicesListing(line));
+      runner.qemuBoot = "boot" in flags ? flags.boot : "";
+      runner.qemuKernel = "kernel" in flags ? flags.kernel : "";
+
+      const inspection = await handler.inspectPhysical(id);
+
+      expect(inspection, name).toMatchObject({ enrollable: false, reason: "unsupported-kind" });
+      if (id === "emulator-5554") expect(runner.rests.some(isGetprop), name).toBe(false);
+    }
+
+    const phone = await networkHandler(devicesListing(NETWORK_LINE));
+    expect(await phone.handler.inspectPhysical(ADDRESS)).toMatchObject({ enrollable: true });
+
+    const off = await networkHandler(
+      devicesListing("emulator-5554 device product:sdk transport_id:1"),
+      { networkDevices: false },
+    );
+    expect(await off.handler.inspectPhysical("emulator-5554")).toMatchObject({
+      enrollable: false,
+      reason: "network-only",
+    });
   });
 });
