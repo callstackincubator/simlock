@@ -1,6 +1,6 @@
 # 0078. A worker may serve a platform's enrolled phones only
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-16
 - **Issue:** [#1588](https://github.com/callstackincubator/simlock/issues/1588) (request [#1181](https://github.com/callstackincubator/simlock/issues/1181))
 - **Narrows:** [ADR 0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
