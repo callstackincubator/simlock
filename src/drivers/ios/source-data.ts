@@ -153,6 +153,15 @@ export class IosSourceTable {
     ]);
   }
 
+  makingThrowaways(): readonly string[] {
+    return this.#database
+      .prepare(
+        "SELECT throwaway_udid FROM ios_source_data WHERE state = 'making' AND throwaway_udid IS NOT NULL",
+      )
+      .all()
+      .map((row) => row["throwaway_udid"] as string);
+  }
+
   allUdids(): readonly string[] {
     return this.#database
       .prepare("SELECT udid FROM ios_source_data WHERE udid IS NOT NULL")

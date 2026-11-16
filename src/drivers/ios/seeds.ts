@@ -118,6 +118,11 @@ export class Seeds {
     ];
   }
 
+  /** why: a throwaway a `making` row names is the driver's own leftover, deleted through that row (ADR 0001 §6), so it is no leased device and no orphan. */
+  makingThrowaways(): ReadonlySet<string> {
+    return new Set(this.#sources.makingThrowaways());
+  }
+
   async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
     const data = iosDriverData(device);
     const catalog = await this.#simctl.loadCatalog();
