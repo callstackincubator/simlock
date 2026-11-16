@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import {
+  type ScriptedProcessExpectation,
   ScriptedProcessRunner,
   type SqliteDatabase,
   FakeClock,
@@ -364,7 +365,19 @@ export const throwawayUdid = "00000000-0000-0000-0000-0000000000bb";
 export const logsRoot = "/Logs/CoreSimulator";
 
 /** why: the calls that make a seed from a throwaway under the `simlock` set, in order; a test starts its script with these, after the catalog read. */
-export function throwawaySeedSteps(seed: string = seedUdid) {
+type ScriptedStep = Pick<ScriptedProcessExpectation, "match" | "result">;
+
+export function throwawaySeedSteps(
+  seed: string = seedUdid,
+): [
+  ScriptedStep,
+  ScriptedStep,
+  ScriptedStep,
+  ScriptedStep,
+  ScriptedStep,
+  ScriptedStep,
+  ScriptedStep,
+] {
   const name = "simlock-seed-device-1";
   return [
     {

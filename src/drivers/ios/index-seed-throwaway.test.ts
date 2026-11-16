@@ -10,11 +10,15 @@ import {
   plantManagedDevice,
 } from "./test-slim.js";
 import {
+  RecordingLogger,
   listFixture,
   logsRoot,
   scopedRunners,
+  listInvocation,
   seedUdid,
+  sourcesSimctl,
   spec,
+  throwawaySeedSteps,
   throwawayUdid,
 } from "./test-index.js";
 
@@ -133,6 +137,122 @@ describe("IosSimctlDriver seed throwaway", () => {
       await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), world.label).resolves.toBe(
         false,
       );
+    }
+
+    const whole = throwawaySeedSteps();
+    const [create, boot, bootstatus, listapps, shutdown, clone, remove] = whole;
+    const failed = { code: 1, stderr: "boom", stdout: "" };
+    const copy = {
+      match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+      result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+    };
+    class BrokenLogRemoval extends MemoryFilesystem {
+      override async rm(path: string): Promise<void> {
+        if (path.startsWith(logsRoot)) throw new Error("denied");
+        await super.rm(path);
+      }
+    }
+    const failures = [
+      {
+        label: "boot fails",
+        steps: [create, boot, { ...bootstatus, result: failed }, shutdown, remove],
+        error: /did not boot/,
+        rows: [],
+        logFolder: false,
+        warnings: [],
+      },
+      {
+        label: "clone fails",
+        steps: [
+          create,
+          boot,
+          bootstatus,
+          listapps,
+          shutdown,
+          { ...clone, result: failed },
+          shutdown,
+          remove,
+        ],
+        error: /boom/,
+        rows: [],
+        logFolder: false,
+        warnings: [],
+      },
+      {
+        label: "throwaway delete fails",
+        steps: [
+          create,
+          boot,
+          bootstatus,
+          listapps,
+          shutdown,
+          clone,
+          { ...remove, result: failed },
+          { match: sourcesSimctl("shutdown", seedUdid) },
+          { match: sourcesSimctl("delete", seedUdid) },
+        ],
+        error: /boom/,
+        rows: [{ state: "making", throwaway_udid: throwawayUdid, udid: seedUdid }],
+        logFolder: true,
+        warnings: [],
+      },
+      {
+        label: "log folder delete fails",
+        steps: [...whole, copy],
+        filesystem: new BrokenLogRemoval(),
+        rows: [{ state: "ready", throwaway_udid: throwawayUdid, udid: seedUdid }],
+        logFolder: true,
+        warnings: [`could not delete log folder ${logsRoot}/${throwawayUdid}: denied`],
+      },
+      {
+        label: "log folder absent",
+        steps: [...whole, copy],
+        absent: true,
+        rows: [{ state: "ready", throwaway_udid: throwawayUdid, udid: seedUdid }],
+        logFolder: false,
+        warnings: [],
+      },
+    ];
+    for (const failure of failures) {
+      const database = await memorySourceDatabase();
+      const logger = new RecordingLogger();
+      const filesystem = failure.filesystem ?? new MemoryFilesystem();
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...failure.steps,
+      ]);
+      scopedRunners.push(runner);
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
+      if (failure.absent !== true) await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        database,
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        logger,
+        logsRoot,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+
+      const outcome = await driver.provision(spec).then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+
+      if (failure.error === undefined) expect(outcome, failure.label).toBeUndefined();
+      else expect(outcome?.message, failure.label).toMatch(failure.error);
+      expect(
+        database.prepare("SELECT state, udid, throwaway_udid FROM ios_source_data").all(),
+        failure.label,
+      ).toEqual(failure.rows);
+      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), failure.label).resolves.toBe(
+        failure.logFolder,
+      );
+      expect(logger.warnings, failure.label).toEqual(failure.warnings);
     }
   });
 });
