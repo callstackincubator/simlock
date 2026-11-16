@@ -115,9 +115,9 @@ describe("IosSimctlDriver device set", () => {
             : ["simctl", ...step.args];
       const runner = new ScriptedProcessRunner(
         steps.flatMap((step) => [
-          ...(!scoped && step.args[0] === "boot" && step.args[1] === driverData.udid
+          ...(!scoped && step.args[0] === "boot" && step.args[1] !== seedUdid
             ? deviceHubEdit(
-                `Set :DevicePreferences:${driverData.udid}:pasteboardSyncEnabled false`,
+                `Set :DevicePreferences:${String(step.args[1])}:pasteboardSyncEnabled false`,
               ).map((match) => ({ match }))
             : []),
           {
@@ -126,8 +126,8 @@ describe("IosSimctlDriver device set", () => {
               ? {}
               : { result: { code: 0, stderr: "", stdout: step.stdout } }),
           },
-          ...(!scoped && step.args[0] === "delete" && step.args[1] === driverData.udid
-            ? deviceHubEdit(`Delete :DevicePreferences:${driverData.udid}`).map((match) => ({
+          ...(!scoped && step.args[0] === "delete"
+            ? deviceHubEdit(`Delete :DevicePreferences:${String(step.args[1])}`).map((match) => ({
                 match,
               }))
             : []),
@@ -135,6 +135,7 @@ describe("IosSimctlDriver device set", () => {
       );
       const filesystem = new MemoryFilesystem();
       await plantDevice(filesystem, devicesDir);
+      await filesystem.mkdirp(`${devicesDir}/${throwawayUdid}/data`);
       if (scoped) await plantManagedDevice(filesystem);
       const driver = await IosSimctlDriver.create({
         database: await memorySourceDatabase(),

@@ -212,6 +212,7 @@ export class IosSimctlDriver implements Driver {
       clock: options.clock,
       slimBoot: this.#slimBoot,
       database: options.database,
+      deviceHub: this.#deviceHub,
       deviceRoot,
       filesystem: options.filesystem,
       fullBootTimeoutMs: this.#fullBootTimeoutMs,

@@ -12,6 +12,7 @@ import type { Clock, Filesystem, IdGenerator, Logger } from "../../ports/index.j
 import { errorMessage } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl, unknownDevice } from "./simctl.js";
+import type { DeviceHubPreferences } from "./devicehub.js";
 import { DeviceMarks } from "./marks.js";
 import type { SlimBoot } from "./slim-boot.js";
 import type { SimulatorBoot } from "./simulator-boot.js";
@@ -37,6 +38,7 @@ interface SeedsOptions {
   readonly clock: Clock;
   readonly slimBoot: SlimBoot;
   readonly database: SqliteDatabase;
+  readonly deviceHub: DeviceHubPreferences;
   readonly deviceRoot: string;
   readonly filesystem: Filesystem;
   readonly fullBootTimeoutMs: number;
@@ -56,6 +58,7 @@ export class Seeds {
   readonly #boot: SimulatorBoot;
   readonly #clock: Clock;
   readonly #slimBoot: SlimBoot;
+  readonly #deviceHub: DeviceHubPreferences;
   readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
   readonly #fullBootTimeoutMs: number;
@@ -77,6 +80,7 @@ export class Seeds {
     this.#boot = options.boot;
     this.#clock = options.clock;
     this.#slimBoot = options.slimBoot;
+    this.#deviceHub = options.deviceHub;
     this.#deviceRoot = options.deviceRoot;
     this.#filesystem = options.filesystem;
     this.#fullBootTimeoutMs = options.fullBootTimeoutMs;
@@ -329,6 +333,11 @@ export class Seeds {
       );
       throwaway = created.stdout.trim();
       this.#sources.setThrowaway(sourceId, throwaway);
+      if (!this.#ownsDeviceSet) {
+        // why: ADR 0048: in Xcode's set a simulator is Simlock's only by its mark, and a booted one keeps the clipboard sync it booted with.
+        await this.#marks.writeMark(throwaway);
+        await this.#deviceHub.disablePasteboardSync(throwaway);
+      }
       try {
         await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
       } catch (error: unknown) {
@@ -408,6 +417,7 @@ export class Seeds {
   async #deleteThrowaway(udid: string, shutdownFirst: boolean): Promise<void> {
     if (shutdownFirst) await this.#simctl.bestEffortShutdown(udid);
     await this.#deleteIn(udid, undefined);
+    if (!this.#ownsDeviceSet) await this.#deviceHub.removePasteboardPreference(udid);
     await this.#deleteLogFolder(udid);
   }
 
