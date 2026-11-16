@@ -1,6 +1,6 @@
 # 0079. An Android worker may enrol phones reached over the network
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-16
 - **Issue:** [#1589](https://github.com/callstackincubator/simlock/issues/1589) (request [#1250](https://github.com/callstackincubator/simlock/issues/1250))
 - **Narrows:** [ADR 0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
