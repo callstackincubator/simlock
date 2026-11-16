@@ -111,3 +111,4 @@ the status is stale.
 | [0074](0074-an-admission-command-ranks-or-refuses-a-gateway-request-and-an-ended-chosen-lease-id-is-remembered.md) | An admission command ranks or refuses a gateway request, and an ended chosen lease id is remembered | Accepted; narrows 0005 items 10 and 11, decision 5 and requirements 14 and 30; supersedes 0020 §1 in part |
 | [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Accepted; narrows 0031's Consequences and 0052 §4 |
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
+| [0078](0078-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Proposed; narrows 0022 and 0009 §4 |
