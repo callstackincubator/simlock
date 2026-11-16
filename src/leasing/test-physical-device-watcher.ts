@@ -32,7 +32,9 @@ interface HarnessOptions {
 function config(options: HarnessOptions): TestEngineConfig {
   const quarantineBackoffMs = options.quarantineBackoffMs ?? 30_000;
   return {
+    android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    ios: { virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,

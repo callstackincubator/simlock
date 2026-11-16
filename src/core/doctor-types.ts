@@ -139,7 +139,8 @@ export interface DoctorQuarantine {
   enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean>;
 }
 
-export type DoctorConfig = Pick<Config, "stalledTransition" | "warmPool">;
+export type DoctorConfig = Pick<Config, "stalledTransition" | "warmPool"> &
+  Readonly<Record<"android" | "ios", Pick<Config["ios"], "virtualDevices">>>;
 
 export interface DoctorOptions {
   readonly clock: Clock;

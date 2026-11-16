@@ -94,7 +94,9 @@ interface EngineOptions {
 function config(options: EngineOptions): TestEngineConfig {
   const ios = options.ios ?? { maxDevices: 1, maxRunning: 1 };
   return {
+    android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    ios: { virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,

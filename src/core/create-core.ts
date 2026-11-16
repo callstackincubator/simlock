@@ -218,6 +218,10 @@ export function createCore(options: CoreOptions): Core {
   const drivers = new DriverCatalog(options.drivers, {
     logger: options.logger,
     preferences: options.modelPreferences,
+    virtualDevices: {
+      android: options.config.android.virtualDevices,
+      ios: options.config.ios.virtualDevices,
+    },
   });
   const deviceLifecycle = new ManagedDeviceLifecycle(
     drivers,

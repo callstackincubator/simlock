@@ -52,17 +52,26 @@ export class DriverCatalog {
   readonly #drivers: ReadonlyMap<Platform, Driver>;
   readonly #logger: Logger;
   readonly #preferences: ModelPreferences;
+  readonly #virtualDevices: Readonly<Partial<Record<Platform, boolean>>>;
 
   constructor(
     drivers: readonly Driver[],
     options: {
       readonly logger?: Logger | undefined;
       readonly preferences?: ModelPreferences | undefined;
+      /** why: a platform set to `false` serves enrolled physical devices only (ADR 0078 §1). */
+      readonly virtualDevices?: Readonly<Partial<Record<Platform, boolean>>> | undefined;
     } = {},
   ) {
+    this.#virtualDevices = options.virtualDevices ?? {};
     this.#drivers = new Map(drivers.map((driver) => [driver.platform, driver]));
     this.#preferences = options.preferences ?? {};
     this.#logger = options.logger?.child("driver-catalog") ?? new NoopLogger();
+  }
+
+  /** why: false only for a platform whose `<platform>.virtualDevices` key is false (ADR 0078 §1). */
+  virtualDevices(platform: Platform): boolean {
+    return this.#virtualDevices[platform] !== false;
   }
 
   get(platform: Platform): Driver {
