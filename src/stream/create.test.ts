@@ -630,9 +630,10 @@ describe("createWorkerStream", () => {
         expect(Object.fromEntries(served.headers), label).toMatchObject(STREAM_HEADERS);
       }
       const seen = [watch(a), watch(b)];
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([1]);
-      feeds[0]!.delta([2]);
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      feed.delta([2]);
       await flush();
       for (const viewer of seen) {
         expect(viewer.frames, label).toEqual(["meta 330x720", "desc 7", "key 1", "delta 2"]);
@@ -656,11 +657,12 @@ describe("createWorkerStream", () => {
     {
       const { feeds, stream } = worker();
       watch(await openOnRoute(stream, "device"));
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([1]);
-      feeds[0]!.meta({ height: 800, width: 400 });
-      feeds[0]!.description([8]);
-      feeds[0]!.keyframe([2]);
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      feed.meta({ height: 800, width: 400 });
+      feed.description([8]);
+      feed.keyframe([2]);
       await flush();
       const joined = await openOnRoute(stream, "device");
       expect(joined.headers.get("simlock-stream-width"), "a joiner after a size change").toBe(
@@ -668,10 +670,10 @@ describe("createWorkerStream", () => {
       );
       expect(joined.headers.get("simlock-stream-height")).toBe("800");
       const viewer = watch(joined);
-      feeds[0]!.delta([3]);
-      feeds[0]!.frame(SCREEN_FRAME_TAG.alive, []);
-      feeds[0]!.keyframe([4]);
-      feeds[0]!.delta([5]);
+      feed.delta([3]);
+      feed.frame(SCREEN_FRAME_TAG.alive, []);
+      feed.keyframe([4]);
+      feed.delta([5]);
       await flush();
       expect(viewer.frames).toEqual(["meta 400x800", "desc 8", "key 4", "delta 5"]);
     }
@@ -680,8 +682,9 @@ describe("createWorkerStream", () => {
       const { feeds, stream } = worker();
       watch(await openOnRoute(stream, "device"));
       const viewer = watch(await openOnRoute(stream, "lease"));
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([1]);
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
       await flush();
       expect(viewer.frames, "a joiner before any parameter sets").toEqual([
         "meta 330x720",
@@ -693,14 +696,15 @@ describe("createWorkerStream", () => {
     {
       const { feeds, stream } = worker();
       watch(await openOnRoute(stream, "device"));
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([1]);
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
       await flush();
       const viewer = watch(await openOnRoute(stream, "lease"));
-      feeds[0]!.delta([2]);
-      feeds[0]!.meta({ height: 800, width: 400 });
-      feeds[0]!.description([8]);
-      feeds[0]!.keyframe([3]);
+      feed.delta([2]);
+      feed.meta({ height: 800, width: 400 });
+      feed.description([8]);
+      feed.keyframe([3]);
       await flush();
       expect(viewer.frames, "a new meta and parameter sets before its first key frame").toEqual([
         "meta 330x720",
@@ -714,8 +718,9 @@ describe("createWorkerStream", () => {
     {
       const { feeds, stream } = worker();
       const early = watch(await openOnRoute(stream, "device"));
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([1]);
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
       await flush();
       const waiting = watch(await openOnRoute(stream, "lease"));
       await stream.leaseEnd.leaseEnded(lease("expired"), new AbortController().signal);
@@ -735,7 +740,8 @@ describe("createWorkerStream", () => {
         watch(await openOnRoute(stream, "device")),
         watch(await openOnRoute(stream, "lease")),
       ];
-      feeds[0]!.write(badMeta);
+      const feed = feeds[0]!;
+      feed.write(badMeta);
       await flush();
       for (const viewer of viewers) {
         expect(viewer.error, "a later meta frame that fails the check").toBe(
@@ -748,14 +754,15 @@ describe("createWorkerStream", () => {
       const { feeds, stream } = worker([], false);
       const first = openOnRoute(stream, "device");
       await flush();
-      feeds[0]!.meta({ codec: "mjpeg" });
+      const feed = feeds[0]!;
+      feed.meta({ codec: "mjpeg" });
       const early = watch(await first);
-      feeds[0]!.delta([1]);
+      feed.delta([1]);
       await flush();
       const joined = await openOnRoute(stream, "lease");
       expect(joined.headers.get("simlock-stream-codec"), "an MJPEG capture").toBe("mjpeg");
       const late = watch(joined);
-      feeds[0]!.delta([2]);
+      feed.delta([2]);
       await flush();
       expect(early.frames).toEqual(["meta 330x720", "delta 1", "delta 2"]);
       expect(late.frames).toEqual(["meta 330x720", "delta 2"]);
@@ -794,14 +801,15 @@ describe("createWorkerStream", () => {
       const { feeds, stream } = worker();
       const fast = watch(await openOnRoute(stream, "device"));
       const stalled = await openOnRoute(stream, "lease");
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([0, 1]);
-      feeds[0]!.frame(SCREEN_FRAME_TAG.alive, []);
-      for (let index = 0; index < 2000; index += 1) feeds[0]!.delta(picture(index));
-      feeds[0]!.meta({ height: 800, width: 400 });
-      feeds[0]!.description([8]);
-      feeds[0]!.keyframe([9, 9]);
-      feeds[0]!.delta([9, 10]);
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([0, 1]);
+      feed.frame(SCREEN_FRAME_TAG.alive, []);
+      for (let index = 0; index < 2000; index += 1) feed.delta(picture(index));
+      feed.meta({ height: 800, width: 400 });
+      feed.description([8]);
+      feed.keyframe([9, 9]);
+      feed.delta([9, 10]);
       await flush();
       expect(fast.frames, "another viewer reads every frame").toHaveLength(2008);
       expect(fast.frames).toContain("alive ");
@@ -823,9 +831,10 @@ describe("createWorkerStream", () => {
       const { feeds, stream } = worker();
       watch(await openOnRoute(stream, "device"));
       const stalled = await openOnRoute(stream, "lease");
-      feeds[0]!.description([7]);
-      feeds[0]!.keyframe([0, 1]);
-      for (let index = 0; index < 1100; index += 1) feeds[0]!.delta(picture(index));
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([0, 1]);
+      for (let index = 0; index < 1100; index += 1) feed.delta(picture(index));
       await flush();
       await stream.leaseEnd.leaseEnded(lease("killed"), new AbortController().signal);
       const reading = watch(stalled);
@@ -843,13 +852,14 @@ describe("createWorkerStream", () => {
       const first = openOnRoute(stream, "device");
       const second = openOnRoute(stream, "lease");
       await flush();
-      feeds[0]!.meta({ codec: "mjpeg" });
+      const feed = feeds[0]!;
+      feed.meta({ codec: "mjpeg" });
       watch(await first);
       const stalled = await second;
-      for (let index = 0; index < 2000; index += 1) feeds[0]!.delta(picture(index));
+      for (let index = 0; index < 2000; index += 1) feed.delta(picture(index));
       await flush();
       const reading = watch(stalled);
-      feeds[0]!.delta(picture(2000));
+      feed.delta(picture(2000));
       await flush();
       expect(reading.frames[0], "an MJPEG viewer past the bound").toBe("meta 330x720");
       expect(reading.frames.length).toBeLessThan(1500);
@@ -881,7 +891,8 @@ describe("createWorkerStream", () => {
       // why: a capture that writes nothing for 30 s ends on its own, so frames keep arriving.
       for (let step = 0; step < 3; step += 1) {
         clock.advance(20_000);
-        feeds[0]!.keyframe([step]);
+        const feed = feeds[0]!;
+        feed.keyframe([step]);
         await flush();
       }
       expect(expiring.ended, label).toBe(true);
@@ -890,7 +901,8 @@ describe("createWorkerStream", () => {
       } else {
         expect(feeds[0]?.closes, label).toBe(0);
         expect(staying.ended).toBe(false);
-        feeds[0]!.keyframe([9]);
+        const feed = feeds[0]!;
+        feed.keyframe([9]);
         await flush();
         expect(staying.frames.at(-1)).toBe("key 9");
       }
@@ -1112,7 +1124,8 @@ describe("createWorkerStream", () => {
       watch(await openOnRoute(stream, "lease")),
     ];
     const unread = await openOnRoute(stream, "device");
-    feeds[0]!.fail(new Error("encoder crashed"));
+    const feed = feeds[0]!;
+    feed.fail(new Error("encoder crashed"));
     await flush();
     for (const viewer of viewers) {
       expect(viewer.error, "a mid-stream read error").toBe("encoder crashed");
