@@ -41,8 +41,11 @@ describe("Android screen capture: open", () => {
         "tunnel_forward=true",
         "video=true",
         "audio=false",
-        "control=false",
+        "control=true",
+        "power_on=false",
+        "clipboard_autosync=false",
         "video_codec=h264",
+        "video_codec_options=i-frame-interval:int=2",
         "send_device_meta=false",
         "send_dummy_byte=true",
         "send_stream_meta=true",
@@ -85,10 +88,10 @@ describe("Android screen capture: open", () => {
     const serverOf = (log: readonly string[]) => log.find((l) => l.includes("app_process"))!;
     const emulatorOptions = serverOf(emulator.target.log).split(" ");
     expect(emulatorOptions).not.toContain("stay_awake=true");
-    expect(emulatorOptions).toContain("control=false");
+    expect(emulatorOptions).toContain("control=true");
     const phoneOptions = serverOf(phone.target.log).split(" ");
     expect(phoneOptions).toContain("stay_awake=true");
-    expect(phoneOptions).toContain("control=false");
+    expect(phoneOptions).toContain("control=true");
     expect(phoneOptions.filter((o) => o !== "stay_awake=true")).toEqual(emulatorOptions);
   });
 
@@ -109,6 +112,41 @@ describe("Android screen capture: open", () => {
       "001dlocalabstract:scrcpy_1234abcd",
     ]);
     expect(world.other.connects).toEqual([]);
+  });
+
+  it("connects the control socket after the video's zero byte and before the video is read, discards what it sends, and ends the stream when it ends", async () => {
+    const world = await setup();
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
+    const feed = await drive(world.clock, waitThenStart(world.target, opening));
+    const [video] = world.target.server.peers;
+    const [control] = world.target.server.controls;
+    expect(world.target.server.peers).toHaveLength(1);
+    expect(world.target.server.controls).toHaveLength(1);
+    expect(control!.written).toEqual([
+      "001chost:transport:emulator-5586",
+      "001dlocalabstract:scrcpy_1234abcd",
+    ]);
+    // why: the video is read only once the control socket is up, and the zero byte is the video's alone:
+    // the control socket is answered with nothing after adb's OKAY, so asking it for one would hang.
+    expect(video!.pulls).toBeGreaterThan(0);
+    expect(control!.pulls).toBeGreaterThan(0);
+
+    control!.send(new Uint8Array(64).fill(7));
+    const reader = feed.body.getReader();
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+    control!.close();
+    await expect(drive(world.clock, reader.read())).rejects.toBeInstanceOf(ScreenUnavailableError);
+    expect(video!.closed).toBe(true);
+  });
+
+  it("refuses the open, and cleans up, when the control connection is refused", async () => {
+    const world = await setup({ server: new AdbServer(["accept", "refuse"]) });
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
+    const error = await drive(world.clock, opening).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ScreenUnavailableError);
+    expect((error as Error).message).toMatch(/control connection/);
+    expect(world.target.server.peers.every((peer) => peer.closed)).toBe(true);
+    expect(world.target.steps.at(-1)).toBe(`shell rm -f ${DEVICE_JAR}`);
   });
 
   it("hands out a body that starts with the session's meta frame", async () => {

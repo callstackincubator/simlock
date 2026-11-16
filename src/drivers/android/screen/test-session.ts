@@ -53,6 +53,11 @@ class Peer {
   readonly written: string[] = [];
   closed = false;
   pulls = 0;
+  // why: set when the connection asked for a socket the server already served: scrcpy's control socket.
+  control = false;
+  // why: a write that fails, as a socket the device has dropped does.
+  failWrites = false;
+  onWrite: ((text: string) => void) | undefined;
   readonly #queue: Uint8Array[] = [];
   #wake: (() => void) | undefined;
   readonly stream: TcpStream;
@@ -84,7 +89,10 @@ class Peer {
       end: () => undefined,
       readable,
       write: async (bytes) => {
-        this.written.push(typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes));
+        if (this.failWrites) throw new Error("write failed");
+        const text = typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes);
+        this.written.push(text);
+        this.onWrite?.(text);
       },
     };
   }
@@ -104,8 +112,12 @@ class Peer {
 
 // why: the adb server on the far side of a target's `connect`; what it answers is scripted per attempt.
 export class AdbServer {
+  // why: the video connections, one per session id; the control connections are kept apart so a
+  // test that waits for "the connection" means the one the video comes on.
   readonly peers: Peer[] = [];
+  readonly controls: Peer[] = [];
   readonly #behaviours: Behaviour[];
+  readonly #served = new Set<string>();
 
   constructor(
     behaviours: Behaviour[] = [],
@@ -128,7 +140,21 @@ export class AdbServer {
     this.peers.push(peer);
     if (behaviour === "no-transport") peer.send(`FAIL0020device '${SERIAL}' not found`);
     if (behaviour === "refuse") peer.send("OKAY", "FAIL0006closed");
-    if (behaviour === "accept") peer.send("OKAY", "OKAY", new Uint8Array([0]));
+    if (behaviour === "accept") {
+      // why: scrcpy writes its zero byte on the first socket a session id is opened on, and nothing on the second.
+      peer.onWrite = (text) => {
+        peer.send("OKAY");
+        if (!text.includes("localabstract:")) return;
+        if (this.#served.has(text)) {
+          peer.control = true;
+          this.peers.splice(this.peers.indexOf(peer), 1);
+          this.controls.push(peer);
+        } else {
+          this.#served.add(text);
+          peer.send(new Uint8Array([0]));
+        }
+      };
+    }
     return peer;
   }
 
@@ -258,10 +284,10 @@ export function push(
   };
 }
 
-// why: a phone's server command carries one more option (stay_awake) than an emulator's 20 arguments.
+// why: a phone's server command carries one more option (stay_awake) than an emulator's 23 arguments.
 export function shell(
   extra: Partial<ScriptedProcessExpectation> = {},
-  options = 20,
+  options = 23,
 ): ScriptedProcessExpectation {
   return {
     hangs: true,
@@ -315,7 +341,7 @@ export async function setup(
   const target = new FakeTarget(
     phone ? PHONE_SERIAL : SERIAL,
     clock,
-    options.expectations ?? [push(), shell({}, phone ? 21 : 20), remove()],
+    options.expectations ?? [push(), shell({}, phone ? 24 : 23), remove()],
     server,
   );
   const scripted = { power: options.power, refuses: options.refuses, wake: options.wake };
