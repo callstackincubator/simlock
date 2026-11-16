@@ -36,6 +36,7 @@ Devices:
 - `devices.except_categories` holds the list a lease kept running, written in the grant commit (`createLease`).
 - `shutdown`, `destroy` and `dispose` answer `undefined` for a leased, gone or moved device. That is not an error.
 - Unreadable is not gone: startup skips a platform it could not list; doctor reports no drift there.
+- Startup deletes the idle `ready` and `shutdown` devices of a platform whose `<platform>.virtualDevices` is `false` (initiator `virtual-devices-off`); a leased one runs to its release (ADR 0078 §2).
 - Warm pool and startup never install. Instance id is never regenerated.
 - `sweepWriteLeftovers` logs a pid-less legacy leftover and never deletes it.
 - Doctor's `service-broken` comes from an injected `serviceCheck`, never from drift.
