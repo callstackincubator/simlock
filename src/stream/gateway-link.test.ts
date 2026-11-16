@@ -355,7 +355,8 @@ describe("a shared relay's viewers", () => {
     feed.keyframe([1]);
     feed.delta([2]);
     await flush();
-    const seenB = watch(await joined.link.serve(DEVICE, OPERATOR, signal()));
+    const second = new AbortController();
+    const seenB = watch(await joined.link.serve(DEVICE, OPERATOR, second.signal));
     feed.delta([3]);
     feed.keyframe([4]);
     feed.delta([5]);
@@ -373,7 +374,8 @@ describe("a shared relay's viewers", () => {
 
     feed.meta({ height: 800 });
     await flush();
-    const late = await joined.link.serve(DEVICE, OPERATOR, signal());
+    const third = new AbortController();
+    const late = await joined.link.serve(DEVICE, OPERATOR, third.signal);
     expect(late.meta.height).toBe(800);
     const seenLate = watch(late);
     await flush();
@@ -388,6 +390,12 @@ describe("a shared relay's viewers", () => {
     await flush();
     expect(seenB.frames.at(-1)).toBe("delta 9");
     expect(joined.calls.map((call) => call.aborts())).toEqual([0]);
+    second.abort();
+    await flush();
+    expect(joined.calls.map((call) => call.aborts())).toEqual([0]);
+    third.abort();
+    await flush();
+    expect(joined.calls.map((call) => call.aborts())).toEqual([1]);
 
     const stalled = relaying(PROMISE);
     const slow = await stalled.link.serve(DEVICE, OPERATOR, signal());

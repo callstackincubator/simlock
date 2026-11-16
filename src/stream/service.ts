@@ -168,7 +168,7 @@ export function streamResponse(stream: CapturedStream, promisesKeyframes = false
   const { meta } = stream;
   // why: the codec and size are headers as well as the body's first frame, because a browser must
   // decide how to read a body before it has read any of it, and because a gateway reads the headers
-  // instead of the body -- which is what lets it relay video without touching a video byte.
+  // first, before it has any frame to read.
   return new Response(stream.body, {
     headers: {
       "cache-control": "no-store",

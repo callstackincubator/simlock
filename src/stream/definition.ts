@@ -11,14 +11,17 @@ export interface StreamModuleConfig {
 // one word; the picture settings are what a worker encodes with, and a gateway that only relays a
 // stream reads none of them.
 const STREAM_HEADERS = {
-  "simlock-stream-keyframe-ms":
-    "5000 when the worker sends a key frame at least every 5 seconds, which lets a gateway share one relay between viewers; absent otherwise.",
   "simlock-stream-codec": "The codec of the body: h264 or mjpeg.",
   "simlock-stream-fps": "Frames per second.",
   "simlock-stream-height":
     "Picture height in pixels when the stream opens; a meta frame in the body gives each later size.",
   "simlock-stream-width":
     "Picture width in pixels when the stream opens; a meta frame in the body gives each later size.",
+};
+
+const STREAM_OPTIONAL_HEADERS = {
+  "simlock-stream-keyframe-ms":
+    "5000 when the worker sends a key frame at least every 5 seconds, which lets a gateway share one relay between viewers; absent otherwise, and always absent from a gateway's answer.",
 };
 
 export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
@@ -46,6 +49,7 @@ export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
               "application/vnd.simlock.stream+mjpeg",
             ],
             headers: STREAM_HEADERS,
+            optionalHeaders: STREAM_OPTIONAL_HEADERS,
           },
           404: {
             description: "No such device or worker, or no such stream path.",
@@ -84,6 +88,7 @@ export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
               "application/vnd.simlock.stream+mjpeg",
             ],
             headers: STREAM_HEADERS,
+            optionalHeaders: STREAM_OPTIONAL_HEADERS,
           },
           404: {
             description: "No such lease, or not the caller's.",

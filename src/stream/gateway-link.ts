@@ -302,8 +302,6 @@ async function fromResponse(
   const body = response.body;
   return {
     body,
-    // why: a browser that goes away aborts its request, which aborts the relay, which the worker
-    // answers by stopping its own capture -- so this covers only a gateway that gives up by itself.
     close: async () => {
       await body.cancel().catch(() => undefined);
     },

@@ -16,7 +16,7 @@ What a stream does to the device:
 - A screen stream changes no device setting and drops no frame. One exception: a phone's stream sets stay awake (`stay_awake=true`, scrcpy's `stay_on_while_plugged_in`) while it runs, and scrcpy's clean-up process puts the old value back when the server ends. An emulator's server never gets the option.
 - A phone's screen state is read before anything is pushed (`mWakefulness` in `dumpsys power`). `Asleep` or `Dozing`: one `KEYCODE_WAKEUP`, then the same read again; still off is `ScreenUnavailableError`, and nothing is pushed.
 - Only a read that names one of those two words is a fact about the screen. Another word, no line, a non-zero exit or a timed-out read goes on, with no wake.
-- The wake is the only key this stream sends. Emulators skip the read and the wake.
+- The wake is the only key sent. Emulators skip the read and the wake.
 
 Start and stop:
 
@@ -30,8 +30,8 @@ Start and stop:
 The body:
 
 - It is pull-based (`highWaterMark: 0`): the socket is read only when the body's reader pulls, so nothing is dropped.
-- The control socket is the server's second connection, made before the video is read. A refused control connection refuses the open; its end before `close`, or a failed write to it, ends the stream like the video's end.
-- A still screen sends no key frame, so `RESET_VIDEO_AFTER_MS` (ADR 0079 §5) without one makes the session write reset video; the answer is relayed as for a rotation.
+- The control socket is the server's second connection: a refused one refuses the open; its end or a failed write ends the stream.
+- `RESET_VIDEO_AFTER_MS` (ADR 0079 §5) without a key frame makes the session ask for reset video.
 - After `ALIVE_AFTER_MS` of quiet the body sends an empty `alive` frame, only after the first key frame, so an encoder that never paints meets the stream's silence bound.
 - A rotation starts a new scrcpy session: a new meta frame, then a new description before the next picture. The browser decoder re-reads both mid-stream.
 - A body whose socket ends errors with the server's last output and closes the feed.
@@ -46,7 +46,6 @@ The body:
   screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on
   again or the lease ends. Nothing ends the stream for it.
 - **A phone woken to its lock screen streams the lock screen.** simlock does not unlock it.
-- **A viewer that joins a phone that went dark mid-stream sees no picture.** A joiner opens nothing, so nothing wakes it.
 - **The stay-awake setting stays on** if the phone loses power or reboots before the clean-up process writes the old value back.
 - **A holder's own stay-awake change is overwritten**: a holder that changes `stay_on_while_plugged_in` over
   passthrough `adb` while a stream is open has it replaced when the stream ends, since scrcpy writes back the value it found.
