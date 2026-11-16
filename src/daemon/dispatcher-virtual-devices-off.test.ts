@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FakeDriver } from "../core/testing.js";
 import { FakeClock } from "../ports/index.js";
 import { classifyError } from "./error-code.js";
-import { buildDispatcher, session } from "./test-dispatcher.js";
+import { buildDispatcher, flushPromises, session } from "./test-dispatcher.js";
 
 type Off = "android" | "ios";
 
@@ -69,4 +69,50 @@ describe("a worker whose <platform>.virtualDevices is false", () => {
       expect(operations).not.toContain("installComponent");
     },
   );
+
+  it("serves a --physical lease as on any worker: granted, waiting, NO_CAPACITY with noWait, UNKNOWN_MODEL with no enrolled match", async () => {
+    const { dispatcher, driver, engine } = await buildDispatcher({
+      physicalDevices: [
+        {
+          createdAt: 1,
+          driverDeviceId: "00008110-001A2B3C4D5E",
+          enrolledApps: [],
+          id: "dev_phys",
+          spec: { class: "phone", model: "iPhone 15", osVersion: "18.4" },
+          state: "ready",
+        },
+      ],
+      virtualDevices: { ios: false },
+    });
+    await engine.convergeRunningCapacity();
+    driver.setPhysicalPresence("00008110-001A2B3C4D5E", true);
+    const phone = { model: "iPhone 15", physical: true, platform: "ios" } as const;
+    const ask = (input: Record<string, unknown>, requesterId: string) =>
+      dispatcher.dispatch("lease.request", { ...input, requesterId }, session());
+
+    const granted = await ask(phone, "first");
+    expect(granted.device).toMatchObject({ id: "dev_phys", physical: true });
+
+    const noWait = await ask({ ...phone, noWait: true }, "second").then(
+      () => undefined,
+      (rejection: unknown) => rejection,
+    );
+    expect(classifyError(noWait)).toBe("NO_CAPACITY");
+
+    let waiterSettled = false;
+    const waiter = ask(phone, "third").finally(() => {
+      waiterSettled = true;
+    });
+    await flushPromises();
+    expect(waiterSettled).toBe(false);
+    await dispatcher.dispatch("lease.release", { leaseId: granted.lease.id }, session());
+    await expect(waiter).resolves.toMatchObject({ device: { id: "dev_phys", physical: true } });
+
+    const unmatched = await ask({ ...phone, model: "iPhone 99" }, "fourth").then(
+      () => undefined,
+      (rejection: unknown) => rejection,
+    );
+    expect(classifyError(unmatched)).toBe("UNKNOWN_MODEL");
+    expect((unmatched as Error).message).toContain("no enrolled physical device can match");
+  });
 });
