@@ -432,11 +432,13 @@ describe("createWorkerStream", () => {
   it("ends a screen stream the gateway relays for a proxy identity at that identity's expiresAt", async () => {
     const clock = new FakeClock();
     let relayCancelled = false;
+    let relayAborted = false;
     const gateway = createGatewayStream({
       clock,
       fleet: {
         knowsWorker: () => true,
-        relay: async () => {
+        relay: async (_workerId, call) => {
+          call.request.signal.addEventListener("abort", () => (relayAborted = true));
           const body = new ReadableStream<Uint8Array>({
             cancel: () => {
               relayCancelled = true;
@@ -458,6 +460,7 @@ describe("createWorkerStream", () => {
     clock.advance(1);
     expect(await settledWithin(next)).toEqual({ done: true, value: undefined });
     expect(relayCancelled).toBe(true);
+    expect(relayAborted).toBe(true);
 
     // why: a stream that ends or is left before its deadline must not leave the deadline armed.
     const finished = createGatewayStream({

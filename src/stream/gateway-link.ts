@@ -86,7 +86,7 @@ async function serveDevice(
     return existing.broadcast.join(signal);
   }
   if (existing !== undefined && existing.broadcast === undefined) {
-    return waitFor(existing, { caller, signal, target });
+    return waitFor(existing, { caller, signal, target }, () => drop(relays, key, existing));
   }
   const entry: SharedRelay = {
     broadcast: undefined,
@@ -94,14 +94,19 @@ async function serveDevice(
     waiters: new Set(),
   };
   relays.set(key, entry);
-  const stream = waitFor(entry, { caller, signal, target });
+  const stream = waitFor(entry, { caller, signal, target }, () => drop(relays, key, entry));
   void openShared(options, relays, key, entry, workerId, target, caller);
   return stream;
+}
+
+function drop(relays: Map<string, SharedRelay>, key: string, entry: SharedRelay): void {
+  if (relays.get(key) === entry) relays.delete(key);
 }
 
 function waitFor(
   entry: SharedRelay,
   viewer: Pick<Waiter, "caller" | "signal" | "target">,
+  forget: () => void,
 ): Promise<CapturedStream> {
   return new Promise<CapturedStream>((resolve, reject) => {
     const waiter: Waiter = { ...viewer, reject, resolve };
@@ -109,7 +114,11 @@ function waitFor(
     const leave = () => {
       if (!entry.waiters.delete(waiter)) return;
       reject(viewer.signal.reason);
-      if (entry.waiters.size === 0) entry.controller.abort();
+      if (entry.waiters.size === 0) {
+        // why: a viewer that comes after the last waiter left must not wait on a relay already aborted.
+        forget();
+        entry.controller.abort();
+      }
     };
     if (viewer.signal.aborted) leave();
     else viewer.signal.addEventListener("abort", leave, { once: true });

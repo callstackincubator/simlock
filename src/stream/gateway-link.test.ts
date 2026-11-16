@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { SCREEN_FRAME_TAG } from "../core/index.js";
 import type { StreamCaller } from "./caller.js";
+import type { CapturedStream } from "./feed.js";
 import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import { StreamRefusalError } from "./refusal.js";
 import { ScriptedFeed } from "./test-fixtures.js";
@@ -201,6 +203,7 @@ const LEASE = { leaseId: "w1.lse_7", workerId: "w1", workerLeaseId: "lse_7" };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 interface RelayCall {
+  readonly aborts: () => number;
   readonly signal: AbortSignal;
   readonly tenant: string;
   readonly url: string;
@@ -209,18 +212,27 @@ interface RelayCall {
 // why: each relay gets a body of its own, as a worker's answer does, so a test sees which viewers share one.
 function relaying(headers: Record<string, string>, gate?: Promise<void>) {
   const calls: RelayCall[] = [];
+  const feeds: ScriptedFeed[] = [];
   const port: FleetPort = {
     knowsWorker: (workerId) => workerId === "w1",
     relay: async (_workerId, call) => {
-      calls.push({ signal: call.request.signal, tenant: call.tenant, url: call.request.url });
+      let aborted = 0;
+      call.request.signal.addEventListener("abort", () => (aborted += 1));
+      calls.push({
+        aborts: () => aborted,
+        signal: call.request.signal,
+        tenant: call.tenant,
+        url: call.request.url,
+      });
       if (calls.length === 1) await gate;
       const feed = new ScriptedFeed();
+      feeds.push(feed);
       feed.meta();
       return new Response(feed.body, { headers: streamHeaders(headers) });
     },
     requesterPrefix: "gw:inst:",
   };
-  return { calls, link: createGatewayStreamLink({ fleet: port }) };
+  return { calls, feeds, link: createGatewayStreamLink({ fleet: port }) };
 }
 
 describe("viewers of one target through the gateway's stream link", () => {
@@ -273,5 +285,143 @@ describe("viewers of one target through the gateway's stream link", () => {
     expect(waiting.calls.map((call) => call.signal.aborted)).toEqual([true, false]);
     second.abort();
     expect(waiting.calls.map((call) => call.signal.aborted)).toEqual([true, true]);
+  });
+});
+
+const FRAME_NAMES: Record<number, string> = {
+  [SCREEN_FRAME_TAG.description]: "desc",
+  [SCREEN_FRAME_TAG.keyframe]: "key",
+  [SCREEN_FRAME_TAG.delta]: "delta",
+};
+
+// why: a viewer that reads whatever arrives, so a test asserts on what it got instead of waiting on a read.
+function watch(stream: CapturedStream) {
+  const seen = { ended: false, frames: [] as string[] };
+  const reader = stream.body.getReader();
+  void (async () => {
+    for (let step = await reader.read(); !step.done; step = await reader.read()) {
+      const frame = step.value;
+      if (frame[4] === SCREEN_FRAME_TAG.meta) {
+        const meta = JSON.parse(new TextDecoder().decode(frame.subarray(5))) as {
+          height: number;
+          width: number;
+        };
+        seen.frames.push(`meta ${String(meta.width)}x${String(meta.height)}`);
+      } else seen.frames.push(`${FRAME_NAMES[frame[4] ?? 0] ?? "?"} ${String(frame[5])}`);
+    }
+    seen.ended = true;
+  })();
+  return seen;
+}
+
+describe("a shared relay's viewers", () => {
+  it("get a joiner's meta, parameter sets and next key frame, a slow viewer's skip to its next key frame, and the relay ends with its last viewer", async () => {
+    const joined = relaying(PROMISE);
+    const first = new AbortController();
+    const seenA = watch(await joined.link.serve(DEVICE, OPERATOR, first.signal));
+    const feed = joined.feeds[0]!;
+    feed.description([7]);
+    feed.keyframe([1]);
+    feed.delta([2]);
+    await flush();
+    const seenB = watch(await joined.link.serve(DEVICE, OPERATOR, signal()));
+    feed.delta([3]);
+    feed.keyframe([4]);
+    feed.delta([5]);
+    await flush();
+    expect(seenA.frames).toEqual([
+      "meta 330x720",
+      "desc 7",
+      "key 1",
+      "delta 2",
+      "delta 3",
+      "key 4",
+      "delta 5",
+    ]);
+    expect(seenB.frames).toEqual(["meta 330x720", "desc 7", "key 4", "delta 5"]);
+
+    feed.meta({ height: 800 });
+    await flush();
+    const late = await joined.link.serve(DEVICE, OPERATOR, signal());
+    expect(late.meta.height).toBe(800);
+    const seenLate = watch(late);
+    await flush();
+    expect(seenLate.frames).toEqual(["meta 330x800", "desc 7"]);
+    feed.delta([6]);
+    feed.keyframe([8]);
+    await flush();
+    expect(seenLate.frames.slice(2)).toEqual(["key 8"]);
+
+    first.abort();
+    feed.delta([9]);
+    await flush();
+    expect(seenB.frames.at(-1)).toBe("delta 9");
+    expect(joined.calls.map((call) => call.aborts())).toEqual([0]);
+
+    const stalled = relaying(PROMISE);
+    const slow = await stalled.link.serve(DEVICE, OPERATOR, signal());
+    const seenLive = watch(await stalled.link.serve(DEVICE, OPERATOR, signal()));
+    const live = stalled.feeds[0]!;
+    live.keyframe([1]);
+    for (const n of [2, 3, 4, 5]) {
+      live.delta([n, ...Array.from({ length: 700_000 }, () => 0)]);
+      await flush();
+    }
+    live.keyframe([9]);
+    live.delta([10]);
+    await flush();
+    expect(seenLive.frames).toEqual([
+      "meta 330x720",
+      "key 1",
+      "delta 2",
+      "delta 3",
+      "delta 4",
+      "delta 5",
+      "key 9",
+      "delta 10",
+    ]);
+    const seenSlow = watch(slow);
+    await flush();
+    expect(seenSlow.frames).toEqual(["meta 330x720", "key 9", "delta 10"]);
+  });
+
+  it("leaving ends the relay once, with its last viewer, even while the worker's head is awaited", async () => {
+    const leaving = relaying(PROMISE);
+    const [one, two] = [new AbortController(), new AbortController()];
+    await leaving.link.serve(DEVICE, OPERATOR, one.signal);
+    await leaving.link.serve(DEVICE, OPERATOR, two.signal);
+    one.abort();
+    leaving.feeds[0]!.delta([1]);
+    await flush();
+    expect(leaving.calls.map((call) => call.aborts())).toEqual([0]);
+    two.abort();
+    await flush();
+    expect(leaving.calls.map((call) => call.aborts())).toEqual([1]);
+
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const waiting = relaying(PROMISE, gate);
+    const [x, y] = [new AbortController(), new AbortController()];
+    const ended = (served: Promise<unknown>) =>
+      served.then(
+        () => "served",
+        (error: unknown) => (error as Error).name,
+      );
+    const a = ended(waiting.link.serve(DEVICE, OPERATOR, x.signal));
+    const b = ended(waiting.link.serve(DEVICE, OPERATOR, y.signal));
+    await flush();
+    x.abort();
+    await flush();
+    expect(waiting.calls.map((call) => call.aborts())).toEqual([0]);
+    y.abort();
+    await flush();
+    expect(waiting.calls.map((call) => call.aborts())).toEqual([1]);
+    expect(await Promise.all([a, b])).toEqual(["AbortError", "AbortError"]);
+    const next = waiting.link.serve(DEVICE, OPERATOR, signal()).then(() => "served");
+    expect(await Promise.race([next, flush().then(() => "waiting")])).toBe("served");
+    expect(waiting.calls).toHaveLength(2);
+    release();
+    await flush();
+    expect(waiting.calls.map((call) => call.aborts())).toEqual([1, 0]);
   });
 });
