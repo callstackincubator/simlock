@@ -122,6 +122,13 @@ describe("IosSimctlDriver device set", () => {
             : []),
           {
             match: { args: argvOf(step), command: "xcrun" },
+            ...(step.args[0] === "clone" && step.args[1] === throwawayUdid
+              ? {
+                  onSpawn: () => {
+                    void filesystem.mkdirp(`${sourcesSet}/${seedUdid}`);
+                  },
+                }
+              : {}),
             ...(step.stdout === undefined
               ? {}
               : { result: { code: 0, stderr: "", stdout: step.stdout } }),

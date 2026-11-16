@@ -9,11 +9,13 @@ import {
   open,
   readdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
   stat,
   statfs,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -121,6 +123,12 @@ export interface Filesystem {
   diskFree(path: string): Promise<number>;
   diskSpace(path: string): Promise<{ readonly freeBytes: number; readonly totalBytes: number }>;
   directorySize(path: string): Promise<number>;
+  /** why: what a symbolic link points at, without following it. */
+  readlink(path: string): Promise<string>;
+  /** why: the link at `path` points at `target` from one step to the next, with no moment when it is missing. */
+  replaceSymlink(path: string, target: string): Promise<void>;
+  /** why: `bytes` written into an existing file at `offset`, with no truncation, keeping its mode and modification time. */
+  writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void>;
 }
 
 // why: only the directories that are absent get the mode, so one that is already there keeps its own.
@@ -403,6 +411,32 @@ export class NodeFilesystem implements Filesystem {
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
       throw error;
+    }
+  }
+
+  async readlink(path: string): Promise<string> {
+    return readlink(path);
+  }
+
+  async replaceSymlink(path: string, target: string): Promise<void> {
+    const staged = `${path}.simlock-swap-${String(process.pid)}`;
+    await symlink(target, staged);
+    try {
+      await rename(staged, path);
+    } catch (error: unknown) {
+      await rm(staged, { force: true });
+      throw error;
+    }
+  }
+
+  async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    const handle = await open(path, "r+");
+    try {
+      const { atime, mtime } = await handle.stat();
+      await handle.write(bytes, 0, bytes.length, offset);
+      await handle.utimes(atime, mtime);
+    } finally {
+      await handle.close();
     }
   }
 
@@ -764,6 +798,33 @@ export class MemoryFilesystem implements Filesystem {
       else if (entry.kind === "file") total += fileBytes(entry).byteLength;
     }
     return total;
+  }
+
+  async readlink(path: string): Promise<string> {
+    this.#failIfDefined(path);
+    const entry = this.#rawEntryAt(this.#underResolvedParent(path));
+    if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
+    return entry.target;
+  }
+
+  async replaceSymlink(path: string, target: string): Promise<void> {
+    this.#failIfDefined(path);
+    const at = this.#underResolvedParent(path);
+    const entry = this.#rawEntryAt(at);
+    if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
+    this.#entries.set(at, { ...this.#newEntry({ kind: "symlink", target }), uid: entry.uid });
+  }
+
+  async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    this.#failIfDefined(path);
+    const entry = this.#entryAt(path);
+    if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
+    const old = fileBytes(entry);
+    const next = new Uint8Array(Math.max(old.byteLength, offset + bytes.byteLength));
+    next.set(old);
+    next.set(bytes, offset);
+    entry.bytes = next;
+    entry.contents = Buffer.from(next).toString("utf8");
   }
 
   /**

@@ -66,7 +66,7 @@ describe("IosSimctlDriver", () => {
     const device = {
       address: driverData.udid,
       deviceId: driverData.udid,
-      driverData,
+      driverData: { ...driverData, lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
       physical: false,
     } as const;
     const cloneInvocation = simctl("clone", driverData.udid, baselineName, sourcesSet);
@@ -274,7 +274,7 @@ describe("IosSimctlDriver", () => {
     await expect(driver.provision({ ...spec, mode: "slim" })).resolves.toEqual({
       address: driverData.udid,
       deviceId: driverData.udid,
-      driverData,
+      driverData: { ...driverData, lineage: [] },
     });
   });
 

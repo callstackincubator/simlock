@@ -8,8 +8,8 @@ import {
   MemoryFilesystem,
   type Logger,
 } from "../../ports/index.js";
-import { IosSimctlDriver, SLIM_CATEGORIES } from "./index.js";
-import { plantReadySeed, memorySourceDatabase } from "./testing.js";
+import { IosSimctlDriver, type IosSimctlDriverOptions, SLIM_CATEGORIES } from "./index.js";
+import { plantReadySeed, memorySourceDatabase, type PlantedSource } from "./testing.js";
 import {
   simctl,
   deviceRoot,
@@ -94,7 +94,7 @@ export function sourcesSimctl(...args: readonly string[]): {
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
 export async function seededDatabase(
-  seed: { readonly runtimeBuild?: string; readonly udid?: string } = {},
+  seed: Partial<Pick<PlantedSource, "files" | "lineage" | "runtimeBuild" | "udid">> = {},
 ): Promise<SqliteDatabase> {
   return plantReadySeed(await memorySourceDatabase(), {
     deviceTypeId: driverData.deviceTypeId,
@@ -218,9 +218,11 @@ export async function createDriver(
   database?: SqliteDatabase,
   logger?: Logger,
   fullBootTimeoutMs?: number,
+  extra: Partial<IosSimctlDriverOptions> = {},
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
+    ...extra,
     database: database ?? (await memorySourceDatabase()),
     clock,
     driverConfig: { deviceRoot },
@@ -260,8 +262,11 @@ export async function launchServicesFiles(
 /** why: Records every `warn` message, so the destroy's log line is asserted on its text. */
 export class RecordingLogger implements Logger {
   readonly warnings: string[] = [];
+  readonly debugs: string[] = [];
 
-  debug(): void {}
+  debug(message: string): void {
+    this.debugs.push(message);
+  }
   info(): void {}
   warn(message: string): void {
     this.warnings.push(message);
@@ -394,4 +399,13 @@ export function throwawaySeedSteps(
     },
     { match: simctl("delete", throwawayUdid) },
   ];
+}
+
+/** why: `simctl clone` made the seed's folder in the sources set, which the scripted runner cannot do, and a make walks it before the seed turns ready. */
+export async function plantSeedClone(
+  filesystem: Filesystem,
+  sourcesSet: string = `${deviceRoot}/sources`,
+  udid: string = seedUdid,
+): Promise<void> {
+  await filesystem.mkdirp(`${sourcesSet}/${udid}`);
 }

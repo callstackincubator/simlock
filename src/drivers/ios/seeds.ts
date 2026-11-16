@@ -20,18 +20,26 @@ import type { ResolvedIosSpec } from "./catalog.js";
 
 import { UDID_PATTERN } from "./device-set-leftovers.js";
 
-import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
+import {
+  IosSourceTable,
+  type ReadySeed,
+  type SourceRecord,
+  type SourceRow,
+} from "./source-data.js";
+
+import { recordLineageFiles, swapCopyFiles } from "./lineage-files.js";
 
 import { type SimctlCatalog } from "./simctl-parse.js";
 
 import { type IosDriverData, iosDriverData } from "./simulator-data.js";
 
-import type { SqliteDatabase } from "../../ports/index.js";
+import type { SqliteDatabase, SqliteOpener } from "../../ports/index.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 
 const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
+const LAUNCH_SERVICES_PATH = /^data\/var\/db\/lsd\/com\.apple\.LaunchServices-[^/]*\.csstore$/;
 
 interface SeedsOptions {
   readonly boot: SimulatorBoot;
@@ -51,6 +59,7 @@ interface SeedsOptions {
   readonly seedTurns: SeedTurns;
   readonly simctl: Simctl;
   readonly sourcesSet: string;
+  readonly sqliteOpener: SqliteOpener | undefined;
 }
 
 /** why: the part of IosSimctlDriver (ADR 0063) that makes, keeps and deletes the seeds every provision copies (ADR 0061), and lists them as sources. */
@@ -73,6 +82,7 @@ export class Seeds {
   readonly #simctl: Simctl;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
+  readonly #sqliteOpener: SqliteOpener | undefined;
   #sourceMaker: string | undefined;
   #swept = false;
 
@@ -94,6 +104,7 @@ export class Seeds {
     this.#simctl = options.simctl;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet = options.sourcesSet;
+    this.#sqliteOpener = options.sqliteOpener;
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
@@ -160,8 +171,9 @@ export class Seeds {
       this.#sources.setUdid(sourceId, cloneUdid);
       await this.#slimBoot.copyOverrides(data.udid, cloneUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
+      const record = await this.#baselineRecord(data, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
-      this.#sources.markReady(sourceId, sizeBytes);
+      this.#sources.markReady(sourceId, sizeBytes, record);
       // why: ADR 0076: the lease is destroyed next, and `simctl delete` leaves its log folder behind for the baseline's copies to inherit.
       await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
@@ -172,6 +184,14 @@ export class Seeds {
       this.#sources.deleteRow(sourceId);
       throw error;
     }
+  }
+
+  /** why: ADR 0076 §2: the baseline's lineage is its lease's UDID and the lineage the lease was copied with; a lease made before lineages were kept has none, so the baseline is never copied. */
+  async #baselineRecord(data: IosDriverData, cloneUdid: string): Promise<SourceRecord> {
+    const lineage =
+      data.lineage === undefined ? undefined : [data.udid.toUpperCase(), ...data.lineage];
+    const files = lineage === undefined ? [] : await this.#recordFiles(cloneUdid, lineage);
+    return { files, lineage, savedWithoutLineage: lineage === undefined };
   }
 
   async destroySource(sourceId: string): Promise<void> {
@@ -219,6 +239,7 @@ export class Seeds {
     try {
       await this.#marks.writeMark(udid);
       await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
+      if (seed.lineage !== undefined) await this.#swapLineage(seed.sourceId, seed.lineage, udid);
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
@@ -235,6 +256,7 @@ export class Seeds {
         name,
         runtimeId: resolved.runtime.identifier,
         udid,
+        ...(seed.lineage === undefined ? {} : { lineage: seed.lineage }),
       } satisfies IosDriverData,
     };
   }
@@ -268,14 +290,19 @@ export class Seeds {
     }
   }
 
-  async #namedSource(sourceId: string): Promise<{ readonly udid: string }> {
+  async #namedSource(sourceId: string): Promise<ReadySeed> {
     const row = this.#sources.findRow(sourceId);
     if (row?.state !== "ready" || row.udid === undefined) {
       throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
     }
     const reason = sourceStaleReason(row, await this.#simctl.loadCatalog());
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
-    return { udid: row.udid };
+    return {
+      lineage: row.lineage,
+      runtimeBuild: row.runtimeBuild,
+      sourceId: row.sourceId,
+      udid: row.udid,
+    };
   }
 
   /** why: two provisions of one kind at once make one seed, the second waiting for the first's make. */
@@ -299,6 +326,16 @@ export class Seeds {
     if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
     if (seed !== undefined) await this.#destroySeed(seed);
     return this.#makeSeed(resolved, specKey);
+  }
+
+  async #bootThrowaway(throwaway: string, sourceId: string): Promise<void> {
+    try {
+      await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
+    } catch (error: unknown) {
+      // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
+      if (error instanceof BootTimeoutError) throw error;
+      throw new DriverCrashError(`seed ${throwaway} did not boot: ${errorMessage(error)}`);
+    }
   }
 
   async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
@@ -350,13 +387,7 @@ export class Seeds {
         await this.#marks.writeMark(throwaway);
         await this.#deviceHub.disablePasteboardSync(throwaway);
       }
-      try {
-        await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
-      } catch (error: unknown) {
-        // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
-        if (error instanceof BootTimeoutError) throw error;
-        throw new DriverCrashError(`seed ${throwaway} did not boot: ${errorMessage(error)}`);
-      }
+      await this.#bootThrowaway(throwaway, sourceId);
       await this.#simctl.shutdown(throwaway);
       const cloned = await this.#simctl.createSimulator(
         ["clone", throwaway, `simlock-seed-${sourceId}`, this.#sourcesSet],
@@ -365,12 +396,14 @@ export class Seeds {
       seedClone = cloned.stdout.trim();
       this.#sources.setUdid(sourceId, seedClone);
       const done = throwaway;
+      const lineage = [done.toUpperCase()];
       throwaway = undefined;
       keepRow = true;
       await this.#deleteThrowaway(done, false);
       keepRow = false;
-      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone));
-      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build };
+      const files = await this.#recordFiles(seedClone, lineage);
+      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone), { files, lineage });
+      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build, lineage };
     } catch (error: unknown) {
       keepRow = await this.#undoFailedMake(seedClone, throwaway, keepRow);
       if (!keepRow) this.#sources.deleteRow(sourceId);
@@ -472,6 +505,33 @@ export class Seeds {
     });
   }
 
+  async #swapLineage(sourceId: string, lineage: readonly string[], udid: string): Promise<void> {
+    const started = this.#clock.now();
+    const counts = await swapCopyFiles(
+      this.#filesystem,
+      join(this.#deviceRoot, udid),
+      // why: the copy's LaunchServices database was dropped just before, so a seed that recorded one has nothing of it left to swap.
+      this.#sources
+        .filesOf(sourceId)
+        .filter((file) => !LAUNCH_SERVICES_PATH.test(file.relativePath)),
+      { lineage, own: udid },
+    );
+    this.#logger?.debug(
+      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable`,
+    );
+  }
+
+  #recordFiles(udid: string, lineage: readonly string[]): ReturnType<typeof recordLineageFiles> {
+    return recordLineageFiles({
+      filesystem: this.#filesystem,
+      folder: join(this.#sourcesSet, udid),
+      lineage,
+      logger: this.#logger,
+      sqlite: this.#sqliteOpener,
+      udid,
+    });
+  }
+
   async #sizeOf(udid: string): Promise<number | undefined> {
     try {
       return await this.#filesystem.directorySize(join(this.#sourcesSet, udid));
@@ -514,12 +574,18 @@ export class Seeds {
 
 /** why: a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
 function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
+  if (seed.lineage === undefined) return true;
   const current = resolved.runtime.build;
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }
 
 /** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
 function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+  if (row.kind === "baseline" && row.lineage === undefined) {
+    return row.savedWithoutLineage
+      ? "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease"
+      : "saved before simulators stopped sharing folders; save it again";
+  }
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
   if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
   if (

@@ -225,6 +225,7 @@ export class IosSimctlDriver implements Driver {
       seedTurns: this.#seedTurns,
       simctl: this.#simctl,
       sourcesSet: sourcesSetFor(options.simlockHome, deviceRoot, rootOptions !== undefined),
+      sqliteOpener: options.sqliteOpener,
     });
     this.screenCapture = createScreenCaptureFor(
       options,

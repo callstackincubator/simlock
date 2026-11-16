@@ -23,16 +23,16 @@ Resolve and boot:
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`).
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
-- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background (the front app stays in front) and told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running.
+- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running.
 
 Seeds (ADR 0061):
 
 - A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` or `simlock simctl list`.
-- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder (`logsRoot`); `saveSource` deletes the saved-from lease's log folder too. A log folder that cannot be deleted is logged and the make or save goes on; a throwaway that cannot be deleted fails the make. Only its `making` row (`throwaway_udid`) deletes a throwaway, at the first `listSources` of a later process or the next make of its kind.
-- Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot: it records each app under the original device's folder. A clone whose drop fails is deleted.
+- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder; `saveSource` deletes the saved-from lease's log folder too. A log folder that cannot be deleted is logged and the make or save goes on; a throwaway that cannot be deleted fails the make.
+- A source records its lineage and, in `ios_source_files`, the files and links naming it, after flushing its WALs. A clone keeps its source's lineage and, before its first boot, has its `com.apple.LaunchServices-*.csstore` deleted and those files and links swapped to its own UDID; a failed drop or swap deletes it. No lineage: a seed is remade, a baseline stale.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
 - A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and one silent 5 minutes more is killed and logged.
-- A `making` row of another process is swept at the first `listSources`; one of this process, once older than any make takes, at the next make of its kind.
+- A `making` row of another process is swept at the first `listSources`, with its throwaway; one of this process, once older than any make takes, at the next make of its kind.
 - A seed that `simctl delete` calls `Invalid device` is already gone: its row is dropped. `removeComponent` deletes the runtime's seeds first.
 
 Physical, passthrough, screen:

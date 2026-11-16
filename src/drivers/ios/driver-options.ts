@@ -8,6 +8,7 @@ import type {
   Logger,
   ProcessRunner,
   SqliteDatabase,
+  SqliteOpener,
   TcpListenerFactory,
   TcpProbe,
   TcpStreamConnector,
@@ -35,6 +36,8 @@ export interface IosSimctlDriverOptions {
   readonly coreSimulatorRoot?: string;
   // why: where CoreSimulator keeps each simulator's log folder, which `simctl delete` leaves behind; with none given the driver deletes no log folder.
   readonly logsRoot?: string;
+  // why: how a source's WALs are flushed when it is made; with none given the driver flushes nothing.
+  readonly sqliteOpener?: SqliteOpener;
   // why: where launchd_sim keeps each simulator's overrides folder; a test points it elsewhere.
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;

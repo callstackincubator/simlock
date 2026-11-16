@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { SqliteDatabase, SqliteSchemaOwner } from "../../ports/index.js";
+import { inTransaction, type SqliteDatabase, type SqliteSchemaOwner } from "../../ports/index.js";
 
 export const iosSourceDataOwner: SqliteSchemaOwner = {
   migrations: [
@@ -31,9 +31,18 @@ export const iosSourceDataOwner: SqliteSchemaOwner = {
        WHERE kind = 'seed' AND state = 'ready';`,
     // why: ADR 0076: the throwaway a seed was copied from, kept so a restart mid-make can delete it through the row.
     "ALTER TABLE ios_source_data ADD COLUMN throwaway_udid TEXT",
+    // why: ADR 0076: the UDIDs a source was copied from (null: made before lineages were kept), the files that name them, and whether a baseline was saved from a device that had no lineage.
+    `ALTER TABLE ios_source_data ADD COLUMN lineage TEXT;
+     ALTER TABLE ios_source_data ADD COLUMN saved_without_lineage INTEGER NOT NULL DEFAULT 0;
+     CREATE TABLE ios_source_files (
+       source_id TEXT NOT NULL,
+       relative_path TEXT NOT NULL CHECK (length(CAST(relative_path AS BLOB)) <= 4096),
+       kind TEXT NOT NULL CHECK (kind IN ('link', 'file', 'unreadable')),
+       PRIMARY KEY (source_id, relative_path)
+     ) STRICT;`,
   ],
   name: "ios-source-data",
-  version: 3,
+  version: 4,
 };
 
 export interface NewSourceRow {
@@ -63,12 +72,27 @@ export interface SourceRow {
   readonly state: "making" | "ready";
   readonly maker: string;
   readonly sizeBytes: number | undefined;
+  readonly lineage: readonly string[] | undefined;
+  readonly savedWithoutLineage: boolean;
 }
 
 export interface ReadySeed {
   readonly sourceId: string;
   readonly udid: string;
   readonly runtimeBuild: string | undefined;
+  readonly lineage: readonly string[] | undefined;
+}
+
+export interface SourceFile {
+  readonly relativePath: string;
+  readonly kind: "link" | "file" | "unreadable";
+}
+
+/** why: what a source records when it is made: the UDIDs it came from and the files that name them. */
+export interface SourceRecord {
+  readonly lineage: readonly string[] | undefined;
+  readonly files: readonly SourceFile[];
+  readonly savedWithoutLineage?: boolean;
 }
 
 /** why: the one place that reads or writes `ios_source_data`; nothing outside the iOS driver does (ADR 0036 §2). */
@@ -113,20 +137,47 @@ export class IosSourceTable {
       .run(udid, sourceId);
   }
 
-  markReady(sourceId: string, sizeBytes: number | undefined): void {
-    this.#database
-      .prepare("UPDATE ios_source_data SET state = 'ready', size_bytes = ? WHERE source_id = ?")
-      .run(sizeBytes ?? null, sourceId);
+  markReady(sourceId: string, sizeBytes: number | undefined, record: SourceRecord): void {
+    inTransaction(this.#database, () => {
+      this.#database
+        .prepare(
+          `UPDATE ios_source_data SET state = 'ready', size_bytes = ?, lineage = ?, saved_without_lineage = ?
+           WHERE source_id = ?`,
+        )
+        .run(
+          sizeBytes ?? null,
+          record.lineage === undefined ? null : JSON.stringify(record.lineage),
+          record.savedWithoutLineage === true ? 1 : 0,
+          sourceId,
+        );
+      const insert = this.#database.prepare(
+        "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES (?, ?, ?)",
+      );
+      for (const file of record.files) insert.run(sourceId, file.relativePath, file.kind);
+    });
+  }
+
+  filesOf(sourceId: string): readonly SourceFile[] {
+    return this.#database
+      .prepare("SELECT relative_path, kind FROM ios_source_files WHERE source_id = ?")
+      .all(sourceId)
+      .map((row) => ({
+        relativePath: row["relative_path"] as string,
+        kind: row["kind"] as SourceFile["kind"],
+      }));
   }
 
   deleteRow(sourceId: string): void {
-    this.#database.prepare("DELETE FROM ios_source_data WHERE source_id = ?").run(sourceId);
+    inTransaction(this.#database, () => {
+      this.#database.prepare("DELETE FROM ios_source_files WHERE source_id = ?").run(sourceId);
+      this.#database.prepare("DELETE FROM ios_source_data WHERE source_id = ?").run(sourceId);
+    });
   }
 
   findReadySeed(specKey: string): ReadySeed | undefined {
     const row = this.#database
       .prepare(
-        "SELECT source_id, udid, runtime_build FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?",
+        "SELECT source_id, udid, runtime_build, lineage FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?",
       )
       .get(specKey);
     if (row === undefined) return undefined;
@@ -134,6 +185,7 @@ export class IosSourceTable {
       sourceId: row["source_id"] as string,
       udid: row["udid"] as string,
       runtimeBuild: (row["runtime_build"] as string | null) ?? undefined,
+      lineage: parseLineage(row["lineage"]),
     };
   }
 
@@ -181,7 +233,7 @@ export class IosSourceTable {
     return this.#database
       .prepare(
         `SELECT source_id, kind, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
-           state, maker, size_bytes FROM ios_source_data ${where}`,
+           state, maker, size_bytes, lineage, saved_without_lineage FROM ios_source_data ${where}`,
       )
       .all(...parameters)
       .map((row) => ({
@@ -197,8 +249,14 @@ export class IosSourceTable {
         state: row["state"] as "making" | "ready",
         maker: row["maker"] as string,
         sizeBytes: (row["size_bytes"] as number | null) ?? undefined,
+        lineage: parseLineage(row["lineage"]),
+        savedWithoutLineage: row["saved_without_lineage"] === 1,
       }));
   }
+}
+
+function parseLineage(value: unknown): readonly string[] | undefined {
+  return typeof value === "string" ? (JSON.parse(value) as string[]) : undefined;
 }
 
 export function sourcesSetFor(simlockHome: string, deviceRoot: string, owned: boolean): string {
