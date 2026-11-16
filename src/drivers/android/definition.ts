@@ -55,5 +55,6 @@ export const androidDriverConfig: DriverConfigEntry<AndroidDriverConfig> = {
       audio: booleanValue,
       bootAnimation: booleanValue,
     }),
+    networkDevices: booleanValue,
   },
 };
