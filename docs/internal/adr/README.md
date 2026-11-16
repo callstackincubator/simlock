@@ -110,5 +110,5 @@ the status is stale.
 | [0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md) | A worker may enrol the phones plugged into it | Accepted; narrows 0022 §3, §5 and §6 |
 | [0074](0074-an-admission-command-ranks-or-refuses-a-gateway-request-and-an-ended-chosen-lease-id-is-remembered.md) | An admission command ranks or refuses a gateway request, and an ended chosen lease id is remembered | Accepted; narrows 0005 items 10 and 11, decision 5 and requirements 14 and 30; supersedes 0020 §1 in part |
 | [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Accepted; narrows 0031's Consequences and 0052 §4 |
-| [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted — not yet implemented; narrows 0061 §1 and §2 |
+| [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted — not yet implemented; narrows 0061 §1, §2 and §4 |
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
