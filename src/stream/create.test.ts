@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  encodeScreenFrame,
   type ScreenAvailability,
   SCREEN_FRAME_TAG,
   ScreenNotSupportedError,
@@ -85,6 +86,50 @@ const relayed = () => new Request("http://simlock-worker/stream/devices/dev_1");
 async function settledWithin<T>(promise: Promise<T>): Promise<T | "pending"> {
   for (let flush = 0; flush < 10; flush += 1) await new Promise((resolve) => setImmediate(resolve));
   return await Promise.race([promise, Promise.resolve("pending" as const)]);
+}
+
+const flush = () => settledWithin(Promise.resolve());
+
+const FRAME_NAMES: Record<number, string> = {
+  [SCREEN_FRAME_TAG.description]: "desc",
+  [SCREEN_FRAME_TAG.keyframe]: "key",
+  [SCREEN_FRAME_TAG.delta]: "delta",
+  [SCREEN_FRAME_TAG.alive]: "alive",
+  [SCREEN_FRAME_TAG.ended]: "ended",
+};
+
+function describeFrame(frame: Uint8Array): string {
+  const payload = frame.subarray(5);
+  if (frame[4] === SCREEN_FRAME_TAG.meta) {
+    const meta = JSON.parse(new TextDecoder().decode(payload)) as { width: number; height: number };
+    return `meta ${String(meta.width)}x${String(meta.height)}`;
+  }
+  const name = FRAME_NAMES[frame[4] ?? 0] ?? "?";
+  return frame[4] === SCREEN_FRAME_TAG.ended
+    ? `${name} ${new TextDecoder().decode(payload)}`
+    : `${name} ${[...payload].join(",")}`;
+}
+
+// why: a viewer that reads whatever arrives, so a test asserts on what a viewer got instead of
+// waiting on a read that may never be answered.
+function watch(response: Response) {
+  const seen = { ended: false, error: undefined as string | undefined, frames: [] as string[] };
+  const reader = response.body!.getReader();
+  void (async () => {
+    try {
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) {
+          seen.ended = true;
+          return;
+        }
+        seen.frames.push(describeFrame(step.value));
+      }
+    } catch (error) {
+      seen.error = (error as Error).message;
+    }
+  })();
+  return seen;
 }
 
 function openOnRoute(
@@ -557,11 +602,19 @@ describe("createWorkerStream", () => {
     }
   });
 
-  it("viewers of one device share one capture: each gets 200 with the current meta and the same frames", async () => {
-    const routes: [string, "device" | "lease", "device" | "lease"][] = [
+  it("viewers of one device share one capture: each gets 200 with the current meta and a body of the current meta, the current parameter sets, then frames from the next key frame", async () => {
+    const lease = (id: string) =>
+      ({ deviceId: "dev_leased", leaseId: "lse_1", reason: id }) as Parameters<
+        ReturnType<typeof worker>["stream"]["leaseEnd"]["leaseEnded"]
+      >[0];
+    const badMeta = encodeScreenFrame(
+      SCREEN_FRAME_TAG.meta,
+      new TextEncoder().encode(JSON.stringify({ codec: "vp9", fps: 30, height: 720, width: 330 })),
+    );
+    const routes = [
       ["two device-path viewers", "device", "device"],
       ["a device-path and a lease-path viewer", "device", "lease"],
-    ];
+    ] as const;
     for (const [label, first, second] of routes) {
       const { feeds, opened, stream } = worker();
       const a = await openOnRoute(stream, first);
@@ -571,23 +624,152 @@ describe("createWorkerStream", () => {
         expect(served.status, label).toBe(200);
         expect(Object.fromEntries(served.headers), label).toMatchObject(STREAM_HEADERS);
       }
-      const readers = [a, b].map((served) => served.body!.getReader());
+      const seen = [watch(a), watch(b)];
       feeds[0]!.description([7]);
       feeds[0]!.keyframe([1]);
       feeds[0]!.delta([2]);
-      for (const reader of readers) {
-        const frames: [number | undefined, number | undefined][] = [];
-        for (let frame = 0; frame < 4; frame += 1) {
-          const read = await reader.read();
-          frames.push([read.value?.[4], read.value?.[5]]);
-        }
-        expect(frames, label).toEqual([
-          [SCREEN_FRAME_TAG.meta, 0x7b],
-          [SCREEN_FRAME_TAG.description, 7],
-          [SCREEN_FRAME_TAG.keyframe, 1],
-          [SCREEN_FRAME_TAG.delta, 2],
-        ]);
+      await flush();
+      for (const viewer of seen) {
+        expect(viewer.frames, label).toEqual(["meta 330x720", "desc 7", "key 1", "delta 2"]);
       }
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { opened, stream } = worker([], true, false, gate);
+      const first = openOnRoute(stream, "device");
+      const second = openOnRoute(stream, "lease");
+      await flush();
+      openIt();
+      const seen = [watch(await first), watch(await second)];
+      await flush();
+      expect(opened(), "a second viewer while the first's open is pending").toBe(1);
+      for (const viewer of seen) expect(viewer.frames).toEqual(["meta 330x720"]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([1]);
+      feeds[0]!.meta({ height: 800, width: 400 });
+      feeds[0]!.description([8]);
+      feeds[0]!.keyframe([2]);
+      await flush();
+      const joined = await openOnRoute(stream, "device");
+      expect(joined.headers.get("simlock-stream-width"), "a joiner after a size change").toBe(
+        "400",
+      );
+      expect(joined.headers.get("simlock-stream-height")).toBe("800");
+      const viewer = watch(joined);
+      feeds[0]!.delta([3]);
+      feeds[0]!.frame(SCREEN_FRAME_TAG.alive, []);
+      feeds[0]!.keyframe([4]);
+      feeds[0]!.delta([5]);
+      await flush();
+      expect(viewer.frames).toEqual(["meta 400x800", "desc 8", "key 4", "delta 5"]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const viewer = watch(await openOnRoute(stream, "lease"));
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([1]);
+      await flush();
+      expect(viewer.frames, "a joiner before any parameter sets").toEqual([
+        "meta 330x720",
+        "desc 7",
+        "key 1",
+      ]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([1]);
+      await flush();
+      const viewer = watch(await openOnRoute(stream, "lease"));
+      feeds[0]!.delta([2]);
+      feeds[0]!.meta({ height: 800, width: 400 });
+      feeds[0]!.description([8]);
+      feeds[0]!.keyframe([3]);
+      await flush();
+      expect(viewer.frames, "a new meta and parameter sets before its first key frame").toEqual([
+        "meta 330x720",
+        "desc 7",
+        "meta 400x800",
+        "desc 8",
+        "key 3",
+      ]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      const early = watch(await openOnRoute(stream, "device"));
+      feeds[0]!.description([7]);
+      feeds[0]!.keyframe([1]);
+      await flush();
+      const waiting = watch(await openOnRoute(stream, "lease"));
+      await stream.leaseEnd.leaseEnded(lease("expired"), new AbortController().signal);
+      await flush();
+      for (const viewer of [early, waiting]) {
+        expect(viewer.frames.at(-1), "the lease ending while it waits").toBe(
+          'ended {"reason":"expired"}',
+        );
+        expect(viewer.ended).toBe(true);
+      }
+      expect(waiting.frames).toEqual(["meta 330x720", "desc 7", 'ended {"reason":"expired"}']);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      const viewers = [
+        watch(await openOnRoute(stream, "device")),
+        watch(await openOnRoute(stream, "lease")),
+      ];
+      feeds[0]!.write(badMeta);
+      await flush();
+      for (const viewer of viewers) {
+        expect(viewer.error, "a later meta frame that fails the check").toBe(
+          "The screen capture names a codec this stream cannot carry: vp9",
+        );
+      }
+    }
+
+    {
+      const { feeds, stream } = worker([], false);
+      const first = openOnRoute(stream, "device");
+      await flush();
+      feeds[0]!.meta({ codec: "mjpeg" });
+      const early = watch(await first);
+      feeds[0]!.delta([1]);
+      await flush();
+      const joined = await openOnRoute(stream, "lease");
+      expect(joined.headers.get("simlock-stream-codec"), "an MJPEG capture").toBe("mjpeg");
+      const late = watch(joined);
+      feeds[0]!.delta([2]);
+      await flush();
+      expect(early.frames).toEqual(["meta 330x720", "delta 1", "delta 2"]);
+      expect(late.frames).toEqual(["meta 330x720", "delta 2"]);
+    }
+
+    {
+      const { feeds, opened, stream } = worker();
+      const viewer = await openOnRoute(stream, "device");
+      const agent = { principal: "tok_agent", role: "agent" };
+      const refused = [
+        await stream.mount.handle(deviceRequest("w1", "dev_leased"), agent),
+        await stream.mount.handle(deviceRequest("w1", "dev_nope"), OPERATOR),
+        await stream.mount.handle(deviceRequest("w1", "dev_shutdown"), OPERATOR),
+      ];
+      expect(refused.map((answer) => answer.status)).toEqual([404, 404, 409]);
+      expect(opened(), "a viewer refused by the device checks").toBe(1);
+      await viewer.body!.cancel();
+      await flush();
+      expect(feeds[0]?.closes, "the refused viewers joined nothing").toBe(1);
     }
   });
 

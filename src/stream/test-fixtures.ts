@@ -4,6 +4,7 @@ import {
   encodeScreenMeta,
   type Platform,
   type ScreenFeed,
+  type ScreenMeta,
   SCREEN_FRAME_TAG,
 } from "../core/index.js";
 import type { StreamRegistry } from "./worker-link.js";
@@ -68,8 +69,8 @@ export class ScriptedFeed implements ScreenFeed {
     if (!this.#done) this.#controller.enqueue(bytes);
   }
 
-  meta(): void {
-    this.write(encodeScreenMeta({ codec: "h264", fps: 30, height: 720, width: 330 }));
+  meta(overrides: Partial<ScreenMeta> = {}): void {
+    this.write(encodeScreenMeta({ codec: "h264", fps: 30, height: 720, width: 330, ...overrides }));
   }
 
   keyframe(payload: readonly number[] = [1, 2, 3]): void {
