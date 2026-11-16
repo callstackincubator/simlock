@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { deviceClassSchema } from "./device-schemas.js";
+import { deviceClassSchema, imageTagSchema } from "./device-schemas.js";
 import { deviceModeSchema, leaseIdentitySchema } from "./schema-parts.js";
 import { capabilityNameSchema } from "./status-schemas.js";
 
@@ -152,7 +152,9 @@ export const configSchema = z.object({
   ios: z
     .object({ defaultMode: deviceModeSchema, defaultModels: defaultModelsSchema })
     .catchall(z.unknown()),
-  android: z.object({ defaultModels: defaultModelsSchema }).catchall(z.unknown()),
+  android: z
+    .object({ defaultImageTag: imageTagSchema.optional(), defaultModels: defaultModelsSchema })
+    .catchall(z.unknown()),
   gateway: z.object({
     url: z.string().optional(),
     token: z.string().optional(),

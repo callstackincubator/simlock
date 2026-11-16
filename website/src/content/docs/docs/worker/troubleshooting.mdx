@@ -60,8 +60,16 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 | `orphan-process` | A simulator or emulator is running that Simlock has no record of. | Nothing. |
 | `warm-pool-target-unreachable` | A warm pool target can never be filled: its runtime is not installed, its model is unknown, or it asks for more than capacity allows. | Nothing. Install the runtime or change the target. |
 | `driver-unavailable` | A platform's driver was refused at start, so the platform is off. The finding carries the `reason` (such as `invalid-device-set` or `device-set-changed`) and a `detail` that says what to run; `simlock doctor` also prints it as `Unavailable [<platform>] <reason>: <detail>` on stderr. | Nothing. Fix it, then restart the daemon. |
-| `driver-advisory` | A platform tool reported something worth knowing that is not a fault. | Nothing. |
+| `driver-advisory` | A platform tool reported something worth knowing that is not a fault. The code is in the message; see [`default-image-tag-not-installed`](#default-image-tag-not-installed). | Nothing. |
 | `module-unavailable` | An optional feature that is turned on cannot run on this machine. The remedy says why. | Nothing. |
+
+## default-image-tag-not-installed
+
+**Symptom.** `simlock doctor` prints `Warning [android] default-image-tag-not-installed` on stderr, and Android leases that name no image tag get the same image as without `android.defaultImageTag`.
+
+**Cause.** No installed system image built for this machine's CPU has the tag the setting names, for example a typo, or an image installed only for another CPU. The message lists the tags that are installed for this CPU. When no image for this CPU is installed at all, the message lists `none`. Doctor says nothing when the setting is not set.
+
+**Fix.** Install an image with that tag, such as `sdkmanager "system-images;android-35;google_apis_playstore;arm64-v8a"` (use your CPU's ABI), or correct `android.defaultImageTag`. See [Choose the system image](/simlock/docs/using-devices/choosing-a-device#choose-the-system-image-android).
 
 ## The daemon will not start
 

@@ -89,6 +89,8 @@ export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   /** why: the image tag a device made for a request naming none really carries, which a saved source reports. */
   readonly defaultImageTag?: string;
+  /** why: models whose resolve with an image tag is refused as a missing runtime, as a real driver refuses a misfit or an image built for another CPU. */
+  readonly taggedRefusals?: readonly string[];
   readonly clock: Clock;
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
   readonly installProgress?: readonly number[];
@@ -179,6 +181,7 @@ export class FakeDriver implements Driver {
   readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
   readonly #defaultImageTag: string | undefined;
+  readonly #taggedRefusals: ReadonlySet<string>;
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
@@ -220,6 +223,7 @@ export class FakeDriver implements Driver {
     this.#defaultModels = options.defaultModels;
     this.#images = options.images;
     this.#defaultImageTag = options.defaultImageTag;
+    this.#taggedRefusals = new Set(options.taggedRefusals);
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
@@ -269,6 +273,7 @@ export class FakeDriver implements Driver {
     if (this.#knownModels !== undefined && !this.#knownModels.has(request.model)) {
       throw new UnknownModelError(this.platform, request.model);
     }
+    this.#assertTaggedFits(request);
     const unknownCategory = request.except?.find((name) => !this.#slimCategories?.has(name));
     if (this.#slimCategories !== undefined && unknownCategory !== undefined) {
       throw new BadDeviceRequestError(`unknown slim category "${unknownCategory}"`);
@@ -289,6 +294,12 @@ export class FakeDriver implements Driver {
         ? { mode: "slim" as const }
         : {}),
     };
+  }
+
+  #assertTaggedFits(request: ExactDeviceRequest): void {
+    if (request.imageTag !== undefined && this.#taggedRefusals.has(request.model)) {
+      throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
+    }
   }
 
   #resolveOsVersion(requested: string | undefined): string {
