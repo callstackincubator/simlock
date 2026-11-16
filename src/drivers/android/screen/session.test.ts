@@ -117,7 +117,13 @@ describe("Android screen capture: open", () => {
   it("connects the control socket after the video's zero byte and before the video is read, discards what it sends, and ends the stream when it ends", async () => {
     const world = await setup();
     const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
-    const feed = await drive(world.clock, waitThenStart(world.target, opening));
+    for (let tries = 0; tries < 100 && world.target.server.peers.length === 0; tries += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    // why: the video has sent nothing but its zero byte, so an open that waited for the picture's size
+    // before it connected the control socket would have no control socket here.
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
     const [video] = world.target.server.peers;
     const [control] = world.target.server.controls;
     expect(world.target.server.peers).toHaveLength(1);
@@ -126,9 +132,10 @@ describe("Android screen capture: open", () => {
       "001chost:transport:emulator-5586",
       "001dlocalabstract:scrcpy_1234abcd",
     ]);
-    // why: the video is read only once the control socket is up, and the zero byte is the video's alone:
-    // the control socket is answered with nothing after adb's OKAY, so asking it for one would hang.
-    expect(video!.pulls).toBeGreaterThan(0);
+    video!.send(streamStart());
+    const feed = await drive(world.clock, opening);
+    // why: the zero byte is the video's alone: the control socket is answered with nothing after adb's
+    // OKAY, so asking it for one would hang.
     expect(control!.pulls).toBeGreaterThan(0);
 
     control!.send(new Uint8Array(64).fill(7));
@@ -138,6 +145,20 @@ describe("Android screen capture: open", () => {
     await expect(drive(world.clock, reader.read())).rejects.toBeInstanceOf(ScreenUnavailableError);
     expect(video!.closed).toBe(true);
     expect(control!.closed).toBe(true);
+  });
+
+  it("fails the open at once, without naming the start bound, when the control socket ends before the video names its size", async () => {
+    const world = await setup();
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
+    const failure = drive(world.clock, opening).catch((caught: unknown) => caught);
+    for (let tries = 0; tries < 100 && world.target.server.controls.length === 0; tries += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    world.target.server.controls[0]!.close();
+    const error = await failure;
+    expect(error).toBeInstanceOf(ScreenUnavailableError);
+    expect((error as Error).message).not.toMatch(/15 s/);
+    expect((error as Error).message).toMatch(/ended before it named the picture's size/);
   });
 
   it("refuses the open, and cleans up, when the control connection is refused", async () => {

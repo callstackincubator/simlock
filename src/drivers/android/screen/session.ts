@@ -119,6 +119,8 @@ class ScrcpySession {
   readonly #isPhone: boolean;
   readonly #tail: string[] = [];
   readonly #abort = new AbortController();
+  // why: an abort is the start bound only when the timer set this; a stop or the control socket's end aborts too.
+  #deadlinePassed = false;
   #pushed = false;
   #shell: ProcessHandle | undefined;
   #shellExited = false;
@@ -165,6 +167,7 @@ class ScrcpySession {
       const startedAt = await this.#spawnServer();
       const deadlineAt = startedAt + START_DEADLINE_MS;
       timer = this.#clock.setTimer(START_DEADLINE_MS, () => {
+        this.#deadlinePassed = true;
         this.#abort.abort();
       });
       const reader = await this.#connect(deadlineAt);
@@ -355,7 +358,7 @@ class ScrcpySession {
     const server = `The screen server on ${this.#target.serial}`;
     const reason = this.#shellExited
       ? `${server} exited before it streamed`
-      : this.#abort.signal.aborted
+      : this.#deadlinePassed
         ? `${server} did not start streaming within ${String(START_DEADLINE_MS / 1000)} s: it ${what}`
         : `${server} ${what}`;
     return new ScreenUnavailableError(this.#withTail(reason));

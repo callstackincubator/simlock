@@ -38,7 +38,7 @@ Seeds (ADR 0061):
 Physical, passthrough, screen:
 
 - `devicectl` over `device.exec` is an allow-list (`devicectlExecCommand`): what is not on the reviewed list is refused, and so is every option that names a host path.
-- Screen (`screen-capture.ts`): stdout is the frames, stdin the program's liveness, and closing stdin is the stop. The capture writes a key frame at least every 5 s of arrival time, a still screen included. The daemon's own `SIMLOCK_IOS_DEVICE_SET` and `SIMLOCK_COREDEVICE_INFO_PLIST` reach neither program; the driver sets the first for a simulator under `simlock` only.
+- Screen (`screen-capture.ts`): stdout is the frames, stdin the program's liveness, and closing stdin is the stop. The daemon's own `SIMLOCK_IOS_DEVICE_SET` and `SIMLOCK_COREDEVICE_INFO_PLIST` reach neither program; the driver sets the first for a simulator under `simlock` only.
 - An iPhone below iOS 27 is `ScreenUnavailableError`; an unreadable version goes on. The iPhone program enforces its CoreDevice pin itself: another major exits 69 with the reason, a 503 for the viewer.
 
 Tunnels (`device-tcp.ts`):
