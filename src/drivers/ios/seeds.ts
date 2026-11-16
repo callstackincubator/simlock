@@ -20,7 +20,12 @@ import type { ResolvedIosSpec } from "./catalog.js";
 
 import { UDID_PATTERN } from "./device-set-leftovers.js";
 
-import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
+import {
+  IosSourceTable,
+  type ReadySeed,
+  type SourceRecord,
+  type SourceRow,
+} from "./source-data.js";
 
 import { recordLineageFiles, swapCopyFiles } from "./lineage-files.js";
 
@@ -165,16 +170,9 @@ export class Seeds {
       this.#sources.setUdid(sourceId, cloneUdid);
       await this.#slimBoot.copyOverrides(data.udid, cloneUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
-      // why: ADR 0076 §2: the baseline's lineage is its lease's UDID and the lineage the lease was copied with; a lease made before lineages were kept has none, so the baseline is never copied.
-      const lineage =
-        data.lineage === undefined ? undefined : [data.udid.toUpperCase(), ...data.lineage];
-      const files = lineage === undefined ? [] : await this.#recordFiles(cloneUdid, lineage);
+      const record = await this.#baselineRecord(data, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
-      this.#sources.markReady(sourceId, sizeBytes, {
-        files,
-        lineage,
-        savedWithoutLineage: lineage === undefined,
-      });
+      this.#sources.markReady(sourceId, sizeBytes, record);
       // why: ADR 0076: the lease is destroyed next, and `simctl delete` leaves its log folder behind for the baseline's copies to inherit.
       await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
@@ -185,6 +183,14 @@ export class Seeds {
       this.#sources.deleteRow(sourceId);
       throw error;
     }
+  }
+
+  /** why: ADR 0076 §2: the baseline's lineage is its lease's UDID and the lineage the lease was copied with; a lease made before lineages were kept has none, so the baseline is never copied. */
+  async #baselineRecord(data: IosDriverData, cloneUdid: string): Promise<SourceRecord> {
+    const lineage =
+      data.lineage === undefined ? undefined : [data.udid.toUpperCase(), ...data.lineage];
+    const files = lineage === undefined ? [] : await this.#recordFiles(cloneUdid, lineage);
+    return { files, lineage, savedWithoutLineage: lineage === undefined };
   }
 
   async destroySource(sourceId: string): Promise<void> {
@@ -321,6 +327,16 @@ export class Seeds {
     return this.#makeSeed(resolved, specKey);
   }
 
+  async #bootThrowaway(throwaway: string, sourceId: string): Promise<void> {
+    try {
+      await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
+    } catch (error: unknown) {
+      // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
+      if (error instanceof BootTimeoutError) throw error;
+      throw new DriverCrashError(`seed ${throwaway} did not boot: ${errorMessage(error)}`);
+    }
+  }
+
   async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     // why: a `making` row of this process older than the longest a make can take belongs to a make that never ended.
     for (const row of this.#sources.makingRowsOfKindBefore(
@@ -370,13 +386,7 @@ export class Seeds {
         await this.#marks.writeMark(throwaway);
         await this.#deviceHub.disablePasteboardSync(throwaway);
       }
-      try {
-        await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
-      } catch (error: unknown) {
-        // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
-        if (error instanceof BootTimeoutError) throw error;
-        throw new DriverCrashError(`seed ${throwaway} did not boot: ${errorMessage(error)}`);
-      }
+      await this.#bootThrowaway(throwaway, sourceId);
       await this.#simctl.shutdown(throwaway);
       const cloned = await this.#simctl.createSimulator(
         ["clone", throwaway, `simlock-seed-${sourceId}`, this.#sourcesSet],

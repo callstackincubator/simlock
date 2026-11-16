@@ -74,29 +74,45 @@ export interface RecordOptions {
  */
 export async function recordLineageFiles(options: RecordOptions): Promise<readonly SourceFile[]> {
   const files: SourceFile[] = [];
-  const visit = async (directory: string, relative: string): Promise<void> => {
-    for (const name of (await options.filesystem.readdir(directory)).sort()) {
-      const path = `${directory}/${name}`;
-      const relativePath = relative === "" ? name : `${relative}/${name}`;
-      const details = await options.filesystem.lstat(path);
-      if (details.kind === "directory") {
-        await visit(path, relativePath);
-      } else if (details.kind === "symlink") {
-        const target = await options.filesystem.readlink(path);
-        if (namesLineage(Buffer.from(target), options.lineage)) {
-          files.push({ kind: "link", relativePath });
-        }
-      } else if (details.kind === "file") {
-        if (name.endsWith(WAL_SUFFIX)) await flushWal(options, path);
-        else {
-          const kind = await classify(options, path);
-          if (kind !== undefined) files.push({ kind, relativePath });
-        }
-      }
-    }
-  };
-  await visit(options.folder, "");
+  await visitFolder(options, options.folder, "", files);
   return files;
+}
+
+async function visitFolder(
+  options: RecordOptions,
+  directory: string,
+  relative: string,
+  files: SourceFile[],
+): Promise<void> {
+  for (const name of (await options.filesystem.readdir(directory)).sort()) {
+    const path = `${directory}/${name}`;
+    const relativePath = relative === "" ? name : `${relative}/${name}`;
+    const details = await options.filesystem.lstat(path);
+    if (details.kind === "directory") {
+      await visitFolder(options, path, relativePath, files);
+      continue;
+    }
+    const kind = await recordedKind(options, path, details.kind);
+    if (kind !== undefined) files.push({ kind, relativePath });
+  }
+}
+
+/** why: a link is recorded when its target names the lineage; a WAL is flushed and never recorded; any other file is recorded when its bytes name it or cannot be read. */
+async function recordedKind(
+  options: RecordOptions,
+  path: string,
+  entry: string,
+): Promise<SourceFile["kind"] | undefined> {
+  if (entry === "symlink") {
+    const target = await options.filesystem.readlink(path);
+    return namesLineage(Buffer.from(target), options.lineage) ? "link" : undefined;
+  }
+  if (entry !== "file") return undefined;
+  if (path.endsWith(WAL_SUFFIX)) {
+    await flushWal(options, path);
+    return undefined;
+  }
+  return classify(options, path);
 }
 
 async function flushWal(options: RecordOptions, wal: string): Promise<void> {
