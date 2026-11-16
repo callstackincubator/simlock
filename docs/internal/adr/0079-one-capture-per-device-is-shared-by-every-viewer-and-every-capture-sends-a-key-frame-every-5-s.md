@@ -1,6 +1,6 @@
 # 0079. One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-16
 - **Issue:** [#602](https://github.com/callstackincubator/simlock/issues/602)
 - **Narrows:** [ADR 0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md)
