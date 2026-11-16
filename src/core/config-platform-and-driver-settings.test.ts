@@ -54,8 +54,12 @@ describe("loadConfig", () => {
       'Invalid config value for "android.turbo"',
     );
     expect(unknown.warn).toHaveBeenCalledWith('Unknown config key: "android.turbo"');
-    expect(unknown.config.android).toEqual({ defaultModels: {} });
-    expect(set.config.ios).toEqual({ defaultMode: "full", defaultModels: {} });
+    expect(unknown.config.android).toEqual({ defaultModels: {}, virtualDevices: true });
+    expect(set.config.ios).toEqual({
+      defaultMode: "full",
+      defaultModels: {},
+      virtualDevices: true,
+    });
   });
 
   it("loads android.defaultImageTag when it is a valid image tag, leaves it unset when absent, and refuses any other value naming the key and what it expects", async () => {
@@ -75,6 +79,39 @@ describe("loadConfig", () => {
         "Invalid config value for \"android.defaultImageTag\": expected an image tag: 1 to 64 letters, digits, '_', '.' or '-'",
       );
     }
+  });
+
+  it("loads <platform>.virtualDevices as true when unset, false when set, refuses a non-boolean naming the key, and ignores it with a warning on a gateway", async () => {
+    const load = async (file: unknown, role: "gateway" | "worker" = "worker") => {
+      const filesystem = new MemoryFilesystem();
+      const warn = vi.fn();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(file));
+      const config = await loadConfig({
+        configPath,
+        filesystem,
+        role,
+        systemStats: createStats(),
+        warn,
+      });
+      return { config, warn };
+    };
+
+    const unset = (await load({})).config;
+    expect([unset.android.virtualDevices, unset.ios.virtualDevices]).toEqual([true, true]);
+    const android = (await load({ android: { virtualDevices: false } })).config;
+    expect([android.android.virtualDevices, android.ios.virtualDevices]).toEqual([false, true]);
+    const ios = (await load({ ios: { virtualDevices: false } })).config;
+    expect([ios.android.virtualDevices, ios.ios.virtualDevices]).toEqual([true, false]);
+    for (const value of ["no", 0]) {
+      await expect(load({ android: { virtualDevices: value } }), String(value)).rejects.toThrow(
+        'Invalid config value for "android.virtualDevices": expected a boolean',
+      );
+    }
+    const gateway = await load({ ios: { virtualDevices: false } }, "gateway");
+    expect(gateway.warn).toHaveBeenCalledWith(
+      'Ignoring "ios": it configures a worker, and this daemon runs in gateway mode.',
+    );
   });
 
   it.each(["fast", "worker", true])(
