@@ -26,6 +26,8 @@ export interface AndroidDriverConfig {
   /** why: an emulator boot may take this long, counted from its spawn, before it is given up. */
   readonly bootTimeoutMs: number;
   readonly emulator: AndroidEmulatorLaunchOptions;
+  /** why: ADR 0080 §1: a worker's opt-in to enrol, list and reconnect phones its adb server reaches over the network. */
+  readonly networkDevices: boolean;
 }
 
 export const DEFAULT_ADB_SERVER_PORT = 5038;
@@ -43,6 +45,7 @@ export const androidDriverConfig: DriverConfigEntry<AndroidDriverConfig> = {
   defaults: {
     bootTimeoutMs: 300_000,
     emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    networkDevices: false,
   },
   validators: {
     bootTimeoutMs: positiveNumber,

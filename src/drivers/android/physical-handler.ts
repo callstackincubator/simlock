@@ -81,6 +81,8 @@ export class AndroidPhysicalHandler {
       readonly isBareShell: (args: readonly string[]) => boolean;
       // why: how a USB transport is told apart depends on the host's adb; injected so Windows can be tested anywhere.
       readonly platform?: NodeJS.Platform;
+      // why: ADR 0080 §1: the worker's `android.networkDevices`, off by default.
+      readonly networkDevices?: boolean;
     },
   ) {
     this.#platform = options.platform ?? process.platform;
