@@ -262,8 +262,11 @@ export async function launchServicesFiles(
 /** why: Records every `warn` message, so the destroy's log line is asserted on its text. */
 export class RecordingLogger implements Logger {
   readonly warnings: string[] = [];
+  readonly debugs: string[] = [];
 
-  debug(): void {}
+  debug(message: string): void {
+    this.debugs.push(message);
+  }
   info(): void {}
   warn(message: string): void {
     this.warnings.push(message);
