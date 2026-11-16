@@ -202,6 +202,49 @@ describe("CLI: catalog", () => {
     expect(JSON.parse(output.stdout)).toEqual({ platforms: [catalog] });
   });
 
+  it("prints the Android default image tag on the line after Runtimes when set, and carries it in --json only then", async () => {
+    const android = {
+      classDefaults: {},
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      platform: "android" as const,
+      runtimes: ["36"],
+    };
+    const run = async (catalog: object, extra: readonly string[]) => {
+      const output = outputCapture();
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            getCatalog: () => Promise.resolve({ platforms: [catalog as typeof android] }),
+          }),
+      });
+      await expect(
+        runCli(["catalog", "--platform", "android", ...extra], environment),
+      ).resolves.toBe(0);
+      return output.stdout;
+    };
+    const tagged = { ...android, defaultImageTag: "google_apis_playstore" };
+
+    expect(await run(tagged, [])).toBe(
+      [
+        "Platform: android",
+        "  Runtimes: 36 (default: (none))",
+        "  Default image tag: google_apis_playstore",
+        "  Models: (none)",
+        "",
+      ].join("\n"),
+    );
+    expect(await run(android, [])).not.toContain("Default image tag");
+    expect(JSON.parse(await run(tagged, ["--json"])).platforms[0].defaultImageTag).toBe(
+      "google_apis_playstore",
+    );
+    expect(JSON.parse(await run(android, ["--json"])).platforms[0]).not.toHaveProperty(
+      "defaultImageTag",
+    );
+  });
+
   it("prints (none) for a platform that has images but none installed", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({

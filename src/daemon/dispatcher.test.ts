@@ -7,6 +7,7 @@ import {
   WORKER_VIEW_REFRESH_INTERVAL_MS,
 } from "../contract/index.js";
 import { FakeClock } from "../ports/index.js";
+import { FakeDriver } from "../core/testing.js";
 import { DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
 import { HOST_SYSTEM, buildDispatcher, flushPromises, session } from "./test-dispatcher.js";
@@ -231,6 +232,35 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     }
   });
 
+  it("catalog.get names android.defaultImageTag on the Android entry only, and nothing when it is unset", async () => {
+    const android = () =>
+      new FakeDriver({ availableOsVersions: ["36"], clock: new FakeClock(0), platform: "android" });
+    const set = await buildDispatcher({
+      androidDefaultImageTag: "google_apis_playstore",
+      extraDrivers: [android()],
+    });
+    const unset = await buildDispatcher({ extraDrivers: [android()] });
+
+    const withTag = (await set.dispatcher.dispatch("catalog.get", {}, admin)).platforms;
+    const without = (await unset.dispatcher.dispatch("catalog.get", {}, admin)).platforms;
+
+    expect(withTag.map((entry) => entry.platform).sort()).toEqual(["android", "ios"]);
+    expect(withTag.find((entry) => entry.platform === "android")?.defaultImageTag).toBe(
+      "google_apis_playstore",
+    );
+    expect(withTag.find((entry) => entry.platform === "ios")).not.toHaveProperty("defaultImageTag");
+    expect(without.find((entry) => entry.platform === "android")).not.toHaveProperty(
+      "defaultImageTag",
+    );
+    const output = (tag: string) => ({
+      platforms: withTag.map((entry) =>
+        entry.platform === "android" ? { ...entry, defaultImageTag: tag } : entry,
+      ),
+    });
+    expect(() => OPERATIONS["catalog.get"].output.parse(output("google_apis"))).not.toThrow();
+    expect(() => OPERATIONS["catalog.get"].output.parse(output("not a tag!"))).toThrow();
+  });
+
   it("a worker's own worker.list carries its load with readAt taken when its status answered, not after its catalog read", async () => {
     const clock = new FakeClock(10_000);
     const base = await buildDispatcher({ clock });
@@ -389,6 +419,17 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       { bootTimeoutMs: 400_000 },
       600_000,
     ]);
+  });
+
+  it("config.get carries android.defaultImageTag when set and leaves it out when not", async () => {
+    const withTag = await buildDispatcher({ androidDefaultImageTag: "google_apis_playstore" });
+    const without = await buildDispatcher({});
+
+    const set = await withTag.dispatcher.dispatch("config.get", {}, admin);
+    const unset = await without.dispatcher.dispatch("config.get", {}, admin);
+
+    expect(set.android["defaultImageTag"]).toBe("google_apis_playstore");
+    expect(unset.android).not.toHaveProperty("defaultImageTag");
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {

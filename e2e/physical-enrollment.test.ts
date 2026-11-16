@@ -168,7 +168,7 @@ describe("simlock device add", () => {
 
   it("by a client whose hello range ends at the previous protocol version is refused with PROTOCOL_VERSION_UNSUPPORTED, so it never sends device.add to a daemon that would answer UNKNOWN_REQUEST", async () => {
     const daemon = await httpDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const previous = PROTOCOL_VERSION_RANGE.max - 1;
+    const previous = PROTOCOL_VERSION_RANGE.min - 1;
     const wire = new SimlockWire(await new NodeIpcTransport().connect(daemon.env.socketPath));
 
     try {

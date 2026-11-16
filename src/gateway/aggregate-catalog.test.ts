@@ -181,6 +181,33 @@ describe("aggregateCatalog", () => {
     expect(disagreed.platforms[0]?.defaultRuntime).toBeUndefined();
   });
 
+  it("keeps the Android default image tag only when every Android worker reports the same one, and has no Android entry without an Android worker", () => {
+    const android = (defaultImageTag?: string) => ({
+      classDefaults: {},
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: { "Pixel 9": ["36"] },
+      models: ["Pixel 9"],
+      platform: "android" as const,
+      runtimes: ["36"],
+      ...(defaultImageTag === undefined ? {} : { defaultImageTag }),
+    });
+    const tagOf = (...tags: (string | undefined)[]) =>
+      aggregateCatalog(
+        tags.map((tag, index) => view({ catalog: [android(tag)], id: `wrk_${index}` })),
+      ).platforms[0]?.defaultImageTag;
+
+    expect(tagOf("google_apis_playstore", "google_apis_playstore")).toBe("google_apis_playstore");
+    expect(tagOf("google_apis_playstore")).toBe("google_apis_playstore");
+    expect(tagOf("google_apis_playstore", undefined)).toBeUndefined();
+    expect(tagOf("google_apis_playstore", "google_apis")).toBeUndefined();
+    expect(
+      aggregateCatalog([view({ catalog: [iosOnA], id: "wrk_a" })]).platforms.map(
+        (entry) => entry.platform,
+      ),
+    ).toEqual(["ios"]);
+  });
+
   it("ignores a disconnected worker: a machine nobody can reach can lease nothing", () => {
     const catalog = aggregateCatalog([
       view({ catalog: [iosOnA], connection: "disconnected", id: "wrk_a" }),

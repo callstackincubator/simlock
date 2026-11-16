@@ -15,13 +15,18 @@ export class StatusHandlers {
   readonly catalogGet: Handler<"catalog.get"> = async (input) => ({
     platforms: (await this.options.catalog.listCatalog(input.platform))
       .map(fitPlatformCatalog)
-      .map((entry) =>
-        // why: ADR 0066 §5: a gateway routes an `except` lease by the iOS worker's default mode.
-        entry.platform === "ios"
-          ? { ...entry, defaultMode: this.options.config.ios.defaultMode }
-          : entry,
-      ),
+      .map((entry) => this.#withDefaults(entry)),
   });
+
+  /** why: ADR 0066 §5 and ADR 0078 §3: a gateway routes by the worker's default mode (iOS) and default image tag (Android), which only config knows. */
+  #withDefaults<Entry extends { readonly platform: string }>(entry: Entry): Entry {
+    const { ios, android } = this.options.config;
+    if (entry.platform === "ios") return { ...entry, defaultMode: ios.defaultMode };
+    if (entry.platform === "android" && android.defaultImageTag !== undefined) {
+      return { ...entry, defaultImageTag: android.defaultImageTag };
+    }
+    return entry;
+  }
 
   readonly statusGet: Handler<"status.get"> = async (_input, session) => {
     const daemon = {
