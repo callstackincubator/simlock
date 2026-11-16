@@ -121,6 +121,8 @@ export interface Filesystem {
   diskFree(path: string): Promise<number>;
   diskSpace(path: string): Promise<{ readonly freeBytes: number; readonly totalBytes: number }>;
   directorySize(path: string): Promise<number>;
+  /** why: `bytes` written into an existing file at `offset`, with no truncation, keeping its mode and modification time. */
+  writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void>;
 }
 
 // why: only the directories that are absent get the mode, so one that is already there keeps its own.
@@ -403,6 +405,17 @@ export class NodeFilesystem implements Filesystem {
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
       throw error;
+    }
+  }
+
+  async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    const handle = await open(path, "r+");
+    try {
+      const { atime, mtime } = await handle.stat();
+      await handle.write(bytes, 0, bytes.length, offset);
+      await handle.utimes(atime, mtime);
+    } finally {
+      await handle.close();
     }
   }
 
@@ -764,6 +777,18 @@ export class MemoryFilesystem implements Filesystem {
       else if (entry.kind === "file") total += fileBytes(entry).byteLength;
     }
     return total;
+  }
+
+  async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    this.#failIfDefined(path);
+    const entry = this.#entryAt(path);
+    if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
+    const old = fileBytes(entry);
+    const next = new Uint8Array(Math.max(old.byteLength, offset + bytes.byteLength));
+    next.set(old);
+    next.set(bytes, offset);
+    entry.bytes = next;
+    entry.contents = Buffer.from(next).toString("utf8");
   }
 
   /**

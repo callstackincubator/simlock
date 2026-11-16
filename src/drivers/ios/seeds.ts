@@ -22,6 +22,8 @@ import { UDID_PATTERN } from "./device-set-leftovers.js";
 
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 
+import { swapCopyFiles } from "./lineage-files.js";
+
 import { type SimctlCatalog } from "./simctl-parse.js";
 
 import { type IosDriverData, iosDriverData } from "./simulator-data.js";
@@ -219,6 +221,14 @@ export class Seeds {
     try {
       await this.#marks.writeMark(udid);
       await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
+      if (seed.lineage !== undefined) {
+        await swapCopyFiles(
+          this.#filesystem,
+          join(this.#deviceRoot, udid),
+          this.#sources.filesOf(seed.sourceId),
+          { lineage: seed.lineage, own: udid },
+        );
+      }
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
@@ -235,6 +245,7 @@ export class Seeds {
         name,
         runtimeId: resolved.runtime.identifier,
         udid,
+        ...(seed.lineage === undefined ? {} : { lineage: seed.lineage }),
       } satisfies IosDriverData,
     };
   }
@@ -268,14 +279,19 @@ export class Seeds {
     }
   }
 
-  async #namedSource(sourceId: string): Promise<{ readonly udid: string }> {
+  async #namedSource(sourceId: string): Promise<ReadySeed> {
     const row = this.#sources.findRow(sourceId);
     if (row?.state !== "ready" || row.udid === undefined) {
       throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
     }
     const reason = sourceStaleReason(row, await this.#simctl.loadCatalog());
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
-    return { udid: row.udid };
+    return {
+      lineage: row.lineage,
+      runtimeBuild: row.runtimeBuild,
+      sourceId: row.sourceId,
+      udid: row.udid,
+    };
   }
 
   /** why: two provisions of one kind at once make one seed, the second waiting for the first's make. */
@@ -365,15 +381,16 @@ export class Seeds {
       seedClone = cloned.stdout.trim();
       this.#sources.setUdid(sourceId, seedClone);
       const done = throwaway;
+      const lineage = [done.toUpperCase()];
       throwaway = undefined;
       keepRow = true;
       await this.#deleteThrowaway(done, false);
       keepRow = false;
       this.#sources.markReady(sourceId, await this.#sizeOf(seedClone), {
         files: [],
-        lineage: [],
+        lineage,
       });
-      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build, lineage: [] };
+      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build, lineage };
     } catch (error: unknown) {
       if (seedClone !== undefined)
         await this.#deleteSeedSimulator(seedClone).catch(() => undefined);

@@ -274,7 +274,7 @@ describe("IosSimctlDriver", () => {
     await expect(driver.provision({ ...spec, mode: "slim" })).resolves.toEqual({
       address: driverData.udid,
       deviceId: driverData.udid,
-      driverData,
+      driverData: { ...driverData, lineage: [] },
     });
   });
 

@@ -102,6 +102,9 @@ describe("AdminSecretManager", () => {
       directorySize: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      writeAt: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
       writeFileExclusive: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -187,6 +190,9 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       directorySize: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      writeAt: () => {
         throw new Error("must not touch the filesystem");
       },
       writeFileExclusive: () => {
