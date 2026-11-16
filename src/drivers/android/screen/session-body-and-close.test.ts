@@ -68,6 +68,13 @@ describe("Android screen capture: the key frame bound", () => {
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.description);
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.keyframe);
 
+    // why: once the viewer goes, the timer is gone with the session: no reset is written to a closed socket.
+    reader.releaseLock();
+    await drive(moving.clock, feed.body.cancel());
+    moving.clock.advance(10_000);
+    await settle();
+    expect(control.written.slice(2)).toEqual([RESET_VIDEO]);
+
     // why: a write that fails ends the stream: its promise is gone, so it does not go on without it.
     const failing = await setup();
     const failingFeed = await opened(failing);

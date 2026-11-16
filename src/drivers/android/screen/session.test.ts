@@ -137,6 +137,7 @@ describe("Android screen capture: open", () => {
     control!.close();
     await expect(drive(world.clock, reader.read())).rejects.toBeInstanceOf(ScreenUnavailableError);
     expect(video!.closed).toBe(true);
+    expect(control!.closed).toBe(true);
   });
 
   it("refuses the open, and cleans up, when the control connection is refused", async () => {
