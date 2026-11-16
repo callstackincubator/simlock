@@ -400,6 +400,11 @@ export class SystemImages {
     return images;
   }
 
+  /** why: an emulator does not boot an image built for another CPU, so the worker's default tag counts only these (ADR 0078 §2). */
+  builtForHost(images: readonly SystemImage[]): SystemImage[] {
+    return images.filter((image) => image.abi === this.#hostAbi);
+  }
+
   #matchingImage(
     images: readonly SystemImage[],
     apiLevel: string,
