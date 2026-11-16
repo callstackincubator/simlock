@@ -15,10 +15,9 @@ Captures:
 
 - No platform name here: a driver offers `screenCapture` or not (`core/screen.ts`).
 - A capture is registered before it starts and its slot is read again after its first frame, so a capture never outlives its device's running state (`worker-link.test.ts`, `create.test.ts`).
-- One capture per device is shared by its viewers, whichever path they asked by: the first viewer to pass the checks opens it, the others join it, also while it starts (`broadcast.ts`, `worker-link.ts`). A joiner's body is the current meta frame, the current parameter sets, then frames from the next key frame, so it can wait for its picture until the capture sends one; MJPEG waits for nothing.
-- A viewer that stops reading skips frames and slows nobody: past `MAX_VIEWER_QUEUE_BYTES` it drops its queued pictures and skips to the next key frame. Meta frames, parameter sets and the lease-end frame are never dropped, and a slow viewer is never cut off.
-- A capture that fails to start refuses every viewer waiting for it the same way, and one that fails mid-stream errors every body; the next viewer starts a fresh one.
-- Every end closes the capture once: the last viewer leaves (one that leaves while others watch closes nothing), the capture ends or errors, the silence bound passes, the lease ends, the device stops. A viewer's `expiresAt` ends only that viewer.
+- One capture per device is shared by its viewers, by either path: the first opens it, the rest join. A joiner gets the current meta and parameter sets, then the next key frame on.
+- A viewer that stops reading skips frames and slows nobody, and is never cut off. A failure reaches every viewer; the next starts a fresh capture.
+- Every end closes the capture once: the last viewer leaves, the capture ends or errors, the silence bound passes, the lease ends, the device stops.
 - The lease end (`beforeDeviceReclaim`) waits for every close before the device is reclaimed, bounded by the driver and by leasing's signal.
 - A device that stops with no lease end runs no reclaim hook, so the device events in `create.ts` stop its captures.
 - A lease granted while streaming ends nothing.
@@ -47,9 +46,9 @@ On a worker:
 
 1. The HTTP layer hands the module a device path (the mount) or a resolved lease (the lease route).
 2. The worker link checks the caller, the worker id and the device's state, or finds the lease's device in the worker's own registry.
-3. A device with a capture already running or starting is joined. Otherwise the link registers a capture slot for the device, then opens the screen through the driver catalog the daemon passed in.
-4. It waits for the meta frame within the start bound, then reads the slot again: a device that stopped meanwhile is refused for every viewer waiting.
-5. Each viewer is answered with the picture's description in headers and its own queue of the capture's frames as the body, meta first.
+3. It joins the device's capture, or registers a capture slot and opens the screen through the driver catalog the daemon passed in.
+4. It waits for the meta frame within the start bound, then reads the slot again: a device that stopped meanwhile is refused.
+5. It answers with the picture's description in headers and the frames as the body, meta first.
 
 Through a gateway:
 
