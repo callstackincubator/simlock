@@ -91,9 +91,14 @@ frame that come during the wait are passed on. The response headers give the cur
 frames are replayed and no key frame is asked for, so a joiner can see
 "starting" for up to 5 s.
 
+An MJPEG capture (no H.264) has no key frames and no parameter sets: every
+picture is whole, so a joiner gets the meta frame, then the next picture,
+and does not wait.
+
 ### 5. Every capture sends a key frame at least every 5 s
 
-This holds on a still screen too, on every platform:
+This holds on a still screen too, on every platform that sends H.264 (an
+MJPEG capture has no key frames; see section 4):
 
 - **iOS** (simulator and iPhone): the encode loop forces a key frame once
   5 s of frame arrival time have passed since the last key frame, whoever
@@ -109,7 +114,8 @@ This holds on a still screen too, on every platform:
 
 The capture is read as fast as it delivers. Each viewer has a bounded
 queue. Past the bound, its queued pictures are dropped and new ones are
-skipped up to the next key frame. Meta frames, parameter sets and the
+skipped up to the next key frame. An MJPEG viewer past the bound drops its
+queued pictures and takes the next one. Meta frames, parameter sets and the
 lease-end frame are never dropped. A slow viewer is never cut off, and no
 limit is set on viewers per device.
 
