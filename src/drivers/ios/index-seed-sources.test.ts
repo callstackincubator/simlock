@@ -199,11 +199,13 @@ describe("IosSimctlDriver", () => {
     "the next seed make of a kind destroys this process's own making row of that kind older than 300 s: a row $name",
     async ({ now, destroyed }) => {
       const stuckUdid = "00000000-0000-0000-0000-0000000000dd";
+      const stuckThrowaway = "00000000-0000-0000-0000-0000000000ee";
       const database = plantSource(await memorySourceDatabase(), {
         deviceTypeId: driverData.deviceTypeId,
         maker: "device-1",
         runtimeId: driverData.runtimeId,
         state: "making",
+        throwawayUdid: stuckThrowaway,
         udid: stuckUdid,
       });
       const copyUdid = "00000000-0000-0000-0000-000000000002";
@@ -214,6 +216,8 @@ describe("IosSimctlDriver", () => {
           ? [
               { match: sourcesSimctl("shutdown", stuckUdid) },
               { match: sourcesSimctl("delete", stuckUdid) },
+              { match: simctl("shutdown", stuckThrowaway) },
+              { match: simctl("delete", stuckThrowaway) },
             ]
           : []),
         ...throwawaySeedSteps(),
@@ -227,8 +231,19 @@ describe("IosSimctlDriver", () => {
       await driver.provision(spec);
 
       expect(
-        runner.calls.filter((call) => call.args[4] === stuckUdid).map((call) => call.args[3]),
-      ).toEqual(destroyed ? ["shutdown", "delete"] : []);
+        runner.calls
+          .filter((call) => [stuckUdid, stuckThrowaway].includes(call.args[4] ?? ""))
+          .map((call) => `${call.args[3] ?? ""} ${call.args[4] ?? ""}`),
+      ).toEqual(
+        destroyed
+          ? [
+              `shutdown ${stuckUdid}`,
+              `delete ${stuckUdid}`,
+              `shutdown ${stuckThrowaway}`,
+              `delete ${stuckThrowaway}`,
+            ]
+          : [],
+      );
       expect(
         database.prepare("SELECT udid FROM ios_source_data WHERE state = 'making'").all(),
       ).toEqual(destroyed ? [] : [{ udid: stuckUdid }]);

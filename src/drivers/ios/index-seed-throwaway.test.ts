@@ -8,6 +8,7 @@ import {
   driverData,
   instanceId,
   plantManagedDevice,
+  simctl,
 } from "./test-slim.js";
 import {
   RecordingLogger,
@@ -324,6 +325,71 @@ describe("IosSimctlDriver seed throwaway", () => {
       expect(reality.devices.map((device) => device.deviceId).sort(), label).toEqual(
         [...left].sort(),
       );
+    }
+  });
+
+  it("a restart mid-make: the first source read deletes the throwaway, its log folder, the seed clone and the row", async () => {
+    const invalid = { code: 1, stderr: `Invalid device: ${throwawayUdid}`, stdout: "" };
+    const cases = [
+      {
+        label: "throwaway only",
+        udid: undefined,
+        steps: [
+          { match: simctl("shutdown", throwawayUdid) },
+          { match: simctl("delete", throwawayUdid) },
+        ],
+      },
+      {
+        label: "throwaway and seed",
+        udid: seedUdid,
+        steps: [
+          { match: sourcesSimctl("shutdown", seedUdid) },
+          { match: sourcesSimctl("delete", seedUdid) },
+          { match: simctl("shutdown", throwawayUdid) },
+          { match: simctl("delete", throwawayUdid) },
+        ],
+      },
+      {
+        label: "throwaway already gone",
+        udid: undefined,
+        steps: [
+          { match: simctl("shutdown", throwawayUdid) },
+          { match: simctl("delete", throwawayUdid), result: invalid },
+        ],
+      },
+    ];
+    for (const { label, steps, udid } of cases) {
+      const database = plantSource(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeId: driverData.runtimeId,
+        state: "making",
+        throwawayUdid,
+        ...(udid === undefined ? {} : { udid }),
+      });
+      const runner = new ScriptedProcessRunner(steps);
+      scopedRunners.push(runner);
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        database,
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        logsRoot,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+
+      await expect(driver.listSources(), label).resolves.toEqual([]);
+
+      expect(runner.calls.length, label).toBe(steps.length);
+      expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get(), label).toEqual({
+        n: 0,
+      });
+      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), label).resolves.toBe(false);
     }
   });
 });
