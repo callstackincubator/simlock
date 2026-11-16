@@ -181,6 +181,7 @@ export class FakeDriver implements Driver {
   readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
   readonly #defaultImageTag: string | undefined;
+  readonly #taggedRefusals: ReadonlySet<string>;
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
@@ -222,6 +223,7 @@ export class FakeDriver implements Driver {
     this.#defaultModels = options.defaultModels;
     this.#images = options.images;
     this.#defaultImageTag = options.defaultImageTag;
+    this.#taggedRefusals = new Set(options.taggedRefusals);
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
@@ -270,6 +272,9 @@ export class FakeDriver implements Driver {
 
     if (this.#knownModels !== undefined && !this.#knownModels.has(request.model)) {
       throw new UnknownModelError(this.platform, request.model);
+    }
+    if (request.imageTag !== undefined && this.#taggedRefusals.has(request.model)) {
+      throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
     }
     const unknownCategory = request.except?.find((name) => !this.#slimCategories?.has(name));
     if (this.#slimCategories !== undefined && unknownCategory !== undefined) {
