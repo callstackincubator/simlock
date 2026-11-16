@@ -145,11 +145,11 @@ sequenceDiagram
   participant D as Device capture
   A->>S: join (first)
   S->>D: open
-  D-->>S: meta, parameter sets, key frame
-  S-->>A: meta, parameter sets, key frame, deltas
+  D-->>S: meta, parameter sets, key frame (MJPEG: meta, pictures)
+  S-->>A: meta, parameter sets, key frame, deltas (MJPEG: pictures)
   B->>S: join
-  S-->>B: current meta, current parameter sets
-  D-->>S: key frame (at most 5 s later)
+  S-->>B: current meta, current parameter sets (H.264 only)
+  D-->>S: key frame (H.264, at most 5 s later; MJPEG: next picture)
   S-->>A: key frame
   S-->>B: key frame, then live
   alt capture fails
@@ -171,8 +171,9 @@ sequenceDiagram
 - The Android screen manual's rules gain the control socket and the reset.
   Its gaps about scrcpy's key-frame interval and about two viewers' stay-awake
   setting go, and the dark-phone gap above is added.
-- A viewer that joins a still device sees its first picture up to 5 s later
-  than today, where it got a capture of its own.
+- An H.264 viewer that joins a still device sees its first picture up to 5 s
+  later than today, where it got a capture of its own. An MJPEG viewer sees
+  its next picture, with no wait.
 - On a still Android screen, scrcpy's encoder restarts every 5 s.
 - While moving, key frames come more often at the same bitrate, so the
   picture is slightly softer.
@@ -180,7 +181,7 @@ sequenceDiagram
   charger) gets no picture until the screen is on again or the lease ends.
   Today its own capture would wake the phone first. Accepted as a known gap.
 - A third-party viewer needs no change: its stream still starts with meta,
-  parameter sets and a key frame.
+  then, for H.264, parameter sets and a key frame, or, for MJPEG, a picture.
 
 ## Alternatives considered
 
@@ -201,7 +202,8 @@ sequenceDiagram
 - **A viewer limit per device, as the device input's 8.** Rejected by the
   maintainer: a joiner costs a bounded queue, not a capture.
 - **Cut off a viewer that stays behind.** Rejected: its queue is bounded, and
-  a background tab catches up at the next key frame.
+  a background tab catches up at the next key frame (MJPEG: the next
+  picture).
 
 ## Verification
 
@@ -209,4 +211,5 @@ The stream module's tests drive a shared capture and a shared relay with
 faked drivers and a faked fleet. The iOS encode loop's tests drive the key
 frame bound with fake frames. The Android session's tests drive the reset
 with a fake clock and target. One slow-lane run per platform proves a key
-frame at least every 5 s on a still screen. The feature's tasks name them.
+frame at least every 5 s on a still screen (H.264 only; an MJPEG capture has
+none). The feature's tasks name them.
