@@ -358,3 +358,7 @@ export function assetInfoPlist(simulatorVersion: string, build: string): string 
 }
 
 export const prepareFull = { mode: "full", purpose: "prepare" } as const;
+
+export const throwawayUdid = "00000000-0000-0000-0000-0000000000bb";
+
+export const logsRoot = "/Logs/CoreSimulator";
