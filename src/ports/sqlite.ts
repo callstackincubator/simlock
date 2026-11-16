@@ -1,5 +1,7 @@
 import { closeSync, openSync } from "node:fs";
 
+import type { MemoryFilesystem } from "./filesystem.js";
+
 export interface SqliteRunResult {
   readonly changes: number | bigint;
   readonly lastInsertRowid: number | bigint;
@@ -43,6 +45,47 @@ export class NodeSqliteOpener implements SqliteOpener {
     // file's mode, so creating it 0600 first keeps all three owner-only, like the other local state.
     if (!options.readOnly && path !== ":memory:") closeSync(openSync(path, "a", 0o600));
     return new engine.DatabaseSync(path, { readOnly: options.readOnly });
+  }
+}
+
+/**
+ * why: a fake for a caller that opens a database only to flush its WAL: it records each database
+ * a checkpoint ran on, can fail one, and empties the `-wal` file in a memory filesystem unless told
+ * to leave its frames.
+ */
+export class FakeSqliteOpener implements SqliteOpener {
+  readonly checkpoints: string[] = [];
+  readonly #filesystem: MemoryFilesystem;
+  readonly #failing: ReadonlySet<string>;
+  readonly #keepingFrames: ReadonlySet<string>;
+
+  constructor(
+    filesystem: MemoryFilesystem,
+    options: {
+      readonly failing?: readonly string[];
+      readonly keepingFrames?: readonly string[];
+    } = {},
+  ) {
+    this.#filesystem = filesystem;
+    this.#failing = new Set(options.failing);
+    this.#keepingFrames = new Set(options.keepingFrames);
+  }
+
+  async open(path: string): Promise<SqliteDatabase> {
+    if (this.#failing.has(path)) throw new Error(`unable to open database file ${path}`);
+    const checkpoint = (): void => {
+      this.checkpoints.push(path);
+      if (!this.#keepingFrames.has(path)) void this.#filesystem.rm(`${path}-wal`);
+    };
+    return {
+      close: () => undefined,
+      exec: (sql) => {
+        if (sql === "PRAGMA wal_checkpoint(TRUNCATE)") checkpoint();
+      },
+      prepare: () => {
+        throw new Error("FakeSqliteOpener runs no statements");
+      },
+    };
   }
 }
 

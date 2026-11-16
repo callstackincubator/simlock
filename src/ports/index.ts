@@ -161,6 +161,7 @@ export {
   WindowsHostLoadProbe,
 } from "./host-load.js";
 export {
+  FakeSqliteOpener,
   filterSqliteExperimentalWarning,
   inTransaction,
   isLockError,

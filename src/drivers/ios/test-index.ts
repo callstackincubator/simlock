@@ -8,7 +8,7 @@ import {
   MemoryFilesystem,
   type Logger,
 } from "../../ports/index.js";
-import { IosSimctlDriver, SLIM_CATEGORIES } from "./index.js";
+import { IosSimctlDriver, type IosSimctlDriverOptions, SLIM_CATEGORIES } from "./index.js";
 import { plantReadySeed, memorySourceDatabase, type PlantedSource } from "./testing.js";
 import {
   simctl,
@@ -218,9 +218,11 @@ export async function createDriver(
   database?: SqliteDatabase,
   logger?: Logger,
   fullBootTimeoutMs?: number,
+  extra: Partial<IosSimctlDriverOptions> = {},
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
+    ...extra,
     database: database ?? (await memorySourceDatabase()),
     clock,
     driverConfig: { deviceRoot },
