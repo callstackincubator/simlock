@@ -146,6 +146,8 @@ export interface AndroidDriverOptions {
   readonly pid?: number;
   /** why: the driver's own keys of the `android` config section; without it emulators launch with the section's defaults. */
   readonly config?: Partial<AndroidDriverConfig> | undefined;
+  /** why: the worker's `android.defaultImageTag`, which `advisories` checks against the images installed for the host CPU. */
+  readonly defaultImageTag?: string | undefined;
 }
 
 export type AndroidDriverDiagnostic = SnapshotColdBootDiagnostic | DeviceProfileSourceDiagnostic;
