@@ -676,6 +676,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         const view = workers.find((worker) => worker.id === workerBId);
         expect(view?.connection).toBe("connected");
         expect(view?.drained).toBe(true);
+        // why: `connected` and `drained` show before the catalog read lands; a fresh gateway has no older catalog, so routing answers UNKNOWN_MODEL until then.
+        expect(view?.catalog?.some((entry) => entry.models.includes("Pixel-B"))).toBe(true);
       },
       { timeout: 15_000 },
     );
