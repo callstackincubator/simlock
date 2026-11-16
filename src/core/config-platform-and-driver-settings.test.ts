@@ -58,6 +58,25 @@ describe("loadConfig", () => {
     expect(set.config.ios).toEqual({ defaultMode: "full", defaultModels: {} });
   });
 
+  it("loads android.defaultImageTag when it is a valid image tag, leaves it unset when absent, and refuses any other value naming the key and what it expects", async () => {
+    const load = async (android: object) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify({ android }));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    expect((await load({ defaultImageTag: "google_apis_playstore" })).android.defaultImageTag).toBe(
+      "google_apis_playstore",
+    );
+    expect((await load({})).android).not.toHaveProperty("defaultImageTag");
+    for (const value of ["", "play store", "a".repeat(65), 7]) {
+      await expect(load({ defaultImageTag: value }), JSON.stringify(value)).rejects.toThrow(
+        "Invalid config value for \"android.defaultImageTag\": expected an image tag: 1 to 64 letters, digits, '_', '.' or '-'",
+      );
+    }
+  });
+
   it.each(["fast", "worker", true])(
     "rejects an ios.defaultMode of %j, naming the key",
     async (value) => {

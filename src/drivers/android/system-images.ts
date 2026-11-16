@@ -400,6 +400,11 @@ export class SystemImages {
     return images;
   }
 
+  /** why: an emulator does not boot an image built for another CPU, so the worker's default tag counts only these (ADR 0078 §2). */
+  builtForHost(images: readonly SystemImage[]): SystemImage[] {
+    return images.filter((image) => image.abi === this.#hostAbi);
+  }
+
   #matchingImage(
     images: readonly SystemImage[],
     apiLevel: string,
@@ -408,7 +413,7 @@ export class SystemImages {
     const matching = images.filter((image) => image.apiLevel === apiLevel);
     if (imageTag !== undefined) {
       const tagged = matching.filter((image) => image.tag === imageTag);
-      return tagged.find((image) => image.abi === this.#hostAbi) ?? tagged[0];
+      return this.builtForHost(tagged)[0] ?? tagged[0];
     }
     return (
       matching.find((image) => image.tag === "google_apis" && image.abi === this.#hostAbi) ??

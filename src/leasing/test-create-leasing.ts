@@ -126,6 +126,7 @@ export async function createHarness(
     /** why: a participant holds a released device in `reclaiming` until it returns. */
     readonly leaseEndParticipants?: readonly LeaseEndParticipant[];
     readonly capacity?: Config["capacity"];
+    readonly defaultImageTags?: Parameters<typeof createTestEngine>[0]["defaultImageTags"];
     readonly defaultModes?: Parameters<typeof createTestEngine>[0]["defaultModes"];
     readonly limits?: CapacityLimits;
     readonly logger?: Logger;
@@ -180,6 +181,9 @@ export async function createHarness(
     clock,
     config: engineConfig,
     drivers,
+    ...(options.defaultImageTags === undefined
+      ? {}
+      : { defaultImageTags: options.defaultImageTags }),
     ...(options.defaultModes === undefined ? {} : { defaultModes: options.defaultModes }),
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },

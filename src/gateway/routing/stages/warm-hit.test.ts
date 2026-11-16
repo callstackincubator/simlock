@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   catalogFixture,
   deviceFixture,
+  hostFixture,
   physicalDeviceFixture,
   statusFixture,
 } from "../../test-support.js";
@@ -59,6 +60,110 @@ describe("warm-hit", () => {
 
     expect(warmHit.score(view([physical]), request)).toBe(0);
     expect(warmHit.score(view([physical, deviceFixture("dev_v", "ready")]), request)).toBe(1);
+  });
+
+  it("ranks a tagless Android request by a ready device with the worker's default image tag on the newest level that has an image of it, else as it came", () => {
+    const device = (id: string, osVersion: string, imageTag?: string) => ({
+      ...deviceFixture(id, "ready"),
+      spec: {
+        physical: false,
+        model: "Pixel 9",
+        osVersion,
+        platform: "android" as const,
+        ...(imageTag === undefined ? {} : { imageTag }),
+      },
+    });
+    const view = (
+      devices: NonNullable<WorkerView["devices"]>,
+      defaultImageTag: string | undefined,
+      baselines?: WorkerView["baselines"],
+      images = [
+        { abi: "arm64-v8a", runtime: "36", tag: "google_apis_playstore" },
+        { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
+      ],
+    ): WorkerView => ({
+      ...(baselines === undefined ? {} : { baselines }),
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([
+        {
+          ...(defaultImageTag === undefined ? {} : { defaultImageTag }),
+          images,
+          models: ["Pixel 9"],
+          platform: "android",
+          runtimes: ["35", "36", "37"],
+        },
+      ]).platforms,
+      connection: "connected",
+      devices,
+      drained: false,
+      host: hostFixture(),
+      id: "wrk_a",
+      lastSeenAt: 1,
+      leases: [],
+    });
+    const playstore = "google_apis_playstore";
+    const request = { model: "Pixel 9", platform: "android" as const };
+
+    expect(warmHit.score(view([device("d1", "36", playstore)], playstore), request)).toBe(1);
+    expect(warmHit.score(view([device("d1", "37")], playstore), request)).toBe(0);
+    expect(warmHit.score(view([device("d1", "37")], undefined), request)).toBe(1);
+    expect(warmHit.score(view([device("d1", "36", playstore)], undefined), request)).toBe(0);
+    const named = { ...request, imageTag: "google_apis" };
+    expect(warmHit.score(view([device("d1", "37", "google_apis")], playstore), named)).toBe(1);
+    expect(warmHit.score(view([device("d1", "36", playstore)], playstore), named)).toBe(0);
+    // why: B7 — a request naming a baseline ranks as today, so the default tag does not narrow it.
+    const saved = {
+      mode: "full" as const,
+      model: "Pixel 9",
+      name: "smoke",
+      osVersion: "36",
+      platform: "android" as const,
+      savedAt: "2026-11-02T13:10:00Z",
+      version: 2,
+    };
+    const copy = {
+      ...device("d1", "36"),
+      spec: { ...device("d1", "36").spec, baseline: { name: "smoke", version: 2 } },
+    };
+    const baselined = { ...request, baseline: "smoke" };
+    expect(warmHit.score(view([copy], playstore, [saved]), baselined)).toBe(1);
+    // why: I4 — no serving model has an image of the default tag, so the request ranks as it came.
+    const onlyApis = [{ abi: "arm64-v8a", runtime: "37", tag: "google_apis" }];
+    expect(warmHit.score(view([device("d1", "37")], playstore, undefined, onlyApis), request)).toBe(
+      1,
+    );
+    // why: I4 — the tag steers to the newest level with an image of it, so an older level is no hit.
+    const twoLevels = [
+      { abi: "arm64-v8a", runtime: "35", tag: playstore },
+      { abi: "arm64-v8a", runtime: "36", tag: playstore },
+    ];
+    const old = view([device("d1", "35", playstore)], playstore, undefined, twoLevels);
+    expect(warmHit.score(old, request)).toBe(0);
+    // why: I7 — only an image built for the worker's CPU (arm64 here) counts for the default tag, so an x86_64 image of it leaves the request as it came.
+    const otherCpu = [
+      { abi: "x86_64", runtime: "37", tag: playstore },
+      { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
+    ];
+    expect(warmHit.score(view([device("d1", "37")], playstore, undefined, otherCpu), request)).toBe(
+      1,
+    );
+    // why: I4, I7 — the newest level is the newest of the worker's CPU, so another CPU's newer image does not move it.
+    const cpuLevels = [
+      { abi: "arm64-v8a", runtime: "35", tag: playstore },
+      { abi: "x86_64", runtime: "36", tag: playstore },
+    ];
+    const armView = view([device("d1", "35", playstore)], playstore, undefined, cpuLevels);
+    expect(warmHit.score(armView, request)).toBe(1);
+    // why: I7 — a host that is not arm64 counts x86_64 images, not arm64-v8a ones.
+    const x86Levels = [
+      { abi: "arm64-v8a", runtime: "37", tag: playstore },
+      { abi: "x86_64", runtime: "36", tag: playstore },
+    ];
+    const x86View = {
+      ...view([device("d1", "36", playstore)], playstore, undefined, x86Levels),
+      host: hostFixture({ arch: "x64" }),
+    };
+    expect(warmHit.score(x86View, request)).toBe(1);
   });
 
   it("counts no device as warm on a worker whose devices were never read", () => {
