@@ -199,6 +199,7 @@ async function discoverIosDriver(
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       logger: logger.child("ios"),
+      logsRoot: `${homedir()}/Library/Logs/CoreSimulator`,
       onSilenceFailed: logSilenceFailure(logger),
       onWindowFailed: logWindowFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),

@@ -212,12 +212,14 @@ export class IosSimctlDriver implements Driver {
       clock: options.clock,
       slimBoot: this.#slimBoot,
       database: options.database,
+      deviceHub: this.#deviceHub,
       deviceRoot,
       filesystem: options.filesystem,
       fullBootTimeoutMs: this.#fullBootTimeoutMs,
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       logger: options.logger,
+      logsRoot: options.logsRoot,
       marks: this.#marks,
       ownsDeviceSet: rootOptions !== undefined,
       seedTurns: this.#seedTurns,
@@ -470,7 +472,10 @@ export class IosSimctlDriver implements Driver {
 
   async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl.run(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    const listed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    const throwaways = this.#seeds.makingThrowaways();
+    const listed = parseManagedDevices(JSON.parse(result.stdout) as unknown).filter(
+      (device) => !throwaways.has(device.udid),
+    );
     // why: Xcode's set also holds the user's own simulators and other Simlocks'; only a
     // durable mark naming this instance proves a simulator here is ours.
     const parsed =

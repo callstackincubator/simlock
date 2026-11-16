@@ -12,6 +12,7 @@ import type { Clock, Filesystem, IdGenerator, Logger } from "../../ports/index.j
 import { errorMessage } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl, unknownDevice } from "./simctl.js";
+import type { DeviceHubPreferences } from "./devicehub.js";
 import { DeviceMarks } from "./marks.js";
 import type { SlimBoot } from "./slim-boot.js";
 import type { SimulatorBoot } from "./simulator-boot.js";
@@ -37,12 +38,14 @@ interface SeedsOptions {
   readonly clock: Clock;
   readonly slimBoot: SlimBoot;
   readonly database: SqliteDatabase;
+  readonly deviceHub: DeviceHubPreferences;
   readonly deviceRoot: string;
   readonly filesystem: Filesystem;
   readonly fullBootTimeoutMs: number;
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly logger: Logger | undefined;
+  readonly logsRoot: string | undefined;
   readonly marks: DeviceMarks;
   readonly ownsDeviceSet: boolean;
   readonly seedTurns: SeedTurns;
@@ -55,12 +58,14 @@ export class Seeds {
   readonly #boot: SimulatorBoot;
   readonly #clock: Clock;
   readonly #slimBoot: SlimBoot;
+  readonly #deviceHub: DeviceHubPreferences;
   readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
   readonly #fullBootTimeoutMs: number;
   readonly #idGenerator: IdGenerator;
   readonly #instanceId: string;
   readonly #logger: Logger | undefined;
+  readonly #logsRoot: string | undefined;
   readonly #marks: DeviceMarks;
   readonly #ownsDeviceSet: boolean;
   readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
@@ -75,12 +80,14 @@ export class Seeds {
     this.#boot = options.boot;
     this.#clock = options.clock;
     this.#slimBoot = options.slimBoot;
+    this.#deviceHub = options.deviceHub;
     this.#deviceRoot = options.deviceRoot;
     this.#filesystem = options.filesystem;
     this.#fullBootTimeoutMs = options.fullBootTimeoutMs;
     this.#idGenerator = options.idGenerator;
     this.#instanceId = options.instanceId;
     this.#logger = options.logger;
+    this.#logsRoot = options.logsRoot;
     this.#marks = options.marks;
     this.#ownsDeviceSet = options.ownsDeviceSet;
     this.#seedTurns = options.seedTurns;
@@ -109,6 +116,11 @@ export class Seeds {
       }),
       ...orphans,
     ];
+  }
+
+  /** why: a throwaway a `making` row names is the driver's own leftover, deleted through that row (ADR 0001 §6), so it is no leased device and no orphan. */
+  makingThrowaways(): ReadonlySet<string> {
+    return new Set(this.#sources.makingThrowaways());
   }
 
   async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
@@ -150,6 +162,8 @@ export class Seeds {
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
       this.#sources.markReady(sourceId, sizeBytes);
+      // why: ADR 0076: the lease is destroyed next, and `simctl delete` leaves its log folder behind for the baseline's copies to inherit.
+      await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
     } catch (error: unknown) {
       if (cloneUdid !== undefined && cloneUdid !== "") {
@@ -310,6 +324,9 @@ export class Seeds {
       sourceId,
       specKey,
     });
+    let throwaway: string | undefined;
+    let keepRow = false;
+    let seedClone: string | undefined;
     try {
       await this.#ensureSourcesSet();
       const created = await this.#simctl.createSimulator(
@@ -319,30 +336,60 @@ export class Seeds {
           resolved.deviceType.identifier,
           resolved.runtime.identifier,
         ],
-        { destination: this.#sourcesSet, source: this.#sourcesSet },
+        {},
       );
-      const udid = created.stdout.trim();
-      this.#sources.setUdid(sourceId, udid);
+      const printed = created.stdout.trim();
+      // why: safety: the throwaway's UDID is joined onto the logs root and deleted, so a value that is not a UDID (an empty one would name the root itself) is refused before anything is recorded.
+      if (!UDID_PATTERN.test(printed)) {
+        throw new DriverCrashError("simctl create returned no device UDID");
+      }
+      throwaway = printed;
+      this.#sources.setThrowaway(sourceId, throwaway);
+      if (!this.#ownsDeviceSet) {
+        // why: ADR 0048: in Xcode's set a simulator is Simlock's only by its mark, and a booted one keeps the clipboard sync it booted with.
+        await this.#marks.writeMark(throwaway);
+        await this.#deviceHub.disablePasteboardSync(throwaway);
+      }
       try {
-        await this.#boot.bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
+        await this.#boot.bootAndWait(throwaway, sourceId, this.#fullBootTimeoutMs);
       } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
         // why: a seed that ran out of boot time is a boot timeout, as an Android seed's is.
         if (error instanceof BootTimeoutError) throw error;
-        throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
+        throw new DriverCrashError(`seed ${throwaway} did not boot: ${errorMessage(error)}`);
       }
-      try {
-        await this.#simctl.shutdown(udid, this.#sourcesSet);
-      } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
-        throw error;
-      }
-      this.#sources.markReady(sourceId, await this.#sizeOf(udid));
-      return { sourceId, udid, runtimeBuild: resolved.runtime.build };
+      await this.#simctl.shutdown(throwaway);
+      const cloned = await this.#simctl.createSimulator(
+        ["clone", throwaway, `simlock-seed-${sourceId}`, this.#sourcesSet],
+        { destination: this.#sourcesSet },
+      );
+      seedClone = cloned.stdout.trim();
+      this.#sources.setUdid(sourceId, seedClone);
+      const done = throwaway;
+      throwaway = undefined;
+      keepRow = true;
+      await this.#deleteThrowaway(done, false);
+      keepRow = false;
+      this.#sources.markReady(sourceId, await this.#sizeOf(seedClone));
+      return { sourceId, udid: seedClone, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
-      this.#sources.deleteRow(sourceId);
+      keepRow = await this.#undoFailedMake(seedClone, throwaway, keepRow);
+      if (!keepRow) this.#sources.deleteRow(sourceId);
       throw error;
     }
+  }
+
+  /** why: a failed make deletes what it created; the row stays only while a throwaway it could not delete still needs it. */
+  async #undoFailedMake(
+    seedClone: string | undefined,
+    throwaway: string | undefined,
+    keepRow: boolean,
+  ): Promise<boolean> {
+    if (seedClone !== undefined) await this.#deleteSeedSimulator(seedClone).catch(() => undefined);
+    if (throwaway === undefined) return keepRow;
+    return !(await this.#deleteThrowaway(throwaway, true).then(
+      () => true,
+      () => false,
+    ));
   }
 
   /**
@@ -361,6 +408,7 @@ export class Seeds {
   async #removeLeftover(row: SourceRow): Promise<void> {
     try {
       if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+      if (row.throwawayUdid !== undefined) await this.#deleteThrowaway(row.throwawayUdid, true);
       this.#sources.deleteRow(row.sourceId);
     } catch (error: unknown) {
       this.#logger?.warn(
@@ -381,8 +429,30 @@ export class Seeds {
 
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#simctl.bestEffortShutdown(udid, this.#sourcesSet);
+    await this.#deleteIn(udid, this.#sourcesSet);
+  }
+
+  /** why: ADR 0076 §1: the throwaway lives in the device set and is deleted only through the `making` row that names it (ADR 0001 §6), with its log folder, which `simctl delete` leaves behind. */
+  async #deleteThrowaway(udid: string, shutdownFirst: boolean): Promise<void> {
+    if (shutdownFirst) await this.#simctl.bestEffortShutdown(udid);
+    await this.#deleteIn(udid, undefined);
+    if (!this.#ownsDeviceSet) await this.#deviceHub.removePasteboardPreference(udid);
+    await this.#deleteLogFolder(udid);
+  }
+
+  async #deleteLogFolder(udid: string): Promise<void> {
+    if (this.#logsRoot === undefined) return;
+    const path = join(this.#logsRoot, udid);
+    try {
+      await this.#filesystem.rm(path);
+    } catch (error: unknown) {
+      this.#logger?.warn(`could not delete log folder ${path}: ${errorMessage(error)}`);
+    }
+  }
+
+  async #deleteIn(udid: string, set: string | undefined): Promise<void> {
     const args = ["delete", udid];
-    const outcome = await this.#simctl.invoke(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const outcome = await this.#simctl.invoke(args, COMMAND_TIMEOUT_MS, set);
     // why: a seed deleted by hand is already gone, and its row must still be dropped.
     if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
     this.#simctl.checked(args, COMMAND_TIMEOUT_MS, outcome);

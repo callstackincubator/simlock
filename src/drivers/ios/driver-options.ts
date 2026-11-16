@@ -33,6 +33,8 @@ export interface IosSimctlDriverOptions {
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
   readonly coreSimulatorRoot?: string;
+  // why: where CoreSimulator keeps each simulator's log folder, which `simctl delete` leaves behind; with none given the driver deletes no log folder.
+  readonly logsRoot?: string;
   // why: where launchd_sim keeps each simulator's overrides folder; a test points it elsewhere.
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
