@@ -13,6 +13,7 @@ describeDeviceDataTable("iosDeviceDataTable", iosDeviceDataTable, [
   base,
   { ...base, slimMarkToken: "tok-1", slimSignature: "sig-1" },
   { ...base, slimSignature: "sig-2" },
+  { ...base, lineage: ["9F2C0000-0000-0000-0000-000000000002", base.udid] },
 ]);
 
 describe("iosDeviceDataTable write", () => {
@@ -23,6 +24,7 @@ describe("iosDeviceDataTable write", () => {
       "required key of the wrong type": { ...base, udid: 5 },
       "optional key of the wrong type": { ...base, slimSignature: 5 },
       "extra key": { ...base, extra: "x" },
+      "lineage entry that is not a UDID": { ...base, lineage: ["not-a-udid"] },
     };
     const state = await openMemoryState([iosDeviceDataTable]);
     for (const [label, value] of Object.entries(cases)) {

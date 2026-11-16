@@ -712,6 +712,7 @@ describe("IosSimctlDriver", () => {
   ])("destroySource $name", async ({ deleteCode, stderr, rows }) => {
     const database = plantSource(await memorySourceDatabase(), {
       deviceTypeId: driverData.deviceTypeId,
+      files: [{ kind: "file", relativePath: "data/a.plist" }],
       runtimeId: driverData.runtimeId,
       udid: seedUdid,
     });
@@ -732,6 +733,9 @@ describe("IosSimctlDriver", () => {
     else await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
     expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "shutdown", "delete"]);
     expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({
+      n: rows,
+    });
+    expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_files").get()).toEqual({
       n: rows,
     });
   });
