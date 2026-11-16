@@ -113,3 +113,4 @@ the status is stale.
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
 | [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
 | [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
+| [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted — not yet implemented; narrows 0045 §5 |
