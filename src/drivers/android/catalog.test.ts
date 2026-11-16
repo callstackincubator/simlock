@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 
 import { LIBRARY_PROFILES } from "./profiles/index.js";
+import { AndroidImageTagMissingError } from "./system-images.js";
 import { avdmanager, binaries, androidFilesystem, createPart } from "./test-catalog.js";
 import {
   ANDROID_HOME_DIRECTORY as home,
@@ -441,6 +442,45 @@ describe("Catalog", () => {
           platform: "android",
         }),
       ).resolves.toMatchObject({ imageTag: "google_apis_playstore", osVersion: "34" });
+    });
+
+    it("with the worker's default tag counts only images of that tag built for the host CPU, and an explicit tag still takes another CPU's", async () => {
+      const tag = "google_apis_playstore";
+      const resolve = async (
+        images: readonly (readonly [string, string, string])[],
+        defaultTag: boolean,
+      ) => {
+        const { part } = await taggedHarness(images);
+        return part
+          .resolveSpec({
+            imageTag: tag,
+            model: "Pixel 5",
+            platform: "android",
+            ...(defaultTag ? { defaultTag: true as const } : {}),
+          })
+          .catch((error: unknown) => error);
+      };
+
+      expect(await resolve([["36", tag, "arm64-v8a"]], true)).toMatchObject({
+        imageTag: tag,
+        osVersion: "36",
+      });
+      expect(
+        await resolve(
+          [
+            ["35", tag, "arm64-v8a"],
+            ["36", tag, "x86_64"],
+          ],
+          true,
+        ),
+      ).toMatchObject({ imageTag: tag, osVersion: "35" });
+      const foreignOnly = await resolve([["36", tag, "x86_64"]], true);
+      expect(foreignOnly).toBeInstanceOf(AndroidImageTagMissingError);
+      expect(foreignOnly).toMatchObject({ downloadable: false });
+      expect(await resolve([["36", tag, "x86_64"]], false)).toMatchObject({
+        imageTag: tag,
+        osVersion: "36",
+      });
     });
 
     it("fails a tag installed for no API level, with no API level named, naming the tag and no API level", async () => {
