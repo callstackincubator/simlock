@@ -275,4 +275,40 @@ describe("createLeasing's port for the warm pool", () => {
 
     expect([defaultMode("ios"), defaultMode("android")]).toEqual(["slim", "full"]);
   });
+
+  it("resolves a configured target with no tag to the spec a tagless lease would get", async () => {
+    const tag = "google_apis_playstore";
+    const driver = () =>
+      new FakeDriver({
+        availableOsVersions: ["36", "37"],
+        clock: new FakeClock(1_000),
+        images: [
+          { abi: "arm64-v8a", runtime: "36", tag },
+          { abi: "arm64-v8a", runtime: "37", tag: "google_apis" },
+        ],
+        platform: "android",
+        taggedRefusals: ["Pixel 6"],
+      });
+    const resolveTarget = async (model: string, defaultImageTags: { android?: string }) => {
+      const { engine } = await createHarness({ defaultImageTags, driver: driver() });
+      return engine.leasing.corePorts.warmPoolDemand.resolve({
+        model,
+        physical: false,
+        platform: "android",
+      });
+    };
+    const spec = (model: string, osVersion: string, imageTag?: string) => ({
+      spec: {
+        model,
+        osVersion,
+        physical: false,
+        platform: "android",
+        ...(imageTag === undefined ? {} : { imageTag }),
+      },
+    });
+
+    expect(await resolveTarget("Pixel 9", { android: tag })).toEqual(spec("Pixel 9", "36", tag));
+    expect(await resolveTarget("Pixel 6", { android: tag })).toEqual(spec("Pixel 6", "37"));
+    expect(await resolveTarget("Pixel 9", {})).toEqual(spec("Pixel 9", "37"));
+  });
 });
