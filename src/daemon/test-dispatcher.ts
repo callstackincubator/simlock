@@ -105,6 +105,17 @@ function withGatewayLabel(config: Config, label: string | undefined): Config {
   return label === undefined ? config : { ...config, gateway: { ...config.gateway, label } };
 }
 
+function withVirtualDevices(
+  config: Config,
+  virtualDevices: Readonly<Partial<Record<"ios" | "android", boolean>>> | undefined,
+): Config {
+  return {
+    ...config,
+    android: { ...config.android, virtualDevices: virtualDevices?.android ?? true },
+    ios: { ...config.ios, virtualDevices: virtualDevices?.ios ?? true },
+  };
+}
+
 function withHttp(config: Config, http: Config["http"] | undefined): Config {
   return http === undefined ? config : { ...config, http };
 }
@@ -178,6 +189,8 @@ export async function buildDispatcher(
     readonly iosDefaultMode?: "slim" | "full";
     /** why: the `android.defaultImageTag` `config.get` reports. */
     readonly androidDefaultImageTag?: string;
+    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0078). */
+    readonly virtualDevices?: Readonly<Partial<Record<"ios" | "android", boolean>>>;
     /** why: the two boot deadlines `config.get` reports. */
     readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };
     readonly components?: Pick<
@@ -238,22 +251,27 @@ export async function buildDispatcher(
     ),
     overrides.http,
   );
-  const config: Config = {
-    ...baseConfig,
-    ...(overrides.androidDefaultImageTag === undefined
-      ? {}
-      : { android: { ...baseConfig.android, defaultImageTag: overrides.androidDefaultImageTag } }),
-    warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
-    ...(overrides.iosDefaultMode === undefined
-      ? {}
-      : { ios: { ...baseConfig.ios, defaultMode: overrides.iosDefaultMode } }),
-    ...(overrides.bootTimeouts === undefined
-      ? {}
-      : {
-          android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android },
-          ios: { ...baseConfig.ios, full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } },
-        }),
-  };
+  const config: Config = withVirtualDevices(
+    {
+      ...baseConfig,
+      ...(overrides.androidDefaultImageTag === undefined
+        ? {}
+        : {
+            android: { ...baseConfig.android, defaultImageTag: overrides.androidDefaultImageTag },
+          }),
+      warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+      ...(overrides.iosDefaultMode === undefined
+        ? {}
+        : { ios: { ...baseConfig.ios, defaultMode: overrides.iosDefaultMode } }),
+      ...(overrides.bootTimeouts === undefined
+        ? {}
+        : {
+            android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android },
+            ios: { ...baseConfig.ios, full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } },
+          }),
+    },
+    overrides.virtualDevices,
+  );
   const wiring = testComponentWiring({
     clock: clock,
     components: overrides.components,
