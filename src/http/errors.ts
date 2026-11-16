@@ -105,10 +105,8 @@ export interface MappedError {
   readonly extra?: Record<string, unknown>;
 }
 
-/** Looks a code up in `ERROR_TABLE`, defensively -- every code `classifyError` returns is a
- * real key by construction, except `DispatchError`'s (a runtime-supplied string, trusted but
- * not verified -- see `dispatcher.ts`); this is the one guard against that ever indexing to
- * `undefined` and throwing instead of degrading to `INTERNAL`. */
+/** why: `DispatchError`'s code is a runtime string, trusted but not verified, so a code missing
+ * from the table degrades to `INTERNAL` instead of indexing to `undefined` and throwing. */
 function tableEntry(code: SimlockErrorCode): (typeof ERROR_TABLE)[SimlockErrorCode] {
   return (
     (ERROR_TABLE as Record<string, (typeof ERROR_TABLE)[SimlockErrorCode]>)[code] ??

@@ -473,6 +473,7 @@ export class FakeDriver implements Driver {
   }
 
   /** why: what a saved source holds, for a test to compare with what the device held. */
+  // fallow-ignore-next-line unused-class-member -- tests read it on fakes their test-* helpers build.
   sourceFiles(sourceId: string): ReadonlyMap<string, string> | undefined {
     return this.#sourceFiles.get(sourceId);
   }

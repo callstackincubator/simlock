@@ -1,70 +1,52 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { etag } from "hono/etag";
-import { z } from "zod";
 
-import type { EventBus } from "../bus/index.js";
+import type { Identity } from "../auth/index.js";
+import { eventsPageQuery, OPERATIONS, usageWindow } from "../contract/index.js";
+import { registerLeaseRequestRoutes } from "./app-lease-request-routes.js";
+import { registerLeaseRoutes } from "./app-lease-routes.js";
 import {
-  type ComponentProgress,
-  eventsPageQuery,
-  OPERATIONS,
-  parseDurationMs,
-  usageWindow,
-  type UsageWindowRefusal,
-} from "../contract/index.js";
-import type { DeviceRecord } from "../core/index.js";
-import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
-import type { Clock, IdGenerator, LeaseSocketAccept, Logger } from "../ports/index.js";
-import { type AuthEnv, requireAuth } from "./auth.js";
-import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
+  emptyBodyAsNone,
+  errorMessage,
+  findOwnedLease,
+  optionalQuery,
+  parseDuration,
+  statsRefusal,
+} from "./app-helpers.js";
+import type {
+  Env,
+  HttpAppDisposable,
+  HttpGatewayDeps,
+  HttpLeaseSocketOutcome,
+  LeaseSocketCapture,
+} from "./app-types.js";
+import { requireAuth } from "./auth.js";
 import {
-  componentInstallRoute,
   baselineListRoute,
   baselineRemoveRoute,
   baselineSaveRoute,
   componentListRoute,
   componentRemoveRoute,
+  configRoute,
   eventsRoute,
   eventsStreamRoute,
+  inboxRoute,
   tokenListRoute,
   updateRoute,
   workerDrainRoute,
-  inboxRoute,
-  configRoute,
   workerListRoute,
   workerRemoveRoute,
   workerUndrainRoute,
   workerUpdateRoute,
 } from "./admin-declarations.js";
+import { buildHttpSession } from "./dispatcher-session.js";
+import { badRequest, errorResponse, mapError } from "./errors.js";
 import {
-  badRequest,
-  errorResponse,
-  forbidden,
-  mapError,
-  requestNotCancellable,
-  unknownLease,
-  unknownRequest,
-} from "./errors.js";
-import {
-  type leaseRequestBodySchema,
-  leaseEventsRoute,
-  leaseExecRoute,
   leaseFileDeleteRoute,
   leaseFileGetRoute,
   leaseFileListRoute,
   leaseFilePutRoute,
-  leaseGetRoute,
-  leaseListRoute,
-  leaseReleaseRoute,
-  leaseRotateRoute,
-  leaseRenewRoute,
-  leaseRequestCancelRoute,
-  leaseRequestCreateRoute,
-  leaseRequestEventsRoute,
-  leaseRequestGetRoute,
-  leaseRequestListRoute,
-  type leaseRequestViewSchema,
-  requestsReplySchema,
 } from "./lease-declarations.js";
 import { LeaseNoticeBuffer } from "./notices.js";
 import {
@@ -79,150 +61,10 @@ import {
   statusRoute,
 } from "./route-declarations.js";
 import { validationHook } from "./routes.js";
-import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
-import type { Auth, Identity } from "../auth/index.js";
-import {
-  buildLeasePayload,
-  type HttpLeaseDevice,
-  isTerminalStage,
-  type LeaseRequestInput,
-  type LeaseRequestReader,
-  LeaseRequestTracker,
-  type TrackedRequestView,
-} from "./tracker.js";
+import { LeaseRequestTracker } from "./tracker.js";
 
-/**
- * why: The device fields the lease routes read: what a lease payload is built from, plus two that
- * only one kind of daemon has. A worker's own registry record carries `state`, which `DELETE
- * /v1/leases/:id` reports; a gateway holds no device state of its own and leaves it out rather
- * than inventing one. A gateway's device carries the `workerId` it lives on, because a device
- * id is one worker's claim and is matched only together with the lease's own `workerId`.
- */
-export interface HttpRegistryDevice extends HttpLeaseDevice {
-  readonly state?: DeviceRecord["state"];
-  readonly workerId?: string;
-}
-
-export interface HttpRegistryReader {
-  readonly snapshot: {
-    readonly devices: readonly HttpRegistryDevice[];
-  };
-}
-
-export interface HttpGatewayDeps {
-  readonly dispatch: HttpDispatch;
-  readonly registry: HttpRegistryReader;
-  readonly leaseRequests: LeaseRequestReader;
-  readonly eventBus: EventBus;
-  readonly ownerRoutedFacts: OwnerRoutedFacts;
-  readonly clock: Clock;
-  readonly idGenerator: IdGenerator;
-  readonly logger: Logger;
-  readonly auth: Pick<Auth, "authenticateRequest">;
-  readonly answerDownloadsEarly?: boolean | undefined;
-  readonly mounts?: readonly HttpMount[];
-  readonly leaseRoutes?: readonly HttpLeaseRoute[];
-  readonly leaseFiles: HttpLeaseFiles;
-}
-
-export interface HttpLeaseFiles {
-  handle(
-    request: Request,
-    identity: Identity,
-    lease: HttpLeaseSocketLease,
-    name: string | undefined,
-  ): Promise<Response>;
-}
-
-// why: the lease is resolved here, with `lease.get`'s own owner-or-operator answer, so a module's
-// lease handler never checks who owns it; http knows a module only by its name.
-export interface HttpLeaseRoute {
-  readonly name: string;
-  // why: the module's two-step socket handler, run for a WebSocket upgrade of the same path.
-  readonly socket?: {
-    open(
-      request: Request,
-      identity: Identity,
-      lease: HttpLeaseSocketLease,
-    ): Promise<Response | HttpLeaseSocketAccept>;
-  };
-  handle(request: Request, identity: Identity, lease: HttpLeaseSocketLease): Promise<Response>;
-}
-
-interface HttpLeaseSocketLease {
-  readonly id: string;
-  readonly deviceId: string;
-  readonly workerId?: string;
-  readonly workerLeaseId?: string;
-}
-
-export type HttpLeaseSocketAccept = LeaseSocketAccept;
-
-// why: what the upgrade router needs of a lease socket request: the refusal to send before the
-// upgrade, or the accept to run on the upgraded socket.
-export type HttpLeaseSocketOutcome =
-  | { readonly response: Response }
-  | { readonly accept: HttpLeaseSocketAccept };
-
-interface LeaseSocketCapture {
-  accept?: HttpLeaseSocketAccept;
-}
-
-export interface HttpMount {
-  readonly prefix: string;
-  handle(request: Request, identity: Identity): Promise<Response>;
-}
-
-type Env = AuthEnv;
-
-const MAX_LONG_POLL_SECONDS = 60;
-
-function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
-  return {
-    ...(body.device === undefined ? {} : { device: body.device }),
-    ...(body.class === undefined ? {} : { class: body.class }),
-    platform: body.platform,
-    ...leaseRequestOptionFields(body),
-    ...leaseRequestNameFields(body),
-  };
-}
-
-function leaseRequestNameFields(body: z.infer<typeof leaseRequestBodySchema>) {
-  return {
-    ...(body.owner === undefined ? {} : { owner: body.owner }),
-    ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
-    ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
-  };
-}
-
-function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) {
-  return {
-    ...(body.os === undefined ? {} : { os: body.os }),
-    ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
-    ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
-    ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
-    ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
-    ...(body.mode === undefined ? {} : { mode: body.mode }),
-    ...(body.except === undefined ? {} : { except: body.except }),
-    ...(body.physical === undefined ? {} : { physical: body.physical }),
-    ...leaseRequestImageFields(body),
-  };
-}
-
-function leaseRequestImageFields(body: z.infer<typeof leaseRequestBodySchema>) {
-  return {
-    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
-    ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
-  };
-}
-
-export interface HttpAppDisposable {
-  readonly dispose: () => void;
-  // why: a WebSocket upgrade of a lease route goes through the app's own auth and lease resolution,
-  // so a refusal is the answer any request to the path would get; only the accept is new.
-  readonly leaseSocket: (request: Request) => Promise<HttpLeaseSocketOutcome>;
-}
+export type { HttpAppDisposable, HttpGatewayDeps, HttpLeaseFiles, HttpMount } from "./app-types.js";
 
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
 export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpAppDisposable {
@@ -367,331 +209,9 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     ),
   );
 
-  app.openapi({ ...leaseRequestCreateRoute, middleware: [agentAuth] }, async (c) => {
-    const identity = c.get("identity");
-    const body = c.req.valid("json");
-    const idempotencyKey = c.req.header("Idempotency-Key");
-    const outcome = await tracker.submit(identity, toLeaseRequestInput(body), idempotencyKey);
-    if (outcome.kind === "rejected") throw outcome.error;
-    c.header("Location", `/v1/lease-requests/${outcome.view.id}`);
-    return c.json({ request: serializeRequest(outcome.view) }, 201);
-  });
+  registerLeaseRequestRoutes(app, { agentAuth, deps, notices, tracker });
 
-  // why: operator-role in effect: `list.get` is an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher.
-  app.openapi({ ...leaseRequestListRoute, middleware: [agentAuth] }, async (c) => {
-    const requests = await deps.dispatch(
-      "list.get",
-      { kind: "requests" },
-      buildHttpSession(c.get("identity")),
-    );
-    return c.json(requestsReplySchema.parse({ requests }), 200);
-  });
-
-  app.openapi({ ...leaseRequestGetRoute, middleware: [agentAuth] }, async (c) => {
-    const id = c.req.valid("param").id;
-    const initial = tracker.get(id);
-    if (initial === undefined) throw unknownRequest(id);
-    requireOwnRequest(c.get("identity"), initial.ownerId);
-
-    const { wait } = c.req.valid("query");
-    if (wait !== undefined) {
-      // why: Clamped, not rejected: an oversized wait still long-polls correctly -- the client
-      // simply re-polls sooner than it asked -- and the clamp bounds how long an abandoned
-      // poll can pin its listener and timer. Aborting the request releases them immediately.
-      await tracker.waitForChange(
-        id,
-        Math.min(Number(wait), MAX_LONG_POLL_SECONDS),
-        c.req.raw.signal,
-      );
-    }
-
-    const view = tracker.get(id) ?? initial;
-    return c.json({ request: serializeRequest(view) }, 200);
-  });
-
-  app.openapi({ ...leaseRequestEventsRoute, middleware: [agentAuth] }, (c) => {
-    const id = c.req.valid("param").id;
-    const initial = tracker.get(id);
-    if (initial === undefined) throw unknownRequest(id);
-    requireOwnRequest(c.get("identity"), initial.ownerId);
-
-    return pipeSse(
-      c,
-      deps.clock,
-      {
-        subscribe(send, end) {
-          const current = tracker.get(id) ?? initial;
-          send({ data: serializeRequest(current), event: current.state.stage });
-          if (isTerminalStage(current.state)) {
-            end();
-            return () => {};
-          }
-          const unsubscribe = tracker.subscribe(id, (state) => {
-            send({ data: serializeRequest({ ...current, state }), event: state.stage });
-            if (isTerminalStage(state)) end();
-          });
-          // why: nothing in this process is driving the request -- one a restarted daemon has not
-          // settled yet -- so no change will ever arrive on this stream: end it rather than
-          // hold it open. The client reconnects and reads the settled state.
-          if (unsubscribe === undefined) {
-            end();
-            return () => {};
-          }
-          return unsubscribe;
-        },
-      },
-      c.get("identity").expiresAt,
-    );
-  });
-
-  app.openapi({ ...leaseRequestCancelRoute, middleware: [agentAuth] }, async (c) => {
-    const id = c.req.valid("param").id;
-    const existing = tracker.get(id);
-    if (existing === undefined) throw unknownRequest(id);
-    requireOwnRequest(c.get("identity"), existing.ownerId);
-
-    const outcome = await tracker.cancel(id, c.get("identity"));
-    if (outcome.kind === "cancelled") return c.body(null, 204);
-    if (outcome.kind === "not-found") throw unknownRequest(id);
-    if (outcome.leaseId !== undefined) {
-      throw requestNotCancellable(
-        `Request already granted lease ${outcome.leaseId}; release it instead`,
-        { leaseId: outcome.leaseId },
-      );
-    }
-    throw requestNotCancellable(
-      "Request is no longer cancellable -- device work is already in flight for it",
-    );
-  });
-
-  app.openapi({ ...leaseGetRoute, middleware: [agentAuth] }, async (c) => {
-    const identity = c.get("identity");
-    const session = buildHttpSession(identity);
-    const lease = await findOwnedLease(deps, session, c.req.valid("param").id);
-    const device = findDevice(deps, lease);
-    if (device === undefined) throw unknownLease(lease.id);
-    // why: ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
-    // restart reports the lease's real width rather than a mode default standing in for a
-    // per-request value this gateway no longer remembers. `requestId` is still gateway-side
-    // bookkeeping, and is still the one field a restart can drop.
-    const requestId = tracker.requestIdForLease(lease.id);
-    return c.json(
-      { lease: buildLeasePayload(device, lease, requestId === undefined ? {} : { requestId }) },
-      200,
-    );
-  });
-
-  app.openapi({ ...leaseRenewRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {
-    const identity = c.get("identity");
-    const session = buildHttpSession(identity);
-    const id = c.req.valid("param").id;
-    const { ttlMs } = c.req.valid("json");
-
-    // why: Dispatched directly (not via `findOwnedLease`/`lease.get`) so `lease.renew`'s own
-    // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
-    // socket transport, rather than the `UNKNOWN_LEASE`/404 `lease.get`'s hidden-lease answer would produce
-    // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself, and a
-    // `ttlMs` above `lease.maxTtlMs` as `BAD_REQUEST`/400 -- the cap lives in the shared
-    // dispatcher, and this route awaits it, so there is nothing to restate here. Answering it
-    // earlier would answer it *before* `ownsLease` and turn another requester's lease into a
-    // 400 about its TTL where the socket and the HTTP API both say 403. An omitted
-    // `ttlMs` re-applies the lease's own stored width (ADR 0004 §4), which is why nothing is
-    // recorded here afterwards.
-    const renewed = await deps.dispatch(
-      "lease.renew",
-      { leaseId: id, ...(ttlMs === undefined ? {} : { ttlMs }) },
-      session,
-    );
-
-    return c.json(
-      {
-        expiresAt: new Date(renewed.ttlDeadline).toISOString(),
-        leaseId: renewed.id,
-        notices: notices.drain(id),
-      },
-      200,
-    );
-  });
-
-  app.openapi({ ...leaseExecRoute, middleware: [agentAuth] }, async (c) => {
-    const identity = c.get("identity");
-    const leaseId = c.req.valid("param").id;
-    const { requesterId, ...body } = c.req.valid("json");
-    // why: Requester identity is the token's over HTTP, never the body's -- except for an
-    // `operator` token, which is the proxying case `device.exec` reads it for. An agent
-    // token that supplies one at all is refused, but by `device.exec`'s own `authorize`
-    // hook (round 4, F4) rather than a route-level check: ADR 0003 §2 puts a contract
-    // operation's answer in the dispatcher, not a transport, so the same request over the
-    // unix socket or a future uplink gets the same `FORBIDDEN` this route now inherits
-    // rather than defining.
-
-    // why: dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
-    // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
-    // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
-    // `lease.get` would produce (see `findOwnedLease`'s comment).
-    // Where a chunk goes at each stage of this request's life, including after the client
-    // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
-    // and is tested.
-    const relay = new OutputRelay();
-    let onStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      onStarted = resolve;
-    });
-
-    const settled = deps
-      .dispatch(
-        "device.exec",
-        { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
-        buildHttpSession(identity, {
-          onStarted: () => onStarted(),
-          onOutput: (stream, chunk) => relay.push({ chunk, stream }),
-        }),
-      )
-      .then(
-        (result) => ({ exitCode: result.exitCode, kind: "exited" }) as const,
-        (error: unknown) => ({ error, kind: "failed" }) as const,
-      );
-
-    // why: An SSE response cannot take back its status code, so the decision point is the moment
-    // the process exists: every failure that can precede one -- an unowned lease, an unknown
-    // one, a refused verb, an unknown tool, a daemon still starting -- lands before
-    // `onStarted` and is answered as an ordinary JSON error with its own status. After it,
-    // the stream is committed, which is what gets a silent long-running command its `200`
-    // and its keepalives immediately, and what makes `EXEC_TIMEOUT` always arrive as the
-    // stream's terminal `error` event (ADR 0005 §19e).
-    const outcome = await Promise.race([settled, started.then(() => undefined)]);
-    if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
-
-    return pipeSse(c, deps.clock, {
-      subscribe(send, end) {
-        relay.attach((chunk) => send({ data: chunk, event: "output" }));
-        void settled.then((result) => {
-          if (result.kind === "exited") {
-            send({ data: { exitCode: result.exitCode }, event: "exit" });
-          } else {
-            const mapped = mapError(result.error);
-            send({
-              data: { error: { code: mapped.code, message: mapped.message } },
-              event: "error",
-            });
-          }
-          end();
-        });
-        return () => relay.drop();
-      },
-    });
-  });
-
-  app.openapi({ ...componentInstallRoute, middleware: [agentAuth] }, async (c) => {
-    const { workers, ...component } = c.req.valid("json");
-    type ProgressEvent = ComponentProgress & { readonly workerId?: string };
-    const early: ProgressEvent[] = [];
-    let deliver: ((progress: ProgressEvent) => void) | undefined;
-    let onAdmitted!: () => void;
-    const admitted = new Promise<void>((resolve) => {
-      onAdmitted = resolve;
-    });
-    const session = buildHttpSession(c.get("identity"), {
-      onStarted: () => onAdmitted(),
-      onComponentProgress: (progress, workerId) => {
-        const event = workerId === undefined ? progress : { ...progress, workerId };
-        if (deliver === undefined) early.push(event);
-        else deliver(event);
-      },
-    });
-
-    const dispatched: Promise<unknown> =
-      workers === undefined
-        ? deps.dispatch("component.install", component, session)
-        : deps.dispatch("worker.install-component", { ...component, workers }, session);
-    const settled = dispatched.then(
-      (result) => ({ kind: "done", result }) as const,
-      (error: unknown) => ({ error, kind: "failed" }) as const,
-    );
-
-    const outcome = await Promise.race([settled, admitted.then(() => undefined)]);
-    if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
-
-    return pipeSse(c, deps.clock, {
-      subscribe(send, end) {
-        deliver = (progress) => void send({ data: progress, event: "progress" });
-        for (const progress of early.splice(0)) deliver(progress);
-        void settled.then((result) => {
-          if (result.kind === "done") {
-            send({ data: result.result, event: "result" });
-          } else {
-            const mapped = mapError(result.error);
-            send({
-              data: { error: { code: mapped.code, message: mapped.message } },
-              event: "error",
-            });
-          }
-          end();
-        });
-        return () => undefined;
-      },
-    });
-  });
-
-  app.openapi({ ...leaseEventsRoute, middleware: [agentAuth] }, async (c) => {
-    const identity = c.get("identity");
-    const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.valid("param").id);
-
-    return pipeSse(
-      c,
-      deps.clock,
-      {
-        subscribe(send, end) {
-          return notices.subscribe(lease.id, (notice) => {
-            send({ data: notice, event: notice.event });
-            if (notice.event === "lease_lost") end();
-          });
-        },
-      },
-      identity.expiresAt,
-    );
-  });
-
-  app.openapi({ ...leaseRotateRoute, middleware: [agentAuth] }, async (c) => {
-    const { orientation } = c.req.valid("json");
-    // why: dispatched directly, like `exec`, so `device.rotate`'s own authorize answers 403 for another requester's lease and the handler 404 for an unknown one.
-    const rotated = await deps.dispatch(
-      "device.rotate",
-      { leaseId: c.req.valid("param").id, orientation },
-      buildHttpSession(c.get("identity")),
-    );
-    return c.json(rotated, 200);
-  });
-
-  app.openapi({ ...leaseReleaseRoute, middleware: [agentAuth] }, async (c) => {
-    const identity = c.get("identity");
-    const session = buildHttpSession(identity);
-    const id = c.req.valid("param").id;
-
-    // why: best-effort lookup, only to decorate the response with the device id/state --
-    // `lease.release`'s output schema is `{ leaseId }` alone (no `deviceId`), so this is still
-    // needed for the response body. It is *not* the authorization decision: `lease.release`
-    // below is dispatched directly and is the sole source of truth for whether this request is
-    // allowed (S6). Its `ownsLease` hook answers `FORBIDDEN`/403 for someone else's lease and
-    // the handler answers `UNKNOWN_LEASE`/404 for a nonexistent one, matching the socket
-    // transport exactly.
-    const lease = await findLeaseForDecoration(deps, session, id);
-
-    await deps.dispatch("lease.release", { leaseId: id }, session);
-
-    const device = lease === undefined ? undefined : findDevice(deps, lease);
-    return c.json(
-      {
-        device: { id: lease?.deviceId ?? id, state: device?.state ?? "reclaiming" },
-        released: true as const,
-      },
-      202,
-    );
-  });
-
-  app.openapi({ ...leaseListRoute, middleware: [agentAuth] }, async (c) =>
-    c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity"))), 200),
-  );
+  registerLeaseRoutes(app, { agentAuth, deps, notices, tracker });
 
   app.openapi({ ...tokenListRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity"))), 200),
@@ -911,115 +431,4 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       return capture.accept === undefined ? { response } : { accept: capture.accept };
     },
   });
-}
-
-// why: no dispatcher operation reads a stored lease request by id, so there is no `authorize` hook to reuse; compared against the record's `ownerId`, the principal the daemon saw send it, never its caller-claimed `requesterId`.
-function requireOwnRequest(identity: Identity, ownerId: string): void {
-  if (identity.role === "operator" || identity.principal === ownerId) return;
-  throw forbidden("Not permitted to access another requester's resource");
-}
-
-// why: `lease.get` answers `UNKNOWN_LEASE` for a lease that does not exist and for one the session does not own alike, so the 404 does not tell them apart (the narrower, deliberate divergence from the mutating routes below that the known gaps in src/http/AGENTS.md describe).
-async function findOwnedLease(
-  deps: HttpGatewayDeps,
-  session: ReturnType<typeof buildHttpSession>,
-  id: string,
-) {
-  const { lease } = await deps.dispatch("lease.get", { leaseId: id }, session);
-  return lease;
-}
-
-/** why: Best-effort lease lookup for a lease id, scoped to what the session's `lease.list` would
- * show it (own leases; admin sees all) -- used only to decorate a response after an
- * authoritative dispatch has already decided whether the request is allowed. Never used to
- * gate access itself (see the `DELETE /v1/leases/:id` route). */
-async function findLeaseForDecoration(
-  deps: HttpGatewayDeps,
-  session: ReturnType<typeof buildHttpSession>,
-  id: string,
-) {
-  const { leases } = await deps.dispatch("lease.list", {}, session);
-  return leases.find((candidate) => candidate.id === id);
-}
-
-function serializeRequest(
-  view: Pick<TrackedRequestView, "id" | "createdAt" | "state">,
-): z.infer<typeof leaseRequestViewSchema> {
-  const base = { createdAt: view.createdAt, id: view.id };
-  switch (view.state.stage) {
-    case "queued":
-      return { ...base, queuePosition: view.state.queuePosition, state: "queued" };
-    case "downloading": {
-      const { stage: _stage, ...download } = view.state;
-      return { ...base, ...download, state: "downloading" };
-    }
-    case "provisioning":
-    case "booting":
-    case "reclaiming":
-      return { ...base, etaSeconds: view.state.etaSeconds, state: view.state.stage };
-    case "granted":
-      return { ...base, lease: view.state.lease, state: "granted" };
-    case "failed":
-      return { ...base, error: view.state.error, state: "failed" };
-    case "cancelled":
-      return { ...base, state: "cancelled" };
-  }
-}
-
-/** why: The device a lease names. On a gateway both carry the `workerId` they came from, and a
- * device matches only on the lease's own worker: a device id is that worker's claim, so another
- * worker reporting the same id never answers for it. On a worker neither carries one. */
-function findDevice(
-  deps: HttpGatewayDeps,
-  lease: { readonly deviceId: string; readonly workerId?: string | undefined },
-): HttpRegistryDevice | undefined {
-  return deps.registry.snapshot.devices.find(
-    (device) => device.id === lease.deviceId && device.workerId === lease.workerId,
-  );
-}
-
-// why: an empty body is no body whatever its content type: a renew without one keeps the lease's own width.
-async function emptyBodyAsNone(c: Context, next: () => Promise<void>): Promise<void> {
-  const isJson = /^application\/([a-z-.]+\+)?json/i.test(c.req.header("content-type") ?? "");
-  if ((await c.req.text()).trim() === "") {
-    // why: the validator reads the body only under a JSON content type, so an empty one is relabelled; `bodyCache.text` is typed as the string but holds the pending read, and the JSON validator parses what it holds, so `{}` stands in for the empty text.
-    if (!isJson) c.req.raw.headers.set("content-type", "application/json");
-    Object.assign(c.req.bodyCache, { text: Promise.resolve("{}") });
-  }
-  await next();
-}
-
-/** why: HTTP-only sugar translating `?since=5m` into the absolute `sinceTs` `events.replay` takes --
- * not a duplicate of any daemon-side logic (the operation itself takes an absolute timestamp),
- * so it is not one of the re-implementations ADR §2 says fall away with the dispatcher move. */
-function parseDuration(value: string): number {
-  const milliseconds = parseDurationMs(value);
-  if (milliseconds === undefined) throw badRequest(`Invalid duration: ${value}`);
-  return milliseconds;
-}
-
-function optionalQuery<Name extends string>(
-  value: string | undefined,
-  name: Name,
-): { [Key in Name]?: string } {
-  return value === undefined ? {} : ({ [name]: value } as { [Key in Name]?: string });
-}
-
-function statsRefusal(refusal: UsageWindowRefusal): string {
-  switch (refusal.problem) {
-    case "since-and-from":
-      return "stats takes since or from, not both";
-    case "to-without-from":
-      return "to needs from";
-    case "not-before-to":
-      return "from must be earlier than to, or than now when to is left out";
-    case "bad-duration":
-      return `Invalid duration: ${refusal.value}`;
-    case "bad-time":
-      return `Invalid time: ${refusal.value} (use ISO 8601 with Z or an offset)`;
-  }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

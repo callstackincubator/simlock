@@ -68,7 +68,7 @@ export const helloRequestSchema = z
  * `hello` request supplied, or the daemon's own default (today: `defaultRequesterId`) when it
  * omitted one. Without this the client cannot learn its own principal in that fallback case, and
  * would otherwise have to guess -- see the abort-authorization defect this closes in
- * `simlock-client/client.ts`.
+ * `simlock-client/client-impl.ts`.
  */
 export const helloReplySchema = z.object({
   protocolVersion: z.number().int(),

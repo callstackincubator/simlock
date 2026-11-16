@@ -11,7 +11,7 @@ How one lease request becomes one concrete device, virtual or physical.
 | Source | Where | Read when |
 |---|---|---|
 | Request: `model` or `class`, `osVersion` (exact or range), `mode`, `imageTag`, `physical`, `allowDownload`, `noWait` | `contract/operations.ts` → `DeviceRequest` | Per request |
-| Download permission | `downloads.policy` (`on-request`), `daemon/dispatcher.ts` | Per request, before leasing |
+| Download permission | `downloads.policy` (`on-request`), `daemon/dispatcher-leases.ts` | Per request, before leasing |
 | Default mode | `ios.defaultMode` (`full`); Android always `full` | Per request with no `mode` |
 | Operator preference lists | `ios.defaultModels`, `android.defaultModels` | Merged once at start |
 | Built-in preference lists | `Driver.defaultModels` of each driver | Merged once at start, after the operator's |
@@ -31,7 +31,7 @@ Never read: the sdkmanager catalog. A preference list is merged in `daemon/worke
 
 ## Virtual: request → spec
 
-In `LeaseAcquisitionCoordinator` (`leasing/lease-acquisition-coordinator.ts`), no lock held:
+In `AcquisitionSpecResolver` (`leasing/acquisition-spec-resolver.ts`), a part of `LeaseAcquisitionCoordinator`, no lock held:
 
 1. `physical: true` → skip to the physical branch.
 2. Mode = request's, else the platform default.

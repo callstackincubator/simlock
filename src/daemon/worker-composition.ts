@@ -425,7 +425,7 @@ export async function composeWorker(
   // could return having stopped nothing (because `stopHttpGateway` isn't assigned yet, the
   // gateway still being mid-`start()`), and `#stop()` would go on to settle and dispose while
   // the gateway finishes binding and starts accepting requests against a daemon already being
-  // torn down -- see `server.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
+  // torn down -- see `server-options.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
   // teardown begins. When HTTP is disabled there is nothing to wait for, so this resolves
   // immediately.
   let resolveGatewayStarted: (() => void) | undefined;

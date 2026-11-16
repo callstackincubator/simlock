@@ -1,67 +1,27 @@
 import { z } from "zod";
-
-import { type EventBus } from "../bus/index.js";
-import type { EventHistoryHandle } from "../history/index.js";
+import { redactConfig } from "../core/index.js";
+import { type IpcConnection, type Logger, NoopLogger } from "../ports/index.js";
+import { parseRequestFrame, type RequestFrame } from "../daemon-protocol/index.js";
 import {
-  type ComponentInstaller,
-  type Config,
-  type Registry,
-  type CleanupReaper,
-  type Doctor,
-  type DriverRejection,
-  type HostFacts,
-  NoDriverError,
-  type Nuke,
-  type BaselineService,
-  type WarmKindForgetter,
-  redactConfig,
-  UnknownPassthroughToolError,
-  type CapacityReader,
-  type WarmPoolReader,
-  type CatalogReader,
-  type PassthroughResolver,
-  type PhysicalAutoEnrollment,
-} from "../core/index.js";
-import {
-  type LeaseHealthMonitor,
-  type PhysicalDeviceWatcher,
-  type DeviceModeReader,
-  type LeaseCommands,
-  type QueueControl,
-} from "../leasing/index.js";
-import type { Clock, IpcConnection, Logger, ProcessRunner } from "../ports/index.js";
-import { NoopLogger } from "../ports/index.js";
-import { parseRequestFrame, type RequestFrame, type RequestId } from "../daemon-protocol/index.js";
-import {
-  leaseRelease,
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
-  relayChannelSchema,
   type OperationName,
   type OPERATIONS,
   type ProtocolRange,
   type Role,
-  type StatusLoad,
-  type StatusMemoryPressure,
 } from "../contract/index.js";
-import type { LinkChannel, LinkConnection } from "../link/index.js";
-import { DaemonAlreadyRunningError, type ConnectionHost } from "./connection-host.js";
-import {
-  resolveAgentRole,
-  type Auth,
-  type SessionRoleResolver,
-  type TokenOperations,
-} from "../auth/index.js";
+import { type LinkConnection } from "../link/index.js";
+import { DaemonAlreadyRunningError } from "./connection-host.js";
+import { resolveAgentRole } from "../auth/index.js";
 import {
   Dispatcher,
   DispatchError,
   type ContractDispatcher,
-  type DispatcherOptions,
   type DispatchSession,
 } from "./dispatcher.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
-import { classifyError, StartupFailedError } from "./error-code.js";
-import { RelayConnection, type RelayTargets, type TwoWayRelayTargets } from "./relay.js";
+import { StartupFailedError } from "./error-code.js";
+import { RelayConnection } from "./relay.js";
 import {
   type Connection,
   errorMessage,
@@ -69,212 +29,16 @@ import {
   respondError,
   writeFrame,
 } from "./server-connection.js";
-import { errorCode, Handshake, parseInput, ProtocolError } from "./server-hello.js";
+import { errorCode, Handshake, ProtocolError } from "./server-hello.js";
 import { ConnectionPushes } from "./server-pushes.js";
-import type { UpdateCoordinator } from "./update-coordinator.js";
-
-/**
- * why: kept in the type rather than making every field optional: a gateway passes `dispatcher` instead,
- * and omitting `queue` from a worker's options stays a compile error.
- */
-export interface DaemonServerEngineOptions {
-  readonly capabilitySources?: DispatcherOptions["capabilitySources"];
-  readonly capacity: CapacityReader;
-  readonly warmPool: WarmPoolReader;
-  readonly deviceModes: DeviceModeReader;
-  readonly catalog: CatalogReader;
-  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
-  readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
-  readonly historyPath?: string;
-  readonly leases: LeaseCommands;
-  readonly hostFacts: () => HostFacts;
-  readonly load?: () => StatusLoad | undefined;
-  readonly instanceId: string;
-  readonly queue: QueueControl;
-  readonly presence?: DispatcherOptions["presence"];
-  readonly reaper: CleanupReaper;
-  readonly healthMonitor?: LeaseHealthMonitor | undefined;
-  readonly physicalDeviceWatcher?: PhysicalDeviceWatcher | undefined;
-  readonly autoEnrollment?: Pick<PhysicalAutoEnrollment, "dispose" | "start"> | undefined;
-  readonly enrollment?: DispatcherOptions["enrollment"];
-  readonly nuke?: Nuke;
-  readonly warmKinds?: WarmKindForgetter;
-  readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
-  readonly passthrough?: PassthroughResolver;
-  readonly inputs?: DispatcherOptions["inputs"];
-  readonly processRunner?: ProcessRunner;
-  readonly leaseFiles?: DispatcherOptions["leaseFiles"];
-  readonly relayTargets?: RelayTargets;
-  readonly relayTwoWayTargets?: TwoWayRelayTargets;
-  readonly execEnv?: NodeJS.ProcessEnv;
-  readonly registry: Registry;
-  readonly stalls?: DispatcherOptions["stalls"];
-  readonly tokens?: TokenOperations;
-  readonly update?: UpdateCoordinator;
-}
-
-export interface DaemonServerCommonOptions {
-  readonly clock: Clock;
-  readonly config: Config;
-  readonly defaultRequesterId: string;
-  /**
-   * why: the daemon serves without a platform whose driver refused to start (safety rule 9), so each
-   * refusal lands as an event in the ring buffer here.
-   */
-  readonly driverRejections?: readonly DriverRejection[];
-  readonly eventBus: EventBus;
-  readonly host: ConnectionHost;
-  readonly hostLoad?: { start(): void; dispose(): void };
-  readonly memoryPressure?: { current(): StatusMemoryPressure | undefined; dispose(): void };
-  readonly logger?: Logger;
-  readonly protocolVersion?: number | ProtocolRange;
-  readonly version: string;
-  readonly resolveRole?: SessionRoleResolver;
-  /**
-   * why: ADR §5's per-start admin secret. Undefined is a legitimate default for tests that don't
-   * exercise the admin handshake at all -- `start()`/`#stop()` simply skip the persist/remove
-   * calls below when it is absent, same style as `doctor`/`nuke`.
-   */
-  readonly adminSecret?: Auth["adminSecret"];
-  /**
-   * why: Startup recovery work (doctor reconciliation, running-capacity convergence) run
-   * *after* the socket is claimed, so reachability never depends on it. `hello` and
-   * `status.get` answer immediately; every other request type parks on this promise.
-   * A rejection here stops the daemon rather than leaving it half-open — see `start()`.
-   */
-  readonly converge?: () => Promise<void>;
-  /**
-   * why: Awaits lease work the subsystem is finishing off its callers' paths — today the
-   * backgrounded device reclaims a release hands off (see `LeaseReleaseCoordinator`).
-   * A graceful stop drains it so the pool is left settled; an ungraceful death leaves
-   * it for startup recovery. The stop itself releases nothing (ADR 0004 §3), so what this
-   * drains is work somebody else's release already handed off; it runs before `dispose`, so a
-   * quarantine retry timer armed by a reclaim settling late is still cancelled.
-   */
-  readonly settle?: () => Promise<void>;
-  /**
-   * why: Called synchronously the moment a stop is asked for, before anything is awaited: it closes
-   * to new work whatever `settle` will later wait for (the warm pool), so nothing started in the
-   * window while auxiliary frontends stop is something the drain then waits out (architecture
-   * rule 12).
-   */
-  readonly beginStop?: () => void;
-  /**
-   * why: Releases what the daemon holds beyond its own state on shutdown, and on a start that
-   * fails at the claim or the `admin.token` write: timers the lease subsystem armed (quarantine
-   * retries), and every driver's own external resources.
-   * Awaited, because a driver's release is asynchronous and a stop that returned before it
-   * finished would report a shutdown that had not happened.
-   */
-  readonly dispose?: () => void | Promise<void>;
-  /**
-   * why: Stops an auxiliary frontend (today: the HTTP gateway's listener, which `worker-composition.ts` or `main.ts` starts
-   * from `onSocketClaimed`, partway through `start()`) before anything else in `stop()` runs, so
-   * no request arriving through it can ever observe a stopping engine. A no-op default when
-   * no auxiliary frontend is running.
-   */
-  readonly stopAuxiliary?: () => Promise<void>;
-  /**
-   * why: ADR 0003 §2's "an HTTP request during startup now waits like a socket request instead of
-   * being refused" needs the HTTP gateway actually listening *before* convergence finishes --
-   * otherwise there is nothing for a request to park against, it just gets connection-refused
-   * the way it always did. Called synchronously right after `#readyPromise` is assigned (so any
-   * request `dispatch()` serves as a result of this callback already parks correctly) and after
-   * the socket claim and the admin secret write, but *before* awaiting convergence -- an
-   * auxiliary frontend started from here must not itself assume convergence is done. A no-op
-   * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
-   */
-  readonly onSocketClaimed?: () => void;
-  /**
-   * why: #118: a gateway's own `OwnerRoutedFacts` (`src/gateway/owner-routed-facts.ts`'s
-   * `GatewayOwnerRoutedFacts`), replacing the inert one gateway mode has used since #117. Worker
-   * mode ignores this entirely -- it builds its own `OwnerRoutedFactBus` from the engine's
-   * registry, exactly as before. Structurally typed (not imported) so this module need not
-   * depend on `src/gateway`; see that class's own doc comment for why the shapes line up with
-   * no cast.
-   */
-  readonly ownerRoutedFacts?: OwnerRoutedFacts & { dispose(): void };
-  /**
-   * why: #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
-   * suppression (`#handleRequest`'s `lease.release-all` case below). Worker mode reads its own
-   * registry directly and never needs this (`this.#engine?.registry` already answers it); a
-   * gateway has no registry, so it supplies its fleet lease index's own entries here instead --
-   * without it, a fleet client's own `lease.release-all` would push every one of its own
-   * `lease-lost` facts back at itself, since nothing would ever mark them self-initiated.
-   * Optional so a test exercising neither engine nor gateway leases need not supply one.
-   */
-  readonly leaseSnapshot?: () => readonly { readonly id: string; readonly ownerId: string }[];
-}
-
-/**
- * why: ADR 0005 §32: one transport, two dispatchers. A worker passes its engine and gets the
- * `Dispatcher` built for it; a gateway passes a ready-made `dispatcher` (its own handlers, over
- * worker views and uplinks) and no engine at all. The union -- rather than one interface with
- * everything optional -- is what keeps each mode's requirements checked at compile time.
- */
-export type DaemonServerOptions =
-  | (DaemonServerCommonOptions & DaemonServerEngineOptions & { readonly dispatcher?: undefined })
-  | (DaemonServerCommonOptions & {
-      readonly dispatcher: ContractDispatcher;
-      readonly update?: UpdateCoordinator;
-    });
-
-type DaemonHealth = "starting" | "running" | "failed";
-
-// fallow-ignore-next-line complexity -- one conditional spread per optional dependency.
-function buildDispatcher(
-  options: DaemonServerCommonOptions & DaemonServerEngineOptions,
-  hooks: {
-    readonly awaitReady: () => Promise<void>;
-    readonly health: () => DaemonHealth;
-  },
-): Dispatcher {
-  return new Dispatcher({
-    awaitReady: hooks.awaitReady,
-    ...(options.capabilitySources === undefined
-      ? {}
-      : { capabilitySources: options.capabilitySources }),
-    capacity: options.capacity,
-    warmPool: options.warmPool,
-    catalog: options.catalog,
-    deviceModes: options.deviceModes,
-    clock: options.clock,
-    components: options.components,
-    config: options.config,
-    ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
-    errorCode: classifyError,
-    eventBus: options.eventBus,
-    eventHistory: options.eventHistory,
-    ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
-    health: hooks.health,
-    hostFacts: options.hostFacts,
-    ...(options.load === undefined ? {} : { load: options.load }),
-    ...(options.memoryPressure === undefined
-      ? {}
-      : { memoryPressure: () => options.memoryPressure?.current() }),
-    instanceId: options.instanceId,
-    leases: options.leases,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-    ...(options.enrollment === undefined ? {} : { enrollment: options.enrollment }),
-    ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
-    ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
-    ...(options.baselines === undefined ? {} : { baselines: options.baselines }),
-    ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
-    ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
-    ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
-    ...(options.leaseFiles === undefined ? {} : { leaseFiles: options.leaseFiles }),
-    ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
-    queue: options.queue,
-    ...(options.presence === undefined ? {} : { presence: options.presence }),
-    reaper: options.reaper,
-    registry: options.registry,
-    ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
-    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-    ...(options.update === undefined ? {} : { update: options.update }),
-    version: options.version,
-  });
-}
+import {
+  buildDispatcher,
+  type DaemonHealth,
+  type DaemonServerEngineOptions,
+  type DaemonServerOptions,
+} from "./server-options.js";
+import { acceptRelayChannel, ConnectionRequests } from "./server-requests.js";
+export type { DaemonServerOptions } from "./server-options.js";
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
@@ -300,6 +64,7 @@ export class DaemonServer {
   readonly #workerDispatcher: Dispatcher | undefined;
   readonly #handshake: Handshake;
   readonly #pushes: ConnectionPushes;
+  readonly #requests: ConnectionRequests;
   /**
    * why: The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
    * registry, capacity or lifecycle to hold). Every engine touchpoint below is written
@@ -353,6 +118,14 @@ export class DaemonServer {
       // payload. Falls back to inert only for a gateway test harness that supplies neither.
       this.#ownerRoutedFacts = options.ownerRoutedFacts ?? inertOwnerRoutedFacts();
     }
+    this.#requests = new ConnectionRequests({
+      dispatcher: this.#dispatcher,
+      pushes: this.#pushes,
+      logger: this.#logger,
+      driverRejections: options.driverRejections ?? [],
+      leaseSnapshot: () =>
+        this.#engine?.registry.snapshot.leases ?? this.options.leaseSnapshot?.() ?? [],
+    });
   }
 
   get socketPath(): string {
@@ -798,7 +571,7 @@ export class DaemonServer {
     }
 
     // why: accepted here, in the same turn the line was read, so a request that parks for startup already holds its channel (ADR 0028).
-    const relayChannel = this.#acceptRelayChannel(connection, frame);
+    const relayChannel = acceptRelayChannel(connection, frame);
 
     // why: `daemon.stop` is a frozen exception (ADR 0003 §6), but only with respect to the
     // *protocol-version* gate: "the daemon accepts it at any protocol version it has ever
@@ -849,7 +622,7 @@ export class DaemonServer {
     }
 
     try {
-      const payload = await this.#handleRequest(connection, frame, relayChannel);
+      const payload = await this.#requests.handle(connection, frame, relayChannel);
       await writeFrame(connection.socket, { id: frame.id, ok: true, payload });
     } catch (error: unknown) {
       relayChannel?.abort();
@@ -870,468 +643,10 @@ export class DaemonServer {
         connection.socket,
         frame.id,
         code,
-        this.#describeError(error),
+        this.#requests.describeError(error),
         error instanceof DispatchError ? error.details : undefined,
       );
     }
-  }
-
-  /**
-   * why: A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
-   * it reads identically to "this host has no Xcode". Safety rule 9 promises Simlock
-   * reports *why* a platform is missing, so the refusal's own one-liner travels with the
-   * error on both paths a user meets it: leasing, and the `simlock simctl` / `simlock adb`
-   * wrapper, whose bare "No driver provides a adb passthrough" reads as a missing SDK and
-   * sends the operator off to install one instead of at the port conflict that caused it.
-   */
-  #describeError(error: unknown): string {
-    const message = errorMessage(error);
-    const rejection = this.#rejectionFor(error);
-    return rejection === undefined ? message : `${message} (${rejection.summary})`;
-  }
-
-  #rejectionFor(error: unknown): DriverRejection | undefined {
-    const rejections = this.options.driverRejections ?? [];
-    if (error instanceof NoDriverError) {
-      return rejections.find((candidate) => candidate.platform === error.platform);
-    }
-    if (error instanceof UnknownPassthroughToolError) {
-      return rejections.find(
-        (candidate) => candidate.passthroughTools?.includes(error.tool) === true,
-      );
-    }
-    return undefined;
-  }
-
-  // fallow-ignore-next-line complexity -- one case per request type; the switch is the transport's whole surface.
-  async #handleRequest(
-    connection: Connection,
-    frame: RequestFrame,
-    relayChannel: LinkChannel | undefined,
-  ): Promise<unknown> {
-    switch (frame.type) {
-      case "lease.request":
-        return this.#requestLease(connection, frame.id, frame.payload);
-      case "lease.release": {
-        const input = parseInput(leaseRelease.input, frame.payload);
-        connection.selfInitiatedReleases.add(input.leaseId);
-        try {
-          return await this.#dispatcher.dispatch(
-            "lease.release",
-            frame.payload,
-            this.#session(connection),
-          );
-        } finally {
-          connection.selfInitiatedReleases.delete(input.leaseId);
-        }
-      }
-      case "lease.release-all": {
-        // why: Every lease this principal owns is about to end, and this connection asked for it,
-        // so suppress the self-push for each. Read from the registry rather than from
-        // per-connection state, which no longer exists (ADR 0004 §3).
-        //
-        // The snapshot can skew either way against what the dispatched call actually
-        // releases, and both ways are acceptable: a lease that expires inside the window is
-        // suppressed here even though its `lease-lost` was the daemon's own doing (the caller
-        // asked for that lease to end and is about to be told every lease of theirs is gone),
-        // and one granted inside the window is not suppressed, so its holder gets the push it
-        // would have got for any other force-release. Neither can suppress a push for a lease
-        // this principal does not own, which is the property that matters.
-        // #118: a gateway has no `#engine`, so it falls back to `options.leaseSnapshot` (its
-        // fleet lease index) -- see that option's own doc comment.
-        const releasing = (
-          this.#engine?.registry.snapshot.leases ??
-          this.options.leaseSnapshot?.() ??
-          []
-        )
-          .filter((lease) => connection.role === "admin" || lease.ownerId === connection.principal)
-          .map((lease) => lease.id);
-        for (const leaseId of releasing) connection.selfInitiatedReleases.add(leaseId);
-        try {
-          return await this.#dispatcher.dispatch(
-            "lease.release-all",
-            frame.payload ?? {},
-            this.#session(connection),
-          );
-        } finally {
-          for (const leaseId of releasing) connection.selfInitiatedReleases.delete(leaseId);
-        }
-      }
-      case "lease.renew":
-        return this.#dispatcher.dispatch("lease.renew", frame.payload, this.#session(connection));
-      case "lease.cancel":
-        return this.#dispatcher.dispatch(
-          "lease.cancel",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "lease.get":
-        return this.#dispatcher.dispatch(
-          "lease.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "lease.list":
-        return this.#dispatcher.dispatch(
-          "lease.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "status.get":
-        return this.#dispatcher.dispatch(
-          "status.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "list.get":
-        return this.#dispatcher.dispatch(
-          "list.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "catalog.get":
-        return this.#dispatcher.dispatch(
-          "catalog.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "cleanup.run":
-        return this.#dispatcher.dispatch(
-          "cleanup.run",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "doctor.run":
-        return this.#dispatcher.dispatch(
-          "doctor.run",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "nuke.run":
-        return this.#dispatcher.dispatch(
-          "nuke.run",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "warm.forget":
-        return this.#dispatcher.dispatch(
-          "warm.forget",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "baseline.list":
-        return this.#dispatcher.dispatch(
-          "baseline.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "baseline.remove":
-        return this.#dispatcher.dispatch(
-          "baseline.remove",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "baseline.save":
-        return this.#dispatcher.dispatch(
-          "baseline.save",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "events.replay":
-        return this.#dispatcher.dispatch(
-          "events.replay",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "usage.get":
-        return this.#dispatcher.dispatch(
-          "usage.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "inbox.get":
-        return this.#dispatcher.dispatch(
-          "inbox.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "events.subscribe":
-        return this.#dispatcher.dispatch(
-          "events.subscribe",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "events.unsubscribe":
-        return this.#dispatcher.dispatch(
-          "events.unsubscribe",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "driver.passthrough":
-        // why: Resolution only: the daemon never runs the command. Spawning it here would attach
-        // a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
-        // that actually has a terminal.
-        return this.#dispatcher.dispatch(
-          "driver.passthrough",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "device.exec":
-        // why: Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
-        // per-call push wiring `lease.request` needs, and gets it the same way.
-        return this.#execDevice(connection, frame.id, frame.payload);
-      case "device.rotate":
-        return this.#dispatcher.dispatch("device.rotate", frame.payload, this.#session(connection));
-      case "relay.request":
-        return this.#relayRequest(connection, frame.id, frame.payload, relayChannel);
-      case "relay.cancel":
-        return this.#dispatcher.dispatch("relay.cancel", frame.payload, this.#session(connection));
-      case "config.get":
-        return this.#dispatcher.dispatch(
-          "config.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "identity.get":
-        return this.#dispatcher.dispatch(
-          "identity.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "token.create":
-        return this.#dispatcher.dispatch("token.create", frame.payload, this.#session(connection));
-      case "token.list":
-        return this.#dispatcher.dispatch(
-          "token.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "token.revoke":
-        return this.#dispatcher.dispatch("token.revoke", frame.payload, this.#session(connection));
-      // why: ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
-      // surface, and what a *given* daemon answers is the dispatcher's business, not the
-      // transport's -- a worker's dispatcher answers `worker.list` about itself and refuses the
-      // rest with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012).
-      case "worker.list":
-        return this.#dispatcher.dispatch(
-          "worker.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "worker.drain":
-        return this.#dispatcher.dispatch("worker.drain", frame.payload, this.#session(connection));
-      case "worker.undrain":
-        return this.#dispatcher.dispatch(
-          "worker.undrain",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "worker.remove":
-        return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
-      case "worker.update":
-        return this.#dispatcher.dispatch("worker.update", frame.payload, this.#session(connection));
-      case "alerts.test":
-        return this.#dispatcher.dispatch("alerts.test", frame.payload, this.#session(connection));
-      case "component.install":
-        return this.#installComponent(connection, frame.id, "component.install", frame.payload);
-      case "worker.install-component":
-        return this.#installComponent(
-          connection,
-          frame.id,
-          "worker.install-component",
-          frame.payload,
-        );
-      case "component.list":
-        return this.#dispatcher.dispatch(
-          "component.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "component.remove":
-        return this.#dispatcher.dispatch(
-          "component.remove",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "device.add":
-        return this.#dispatcher.dispatch("device.add", frame.payload, this.#session(connection));
-      case "device.remove":
-        return this.#dispatcher.dispatch("device.remove", frame.payload, this.#session(connection));
-      case "daemon.update":
-        return this.#dispatcher.dispatch("daemon.update", frame.payload, this.#session(connection));
-      // why: "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
-      // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
-      // scoped to protocol version only -- still gated on a completed handshake and the `admin`
-      // role there), so it never reaches `#handleRequest`.
-      default:
-        throw new ProtocolError("UNKNOWN_REQUEST", `Unknown request type: ${frame.type}`);
-    }
-  }
-
-  // why: `channel` is wire input, so its shape is checked before it names a channel; a name that fails, or one the link never saw, accepts nothing and the call fails `BAD_REQUEST` later.
-  #acceptRelayChannel(connection: Connection, frame: RequestFrame): LinkChannel | undefined {
-    if (frame.type !== "relay.request" || connection.link === undefined) return undefined;
-    const payload: unknown = frame.payload;
-    if (typeof payload !== "object" || payload === null) return undefined;
-    const name = relayChannelSchema.safeParse((payload as { channel?: unknown }).channel);
-    if (!name.success) return undefined;
-    try {
-      return connection.link.acceptChannel(name.data);
-    } catch {
-      return undefined;
-    }
-  }
-
-  #session(connection: Connection): DispatchSession {
-    return {
-      isGatewayUplink: connection.isGatewayUplink,
-      manageEventSubscription: (subscribe) =>
-        this.#pushes.manageEventSubscription(connection, subscribe),
-      principal: connection.principal,
-      relays: connection.relays,
-      role: connection.role,
-      via: connection.isGatewayUplink === true ? "uplink" : "socket",
-    };
-  }
-
-  /**
-   * why: The progress-delivery wiring ADR 0003 §2 keeps in `DaemonServer` ("DaemonServer keeps
-   * framing, connection lifecycle, and pushes; it loses the request switch"). The actual lease
-   * acquisition is `Dispatcher`'s `lease.request` handler; this method's job is what is left
-   * around that call that depends on *this connection* rather than on the operation itself,
-   * which since ADR 0004 is progress routing and nothing else -- a granted lease is not
-   * attached to the connection that asked for it in any way.
-   */
-  async #requestLease(
-    connection: Connection,
-    requestId: RequestId,
-    value: unknown,
-  ): Promise<unknown> {
-    let progressSocket: IpcConnection | undefined = connection.socket;
-    const disposeProgress = () => {
-      progressSocket = undefined;
-    };
-    connection.progressDisposers.add(disposeProgress);
-    // why: A connection close only silences this call's pushes (`disposeProgress`): the request
-    // itself keeps waiting, and a client that reconnects repeats it to get its answer.
-    let grant;
-    try {
-      grant = await this.#dispatcher.dispatch("lease.request", value ?? {}, {
-        ...this.#session(connection),
-        onProgress: (progress) => {
-          if (progressSocket !== undefined) {
-            // why: Progress is advisory: one that does not fit the push contract (a `downloading`
-            // component the driver named past the contract's bound) or a socket that went away
-            // is dropped, and the request carries on to its answer.
-            void this.#pushes.progress(progressSocket, requestId, progress).catch(() => {
-              this.#logger.warn("A lease progress push was not sent", { stage: progress.stage });
-            });
-          }
-        },
-      });
-    } finally {
-      connection.progressDisposers.delete(disposeProgress);
-      disposeProgress();
-    }
-    // why: A grant that lands after its requester's connection died (or during a stop) is left
-    // standing on purpose: ADR 0004 §3 -- connection close means nothing to a lease, so the
-    // client that reconnects can renew it, and if none does it expires at its deadline like
-    // any other.
-    return grant;
-  }
-
-  /**
-   * why: ADR 0005 §19a's output relay, and the exact counterpart of `#requestLease` above: the
-   * operation itself is the dispatcher's `device.exec` handler; what lives here is the part
-   * that depends on *this connection* -- turning each chunk into an `output` push carrying this
-   * call's frame id, and stopping the moment the socket goes away.
-   *
-   * The command keeps running after a disconnect rather than being killed with it. That is the
-   * same answer ADR 0004 §3 gives for leases (a dead connection is not a dead lease) and the
-   * only safe one here: a half-applied `simctl install` interrupted because a client's tunnel
-   * blipped is worse than one that finishes with nobody listening, and the daemon has no way to
-   * know which half a kill would land in. Its exit code is simply lost with the connection, and
-   * `exec.timeoutMs` still bounds how long it can run.
-   */
-  async #execDevice(
-    connection: Connection,
-    requestId: RequestId,
-    value: unknown,
-  ): Promise<unknown> {
-    let outputSocket: IpcConnection | undefined = connection.socket;
-    const disposeOutput = () => {
-      outputSocket = undefined;
-    };
-    connection.progressDisposers.add(disposeOutput);
-    try {
-      return await this.#dispatcher.dispatch("device.exec", value ?? {}, {
-        ...this.#session(connection),
-        // why: Returned rather than fired and forgotten, which is what applies backpressure: the
-        // dispatcher hands this promise to the process runner, which stops reading the child
-        // until the frame has actually been written (ADR 0005 §19e -- "streamed, never
-        // buffered" is only true end to end if a client that does not read slows the command
-        // down instead of filling this process). A write that fails on a socket which died
-        // between the check and the write (EPIPE) resolves rather than rejecting: the chunk is
-        // lost with the connection, the command carries on, and a rejection here would both
-        // wedge the child and, unhandled, take the daemon down over a client that hung up.
-        onOutput: async (stream, chunk) => {
-          if (outputSocket === undefined) return;
-          await this.#pushes.output(outputSocket, requestId, stream, chunk).catch(() => undefined);
-        },
-        // why: ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
-        // unlike `onOutput` this carries no backpressure meaning, and the dispatcher calls it
-        // synchronously between the spawn and the first chunk. Every peer that negotiates
-        // protocol 5 understands the frame (§31), so this is not a signal anyone opts out of.
-        onStarted: () => {
-          if (outputSocket === undefined) return;
-          void this.#pushes.started(outputSocket, requestId).catch(() => undefined);
-        },
-      });
-    } finally {
-      connection.progressDisposers.delete(disposeOutput);
-      disposeOutput();
-    }
-  }
-
-  #relayRequest(
-    connection: Connection,
-    requestId: RequestId,
-    value: unknown,
-    relayChannel: LinkChannel | undefined,
-  ): Promise<unknown> {
-    return this.#dispatcher.dispatch("relay.request", value, {
-      ...this.#session(connection),
-      ...(relayChannel === undefined ? {} : { relayChannel }),
-      onRelayHead: (status, headers) =>
-        this.#pushes.relayHead(connection.socket, requestId, status, headers),
-    });
-  }
-
-  /**
-   * why: ADR 0010 §6: the counterpart of `#requestLease` for an install. Each progress update becomes
-   * a `component-progress` push carrying this call's frame id. A closed connection only
-   * silences the pushes (`writeFrame` writes nothing to a closed socket, and a write that fails
-   * is dropped): the install carries on for every call joined to it, and a client that
-   * reconnects repeats the request to join it again.
-   *
-   * A gateway's `worker.install-component` takes the same path: its progress names the worker
-   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher
-   * refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
-   */
-  #installComponent(
-    connection: Connection,
-    requestId: RequestId,
-    operation: "component.install" | "worker.install-component",
-    value: unknown,
-  ): Promise<unknown> {
-    return this.#dispatcher.dispatch(operation, value ?? {}, {
-      ...this.#session(connection),
-      onComponentProgress: (progress, workerId) => {
-        void this.#pushes
-          .componentProgress(connection.socket, requestId, progress, workerId)
-          .catch(() => undefined);
-      },
-    });
   }
 
   #closeConnection(connection: Connection): void {

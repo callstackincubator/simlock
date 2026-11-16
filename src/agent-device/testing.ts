@@ -14,6 +14,7 @@ export class FakeAgentDeviceHealth implements AgentDeviceHealthProbe {
     this.#answer = { body };
   }
 
+  // fallow-ignore-next-line unused-class-member -- the agent-device tests call it on fakes their test-* helpers build.
   rejectWith(error: Error): void {
     this.#answer = { error };
   }

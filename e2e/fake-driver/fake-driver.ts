@@ -650,6 +650,7 @@ export class OutOfProcessFakeDriver implements Driver {
   }
 
   /** Not through `#beforeCall`, so a test's call log holds only what the test caused. */
+  // fallow-ignore-next-line unused-class-member -- called through the Driver interface, and by its tests through a test-* harness.
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     return (await this.#readScript()).toolVersions ?? [];
   }
