@@ -8,6 +8,7 @@ import {
   createDriver,
   listFixture,
   listInvocation,
+  plantLaunchServices,
   scopedRunners,
   seedUdid,
   seededDatabase,
@@ -187,5 +188,28 @@ describe("IosSimctlDriver copy swap", () => {
         if (attempt.crash === true) expect(outcome, attempt.label).toBeInstanceOf(DriverCrashError);
       }
     }
+  });
+
+  it("a LaunchServices database the seed recorded is dropped from the copy and is not swapped", async () => {
+    const csstore = "data/var/db/lsd/com.apple.LaunchServices-33554481-v2.csstore";
+    const database = await seededDatabase({
+      files: [{ kind: "file", relativePath: csstore }],
+      lineage: [lineageUdid],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+      },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${copyUdid}`);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    await driver.provision(spec);
+
+    expect(await filesystem.exists(`${deviceRoot}/${copyUdid}/${csstore}`)).toBe(false);
   });
 });

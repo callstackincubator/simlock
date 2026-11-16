@@ -39,6 +39,7 @@ import type { SqliteDatabase, SqliteOpener } from "../../ports/index.js";
 const STALE_MAKING_MS = 300_000;
 
 const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
+const LAUNCH_SERVICES_PATH = /^data\/var\/db\/lsd\/com\.apple\.LaunchServices-[^/]*\.csstore$/;
 
 interface SeedsOptions {
   readonly boot: SimulatorBoot;
@@ -502,7 +503,10 @@ export class Seeds {
     const counts = await swapCopyFiles(
       this.#filesystem,
       join(this.#deviceRoot, udid),
-      this.#sources.filesOf(sourceId),
+      // why: the copy's LaunchServices database was dropped just before, so a seed that recorded one has nothing of it left to swap.
+      this.#sources
+        .filesOf(sourceId)
+        .filter((file) => !LAUNCH_SERVICES_PATH.test(file.relativePath)),
       { lineage, own: udid },
     );
     this.#logger?.debug(
