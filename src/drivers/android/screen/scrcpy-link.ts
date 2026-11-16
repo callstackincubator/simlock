@@ -104,6 +104,25 @@ async function attemptConnection(
   }
 }
 
+// why: the control socket is the second the server accepts on its name and carries no zero byte, so it is
+// connected once, after the video's, and is never asked for one; anything but an open socket refuses.
+export async function connectScrcpyControl(
+  request: ScrcpyConnectRequest,
+): Promise<ScrcpyConnection> {
+  const { target, signal } = request;
+  const outcome = await openDeviceSocket({
+    connect: (timeoutMs) => target.connect(timeoutMs),
+    serial: target.serial,
+    signal,
+    service: `localabstract:scrcpy_${request.scidHex}`,
+    timeoutMs: Math.max(1, request.deadlineAt - request.clock.now()),
+  });
+  if (outcome.kind !== "open") throw request.stopped(outcome.reason);
+  if (signal.aborted) outcome.stream.close();
+  else signal.addEventListener("abort", () => outcome.stream.close(), { once: true });
+  return { reader: outcome.reader, stream: outcome.stream };
+}
+
 function sleep(clock: Clock, delayMs: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (signal.aborted) {

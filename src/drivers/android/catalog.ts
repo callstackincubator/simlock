@@ -56,7 +56,7 @@ export interface CatalogOptions extends ProfileSourceInputs {
   readonly onDiagnostic: ((diagnostic: DeviceProfileSourceDiagnostic) => void) | undefined;
   readonly processRunner: ProcessRunner;
   readonly sdkRoot: string;
-  readonly systemImages: Pick<SystemImages, "installedImages" | "noFittingImage">;
+  readonly systemImages: Pick<SystemImages, "builtForHost" | "installedImages" | "noFittingImage">;
 }
 
 /** why: the part of AndroidDriver (ADR 0063) that owns the profile registry, the resolved-profile cache `resolveSpec` writes and the kept `avdmanager list device` answer. */
@@ -94,7 +94,14 @@ export class Catalog {
     const profile = await this.#deviceProfiles.resolve(request.model);
     const images = await this.#systemImages.installedImages();
     if (request.imageTag !== undefined) {
-      const apiLevel = this.#taggedApiLevel(profile, images, request.imageTag, request.osVersion);
+      const candidates =
+        request.defaultTag === true ? this.#systemImages.builtForHost(images) : images;
+      const apiLevel = this.#taggedApiLevel(
+        profile,
+        candidates,
+        request.imageTag,
+        request.osVersion,
+      );
       this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
       return {
         imageTag: request.imageTag,

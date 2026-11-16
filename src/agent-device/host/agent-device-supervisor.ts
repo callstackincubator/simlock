@@ -213,6 +213,7 @@ export class AgentDeviceSupervisor {
     await this.#begin();
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the module host's port, and by its tests through the test-* harness.
   async stop(): Promise<void> {
     this.#stopped = true;
     for (const wake of this.#stopWaiters) wake();

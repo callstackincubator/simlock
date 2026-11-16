@@ -68,9 +68,10 @@ export default {
     },
     {
       name: "testing-only-in-tests",
-      comment: "only a *.test.ts file or a test-*.ts helper imports a testing.ts or test-*.ts file",
+      comment:
+        "only a *.test.ts file, a test-*.ts helper or a testing.ts entry imports a testing.ts or test-*.ts file",
       severity: "error",
-      from: { pathNot: testFile },
+      from: { pathNot: linkTestFile },
       to: { path: "(^|/)(testing|test-[^/]+)\\.tsx?$" },
     },
     {

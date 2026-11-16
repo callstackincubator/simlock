@@ -132,12 +132,12 @@
         "reason": "Glue scripts for the delivery pipeline: git and transcript walks, option parsing, a Markdown shape check. Their tests spawn them rather than import them and there is no coverage pipeline, so Fallow counts 0% coverage and CRAP is cyclomatic squared plus cyclomatic. Cyclomatic 12 and cognitive 15 are the real limits; maxCrap 156 is the CRAP of a cyclomatic-12 function at 0% coverage (12 * 12 + 12), so CRAP never fails a function the cyclomatic ceiling passes."
       },
       {
-        "files": ["src/agent-device/host/agent-device-supervisor.test.ts"],
+        "files": ["src/agent-device/host/test-agent-device-supervisor.ts"],
         "maxCrap": 80,
-        "reason": "The supervisor's test arranges a process table, a clock, a filesystem and a scripted runner in one helper so each of its cases reads as one claim; the helper is branching setup, not logic under test."
+        "reason": "The supervisor's tests arrange a process table, a clock, a filesystem and a scripted runner in one helper so each of its cases reads as one claim; the helper is branching setup, not logic under test."
       },
       {
-        "files": ["src/drivers/android/screen/session.test.ts"],
+        "files": ["src/drivers/android/screen/test-session.ts"],
         "maxCrap": 45,
         "reason": "The capture's `setup` builds both devices' worlds — two targets, a scripted runner, an adb server, a clock, a filesystem, an optional scripted screen answer — in one helper so each case reads as one claim; the branches are optional arrangement, not logic under test."
       },

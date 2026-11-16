@@ -1,6 +1,3 @@
-import type { EventBus, EventMap } from "../bus/index.js";
-import type { Clock, IdGenerator } from "../ports/index.js";
-import type { StateDatabase } from "../state/index.js";
 import {
   DEFAULT_DEVICES_DELETED_RETENTION_MS,
   DEFAULT_LEASE_ENDED_ID_RETENTION_MS,
@@ -16,20 +13,15 @@ import {
   IllegalTransition,
   isSettled,
   type LeaseGrant,
-  type LeaseIdentity,
   type LeaseRecord,
   type LeaseRequestFailure,
   type LeaseRequestRecord,
-  type PhysicalClass,
   type PhysicalDevice,
   type Platform,
   transition,
   type VirtualDevice,
-  type VirtualSpec,
 } from "./domain.js";
-import type { ComponentReceipt, DeviceDataTable } from "./driver.js";
 import {
-  type LeaseRequestLimits,
   type LeaseRequestOutcome,
   type LeaseRequestStore,
   type NewLeaseRequest,
@@ -53,132 +45,41 @@ import {
   writeLease,
   writeLeaseRequest,
 } from "./registry-rows.js";
+import { RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry-errors.js";
+import type {
+  ComponentRecord,
+  CreateLeaseInput,
+  PhysicalEnrollmentInput,
+  RegisterDeviceInput,
+  RegistryDeviceEvent,
+  RegistryOptions,
+  RegistrySnapshot,
+  ReleasedLease,
+} from "./registry-types.js";
+import {
+  assertTransitionEvent,
+  changes,
+  cloneComponent,
+  cloneDevice,
+  cloneLease,
+  cloneLeaseRequest,
+  componentKey,
+  isExpired,
+  isVirtual,
+  withoutCauseUnlessQuarantined,
+} from "./registry-records.js";
 
-export interface RegistryOptions {
-  readonly clock: Clock;
-  readonly idGenerator: IdGenerator;
-  readonly eventBus: EventBus;
-  readonly state: StateDatabase;
-  readonly deviceData: ReadonlyMap<Platform, DeviceDataTable>;
-  /**
-   * `lease.identity`: the policy a newly registered device is stamped with, looked up by its
-   * spec's platform. Only registration reads it -- a loaded record keeps the policy it was
-   * created under. Defaults to `reusable` for both platforms.
-   */
-  readonly leaseIdentity?: Readonly<Record<Platform, LeaseIdentity>>;
-  /**
-   * `lease.requestRetentionMs` and `lease.maxRequestRecords`: how long a settled lease request is
-   * kept and how many are kept at most. Defaults to the config defaults.
-   */
-  readonly leaseRequestLimits?: LeaseRequestLimits;
-  /** why: `devices.deletedRetentionMs`, how long a `deleted` device record is kept; defaults to the config default. */
-  readonly deletedRetentionMs?: number;
-  /** why: `lease.endedIdRetentionMs`, how long a chosen lease id is remembered after its lease ended; defaults to the config default. */
-  readonly endedIdRetentionMs?: number;
-}
-
-export interface RegistrySnapshot {
-  /** Every device: the records of `devices`, then those of `physicalDevices`. */
-  readonly devices: readonly DeviceRecord[];
-  readonly virtualDevices: readonly VirtualDevice[];
-  readonly leases: readonly LeaseRecord[];
-  readonly components: readonly ComponentRecord[];
-}
-
-/**
- * The fourth record type: a component Simlock installed (ADR 0010 §5). `receipt` is the
- * driver's own, opaque to the core and compared only for equality -- a component is Simlock's
- * when a record's receipt equals the receipt of something installed now. One record per platform
- * and version: a later install of the same version replaces it.
- */
-export interface ComponentRecord {
-  readonly platform: Platform;
-  readonly version: string;
-  readonly installedAt: number;
-  readonly receipt: ComponentReceipt;
-}
-
-export interface RegisterDeviceInput {
-  readonly driverDeviceId: string;
-  readonly spec: VirtualSpec;
-  readonly driverData: unknown;
-  readonly provisionDuration: number;
-}
-
-export interface PhysicalEnrollmentInput {
-  readonly platform: Platform;
-  readonly driverDeviceId: string;
-  readonly model: string;
-  readonly osVersion: string;
-  readonly class: PhysicalClass;
-  readonly apps: readonly string[];
-  /** why: who enrolled the phone, for `device.enrolled`; an operator's `device add` unless the worker's auto-enroller says otherwise. */
-  readonly initiator?: "operator" | "auto";
-}
-
-export interface ReleasedLease {
-  readonly device: DeviceRecord;
-  readonly lease: LeaseRecord;
-}
-
-export interface CreateLeaseInput {
-  readonly deviceId: string;
-  readonly requesterId: string;
-  readonly ownerId: string;
-  readonly ttlMs: number;
-  readonly ttlDeadline: number;
-  /** why: the caller has already refused an ID that is in use: one place enforces that rule. */
-  readonly leaseId?: string;
-  /** why: the categories the lease keeps running, written to the device in the commit that leases it (ADR 0066 §4). */
-  readonly except?: readonly string[];
-  /**
-   * why: when given, the commit that adds the lease also marks the request `granted`, so no crash can
-   * fall between the two.
-   */
-  readonly request?: {
-    readonly id: string;
-    readonly environment: LeaseGrant["environment"];
-    readonly timing: LeaseGrant["timing"];
-  };
-}
-
-export type RegistryDeviceEvent =
-  | {
-      readonly event: "device.ready";
-      readonly payload: Omit<EventMap["device.ready"], "platform">;
-    }
-  | { readonly event: "device.reclaimed"; readonly payload: EventMap["device.reclaimed"] }
-  | { readonly event: "device.shutdown"; readonly payload: EventMap["device.shutdown"] }
-  | {
-      readonly event: "device.absence-detected";
-      readonly payload: EventMap["device.absence-detected"];
-    }
-  | { readonly event: "device.returned"; readonly payload: EventMap["device.returned"] }
-  | {
-      readonly event: "device.deleted";
-      readonly payload: Omit<EventMap["device.deleted"], "physical">;
-    };
-
-export class UnknownDeviceError extends Error {
-  constructor(readonly deviceId: string) {
-    super(`Unknown device: ${deviceId}`);
-    this.name = "UnknownDeviceError";
-  }
-}
-
-export class UnknownLeaseError extends Error {
-  constructor(readonly leaseId: string) {
-    super(`Unknown lease: ${leaseId}`);
-    this.name = "UnknownLeaseError";
-  }
-}
-
-export class RegistryEventError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RegistryEventError";
-  }
-}
+export type {
+  ComponentRecord,
+  CreateLeaseInput,
+  PhysicalEnrollmentInput,
+  RegisterDeviceInput,
+  RegistryDeviceEvent,
+  RegistryOptions,
+  RegistrySnapshot,
+  ReleasedLease,
+} from "./registry-types.js";
+export { RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry-errors.js";
 
 /**
  * Devices, leases, lease requests (stored before they are queued, see `LeaseRequestBook`) and
@@ -255,6 +156,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * `ComponentInstaller` calls it once the driver removed the component, before it emits
    * `component.removed`. Deleting a record that is not there commits nothing.
    */
+  // fallow-ignore-next-line unused-class-member -- called by ComponentInstaller through its Pick<Registry> port and by the registry tests.
   async deleteComponent(platform: Platform, version: string): Promise<void> {
     const components = this.#components.filter(
       (existing) => existing.platform !== platform || existing.version !== version,
@@ -1088,95 +990,4 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         );
     }
   }
-}
-
-function isExpired(device: DeviceRecord, now: number, retentionMs: number): boolean {
-  return device.deletedAt !== undefined && now - device.deletedAt > retentionMs;
-}
-
-function componentKey(record: ComponentRecord): string {
-  return `${record.platform}\0${record.version}`;
-}
-
-/** why: records are immutable, so a record that is not the committed object has changed and one that is not in `after` is gone. */
-function changes<T>(
-  before: readonly T[],
-  after: readonly T[],
-  keyOf: (record: T) => string,
-): { readonly changed: T[]; readonly removed: string[] } {
-  const committed = new Map(before.map((record) => [keyOf(record), record]));
-  const kept = new Set(after.map(keyOf));
-  return {
-    changed: after.filter((record) => committed.get(keyOf(record)) !== record),
-    removed: [...committed.keys()].filter((key) => !kept.has(key)),
-  };
-}
-
-function cloneDevice<T extends DeviceRecord>(device: T): T {
-  return { ...device, spec: { ...device.spec } } as T;
-}
-
-function isVirtual(device: DeviceRecord): device is VirtualDevice {
-  return !device.physical;
-}
-
-/** why: the one place a cause goes when its device leaves quarantine, however it left. */
-function withoutCauseUnlessQuarantined(device: DeviceRecord): DeviceRecord {
-  if (device.state === "quarantined" || device.quarantineCause === undefined) return device;
-  const { quarantineCause: _cause, ...rest } = device;
-  return rest as DeviceRecord;
-}
-
-function cloneLease(lease: LeaseRecord): LeaseRecord {
-  return { ...lease };
-}
-
-function cloneComponent(record: ComponentRecord): ComponentRecord {
-  return { ...record, receipt: { ...record.receipt } };
-}
-
-function cloneLeaseRequest(record: LeaseRequestRecord): LeaseRequestRecord {
-  return { ...record, request: { ...record.request } };
-}
-
-/** The one device event a transition carries must be the one its states call for, about this device. */
-function assertTransitionEvent(
-  device: DeviceRecord,
-  to: DeviceState,
-  event: RegistryDeviceEvent | undefined,
-): void {
-  const expectedEvent = eventForTransition(device.state, to);
-  if (event?.event !== expectedEvent) {
-    throw new RegistryEventError(
-      `Transition from ${device.state} to ${to} requires ${expectedEvent ?? "no"} device event`,
-    );
-  }
-  if (event !== undefined && event.payload.deviceId !== device.id) {
-    throw new RegistryEventError(`Device event payload does not match device: ${device.id}`);
-  }
-}
-
-function eventForTransition(
-  from: DeviceState,
-  to: DeviceState,
-): RegistryDeviceEvent["event"] | undefined {
-  if (to === "absent") {
-    return "device.absence-detected";
-  }
-  if (from === "absent" && to === "reclaiming") {
-    return "device.returned";
-  }
-  if (from === "reclaiming") {
-    return "device.reclaimed";
-  }
-  if (to === "ready") {
-    return "device.ready";
-  }
-  if (to === "shutdown") {
-    return "device.shutdown";
-  }
-  if (to === "deleted") {
-    return "device.deleted";
-  }
-  return undefined;
 }

@@ -145,6 +145,7 @@ export class WorkerRegistry {
    * Likewise a view with no `devices` carries the physical devices of the last list read from it, none when that list had none.
    * Never shown to an operator: the view itself says "not read yet".
    */
+  // fallow-ignore-next-line unused-class-member -- called through the gateway's views port, and by its tests through the test-* harness.
   routingViews(): readonly WorkerView[] {
     return this.views().map((view) => {
       const catalog = this.#lastCatalog.get(view.id);
@@ -188,6 +189,7 @@ export class WorkerRegistry {
    * or any other listener: this registry's own correctness must never depend on what a
    * subscriber does with the notification.
    */
+  // fallow-ignore-next-line unused-class-member -- called through the gateway's views port, and by its tests through the test-* harness.
   onViewsChanged(listener: () => void): () => void {
     this.#viewsChangedListeners.add(listener);
     return () => {

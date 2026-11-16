@@ -91,15 +91,17 @@ function inputs(
   comments: readonly { body: string }[],
   previous?: string,
   base = "main",
+  head = "bug/12",
 ) {
   const file = join(mkdtempSync(join(root, "gh-")), "github.json");
   writeFileSync(
     file,
     JSON.stringify({
-      "repos/o/r/pulls/7": { head: { ref: "bug/12" }, base: { ref: base }, body: null },
+      "repos/o/r/pulls/7": { head: { ref: head }, base: { ref: base }, body: null },
       "repos/o/r/issues/12": issue,
       "repos/o/r/issues/12/comments": comments,
       "repos/o/r/issues/5": { body: "Feature\r\nfive." },
+      "repos/o/r/issues/602": FEATURE,
     }),
   );
   writeFileSync(join(dirname(file), "gh"), FAKE_GH);
@@ -123,6 +125,11 @@ function inputs(
   return { read };
 }
 
+const FEATURE = {
+  body: "Feature 602.",
+  labels: [{ name: "feature:planned" }],
+  parent_issue_url: null,
+};
 const BUG = { body: "The bug.", labels: [{ name: "bug:ready" }], parent_issue_url: null };
 
 describe("review-inputs.sh over repo-scoped REST", { timeout: 30_000 }, () => {
@@ -132,6 +139,15 @@ describe("review-inputs.sh over repo-scoped REST", { timeout: 30_000 }, () => {
     expect(result.read("issue.md")).toBe("The bug.\n");
     expect(result.read("feature.md")).toBe("Feature\nfive.\n");
     expect(inputs(BUG, []).read("feature.md")).toBeNull();
+  });
+
+  it("writes the feature as issue.md for a feature/<N>-adr branch and a feature/<N>-adr-<suffix> one", () => {
+    expect(inputs(BUG, [], undefined, "main", "feature/602-adr").read("issue.md")).toBe(
+      "Feature 602.\n",
+    );
+    expect(inputs(BUG, [], undefined, "main", "feature/602-adr-amend").read("issue.md")).toBe(
+      "Feature 602.\n",
+    );
   });
 
   it("lists in stale-refs.txt the lines holding a word the issue's Retired words section names", () => {

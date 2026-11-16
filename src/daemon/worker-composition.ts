@@ -211,6 +211,9 @@ export async function composeWorker(
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
           clock,
           database: state.database,
+          ...(config.android.defaultImageTag === undefined
+            ? {}
+            : { androidDefaultImageTag: config.android.defaultImageTag }),
           driversConfig: config.drivers,
           eventBus,
           filesystem,
@@ -370,6 +373,7 @@ export async function composeWorker(
     components,
     config,
     core,
+    defaultImageTags: deviceModeWiring(config).defaultImageTags,
     defaultModes: deviceModeWiring(config).defaultModes,
     describeFailure: describeLeaseRequestFailure,
     eventBus,
@@ -425,7 +429,7 @@ export async function composeWorker(
   // could return having stopped nothing (because `stopHttpGateway` isn't assigned yet, the
   // gateway still being mid-`start()`), and `#stop()` would go on to settle and dispose while
   // the gateway finishes binding and starts accepting requests against a daemon already being
-  // torn down -- see `server.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
+  // torn down -- see `server-options.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
   // teardown begins. When HTTP is disabled there is nothing to wait for, so this resolves
   // immediately.
   let resolveGatewayStarted: (() => void) | undefined;
@@ -760,11 +764,16 @@ export async function composeWorker(
   return daemon;
 }
 
-export function deviceModeWiring(config: Pick<Config, "ios">): {
+export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
+  readonly defaultImageTags: Readonly<Partial<Record<"android", string>>>;
   readonly defaultModes: Readonly<Partial<Record<"ios" | "android", DeviceMode>>>;
   readonly slimByDefault: boolean;
 } {
   return {
+    defaultImageTags:
+      config.android.defaultImageTag === undefined
+        ? {}
+        : { android: config.android.defaultImageTag },
     defaultModes: { ios: config.ios.defaultMode },
     slimByDefault: config.ios.defaultMode === "slim",
   };

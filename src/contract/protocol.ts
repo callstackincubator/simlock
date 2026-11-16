@@ -10,7 +10,7 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /** Widen only once a second version is kept alive side by side with the first; a bump that leaves no shim behind moves both ends. */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 89, max: 89 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 89, max: 91 };
 
 const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
@@ -68,7 +68,7 @@ export const helloRequestSchema = z
  * `hello` request supplied, or the daemon's own default (today: `defaultRequesterId`) when it
  * omitted one. Without this the client cannot learn its own principal in that fallback case, and
  * would otherwise have to guess -- see the abort-authorization defect this closes in
- * `simlock-client/client.ts`.
+ * `simlock-client/client-impl.ts`.
  */
 export const helloReplySchema = z.object({
   protocolVersion: z.number().int(),
