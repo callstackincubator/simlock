@@ -246,7 +246,7 @@ export class AndroidPhysicalHandler {
     for (const { driverDeviceId, hardwareSerial } of enrolled) {
       const network = this.#networkDevices && hardwareSerial !== undefined;
       const matching = entries.filter(
-        (entry) => entry.serial === driverDeviceId && (entry.usb || (network && !entry.emulator)),
+        (entry) => entry.serial === driverDeviceId && (entry.usb || network),
       );
       if (matching.some((entry) => entry.state === "device")) {
         const same = !network || (await this.#hasHardwareSerial(driverDeviceId, hardwareSerial));
@@ -457,7 +457,7 @@ function parseDevices(output: string, platform: NodeJS.Platform): ListedTranspor
     const usb =
       tokens.some((token) => token.startsWith("usb:")) ||
       (platform === "win32" && !isNetworkOrEmulatorSerial(serial));
-    entries.push({ emulator: !usb && /^emulator-\d+$/.test(serial), serial, state, usb });
+    entries.push({ emulator: /^emulator-\d+$/.test(serial), serial, state, usb });
   }
   return entries;
 }

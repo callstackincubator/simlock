@@ -370,7 +370,9 @@ describe("Android physical handler under android.networkDevices: reclaim", () =>
     for (const failure of [FAILED, TIMED_OUT]) {
       const unreadable = await networkHandler(devicesListing(NETWORK_LINE));
       unreadable.runner.override((rest) => (rest.includes("ro.serialno") ? failure : undefined));
-      await expect(unreadable.handler.reclaim(device)).rejects.toThrow(/hardware serial/);
+      await expect(unreadable.handler.reclaim(device)).rejects.toThrow(
+        "physical reclaim could not read the hardware serial",
+      );
       expect(pmCommands(unreadable.runner)).toEqual([]);
     }
 
