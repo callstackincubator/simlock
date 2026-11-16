@@ -255,6 +255,7 @@ describe("IosSimctlDriver seed throwaway", () => {
         failure.logFolder,
       );
       expect(logger.warnings, failure.label).toEqual(failure.warnings);
+      expect(runner.calls.length, failure.label).toBe(failure.steps.length + 1);
     }
   });
 
