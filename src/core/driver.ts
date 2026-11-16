@@ -54,6 +54,8 @@ export type VirtualDriverDevice = DriverDevice & { readonly physical: false };
 export type PhysicalDriverDevice = DriverDevice & {
   readonly physical: true;
   readonly enrolledApps: readonly string[];
+  /** why: set for a network phone only, so the driver checks it still reaches that phone (ADR 0080 §2). */
+  readonly hardwareSerial?: string;
 };
 
 export function isPhysicalDriverDevice(device: DriverDevice): device is PhysicalDriverDevice {
@@ -83,7 +85,12 @@ export function toDriverDevice(device: DeviceRecord): VirtualDriverDevice | Phys
     driverData: device.driverData,
   };
   return device.physical
-    ? { ...base, enrolledApps: device.enrolledApps, physical: true }
+    ? {
+        ...base,
+        enrolledApps: device.enrolledApps,
+        ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
+        physical: true,
+      }
     : { ...base, physical: false };
 }
 

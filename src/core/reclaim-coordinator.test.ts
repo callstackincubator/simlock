@@ -657,6 +657,24 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     });
   });
 
+  it("a physical reclaim hands the driver the record's hardwareSerial, and none for a record without one", async () => {
+    const reclaimedWith = async (hardwareSerial?: string) => {
+      const harness = await physicalHarness(
+        "reclaiming",
+        hardwareSerial === undefined ? {} : { hardwareSerial },
+      );
+      harness.driver.setPhysicalPresence(PHYSICAL_ID, true);
+      await harness.coordinator.reclaim(releasedPhysical(harness.device()));
+      return harness.driver.calls.find((call) => call.operation === "reclaim")?.arguments[0];
+    };
+
+    expect(await reclaimedWith("SER-1")).toMatchObject({
+      deviceId: PHYSICAL_ID,
+      hardwareSerial: "SER-1",
+    });
+    expect(await reclaimedWith()).not.toHaveProperty("hardwareSerial");
+  });
+
   it("a failed physical reclaim reads presence with the record's driverDeviceId and hardwareSerial", async () => {
     const harness = await physicalHarness("reclaiming", { hardwareSerial: "SER-1" });
     harness.driver.setPhysicalPresence(PHYSICAL_ID, true);
