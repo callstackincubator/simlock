@@ -154,4 +154,24 @@ describe("a worker whose <platform>.virtualDevices is false", () => {
     );
     expect(android.calls.map((call) => call.operation)).not.toContain("listCatalog");
   });
+
+  it("installs, lists and removes components on a phones-only platform as on any worker", async () => {
+    const { dispatcher } = await buildDispatcher({ virtualDevices: { ios: false } });
+    const admin = session({ principal: "tok_operator", role: "admin" });
+    const component = { platform: "ios", version: "27.0" } as const;
+
+    await expect(dispatcher.dispatch("component.install", component, admin)).resolves.toEqual({
+      component: "27.0",
+      outcome: "installed",
+      platform: "ios",
+      version: "27.0",
+    });
+    const listed = await dispatcher.dispatch("component.list", { platform: "ios" }, admin);
+    expect(listed.components.map((entry) => entry.version)).toContain("27.0");
+    await expect(dispatcher.dispatch("component.remove", component, admin)).resolves.toMatchObject({
+      outcome: "removed",
+    });
+    const after = await dispatcher.dispatch("component.list", { platform: "ios" }, admin);
+    expect(after.components.map((entry) => entry.version)).not.toContain("27.0");
+  });
 });
