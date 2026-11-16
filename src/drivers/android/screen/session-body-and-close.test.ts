@@ -27,33 +27,33 @@ async function settle(): Promise<void> {
 }
 
 describe("Android screen capture: the key frame bound", () => {
-  it("sends reset video on the control socket when no key frame came for 5 s", async () => {
-    // why: a still screen: a reset at 5 s and again at 10 s, none before.
+  it("sends reset video on the control socket when no key frame came for 4 s", async () => {
+    // why: a still screen: a reset at 4 s and again at 8 s, none before.
     const still = await setup();
     await opened(still);
     const stillControl = still.target.server.controls[0]!;
-    still.clock.advance(4_999);
+    still.clock.advance(3_999);
     await settle();
     expect(stillControl.written.slice(2)).toEqual([]);
     still.clock.advance(1);
     await settle();
     expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO]);
-    still.clock.advance(5_000);
+    still.clock.advance(4_000);
     await settle();
     expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO, RESET_VIDEO]);
 
-    // why: a key frame at 4 s moves the reset to 9 s, and the session the reset starts is relayed whole.
+    // why: a key frame at 3 s moves the reset from 4 s to 7 s, and the session the reset starts is relayed whole.
     const moving = await setup();
     const feed = await opened(moving);
     const peer = moving.target.server.last;
     const control = moving.target.server.controls[0]!;
     const reader = feed.body.getReader();
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
-    moving.clock.advance(4_000);
+    moving.clock.advance(3_000);
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.description);
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.keyframe);
-    moving.clock.advance(4_999);
+    moving.clock.advance(3_999);
     await settle();
     expect(control.written.slice(2)).toEqual([]);
     moving.clock.advance(1);
@@ -82,7 +82,7 @@ describe("Android screen capture: the key frame bound", () => {
     expect(frameTag((await failingReader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
     failing.target.server.controls[0]!.failWrites = true;
     const ended = failingReader.read();
-    failing.clock.advance(5_000);
+    failing.clock.advance(4_000);
     await expect(ended).rejects.toBeInstanceOf(ScreenUnavailableError);
   });
 });

@@ -661,7 +661,7 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     });
   });
   it("refuses a gateway on the current protocol when this worker advertises the previous one (ADR 0007 §12)", async () => {
-    const previous = { min: PROTOCOL_VERSION_RANGE.min - 1, max: PROTOCOL_VERSION_RANGE.max - 1 };
+    const previous = { min: PROTOCOL_VERSION_RANGE.min - 2, max: PROTOCOL_VERSION_RANGE.min - 1 };
     const harness = await createHarness({
       protocolVersion: previous,
       resolveRole: { resolve: () => "admin" },

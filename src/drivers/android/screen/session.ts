@@ -50,8 +50,9 @@ const SCREEN_OFF_MESSAGE =
 export const ALIVE_AFTER_MS = 5_000;
 const ALIVE_FRAME = encodeScreenFrame(SCREEN_FRAME_TAG.alive, new Uint8Array(0));
 // why: ADR 0079 §5 bounds the gap between key frames at 5 s; scrcpy's encoder sends none for a still screen
-// and the reset (control message 17) makes it send a session, parameters and a key frame at once.
-const RESET_VIDEO_AFTER_MS = 5_000;
+// and the reset (control message 17) makes it send a session, parameters and a key frame at once. The reset
+// waits 4 s, not 5, because an emulator takes about a second to answer it and the answer must land inside the 5 s.
+const RESET_VIDEO_AFTER_MS = 4_000;
 const RESET_VIDEO = new Uint8Array([17]);
 const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
@@ -370,8 +371,8 @@ class ScrcpySession {
       : `${message}. Its last output:\n${this.#tail.join("\n")}`;
   }
 
-  // why: every key frame the body delivers restarts the 5 s, so a moving screen is never reset and a still one
-  // is reset every 5 s; the timer lives apart from the reads, which a slow viewer stops.
+  // why: every key frame the body delivers restarts the 4 s, so a moving screen is never reset and a still one
+  // is reset every 4 s; the timer lives apart from the reads, which a slow viewer stops.
   #armReset(): void {
     if (this.#closing !== undefined) return;
     if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);

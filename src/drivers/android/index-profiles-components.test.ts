@@ -165,6 +165,65 @@ describe("AndroidDriver", () => {
     });
   });
 
+  describe("default-image-tag-not-installed advisory", () => {
+    const missing = (tag: string, installed: string) => ({
+      code: "default-image-tag-not-installed",
+      message: `android.defaultImageTag is "${tag}", but no installed system image for this machine's CPU (arm64-v8a) has that tag (installed for arm64-v8a: ${installed}). Android leases that name no image tag get the image they would get without it.`,
+    });
+
+    async function tagAdvisories(
+      images: readonly (readonly [string, string, string])[],
+      defaultImageTag: string | undefined,
+    ) {
+      const filesystem = await androidFilesystem({ images });
+      const driver = await createDriver(filesystem, new EmulatorExitingRunner([]), {
+        deviceProfileSources: [],
+        hostAbi: "arm64-v8a",
+        ...(defaultImageTag === undefined ? {} : { defaultImageTag }),
+      });
+      return (await driver.advisories()).filter(
+        (advisory) => advisory.code === "default-image-tag-not-installed",
+      );
+    }
+
+    it("warns when no installed system image for the host CPU has `android.defaultImageTag`, naming the tag, the host CPU and the host CPU's tags sorted and once each", async () => {
+      const host = [
+        ["34", "google_apis_playstore", "arm64-v8a"],
+        ["35", "google_apis", "arm64-v8a"],
+        ["36", "google_apis", "arm64-v8a"],
+      ] as const;
+      const cases = [
+        { name: "installed for the host CPU", images: host, tag: "google_apis", expected: [] },
+        {
+          name: "installed only for another CPU",
+          images: [...host, ["35", "default", "x86_64"]] as const,
+          tag: "default",
+          expected: [missing("default", "google_apis, google_apis_playstore")],
+        },
+        {
+          name: "installed nowhere",
+          images: host,
+          tag: "gogle_apis",
+          expected: [missing("gogle_apis", "google_apis, google_apis_playstore")],
+        },
+        {
+          name: "no image for the host CPU",
+          images: [["35", "default", "x86_64"]] as const,
+          tag: "google_apis",
+          expected: [missing("google_apis", "none")],
+        },
+        { name: "setting unset", images: host, tag: undefined, expected: [] },
+      ];
+
+      for (const { name, images, tag, expected } of cases) {
+        expect({ name, advisories: await tagAdvisories(images, tag) }).toEqual({
+          name,
+          advisories: expected,
+        });
+      }
+    });
+  });
+
   describe("device-profile sources", () => {
     it("resolves a devices.xml-only model and applies its properties to config.ini", async () => {
       const harness = await libraryHarness({ devicesXml: customDeviceXml("Custom A", 4096) });

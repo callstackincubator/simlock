@@ -34,6 +34,7 @@ Never read: the sdkmanager catalog. A preference list is merged in `daemon/worke
 In `AcquisitionSpecResolver` (`leasing/acquisition-spec-resolver.ts`), a part of `LeaseAcquisitionCoordinator`, no lock held:
 
 1. `physical: true` → skip to the physical branch.
+   A virtual Android request with no `imageTag` on a worker with `android.defaultImageTag` is tried first as if it named that tag, with downloads off and `defaultTag` set so only host-CPU images count; a `RuntimeMissingError` runs steps 2 to 9 again on the request as it came (ADR 0078).
 2. Mode = request's, else the platform default.
 3. Shape of the request:
    - exact model, no range → used as is; no catalog read.

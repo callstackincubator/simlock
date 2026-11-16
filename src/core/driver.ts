@@ -30,9 +30,11 @@ export interface ExactDeviceRequest {
   readonly mode?: DeviceMode;
   readonly imageTag?: string;
   readonly except?: readonly string[];
+  /** why: set only by leasing's attempt with a worker's default image tag, never from the wire; the Android driver then counts only images built for its host CPU (ADR 0078 §2). */
+  readonly defaultTag?: true;
 }
 
-export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
+export interface DeviceRequest extends Omit<ExactDeviceRequest, "defaultTag" | "model"> {
   /** why: the name of the baseline the request wants a copy of; the coordinator checks it against the baseline and resolves the spec from it. */
   readonly baseline?: string;
   readonly model?: string;
