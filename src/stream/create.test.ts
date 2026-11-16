@@ -858,19 +858,19 @@ describe("createWorkerStream", () => {
     }
   });
 
-  it("closes the capture once, when its last viewer leaves: a viewer that leaves, or whose expiresAt passes, closes nothing while another watches", async () => {
-    {
-      const { feeds, stream } = worker();
-      const first = await openOnRoute(stream, "device");
-      const second = await openOnRoute(stream, "lease");
-      await first.body!.cancel();
-      await flush();
-      expect(feeds[0]?.closes, "the first leaves").toBe(0);
-      await second.body!.cancel();
-      await flush();
-      expect(feeds[0]?.closes, "the second leaves").toBe(1);
-    }
+  const leaves1 = async () => {
+    const { feeds, stream } = worker();
+    const first = await openOnRoute(stream, "device");
+    const second = await openOnRoute(stream, "lease");
+    await first.body!.cancel();
+    await flush();
+    expect(feeds[0]?.closes, "the first leaves").toBe(0);
+    await second.body!.cancel();
+    await flush();
+    expect(feeds[0]?.closes, "the second leaves").toBe(1);
+  };
 
+  const leaves2 = async () => {
     for (const [label, other] of [
       ["one viewer's expiresAt", true],
       ["the last viewer's expiresAt", false],
@@ -895,60 +895,67 @@ describe("createWorkerStream", () => {
         expect(staying.frames.at(-1)).toBe("key 9");
       }
     }
+  };
 
-    {
-      let openIt = () => {};
-      const gate = new Promise<void>((resolve) => (openIt = resolve));
-      const { feeds, signals, stream } = worker([], true, false, gate);
-      const aborts = [new AbortController(), new AbortController()];
-      const asked = [
-        stream.mount.handle(
-          new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
-            signal: aborts[0]!.signal,
-          }),
-          OPERATOR,
-        ),
-        stream.leaseRoute(
-          new Request("http://daemon/v1/leases/lse_1/stream", { signal: aborts[1]!.signal }),
-          { principal: "tok_agent", role: "agent" },
-          { deviceId: "dev_leased", id: "lse_1" },
-        ),
-      ];
-      await flush();
-      aborts[0]!.abort();
-      await flush();
-      expect(signals[0]?.aborted, "one leaves during the open and another stays").toBe(false);
-      aborts[1]!.abort();
-      await flush();
-      expect(signals[0]?.aborted, "every viewer leaves during the open").toBe(true);
-      openIt();
-      await Promise.all(asked);
-      await flush();
-      expect(feeds[0]?.closes).toBe(1);
-    }
-
-    {
-      let openIt = () => {};
-      const gate = new Promise<void>((resolve) => (openIt = resolve));
-      const { feeds, signals, stream } = worker([], true, false, gate);
-      const leaving = new AbortController();
-      const first = stream.mount.handle(
+  const leaves3 = async () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    const { feeds, signals, stream } = worker([], true, false, gate);
+    const aborts = [new AbortController(), new AbortController()];
+    const asked = [
+      stream.mount.handle(
         new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
-          signal: leaving.signal,
+          signal: aborts[0]!.signal,
         }),
         OPERATOR,
-      );
-      const staying = openOnRoute(stream, "lease");
-      await flush();
-      leaving.abort();
-      openIt();
-      await first;
-      const watching = watch(await staying);
-      await flush();
-      expect(signals[0]?.aborted).toBe(false);
-      expect(watching.frames).toEqual(["meta 330x720"]);
-      expect(feeds[0]?.closes).toBe(0);
-    }
+      ),
+      stream.leaseRoute(
+        new Request("http://daemon/v1/leases/lse_1/stream", { signal: aborts[1]!.signal }),
+        { principal: "tok_agent", role: "agent" },
+        { deviceId: "dev_leased", id: "lse_1" },
+      ),
+    ];
+    await flush();
+    aborts[0]!.abort();
+    await flush();
+    expect(signals[0]?.aborted, "one leaves during the open and another stays").toBe(false);
+    aborts[1]!.abort();
+    await flush();
+    expect(signals[0]?.aborted, "every viewer leaves during the open").toBe(true);
+    openIt();
+    await Promise.all(asked);
+    await flush();
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const leaves4 = async () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    const { feeds, signals, stream } = worker([], true, false, gate);
+    const leaving = new AbortController();
+    const first = stream.mount.handle(
+      new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+        signal: leaving.signal,
+      }),
+      OPERATOR,
+    );
+    const staying = openOnRoute(stream, "lease");
+    await flush();
+    leaving.abort();
+    openIt();
+    await first;
+    const watching = watch(await staying);
+    await flush();
+    expect(signals[0]?.aborted).toBe(false);
+    expect(watching.frames).toEqual(["meta 330x720"]);
+    expect(feeds[0]?.closes).toBe(0);
+  };
+
+  it("closes the capture once, when its last viewer leaves: a viewer that leaves, or whose expiresAt passes, closes nothing while another watches", async () => {
+    await leaves1();
+    await leaves2();
+    await leaves3();
+    await leaves4();
   });
 
   it("a lease end or a device stop ends every viewer of the device as it ends one: each gets the lease-end frame when there is a reason, then the end, and the capture closes once", async () => {
@@ -1033,110 +1040,116 @@ describe("createWorkerStream", () => {
     }
   });
 
-  it("a capture that fails fails every viewer it serves the same way, and the next viewer starts a fresh capture", async () => {
-    const gated = () => {
-      let openIt = () => {};
-      const gate = new Promise<void>((resolve) => (openIt = resolve));
-      return { gate, openIt: () => openIt() };
-    };
-    const refusal = async (answer: Response) => ({
-      body: await answer.json(),
-      status: answer.status,
-    });
+  const gated = () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    return { gate, openIt: () => openIt() };
+  };
+  const refusal = async (answer: Response) => ({
+    body: await answer.json(),
+    status: answer.status,
+  });
 
-    {
-      const { gate, openIt } = gated();
-      const { opened, stream } = worker(
-        [],
-        true,
-        false,
-        gate,
-        new ScreenUnavailableError("no encoder"),
+  const scenario1 = async () => {
+    const { gate, openIt } = gated();
+    const { opened, stream } = worker(
+      [],
+      true,
+      false,
+      gate,
+      new ScreenUnavailableError("no encoder"),
+    );
+    const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+    await flush();
+    openIt();
+    const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+    for (const answer of answers) {
+      expect(answer, "a start that fails").toEqual({
+        body: { error: { code: "STREAM_UNAVAILABLE", message: "no encoder" } },
+        status: 503,
+      });
+    }
+    expect(opened()).toBe(1);
+    const again = await settledWithin(openOnRoute(stream, "device"));
+    expect(again === "pending" ? again : again.status, "a viewer after a failed start").toBe(503);
+    expect(opened()).toBe(2);
+  };
+
+  const scenario2 = async () => {
+    const { clock, feeds, opened, stream } = worker([], false);
+    const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+    await flush();
+    clock.advance(30_000);
+    const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+    expect(
+      answers.map((answer) => answer.status),
+      "the start bound",
+    ).toEqual([503, 503]);
+    expect(answers[1]).toEqual(answers[0]);
+    expect(opened()).toBe(1);
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const scenario3 = async () => {
+    const { gate, openIt } = gated();
+    const { emit, feeds, stream } = worker([], true, false, gate);
+    const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+    await flush();
+    emit("device.shutdown", "dev_leased");
+    openIt();
+    const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+    for (const answer of answers) {
+      expect(answer.status, "the device stopping during a shared start").toBe(409);
+    }
+    expect(answers[1]).toEqual(answers[0]);
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const scenario4 = async () => {
+    const { feeds, opened, stream } = worker();
+    const viewers = [
+      watch(await openOnRoute(stream, "device")),
+      watch(await openOnRoute(stream, "lease")),
+    ];
+    const unread = await openOnRoute(stream, "device");
+    feeds[0]!.fail(new Error("encoder crashed"));
+    await flush();
+    for (const viewer of viewers) {
+      expect(viewer.error, "a mid-stream read error").toBe("encoder crashed");
+    }
+    expect(feeds[0]?.closes).toBe(1);
+    const fresh = watch(await openOnRoute(stream, "device"));
+    await flush();
+    expect(opened(), "a new open after a failure, while an errored body is unread").toBe(2);
+    expect(fresh.frames).toEqual(["meta 330x720"]);
+    await expect(unread.body!.getReader().read()).rejects.toThrow("encoder crashed");
+  };
+
+  const scenario5 = async () => {
+    const { clock, feeds, stream } = worker();
+    const viewers = [
+      watch(await openOnRoute(stream, "device")),
+      watch(await openOnRoute(stream, "lease")),
+    ];
+    clock.advance(29_999);
+    await flush();
+    expect(viewers.map((viewer) => viewer.error)).toEqual([undefined, undefined]);
+    clock.advance(1);
+    await flush();
+    for (const viewer of viewers) {
+      expect(viewer.error, "the silence bound").toBe(
+        "The screen capture wrote nothing for 30000ms while waiting for the next frame",
       );
-      const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
-      await flush();
-      openIt();
-      const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
-      for (const answer of answers) {
-        expect(answer, "a start that fails").toEqual({
-          body: { error: { code: "STREAM_UNAVAILABLE", message: "no encoder" } },
-          status: 503,
-        });
-      }
-      expect(opened()).toBe(1);
-      const again = await settledWithin(openOnRoute(stream, "device"));
-      expect(again === "pending" ? again : again.status, "a viewer after a failed start").toBe(503);
-      expect(opened()).toBe(2);
     }
+    expect(feeds[0]?.closes).toBe(1);
+  };
 
-    {
-      const { clock, feeds, opened, stream } = worker([], false);
-      const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
-      await flush();
-      clock.advance(30_000);
-      const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
-      expect(
-        answers.map((answer) => answer.status),
-        "the start bound",
-      ).toEqual([503, 503]);
-      expect(answers[1]).toEqual(answers[0]);
-      expect(opened()).toBe(1);
-      expect(feeds[0]?.closes).toBe(1);
-    }
-
-    {
-      const { gate, openIt } = gated();
-      const { emit, feeds, stream } = worker([], true, false, gate);
-      const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
-      await flush();
-      emit("device.shutdown", "dev_leased");
-      openIt();
-      const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
-      for (const answer of answers) {
-        expect(answer.status, "the device stopping during a shared start").toBe(409);
-      }
-      expect(answers[1]).toEqual(answers[0]);
-      expect(feeds[0]?.closes).toBe(1);
-    }
-
-    {
-      const { feeds, opened, stream } = worker();
-      const viewers = [
-        watch(await openOnRoute(stream, "device")),
-        watch(await openOnRoute(stream, "lease")),
-      ];
-      const unread = await openOnRoute(stream, "device");
-      feeds[0]!.fail(new Error("encoder crashed"));
-      await flush();
-      for (const viewer of viewers) {
-        expect(viewer.error, "a mid-stream read error").toBe("encoder crashed");
-      }
-      expect(feeds[0]?.closes).toBe(1);
-      const fresh = watch(await openOnRoute(stream, "device"));
-      await flush();
-      expect(opened(), "a new open after a failure, while an errored body is unread").toBe(2);
-      expect(fresh.frames).toEqual(["meta 330x720"]);
-      await expect(unread.body!.getReader().read()).rejects.toThrow("encoder crashed");
-    }
-
-    {
-      const { clock, feeds, stream } = worker();
-      const viewers = [
-        watch(await openOnRoute(stream, "device")),
-        watch(await openOnRoute(stream, "lease")),
-      ];
-      clock.advance(29_999);
-      await flush();
-      expect(viewers.map((viewer) => viewer.error)).toEqual([undefined, undefined]);
-      clock.advance(1);
-      await flush();
-      for (const viewer of viewers) {
-        expect(viewer.error, "the silence bound").toBe(
-          "The screen capture wrote nothing for 30000ms while waiting for the next frame",
-        );
-      }
-      expect(feeds[0]?.closes).toBe(1);
-    }
+  it("a capture that fails fails every viewer it serves the same way, and the next viewer starts a fresh capture", async () => {
+    await scenario1();
+    await scenario2();
+    await scenario3();
+    await scenario4();
+    await scenario5();
   });
 
   it("a viewer of either stream route sees a 0x07 frame with the reason, then the end, when the lease ends", async () => {

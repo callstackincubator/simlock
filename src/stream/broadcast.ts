@@ -4,7 +4,7 @@ import { type Frame, FrameSplitter, readScreenMeta } from "./framing.js";
 
 // why: about 10 s of today's 1500 kbps. That rides out a short stall without dropping anything and
 // bounds the memory a viewer that never reads can hold.
-export const MAX_VIEWER_QUEUE_BYTES = 2 * 1024 * 1024;
+const MAX_VIEWER_QUEUE_BYTES = 2 * 1024 * 1024;
 
 export interface Broadcast {
   // why: the viewer's `meta` is the capture's current one, so a joiner after a size change gets headers
