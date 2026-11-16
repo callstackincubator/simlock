@@ -174,7 +174,8 @@ describe("Android screen capture: open", () => {
     })();
     const feed = await drive(world.clock, opening, 10);
     await watcher;
-    expect(world.target.connects).toHaveLength(4);
+    // why: four attempts at the video socket, then the one control connection.
+    expect(world.target.connects).toHaveLength(5);
     expect(world.clock.now() - started).toBeGreaterThanOrEqual(3 * CONNECT_RETRY_MS);
     // why: two drive steps of slack; a retry interval slower than CONNECT_RETRY_MS overshoots this.
     expect(world.clock.now() - started).toBeLessThan(3 * CONNECT_RETRY_MS + 2 * 10);

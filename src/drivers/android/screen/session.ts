@@ -22,6 +22,7 @@ import type { ChunkReader } from "./adb-socket.js";
 import { EnvelopeMapper } from "./envelope.js";
 import {
   CLOSE_DEADLINE_MS,
+  connectScrcpyControl,
   connectScrcpySocket,
   DEVICE_DIRECTORY,
   errorMessage,
@@ -119,6 +120,7 @@ class ScrcpySession {
   #shellExited = false;
   #collected: Promise<void> | undefined;
   #stream: TcpStream | undefined;
+  #control: TcpStream | undefined;
   #closing: Promise<void> | undefined;
 
   constructor(
@@ -161,6 +163,7 @@ class ScrcpySession {
         this.#abort.abort();
       });
       const reader = await this.#connect(deadlineAt);
+      await this.#connectControl(deadlineAt);
       const parser = new ScrcpyVideoParser();
       const mapper = new EnvelopeMapper(this.#settings.fps);
       const pending = await this.#untilSized(reader, parser, mapper);
@@ -253,8 +256,13 @@ class ScrcpySession {
       "tunnel_forward=true",
       "video=true",
       "audio=false",
-      "control=false",
+      "control=true",
+      // why: with a control channel scrcpy would power the screen on and sync the clipboard; a stream changes no device setting.
+      "power_on=false",
+      "clipboard_autosync=false",
       "video_codec=h264",
+      // why: a moving screen then rarely needs the reset that bounds a still one's key frames.
+      "video_codec_options=i-frame-interval:int=2",
       "send_device_meta=false",
       "send_dummy_byte=true",
       "send_stream_meta=true",
@@ -312,6 +320,29 @@ class ScrcpySession {
     });
     this.#stream = stream;
     return reader;
+  }
+
+  async #connectControl(deadlineAt: number): Promise<void> {
+    const { reader, stream } = await connectScrcpyControl({
+      clock: this.#clock,
+      deadlineAt,
+      scidHex: this.#scidHex,
+      signal: this.#abort.signal,
+      stopped: (last) => this.#startFailure(`did not accept its control connection (${last})`),
+      target: this.#target,
+    });
+    this.#control = stream;
+    void this.#drainControl(reader);
+  }
+
+  // why: the device's answers on the control socket mean nothing to a stream, but a socket nobody reads
+  // fills and stops the server; its end before `close` is a server that died, and the abort closes the
+  // video socket, so the body ends as it does when the video ends.
+  async #drainControl(reader: ChunkReader): Promise<void> {
+    while ((await reader.read()) !== undefined) {
+      // why: only the end matters.
+    }
+    if (this.#closing === undefined) this.#abort.abort();
   }
 
   #startFailure(what: string): ScreenUnavailableError {
@@ -422,6 +453,7 @@ class ScrcpySession {
     // why: the server exits when a write to its video socket fails, which is the stop it was built
     // for; the kill below only covers a screen so still that the server has nothing to write.
     this.#stream?.close();
+    this.#control?.close();
     const shell = this.#shell;
     if (shell !== undefined && !(await this.#exitsWithin(shell, SHELL_EXIT_GRACE_MS))) {
       shell.kill("SIGKILL");
