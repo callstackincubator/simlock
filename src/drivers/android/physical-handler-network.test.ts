@@ -338,3 +338,41 @@ describe("Android physical handler under android.networkDevices: listAttachedPhy
     await expect(off.handler.listAttachedPhysical()).resolves.toEqual([PHONE]);
   });
 });
+
+describe("Android physical handler under android.networkDevices: reclaim", () => {
+  const device = {
+    address: ADDRESS,
+    deviceId: ADDRESS,
+    driverData: {},
+    enrolledApps: ["com.example.kept"],
+    hardwareSerial: "R58Y61A60HN",
+    physical: true,
+  } as const;
+  const pmCommands = (runner: PhoneAdb) => runner.rests.filter((rest) => rest.includes("pm"));
+
+  it("uninstalls only from the phone with the recorded hardware serial: another serial or an unreadable one throws before any pm command, and a USB record reads no serial", async () => {
+    const same = await networkHandler(devicesListing(NETWORK_LINE));
+    await expect(same.handler.reclaim(device)).resolves.toMatchObject({ state: "ready" });
+    expect(same.runner.rests.findIndex((rest) => rest.includes("ro.serialno"))).toBe(0);
+    expect(same.runner.installed).toEqual(["com.example.kept"]);
+
+    const another = await networkHandler(devicesListing(NETWORK_LINE));
+    another.runner.hardwareSerial = "ZZZ999";
+    await expect(another.handler.reclaim(device)).rejects.toThrow(
+      `the phone at ${ADDRESS} is not the enrolled one (hardware serial ZZZ999, enrolled R58Y61A60HN)`,
+    );
+    expect(pmCommands(another.runner)).toEqual([]);
+
+    for (const failure of [FAILED, TIMED_OUT]) {
+      const unreadable = await networkHandler(devicesListing(NETWORK_LINE));
+      unreadable.runner.override((rest) => (rest.includes("ro.serialno") ? failure : undefined));
+      await expect(unreadable.handler.reclaim(device)).rejects.toThrow(/hardware serial/);
+      expect(pmCommands(unreadable.runner)).toEqual([]);
+    }
+
+    const usb = await networkHandler(devicesListing(USB_LINE));
+    const { hardwareSerial: _none, ...usbRecord } = { ...device, address: PHONE, deviceId: PHONE };
+    await expect(usb.handler.reclaim(usbRecord)).resolves.toMatchObject({ state: "ready" });
+    expect(usb.runner.rests.flat()).not.toContain("ro.serialno");
+  });
+});
