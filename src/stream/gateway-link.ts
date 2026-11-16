@@ -1,4 +1,5 @@
 import type { ScreenMeta } from "../core/index.js";
+import { type Broadcast, createBroadcast } from "./broadcast.js";
 import type { StreamCaller } from "./caller.js";
 import type { CapturedStream } from "./feed.js";
 import { checkedMeta } from "./framing.js";
@@ -10,7 +11,12 @@ import {
   unknownLease,
   unknownWorker,
 } from "./refusal.js";
-import type { StreamLink, StreamTarget } from "./service.js";
+import {
+  KEYFRAME_HEADER,
+  KEYFRAME_PROMISE_MS,
+  type StreamLink,
+  type StreamTarget,
+} from "./service.js";
 
 export interface FleetPort {
   knowsWorker(workerId: string): boolean;
@@ -32,11 +38,31 @@ export interface GatewayStreamLinkOptions {
 }
 
 export function createGatewayStreamLink(options: GatewayStreamLinkOptions): StreamLink {
-  return { serve: (target, caller, signal) => serveDevice(options, target, caller, signal) };
+  const relays = new Map<string, SharedRelay>();
+  return {
+    serve: (target, caller, signal) => serveDevice(options, relays, target, caller, signal),
+  };
+}
+
+interface Waiter {
+  readonly target: StreamTarget;
+  readonly caller: StreamCaller;
+  readonly signal: AbortSignal;
+  readonly resolve: (stream: CapturedStream) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+// why: a shared relay belongs to the gateway, not to the viewer that opened it: its own abort controller
+// ends it, once its last viewer has left.
+interface SharedRelay {
+  readonly controller: AbortController;
+  readonly waiters: Set<Waiter>;
+  broadcast: Broadcast | undefined;
 }
 
 async function serveDevice(
   options: GatewayStreamLinkOptions,
+  relays: Map<string, SharedRelay>,
   target: StreamTarget,
   caller: StreamCaller,
   signal: AbortSignal,
@@ -48,23 +74,139 @@ async function serveDevice(
   }
   const workerId = target.workerId ?? "";
   if (!options.fleet.knowsWorker(workerId)) throw unknownWorker(workerId);
-  const subject =
-    target.leaseId === undefined ? `device ${target.deviceId}` : `lease ${target.leaseId}`;
+  // why: a lease is shared by the worker's own id for it, and a device by its id; the two never share,
+  // because the gateway does not know a lease's device before the worker answers.
+  const key = `${workerId}\u0000${
+    target.leaseId === undefined
+      ? `device:${target.deviceId}`
+      : `lease:${target.workerLeaseId ?? target.leaseId}`
+  }`;
+  const existing = relays.get(key);
+  if (existing?.broadcast !== undefined && !existing.broadcast.stopped) {
+    return existing.broadcast.join(signal);
+  }
+  if (existing !== undefined && existing.broadcast === undefined) {
+    return waitFor(existing, { caller, signal, target });
+  }
+  const entry: SharedRelay = {
+    broadcast: undefined,
+    controller: new AbortController(),
+    waiters: new Set(),
+  };
+  relays.set(key, entry);
+  const stream = waitFor(entry, { caller, signal, target });
+  void openShared(options, relays, key, entry, workerId, target, caller);
+  return stream;
+}
+
+function waitFor(
+  entry: SharedRelay,
+  viewer: Pick<Waiter, "caller" | "signal" | "target">,
+): Promise<CapturedStream> {
+  return new Promise<CapturedStream>((resolve, reject) => {
+    const waiter: Waiter = { ...viewer, reject, resolve };
+    entry.waiters.add(waiter);
+    const leave = () => {
+      if (!entry.waiters.delete(waiter)) return;
+      reject(viewer.signal.reason);
+      if (entry.waiters.size === 0) entry.controller.abort();
+    };
+    if (viewer.signal.aborted) leave();
+    else viewer.signal.addEventListener("abort", leave, { once: true });
+  });
+}
+
+async function openShared(
+  options: GatewayStreamLinkOptions,
+  relays: Map<string, SharedRelay>,
+  key: string,
+  entry: SharedRelay,
+  workerId: string,
+  target: StreamTarget,
+  opener: StreamCaller,
+): Promise<void> {
+  const subject = subjectOf(target);
+  let response: Response;
+  let captured: CapturedStream;
+  try {
+    response = await relayed(workerId, subject, () =>
+      callRelay(options, workerId, target, opener, entry.controller.signal),
+    );
+    captured = await fromResponse(workerId, subject, response);
+  } catch (error) {
+    if (relays.get(key) === entry) relays.delete(key);
+    const waiters = [...entry.waiters];
+    entry.waiters.clear();
+    for (const waiter of waiters) waiter.reject(withCallersLeaseId(waiter.target, error));
+    return;
+  }
+  const waiters = [...entry.waiters];
+  entry.waiters.clear();
+  if (waiters.length === 0) {
+    if (relays.get(key) === entry) relays.delete(key);
+    await captured.close();
+    return;
+  }
+  if (response.headers.get(KEYFRAME_HEADER) === String(KEYFRAME_PROMISE_MS)) {
+    const broadcast = createBroadcast(captured);
+    entry.broadcast = broadcast;
+    void broadcast.done.then(() => {
+      entry.controller.abort();
+      if (relays.get(key) === entry) relays.delete(key);
+    });
+    for (const waiter of waiters) waiter.resolve(broadcast.join(waiter.signal));
+    return;
+  }
+  // why: a worker that makes no promise cannot start a joiner, so its first viewer takes this relay as its
+  // own -- its leaving ends it -- and each other viewer asks for one of its own, as before sharing.
+  if (relays.get(key) === entry) relays.delete(key);
+  const [taker, ...others] = waiters;
+  if (taker === undefined) return;
+  taker.signal.addEventListener("abort", () => entry.controller.abort(), { once: true });
+  if (taker.signal.aborted) entry.controller.abort();
+  taker.resolve(captured);
+  for (const other of others) {
+    serveAlone(options, workerId, other.target, other.caller, other.signal).then(
+      other.resolve,
+      other.reject,
+    );
+  }
+}
+
+async function serveAlone(
+  options: GatewayStreamLinkOptions,
+  workerId: string,
+  target: StreamTarget,
+  caller: StreamCaller,
+  signal: AbortSignal,
+): Promise<CapturedStream> {
+  const subject = subjectOf(target);
   const response = await relayed(workerId, subject, () =>
-    options.fleet.relay(workerId, {
-      leaseId: target.workerLeaseId,
-      request: new Request(`http://simlock-worker${relayPath(target)}`, {
-        method: "GET",
-        signal,
-      }),
-      tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
-    }),
+    callRelay(options, workerId, target, caller, signal),
   );
   try {
     return await fromResponse(workerId, subject, response);
   } catch (error) {
     throw withCallersLeaseId(target, error);
   }
+}
+
+function subjectOf(target: StreamTarget): string {
+  return target.leaseId === undefined ? `device ${target.deviceId}` : `lease ${target.leaseId}`;
+}
+
+function callRelay(
+  options: GatewayStreamLinkOptions,
+  workerId: string,
+  target: StreamTarget,
+  caller: StreamCaller,
+  signal: AbortSignal,
+): Promise<Response> {
+  return options.fleet.relay(workerId, {
+    leaseId: target.workerLeaseId,
+    request: new Request(`http://simlock-worker${relayPath(target)}`, { method: "GET", signal }),
+    tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
+  });
 }
 
 function relayPath(target: StreamTarget): string {

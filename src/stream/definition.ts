@@ -11,6 +11,8 @@ export interface StreamModuleConfig {
 // one word; the picture settings are what a worker encodes with, and a gateway that only relays a
 // stream reads none of them.
 const STREAM_HEADERS = {
+  "simlock-stream-keyframe-ms":
+    "5000 when the worker sends a key frame at least every 5 seconds, which lets a gateway share one relay between viewers; absent otherwise.",
   "simlock-stream-codec": "The codec of the body: h264 or mjpeg.",
   "simlock-stream-fps": "Frames per second.",
   "simlock-stream-height":

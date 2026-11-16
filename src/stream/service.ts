@@ -24,6 +24,11 @@ export interface LeaseStreamTarget {
   readonly deviceId?: undefined;
 }
 
+// why: the header a worker's answer carries to promise a key frame at least every 5 s, the only thing
+// that lets a gateway share one relay between viewers.
+export const KEYFRAME_HEADER = "simlock-stream-keyframe-ms";
+export const KEYFRAME_PROMISE_MS = 5000;
+
 export interface StreamLink {
   serve(target: StreamTarget, caller: StreamCaller, signal: AbortSignal): Promise<CapturedStream>;
 }
@@ -32,6 +37,9 @@ export interface StreamServiceOptions {
   readonly link: StreamLink;
   // why: the clock an `expiresAt` deadline runs on; a door with none cannot end a stream at a time.
   readonly clock?: Clock;
+  // why: on for a worker, whose captures send a key frame at least every 5 s; a gateway makes no such promise
+  // of its own, so its answer to a viewer never carries the header.
+  readonly promisesKeyframes?: boolean;
   readonly logger?: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -112,6 +120,7 @@ export async function handleStreamRequest(
     options.clock === undefined || expiresAt === undefined
       ? stream
       : endingAt(stream, options.clock, expiresAt),
+    options.promisesKeyframes === true,
   );
 }
 
@@ -155,7 +164,7 @@ function endingAt(stream: CapturedStream, clock: Clock, expiresAt: number): Capt
   return { ...stream, body };
 }
 
-export function streamResponse(stream: CapturedStream): Response {
+export function streamResponse(stream: CapturedStream, promisesKeyframes = false): Response {
   const { meta } = stream;
   // why: the codec and size are headers as well as the body's first frame, because a browser must
   // decide how to read a body before it has read any of it, and because a gateway reads the headers
@@ -168,6 +177,7 @@ export function streamResponse(stream: CapturedStream): Response {
       "simlock-stream-fps": String(meta.fps),
       "simlock-stream-height": String(meta.height),
       "simlock-stream-width": String(meta.width),
+      ...(promisesKeyframes ? { [KEYFRAME_HEADER]: String(KEYFRAME_PROMISE_MS) } : {}),
     },
     status: 200,
   });

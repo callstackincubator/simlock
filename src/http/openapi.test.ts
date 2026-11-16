@@ -406,6 +406,7 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "simlock-stream-codec",
       "simlock-stream-fps",
       "simlock-stream-height",
+      "simlock-stream-keyframe-ms",
       "simlock-stream-width",
     ]);
     expect(

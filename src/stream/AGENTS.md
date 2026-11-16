@@ -27,7 +27,9 @@ Captures:
 
 Gateway:
 
-- A gateway never parses a video byte: it reads the headers, checks them with `checkedMeta` as a worker checks a meta frame, and relays the body unread.
+- A gateway never reads a picture: it reads the headers, checks them with `checkedMeta` as a worker checks a meta frame, and, for a shared relay, each frame's length and tag and each meta frame's JSON.
+- Viewers of one device, or of one lease by the worker's own id, share one relay to the worker, only when its answer carries `simlock-stream-keyframe-ms: 5000` (a worker's answer does, a gateway's never). A device path and a lease path never share. A worker without the header gets a relay per viewer.
+- A shared relay belongs to the gateway: it ends when its last viewer leaves or the worker ends it, and a viewer's `expiresAt` ends only that viewer. A refusal or failure of the relay reaches every viewer waiting on it.
 - A worker's refusal is a claim: its status is kept, but its code is forwarded only when it has the shape of ours (`relayedRefusal`, `refusal.ts`). A success without a picture is the gateway's own failure.
 - A worker names a lease by its own id; the gateway puts the caller's lease id back into an unknown-lease answer.
 
@@ -55,4 +57,4 @@ Through a gateway:
 1. The gateway's link refuses a non-operator on a device path and a worker that is not in the fleet.
 2. It relays the request to the worker's `stream` relay target, by device id or by the worker's own lease id.
 3. The worker serves it through the same link, slots and checks as a local request.
-4. The gateway checks the answer's headers and passes the body on; its relay bounds the body by inactivity, and by the caller's `expiresAt`.
+4. The gateway checks the answer's headers. With the key-frame promise it joins the viewer to the target's shared relay; without it, it passes the body on to that viewer alone. Its relay bounds the body by inactivity, and each viewer by the caller's `expiresAt`.

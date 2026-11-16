@@ -78,6 +78,7 @@ const STREAM_HEADERS = {
   "simlock-stream-codec": "h264",
   "simlock-stream-fps": "30",
   "simlock-stream-height": "720",
+  "simlock-stream-keyframe-ms": "5000",
   "simlock-stream-width": "330",
 };
 
@@ -239,10 +240,11 @@ describe("createWorkerStream", () => {
     });
   });
 
-  it("stops a relayed capture when its lease ends", async () => {
+  it("answers a relayed stream with the worker's key-frame promise, and stops its capture when its lease ends", async () => {
     const { feeds, stream } = worker();
     const served = await stream.relayTarget(relayed(), "gw:inst:agent-1");
     expect(served.status).toBe(200);
+    expect(served.headers.get("simlock-stream-keyframe-ms")).toBe("5000");
     await stream.leaseEnd.leaseEnded(
       { deviceId: "dev_1", leaseId: "lse_1" } as Parameters<typeof stream.leaseEnd.leaseEnded>[0],
       new AbortController().signal,
@@ -383,6 +385,7 @@ describe("createWorkerStream", () => {
     const served = await ask("w1");
     expect(served.status).toBe(200);
     expect(served.headers.get("simlock-stream-codec")).toBe("h264");
+    expect(served.headers.get("simlock-stream-keyframe-ms")).toBeNull();
     await served.body?.cancel();
     expect(relays).toEqual([
       {
