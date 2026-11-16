@@ -238,6 +238,7 @@ export class AndroidDriver implements Driver {
       baseEnv: options.env,
       filesystem: options.filesystem,
       isBareShell: (args) => this.#passthroughRules.isBareShell(args),
+      networkDevices: options.config?.networkDevices ?? false,
       processRunner: options.processRunner,
       tcpProbe: options.tcpProbe,
     });

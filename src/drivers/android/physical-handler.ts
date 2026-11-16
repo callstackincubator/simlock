@@ -57,6 +57,7 @@ interface ListedTransport {
   readonly serial: string;
   readonly state: string;
   readonly usb: boolean;
+  readonly emulator: boolean;
 }
 
 type Ran =
@@ -73,6 +74,7 @@ export class AndroidPhysicalHandler {
   readonly #processRunner: ProcessRunner;
   readonly #isBareShell: (args: readonly string[]) => boolean;
   readonly #platform: NodeJS.Platform;
+  readonly #networkDevices: boolean;
 
   constructor(
     options: Omit<DefaultAdbServerGateOptions, "env"> & {
@@ -86,6 +88,7 @@ export class AndroidPhysicalHandler {
     },
   ) {
     this.#platform = options.platform ?? process.platform;
+    this.#networkDevices = options.networkDevices ?? false;
     this.#isBareShell = options.isBareShell;
     this.#adb = options.adb;
     this.#processRunner = options.processRunner;
@@ -155,14 +158,17 @@ export class AndroidPhysicalHandler {
     const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
     if (listing.kind !== "ok") return this.#refusal(listing, "the device list (adb devices -l)");
 
-    const unusable = unenrollable(
-      parseDevices(listing.stdout, this.#platform).filter((entry) => entry.serial === id),
+    const matching = parseDevices(listing.stdout, this.#platform).filter(
+      (entry) => entry.serial === id,
     );
+    const unusable = unenrollable(matching, this.#networkDevices);
     if (unusable !== undefined) return unusable;
-    return this.#readDevice(id);
+    return this.#readDevice(id, !matching.some((entry) => entry.usb));
   }
 
-  async #readDevice(id: string): Promise<PhysicalInspection> {
+  async #readDevice(id: string, network: boolean): Promise<PhysicalInspection> {
+    const serial = network ? await this.#readHardwareSerial(id) : undefined;
+    if (serial?.kind === "refused") return serial.refusal;
     const model = await this.#readText(id, ["shell", "getprop", "ro.product.model"]);
     if (model.kind !== "ok")
       return this.#refusal(model.ran, "the model (getprop ro.product.model)");
@@ -182,7 +188,24 @@ export class AndroidPhysicalHandler {
       enrollable: true,
       model: model.value,
       osVersion: level.value,
+      ...(serial === undefined ? {} : { hardwareSerial: serial.value }),
     };
+  }
+
+  async #readHardwareSerial(
+    id: string,
+  ): Promise<
+    | { readonly kind: "ok"; readonly value: string }
+    | { readonly kind: "refused"; readonly refusal: Refusal }
+  > {
+    const serial = await this.#readText(id, ["shell", "getprop", "ro.serialno"]);
+    if (serial.kind !== "ok") {
+      return {
+        kind: "refused",
+        refusal: this.#refusal(serial.ran, "the hardware serial (getprop ro.serialno)"),
+      };
+    }
+    return { kind: "ok", value: serial.value };
   }
 
   async listPresentPhysical(
@@ -368,7 +391,7 @@ function parseDevices(output: string, platform: NodeJS.Platform): ListedTranspor
     const usb =
       tokens.some((token) => token.startsWith("usb:")) ||
       (platform === "win32" && !isNetworkOrEmulatorSerial(serial));
-    entries.push({ serial, state, usb });
+    entries.push({ emulator: !usb && /^emulator-\d+$/.test(serial), serial, state, usb });
   }
   return entries;
 }
@@ -382,17 +405,29 @@ function isNetworkOrEmulatorSerial(serial: string): boolean {
   return /:\d+$/.test(serial) || serial.includes("._tcp") || /^emulator-\d+$/.test(serial);
 }
 
-function unenrollable(matching: readonly ListedTransport[]): Refusal | undefined {
+function unenrollable(
+  matching: readonly ListedTransport[],
+  networkDevices: boolean,
+): Refusal | undefined {
   const usb = matching.filter((entry) => entry.usb);
   if (usb.some((entry) => entry.state === "device")) return undefined;
-  if (usb.some((entry) => entry.state === "unauthorized")) {
+  const network = networkDevices ? matching.filter((entry) => !entry.usb && !entry.emulator) : [];
+  if (networkDevices && usb.length === 0 && matching.some((entry) => entry.emulator)) {
+    return {
+      enrollable: false,
+      message: "an emulator is not a phone, whatever it is connected through",
+      reason: "unsupported-kind",
+    };
+  }
+  if (network.some((entry) => entry.state === "device")) return undefined;
+  if (usb.concat(network).some((entry) => entry.state === "unauthorized")) {
     return {
       enrollable: false,
       message: "USB debugging is not authorized for this host on the device",
       reason: "untrusted",
     };
   }
-  if (usb.length === 0 && matching.length > 0) {
+  if (!networkDevices && usb.length === 0 && matching.length > 0) {
     return {
       enrollable: false,
       message: "only USB-connected devices can be enrolled",
