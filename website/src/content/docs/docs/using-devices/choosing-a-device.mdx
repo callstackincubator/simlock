@@ -150,6 +150,8 @@ simlock lease --platform android --device "Pixel 8" --image-tag google_apis_play
 ```
 
 - Without `--image-tag`, you get the `google_apis` image for the machine's CPU when it is installed, or another installed image for that API level.
+- When the worker sets `android.defaultImageTag`, a lease with no `--image-tag` (from the CLI, MCP, the HTTP API or a client such as a device picker) is first tried as if it named that tag, for an image built for the machine's own CPU, and it never downloads. With no `--os` it gets the newest API level that has an image of the tag, which can be older than the newest level installed. If no such image fits the request (the model takes none, the level has none, or the image is for another CPU), the lease gets what it would get without the setting, and `--allow-download` then applies to that. `--os 37` names a level, so it is tried at 37 first and falls back there when 37 has no image of the tag.
+- Play Store images refuse `adb root` and `adb remount`. If your lease needs them on a worker with a Play Store default, pass `--image-tag google_apis`. That is a pool of its own: an idle device made without a tag does not serve it.
 - With `--image-tag` and no `--os`, you get the newest API level that has an image with that tag.
 - An image tag never downloads anything. If no image with that tag is installed for the API level, or the image doesn't fit the model, the lease fails with `RUNTIME_MISSING` (exit 12).
 - On iOS, `--image-tag` fails with `BAD_REQUEST` (exit 2).

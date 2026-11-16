@@ -617,17 +617,32 @@ describe("deviceModeWiring", () => {
     (defaultMode) => {
       expect(
         deviceModeWiring({
+          android: { defaultModels: {} },
           ios: {
             defaultMode,
             defaultModels: {},
           },
         }),
-      ).toEqual({
+      ).toMatchObject({
         defaultModes: { ios: defaultMode },
         slimByDefault: defaultMode === "slim",
       });
     },
   );
+
+  it("passes android.defaultImageTag to leasing as the Android default tag, and nothing when it is unset", () => {
+    const ios = { defaultMode: "full", defaultModels: {} } as const;
+
+    expect(
+      deviceModeWiring({
+        android: { defaultImageTag: "google_apis_playstore", defaultModels: {} },
+        ios,
+      }).defaultImageTags,
+    ).toEqual({ android: "google_apis_playstore" });
+    expect(
+      deviceModeWiring({ android: { defaultModels: {} }, ios }).defaultImageTags,
+    ).toStrictEqual({});
+  });
 });
 
 describe("modelPreferenceWiring", () => {
