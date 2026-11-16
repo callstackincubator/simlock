@@ -139,6 +139,8 @@ export async function createHarness(
     readonly warmPool?: Partial<Config["warmPool"]>;
     /** why: how long a ready device may idle before the pool shuts it down. */
     readonly idleShutdownAfterMs?: number;
+    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0078). */
+    readonly virtualDevices?: Readonly<Partial<Record<"android" | "ios", boolean>>>;
     /** why: starts the warm pool as the daemon's startup does, so it learns from the leases and reacts to events. */
     readonly startPool?: boolean;
   } = {},
@@ -167,7 +169,9 @@ export async function createHarness(
   );
   const engineConfig: TestEngineConfig = {
     ...baseConfig,
+    android: { virtualDevices: options.virtualDevices?.android ?? true },
     capacity: capacityConfig(baseConfig, options),
+    ios: { virtualDevices: options.virtualDevices?.ios ?? true },
   };
   const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
   const drivers = options.drivers ?? [driver];
