@@ -146,6 +146,8 @@ export interface AndroidDriverOptions {
   readonly pid?: number;
   /** why: the driver's own keys of the `android` config section; without it emulators launch with the section's defaults. */
   readonly config?: Partial<AndroidDriverConfig> | undefined;
+  /** why: the worker's `android.defaultImageTag`, which `advisories` checks against the images installed for the host CPU. */
+  readonly defaultImageTag?: string | undefined;
 }
 
 export type AndroidDriverDiagnostic = SnapshotColdBootDiagnostic | DeviceProfileSourceDiagnostic;
@@ -185,6 +187,8 @@ export class AndroidDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
   readonly #systemImages: SystemImages;
+  readonly #defaultImageTag: string | undefined;
+  readonly #hostAbi: string;
   readonly #seeds: Seeds;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
@@ -257,6 +261,8 @@ export class AndroidDriver implements Driver {
     // read by `SystemImages.listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
+    this.#defaultImageTag = options.defaultImageTag;
+    this.#hostAbi = options.hostAbi;
     this.#systemImages = new SystemImages({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
@@ -714,10 +720,27 @@ export class AndroidDriver implements Driver {
     const hidden = await this.#catalog.hiddenProfiles();
     return [
       ...physical,
+      ...(await this.#defaultImageTagAdvisories()),
       ...hidden.map(({ libraryName, userName }) => ({
         code: "device-profile-hidden",
         message: `"${userName}" in devices.xml is not used: Simlock's own ${libraryName} profile answers to that name`,
       })),
+    ];
+  }
+
+  // why: ADR 0078 §4 -- a setting no image meets is advice, never a refusal; only host-CPU images count, since the worker's default tag never picks another CPU's.
+  async #defaultImageTagAdvisories(): Promise<readonly DriverAdvisory[]> {
+    const tag = this.#defaultImageTag;
+    if (tag === undefined) return [];
+    const hostImages = this.#systemImages.builtForHost(await this.#systemImages.installedImages());
+    if (hostImages.some((image) => image.tag === tag)) return [];
+    const installed =
+      [...new Set(hostImages.map((image) => image.tag))].sort().join(", ") || "none";
+    return [
+      {
+        code: "default-image-tag-not-installed",
+        message: `android.defaultImageTag is "${tag}", but no installed system image for this machine's CPU (${this.#hostAbi}) has that tag (installed for ${this.#hostAbi}: ${installed}). Android leases that name no image tag get the image they would get without it.`,
+      },
     ];
   }
 

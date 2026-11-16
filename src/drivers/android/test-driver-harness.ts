@@ -136,6 +136,8 @@ export async function createDriver(
     readonly clock?: FakeClock;
     /** why: a second driver over the same table is the daemon after a restart. */
     readonly database?: Awaited<ReturnType<typeof memoryAndroidSourceDatabase>>;
+    /** why: the worker's `android.defaultImageTag`, unset unless a test says otherwise. */
+    readonly defaultImageTag?: string;
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly emulator?: AndroidEmulatorLaunchOptions;
@@ -188,6 +190,7 @@ export async function createDriver(
  * without the helper itself turning into a pile of conditionals. */
 function onlyProvided(options: {
   readonly acceptAndroidLicenses?: boolean;
+  readonly defaultImageTag?: string;
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
@@ -197,6 +200,7 @@ function onlyProvided(options: {
   readonly tcpStreamConnector?: FakeTcpStreamConnector;
 }) {
   return {
+    ...(options.defaultImageTag === undefined ? {} : { defaultImageTag: options.defaultImageTag }),
     ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
     ...(options.scrcpyServerPath === undefined
       ? {}
