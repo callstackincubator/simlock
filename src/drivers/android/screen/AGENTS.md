@@ -9,15 +9,14 @@ The target:
 
 - The driver hands the capture one `ScreenTarget` per device. Every adb command and connection of a session goes through it: `args` start at the adb subcommand, and the target aims them at its device and picks its adb server.
 - The capture names no adb server port and runs no version check of its own. The physical handler (`../physical-handler.ts`) is the one place that knows both (architecture rule 10; safety rule: the check before every physical command). Each of a phone's `run`, `spawn` and `connect` passes the check first; a closed check sends nothing and throws `ScreenUnavailableError` with its message.
-- A physical iPhone stays refused by the iOS driver, not here.
 - A screen stream touches only its own `scid`: its jar path and socket name; never another stream's.
 
 What a stream does to the device:
 
 - A screen stream changes no device setting and drops no frame. One exception: a phone's stream sets stay awake (`stay_awake=true`, scrcpy's `stay_on_while_plugged_in`) while it runs, and scrcpy's clean-up process puts the old value back when the server ends. An emulator's server never gets the option.
-- A phone's screen state is read before anything is pushed (`mWakefulness` in `dumpsys power`). `Asleep` or `Dozing`: one `KEYCODE_WAKEUP`, then the same read again; still off is `ScreenUnavailableError`, and nothing is pushed. The wake's exit is not looked at.
-- Only a read that names one of those two words is a fact about the screen. Another word, no line, a non-zero exit or a timed-out read goes on, with no wake. The word can be printed with a trailing blank (`Dozing `).
-- The wake is the only key this stream sends: the server is told not to power the screen on. Emulators skip the read and the wake.
+- A phone's screen state is read before anything is pushed (`mWakefulness` in `dumpsys power`). `Asleep` or `Dozing`: one `KEYCODE_WAKEUP`, then the same read again; still off is `ScreenUnavailableError`, and nothing is pushed.
+- Only a read that names one of those two words is a fact about the screen. Another word, no line, a non-zero exit or a timed-out read goes on, with no wake.
+- The wake is the only key this stream sends. Emulators skip the read and the wake.
 
 Start and stop:
 
@@ -31,9 +30,9 @@ Start and stop:
 The body:
 
 - It is pull-based (`highWaterMark: 0`): the socket is read only when the body's reader pulls, so nothing is dropped.
-- The server runs with its control channel on. The control socket is the second connection to the server's socket: made once, after the video's zero byte and before the video is read, and never asked for a zero byte. Its bytes are read and discarded. A refused control connection refuses the open; its end before `close`, or a failed write to it, ends the stream like the video's end.
-- A still screen sends no key frame, so every `RESET_VIDEO_AFTER_MS` (ADR 0079 §5) without a delivered key frame the session writes reset video to the control socket. The server answers with a session packet, parameter sets and a key frame, which the body relays as a new meta frame, description and picture, as for a rotation.
-- Between resets a still screen is quiet, so after `ALIVE_AFTER_MS` of quiet the body sends an empty `alive` frame. `alive` frames begin only after the first key frame, so an encoder that never paints meets the stream's silence bound.
+- The control socket is the server's second connection, made once before the video is read. A refused control connection refuses the open; its end before `close`, or a failed write to it, ends the stream like the video's end.
+- A still screen sends no key frame, so `RESET_VIDEO_AFTER_MS` (ADR 0079 §5) without one makes the session write reset video; the answer is relayed as for a rotation.
+- After `ALIVE_AFTER_MS` of quiet the body sends an empty `alive` frame, only after the first key frame, so an encoder that never paints meets the stream's silence bound.
 - A rotation starts a new scrcpy session: a new meta frame, then a new description before the next picture. The browser decoder re-reads both mid-stream.
 - A body whose socket ends errors with the server's last output and closes the feed.
 
