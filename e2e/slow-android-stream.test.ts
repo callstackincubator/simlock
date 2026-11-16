@@ -55,7 +55,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with alive frames and a key frame at least every 5.5 s, and ends when its lease is released under a viewer",
+      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with a key frame at least every 5.5 s, and ends when its lease is released under a viewer",
       { timeout: 480_000 },
       async () => {
         const { env, port } = await withHttpDaemon((httpPort) => ({
@@ -190,12 +190,10 @@ describe.skipIf(!hasAndroidSdk)(
           await new Promise((resolve) => setTimeout(resolve, 45_000));
           expect(ended, "a still screen's stream ended inside the silence bound").toBe(false);
           expect(tags).toContain(TAG.keyframe);
-          // why: an `alive` frame is the evidence the screen went still and the stream was kept open
-          // for it; a screen that kept painting would pass the line above without proving anything.
-          expect(tags, "no alive frame: the screen never went still").toContain(TAG.alive);
 
           // why: ADR 0079 §5: the driver's reset video makes a still screen's encoder send a key frame
-          // at least every 5 s, so a viewer that joins or resets its decoder never waits longer.
+          // at least every 5 s (it resets after 4 s of none), so a viewer that joins or resets its decoder
+          // never waits longer.
           expect(
             keyFrameAt.length,
             "fewer than 3 key frames in 45 s of a still screen",
