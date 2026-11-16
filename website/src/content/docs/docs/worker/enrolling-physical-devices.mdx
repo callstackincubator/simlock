@@ -25,7 +25,7 @@ Enrol on the machine the device is plugged into, from the user account that runs
 <TabItem label="Android">
 
 - The Android SDK with `platform-tools` (see [Requirements](/simlock/docs/introduction/requirements)).
-- Connected by USB, with USB debugging turned on and authorized for this machine.
+- Connected by USB, with USB debugging turned on and authorized for this machine. To enrol a phone that adb reaches over the network instead, see [Phones reached over the network](#android-phones-reached-over-the-network).
 - The adb that is running (the one Android Studio and plain `adb` use) must be the same version as the `adb` in the SDK's `platform-tools`. `simlock doctor` reports `adb-protocol-mismatch` when it is not. See [No Android phone is seen](#no-android-phone-is-seen).
 - Simlock cannot tell when an Android phone is locked, so a locked phone is still leased. Keep it unlocked, or turn on **Stay awake** in the developer options.
 
@@ -90,6 +90,34 @@ Add `--json` for the full result:
 {"id":"dev_5b0e7c21-9d4a-4f3e-8a16-c2e47f09d3b8","driverDeviceId":"00008110-001A2B3C4D5E","platform":"ios","model":"iPhone 15 Pro","osVersion":"18.4","class":"phone","appCount":12,"reenrolled":false}
 ```
 
+## Android phones reached over the network
+
+A phone with no USB path to the worker (wired by Ethernet, or on Wi-Fi) can be enrolled when the worker's adb server reaches it. Set `android.networkDevices` to `true` in the worker's `config.json` and restart the daemon:
+
+```json
+{ "android": { "networkDevices": true } }
+```
+
+Then connect the phone yourself, once, and enrol it by the name adb lists it under:
+
+```bash
+adb connect 192.168.1.5:5555
+simlock device add --platform android 192.168.1.5:5555
+```
+
+A phone paired with Android 11 wireless debugging is listed under a name like `adb-R58Y61A60HN-r7wg2G._adb-tls-connect._tcp`; enrol it by that name. Simlock never runs `adb pair` and never handles a pairing code.
+
+- **The address is the ID.** The enrolled ID is the name adb lists the phone under. Simlock also keeps the phone's own hardware serial (`getprop ro.serialno`) and reads it before it grants the phone or cleans it up. A different phone answering at the address (DHCP gave it away) reads `absent (not-present)`, is never granted, and loses no app.
+- **One phone, one record.** A phone whose hardware serial is already enrolled, over USB or under another address, is refused `enrolled-under-other-id`, whatever `android.networkDevices` says.
+- **Simlock reconnects it.** Every `health.probeIntervalMs` the worker runs `adb connect` for each enrolled `host:port` phone adb no longer lists, for example after the adb server restarted. A phone listed by an mDNS name is reconnected by adb itself. One that does not answer delays the grants of the worker's other Android phones by up to 10 seconds.
+- **Emulators are never phones.** An emulator is refused `unsupported-kind` whatever it is connected through.
+- **Moving a phone.** A phone that gets a new address reads absent. Remove it with `simlock device remove` and add it at its new address.
+- **Turning the key off** leaves network phones enrolled. They read `absent (not-present)` and are not reconnected.
+
+<Aside type="danger">
+With both `android.networkDevices` and `devices.autoEnroll` on, the worker enrols every network phone that adb lists, including a developer's own Wi-Fi phone connected to that worker, and uninstalls its apps when a lease ends. Turn both on only where every phone adb reaches is a test phone. Anyone who can reach a phone's adb port with an authorized key can drive it outside Simlock; securing that network is yours.
+</Aside>
+
 ## Enrol phones automatically
 
 An admin can let the worker enrol the phones plugged into it. Set `devices.autoEnroll` to `true` in the worker's `config.json` and restart the daemon:
@@ -98,7 +126,7 @@ An admin can let the worker enrol the phones plugged into it. Set `devices.autoE
 { "devices": { "autoEnroll": true } }
 ```
 
-From then on, every `health.probeIntervalMs` (30 seconds by default) the worker enrols each phone plugged in by USB that `simlock device add` would accept, with no command. The `device.enrolled` event of such a phone says `initiator: "auto"`.
+From then on, every `health.probeIntervalMs` (30 seconds by default) the worker enrols each phone plugged in by USB that `simlock device add` would accept, with no command. With `android.networkDevices` on too, it also enrols the network phones adb lists; run `adb connect` once for each. The `device.enrolled` event of such a phone says `initiator: "auto"`.
 
 <Aside type="danger">
 Turn it on only where every phone plugged into the worker is a test phone. Each enrolled phone has every app that was not on it at enrolment uninstalled when a lease ends, so a personal phone charging on the worker would lose its apps.
@@ -169,7 +197,7 @@ Removed 00008110-001A2B3C4D5E. It is no longer enrolled; nothing on the device c
 | Reason | Fix |
 | --- | --- |
 | `not-connected` | Connect the device by USB. On Android, check that `adb devices` lists it. |
-| `network-only` | The device is reachable only over Wi-Fi. Connect it by USB. |
+| `network-only` | The device is reachable only over Wi-Fi. Connect it by USB, or on Android set `android.networkDevices` to `true`. |
 | `untrusted` | iOS: tap **Trust This Computer**. Android: accept the USB debugging prompt on the phone. |
 | `developer-mode-off` | Turn on Developer Mode and restart the device when asked. |
 | `os-too-old` | Update the device to iOS or iPadOS 17 or later. |
