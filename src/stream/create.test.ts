@@ -948,6 +948,88 @@ describe("createWorkerStream", () => {
     }
   });
 
+  it("a lease end or a device stop ends every viewer of the device as it ends one: each gets the lease-end frame when there is a reason, then the end, and the capture closes once", async () => {
+    const leaseEnd = (stream: ReturnType<typeof worker>["stream"], reason: string) =>
+      stream.leaseEnd.leaseEnded(
+        { deviceId: "dev_leased", leaseId: "lse_1", reason } as Parameters<
+          typeof stream.leaseEnd.leaseEnded
+        >[0],
+        new AbortController().signal,
+      );
+    const watchers = async (stream: ReturnType<typeof worker>["stream"], count: number) => {
+      const routes = ["device", "lease", "device"] as const;
+      const opened = [];
+      for (let index = 0; index < count; index += 1) {
+        opened.push(watch(await openOnRoute(stream, routes[index]!)));
+      }
+      return opened;
+    };
+    const endedFrames = (viewer: ReturnType<typeof watch>) =>
+      viewer.frames.filter((frame) => frame.startsWith("ended"));
+
+    {
+      const { feeds, stream } = worker();
+      const viewers = await watchers(stream, 3);
+      await leaseEnd(stream, "explicit");
+      await flush();
+      for (const viewer of viewers) {
+        expect(endedFrames(viewer), "a lease end with three viewers").toEqual([
+          'ended {"reason":"explicit"}',
+        ]);
+        expect(viewer.ended).toBe(true);
+      }
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      const { emit, feeds, stream } = worker();
+      const viewers = await watchers(stream, 2);
+      emit("device.shutdown", "dev_leased");
+      await flush();
+      for (const viewer of viewers) {
+        expect(viewer.ended, "device.shutdown with two viewers").toBe(true);
+        expect(endedFrames(viewer)).toEqual([]);
+      }
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      const { emit, feeds, stream } = worker();
+      const viewers = await watchers(stream, 2);
+      emit("device.absence-detected", "dev_leased", { previousState: "leased" });
+      await flush();
+      await leaseEnd(stream, "device-lost");
+      await flush();
+      for (const viewer of viewers) {
+        expect(endedFrames(viewer), "device.absence-detected on a leased device").toEqual([
+          'ended {"reason":"device-lost"}',
+        ]);
+        expect(viewer.ended).toBe(true);
+      }
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      const { emit, feeds, opened, registry, stream } = worker();
+      await watchers(stream, 1);
+      emit("device.shutdown", "dev_leased");
+      await flush();
+      const again = watch(await openOnRoute(stream, "device"));
+      await flush();
+      expect(opened(), "a viewer that asks after the stop gets a fresh capture").toBe(2);
+      expect(again.frames).toEqual(["meta 330x720"]);
+      expect(feeds[1]?.closes).toBe(0);
+      emit("device.shutdown", "dev_leased");
+      registry.devices = registry.devices.map((device) =>
+        device.id === "dev_leased" ? { ...device, state: "shutdown" } : device,
+      );
+      await flush();
+      const refused = await openOnRoute(stream, "device");
+      expect(refused.status).toBe(409);
+      expect(opened()).toBe(2);
+    }
+  });
+
   it("a viewer of either stream route sees a 0x07 frame with the reason, then the end, when the lease ends", async () => {
     const routes = {
       device: (stream: ReturnType<typeof worker>["stream"]) =>
