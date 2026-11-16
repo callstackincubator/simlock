@@ -61,7 +61,9 @@ export interface Call {
   readonly options: ProcessRunOptions;
 }
 
-export type Override = (rest: readonly string[]) => ProcessResult | "hang" | undefined;
+export type Override = (
+  rest: readonly string[],
+) => ProcessResult | Promise<ProcessResult> | "hang" | undefined;
 
 export const OK = (stdout = ""): ProcessResult => ({ code: 0, stderr: "", stdout });
 

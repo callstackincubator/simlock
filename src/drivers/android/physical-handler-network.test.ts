@@ -8,10 +8,12 @@ import {
   FAILED,
   TIMED_OUT,
   PHONE,
+  restOf,
   isGetprop,
   PhoneAdb,
   sdk,
   USB_LINE,
+  VERSION_REPLY_40,
   VERSION_REPLY_41,
 } from "./test-physical-handler.js";
 
@@ -23,12 +25,16 @@ const MDNS_LINE = `${MDNS} device product:a16nseea model:SM_A165F transport_id:5
 // why: the key and the host's platform are the handler's construction options, which the driver surface cannot vary per test.
 async function networkHandler(
   listing: string,
-  options: { readonly networkDevices?: boolean; readonly platform?: NodeJS.Platform } = {},
+  options: {
+    readonly networkDevices?: boolean;
+    readonly platform?: NodeJS.Platform;
+    readonly reply?: string;
+  } = {},
 ) {
   const runner = new PhoneAdb([]);
   runner.devicesOutput = listing;
   const probe = new FakeTcpProbe([]);
-  probe.replyWith(VERSION_REPLY_41);
+  probe.replyWith(options.reply ?? VERSION_REPLY_41);
   const handler = new AndroidPhysicalHandler({
     adb,
     baseEnv: { ANDROID_HOME: sdk },
@@ -216,5 +222,98 @@ describe("Android physical handler under android.networkDevices: listPresentPhys
       { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
     ]);
     expect(off.runner.rests.flat()).not.toContain("connect");
+  });
+});
+
+describe("Android physical handler under android.networkDevices: reconnecting", () => {
+  const other = "192.168.1.6:5555";
+  const third = "192.168.1.7:5555";
+  const listed = (...ids: string[]) =>
+    devicesListing(...ids.map((id) => `${id} device product:o1s transport_id:4`));
+  const record = (driverDeviceId: string) => ({ driverDeviceId, hardwareSerial: "R58Y61A60HN" });
+  const connects = (runner: PhoneAdb) => runner.rests.filter((rest) => rest[0] === "connect");
+  const listings = (runner: PhoneAdb) => runner.rests.filter((rest) => rest[0] === "devices");
+
+  // why: a connect that "succeeds" only adds the phone to the next listing, as adb's own output is ignored.
+  function connectAdds(runner: PhoneAdb, reachable: readonly string[], output: string) {
+    let inFlight = 0;
+    let mostInFlight = 0;
+    runner.override((rest) => {
+      if (rest[0] !== "connect") return undefined;
+      const address = rest[1] ?? "";
+      inFlight += 1;
+      mostInFlight = Math.max(mostInFlight, inFlight);
+      return new Promise((resolve) => {
+        setImmediate(() => {
+          inFlight -= 1;
+          if (reachable.includes(address)) {
+            runner.devicesOutput += `${address} device product:o1s transport_id:9\n`;
+          }
+          resolve({ code: 0, stderr: "", stdout: output });
+        });
+      });
+    });
+    return { mostInFlight: () => mostInFlight };
+  }
+
+  it("runs one adb connect with a 10 s limit for each enrolled host:port the listing lacks, all together, then lists once more and judges by that listing alone", async () => {
+    const reconnected = await networkHandler(listed());
+    const only = connectAdds(reconnected.runner, [ADDRESS], `connected to ${ADDRESS}\n`);
+    expect(await reconnected.handler.listPresentPhysical([record(ADDRESS)])).toEqual([
+      { driverDeviceId: ADDRESS, osVersion: "34", present: true },
+    ]);
+    expect(connects(reconnected.runner)).toEqual([["connect", ADDRESS]]);
+    expect(
+      reconnected.runner.commands.find((call) => restOf(call)[0] === "connect")?.options.timeoutMs,
+    ).toBe(10_000);
+    expect(listings(reconnected.runner)).toHaveLength(2);
+    expect(only.mostInFlight()).toBe(1);
+
+    const failed = await networkHandler(listed());
+    connectAdds(failed.runner, [], `failed to connect to '${ADDRESS}': Connection refused\n`);
+    expect(await failed.handler.listPresentPhysical([record(ADDRESS)])).toEqual([
+      { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
+    ]);
+
+    const wrongExit = await networkHandler(listed());
+    connectAdds(wrongExit.runner, [ADDRESS], `failed to connect to '${ADDRESS}'\n`);
+    expect(await wrongExit.handler.listPresentPhysical([record(ADDRESS)])).toMatchObject([
+      { present: true },
+    ]);
+
+    const many = await networkHandler(listed());
+    const together = connectAdds(many.runner, [], "");
+    await many.handler.listPresentPhysical([ADDRESS, other, third].map(record));
+    expect(connects(many.runner)).toHaveLength(3);
+    expect(together.mostInFlight()).toBe(3);
+    expect(listings(many.runner)).toHaveLength(2);
+
+    const timedOut = await networkHandler(listed());
+    timedOut.runner.override((rest) => (rest[0] === "connect" ? TIMED_OUT : undefined));
+    expect(await timedOut.handler.listPresentPhysical([record(ADDRESS)])).toEqual([
+      { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
+    ]);
+  });
+
+  it("runs no adb connect for a listed host:port, an mDNS name, a USB ID, a key that is off or a protocol mismatch", async () => {
+    const cases = [
+      { enrolled: [record(ADDRESS)], listing: listed(ADDRESS), name: "listed" },
+      { enrolled: [record(MDNS)], listing: listed(), name: "mDNS name" },
+      { enrolled: [{ driverDeviceId: PHONE }], listing: listed(), name: "USB ID" },
+      { enrolled: [record(ADDRESS)], listing: listed(), name: "key off", networkDevices: false },
+      { enrolled: [record(ADDRESS)], listing: listed(), name: "mismatch", reply: VERSION_REPLY_40 },
+    ] as const;
+    for (const { enrolled, listing, name, ...options } of cases) {
+      const { handler, runner } = await networkHandler(listing, options);
+
+      const present = await handler.listPresentPhysical(enrolled);
+
+      expect(connects(runner), name).toEqual([]);
+      if (name === "mismatch") {
+        expect(present, name).toEqual([
+          { driverDeviceId: ADDRESS, present: false, reason: "not-present" },
+        ]);
+      }
+    }
   });
 });
