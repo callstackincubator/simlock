@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeDriver } from "../core/testing.js";
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
 import { buildDispatcher, gibibyte, session } from "./test-dispatcher.js";
@@ -268,4 +268,105 @@ describe("Dispatcher: a baseline lease is released", () => {
       expect(fileOf(second.device.id, "data/session.txt")).toBeUndefined();
     },
   );
+});
+
+describe("Dispatcher: a baseline the driver calls stale", () => {
+  const reason = "saved before simulators stopped sharing folders; save it again";
+
+  async function built(logger?: JsonLinesLogger) {
+    const clock = new FakeClock(1_000);
+    const harness = await buildDispatcher({
+      clock,
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+      ...(logger === undefined ? {} : { engine: { logger } }),
+      warmPool: { baselineLearnAfter: 1 },
+    });
+    const real = harness.driver.listSources.bind(harness.driver);
+    return {
+      ...harness,
+      clock,
+      markStale: () =>
+        vi
+          .spyOn(harness.driver, "listSources")
+          .mockImplementation(async () =>
+            (await real()).map((source) => ({ ...source, staleReason: reason })),
+          ),
+      provisions: () =>
+        harness.driver.calls.filter((call) => call.operation === "provision").length,
+      request: () =>
+        harness.dispatcher
+          .dispatch("lease.request", { baseline: "checkout", platform: "ios" }, session())
+          .catch((error: unknown) => error),
+      restart: async () => harness.engine.core.converge(await harness.engine.core.readStartup()),
+      save: async () => {
+        const first = await harness.dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+          session(),
+        );
+        await harness.dispatcher.dispatch(
+          "baseline.save",
+          { leaseId: first.lease.id, name: "checkout" },
+          session({ role: "admin" }),
+        );
+      },
+    };
+  }
+
+  async function learned(harness: Awaited<ReturnType<typeof built>>): Promise<void> {
+    await harness.restart();
+    await harness.save();
+    const granted = await harness.request();
+    await harness.dispatcher.dispatch(
+      "lease.release",
+      { leaseId: (granted as { lease: { id: string } }).lease.id },
+      session(),
+    );
+  }
+
+  it("answers BASELINE_STALE from the first request after the worker starts or after its save, and warms no copy of it", async () => {
+    const control = await built();
+    await learned(control);
+    const warmed = control.provisions();
+    await control.engine.core.passWarmPool();
+    expect(control.provisions(), "a fresh baseline's learned kind is warmed").toBeGreaterThan(
+      warmed,
+    );
+
+    const restarted = await built();
+    await learned(restarted);
+    restarted.markStale();
+    await restarted.restart();
+    const provisioned = restarted.provisions();
+    await restarted.engine.core.passWarmPool();
+    expect(restarted.provisions(), "no copy of a stale baseline is warmed").toBe(provisioned);
+    expect(await restarted.request()).toMatchObject({
+      code: "BASELINE_STALE",
+      message: `baseline checkout is stale: ${reason}`,
+    });
+
+    const saved = await built();
+    saved.markStale();
+    await saved.save();
+    expect(await saved.request()).toMatchObject({
+      code: "BASELINE_STALE",
+      message: `baseline checkout is stale: ${reason}`,
+    });
+  });
+
+  it("goes on, logging it, when the check at startup or after a save fails", async () => {
+    const sink = new MemoryLogSink();
+    const harness = await built(new JsonLinesLogger({ clock: new FakeClock(0), sink }));
+    vi.spyOn(harness.engine.core.baselines, "checkStale").mockRejectedValue(
+      new Error("catalog unreadable"),
+    );
+
+    await expect(harness.restart()).resolves.toBeUndefined();
+    await expect(harness.save()).resolves.toBeUndefined();
+
+    expect(sink.records.map((record) => record.message)).toEqual([
+      "could not check baselines at startup: catalog unreadable",
+      "could not check baselines after a save: catalog unreadable",
+    ]);
+  });
 });

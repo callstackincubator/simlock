@@ -2,7 +2,7 @@ import { afterEach, expect, it, describe } from "vitest";
 import { DriverCrashError, BootTimeoutError } from "../../core/index.js";
 import { ScriptedProcessRunner, FakeClock, MemoryFilesystem } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
-import { plantSource, memorySourceDatabase } from "./testing.js";
+import { type PlantedSource, plantSource, memorySourceDatabase } from "./testing.js";
 import {
   deviceRoot,
   driverData,
@@ -146,9 +146,11 @@ describe("IosSimctlDriver", () => {
     { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
     { name: "an unknown source is refused", id: "nope", cloned: false },
     { name: "a stale source is refused", id: "planted-old", cloned: false },
+    { name: "a source with no lineage is refused", id: "planted-unlineaged", cloned: false },
   ])("provision with a source: $name", async ({ id, cloned }) => {
     const namedUdid = "00000000-0000-0000-0000-0000000000bb";
     const oldUdid = "00000000-0000-0000-0000-0000000000cc";
+    const unlineagedUdid = "00000000-0000-0000-0000-0000000000dd";
     const database = await seededDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
     const planted = plantSource(database, { ...kind, kind: "baseline", udid: namedUdid });
@@ -159,6 +161,10 @@ describe("IosSimctlDriver", () => {
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-old' WHERE udid = ?")
       .run(oldUdid);
+    plantSource(database, { ...kind, kind: "baseline", lineage: null, udid: unlineagedUdid });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-unlineaged' WHERE udid = ?")
+      .run(unlineagedUdid);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
     await plantSeedClone(filesystem);
@@ -391,9 +397,29 @@ describe("IosSimctlDriver", () => {
       runtimeBuild: undefined,
       remade: false,
     },
-  ])(
+    {
+      name: "it has no lineage",
+      lineage: null,
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: true,
+    },
+    {
+      name: "its lineage is empty",
+      lineage: [],
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: false,
+    },
+  ] as readonly {
+    name: string;
+    lineage?: readonly string[] | null;
+    seedBuild: string | undefined;
+    runtimeBuild: string | undefined;
+    remade: boolean;
+  }[])(
     "makes the seed again before copying it only when it is stale: $name -> remade $remade",
-    async ({ seedBuild, runtimeBuild, remade }) => {
+    async ({ lineage, seedBuild, runtimeBuild, remade }) => {
       const staleUdid = "00000000-0000-0000-0000-0000000000bb";
       const catalog = JSON.parse(listFixture) as {
         runtimes: { buildversion?: string; identifier: string }[];
@@ -429,6 +455,7 @@ describe("IosSimctlDriver", () => {
         filesystem,
         await seededDatabase({
           udid: planted,
+          ...(lineage === undefined ? {} : { lineage }),
           ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
         }),
       );
@@ -455,8 +482,38 @@ describe("IosSimctlDriver", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    name: string;
+    edit: (catalog: Catalog) => void;
+    planted?: Partial<PlantedSource>;
+    reason: string | undefined;
+  }>([
     { name: "healthy", edit: () => undefined, reason: undefined },
+    {
+      name: "a seed has no lineage, which is remade and shows no reason",
+      edit: () => undefined,
+      planted: { lineage: null },
+      reason: undefined,
+    },
+    {
+      name: "a baseline was saved before lineages were kept",
+      edit: () => undefined,
+      planted: { kind: "baseline", lineage: null },
+      reason: "saved before simulators stopped sharing folders; save it again",
+    },
+    {
+      name: "a baseline was saved from a simulator made before lineages were kept",
+      edit: () => undefined,
+      planted: { kind: "baseline", lineage: null, savedWithoutLineage: true },
+      reason:
+        "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease",
+    },
+    {
+      name: "a baseline has a lineage",
+      edit: () => undefined,
+      planted: { kind: "baseline", lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
+      reason: undefined,
+    },
     {
       name: "its runtime is gone",
       edit: (catalog: Catalog) => {
@@ -485,8 +542,8 @@ describe("IosSimctlDriver", () => {
       reason: `device type ${driverData.deviceTypeId} is not available`,
     },
   ])(
-    "lists a ready seed as a source with its model, version and size, and its staleReason when $name, which clears once it is back",
-    async ({ edit, reason }) => {
+    "lists a ready source with its model, version and size, and its staleReason when $name, which clears once it is back",
+    async ({ edit, planted, reason }) => {
       const catalogOf = (change: (catalog: Catalog) => void) => {
         const catalog = JSON.parse(listFixture) as Catalog;
         for (const entry of catalog.runtimes) {
@@ -508,12 +565,13 @@ describe("IosSimctlDriver", () => {
         runtimeId: driverData.runtimeId,
         sizeBytes: 1_073_741_824,
         udid: seedUdid,
+        ...planted,
       });
       const driver = await createDriver(runner, new FakeClock(), undefined, database);
 
       expect(await driver.listSources()).toMatchObject([
         {
-          kind: "seed",
+          kind: planted?.kind ?? "seed",
           model: "iPhone 16",
           osVersion: "26.5",
           sizeBytes: 1_073_741_824,
