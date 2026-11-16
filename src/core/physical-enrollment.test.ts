@@ -634,6 +634,8 @@ describe("PhysicalEnrollment", () => {
     const network = "192.168.1.5:5555";
     const taking = await build([{ hardwareSerial: "SER-1", ids: [network] }]);
     await taking.core.enrollment.add("ios", network);
+    const same = await taking.core.enrollment.add("ios", network);
+    expect(same.reenrolled, "same ID, same serial").toBe(true);
     taking.driver.setPhysicalDevices([{ hardwareSerial: "SER-2", ids: [network] }]);
     const again = await taking.core.enrollment.add("ios", network);
     expect(again.reenrolled).toBe(true);
