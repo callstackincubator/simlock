@@ -115,4 +115,43 @@ describe("a worker whose <platform>.virtualDevices is false", () => {
     expect(classifyError(unmatched)).toBe("UNKNOWN_MODEL");
     expect((unmatched as Error).message).toContain("no enrolled physical device can match");
   });
+
+  it("catalog.get answers a phones-only platform with empty lists and virtualDevices false, without asking its driver, and the other platform in full", async () => {
+    const clock = new FakeClock(1_000);
+    const android = new FakeDriver({
+      availableOsVersions: ["36"],
+      clock,
+      knownModels: ["Pixel 8"],
+      platform: "android",
+    });
+    const { dispatcher } = await buildDispatcher({
+      clock,
+      extraDrivers: [android],
+      virtualDevices: { android: false },
+    });
+    const phonesOnly = {
+      classDefaults: {},
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      platform: "android",
+      runtimes: [],
+      virtualDevices: false,
+    };
+
+    const only = await dispatcher.dispatch("catalog.get", { platform: "android" }, session());
+    const both = await dispatcher.dispatch("catalog.get", {}, session());
+
+    expect(only.platforms).toEqual([phonesOnly]);
+    expect(both.platforms).toHaveLength(2);
+    expect(both.platforms.find((entry) => entry.platform === "android")).toEqual(phonesOnly);
+    expect(both.platforms.find((entry) => entry.platform === "ios")).toMatchObject({
+      runtimes: ["26.5"],
+    });
+    expect(both.platforms.find((entry) => entry.platform === "ios")).not.toHaveProperty(
+      "virtualDevices",
+    );
+    expect(android.calls.map((call) => call.operation)).not.toContain("listCatalog");
+  });
 });
