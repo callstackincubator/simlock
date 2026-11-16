@@ -273,9 +273,7 @@ export class FakeDriver implements Driver {
     if (this.#knownModels !== undefined && !this.#knownModels.has(request.model)) {
       throw new UnknownModelError(this.platform, request.model);
     }
-    if (request.imageTag !== undefined && this.#taggedRefusals.has(request.model)) {
-      throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
-    }
+    this.#assertTaggedFits(request);
     const unknownCategory = request.except?.find((name) => !this.#slimCategories?.has(name));
     if (this.#slimCategories !== undefined && unknownCategory !== undefined) {
       throw new BadDeviceRequestError(`unknown slim category "${unknownCategory}"`);
@@ -296,6 +294,12 @@ export class FakeDriver implements Driver {
         ? { mode: "slim" as const }
         : {}),
     };
+  }
+
+  #assertTaggedFits(request: ExactDeviceRequest): void {
+    if (request.imageTag !== undefined && this.#taggedRefusals.has(request.model)) {
+      throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
+    }
   }
 
   #resolveOsVersion(requested: string | undefined): string {

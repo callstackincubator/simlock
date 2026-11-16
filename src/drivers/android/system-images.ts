@@ -413,7 +413,7 @@ export class SystemImages {
     const matching = images.filter((image) => image.apiLevel === apiLevel);
     if (imageTag !== undefined) {
       const tagged = matching.filter((image) => image.tag === imageTag);
-      return tagged.find((image) => image.abi === this.#hostAbi) ?? tagged[0];
+      return this.builtForHost(tagged)[0] ?? tagged[0];
     }
     return (
       matching.find((image) => image.tag === "google_apis" && image.abi === this.#hostAbi) ??
