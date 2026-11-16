@@ -119,9 +119,11 @@ WAL in the source is flushed into its database (`wal_checkpoint(TRUNCATE)`),
 because a WAL frame carries a checksum a swap would break. The source
 records its **lineage**: the UDIDs of the simulators it was copied from
 that have booted (a seed: its throwaway; a baseline: its device's UDID and
-its own source's lineage), the device set they ran in, and the files and
-links that name any of them, found by reading every byte once with no size
-limit. A file the host cannot read is recorded as unreadable. A WAL that
+its own source's lineage) and the files and links that name any of them,
+found by reading every byte once with no size limit. A lease's device
+keeps its source's lineage, so a save knows it without reading the copy.
+The device set is not recorded: switching `deviceSet` is refused while any
+source is left (ADR 0048). A file the host cannot read is recorded as unreadable. A WAL that
 still holds frames after the flush is logged and never patched.
 
 ### 3. Every lease's copy swaps its lineage's UDIDs for its own before its first boot
@@ -137,12 +139,11 @@ as one whose drop fails is.
 
 ### 4. Sources made before this are not copied as they are
 
-A source with no lineage record, or whose lineage names another device set
-than the copies' (the setting changed), is stale: a seed is deleted where
-its row says and made again, and a baseline answers `BASELINE_STALE`
-(`saved before simulators stopped sharing folders; save it again`) from
-the first request after the worker starts. Each is deleted in its own set
-when removed.
+A source with no lineage record is stale: a seed is deleted and made
+again, and a baseline answers `BASELINE_STALE` from the first request
+after the worker starts, since core now checks baselines for staleness at
+startup. A baseline saved from a device made before this has no lineage
+either. The reason's wording lives in #1561's design tables.
 
 ## Consequences
 
