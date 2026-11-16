@@ -1,4 +1,4 @@
-# 0078. A worker may serve a platform's enrolled phones only
+# 0080. A worker may serve a platform's enrolled phones only
 
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-16
