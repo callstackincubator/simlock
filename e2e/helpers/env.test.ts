@@ -212,3 +212,69 @@ describe("withSharedDaemon with keepSeeds", () => {
     }
   });
 });
+
+describe("withSharedDaemon with keepSeeds and an iOS seed", () => {
+  it("gives the next env the iOS seed's lineage and its file rows, even when its simulator set is outside the home", async () => {
+    const laneHome = join(tmpdir(), `simlock-lane-${randomBytes(3).toString("hex")}`);
+    const sources = `${laneHome}-sources`;
+    process.env.SIMLOCK_E2E_LANE_HOME = laneHome;
+    const udid = "11111111-2222-3333-4444-555555555555";
+    const lineage = JSON.stringify(["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"]);
+    const files = [
+      { kind: "file", relative_path: "data/Library/a.plist" },
+      { kind: "link", relative_path: "data/Library/b" },
+      { kind: "unreadable", relative_path: "data/Library/c" },
+    ];
+    try {
+      await mkdir(join(sources, udid), { recursive: true });
+      const first = await laneEnv();
+      try {
+        const database = new DatabaseSync(join(first.home, "state.db"));
+        try {
+          database.exec("PRAGMA busy_timeout=5000");
+          database
+            .prepare(
+              `INSERT INTO ios_source_data (source_id, kind, state, spec_key, udid, set_path,
+                 device_type_id, runtime_id, model, os_version, maker, lineage, created_at)
+               VALUES ('seed_ios', 'seed', 'ready', ?, ?, ?, 'type', 'runtime', 'iPhone 16', '26.5', 'maker', ?, 1)`,
+            )
+            .run("iPhone 16\u0000runtime", udid, sources, lineage);
+          for (const file of files) {
+            database
+              .prepare(
+                "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES ('seed_ios', ?, ?)",
+              )
+              .run(file.relative_path, file.kind);
+          }
+        } finally {
+          database.close();
+        }
+      } finally {
+        await first.teardown();
+      }
+
+      const second = await laneEnv();
+      try {
+        const database = new DatabaseSync(join(second.home, "state.db"));
+        try {
+          expect(database.prepare("SELECT source_id, lineage FROM ios_source_data").all()).toEqual([
+            { lineage, source_id: "seed_ios" },
+          ]);
+          expect(
+            database
+              .prepare("SELECT kind, relative_path FROM ios_source_files ORDER BY relative_path")
+              .all(),
+          ).toEqual(files);
+        } finally {
+          database.close();
+        }
+      } finally {
+        await second.teardown();
+      }
+    } finally {
+      delete process.env.SIMLOCK_E2E_LANE_HOME;
+      await rm(laneHome, { force: true, recursive: true });
+      await rm(sources, { force: true, recursive: true });
+    }
+  });
+});
