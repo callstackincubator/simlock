@@ -70,6 +70,9 @@ function formatCatalog(response: CatalogGetOutput): string {
       return [
         `Platform: ${entry.platform}`,
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
+        ...(entry.defaultImageTag === undefined
+          ? []
+          : [`  Default image tag: ${esc(entry.defaultImageTag)}`]),
         models.length > 0 ? "  Models:" : "  Models: (none)",
         ...models,
         ...(entry.images === undefined

@@ -46,7 +46,7 @@ the status is stale.
 | [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by 0039; §19c's piped stdin narrowed by 0058; items 10 and 11, decision 5 and requirements 14 and 30 narrowed by 0074; Non-goals (port forwarding) narrowed by 0054 and 0064; Non-goals (file transfer) and §19b′ narrowed by 0067 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted; §2 narrowed by 0032 (the event record is a database) |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted |
-| [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android |
+| [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android, §9 by 0078 |
 | [0009](0009-gateway-routing-is-a-list-of-stages.md) | Gateway routing is a list of stages, and a request that cannot be served fails at once | Accepted — partly implemented: §6's `defaultRuntime` rule |
 | [0010](0010-components-have-one-owner-in-the-core.md) | Components are installed, recorded and removed through one owner in the core | Accepted |
 | [0011](0011-the-console-is-a-built-app-the-daemon-serves.md) | The console is a built app the daemon serves at `/` | Accepted |
@@ -63,7 +63,7 @@ the status is stale.
 | [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Accepted; amends 0001 §3 and §5, 0015 §3 and 0019 §1–2 for physical devices; §3, §5 and §6 narrowed by 0073 |
 | [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by 0043; §1, §3–4 narrowed by 0046; §2 and §4 narrowed by 0070; §3 superseded in part by 0071 |
 | [0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) | Leasing calls lease-end participants before it reclaims a device | Accepted |
-| [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted |
+| [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted; §4 narrowed by 0078 |
 | [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies; §3's in-process link narrowed by 0043; §1 narrowed by 0067 (a core relay target) |
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted; §4 narrowed by 0049 and, for a file PUT's deadline, 0067 |
@@ -83,7 +83,7 @@ the status is stale.
 | [0042](0042-simlock-updates-itself-through-a-frozen-call-and-a-detached-updater.md) | Simlock updates itself through a frozen call and a detached updater | Accepted — not yet implemented; narrows 0009's `takes-requests` stage |
 | [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part; §4 narrowed by 0046 |
 | [0044](0044-the-console-reads-what-its-page-shows-and-events-mark-it-stale.md) | The console reads what its page shows, and events mark it stale | Accepted — not yet implemented; supersedes 0013 §3 |
-| [0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Accepted; §2 narrowed by 0049 |
+| [0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Accepted; §2 narrowed by 0049, §5 by 0079 |
 | [0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) | A standalone worker serves agent-device by default and hands local agents a private profile | Accepted — not yet implemented; narrows 0023 §1, §3–4, 0030 §2, 0039 and 0043 §4 |
 | [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted; narrows 0001 §1, §2, §3, §5, §6 and §7 for iOS under `deviceSet: "default"` |
@@ -112,3 +112,5 @@ the status is stale.
 | [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Accepted; narrows 0031's Consequences and 0052 §4 |
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
 | [0078](0078-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted — not yet implemented; narrows 0022 and 0009 §4 |
+| [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
+| [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |

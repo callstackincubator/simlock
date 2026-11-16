@@ -39,7 +39,13 @@ import { type LeaseRequestOptions } from "./wait-queue.js";
 
 export type AcquisitionSpecResolverOptions = Pick<
   LeaseAcquisitionCoordinatorOptions,
-  "baselines" | "catalog" | "components" | "defaultModes" | "drivers" | "modelPreferences"
+  | "baselines"
+  | "catalog"
+  | "components"
+  | "defaultImageTags"
+  | "defaultModes"
+  | "drivers"
+  | "modelPreferences"
 >;
 
 /** why: turns a request into the exact spec a driver resolves, and a baseline request into that baseline's spec, so the root and the workflow never resolve a spec themselves. */
@@ -63,6 +69,41 @@ export class AcquisitionSpecResolver {
     if (request.baseline !== undefined) {
       return this.#resolveBaseline(driver, request.baseline, request);
     }
+    const tag = this.#defaultTag(request);
+    if (tag !== undefined) {
+      try {
+        return await this.#resolveAttempt(
+          driver,
+          { ...request, imageTag: tag },
+          { ...options, allowDownload: false },
+          onProgress,
+          true,
+        );
+      } catch (error: unknown) {
+        // why: only a missing runtime says the tag cannot be met here; any other refusal is the request's answer (ADR 0078 §2).
+        if (!(error instanceof RuntimeMissingError)) throw error;
+      }
+    }
+    return this.#resolveAttempt(driver, request, options, onProgress, false);
+  }
+
+  /** why: the image tag the worker gives this request, or none for a request the default does not apply to (ADR 0078 §1). */
+  #defaultTag(request: DeviceRequest): string | undefined {
+    if (request.imageTag !== undefined || request.physical === true) return undefined;
+    return this.options.defaultImageTags[request.platform];
+  }
+
+  async #resolveAttempt(
+    driver: Driver,
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    onProgress: (progress: DownloadingProgress) => void,
+    defaultTag: boolean,
+  ): Promise<{
+    readonly spec: VirtualSpec;
+    readonly requirement: DeviceRequirement;
+    readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
+  }> {
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     if (request.except !== undefined && mode !== "slim") {
@@ -76,7 +117,8 @@ export class AcquisitionSpecResolver {
         ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
         : await this.#resolveRanged(request, mode, range);
     // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
-    const resolved = await this.#resolveOrInstall(onProgress, driver, target.exact, {
+    const exact = defaultTag ? { ...target.exact, defaultTag: true as const } : target.exact;
+    const resolved = await this.#resolveOrInstall(onProgress, driver, exact, {
       ...options,
       allowDownload: options.allowDownload === true && range === undefined,
     });

@@ -32,6 +32,7 @@ Platform: ios
 - Models are grouped by class. Each class shows the model a lease for that class gets.
 - A model works only with the runtimes on its own line. `(no paired runtime)` means no installed runtime works with it.
 - For Android, the output also lists each installed system image with its API level, tag and CPU type. A listed tag is what `simlock lease --image-tag` accepts. Models you made in Android Studio are marked `(custom)`.
+- On Android, when the worker sets `android.defaultImageTag`, a `Default image tag: <tag>` line follows the `Runtimes` line. Through a gateway the line shows only when every Android worker reports the same tag; with different tags, or a worker with none, it is left out. `--json` carries `defaultImageTag` under the same conditions.
 - A platform whose tools are missing is not listed. Run `simlock doctor` to see why.
 
 `simlock catalog` shows only what is installed and never downloads anything. Add `--json` for the structured form.

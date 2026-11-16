@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  encodeScreenFrame,
   type ScreenAvailability,
   SCREEN_FRAME_TAG,
   ScreenNotSupportedError,
+  ScreenUnavailableError,
 } from "../core/index.js";
 import { FakeClock, NoopLogger } from "../ports/index.js";
 import { createGatewayStream, createWorkerStream } from "./create.js";
@@ -14,6 +16,7 @@ function worker(
   sendsMeta = true,
   unsupported = false,
   openGate: Promise<void> = Promise.resolve(),
+  failWith?: Error,
 ) {
   const clock = new FakeClock();
   const registry = new TestRegistry(
@@ -30,6 +33,7 @@ function worker(
     [{ deviceId: "dev_leased", id: "lse_1" }],
   );
   const feeds: ScriptedFeed[] = [];
+  const signals: AbortSignal[] = [];
   let opened = 0;
   const handlers = new Map<string, ((envelope: { payload: { deviceId: string } }) => void)[]>();
   const stream = createWorkerStream({
@@ -47,9 +51,11 @@ function worker(
     name: "stream",
     registry,
     screens: {
-      openScreen: async () => {
+      openScreen: async (_platform, _device, _settings, signal) => {
         opened += 1;
+        signals.push(signal);
         await openGate;
+        if (failWith !== undefined) throw failWith;
         if (unsupported) throw new ScreenNotSupportedError("no capture here");
         const feed = new ScriptedFeed();
         if (sendsMeta) feed.meta();
@@ -65,13 +71,14 @@ function worker(
       handler({ payload: { deviceId, ...payload } } as Parameters<typeof handler>[0]);
     }
   };
-  return { clock, emit, feeds, opened: () => opened, registry, stream };
+  return { clock, emit, feeds, opened: () => opened, registry, signals, stream };
 }
 
 const STREAM_HEADERS = {
   "simlock-stream-codec": "h264",
   "simlock-stream-fps": "30",
   "simlock-stream-height": "720",
+  "simlock-stream-keyframe-ms": "5000",
   "simlock-stream-width": "330",
 };
 
@@ -85,6 +92,50 @@ const relayed = () => new Request("http://simlock-worker/stream/devices/dev_1");
 async function settledWithin<T>(promise: Promise<T>): Promise<T | "pending"> {
   for (let flush = 0; flush < 10; flush += 1) await new Promise((resolve) => setImmediate(resolve));
   return await Promise.race([promise, Promise.resolve("pending" as const)]);
+}
+
+const flush = () => settledWithin(Promise.resolve());
+
+const FRAME_NAMES: Record<number, string> = {
+  [SCREEN_FRAME_TAG.description]: "desc",
+  [SCREEN_FRAME_TAG.keyframe]: "key",
+  [SCREEN_FRAME_TAG.delta]: "delta",
+  [SCREEN_FRAME_TAG.alive]: "alive",
+  [SCREEN_FRAME_TAG.ended]: "ended",
+};
+
+function describeFrame(frame: Uint8Array): string {
+  const payload = frame.subarray(5);
+  if (frame[4] === SCREEN_FRAME_TAG.meta) {
+    const meta = JSON.parse(new TextDecoder().decode(payload)) as { width: number; height: number };
+    return `meta ${String(meta.width)}x${String(meta.height)}`;
+  }
+  const name = FRAME_NAMES[frame[4] ?? 0] ?? "?";
+  return frame[4] === SCREEN_FRAME_TAG.ended
+    ? `${name} ${new TextDecoder().decode(payload)}`
+    : `${name} ${[...payload.subarray(0, 4)].join(",")}`;
+}
+
+// why: a viewer that reads whatever arrives, so a test asserts on what a viewer got instead of
+// waiting on a read that may never be answered.
+function watch(response: Response) {
+  const seen = { ended: false, error: undefined as string | undefined, frames: [] as string[] };
+  const reader = response.body!.getReader();
+  void (async () => {
+    try {
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) {
+          seen.ended = true;
+          return;
+        }
+        seen.frames.push(describeFrame(step.value));
+      }
+    } catch (error) {
+      seen.error = (error as Error).message;
+    }
+  })();
+  return seen;
 }
 
 function openOnRoute(
@@ -189,10 +240,11 @@ describe("createWorkerStream", () => {
     });
   });
 
-  it("stops a relayed capture when its lease ends", async () => {
+  it("answers a relayed stream with the worker's key-frame promise, and stops its capture when its lease ends", async () => {
     const { feeds, stream } = worker();
     const served = await stream.relayTarget(relayed(), "gw:inst:agent-1");
     expect(served.status).toBe(200);
+    expect(served.headers.get("simlock-stream-keyframe-ms")).toBe("5000");
     await stream.leaseEnd.leaseEnded(
       { deviceId: "dev_1", leaseId: "lse_1" } as Parameters<typeof stream.leaseEnd.leaseEnded>[0],
       new AbortController().signal,
@@ -333,6 +385,7 @@ describe("createWorkerStream", () => {
     const served = await ask("w1");
     expect(served.status).toBe(200);
     expect(served.headers.get("simlock-stream-codec")).toBe("h264");
+    expect(served.headers.get("simlock-stream-keyframe-ms")).toBeNull();
     await served.body?.cancel();
     expect(relays).toEqual([
       {
@@ -379,11 +432,13 @@ describe("createWorkerStream", () => {
   it("ends a screen stream the gateway relays for a proxy identity at that identity's expiresAt", async () => {
     const clock = new FakeClock();
     let relayCancelled = false;
+    let relayAborted = false;
     const gateway = createGatewayStream({
       clock,
       fleet: {
         knowsWorker: () => true,
-        relay: async () => {
+        relay: async (_workerId, call) => {
+          call.request.signal.addEventListener("abort", () => (relayAborted = true));
           const body = new ReadableStream<Uint8Array>({
             cancel: () => {
               relayCancelled = true;
@@ -405,6 +460,7 @@ describe("createWorkerStream", () => {
     clock.advance(1);
     expect(await settledWithin(next)).toEqual({ done: true, value: undefined });
     expect(relayCancelled).toBe(true);
+    expect(relayAborted).toBe(true);
 
     // why: a stream that ends or is left before its deadline must not leave the deadline armed.
     const finished = createGatewayStream({
@@ -555,6 +611,656 @@ describe("createWorkerStream", () => {
       expect(refused.status).toBe(409);
       expect(feeds[0]?.closes).toBe(1);
     }
+  });
+
+  it("viewers of one device share one capture: each gets 200 with the current meta and a body of the current meta, the current parameter sets, then frames from the next key frame", async () => {
+    const lease = (id: string) =>
+      ({ deviceId: "dev_leased", leaseId: "lse_1", reason: id }) as Parameters<
+        ReturnType<typeof worker>["stream"]["leaseEnd"]["leaseEnded"]
+      >[0];
+    const badMeta = encodeScreenFrame(
+      SCREEN_FRAME_TAG.meta,
+      new TextEncoder().encode(JSON.stringify({ codec: "vp9", fps: 30, height: 720, width: 330 })),
+    );
+    const routes = [
+      ["two device-path viewers", "device", "device"],
+      ["a device-path and a lease-path viewer", "device", "lease"],
+    ] as const;
+    for (const [label, first, second] of routes) {
+      const { feeds, opened, stream } = worker();
+      const a = await openOnRoute(stream, first);
+      const b = await openOnRoute(stream, second);
+      expect(opened(), label).toBe(1);
+      for (const served of [a, b]) {
+        expect(served.status, label).toBe(200);
+        expect(Object.fromEntries(served.headers), label).toMatchObject(STREAM_HEADERS);
+      }
+      const seen = [watch(a), watch(b)];
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      feed.delta([2]);
+      await flush();
+      for (const viewer of seen) {
+        expect(viewer.frames, label).toEqual(["meta 330x720", "desc 7", "key 1", "delta 2"]);
+      }
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { opened, stream } = worker([], true, false, gate);
+      const first = openOnRoute(stream, "device");
+      const second = openOnRoute(stream, "lease");
+      await flush();
+      openIt();
+      const seen = [watch(await first), watch(await second)];
+      await flush();
+      expect(opened(), "a second viewer while the first's open is pending").toBe(1);
+      for (const viewer of seen) expect(viewer.frames).toEqual(["meta 330x720"]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      feed.meta({ height: 800, width: 400 });
+      feed.description([8]);
+      feed.keyframe([2]);
+      await flush();
+      const joined = await openOnRoute(stream, "device");
+      expect(joined.headers.get("simlock-stream-width"), "a joiner after a size change").toBe(
+        "400",
+      );
+      expect(joined.headers.get("simlock-stream-height")).toBe("800");
+      const viewer = watch(joined);
+      feed.delta([3]);
+      feed.frame(SCREEN_FRAME_TAG.alive, []);
+      feed.keyframe([4]);
+      feed.delta([5]);
+      await flush();
+      expect(viewer.frames).toEqual(["meta 400x800", "desc 8", "key 4", "delta 5"]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const viewer = watch(await openOnRoute(stream, "lease"));
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      await flush();
+      expect(viewer.frames, "a joiner before any parameter sets").toEqual([
+        "meta 330x720",
+        "desc 7",
+        "key 1",
+      ]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      await flush();
+      const viewer = watch(await openOnRoute(stream, "lease"));
+      feed.delta([2]);
+      feed.meta({ height: 800, width: 400 });
+      feed.description([8]);
+      feed.keyframe([3]);
+      await flush();
+      expect(viewer.frames, "a new meta and parameter sets before its first key frame").toEqual([
+        "meta 330x720",
+        "desc 7",
+        "meta 400x800",
+        "desc 8",
+        "key 3",
+      ]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      const early = watch(await openOnRoute(stream, "device"));
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([1]);
+      await flush();
+      const waiting = watch(await openOnRoute(stream, "lease"));
+      await stream.leaseEnd.leaseEnded(lease("expired"), new AbortController().signal);
+      await flush();
+      for (const viewer of [early, waiting]) {
+        expect(viewer.frames.at(-1), "the lease ending while it waits").toBe(
+          'ended {"reason":"expired"}',
+        );
+        expect(viewer.ended).toBe(true);
+      }
+      expect(waiting.frames).toEqual(["meta 330x720", "desc 7", 'ended {"reason":"expired"}']);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      const viewers = [
+        watch(await openOnRoute(stream, "device")),
+        watch(await openOnRoute(stream, "lease")),
+      ];
+      const feed = feeds[0]!;
+      feed.write(badMeta);
+      await flush();
+      for (const viewer of viewers) {
+        expect(viewer.error, "a later meta frame that fails the check").toBe(
+          "The screen capture names a codec this stream cannot carry: vp9",
+        );
+      }
+    }
+
+    {
+      const { feeds, stream } = worker([], false);
+      const first = openOnRoute(stream, "device");
+      await flush();
+      const feed = feeds[0]!;
+      feed.meta({ codec: "mjpeg" });
+      const early = watch(await first);
+      feed.delta([1]);
+      await flush();
+      const joined = await openOnRoute(stream, "lease");
+      expect(joined.headers.get("simlock-stream-codec"), "an MJPEG capture").toBe("mjpeg");
+      const late = watch(joined);
+      feed.delta([2]);
+      await flush();
+      expect(early.frames).toEqual(["meta 330x720", "delta 1", "delta 2"]);
+      expect(late.frames).toEqual(["meta 330x720", "delta 2"]);
+    }
+
+    {
+      const { feeds, opened, stream } = worker();
+      const viewer = await openOnRoute(stream, "device");
+      const agent = { principal: "tok_agent", role: "agent" };
+      const refused = [
+        await stream.mount.handle(deviceRequest("w1", "dev_leased"), agent),
+        await stream.mount.handle(deviceRequest("w1", "dev_nope"), OPERATOR),
+        await stream.mount.handle(deviceRequest("w1", "dev_shutdown"), OPERATOR),
+      ];
+      expect(refused.map((answer) => answer.status)).toEqual([404, 404, 409]);
+      expect(opened(), "a viewer refused by the device checks").toBe(1);
+      await viewer.body!.cancel();
+      await flush();
+      expect(feeds[0]?.closes, "the refused viewers joined nothing").toBe(1);
+    }
+  });
+
+  it("a stalled viewer never delays the capture or another viewer: past 2 MiB it drops its queued pictures and skips to the next key frame, and keeps meta, parameter sets and the lease-end frame", async () => {
+    // why: 2 KiB a picture, so 1,100 of them are past the 2 MiB a viewer may queue.
+    const picture = (index: number) => [
+      index >> 8,
+      index & 255,
+      ...Array.from({ length: 2044 }, () => 0),
+    ];
+    const lease = (reason: string) =>
+      ({ deviceId: "dev_leased", leaseId: "lse_1", reason }) as Parameters<
+        ReturnType<typeof worker>["stream"]["leaseEnd"]["leaseEnded"]
+      >[0];
+
+    {
+      const { feeds, stream } = worker();
+      const fast = watch(await openOnRoute(stream, "device"));
+      const stalled = await openOnRoute(stream, "lease");
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([0, 1]);
+      feed.frame(SCREEN_FRAME_TAG.alive, []);
+      for (let index = 0; index < 2000; index += 1) feed.delta(picture(index));
+      feed.meta({ height: 800, width: 400 });
+      feed.description([8]);
+      feed.keyframe([9, 9]);
+      feed.delta([9, 10]);
+      await flush();
+      expect(fast.frames, "another viewer reads every frame").toHaveLength(2008);
+      expect(fast.frames).toContain("alive ");
+      expect(fast.frames.at(-1)).toBe("delta 9,10");
+
+      const reading = watch(stalled);
+      await flush();
+      expect(reading.frames, "the stalled viewer reading again").toEqual([
+        "meta 330x720",
+        "desc 7",
+        "meta 400x800",
+        "desc 8",
+        "key 9,9",
+        "delta 9,10",
+      ]);
+    }
+
+    {
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const stalled = await openOnRoute(stream, "lease");
+      const feed = feeds[0]!;
+      feed.description([7]);
+      feed.keyframe([0, 1]);
+      for (let index = 0; index < 1100; index += 1) feed.delta(picture(index));
+      await flush();
+      await stream.leaseEnd.leaseEnded(lease("killed"), new AbortController().signal);
+      const reading = watch(stalled);
+      await flush();
+      expect(reading.frames, "a full queue at a lease end").toEqual([
+        "meta 330x720",
+        "desc 7",
+        'ended {"reason":"killed"}',
+      ]);
+      expect(reading.ended).toBe(true);
+    }
+
+    {
+      // why: 700 pictures of 2 KiB are about 1.4 MiB, past 1 MiB and under the 2 MiB bound, so nothing is dropped.
+      const { feeds, stream } = worker();
+      watch(await openOnRoute(stream, "device"));
+      const stalled = await openOnRoute(stream, "lease");
+      const feed = feeds[0]!;
+      feed.keyframe([0, 1]);
+      for (let index = 0; index < 700; index += 1) feed.delta(picture(index));
+      await flush();
+      const reading = watch(stalled);
+      await flush();
+      expect(reading.frames, "an H.264 viewer under the bound keeps every picture").toHaveLength(
+        702,
+      );
+      expect(reading.frames).toContain("key 0,1");
+    }
+
+    {
+      const { feeds, stream } = worker([], false);
+      const first = openOnRoute(stream, "device");
+      const second = openOnRoute(stream, "lease");
+      await flush();
+      const feed = feeds[0]!;
+      feed.meta({ codec: "mjpeg" });
+      watch(await first);
+      const underBound = await second;
+      for (let index = 0; index < 700; index += 1) feed.delta(picture(index));
+      await flush();
+      const kept = watch(underBound);
+      await flush();
+      expect(kept.frames, "an MJPEG viewer under the bound keeps every picture").toHaveLength(701);
+    }
+
+    {
+      const { feeds, stream } = worker([], false);
+      const first = openOnRoute(stream, "device");
+      const second = openOnRoute(stream, "lease");
+      await flush();
+      const feed = feeds[0]!;
+      feed.meta({ codec: "mjpeg" });
+      watch(await first);
+      const stalled = await second;
+      for (let index = 0; index < 2000; index += 1) feed.delta(picture(index));
+      await flush();
+      const reading = watch(stalled);
+      feed.delta(picture(2000));
+      await flush();
+      expect(reading.frames[0], "an MJPEG viewer past the bound").toBe("meta 330x720");
+      expect(reading.frames.length).toBeLessThan(1500);
+      expect(reading.frames).not.toContain("delta 0,0,0,0");
+      expect(reading.frames.at(-1)).toBe("delta 7,208,0,0");
+    }
+  });
+
+  const leaves1 = async () => {
+    const { feeds, stream } = worker();
+    const first = await openOnRoute(stream, "device");
+    const second = await openOnRoute(stream, "lease");
+    await first.body!.cancel();
+    await flush();
+    expect(feeds[0]?.closes, "the first leaves").toBe(0);
+    await second.body!.cancel();
+    await flush();
+    expect(feeds[0]?.closes, "the second leaves").toBe(1);
+  };
+
+  const leaves2 = async () => {
+    for (const [label, other] of [
+      ["one viewer's expiresAt", true],
+      ["the last viewer's expiresAt", false],
+    ] as const) {
+      const { clock, feeds, stream } = worker();
+      const expiring = watch(await openOnRoute(stream, "device", clock.now() + 60_000));
+      const staying = other ? watch(await openOnRoute(stream, "lease")) : undefined;
+      // why: a capture that writes nothing for 30 s ends on its own, so frames keep arriving.
+      for (let step = 0; step < 3; step += 1) {
+        clock.advance(20_000);
+        const feed = feeds[0]!;
+        feed.keyframe([step]);
+        await flush();
+      }
+      expect(expiring.ended, label).toBe(true);
+      if (staying === undefined) {
+        expect(feeds[0]?.closes, label).toBe(1);
+      } else {
+        expect(feeds[0]?.closes, label).toBe(0);
+        expect(staying.ended).toBe(false);
+        const feed = feeds[0]!;
+        feed.keyframe([9]);
+        await flush();
+        expect(staying.frames.at(-1)).toBe("key 9");
+      }
+    }
+  };
+
+  const leaves3 = async () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    const { feeds, signals, stream } = worker([], true, false, gate);
+    const aborts = [new AbortController(), new AbortController()];
+    const asked = [
+      stream.mount.handle(
+        new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+          signal: aborts[0]!.signal,
+        }),
+        OPERATOR,
+      ),
+      stream.leaseRoute(
+        new Request("http://daemon/v1/leases/lse_1/stream", { signal: aborts[1]!.signal }),
+        { principal: "tok_agent", role: "agent" },
+        { deviceId: "dev_leased", id: "lse_1" },
+      ),
+    ];
+    await flush();
+    aborts[0]!.abort();
+    await flush();
+    expect(signals[0]?.aborted, "one leaves during the open and another stays").toBe(false);
+    aborts[1]!.abort();
+    await flush();
+    expect(signals[0]?.aborted, "every viewer leaves during the open").toBe(true);
+    openIt();
+    await Promise.all(asked);
+    await flush();
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const leaves4 = async () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    const { feeds, signals, stream } = worker([], true, false, gate);
+    const leaving = new AbortController();
+    const first = stream.mount.handle(
+      new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+        signal: leaving.signal,
+      }),
+      OPERATOR,
+    );
+    const staying = openOnRoute(stream, "lease");
+    await flush();
+    leaving.abort();
+    openIt();
+    await first;
+    const watching = watch(await staying);
+    await flush();
+    expect(signals[0]?.aborted).toBe(false);
+    expect(watching.frames).toEqual(["meta 330x720"]);
+    expect(feeds[0]?.closes).toBe(0);
+  };
+
+  const leaves5 = async () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    const { feeds, opened, stream } = worker([], true, false, gate);
+    const leaving = new AbortController();
+    const first = stream.mount.handle(
+      new Request("http://daemon/v1/stream/workers/w1/devices/dev_leased", {
+        signal: leaving.signal,
+      }),
+      OPERATOR,
+    );
+    await flush();
+    leaving.abort();
+    await flush();
+    const next = openOnRoute(stream, "lease");
+    await flush();
+    expect(opened(), "a new viewer after every viewer left during the open").toBe(2);
+    openIt();
+    await first;
+    const watching = watch(await next);
+    await flush();
+    expect(watching.frames).toEqual(["meta 330x720"]);
+    expect(feeds.map((feed) => feed.closes)).toEqual([1, 0]);
+  };
+
+  it("closes the capture once, when its last viewer leaves: a viewer that leaves, or whose expiresAt passes, closes nothing while another watches", async () => {
+    await leaves1();
+    await leaves2();
+    await leaves3();
+    await leaves4();
+    await leaves5();
+  });
+
+  const leaseEnd = (stream: ReturnType<typeof worker>["stream"], reason: string) =>
+    stream.leaseEnd.leaseEnded(
+      { deviceId: "dev_leased", leaseId: "lse_1", reason } as Parameters<
+        typeof stream.leaseEnd.leaseEnded
+      >[0],
+      new AbortController().signal,
+    );
+  const watchers = async (stream: ReturnType<typeof worker>["stream"], count: number) => {
+    const routes = ["device", "lease", "device"] as const;
+    const opened = [];
+    for (let index = 0; index < count; index += 1) {
+      opened.push(watch(await openOnRoute(stream, routes[index]!)));
+    }
+    return opened;
+  };
+  const endedFrames = (viewer: ReturnType<typeof watch>) =>
+    viewer.frames.filter((frame) => frame.startsWith("ended"));
+
+  const ends1 = async () => {
+    const { feeds, stream } = worker();
+    const viewers = await watchers(stream, 3);
+    await leaseEnd(stream, "explicit");
+    await flush();
+    for (const viewer of viewers) {
+      expect(endedFrames(viewer), "a lease end with three viewers").toEqual([
+        'ended {"reason":"explicit"}',
+      ]);
+      expect(viewer.ended).toBe(true);
+    }
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const ends2 = async () => {
+    const { emit, feeds, stream } = worker();
+    const viewers = await watchers(stream, 2);
+    emit("device.shutdown", "dev_leased");
+    await flush();
+    for (const viewer of viewers) {
+      expect(viewer.ended, "device.shutdown with two viewers").toBe(true);
+      expect(endedFrames(viewer)).toEqual([]);
+    }
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const ends3 = async () => {
+    const { emit, feeds, stream } = worker();
+    const viewers = await watchers(stream, 2);
+    emit("device.absence-detected", "dev_leased", { previousState: "leased" });
+    await flush();
+    await leaseEnd(stream, "device-lost");
+    await flush();
+    for (const viewer of viewers) {
+      expect(endedFrames(viewer), "device.absence-detected on a leased device").toEqual([
+        'ended {"reason":"device-lost"}',
+      ]);
+      expect(viewer.ended).toBe(true);
+    }
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const ends4 = async () => {
+    const { emit, feeds, opened, registry, stream } = worker();
+    await watchers(stream, 1);
+    emit("device.shutdown", "dev_leased");
+    await flush();
+    const again = watch(await openOnRoute(stream, "device"));
+    await flush();
+    expect(opened(), "a viewer that asks after the stop gets a fresh capture").toBe(2);
+    expect(again.frames).toEqual(["meta 330x720"]);
+    expect(feeds[1]?.closes).toBe(0);
+    emit("device.shutdown", "dev_leased");
+    registry.devices = registry.devices.map((device) =>
+      device.id === "dev_leased" ? { ...device, state: "shutdown" } : device,
+    );
+    await flush();
+    const refused = await openOnRoute(stream, "device");
+    expect(refused.status).toBe(409);
+    expect(opened()).toBe(2);
+  };
+
+  const ends5 = async () => {
+    for (const way of ["device stop", "last viewer leaves"]) {
+      let closeIt = () => {};
+      const closing = new Promise<void>((resolve) => (closeIt = resolve));
+      const { emit, feeds, opened, stream } = worker();
+      const first = await openOnRoute(stream, "device");
+      const old = feeds[0]!;
+      const close = old.close.bind(old);
+      // why: a capture whose close is slow is stopped but still in flight, the window a late viewer must not join.
+      old.close = async () => {
+        await closing;
+        await close();
+      };
+      if (way === "device stop") emit("device.shutdown", "dev_leased");
+      else if (way === "last viewer leaves") await first.body!.cancel();
+      await flush();
+      const again = watch(await openOnRoute(stream, "device"));
+      await flush();
+      expect(opened(), `a viewer that asks while the capture stopped by ${way} is closing`).toBe(2);
+      expect(again.frames, way).toEqual(["meta 330x720"]);
+      closeIt();
+      await flush();
+      expect(again.ended, way).toBe(false);
+      expect(feeds[0]?.closes, way).toBe(1);
+    }
+  };
+
+  it("a lease end or a device stop ends every viewer of the device as it ends one: each gets the lease-end frame when there is a reason, then the end, and the capture closes once", async () => {
+    await ends1();
+    await ends2();
+    await ends3();
+    await ends4();
+    await ends5();
+  });
+
+  const gated = () => {
+    let openIt = () => {};
+    const gate = new Promise<void>((resolve) => (openIt = resolve));
+    return { gate, openIt: () => openIt() };
+  };
+  const refusal = async (answer: Response) => ({
+    body: await answer.json(),
+    status: answer.status,
+  });
+
+  const scenario1 = async () => {
+    const { gate, openIt } = gated();
+    const { opened, stream } = worker(
+      [],
+      true,
+      false,
+      gate,
+      new ScreenUnavailableError("no encoder"),
+    );
+    const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+    await flush();
+    openIt();
+    const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+    for (const answer of answers) {
+      expect(answer, "a start that fails").toEqual({
+        body: { error: { code: "STREAM_UNAVAILABLE", message: "no encoder" } },
+        status: 503,
+      });
+    }
+    expect(opened()).toBe(1);
+    const again = await settledWithin(openOnRoute(stream, "device"));
+    expect(again === "pending" ? again : again.status, "a viewer after a failed start").toBe(503);
+    expect(opened()).toBe(2);
+  };
+
+  const scenario2 = async () => {
+    const { clock, feeds, opened, stream } = worker([], false);
+    const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+    await flush();
+    clock.advance(30_000);
+    const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+    expect(
+      answers.map((answer) => answer.status),
+      "the start bound",
+    ).toEqual([503, 503]);
+    expect(answers[1]).toEqual(answers[0]);
+    expect(opened()).toBe(1);
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const scenario3 = async () => {
+    const { gate, openIt } = gated();
+    const { emit, feeds, stream } = worker([], true, false, gate);
+    const asked = [openOnRoute(stream, "device"), openOnRoute(stream, "lease")];
+    await flush();
+    emit("device.shutdown", "dev_leased");
+    openIt();
+    const answers = await Promise.all(asked.map(async (answer) => refusal(await answer)));
+    for (const answer of answers) {
+      expect(answer.status, "the device stopping during a shared start").toBe(409);
+    }
+    expect(answers[1]).toEqual(answers[0]);
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  const scenario4 = async () => {
+    const { feeds, opened, stream } = worker();
+    const viewers = [
+      watch(await openOnRoute(stream, "device")),
+      watch(await openOnRoute(stream, "lease")),
+    ];
+    const unread = await openOnRoute(stream, "device");
+    const feed = feeds[0]!;
+    feed.fail(new Error("encoder crashed"));
+    await flush();
+    for (const viewer of viewers) {
+      expect(viewer.error, "a mid-stream read error").toBe("encoder crashed");
+    }
+    expect(feeds[0]?.closes).toBe(1);
+    const fresh = watch(await openOnRoute(stream, "device"));
+    await flush();
+    expect(opened(), "a new open after a failure, while an errored body is unread").toBe(2);
+    expect(fresh.frames).toEqual(["meta 330x720"]);
+    await expect(unread.body!.getReader().read()).rejects.toThrow("encoder crashed");
+  };
+
+  const scenario5 = async () => {
+    const { clock, feeds, stream } = worker();
+    const viewers = [
+      watch(await openOnRoute(stream, "device")),
+      watch(await openOnRoute(stream, "lease")),
+    ];
+    clock.advance(29_999);
+    await flush();
+    expect(viewers.map((viewer) => viewer.error)).toEqual([undefined, undefined]);
+    clock.advance(1);
+    await flush();
+    for (const viewer of viewers) {
+      expect(viewer.error, "the silence bound").toBe(
+        "The screen capture wrote nothing for 30000ms while waiting for the next frame",
+      );
+    }
+    expect(feeds[0]?.closes).toBe(1);
+  };
+
+  it("a capture that fails fails every viewer it serves the same way, and the next viewer starts a fresh capture", async () => {
+    await scenario1();
+    await scenario2();
+    await scenario3();
+    await scenario4();
+    await scenario5();
   });
 
   it("a viewer of either stream route sees a 0x07 frame with the reason, then the end, when the lease ends", async () => {

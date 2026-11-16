@@ -41,7 +41,7 @@ export class MetaFrameScanner {
   }
 }
 
-function readScreenMeta(payload: Uint8Array): ScreenMeta {
+export function readScreenMeta(payload: Uint8Array): ScreenMeta {
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder().decode(payload));
@@ -51,6 +51,66 @@ function readScreenMeta(payload: Uint8Array): ScreenMeta {
   const fields =
     typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
   return checkedMeta(fields["codec"], fields["width"], fields["height"], fields["fps"]);
+}
+
+export interface Frame {
+  readonly tag: number;
+  // why: the whole frame, header included, so a viewer is handed bytes it can write as they are.
+  readonly bytes: Uint8Array;
+}
+
+// why: a stream is read here only as far as each frame's length and tag, so a frame can be handed to
+// a viewer or dropped without anyone reading a picture's bytes.
+export class FrameSplitter {
+  #head = new Uint8Array(SCREEN_FRAME_HEADER_BYTES);
+  #headFilled = 0;
+  #frame: Uint8Array | undefined;
+  #filled = 0;
+  #started = false;
+
+  push(chunk: Uint8Array): Frame[] {
+    const frames: Frame[] = [];
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (this.#frame === undefined) {
+        const take = Math.min(SCREEN_FRAME_HEADER_BYTES - this.#headFilled, chunk.length - offset);
+        this.#head.set(chunk.subarray(offset, offset + take), this.#headFilled);
+        this.#headFilled += take;
+        offset += take;
+        if (this.#headFilled < SCREEN_FRAME_HEADER_BYTES) break;
+        this.#frame = this.#startFrame();
+      }
+      const take = Math.min(this.#frame.length - this.#filled, chunk.length - offset);
+      this.#frame.set(chunk.subarray(offset, offset + take), this.#filled);
+      this.#filled += take;
+      offset += take;
+      if (this.#filled === this.#frame.length) {
+        frames.push({ bytes: this.#frame, tag: this.#frame[4] ?? 0 });
+        this.#frame = undefined;
+      }
+    }
+    return frames;
+  }
+
+  #startFrame(): Uint8Array {
+    const length = new DataView(this.#head.buffer).getUint32(0);
+    const total = SCREEN_FRAME_HEADER_BYTES + length - 1;
+    this.#headFilled = 0;
+    if (length < 1) throw new Error("The screen stream's output is not a frame envelope");
+    if (total > MAX_FRAME_BYTES) {
+      throw new Error(
+        `The screen stream sent a frame of ${String(total)} bytes, over the ${String(MAX_FRAME_BYTES)} a frame may be`,
+      );
+    }
+    if (!this.#started && this.#head[4] !== SCREEN_FRAME_TAG.meta) {
+      throw new Error("The screen stream does not begin with a meta frame");
+    }
+    this.#started = true;
+    const frame = new Uint8Array(total);
+    frame.set(this.#head);
+    this.#filled = SCREEN_FRAME_HEADER_BYTES;
+    return frame;
+  }
 }
 
 // why: one check for a meta frame read from a capture and for the headers a gateway reads from a

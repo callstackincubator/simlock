@@ -141,6 +141,16 @@ describe("assess", () => {
     expect(assess(REQUEST, [busy]).kind).toBe("route-or-wait");
   });
 
+  it("answers a tagless Android request the same on a worker with a default image tag and on one without", () => {
+    const pixel: CatalogEntry = { models: ["Pixel 9"], platform: "android", runtimes: ["36"] };
+    const request = { model: "Pixel 9", platform: "android" as const };
+
+    expect(
+      assess(request, [view("wrk_a", { ...pixel, defaultImageTag: "google_apis_playstore" })]),
+    ).toEqual(assess(request, [view("wrk_a", pixel)]));
+    expect(assess(request, [view("wrk_a", pixel)]).kind).toBe("route-or-wait");
+  });
+
   it("says NO_CAPACITY, never UNKNOWN_MODEL, when the only worker connected for the first time and its catalog has not arrived", () => {
     const first = view("wrk_a", IOS, {
       catalog: [],
