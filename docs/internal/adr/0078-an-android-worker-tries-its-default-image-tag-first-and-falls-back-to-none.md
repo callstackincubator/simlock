@@ -40,10 +40,14 @@ fixes its own tag (ADR 0061 §5).
 Leasing's spec resolver is the one place a request with no tag gets the
 default. It runs the request once as if it named the default tag: the same
 model, class, range and level rules that a tagged request follows today,
-with downloads off. If that attempt is refused as a missing runtime (no
-image of the tag at a level the request can take, or an image that does not
+with downloads off, and the driver counts only images of the tag built for
+the machine's own CPU: an emulator does not boot an image for another one.
+An explicit `--image-tag` keeps today's order, which falls back to another
+CPU's image. If the attempt is refused as a missing runtime (no image of the
+tag for this CPU at a level the request can take, or an image that does not
 fit the model), the request runs again exactly as it came, which includes
-the download that it may ask for.
+the download that it may ask for. Any other refusal is the request's answer,
+since the second attempt would refuse the same way.
 
 So with no `--os` the tag outranks the newest level. A Pixel 9 on a worker
 with API 37 `google_apis` and API 36 `google_apis_playstore` gets API 36
@@ -66,7 +70,10 @@ flowchart TD
 
 A worker's Android catalog entry names its default tag, as its iOS entry
 names its default mode. A gateway reads it per worker when it checks for a
-warm device. A worker that does not send it has no default. Whether a
+warm device. A worker that does not send it has no default, and the
+protocol's lowest version stays where it is, so an older worker still
+joins. The gateway's merged catalog names a default only when every Android
+worker reports the same one, as it does for the default runtime. Whether a
 worker can serve a request is unchanged, because the fallback is always
 today's answer.
 
@@ -78,7 +85,7 @@ That only ranks workers, so the lease is still served.
 ### 4. An unmet setting is reported, not refused
 
 `simlock doctor` reports an advisory when no installed system image has
-the configured tag. The worker starts and serves as it would without the
+the configured tag for the machine's CPU. The worker starts and serves as it would without the
 setting.
 
 ## Consequences
@@ -88,8 +95,12 @@ setting.
 - An idle device made without a tag no longer serves a tagless lease that
   now resolves to the tag. It ages out under the idle rules.
 - One catalog field and one config field: the protocol is bumped.
-- A caller who needs today's image on such a worker names it:
-  `--image-tag google_apis`.
+- A caller who needs a `google_apis` image on such a worker names
+  `--image-tag google_apis`. That is a pool of its own: an idle device made
+  without a tag does not serve it.
+- Play Store images refuse `adb root` and `adb remount`, so a tagless lease
+  that relied on root on a `google_apis` image needs that flag once the
+  setting is on.
 
 ## Alternatives considered
 
