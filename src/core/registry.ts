@@ -575,6 +575,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       driverData: {},
       driverDeviceId: input.driverDeviceId,
       enrolledApps: [...input.apps],
+      ...(input.hardwareSerial === undefined ? {} : { hardwareSerial: input.hardwareSerial }),
       id: `dev_${this.options.idGenerator.generate()}`,
       physical: true,
       readyAt: now,
