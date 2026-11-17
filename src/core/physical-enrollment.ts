@@ -4,7 +4,10 @@ import type { Driver, DriverRefusalReason } from "./driver.js";
 import type { PhysicalEnrollmentInput, RegistrySnapshot } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
-export type DeviceNotEnrollableReason = DriverRefusalReason | "enrolled-on-other-platform";
+export type DeviceNotEnrollableReason =
+  | DriverRefusalReason
+  | "enrolled-on-other-platform"
+  | "enrolled-under-other-id";
 
 export class DeviceNotEnrollableError extends Error {
   constructor(
@@ -99,6 +102,7 @@ export class PhysicalEnrollment {
         return "skipped" as const;
       }
       if (existing === undefined) {
+        this.#requireOneRecord(platform, id, read);
         return {
           created: await this.options.registry.enrollPhysical({ ...read, initiator, platform }),
         };
@@ -132,9 +136,10 @@ export class PhysicalEnrollment {
           `${existing.driverDeviceId} was read again as ${again.driverDeviceId}`,
         );
       }
-      const device = await this.options.decisions.run(() =>
-        this.options.registry.reenrollPhysical(existing.id, { ...again, platform }),
-      );
+      const device = await this.options.decisions.run(() => {
+        this.#requireOneRecord(platform, id, again);
+        return this.options.registry.reenrollPhysical(existing.id, { ...again, platform });
+      });
       this.options.physicalDeviceReady?.(device.id);
       return { device, reenrolled: true };
     } finally {
@@ -196,7 +201,37 @@ export class PhysicalEnrollment {
       driverDeviceId: inspection.driverDeviceId,
       model: inspection.model,
       osVersion: inspection.osVersion,
+      ...(inspection.hardwareSerial === undefined
+        ? {}
+        : { hardwareSerial: inspection.hardwareSerial }),
     };
+  }
+
+  /** why: one phone keeps one record whatever address it is reached at; this runs under the lock at each commit, never on a stale read (ADR 0080 §2). */
+  #requireOneRecord(
+    platform: Platform,
+    id: string,
+    read: Omit<PhysicalEnrollmentInput, "platform">,
+  ): void {
+    const { driverDeviceId, hardwareSerial } = read;
+    const holder = this.options.registry.snapshot.devices.find(
+      (device): device is PhysicalDevice =>
+        device.physical &&
+        device.state !== "deleted" &&
+        device.driverDeviceId !== driverDeviceId &&
+        (device.hardwareSerial === driverDeviceId ||
+          (hardwareSerial !== undefined &&
+            (device.driverDeviceId === hardwareSerial ||
+              device.hardwareSerial === hardwareSerial))),
+    );
+    if (holder === undefined) return;
+    throw new DeviceNotEnrollableError(
+      platform,
+      id,
+      "enrolled-under-other-id",
+      `this phone (hardware serial ${hardwareSerial ?? driverDeviceId}) is enrolled as ${holder.driverDeviceId}; remove that record first`,
+      holder.driverDeviceId,
+    );
   }
 
   #recordIds(driverDeviceId: string): Set<string> {

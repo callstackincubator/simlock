@@ -43,7 +43,10 @@ export async function seededWorld() {
       idGenerator: { generate: () => "unexpected" },
       state,
     });
-  const enroll = (name: string, overrides: Partial<typeof physicalInput> = {}) => {
+  const enroll = (
+    name: string,
+    overrides: Partial<typeof physicalInput> & { hardwareSerial?: string } = {},
+  ) => {
     names.push(name);
     return registry.enrollPhysical({ ...physicalInput, ...overrides });
   };

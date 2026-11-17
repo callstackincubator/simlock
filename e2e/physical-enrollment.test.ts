@@ -269,6 +269,33 @@ describe("simlock device add", () => {
     });
   });
 
+  it("of a phone whose hardware serial another record holds answers enrolled-under-other-id with the message and the canonicalId that record holds, over the CLI and HTTP, and writes no second record", async () => {
+    const network = "192.168.1.5:5555";
+    const daemon = await httpDaemon({
+      android: {
+        physicalDevices: [PIXEL, { ...PIXEL, hardwareSerial: PIXEL.ids[0], ids: [network] }],
+      },
+    });
+    const enrolled = await add(daemon.env, "android", PIXEL.ids[0] as string);
+    const message = `this phone (hardware serial ${PIXEL.ids[0]}) is enrolled as ${PIXEL.ids[0]}; remove that record first`;
+
+    const result = await daemon.env.cli(["device", "add", "--platform", "android", network]);
+    const http = await postDevice(daemon, { id: network, platform: "android" });
+
+    expect(result.code, result.stderr).toBe(12);
+    expect(result.error).toEqual({ code: "DEVICE_NOT_ENROLLABLE", message });
+    expect(http.status).toBe(422);
+    expect(http.body.error).toEqual({
+      canonicalId: PIXEL.ids[0],
+      code: "DEVICE_NOT_ENROLLABLE",
+      id: network,
+      message,
+      platform: "android",
+      reason: "enrolled-under-other-id",
+    });
+    expect((await rows(daemon.env)).map((row) => row.id)).toEqual([enrolled.id]);
+  });
+
   it("without --platform exits 2 with USAGE and the driver log has no inspectPhysical call", async () => {
     const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
     await env.driverLog.clear();

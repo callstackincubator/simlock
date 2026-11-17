@@ -170,7 +170,7 @@ export class AcquisitionWorkflow {
     let present = false;
     try {
       const reads = await readPhysicalPresence(this.options.drivers.get(device.spec.platform), [
-        device.driverDeviceId,
+        device,
       ]);
       present = reads.get(device.driverDeviceId) === true;
     } catch (error: unknown) {

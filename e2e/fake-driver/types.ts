@@ -52,6 +52,7 @@ export interface ScriptedPhysicalDevice {
   readonly class?: "phone" | "tablet";
   readonly apps?: readonly string[];
   readonly installedApps?: readonly string[];
+  readonly hardwareSerial?: string;
   readonly present?: boolean;
   readonly absentReason?: "locked" | "untrusted" | "not-present";
   readonly refusal?: { readonly reason: FakeDriverRefusalReason; readonly message: string };

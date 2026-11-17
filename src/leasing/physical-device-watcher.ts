@@ -152,10 +152,7 @@ export class PhysicalDeviceWatcher {
   ): Promise<ReadonlyMap<string, PhysicalRead> | undefined> {
     try {
       const driver = this.options.drivers.get(platform);
-      return await readPhysicalPresenceDetail(
-        driver,
-        group.map((device) => device.driverDeviceId),
-      );
+      return await readPhysicalPresenceDetail(driver, group);
     } catch (error: unknown) {
       this.#logger.warn("physical presence read failed", { platform, error: stableError(error) });
       return undefined;
