@@ -192,6 +192,7 @@ curl -X DELETE "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Authorizati
 | `GET /v1/status` | The devices, capacity and queue. With an agent token, `leases` and `waiting` show only your own. To find enrolled phones, see [Physical devices](/simlock/docs/using-devices/physical-devices#see-which-devices-are-enrolled). |
 | `GET /v1/catalog?platform=ios` | The models and OS versions you can ask for, as `simlock catalog --json` prints them. |
 | `GET /v1/identity` | Who the token is. |
+| `GET /v1/session` | A WebSocket upgrade that carries Simlock's daemon protocol, on a standalone worker or a gateway. Each text message is one protocol line, and `hello` works as on the local socket, except that the token sets the role and the principal: a `principal` in `hello` is ignored and a `credential` is refused. A message over 32 MiB or a binary one closes the socket (`1009`, `1003`), a peer that stops answering pings is closed, a signed-in proxy identity's session ends when its sign-in expires (`4001`), and `simlock token revoke` closes the token's sessions (`4003`). A plain `GET` answers `426`. |
 
 ### Send a lease request safely twice
 
