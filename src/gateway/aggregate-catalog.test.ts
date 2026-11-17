@@ -60,6 +60,33 @@ describe("aggregateCatalog", () => {
     });
   });
 
+  it("says virtualDevices false for a platform only when every worker reporting it says so, and lists the emulator worker's models otherwise", () => {
+    const phonesOnly = {
+      ...iosOnA,
+      classDefaults: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      runtimes: [],
+      virtualDevices: false as const,
+    };
+
+    const allOff = aggregateCatalog([
+      view({ catalog: [phonesOnly], id: "wrk_a" }),
+      view({ catalog: [phonesOnly], id: "wrk_b" }),
+    ]);
+    const mixed = aggregateCatalog([
+      view({ catalog: [phonesOnly], id: "wrk_a" }),
+      view({ catalog: [iosOnA], id: "wrk_b" }),
+    ]);
+
+    expect(allOff.platforms[0]).toMatchObject({ models: [], virtualDevices: false });
+    expect(mixed.platforms[0]).toMatchObject({ models: ["iPhone 17"], runtimes: ["26.0"] });
+    expect(mixed.platforms[0]).not.toHaveProperty("virtualDevices");
+    expect(() => OPERATIONS["catalog.get"].output.parse(allOff)).not.toThrow();
+    expect(() => OPERATIONS["catalog.get"].output.parse(mixed)).not.toThrow();
+  });
+
   it("carries the union of the workers' slim categories, and no default mode", () => {
     const slimming = (slimCategories: string[], defaultMode: "slim" | "full") => ({
       ...iosOnA,
