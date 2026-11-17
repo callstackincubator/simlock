@@ -62,7 +62,7 @@ flowchart LR
 - A person who takes over a leased iOS simulator can type on a hardware
   keyboard, open the app switcher and lock or wake the screen, on every
   runtime.
-- The helper sends the Home press again, which ADR 0049's notes said Xcode
+- The helper sends the Home press again, which serve-sim's notes said Xcode
   26 drops. It does not drop it on CoreSimulator 1174.21. An older
   CoreSimulator was not measured; a worker on one may ignore these presses
   silently.

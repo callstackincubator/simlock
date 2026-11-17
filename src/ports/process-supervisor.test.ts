@@ -143,11 +143,23 @@ describe("NodeProcessSupervisor.commandLine", () => {
   );
 
   it.each([
-    ["linux", "exits non-zero", "ps", posixRead, { code: 1 }],
+    ["linux", "exits non-zero", "ps", posixRead, { code: 1, stdout: "/usr/bin/node a.js\n" }],
     ["linux", "prints nothing", "ps", posixRead, { stdout: "\n" }],
-    ["win32", "exits non-zero", "powershell.exe", windowsRead, { code: 1 }],
+    [
+      "win32",
+      "exits non-zero",
+      "powershell.exe",
+      windowsRead,
+      { code: 1, stdout: "node a.js\r\n" },
+    ],
     ["win32", "prints nothing", "powershell.exe", windowsRead, { stdout: "\r\n" }],
-    ["win32", "is ended at its time limit", "powershell.exe", windowsRead, { code: null }],
+    [
+      "win32",
+      "is ended at its time limit",
+      "powershell.exe",
+      windowsRead,
+      { code: null, stdout: "node a.js\r\n" },
+    ],
   ] as const)(
     "answers undefined on %s when the read %s",
     async (platform, _case, command, args, result) => {

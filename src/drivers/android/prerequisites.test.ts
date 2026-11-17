@@ -333,6 +333,8 @@ describe("androidPrerequisites on Windows", () => {
   it.each([
     ["ANDROID_HOME", { ANDROID_HOME: winSdk }, winSdk],
     ["Android Studio's %LOCALAPPDATA% default", { LOCALAPPDATA: "/Volumes/Data/Local" }, localSdk],
+    ["<home>/AppData/Local when LOCALAPPDATA is unset", {}, winSdk],
+    ["<home>/AppData/Local when LOCALAPPDATA is empty", { LOCALAPPDATA: "" }, winSdk],
   ])(
     "finds a complete SDK of .exe and .bat tools through %s and runs its sdkmanager.bat",
     async (_source, env, root) => {

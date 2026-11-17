@@ -193,6 +193,19 @@ describe("ensureOwnedRoot", () => {
     },
   );
 
+  it("refuses as unreadable a root whose rename failed with another code, ENOSPC, even when another process published it first", async () => {
+    const filesystem = new RefusingRenameFilesystem(
+      uid,
+      async (target) => {
+        await target.mkdirp(root);
+        await target.writeFileAtomic(markerPath, marker());
+      },
+      "ENOSPC",
+    );
+
+    await expect(refusal(filesystem)).resolves.toBe("unreadable");
+  });
+
   it("still refuses a root whose rename was refused with EPERM when nothing else published it", async () => {
     const filesystem = new RefusingRenameFilesystem(uid, async () => undefined);
 

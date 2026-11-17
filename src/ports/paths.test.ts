@@ -72,6 +72,13 @@ describe("resolveDaemonSocketPath", () => {
       expect(isPipeEndpoint(endpoint)).toBe(true);
     });
 
+    it("names the pipe simlock- and the first 16 hex characters of the SHA-256 of the lower-cased data directory, as the client docs say", () => {
+      // why: `printf '%s' 'c:\users\me\.simlock' | shasum -a 256` starts 9b8d70a31742e257.
+      expect(resolveDaemonSocketPath(home, "win32")).toBe(
+        String.raw`\\.\pipe\simlock-9b8d70a31742e257`,
+      );
+    });
+
     it("gives one data directory one name, whatever its case, and two directories two", () => {
       const endpoint = resolveDaemonSocketPath(home, "win32");
 

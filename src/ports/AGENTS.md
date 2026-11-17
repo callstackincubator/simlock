@@ -42,15 +42,8 @@ Files and modes:
 
 Windows:
 
-- `resolveDaemonSocketPath` answers a named pipe there, because Node cannot listen on a file
-  path. A pipe is not a file: it is never `stat`ed (a live one fails `EBUSY`), removed or given a
-  directory. Ask `isPipeEndpoint` first.
 - No directory guards a pipe. The default pipe ACL lets other accounts only read, and a client
-  needs read and write. A second listener fails `address-in-use`.
-- Every child an adapter starts sets `windowsHide`: the daemon has no console, so a console
-  program would open a window.
-- A `.bat` or `.cmd` runs through `cmd.exe` (`windows-command.ts`), and an argument holding `%`,
-  `"` or a line break is refused.
+  needs read and write.
 
 ## Adding an external API
 
