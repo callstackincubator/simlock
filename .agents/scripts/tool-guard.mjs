@@ -20,8 +20,7 @@
 //   prompt     a stage or lens agent (`implementer`, `reviewer`, `hardware-verifier`,
 //              `spec-reviewer`, `code-reviewer`, `claims-reviewer`) is started without the ledger
 //              tag as its prompt's first line (toolchain.md, "Review measurement"); an
-//              `implementer` without `brief:` and its mode's brief text, a `reviewer` without
-//              `protocol:` and REVIEW.md's text; a stage agent with a `model`; a `code-reviewer`
+//              `implementer` without a `mode:` line; a stage agent with a `model`; a `code-reviewer`
 //              off Opus on a diff that touches a strict area (REVIEW.md, "Routing"), outside a
 //              replay; or a sub-agent starts a helper that is not `run_in_background: false`.
 //   git        a sub-agent runs `git stash` (but `list` or `show`), `git rebase` (or `pull
@@ -41,6 +40,12 @@
 //              `!slow` tags filter; a sub-agent runs `pnpm test:e2e:slow` (or a physical lane);
 //              an agent other than `hardware-verifier` and `implementer` runs `slow-e2e.sh`
 //              for anything but `status` (delivery rule 16).
+//
+//   inject     not a refusal: the guard appends to the prompt the text the agent would otherwise
+//              open or its caller paste: an `implementer`'s mode brief under `brief:`, a
+//              `reviewer`'s `docs/internal/REVIEW.md` under `protocol:` (both from this checkout),
+//              and a lens's brief from `<inputs>/briefs/`, after `review-later-round.md` when the
+//              round is not 1. A prompt that already carries the text is left alone.
 //
 // A refusal exits 2 with the reason on stderr, which the agent reads.
 import { execFileSync } from "node:child_process";
@@ -162,56 +167,77 @@ const AGENT_RULES = [
       "lens=<lens>`, `-` for a key that does not apply yet. Start the agent again with it.",
   },
 ];
-const PROMPT_CHECKS = {
-  implementer: briefCheck,
-  reviewer: protocolCheck,
-  "code-reviewer": strictAreaCheck,
+// why: a model that pastes a brief pays for it twice and paraphrases it; the hook adds the file's
+// own bytes to the prompt the agent receives, and the caller's context keeps the short one.
+const PROMPT_TEXT = {
+  implementer: briefText,
+  reviewer: protocolText,
+  "spec-reviewer": (prompt) => lensText(prompt, "review-spec.md"),
+  "code-reviewer": (prompt) => lensText(prompt, "review-code.md"),
+  "claims-reviewer": (prompt) => lensText(prompt, "review-claims.md"),
 };
 
 function agentRules() {
   const ctx = { type: args.subagent_type, prompt: String(args.prompt ?? "") };
   refuseFirst(AGENT_RULES, ctx);
-  PROMPT_CHECKS[ctx.type]?.(ctx.prompt);
+  if (ctx.type === "code-reviewer") strictAreaCheck(ctx.prompt);
+  const text = PROMPT_TEXT[ctx.type]?.(ctx.prompt) ?? "";
+  if (text === "") return;
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        updatedInput: { ...args, prompt: `${ctx.prompt.trimEnd()}\n${text}` },
+      },
+    }),
+  );
 }
 
 function firstLine(prompt) {
   return prompt.replace(/^\s+/, "").split("\n")[0];
 }
 
-function briefCheck(prompt) {
+function carries(prompt, text) {
+  return squash(prompt).includes(squash(text).slice(0, 200));
+}
+
+function briefText(prompt) {
   const mode = /^mode:\s*`?([\w-]+)/m.exec(prompt)?.[1];
   const file = path.join(ROOT, ".agents", "briefs", `implement-${mode}.md`);
   if (mode === undefined || !fs.existsSync(file)) {
     refuse(
-      "Refused: an implementer's prompt names its mode on a `mode:` line: build, audit, fix or " +
-        "hardware-fix. Start the agent again with it.",
+      "Refused: an implementer's prompt names its mode on a `mode:` line: build, audit, fix, " +
+        "hardware-fix or refactor. Start the agent again with it.",
     );
   }
-  const at = prompt.search(/^brief:/m);
-  const want = squash(fs.readFileSync(file, "utf8")).slice(0, 200);
-  if (at === -1 || !squash(prompt.slice(at)).includes(want)) {
-    refuse(
-      `Refused: an implementer's prompt carries \`brief:\` and then the full text of ` +
-        `\`.agents/briefs/implement-${mode}.md\` from this checkout, so the agent opens no file ` +
-        "to learn its mode. Paste it and start the agent again.",
-    );
-  }
+  const brief = fs.readFileSync(file, "utf8");
+  return carries(prompt, brief) ? "" : `brief:\n${brief}`;
 }
 
-function protocolCheck(prompt) {
-  const heading =
-    fs
-      .readFileSync(path.join(ROOT, "docs", "internal", "REVIEW.md"), "utf8")
-      .split("\n")
-      .find((l) => l.startsWith("# ")) ?? "";
-  const at = prompt.search(/^protocol:/m);
-  const lines = at === -1 ? [] : prompt.slice(at).split("\n");
-  if (!lines.some((l) => l.trim() === heading.trim())) {
-    refuse(
-      "Refused: a reviewer's prompt carries `protocol:` and then the full text of " +
-        "`docs/internal/REVIEW.md` from this checkout. Paste it and start the agent again.",
-    );
+function protocolText(prompt) {
+  const protocol = fs.readFileSync(path.join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
+  return carries(prompt, protocol) ? "" : `protocol:\n${protocol}`;
+}
+
+// why: a lens is judged by the pinned base's briefs, which the inputs directory holds; a
+// directory the guard cannot read leaves the prompt alone, and the lens reads the files itself.
+function lensText(prompt, name) {
+  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
+  if (dir === undefined) return "";
+  const round =
+    /^round:\s*`?([\w-]+)/m.exec(prompt)?.[1] ?? /\bround=(\S+)/.exec(firstLine(prompt))?.[1];
+  const names = round === "1" ? [name] : ["review-later-round.md", name];
+  let text = "";
+  for (const n of names) {
+    let brief;
+    try {
+      brief = fs.readFileSync(path.resolve(cwd, dir, "briefs", n), "utf8");
+    } catch {
+      return "";
+    }
+    if (!carries(prompt, brief)) text += `=== briefs/${n} ===\n${brief}\n`;
   }
+  return text;
 }
 
 function strictAreaCheck(prompt) {
