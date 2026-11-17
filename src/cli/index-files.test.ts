@@ -261,6 +261,26 @@ describe("CLI: simlock files", () => {
     expect(JSON.parse(long.output.stdout)).toEqual({ lease: "lse_1", name: "big.bin", size: 40 });
     expect(moving.now()).toBe(1_200_000);
 
+    const slow = new FakeClock(0);
+    let pulls = 0;
+    const download = await files(
+      ["files", "get", "app-debug.apk"],
+      async (request) => ({
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            slow.advance(10_000);
+            if (request.signal.aborted) controller.error(new Error("aborted"));
+            else if (pulls++ === 40) controller.close();
+            else controller.enqueue(new Uint8Array([1]));
+          },
+        }),
+        status: 200,
+      }),
+      { clock: slow },
+    );
+    expect(download.code, "a 400-second download with bytes moving").toBe(0);
+    expect(download.output.stdout).toHaveLength(40);
+
     const refused: [string, readonly string[], string, Options?][] = [
       ["a missing local file", ["put", "nothing.apk"], "No file nothing.apk"],
       ["a folder", ["put", "build"], "build is a folder; a folder cannot be uploaded yet (#1636)"],
