@@ -644,10 +644,11 @@ describe("deviceModeWiring", () => {
     (defaultMode) => {
       expect(
         deviceModeWiring({
-          android: { defaultModels: {} },
+          android: { defaultModels: {}, virtualDevices: true },
           ios: {
             defaultMode,
             defaultModels: {},
+            virtualDevices: true,
           },
         }),
       ).toMatchObject({
@@ -658,16 +659,21 @@ describe("deviceModeWiring", () => {
   );
 
   it("passes android.defaultImageTag to leasing as the Android default tag, and nothing when it is unset", () => {
-    const ios = { defaultMode: "full", defaultModels: {} } as const;
+    const ios = { defaultMode: "full", defaultModels: {}, virtualDevices: true } as const;
 
     expect(
       deviceModeWiring({
-        android: { defaultImageTag: "google_apis_playstore", defaultModels: {} },
+        android: {
+          defaultImageTag: "google_apis_playstore",
+          defaultModels: {},
+          virtualDevices: true,
+        },
         ios,
       }).defaultImageTags,
     ).toEqual({ android: "google_apis_playstore" });
     expect(
-      deviceModeWiring({ android: { defaultModels: {} }, ios }).defaultImageTags,
+      deviceModeWiring({ android: { defaultModels: {}, virtualDevices: true }, ios })
+        .defaultImageTags,
     ).toStrictEqual({});
   });
 });

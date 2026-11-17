@@ -41,7 +41,7 @@ In a script, check the exit code or `code`, never the message: the message is fo
 
 | Code | Exit | What it means | What to do |
 | --- | --- | --- | --- |
-| `UNKNOWN_MODEL` | 12 | This machine doesn't know the model, has no model listed for the class, or (with `--physical`) has no enrolled device that could ever match. | Check the spelling against `simlock catalog`. For a class, an admin can name a model in `ios.defaultModels` or `android.defaultModels`. For a physical device, remember `--os` is exact. |
+| `UNKNOWN_MODEL` | 12 | This machine doesn't know the model, has no model listed for the class, has `ios.virtualDevices` or `android.virtualDevices` set to `false` and the request has no `--physical`, or (with `--physical`) has no enrolled device that could ever match. | Check the spelling against `simlock catalog`. On a phones-only worker the message names the key: ask again with `--physical`. For a class, an admin can name a model in `ios.defaultModels` or `android.defaultModels`. For a physical device, remember `--os` is exact. |
 | `RUNTIME_MISSING` | 12 | The OS version, or the Android image, isn't installed. An OS range or `--image-tag` never downloads. | Pass `--allow-download` for an exact version, or ask an admin to install it. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device#when-the-runtime-is-not-installed). |
 | `UNKNOWN_BASELINE` | 12 | `--baseline` names a baseline this machine doesn't have. | Check the name with `simlock baseline list`. |
 | `BASELINE_MISMATCH` | 2 | `--baseline` came with a platform, model, OS, mode or image tag that differs from the baseline. The message names the first one that differs. | Drop that option: the baseline already decides it. |
