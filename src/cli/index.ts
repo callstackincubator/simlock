@@ -247,9 +247,13 @@ const GATEWAY_ALSO_HERE_HINT =
 async function gatewayHintFor(
   environment: CliEnvironment | undefined,
   daemonFlag: DaemonFlag,
+  remote: RemoteFarm | undefined,
   error: unknown,
 ): Promise<string | undefined> {
-  if (environment === undefined || daemonFlag === "gateway") return undefined;
+  // why: in remote mode the refusal came from the farm, so a gateway on this machine is not the one to run the command again on.
+  if (environment === undefined || daemonFlag === "gateway" || remote !== undefined) {
+    return undefined;
+  }
   if (environment.daemonHome.role !== "worker" || !environment.daemonHome.gatewayPresent) {
     return undefined;
   }
@@ -279,6 +283,7 @@ export async function runCli(
 ): Promise<number> {
   let resolved = environment;
   let flag: DaemonFlag;
+  let remote: RemoteFarm | undefined;
   try {
     const { token, url: urlFlag, daemonFlag, rest } = extractGlobalFlags(argv);
     flag = daemonFlag;
@@ -298,7 +303,7 @@ export async function runCli(
     resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
     if (daemonFlag === "gateway") await refuseWhenNoGateway(resolved, command.path, command.rest);
     const url = urlFlag ?? nonEmpty(resolved.tunnelUrl);
-    const remote = remoteFarm(url, token ?? resolved.tunnelToken, daemonFlag);
+    remote = remoteFarm(url, token ?? resolved.tunnelToken, daemonFlag);
     if (remote !== undefined) refuseInRemoteMode(command.path, command.rest);
     return await command.module.run(command.rest, {
       path: command.path,
@@ -311,7 +316,7 @@ export async function runCli(
     await writeError(
       (value) => (environment?.stderr ?? process.stderr).write(value),
       error,
-      await gatewayHintFor(resolved, flag, error),
+      await gatewayHintFor(resolved, flag, remote, error),
     );
     return await errorExitCode(error);
   }

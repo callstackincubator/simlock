@@ -79,6 +79,24 @@ async function expectEqualsFormRuns(): Promise<void> {
   expect(equalsForm.launched()).toBe(0);
 }
 
+// why: a farm's refusal is about the farm; a gateway on this machine is not what the user was told to run again.
+async function expectNoLocalGatewayHint(): Promise<void> {
+  const refusal = Object.assign(new Error("worker.drain is a gateway operation"), {
+    code: "UNSUPPORTED_IN_WORKER_MODE",
+  });
+  const farm = new FakeFarm({ "status.get": () => refusal });
+  const output = outputCapture();
+  const environment = output.environmentWith({
+    daemonHome: { dataDirectory: "/simlock", gatewayPresent: true, role: "worker" },
+    tunnelToken: "slk_t",
+    tunnelUrl: "https://farm.example.com",
+    webSocket: farm,
+  });
+  expect(await runCli(["status"], environment)).toBe(2);
+  expect(output.stderr).toContain("worker.drain is a gateway operation");
+  expect(output.stderr).not.toContain("--gateway");
+}
+
 describe("CLI: remote mode selection", () => {
   it("runs a command on the farm when --url or SIMLOCK_URL is set with a token, and on this machine's daemon otherwise; sends --token over SIMLOCK_TOKEN and never SIMLOCK_ADMIN_TOKEN; a refused token fails UNAUTHENTICATED; nothing is launched remotely", async () => {
     const accepted: [string, string][] = [
@@ -113,6 +131,7 @@ describe("CLI: remote mode selection", () => {
 
     for (const token of [undefined, "", "x".repeat(4097)]) await expectNoToken(token);
     await expectEqualsFormRuns();
+    await expectNoLocalGatewayHint();
 
     const credentials = session({
       adminToken: "admin-secret",
