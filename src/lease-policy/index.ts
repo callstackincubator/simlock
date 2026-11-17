@@ -389,40 +389,57 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
   };
 }
 
-const FIRST_RECONNECT_DELAY_MS = 1_000;
+// why: ADR 0081 §4: a short drop is back within seconds, so the first tries come fast and then settle to a poll that is cheap for a farm.
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+const STEADY_RECONNECT_DELAY_MS = 15_000;
 
 export interface ReconnectOptions<T> {
   readonly clock: Clock;
+  readonly deadline: number;
   readonly attempt: () => Promise<T>;
   readonly onReconnected: (answer: T) => void;
+  readonly onDeadline: () => void;
 }
 
 export interface Reconnect {
   stop(): void;
 }
 
-/**
- * why: the reconnect half of a holder's policy (ADR 0081 §4): the typed client never reconnects,
- * so a frontend tries again on a schedule, outside it, and this is the schedule.
- */
+// why: the reconnect half of a holder's policy (ADR 0081 §4): the typed client never reconnects, so a frontend tries again on a schedule, outside it, and none after the deadline.
 export function startReconnect<T>(options: ReconnectOptions<T>): Reconnect {
-  const { clock, attempt, onReconnected } = options;
+  const { clock, deadline, attempt, onReconnected, onDeadline } = options;
   let stopped = false;
-  let timer: TimerHandle | undefined = clock.setTimer(FIRST_RECONNECT_DELAY_MS, () => {
-    timer = undefined;
-    void attempt().then(
-      (answer) => {
-        if (!stopped) onReconnected(answer);
-      },
-      () => undefined,
-    );
+  let tries = 0;
+  let timer: TimerHandle | undefined;
+  const deadlineTimer = clock.setTimer(Math.max(0, deadline - clock.now()), () => {
+    if (stopped) return;
+    stop();
+    onDeadline();
   });
-  return {
-    stop: (): void => {
-      stopped = true;
-      if (timer === undefined) return;
-      clock.cancel(timer);
+  function stop(): void {
+    stopped = true;
+    clock.cancel(deadlineTimer);
+    if (timer !== undefined) clock.cancel(timer);
+    timer = undefined;
+  }
+  const schedule = (): void => {
+    timer = clock.setTimer(RECONNECT_DELAYS_MS[tries] ?? STEADY_RECONNECT_DELAY_MS, () => {
       timer = undefined;
-    },
+      void tryOnce();
+    });
   };
+  const tryOnce = async (): Promise<void> => {
+    try {
+      const answer = await attempt();
+      if (stopped) return;
+      stop();
+      onReconnected(answer);
+    } catch {
+      if (stopped) return;
+      tries += 1;
+      schedule();
+    }
+  };
+  schedule();
+  return { stop };
 }

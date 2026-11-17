@@ -308,6 +308,19 @@ async function runLease(
         );
         reconnect = startReconnect({
           clock: environment.clock,
+          deadline: ourLeaseDeadline ?? 0,
+          onDeadline: () => {
+            markLeaseLost({
+              deviceId: grantedLease.deviceId,
+              leaseId: grantedLease.id,
+              reason: "renew-failed",
+            });
+            queueErrorWrite(
+              new Error(
+                `Gave up reconnecting to ${farmOrigin}: lease ${grantedLease.id} passed its deadline`,
+              ),
+            );
+          },
           attempt: async () => {
             const next = await connectDaemonClient(environment, token);
             const renewed = await next.renewLease({ leaseId: grantedLease.id });
