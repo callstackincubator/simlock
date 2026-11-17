@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PNG } from "pngjs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -63,8 +64,9 @@ function boxOf(node: Record<string, unknown>): Box | undefined {
   return rect !== undefined && typeof rect.width === "number" ? rect : undefined;
 }
 
-// why: the search field is the node agent-device names a search field or labels Search; the screen is
-// the largest box in the same snapshot, so the tap's fraction is measured against one size.
+// why: the search field is the node agent-device types a SearchField (Settings' list also holds buttons
+// labelled Search, and a cell named "Optimising Search and Siri"); the screen is the largest box in the
+// same snapshot, so the tap's fraction is measured against one size.
 function searchFieldAndScreen(json: unknown): { field?: Box; screen?: Box } {
   const boxed = [...nodesOf(json)].flatMap((node) => {
     const box = boxOf(node);
@@ -72,26 +74,36 @@ function searchFieldAndScreen(json: unknown): { field?: Box; screen?: Box } {
   });
   const area = (box: Box) => box.width * box.height;
   const screen = boxed.map((entry) => entry.box).sort((left, right) => area(right) - area(left))[0];
-  const field = boxed.find(({ node }) =>
-    /search/i.test(
-      `${String(node["type"])} ${String(node["label"])} ${String(node["identifier"])}`,
-    ),
-  )?.box;
+  const field = boxed.find(({ node }) => node["type"] === "SearchField")?.box;
   return {
     ...(field === undefined ? {} : { field }),
     ...(screen === undefined ? {} : { screen }),
   };
 }
 
-function isForeground(applicationState: unknown): boolean {
-  return applicationState === 4 || /foreground/i.test(String(applicationState));
+// why: the share of pixels that moved between two screenshots of one simulator; the app switcher and
+// Lock repaint most of a screen, so a press counts when more than CHANGED of it moved.
+const CHANGED = 0.3;
+function changedFraction(before: PNG, after: PNG): number {
+  if (before.width !== after.width || before.height !== after.height) return 1;
+  let moved = 0;
+  for (let i = 0; i < before.data.length; i += 4) {
+    const delta =
+      Math.abs(before.data[i]! - after.data[i]!) +
+      Math.abs(before.data[i + 1]! - after.data[i + 1]!) +
+      Math.abs(before.data[i + 2]! - after.data[i + 2]!);
+    if (delta > 48) moved++;
+  }
+  return moved / (before.data.length / 4);
 }
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
   "iOS simulator input on an iOS 27 runtime",
   { tags: ["slow", "ios"] },
   () => {
     let env: SharedTestEnv;
+    let leased = false;
 
     beforeAll(async () => {
       const pinned = await assertPinnedAgentDevice("ios");
@@ -114,7 +126,8 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
       await cleanupAgents();
       if (env !== undefined) {
         await env.cli(["release", "--all", "--yes"], { timeout: 60_000 });
-        await waitForFree(env);
+        // why: a pool that never leased has no device to wait for; waitForFree expects the replacement a release makes.
+        if (leased) await waitForFree(env);
       }
       await env?.teardown();
     }, 420_000);
@@ -125,6 +138,7 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
       async () => {
         const a: Agent = await makeAgent(env, "ios-input");
         ok(await a.run(["open", "--platform", "ios", "--os", ">=27"], { timeout: 330_000 }));
+        leased = true;
         ok(await a.run(["open", SETTINGS]));
         const shots = await mkdtemp(join(tmpdir(), "simlock-ios-input-"));
         progress(`screenshots of the iOS input test are saved in ${shots}`);
@@ -136,16 +150,33 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
         expect(screen, "the screen in the snapshot").toBeDefined();
         const lease = (await listLeases(env))[0];
         const socket = await openInputSocket(env.httpPort, lease?.id ?? "", a.token);
-        const appState = async () => {
-          const state = await a.run(["appstate", "--json"]);
-          ok(state);
-          const applicationState = (state.data as { applicationState?: unknown } | undefined)
-            ?.applicationState;
-          expect(applicationState, "appstate carries applicationState").toBeDefined();
-          return applicationState;
+        const appState = (await a.run(["appstate", "--json"])).data as
+          | { device_udid?: string; ios_simulator_device_set?: string }
+          | undefined;
+        expect(appState?.device_udid, "appstate names the simulator").toBeDefined();
+        const frame = async (name: string): Promise<PNG> => {
+          const file = join(shots, `${name}.png`);
+          execFileSync("xcrun", [
+            "simctl",
+            "--set",
+            appState!.ios_simulator_device_set!,
+            "io",
+            appState!.device_udid!,
+            "screenshot",
+            file,
+          ]);
+          return PNG.sync.read(await readFile(file));
         };
-        const shot = async (name: string) => {
-          ok(await a.run(["screenshot", join(shots, `${name}.png`)]));
+        const waitForScreenChange = async (before: PNG, name: string): Promise<PNG> => {
+          let latest = before;
+          await waitFor(
+            async () => {
+              latest = await frame(name);
+              return changedFraction(before, latest) > CHANGED;
+            },
+            { interval: 2_000, label: `the screen changed for ${name}`, timeout: 30_000 },
+          );
+          return latest;
         };
         try {
           await socket.waitForTag(INPUT_ADMITTED);
@@ -169,32 +200,22 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
             },
             { interval: 3_000, label: "typed keys in the snapshot", timeout: 60_000 },
           );
-          await shot("1-typed");
-          expect(isForeground(await appState()), "Settings is in front before the presses").toBe(
-            true,
-          );
+          const frameA = await frame("1-typed");
 
+          // why: agent-device's appstate keeps answering runningForeground behind the app switcher and
+          // its screenshot hangs there, so the presses are read off the simulator's own screen.
           socket.send(INPUT_BUTTON, { button: "app_switcher" });
-          await waitFor(async () => !isForeground(await appState()), {
-            interval: 2_000,
-            label: "Settings out of the foreground after app_switcher",
-            timeout: 30_000,
-          });
-          await shot("2-app-switcher");
+          const switcher = await waitForScreenChange(frameA, "2-app-switcher");
 
           ok(await a.run(["open", SETTINGS]));
-          await waitFor(async () => isForeground(await appState()), {
-            interval: 2_000,
-            label: "Settings reopened",
-            timeout: 30_000,
-          });
+          await sleep(3_000);
+          const reopened = await frame("2b-reopened");
+          expect(
+            changedFraction(switcher, reopened),
+            "Settings is back after the switcher",
+          ).toBeGreaterThan(CHANGED);
           socket.send(INPUT_BUTTON, { button: "lock" });
-          await waitFor(async () => !isForeground(await appState()), {
-            interval: 2_000,
-            label: "Settings out of the foreground after lock",
-            timeout: 30_000,
-          });
-          await shot("3-lock");
+          await waitForScreenChange(reopened, "3-lock");
         } finally {
           socket.close();
         }
