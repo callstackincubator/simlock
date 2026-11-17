@@ -7,6 +7,7 @@ import type { TestEnv } from "./helpers/env.js";
 import {
   iosDeviceSet,
   processesInDeviceSet,
+  runtimeRootProcesses,
   setDevices,
   simctlInSet,
   sweepStaleDeviceSets,
@@ -439,6 +440,42 @@ describe.skipIf(process.platform !== "darwin")(
           ),
         ).toEqual([]);
         await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+      },
+    );
+
+    it(
+      "a worker's exclude turns off a service no category holds, and its include keeps a category's service running",
+      { timeout: 1_800_000 },
+      async () => {
+        const diagnosticd = "com.apple.diagnosticd";
+        const apsd = "com.apple.apsd";
+        const excluding = await withRealDaemon({
+          ios: { defaultMode: "slim", slim: { categories: [], exclude: [diagnosticd] } },
+        });
+        const { model, os } = await catalogModelWithOs(excluding, (versions) =>
+          versions.find((version) => Number(version.split(".")[0]) >= 26),
+        );
+        const excluded = await leaseDetached(excluding, model, os, "slim-exclude");
+        await expectSlim(excluding, excluded.mode, "a worker with only an exclude must grant slim");
+        expect((await printDisabled(excluded)).has(diagnosticd)).toBe(true);
+        expect(
+          await runtimeRootProcesses("diagnosticd"),
+          "no diagnosticd runs while the excluding worker's device is booted",
+        ).toEqual([]);
+        await excluding.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+
+        const including = await withRealDaemon({
+          ios: { defaultMode: "slim", slim: { include: [apsd] } },
+        });
+        const included = await leaseDetached(including, model, os, "slim-include");
+        await expectSlim(including, included.mode, "a worker with only an include must grant slim");
+        const disabled = await printDisabled(included);
+        expect(disabled.has(apsd), "apsd is kept running by include").toBe(false);
+        expect(
+          [...ALL_LABELS].filter((label) => label !== apsd && !disabled.has(label)),
+          "every other category label is disabled",
+        ).toEqual([]);
+        await including.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
       },
     );
 
