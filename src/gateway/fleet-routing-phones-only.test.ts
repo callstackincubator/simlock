@@ -45,9 +45,22 @@ describe("FleetLeaseCoordinator with phones-only workers (ADR 0080 §3)", () => 
   it.each([
     {
       name: "one phones-only worker: the phones-only refusal",
-      refused: /ios\.virtualDevices is false.*--physical/,
+      refused:
+        "Every worker with ios serves only enrolled physical ios devices " +
+        "(ios.virtualDevices is false); ask for a physical device (--physical, or physical: true)",
       request: PLAIN,
       workers: [["wrk_a", PHONES_ONLY("ios")]] as const,
+    },
+    {
+      name: "a worker without the platform beside a phones-only one: still the phones-only refusal",
+      refused:
+        "Every worker with android serves only enrolled physical android devices " +
+        "(android.virtualDevices is false); ask for a physical device (--physical, or physical: true)",
+      request: { model: "Pixel 9", platform: "android" as const },
+      workers: [
+        ["wrk_a", EMULATORS("ios")],
+        ["wrk_b", PHONES_ONLY("android")],
+      ] as const,
     },
     {
       name: "a phones-only worker and an emulator worker: the emulator worker",
@@ -69,7 +82,7 @@ describe("FleetLeaseCoordinator with phones-only workers (ADR 0080 §3)", () => 
     },
     {
       name: "one worker without the field and no models: the generic UNKNOWN_MODEL",
-      refused: /^Unknown ios model: iPhone 17$/,
+      refused: "Unknown ios model: iPhone 17",
       request: PLAIN,
       workers: [["wrk_a", { models: [], platform: "ios", runtimes: [] } satisfies Entry]] as const,
     },
@@ -93,7 +106,7 @@ describe("FleetLeaseCoordinator with phones-only workers (ADR 0080 §3)", () => 
     if ("refused" in expected) {
       await expect(outcome).rejects.toMatchObject({
         code: "UNKNOWN_MODEL",
-        message: expect.stringMatching(expected.refused),
+        message: expected.refused,
       });
     } else {
       expect((await outcome).lease.worker?.id).toBe(expected.served);

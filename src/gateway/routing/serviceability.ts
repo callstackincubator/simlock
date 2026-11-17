@@ -284,13 +284,13 @@ function phonesOnlyEverywhere(known: readonly WorkerView[], request: RoutableReq
     .every((worker) => catalogOf(worker, request)?.virtualDevices === false);
 }
 
-// why: the worker's own refusal (`VirtualDevicesOffError`), word for word, so a gateway answers as the worker would.
+// why: ADR 0080 §3 and the issue's I3 word the gateway's refusal for the fleet ("Every worker with <platform> …"), unlike the single worker's "This worker serves only…" in `VirtualDevicesOffError`.
 function phonesOnly(request: RoutableRequest): Rejection {
   const { platform } = request;
   return {
     ...unknownModel(request),
     message:
-      `This worker serves only enrolled physical ${platform} devices ` +
+      `Every worker with ${platform} serves only enrolled physical ${platform} devices ` +
       `(${platform}.virtualDevices is false); ask for a physical device ` +
       "(--physical, or physical: true)",
   };

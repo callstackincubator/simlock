@@ -30,6 +30,6 @@ Serviceability (`assess`):
   `can-serve` gives is the code the table would reject with. `has-baseline` and `assess` share
   `baselineEntry` and `withBaseline`; no field of a baseline is compared in the gateway.
 - A request with `except` (ADR 0066 §5) is checked after the model and runtime rows and before the capacity row.
-- A plain request on a platform whose every known holder reports `virtualDevices: false` is refused with the worker's phones-only message (ADR 0080 §3), after `NO_DRIVER` and before the model row.
+- A plain request on a platform whose every known holder reports `virtualDevices: false` is refused with the fleet's phones-only message, "Every worker with <platform> serves only enrolled physical <platform> devices …" (ADR 0080 §3), after `NO_DRIVER` and before the model row.
 - Downloads never make a worker able to serve: only installed runtimes count.
 - `matchRequest` gives the model name the gateway forwards, so the worker resolves what routing matched.

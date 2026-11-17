@@ -79,10 +79,16 @@ describe("aggregateCatalog", () => {
       view({ catalog: [phonesOnly], id: "wrk_a" }),
       view({ catalog: [iosOnA], id: "wrk_b" }),
     ]);
+    const mixedEmulatorFirst = aggregateCatalog([
+      view({ catalog: [iosOnA], id: "wrk_a" }),
+      view({ catalog: [phonesOnly], id: "wrk_b" }),
+    ]);
 
     expect(allOff.platforms[0]).toMatchObject({ models: [], virtualDevices: false });
     expect(mixed.platforms[0]).toMatchObject({ models: ["iPhone 17"], runtimes: ["26.0"] });
     expect(mixed.platforms[0]).not.toHaveProperty("virtualDevices");
+    expect(mixedEmulatorFirst.platforms[0]).toMatchObject({ models: ["iPhone 17"] });
+    expect(mixedEmulatorFirst.platforms[0]).not.toHaveProperty("virtualDevices");
     expect(() => OPERATIONS["catalog.get"].output.parse(allOff)).not.toThrow();
     expect(() => OPERATIONS["catalog.get"].output.parse(mixed)).not.toThrow();
   });
