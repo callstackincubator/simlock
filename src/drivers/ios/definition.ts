@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import {
   booleanValue,
+  invalidValue,
   type DriverConfigEntry,
   objectValidator,
   positiveNumber,
@@ -49,8 +50,21 @@ export const iosDriverConfig: DriverConfigEntry<IosDriverConfig> = {
     full: { bootTimeoutMs: 300_000 },
     simulator: { audio: true, createTimeoutMs: 30_000, headless: true },
   },
+  // why: ADR 0083 §1: the two lists are checked on the merged config, because the file and the overrides are validated one layer at a time.
+  check: (section: IosDriverConfig) => {
+    const { exclude = [], include = [] } = section.slim;
+    const both = [...new Set(include.filter((name) => exclude.includes(name)))].sort();
+    if (both.length > 0) {
+      throw invalidValue("ios.slim", `no service in both include and exclude (${both.join(", ")})`);
+    }
+  },
   validators: {
-    slim: objectValidator({ categories: stringArray, bootTimeoutMs: positiveNumber }),
+    slim: objectValidator({
+      categories: stringArray,
+      bootTimeoutMs: positiveNumber,
+      include: stringArray,
+      exclude: stringArray,
+    }),
     full: objectValidator({ bootTimeoutMs: positiveNumber }),
     simulator: objectValidator({
       audio: booleanValue,
