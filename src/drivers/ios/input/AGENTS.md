@@ -1,6 +1,6 @@
 # iOS device input
 
-Does: taps, scrolls, Home, keys and rotations on an iOS simulator, through `simlock-screen-capture <udid> --input`; a physical iPhone answers unavailable.
+Does: taps, scrolls, Home, the app switcher, Lock, keys and rotations on an iOS simulator, through `simlock-screen-capture <udid> --input`; a physical iPhone answers unavailable.
 Flows: [iOS driver](../AGENTS.md), [input](../../../input/AGENTS.md).
 
 ## Rules
