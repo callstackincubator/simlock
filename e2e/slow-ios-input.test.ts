@@ -11,6 +11,7 @@ import {
   FIRST_SNAPSHOT,
   freeLoopbackPort,
   listLeases,
+  listRequests,
   makeAgent,
   newAgentToken,
   ok,
@@ -18,7 +19,6 @@ import {
   progress,
   waitFor,
   waitForAgentDevice,
-  waitForFree,
   withSharedDaemon,
   type Agent,
   type SharedTestEnv,
@@ -103,7 +103,6 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
   { tags: ["slow", "ios"] },
   () => {
     let env: SharedTestEnv;
-    let leased = false;
 
     beforeAll(async () => {
       const pinned = await assertPinnedAgentDevice("ios");
@@ -126,8 +125,12 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
       await cleanupAgents();
       if (env !== undefined) {
         await env.cli(["release", "--all", "--yes"], { timeout: 60_000 });
-        // why: a pool that never leased has no device to wait for; waitForFree expects the replacement a release makes.
-        if (leased) await waitForFree(env);
+        // why: no warm pool is configured here, so a released simulator is destroyed and no replacement turns ready; waitForFree would wait for one; only the lease and the request have to be gone before the daemon stops.
+        await waitFor(
+          async () =>
+            (await listLeases(env)).length === 0 && (await listRequests(env)).length === 0,
+          { interval: 1_000, label: "no lease and no request after the release", timeout: 120_000 },
+        );
       }
       await env?.teardown();
     }, 420_000);
@@ -138,7 +141,6 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
       async () => {
         const a: Agent = await makeAgent(env, "ios-input");
         ok(await a.run(["open", "--platform", "ios", "--os", ">=27"], { timeout: 330_000 }));
-        leased = true;
         ok(await a.run(["open", SETTINGS]));
         const shots = await mkdtemp(join(tmpdir(), "simlock-ios-input-"));
         progress(`screenshots of the iOS input test are saved in ${shots}`);
@@ -220,7 +222,6 @@ describe.skipIf(AGENT_DEVICE === undefined || !hasIos27Runtime())(
           socket.close();
         }
         ok(await a.run(["close"]));
-        await waitForFree(env);
       },
     );
   },
