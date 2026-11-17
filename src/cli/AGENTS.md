@@ -33,6 +33,7 @@ Passthrough and tunnel:
 
 - `simctl` and `adb`: on a worker the scoped command runs here (`spawnPassthrough`). Through a gateway it is `device.exec`: the worker's driver fills the lease's device in and refuses another (ADR 0047).
 - Without `--stdin`, stdin is never read and `stdin: ""` is sent (ADR 0058). A worker ignores `--stdin`.
+- `files` talks to a worker or gateway over HTTP (`httpStream`) after a session call for the default lease, and needs `--url`: without it the command exits 2. A transfer ends when no byte of either body has moved for 60 s (`REMOTE_UNREACHABLE`); a download lands in `<file>.part` and moves into place whole. A remote `simctl` or `adb` that fails after naming an existing local path prints one hint.
 - `tunnel` talks to a worker or gateway over HTTP and a WebSocket, never the local daemon. `ws` loads on the first connect, for this command only.
 - A forward tunnel binds its caller port before anything else, and holds accepted connections until `READY`.
 - `tunnel emulator adb`: a failed `adb connect` is a warning and the tunnel stays. Leaving always runs `adb disconnect`, and the exit code is the command's own.
