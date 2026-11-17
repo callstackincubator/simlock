@@ -139,6 +139,13 @@ export class SlimBoot {
         from,
         join(this.#overridesFolder(copyUdid), OVERRIDES_FILE_NAME),
       );
+      const record = join(this.#overridesFolder(seedUdid), RECORD_FILE_NAME);
+      if (await this.#filesystem.exists(record)) {
+        await this.#filesystem.copyFile(
+          record,
+          join(this.#overridesFolder(copyUdid), RECORD_FILE_NAME),
+        );
+      }
     } catch (error: unknown) {
       this.#logger?.warn(
         `could not copy the launchd overrides of seed ${seedUdid} to ${copyUdid}: ${errorMessage(error)}`,
