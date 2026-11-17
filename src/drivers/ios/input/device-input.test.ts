@@ -166,27 +166,33 @@ describe("iOS device input", () => {
     expect(inXcodeSet.launcher.starts.map((start) => start.env)).toEqual([{ PATH: "/usr/bin" }]);
     inXcodeSet.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
     await xcodeOpen;
+  });
 
+  it("a socket client sends a key on an iOS simulator of any runtime, and the config never says keyboardUnavailable", async () => {
     for (const runtimeId of [
+      "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
       "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
       "com.apple.CoreSimulator.SimRuntime.iOS-28-1",
       "garbage",
     ]) {
-      const other = setup();
-      const opened = other.factory.open(simulator(runtimeId), new AbortController().signal);
-      other.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
-      const limited = (await opened) as DeviceInput;
-      const limitedConfigs: InputScreenConfig[] = [];
-      limited.onConfig((config) => limitedConfigs.push(config));
-      expect(limitedConfigs).toEqual([
-        { height: 2556, keyboardUnavailable: true, orientation: "portrait", width: 1179 },
+      const { factory, launcher } = setup();
+      const opening = factory.open(simulator(runtimeId), new AbortController().signal);
+      launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+      const input = (await opening) as DeviceInput;
+      const configs: InputScreenConfig[] = [];
+      input.onConfig((config) => configs.push(config));
+      input.send({ kind: "key", type: "down", usage: 0x04 });
+      input.send({ kind: "key", type: "up", usage: 0x04 });
+      expect(decoded(launcher.last.stdinWrites), runtimeId).toEqual([
+        { body: { type: "down", usage: 0x04 }, tag: INPUT_TAG.key },
+        { body: { type: "up", usage: 0x04 }, tag: INPUT_TAG.key },
       ]);
-      limited.send({ kind: "key", type: "down", usage: 0x04 });
-      limited.send({ kind: "touch", type: "begin", x: 0.5, y: 0.25 });
-      limited.send({ kind: "orientation", orientation: "landscape_left" });
-      expect(decoded(other.launcher.last.stdinWrites)).toEqual([
-        { body: { type: "begin", x: 0.5, y: 0.25 }, tag: INPUT_TAG.touch },
-        { body: { orientation: "landscape_left" }, tag: 0x07 },
+
+      launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(configs, runtimeId).toEqual([
+        { height: 2000, orientation: "portrait", width: 1000 },
+        { height: 2000, orientation: "portrait", width: 3000 },
       ]);
     }
   });
@@ -245,24 +251,6 @@ describe("iOS device input", () => {
       { height: 2000, orientation: "portrait", width: 1000 },
     ]);
     expect(logger.warnings).toHaveLength(4);
-
-    const keyless = setup();
-    const keylessOpen = keyless.factory.open(
-      simulator("com.apple.CoreSimulator.SimRuntime.iOS-27-0"),
-      new AbortController().signal,
-    );
-    keyless.launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
-    const keylessInput = (await keylessOpen) as DeviceInput;
-    const keylessConfigs: InputScreenConfig[] = [];
-    keylessInput.onConfig((config) => keylessConfigs.push(config));
-    keyless.launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
-    await flush();
-    expect(keylessConfigs.at(-1)).toEqual({
-      height: 2000,
-      keyboardUnavailable: true,
-      orientation: "portrait",
-      width: 3000,
-    });
   });
 
   it("an open rejects when the helper is missing, exits first or reports no size within 10 s, and a helper that exits later fails the input", async () => {
