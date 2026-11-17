@@ -1,6 +1,7 @@
 import type { IpcConnection } from "../ports/index.js";
 import {
   fromWireError,
+  isSimlockError,
   mapLegacyProtocolMismatch,
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
@@ -122,9 +123,17 @@ export class SimlockWire {
     this.#connection = connection;
     this.#maxLineChars = maxLineChars;
     connection.onData((chunk) => this.#read(chunk));
-    connection.onError(() =>
+    // why: a connection that knows why it ended (a remote session closed for a revoked token) hands the wire that typed error to reject the calls with.
+    connection.onError((error) =>
       this.#die(
-        new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Daemon connection is closed", {}),
+        isSimlockError(error)
+          ? error
+          : new SimlockError(
+              "DAEMON_CONNECTION_LOST",
+              "transport",
+              "Daemon connection is closed",
+              {},
+            ),
       ),
     );
     connection.onClose(() =>

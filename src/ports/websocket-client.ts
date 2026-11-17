@@ -101,6 +101,7 @@ export class NodeWebSocketClientConnector implements WebSocketClientConnector {
         autoPong: true,
         handshakeTimeout: options.handshakeTimeoutMs,
         headers: { ...options.headers },
+        ...(options.maxPayloadBytes === undefined ? {} : { maxPayload: options.maxPayloadBytes }),
       });
       socket.once("unexpected-response", (_request, response) => {
         const chunks: Buffer[] = [];

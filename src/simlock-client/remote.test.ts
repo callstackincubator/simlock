@@ -197,14 +197,16 @@ describe("the typed client over a farm's session path", () => {
     it("rejects the calls in flight when the connection drops, when the farm is silent for 45 s, and with UNAUTHENTICATED on close 4003", async () => {
       const dropped = await opened();
       const inFlight = dropped.client.identity();
+      const inFlightState = promiseState(inFlight);
       await flushMicrotasks();
       dropped.peer.dropped(1006, "");
       await flushMicrotasks();
-      expect(promiseState(inFlight).state).toBe("rejected");
+      expect(inFlightState.state).toBe("rejected");
       await expect(inFlight).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
 
       const silent = await opened();
       const waiting = silent.client.identity();
+      const waitingState = promiseState(waiting);
       await flushMicrotasks();
       silent.clock.advance(44_999);
       silent.peer.ping();
@@ -213,16 +215,17 @@ describe("the typed client over a farm's session path", () => {
       expect(silent.peer.terminated).toBe(false);
       silent.clock.advance(1);
       await flushMicrotasks();
-      expect(promiseState(waiting).state).toBe("rejected");
+      expect(waitingState.state).toBe("rejected");
       await expect(waiting).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
       expect(silent.peer.terminated).toBe(true);
 
       const revoked = await opened();
       const pending = revoked.client.identity();
+      const pendingState = promiseState(pending);
       await flushMicrotasks();
       revoked.peer.dropped(4003, "token revoked");
       await flushMicrotasks();
-      expect(promiseState(pending).state).toBe("rejected");
+      expect(pendingState.state).toBe("rejected");
       await expect(pending).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
       await expect(revoked.client.identity()).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
     });

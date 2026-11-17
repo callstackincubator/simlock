@@ -2,6 +2,7 @@ import {
   type Clock,
   type IpcConnection,
   type IpcConnector,
+  type TimerHandle,
   NodeWebSocketClientConnector,
   SystemClock,
   type WebSocketClient,
@@ -10,9 +11,15 @@ import {
 } from "../ports/index.js";
 import { type AnySimlockError, SimlockError } from "../contract/index.js";
 import type { ConnectOptions } from "./client.js";
+import { MAX_WIRE_LINE_CHARS } from "./wire.js";
 import { farmOrigin, farmTokenFits, farmUrlProblem } from "./farm-url.js";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
+// why: ADR 0081 §4: the farm pings every 15 s, so a session that hears nothing for 45 s has lost its network without a close.
+const SILENCE_TIMEOUT_MS = 45_000;
+const CLOSE_NORMAL = 1000;
+// why: the farm closes a session with this code when the token behind it was revoked.
+const CLOSE_TOKEN_REVOKED = 4003;
 
 export interface RemoteSessionOptions {
   readonly token: string;
@@ -87,11 +94,12 @@ export class RemoteSessionConnector implements IpcConnector {
         .connect(url, {
           handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
           headers: { authorization: `Bearer ${token}` },
+          maxPayloadBytes: MAX_WIRE_LINE_CHARS,
         })
         .then(resolve, (error: unknown) => reject(refusalOf(error)))
         .finally(() => clock.cancel(timer));
     });
-    return new SessionLines(socket);
+    return new SessionLines(socket, clock);
   }
 }
 
@@ -114,24 +122,26 @@ function refusalOf(error: unknown): AnySimlockError {
   );
 }
 
-// why: the wire reads `\n`-ended chunks, so each text message gets its newline back, and a write holding several lines goes out as one message per line.
+// why: the wire reads `\n`-ended chunks, so each text message gets its newline back, and a write holding several lines goes out as one message per line. The session ends once, for whichever reason comes first: the farm's close, a drop, or 45 s without its ping.
 class SessionLines implements IpcConnection {
   readonly #socket: WebSocketClient;
+  readonly #clock: Clock;
   readonly #data = new Set<(chunk: string) => void>();
   readonly #closes = new Set<() => void>();
   readonly #errors = new Set<(error: Error) => void>();
+  #silence: TimerHandle | undefined;
   #closed = false;
 
-  constructor(socket: WebSocketClient) {
+  constructor(socket: WebSocketClient, clock: Clock) {
     this.#socket = socket;
+    this.#clock = clock;
     socket.onMessage((bytes) => {
       const chunk = `${new TextDecoder().decode(bytes)}\n`;
       for (const listener of this.#data) listener(chunk);
     });
-    socket.onClose(() => {
-      this.#closed = true;
-      for (const listener of this.#closes) listener();
-    });
+    socket.onPing(() => this.#listen());
+    socket.onClose((code) => this.#end(code));
+    this.#listen();
   }
 
   get closed(): boolean {
@@ -160,6 +170,31 @@ class SessionLines implements IpcConnection {
   }
 
   async close(): Promise<void> {
-    this.#socket.close(1000, "");
+    this.#socket.close(CLOSE_NORMAL, "");
+  }
+
+  #listen(): void {
+    if (this.#silence !== undefined) this.#clock.cancel(this.#silence);
+    this.#silence = this.#clock.setTimer(SILENCE_TIMEOUT_MS, () => {
+      this.#end(undefined);
+      // why: a farm that vanished never answers a close, and `ws` would keep the socket and the process alive for 30 s past the bound.
+      this.#socket.terminate();
+    });
+  }
+
+  #end(code: number | undefined): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    if (this.#silence !== undefined) this.#clock.cancel(this.#silence);
+    if (code === CLOSE_TOKEN_REVOKED) {
+      const revoked = new SimlockError(
+        "UNAUTHENTICATED",
+        "protocol",
+        "The farm ended the session: its token was revoked",
+        {},
+      );
+      for (const listener of this.#errors) listener(revoked);
+    }
+    for (const listener of this.#closes) listener();
   }
 }
