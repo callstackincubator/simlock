@@ -15,7 +15,7 @@ function refusal(platform: Off): string {
   );
 }
 
-// why: the request shapes of ADR 0080's Examples, each a plain lease on the phones-only platform.
+// why: the request shapes of ADR 0084's Examples, each a plain lease on the phones-only platform.
 function plainRequests(platform: Off): readonly Record<string, unknown>[] {
   return [
     { platform },

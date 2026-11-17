@@ -23,7 +23,7 @@ export interface SpentDeviceDeletion {
   deleteSpent(device: VirtualDevice): Promise<void>;
 }
 
-/** why: deletes an idle virtual device of a platform whose `<platform>.virtualDevices` is false (ADR 0080 §2). */
+/** why: deletes an idle virtual device of a platform whose `<platform>.virtualDevices` is false (ADR 0084 §2). */
 export interface IdleDeviceDeletion {
   readonly platforms: readonly Platform[];
   deleteIdle(device: VirtualDevice): Promise<void>;

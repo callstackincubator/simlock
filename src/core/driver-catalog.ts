@@ -41,7 +41,7 @@ export type ModelPreferences = Readonly<
 export interface PlatformCatalog extends DriverCatalogEntry {
   readonly platform: Platform;
   readonly classDefaults: Readonly<Partial<Record<DeviceClass, string>>>;
-  /** why: `false` for a platform whose `<platform>.virtualDevices` is off (ADR 0080 §3); absent otherwise. */
+  /** why: `false` for a platform whose `<platform>.virtualDevices` is off (ADR 0084 §3); absent otherwise. */
   readonly virtualDevices?: false;
 }
 
@@ -50,7 +50,7 @@ export interface ScreenAvailability {
   readonly reason?: string;
 }
 
-/** why: the catalog entry of a platform whose virtual devices are off: the platform stays so a gateway still routes phone requests to this worker (ADR 0080 §3). */
+/** why: the catalog entry of a platform whose virtual devices are off: the platform stays so a gateway still routes phone requests to this worker (ADR 0084 §3). */
 function phonesOnlyEntry(platform: Platform): PlatformCatalog {
   return {
     classDefaults: {},
@@ -76,7 +76,7 @@ export class DriverCatalog {
     options: {
       readonly logger?: Logger | undefined;
       readonly preferences?: ModelPreferences | undefined;
-      /** why: a platform set to `false` serves enrolled physical devices only (ADR 0080 §1). */
+      /** why: a platform set to `false` serves enrolled physical devices only (ADR 0084 §1). */
       readonly virtualDevices?: Readonly<Partial<Record<Platform, boolean>>> | undefined;
     } = {},
   ) {
@@ -86,7 +86,7 @@ export class DriverCatalog {
     this.#logger = options.logger?.child("driver-catalog") ?? new NoopLogger();
   }
 
-  /** why: false only for a platform whose `<platform>.virtualDevices` key is false (ADR 0080 §1). */
+  /** why: false only for a platform whose `<platform>.virtualDevices` key is false (ADR 0084 §1). */
   virtualDevices(platform: Platform): boolean {
     return this.#virtualDevices[platform] !== false;
   }
