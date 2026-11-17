@@ -315,7 +315,7 @@ async function neverBackBeforeTheDeadline(): Promise<void> {
 }
 
 describe("CLI: a held remote lease across a network drop", () => {
-  it("rides out a drop: it reconnects and renews until the lease's deadline, and ends with the lease lost when the farm never comes back", async () => {
+  it("a held remote lease rides out a network drop: it reconnects, renews and holds on until its deadline, ends by what the farm answers, and a queued request asks again", async () => {
     await rideOutADropBeforeTheDeadline();
     await neverBackBeforeTheDeadline();
     await reconnectAnswersDecideTheEnd();
