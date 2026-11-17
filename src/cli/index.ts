@@ -4,7 +4,7 @@
 import { COMMANDS, resolveCommand } from "./tree.js";
 import { errorExitCode, UsageError, withHelpHint, writeError } from "./errors.js";
 import type { DaemonFlag } from "../ports/index.js";
-import type { CliEnvironment } from "./types.js";
+import type { CliEnvironment, RemoteFarm } from "./types.js";
 
 export type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
 /** why: re-exported, not re-implemented, so another edge enters the CLI through its index;
@@ -69,6 +69,22 @@ function daemonFlagNamed(arg: string): "gateway" | "local" | undefined {
   return undefined;
 }
 
+// why: `--name value` and `--name=value` are one flag; `next` is the index of the argument after it.
+function takeValueFlag(
+  argv: readonly string[],
+  index: number,
+  name: string,
+): { readonly value: string; readonly next: number } | undefined {
+  const arg = argv[index] as string;
+  if (arg === `--${name}`) {
+    const value = argv[index + 1];
+    if (value === undefined) throw new UsageError(`--${name} requires a value`);
+    return { next: index + 2, value };
+  }
+  if (arg.startsWith(`--${name}=`)) return { next: index + 1, value: arg.slice(name.length + 3) };
+  return undefined;
+}
+
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
   readonly url: string | undefined;
@@ -76,44 +92,29 @@ function extractGlobalFlags(argv: readonly string[]): {
   readonly rest: string[];
 } {
   const rest: string[] = [];
-  let token: string | undefined;
-  let url: string | undefined;
+  const values: Record<"token" | "url", string | undefined> = { token: undefined, url: undefined };
   let daemonFlag: DaemonFlag;
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index] as string;
-    if (arg === "--token") {
-      const value = argv[index + 1];
-      if (value === undefined) throw new UsageError("--token requires a value");
-      token = value;
-      index++;
+  let index = 0;
+  while (index < argv.length) {
+    const taken = (["token", "url"] as const)
+      .map((name) => ({ name, flag: takeValueFlag(argv, index, name) }))
+      .find(({ flag }) => flag !== undefined);
+    if (taken?.flag !== undefined) {
+      values[taken.name] = taken.flag.value;
+      index = taken.flag.next;
       continue;
     }
-    if (arg.startsWith("--token=")) {
-      token = arg.slice("--token=".length);
-      continue;
-    }
-    if (arg === "--url") {
-      const value = argv[index + 1];
-      if (value === undefined) throw new UsageError("--url requires a value");
-      url = value;
-      index++;
-      continue;
-    }
-    if (arg.startsWith("--url=")) {
-      url = arg.slice("--url=".length);
-      continue;
-    }
-    const named = daemonFlagNamed(arg);
-    if (named !== undefined) {
-      if (daemonFlag !== undefined && daemonFlag !== named) {
-        throw new UsageError("--gateway and --local cannot be used together");
-      }
-      daemonFlag = named;
-      continue;
-    }
-    rest.push(arg);
+    const named = daemonFlagNamed(argv[index] as string);
+    if (named === undefined) rest.push(argv[index] as string);
+    else if (daemonFlag !== undefined && daemonFlag !== named) {
+      throw new UsageError("--gateway and --local cannot be used together");
+    } else daemonFlag = named;
+    index++;
   }
-  return { token, url, daemonFlag, rest };
+  if (values.url !== undefined && daemonFlag !== undefined) {
+    throw new UsageError("--url cannot be used with --local or --gateway");
+  }
+  return { daemonFlag, rest, token: values.token, url: values.url };
 }
 
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
@@ -191,6 +192,15 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
     },
     process.env,
   );
+}
+
+// why: remote mode is the URL without an explicit `--local` or `--gateway`, which beats a `SIMLOCK_URL` left over in the shell.
+function remoteFarm(
+  url: string | undefined,
+  token: string | undefined,
+  daemonFlag: DaemonFlag,
+): RemoteFarm | undefined {
+  return url !== undefined && daemonFlag === undefined ? { token, url } : undefined;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {
@@ -272,9 +282,6 @@ export async function runCli(
   try {
     const { token, url: urlFlag, daemonFlag, rest } = extractGlobalFlags(argv);
     flag = daemonFlag;
-    if (urlFlag !== undefined && daemonFlag !== undefined) {
-      throw new UsageError("--url cannot be used with --local or --gateway");
-    }
     if (rest[0] === "--version" || rest[0] === "-v") {
       // why: loaded here, not statically, so only this request pays for the ports barrel, as a real command does.
       const { readPackageVersion } = await import("../ports/index.js");
@@ -291,11 +298,7 @@ export async function runCli(
     resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
     if (daemonFlag === "gateway") await refuseWhenNoGateway(resolved, command.path, command.rest);
     const url = urlFlag ?? nonEmpty(resolved.tunnelUrl);
-    // why: remote mode is the URL without an explicit `--local` or `--gateway`, which beats a `SIMLOCK_URL` left over in the shell.
-    const remote =
-      url !== undefined && daemonFlag === undefined
-        ? { url, token: token ?? resolved.tunnelToken }
-        : undefined;
+    const remote = remoteFarm(url, token ?? resolved.tunnelToken, daemonFlag);
     if (remote !== undefined) refuseInRemoteMode(command.path, command.rest);
     return await command.module.run(command.rest, {
       path: command.path,
