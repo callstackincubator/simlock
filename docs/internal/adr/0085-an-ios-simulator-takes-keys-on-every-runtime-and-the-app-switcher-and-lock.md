@@ -25,7 +25,7 @@ Xcode 26.4.1, 27.0 and 27.2 and one CoreSimulator (1174.21, from Xcode
 | Sent by the helper                          | iOS 26.4 | iOS 27.0 | iOS 27.2 |
 | ------------------------------------------- | -------- | -------- | -------- |
 | Indigo key message (keys `a`–`h`)           | typed    | typed    | typed    |
-| Indigo button, source 1 (Lock)              | locked   | locked   | locked   |
+| Indigo button, source 1 (Lock)              | locked; again: woke | locked   | locked; again: woke |
 | Indigo Home pressed twice, 0.05–0.2 s apart | switcher | switcher | switcher |
 
 The SimulatorKit of each of the three Xcodes gave the same results. Once,
