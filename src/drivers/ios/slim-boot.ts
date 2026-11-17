@@ -55,6 +55,7 @@ type SlimWrite =
       readonly kept: readonly SlimCategory[];
       readonly startedAt: number;
       readonly writeError: string | undefined;
+      readonly unconfigured: string | undefined;
     };
 
 type SlimPlan =
@@ -174,11 +175,9 @@ export class SlimBoot {
     const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
     const recorded = await this.#readRecord(recordFile);
     // why: a name the worker dropped is still written back on (ADR 0083 §5), so a record or a name keeps the write going even with no category.
+    const noCategoriesDetail = `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`;
     if (configured.categories.length === 0 && names.length === 0 && recorded.length === 0) {
-      return {
-        detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
-        kind: "no-categories",
-      };
+      return { detail: noCategoriesDetail, kind: "no-categories" };
     }
 
     const startedAt = this.#clock.now();
@@ -194,7 +193,12 @@ export class SlimBoot {
       writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
-    return { kept, kind: "written", resolved, startedAt, wanted, writeError };
+    // why: no category and no `exclude` is the unconfigured case, which logs its skip as before (ADR 0083 §4).
+    const unconfigured =
+      configured.categories.length === 0 && (slim.exclude ?? []).length === 0
+        ? noCategoriesDetail
+        : undefined;
+    return { kept, kind: "written", resolved, startedAt, unconfigured, wanted, writeError };
   }
 
   // why: the plist first, then the record: a restart between them leaves the old record, which still lists every name the plist may hold off (ADR 0083 S2).
@@ -256,6 +260,13 @@ export class SlimBoot {
   ): Promise<DriverDevice> {
     if (write.kept.length > 0 && write.writeError !== undefined) {
       throw new KeptCategoriesError(write.writeError);
+    }
+    // why: ADR 0083 §4: with no label written off the device is `full` whatever a readback would say, so none is run unless a kept category needs it.
+    if (write.kept.length === 0 && ![...write.wanted.values()].some(Boolean)) {
+      const detail = write.unconfigured ?? write.writeError;
+      return detail === undefined
+        ? this.#asIs(device, data, "full")
+        : this.#skipApply(device, data, detail, "full");
     }
     const outcome = await this.#simctl.invoke(
       ["spawn", data.udid, "launchctl", "print-disabled", "system"],

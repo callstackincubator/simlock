@@ -179,6 +179,34 @@ describe("IosSimctlDriver makeReady with include and exclude names", () => {
     expect(noCategories.onSlimSkipped).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "apply-failed" }),
     );
+
+    const noCategoriesCases = [
+      { slim: { categories: [], include: [apsd] } },
+      {
+        slim: { categories: [] },
+        plist: { [diagnosticd]: true },
+        record: JSON.stringify([diagnosticd]),
+      },
+      { slim: { categories: [], include: [apsd] }, readbackFails: true },
+      { slim: { categories: [], include: [apsd] }, failing: "writeRecord" as const },
+    ];
+    for (const options of noCategoriesCases) {
+      const result = await boot(options);
+      expect(result.outcome).toEqual(fullMode);
+      expect(result.onSlimSkipped).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "apply-failed" }),
+      );
+      expect(result.onSlimmed).not.toHaveBeenCalled();
+    }
+
+    const nothingOffUnreadable = await boot({
+      slim: {
+        categories: ["store"],
+        include: SLIM_CATEGORIES.find((c) => c.name === "store")!.labels,
+      },
+      readbackFails: true,
+    });
+    expect(nothingOffUnreadable.outcome).toEqual(fullMode);
   });
 
   it("fails a lease's boot only on its kept categories", async () => {
@@ -239,6 +267,10 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
     expect(dropped.written?.[diagnosticd]).toBe(false);
     expect(dropped.written?.[gamed]).toBe(true);
     expect(dropped.record).toEqual([gamed]);
+    expect(dropped.filesystem.writes).toEqual([
+      overridesPath(slim18_5.udid),
+      recordPath(slim18_5.udid),
+    ]);
 
     const droppedWithNoCategory = await boot({
       slim: { categories: [] },
