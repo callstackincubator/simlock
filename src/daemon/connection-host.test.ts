@@ -16,9 +16,53 @@ import {
   type IpcConnector,
   type IpcListenerFactory,
 } from "../ports/index.js";
-import { DaemonAlreadyRunningError, DaemonEndpointHost } from "./connection-host.js";
+import {
+  DaemonAlreadyRunningError,
+  DaemonEndpointHost,
+  prepareDataDirectory,
+} from "./connection-host.js";
 
 const endpoint = "/simlock/daemon.sock";
+
+describe("prepareDataDirectory", () => {
+  it("warns on macOS and Linux when group or others can reach the folder, and never on Windows, whose mode bits Node makes up", async () => {
+    // why: on Windows Node reports 0o666 for every writable folder and 0o444 for a read-only
+    // one, whatever its ACL says, so the bits cannot tell who can open it.
+    const cases = [
+      { platform: "win32", mode: 0o666 },
+      { platform: "win32", mode: 0o444 },
+      { platform: "darwin", mode: 0o755 },
+      { platform: "linux", mode: 0o750 },
+    ] as const;
+    // why: the platform parameter is the fix's; the alias lets this test compile before it lands.
+    const prepare: (
+      filesystem: MemoryFilesystem,
+      path: string,
+      platform: NodeJS.Platform,
+    ) => Promise<string | undefined> = prepareDataDirectory;
+    const warnings = [];
+    for (const [index, testCase] of cases.entries()) {
+      const filesystem = new MemoryFilesystem();
+      const path = `/home/${index}`;
+      await filesystem.mkdirp(path);
+      await filesystem.chmod(path, testCase.mode);
+      warnings.push([testCase.platform, await prepare(filesystem, path, testCase.platform)]);
+    }
+
+    expect(warnings).toEqual([
+      ["win32", undefined],
+      ["win32", undefined],
+      [
+        "darwin",
+        "data directory /home/2 is accessible to other users (mode 755); run chmod 700 /home/2",
+      ],
+      [
+        "linux",
+        "data directory /home/3 is accessible to other users (mode 750); run chmod 700 /home/3",
+      ],
+    ]);
+  });
+});
 
 describe("DaemonEndpointHost", () => {
   it("binds a fresh endpoint and removes only its owned entry on repeated stop", async () => {
