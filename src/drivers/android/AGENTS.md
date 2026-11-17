@@ -49,7 +49,7 @@ Physical phones:
 Profiles and components:
 
 - Profile sources are read in order: the library, the SDK (`avdmanager list device`), the user's devices.xml. The first case-insensitive name match wins and classes the model. A devices.xml name the library shadows is advisory `device-profile-hidden`.
-- The `avdmanager list device` answer is kept until a file it reads profiles from changes, appears or goes (`AvdmanagerDeviceList`); a failed run is not kept. The sdkmanager catalog is never read.
+- The sdkmanager catalog is never read.
 - Existing devices are not re-checked for fit.
 - A component is an API level. A licence refusal runs `sdkmanager --licenses` only under `downloads.acceptAndroidLicenses`, else `AndroidLicenseNotAcceptedError`: licence consent is never implied by download permission.
 
