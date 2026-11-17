@@ -183,6 +183,12 @@ const leaseRequestsOf = (held: Held) =>
     .filter(({ type }) => type === "lease.request")
     .map(({ payload }) => payload as { idempotencyKey?: string });
 
+async function dropWhileRequest(held: Held): Promise<void> {
+  await vi.waitFor(() => expect(leaseRequestsOf(held)).toHaveLength(1));
+  held.farm.connections[0]?.peer.dropped(1006, "");
+  await vi.waitFor(() => expect(held.stderr()).toContain("lost the connection"));
+}
+
 async function dropWhileQueued(): Promise<void> {
   let asked = 0;
   const queued = holdRemoteLease(() => ({
@@ -203,6 +209,67 @@ async function dropWhileQueued(): Promise<void> {
   expect(again?.idempotencyKey).toBe(first?.idempotencyKey);
   queued.signals.emit("SIGINT");
   expect(await ends(queued)).toBe(0);
+}
+
+async function queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway(): Promise<void> {
+  const answersFor =
+    (...answers: unknown[]) =>
+    () => {
+      let asked = 0;
+      return {
+        "lease.request": () => {
+          asked += 1;
+          return asked === 1 ? NO_REPLY : (answers[asked - 2] ?? detachedGrant);
+        },
+      };
+    };
+  const restart = fault("INTERNAL", "send it again with a new key");
+
+  const restarted = holdRemoteLease(answersFor(restart));
+  await dropWhileRequest(restarted);
+  restarted.clock.advance(1_000);
+  await vi.waitFor(() => expect(restarted.stdout()).toContain("lse_env"));
+  expect(restarted.stderr()).toContain(
+    notice(`${URL} restarted and dropped the waiting request; asking again`),
+  );
+  const keys = leaseRequestsOf(restarted).map((request) => request.idempotencyKey);
+  expect(keys).toHaveLength(3);
+  expect(keys[1]).toBe(keys[0]);
+  expect(keys[2]).not.toBe(keys[0]);
+  restarted.signals.emit("SIGINT");
+  expect(await ends(restarted)).toBe(0);
+
+  const twice = holdRemoteLease(answersFor(restart, restart));
+  await dropWhileRequest(twice);
+  twice.clock.advance(1_000);
+  expect(await ends(twice)).toBe(1);
+  expect(errorLine(twice.stderr()).code).toBe("INTERNAL");
+  expect(leaseRequestsOf(twice)).toHaveLength(3);
+
+  const timedOut = holdRemoteLease(
+    answersFor(fault("QUEUE_TIMEOUT", "no device freed up in time")),
+  );
+  await dropWhileRequest(timedOut);
+  timedOut.clock.advance(1_000);
+  expect(await ends(timedOut)).toBe(10);
+  expect(errorLine(timedOut.stderr()).code).toBe("QUEUE_TIMEOUT");
+
+  for (const [argv, giveUpAfter] of [
+    [[], 300_000],
+    [["--timeout", "30s"], 30_000],
+  ] as const) {
+    const gone = holdRemoteLease(answersFor(), argv);
+    await dropWhileRequest(gone);
+    gone.farm.failure = new Error("connect ECONNREFUSED");
+    gone.clock.advance(giveUpAfter - 1);
+    expect(gone.exitCode(), argv.join(" ")).toBeUndefined();
+    gone.clock.advance(1);
+    expect(await ends(gone), argv.join(" ")).toBe(1);
+    expect(errorLine(gone.stderr()).code).toBe("REMOTE_UNREACHABLE");
+    const tried = gone.attempts.length;
+    gone.clock.advance(600_000);
+    expect(gone.attempts).toHaveLength(tried);
+  }
 }
 
 async function rideOutADropBeforeTheDeadline(): Promise<void> {
@@ -254,5 +321,6 @@ describe("CLI: a held remote lease across a network drop", () => {
     await reconnectAnswersDecideTheEnd();
     await silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound();
     await dropWhileQueued();
+    await queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway();
   });
 });
