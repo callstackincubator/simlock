@@ -21,6 +21,7 @@ export interface DirectoryAccessReader {
 
 const READ_TIMEOUT_MS = 10_000;
 const PATH_VARIABLE = "SIMLOCK_ACL_PATH";
+// why: generic rights set the top bit, so the signed mask is widened and masked back to the unsigned value.
 // why: the path travels in the environment, so no quoting of it can break out of the script.
 const SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
@@ -30,7 +31,7 @@ const SCRIPT = [
   "  sid = $_.IdentityReference.Translate($sid).Value;",
   "  name = $_.IdentityReference.Value;",
   "  allow = ($_.AccessControlType -eq 'Allow');",
-  "  rights = [int64]([uint32]$_.FileSystemRights) } })",
+  "  rights = ([int64][int]$_.FileSystemRights) -band 4294967295 } })",
   "[ordered]@{ user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; entries = $entries } | ConvertTo-Json -Compress -Depth 4",
 ].join("\n");
 
