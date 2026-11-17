@@ -78,6 +78,14 @@ describe("NodeHttpStreamClient", () => {
       url: `${base}/hang`,
     });
     controller.abort();
-    await expect(hanging).rejects.toThrow();
+    // why: a client that ignores the abort never settles, so the race names the failure instead of the test timing out.
+    const outcome = await Promise.race([
+      hanging.then(
+        () => "answered",
+        () => "rejected",
+      ),
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe("rejected");
   });
 });

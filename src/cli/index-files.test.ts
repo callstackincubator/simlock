@@ -26,6 +26,8 @@ interface Options {
   readonly pieces?: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly leases?: readonly ReturnType<typeof lease>[];
+  // why: a real filesystem leaves the bytes written so far when a stream fails; the in-memory one writes nothing, so a test asks for the leftover.
+  readonly leavesPartial?: boolean;
 }
 
 async function workerRoutes(request: HttpStreamRequest): Promise<HttpStreamAnswer> {
@@ -50,6 +52,14 @@ async function files(
   const stream = new FakeHttpStreamClient();
   stream.reply = reply;
   await filesystem.writeFileAtomic("/work/project/big.bin", "");
+  if (options.leavesPartial === true) {
+    const written = filesystem.writeFileStream.bind(filesystem);
+    filesystem.writeFileStream = async (path, body, writeOptions) => {
+      await filesystem.writeFileAtomic(path, "apk");
+      await written(`${path}.discarded`, body, writeOptions);
+      return 0;
+    };
+  }
   if (options.pieces !== undefined) {
     const pieces = options.pieces;
     const opened = filesystem.openFile.bind(filesystem);
@@ -155,6 +165,13 @@ describe("CLI: simlock files", () => {
       });
       expect(result.output.stdout, title).toBe("");
     }
+    const strange = await files(["files", "list"], async () =>
+      answer(500, { error: { code: "NOT_A_SIMLOCK_CODE", message: "boom" } }),
+    );
+    expect(strange.code).toBe(1);
+    expect(JSON.parse(strange.output.stderr)).toEqual({
+      error: { code: "REMOTE_UNREACHABLE", message: `The farm at ${URL} answered 500` },
+    });
     const unreachable = await files(["files", "list"], async () => {
       throw new Error("connect ECONNREFUSED");
     });
@@ -163,16 +180,20 @@ describe("CLI: simlock files", () => {
       error: { code: "REMOTE_UNREACHABLE", message: `No answer from ${URL}` },
     });
     let sent = false;
-    const cut = await files(["files", "get", "app-debug.apk", "-o", "copy.apk"], async () => ({
-      body: new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (sent) controller.error(new Error("socket hang up"));
-          else controller.enqueue(new TextEncoder().encode("apk"));
-          sent = true;
-        },
+    const cut = await files(
+      ["files", "get", "app-debug.apk", "-o", "copy.apk"],
+      async () => ({
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (sent) controller.error(new Error("socket hang up"));
+            else controller.enqueue(new TextEncoder().encode("apk"));
+            sent = true;
+          },
+        }),
+        status: 200,
       }),
-      status: 200,
-    }));
+      { leavesPartial: true },
+    );
     expect(cut.code).toBe(1);
     expect(JSON.parse(cut.output.stderr).error.code).toBe("REMOTE_UNREACHABLE");
     expect(await cut.filesystem.exists("/work/project/copy.apk")).toBe(false);
@@ -254,7 +275,11 @@ describe("CLI: simlock files", () => {
 });
 
 describe("CLI: a remote simctl or adb that fails after naming a path on this machine", () => {
-  async function passthrough(argv: readonly string[], exitCode: number, remote = true) {
+  async function passthrough(
+    argv: readonly string[],
+    exitCode: number,
+    where: "farm" | "local" | "local gateway" = "farm",
+  ) {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/work/project/MyApp.app");
     await filesystem.writeFileAtomic("/work/project/app.apk", "apk-bytes");
@@ -265,14 +290,23 @@ describe("CLI: a remote simctl or adb that fails after naming a path on this mac
     });
     const output = outputCapture(
       realCliEnvironmentPorts(filesystem),
-      remote ? AGENT_A : { SIMLOCK_ADMIN_TOKEN: "admin", SIMLOCK_AGENT_ID: "agent-a" },
+      where === "farm" ? AGENT_A : { SIMLOCK_ADMIN_TOKEN: "admin", SIMLOCK_AGENT_ID: "agent-a" },
     );
     const code = await runCli(
       argv,
       output.environmentWith({
         connectAdmin: async (resolveCredential) => {
           await resolveCredential();
-          return fakeClient();
+          return where === "local gateway"
+            ? fakeClient({
+                exec: async () => ({ exitCode }),
+                getStatus: async () => ({
+                  ...(await fakeClient().getStatus()),
+                  daemon: { ...(await fakeClient().getStatus()).daemon, mode: "gateway" },
+                }),
+                listLeases: async () => ({ leases: [lease("lse_1", "agent-a")] }),
+              })
+            : fakeClient();
         },
         runPassthrough: async () => exitCode,
         webSocket: farm,
@@ -287,7 +321,13 @@ describe("CLI: a remote simctl or adb that fails after naming a path on this mac
     `${JSON.stringify({ notice: `${path} is a folder on this machine, and the command ran on the worker; a folder cannot be uploaded yet (#1636): install it with agent-device, or from a path on the worker` })}\n`;
 
   it("prints one hint for the first argument that names a path here, keeps the tool's exit code, and prints none on success, for no such path, or in local mode", async () => {
-    const cases: [string, readonly string[], number, string, boolean?][] = [
+    const cases: [
+      string,
+      readonly string[],
+      number,
+      string,
+      ("farm" | "local" | "local gateway")?,
+    ][] = [
       ["a local file", ["adb", "install", "./app.apk"], 1, fileHint("./app.apk")],
       [
         "a local folder",
@@ -303,10 +343,17 @@ describe("CLI: a remote simctl or adb that fails after naming a path on this mac
         1,
         fileHint("app.apk"),
       ],
-      ["local mode", ["adb", "install", "app.apk"], 1, "", false],
+      ["local mode", ["adb", "install", "app.apk"], 1, "", "local"],
+      [
+        "a gateway on this machine, with no --url",
+        ["adb", "install", "app.apk"],
+        1,
+        "",
+        "local gateway",
+      ],
     ];
-    for (const [title, argv, exitCode, hint, remote] of cases) {
-      const result = await passthrough(argv, exitCode, remote);
+    for (const [title, argv, exitCode, hint, where] of cases) {
+      const result = await passthrough(argv, exitCode, where);
       expect(result.code, title).toBe(exitCode);
       expect(result.stderr, title).toBe(hint);
     }
