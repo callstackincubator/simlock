@@ -148,8 +148,6 @@ export {
   type StreamingProcessResult,
 } from "./process-runner.js";
 export {
-  type AccessEntry,
-  type DirectoryAccess,
   type DirectoryAccessReader,
   FakeDirectoryAccessReader,
   PowerShellDirectoryAccessReader,
