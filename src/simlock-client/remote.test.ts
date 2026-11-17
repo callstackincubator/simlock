@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { connectSimlockAdmin } from "../admin/index.js";
 import { connectSimlock } from "../client/index.js";
-import { FakeClock, FakeWebSocketClientConnector } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
+import { flushMicrotasks } from "./test-client.js";
+import { FakeClock, FakeWebSocketClientConnector, WebSocketRefusedError } from "../ports/index.js";
 
 const HELLO_REPLY = {
   daemonProtocolRange: { max: 3, min: 3 },
@@ -74,5 +76,49 @@ describe("the typed client over a farm's session path", () => {
     ];
     for (const [attempt, message] of refused) await expect(attempt()).rejects.toThrow(message);
     expect(farm.connections).toHaveLength(2);
+  });
+
+  it("fails to connect with a code a program can match: REMOTE_UNREACHABLE, UNAUTHENTICATED or FORBIDDEN", async () => {
+    const clock = new FakeClock();
+    const url = "https://farm.example";
+    const refusals: [string, (farm: FakeWebSocketClientConnector) => void, string][] = [
+      [
+        "nothing listening",
+        (farm) => (farm.failure = new Error("connect ECONNREFUSED")),
+        "REMOTE_UNREACHABLE",
+      ],
+      ["401", (farm) => (farm.failure = new WebSocketRefusedError(401, "{}")), "UNAUTHENTICATED"],
+      ["403", (farm) => (farm.failure = new WebSocketRefusedError(403, "{}")), "FORBIDDEN"],
+      [
+        "404 at the path",
+        (farm) => (farm.failure = new WebSocketRefusedError(404, "")),
+        "REMOTE_UNREACHABLE",
+      ],
+      [
+        "502 from a proxy",
+        (farm) => (farm.failure = new WebSocketRefusedError(502, "Bad Gateway")),
+        "REMOTE_UNREACHABLE",
+      ],
+    ];
+    for (const [name, arrange, code] of refusals) {
+      const farm = new FakeWebSocketClientConnector();
+      arrange(farm);
+      await expect(
+        connectSimlock({ clock, token: "sk_tok", url, webSocket: farm }),
+        name,
+      ).rejects.toMatchObject({ code });
+    }
+
+    const silent = new FakeWebSocketClientConnector();
+    silent.unanswered = true;
+    const waiting = connectSimlock({ clock, token: "sk_tok", url, webSocket: silent });
+    const state = promiseState(waiting);
+    clock.advance(9_999);
+    await flushMicrotasks();
+    expect(state.state).toBe("pending");
+    clock.advance(1);
+    await flushMicrotasks();
+    expect(state.state).toBe("rejected");
+    await expect(waiting).rejects.toMatchObject({ code: "REMOTE_UNREACHABLE" });
   });
 });

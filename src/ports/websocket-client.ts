@@ -187,9 +187,12 @@ export class FakeWebSocketClientConnector implements WebSocketClientConnector {
   }[] = [];
   // why: a test sets this to make the next `connect` fail, as a refused upgrade or an unreachable host does.
   failure: Error | undefined;
+  // why: a test sets this to play a farm that never answers the upgrade, which a bound must then end.
+  unanswered = false;
 
   async connect(url: string, options: WebSocketClientOptions): Promise<WebSocketClient> {
     if (this.failure !== undefined) throw this.failure;
+    if (this.unanswered) return new Promise<WebSocketClient>(() => undefined);
     const peer = new FakeWebSocketPeer();
     this.connections.push({ options, peer, url });
     return peer;
