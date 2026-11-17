@@ -91,7 +91,16 @@ export interface NodeDaemonLauncherOptions {
  * import), their parents left to the default and an existing one left as it is. `chmod` because the umask can only take bits from `mkdir`'s mode.
  */
 async function createDataDirectory(directory: string): Promise<void> {
-  await mkdir(dirname(directory), { recursive: true });
+  const parent = dirname(directory);
+  // why: Windows rejects even a recursive mkdir of a drive root (`D:\`) with EPERM though it
+  // exists, so a parent that is already a directory is left alone.
+  if (
+    !(await stat(parent).then(
+      (info) => info.isDirectory(),
+      () => false,
+    ))
+  )
+    await mkdir(parent, { recursive: true });
   try {
     await mkdir(directory, { mode: 0o700 });
   } catch (error: unknown) {
