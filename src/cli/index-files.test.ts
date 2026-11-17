@@ -265,12 +265,15 @@ describe("CLI: a remote simctl or adb that fails after naming a path on this mac
     });
     const output = outputCapture(
       realCliEnvironmentPorts(filesystem),
-      remote ? AGENT_A : { SIMLOCK_AGENT_ID: "agent-a" },
+      remote ? AGENT_A : { SIMLOCK_ADMIN_TOKEN: "admin", SIMLOCK_AGENT_ID: "agent-a" },
     );
     const code = await runCli(
       argv,
       output.environmentWith({
-        connectAdmin: async () => fakeClient(),
+        connectAdmin: async (resolveCredential) => {
+          await resolveCredential();
+          return fakeClient();
+        },
         runPassthrough: async () => exitCode,
         webSocket: farm,
       }),
