@@ -48,10 +48,17 @@ commit-msg:
 pre-push:
   piped: true
   commands:
+    # CI's own command (ci.yml, Fallow job): a push that passes here passes there.
     fallow:
       priority: 1
-      run: pnpm exec fallow audit --base origin/main --format compact
-      fail_text: "Fallow found issues in your changes. Run 'pnpm fallow' to see details."
+      run: pnpm fallow --ci --format github-annotations
+      fail_text: "Fallow fails on this tree as it will in CI: fix each ::error and ::warning line (a ::notice never fails). One in a file the branch did not change means main is red: stop and report it."
+    # These tests read the repository's files rather than import code, so `pnpm test:changed`
+    # never selects them and any change can break them; together they take about a second.
+    repo-tests:
+      priority: 1
+      run: pnpm exec vitest run --project unit .repo.test.ts
+      fail_text: "A test of the repository's own files fails (a size cap, the ADR index, a doc's audience): the output names the file and the rule."
     protocol-bump:
       priority: 1
       run: node .agents/scripts/protocol-bump-check.mjs --base origin/main
