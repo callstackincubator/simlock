@@ -219,7 +219,6 @@ export class McpSession {
     signal: AbortSignal | undefined,
     onProgress: ((progress: LeaseProgressNotice) => void) | undefined,
   ): Promise<LeaseGrant> {
-    const farm = this.#farm;
     let client = first;
     for (;;) {
       try {
@@ -228,33 +227,44 @@ export class McpSession {
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (error: unknown) {
+        const farm = this.#farm;
         if (farm === undefined || !isSimlockError(error) || error.code !== "DAEMON_CONNECTION_LOST")
           throw error;
-        this.#throwIfClosed();
-        this.#notify({
-          level: "warning",
-          message: `lost the connection to ${farm.origin}; reconnecting to the waiting request`,
-        });
-        try {
-          client = await reconnectWhileWaiting({
-            abandon: () => undefined,
-            // why: the connection is adopted by the session as it opens, so one that opens after the wait ended is the session's to close.
-            attempt: () => this.#clientForUse(this.#connectForRenew),
-            clock: this.#clock,
-            deadline: this.#clock.now() + UNREACHABLE_GIVE_UP_MS,
-            origin: farm.origin,
-            signal,
-          });
-        } catch (reconnectError: unknown) {
-          if (signal?.aborted === true) await this.#cancelWaitingRequest(request);
-          throw reconnectError;
-        }
-        if (signal?.aborted === true) {
-          await this.#cancelWaitingRequest(request);
-          throw new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {});
-        }
+        client = await this.#reconnectForRequest(farm.origin, request, signal);
       }
     }
+  }
+
+  async #reconnectForRequest(
+    origin: string,
+    request: LeaseRequestInput,
+    signal: AbortSignal | undefined,
+  ): Promise<SimlockClient> {
+    this.#throwIfClosed();
+    this.#notify({
+      level: "warning",
+      message: `lost the connection to ${origin}; reconnecting to the waiting request`,
+    });
+    let client: SimlockClient;
+    try {
+      client = await reconnectWhileWaiting({
+        abandon: () => undefined,
+        // why: the connection is adopted by the session as it opens, so one that opens after the wait ended is the session's to close.
+        attempt: () => this.#clientForUse(this.#connectForRenew),
+        clock: this.#clock,
+        deadline: this.#clock.now() + UNREACHABLE_GIVE_UP_MS,
+        origin,
+        signal,
+      });
+    } catch (error: unknown) {
+      if (signal?.aborted === true) await this.#cancelWaitingRequest(request);
+      throw error;
+    }
+    if (signal?.aborted === true) {
+      await this.#cancelWaitingRequest(request);
+      throw new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {});
+    }
+    return client;
   }
 
   async #cancelWaitingRequest(request: LeaseRequestInput): Promise<void> {
