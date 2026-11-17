@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FakeClock, FakeHttpStreamClient, MemoryFilesystem } from "../ports/index.js";
 import type { HttpStreamAnswer, HttpStreamRequest } from "../ports/index.js";
 import { runCli } from "./index.js";
-import { detachedGrant, outputCapture, realCliEnvironmentPorts } from "./test-index.js";
+import { detachedGrant, fakeClient, outputCapture, realCliEnvironmentPorts } from "./test-index.js";
 import { FakeFarm } from "./test-remote.js";
 
 const URL = "https://farm.example.com";
@@ -250,5 +250,62 @@ describe("CLI: simlock files", () => {
     expect(named_lease.stream.requests.map(({ url }) => url)).toEqual([
       `${URL}/v1/leases/lse_9/files/app-debug.apk`,
     ]);
+  });
+});
+
+describe("CLI: a remote simctl or adb that fails after naming a path on this machine", () => {
+  async function passthrough(argv: readonly string[], exitCode: number, remote = true) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/work/project/MyApp.app");
+    await filesystem.writeFileAtomic("/work/project/app.apk", "apk-bytes");
+    await filesystem.writeFileAtomic("/work/project/other.apk", "apk-bytes");
+    const farm = new FakeFarm({
+      "device.exec": () => ({ exitCode }),
+      "lease.list": () => ({ leases: [lease("lse_1", "agent-a")] }),
+    });
+    const output = outputCapture(
+      realCliEnvironmentPorts(filesystem),
+      remote ? AGENT_A : { SIMLOCK_AGENT_ID: "agent-a" },
+    );
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () => fakeClient(),
+        runPassthrough: async () => exitCode,
+        webSocket: farm,
+      }),
+    );
+    return { code, stderr: output.stderr };
+  }
+
+  const fileHint = (path: string) =>
+    `${JSON.stringify({ notice: `${path} is on this machine, but the command ran on the worker; upload it with \`simlock files put ${path}\` and name it by its file name` })}\n`;
+  const folderHint = (path: string) =>
+    `${JSON.stringify({ notice: `${path} is a folder on this machine, and the command ran on the worker; a folder cannot be uploaded yet (#1636): install it with agent-device, or from a path on the worker` })}\n`;
+
+  it("prints one hint for the first argument that names a path here, keeps the tool's exit code, and prints none on success, for no such path, or in local mode", async () => {
+    const cases: [string, readonly string[], number, string, boolean?][] = [
+      ["a local file", ["adb", "install", "./app.apk"], 1, fileHint("./app.apk")],
+      [
+        "a local folder",
+        ["simctl", "install", "booted", "./MyApp.app"],
+        1,
+        folderHint("./MyApp.app"),
+      ],
+      ["exit 0", ["simctl", "install", "booted", "./MyApp.app"], 0, ""],
+      ["no such local path", ["adb", "install", "missing.apk"], 1, ""],
+      [
+        "two local paths",
+        ["adb", "install-multiple", "app.apk", "other.apk"],
+        1,
+        fileHint("app.apk"),
+      ],
+      ["local mode", ["adb", "install", "app.apk"], 1, "", false],
+    ];
+    for (const [title, argv, exitCode, hint, remote] of cases) {
+      const result = await passthrough(argv, exitCode, remote);
+      expect(result.code, title).toBe(exitCode);
+      expect(result.stderr, title).toBe(hint);
+    }
   });
 });
