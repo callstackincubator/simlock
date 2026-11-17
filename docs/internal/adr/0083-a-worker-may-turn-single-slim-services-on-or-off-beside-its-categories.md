@@ -1,4 +1,4 @@
-# 0082. A worker may turn single slim services on or off beside its categories
+# 0083. A worker may turn single slim services on or off beside its categories
 
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-17
