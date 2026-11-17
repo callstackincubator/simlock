@@ -513,6 +513,27 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     }
   });
 
+  // why: `killChildren` is a Windows kill; elsewhere a child that answers SIGTERM with its own
+  // exit code keeps reporting it.
+  it.skipIf(process.platform === "win32")(
+    "reports the exit code of a killChildren child that exits on SIGTERM",
+    async () => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => process.exit(7)); console.log('ready'); setInterval(() => {}, 1_000)",
+        ],
+        { killChildren: true },
+      );
+      for await (const line of handle.stdout) if (line === "ready") break;
+
+      handle.kill("SIGTERM");
+
+      await expect(handle.wait()).resolves.toMatchObject({ code: 7 });
+    },
+  );
+
   it("kills the grandchildren too, because the signal goes to the process group", async () => {
     // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
     // `adb`/`emulator` wrapper script, `simctl spawn`) leaves the work in a *grandchild*, and a

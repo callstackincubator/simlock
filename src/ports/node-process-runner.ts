@@ -3,7 +3,7 @@ import { closeSync, openSync } from "node:fs";
 import type { Writable } from "node:stream";
 
 import { LineBuffer, captureLines } from "./process-line-buffer.js";
-import { isRunning, killProcessTree, runLimits } from "./process-tree-kill.js";
+import { isRunning, killProcessTree, runLimits, type WindowsKill } from "./process-tree-kill.js";
 import { childLaunch } from "./windows-command.js";
 import {
   InputStreamFailedError,
@@ -142,7 +142,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.lineEnd ?? "newline",
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      launch.windowsVerbatimArguments,
+      windowsKillOf(launch.windowsVerbatimArguments, options.killChildren === true),
       runLimits(options),
     );
   }
@@ -176,7 +176,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.onChunk,
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      launch.windowsVerbatimArguments,
+      windowsKillOf(launch.windowsVerbatimArguments, false),
     );
     if (options.input !== undefined) {
       // why: One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
@@ -317,7 +317,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
     private readonly exitDeferralCapMs: number,
     private readonly exitGraceMs: number,
-    private readonly wrapped: boolean,
+    private readonly windowsKill: WindowsKill,
   ) {
     this.pid = pid;
     this.#forward(child.stdout, "stdout", onChunk);
@@ -331,7 +331,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         settled = true;
         const killedWith = this.#killedWith;
         resolve(
-          wrapped && killedWith !== undefined
+          windowsKill !== "child" && killedWith !== undefined
             ? { code: null, signal: killedWith }
             : { code, signal },
         );
@@ -404,7 +404,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
     if (isRunning(this.child)) this.#killedWith ??= signal;
-    killProcessTree(this.child, this.pid, signal, this.wrapped);
+    killProcessTree(this.child, this.pid, signal, this.windowsKill);
   }
 
   wait(): Promise<StreamingProcessResult> {
@@ -480,7 +480,7 @@ class NodeProcessHandle implements ProcessHandle {
     lineEnd: LineEnd,
     private readonly exitDeferralCapMs: number,
     private readonly exitGraceMs: number,
-    private readonly wrapped: boolean,
+    private readonly windowsKill: WindowsKill,
     limits: Pick<ProcessRunOptions, "maxStdoutBytes" | "signal"> = {},
   ) {
     this.pid = pid;
@@ -497,7 +497,7 @@ class NodeProcessHandle implements ProcessHandle {
         }
         settled = true;
         resolve({
-          code: wrapped && this.#killedWith !== undefined ? null : code,
+          code: windowsKill !== "child" && this.#killedWith !== undefined ? null : code,
           stderr: this.#stderrChunks.join(""),
           stdout: this.#stdoutChunks.join(""),
           ...(this.#endedBy === undefined ? {} : { endedBy: this.#endedBy }),
@@ -560,7 +560,7 @@ class NodeProcessHandle implements ProcessHandle {
       this.#killedWith ??= signal;
       this.#endedBy ??= endedBy;
     }
-    killProcessTree(this.child, this.pid, signal, this.wrapped);
+    killProcessTree(this.child, this.pid, signal, this.windowsKill);
   }
 
   unref(): void {
@@ -578,4 +578,12 @@ function childStdio(
 ): "pipe" | "ignore" | ["ignore", number, number] {
   if (logFd !== undefined) return ["ignore", logFd, logFd];
   return stdio === undefined || typeof stdio === "object" ? "pipe" : stdio;
+}
+
+// why: a batch file's `cmd.exe` wrapper dies with its whole tree; a `killChildren` child with its
+// own children only; any other child alone. Off Windows every child is `"child"`: its exit code
+// stands, as the kill there is the process group's own signal.
+function windowsKillOf(wrapped: boolean, killChildren: boolean): WindowsKill {
+  if (wrapped) return "tree";
+  return killChildren && process.platform === "win32" ? "children" : "child";
 }
