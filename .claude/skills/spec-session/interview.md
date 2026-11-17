@@ -19,6 +19,9 @@ whose prerequisites are settled.
 - One round asks the whole frontier with `AskUserQuestion`, up to four
   questions per call, the decisions most others hang on first. Two
   questions never share a round when one's answer could change the other.
+- The dialog can hide the text before it. The session's first question
+  starts with the problem in two lines: who it hurts and what happens
+  today.
 - Ask a decision only when it is expensive to reverse, changes scope, or
   changes what a user sees. Decide the others yourself and say so in the
   round's text; they go under Decisions (`Decided in the session: ...`).
@@ -68,5 +71,7 @@ approval (stage 4).
 ## Done
 
 The frontier is empty, and every claim the design will rest on about today
-has a source line you opened or a command you ran. Wait for the background
-explorers. A claim with no source is a question: ask it in one more round.
+has a source line you opened or a command you ran, and every background
+explorer has reported. Its report arrives as a message when it ends: there
+is no tool to wait with, so end your turn until it comes. A claim with no
+source is a question: ask it in one more round.

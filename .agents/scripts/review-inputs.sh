@@ -25,8 +25,7 @@
 #                          the repo that still name something the diff removed, or a word the
 #                          Retired words section of issue.md or feature.md names
 #   briefs/                every file in .agents/briefs/ as the base has it: each reviewer's
-#                          brief, and calibration.md, the findings reviews raised lately that
-#                          were rejected, which every reviewer reads first
+#                          brief
 #   issue.md               the issue the PR closes: the second segment of a <kind>/<n> branch
 #                          (feature/<n>-adr[-suffix] is the feature <n>), else the first "Closes #n" in the PR body
 #   feature.md             the issue's parent: its GitHub parent, else its "Part of #n" line

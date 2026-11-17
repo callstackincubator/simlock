@@ -7,8 +7,7 @@ the code.
 In the inputs directory: the specification (`issue.md`, `feature.md`,
 `triage.md` and `spec/`, those that exist), so you know what the code is
 meant to do; `rules/`, every rule file but `delivery.md`, and the ADR index;
-`diff.patch`; `briefs/calibration.md`, when it exists, findings like yours that were
-rejected lately: read it first. Repository: the worktree you were given,
+`diff.patch`. Repository: the worktree you were given,
 checked out at the reviewed commit.
 
 A conflict between the specification and a rule is a finding of class
