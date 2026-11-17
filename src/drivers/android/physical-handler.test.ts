@@ -124,7 +124,7 @@ describe("Android physical handler: the protocol gate", () => {
     const { driver, runner, probe, log } = await world();
 
     await driver.inspectPhysical(PHONE);
-    await driver.listPresentPhysical([PHONE]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     await driver.reclaim(PHYSICAL, { clean: "standard" });
     const commandsBeforePassthrough = runner.commands.length;
     const sendsBeforePassthrough = defaultServerSends(probe).length;
@@ -177,7 +177,7 @@ describe("Android physical handler: the protocol gate", () => {
       if (isDevicesListing(rest)) probe.replyWith(VERSION_REPLY_40);
     };
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
     expect(runner.rests.some(isGetprop)).toBe(false);
@@ -228,7 +228,7 @@ describe("Android physical handler: the protocol gate", () => {
     const { driver, runner, probe } = await world();
 
     await driver.inspectPhysical(PHONE);
-    await driver.listPresentPhysical([PHONE]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     await driver.reclaim(PHYSICAL, { clean: "standard" });
     const command = await passthroughOf(driver, ["shell", "getprop"]);
     const sendsBefore = defaultServerSends(probe).length;
@@ -244,7 +244,10 @@ describe("Android physical handler: the protocol gate", () => {
   it("with a default server of another protocol, no physical method starts a process after adb version: every serial is not present, inspectPhysical is refused naming both protocol numbers, reclaim rejects", async () => {
     const { driver, runner } = await world({ serverReply: VERSION_REPLY_40 });
 
-    const present = await driver.listPresentPhysical([PHONE, "SERIAL2"]);
+    const present = await driver.listPresentPhysical([
+      { driverDeviceId: PHONE },
+      { driverDeviceId: "SERIAL2" },
+    ]);
     const inspection = await driver.inspectPhysical(PHONE);
     const failure = await rejectionOf(driver.reclaim(PHYSICAL, { clean: "standard" }));
 
@@ -268,7 +271,7 @@ describe("Android physical handler: the protocol gate", () => {
     async (_name, reply) => {
       const { driver, runner } = await world({ serverReply: reply });
 
-      const present = await driver.listPresentPhysical([PHONE]);
+      const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
       expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
       expect(runner.commands).toEqual([]);
@@ -279,7 +282,7 @@ describe("Android physical handler: the protocol gate", () => {
     const { driver, runner, probe } = await world();
     probe.failSendsWith(Object.assign(new Error("reset"), { code: "ECONNRESET" }));
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
     expect(runner.commands).toEqual([]);
@@ -289,7 +292,7 @@ describe("Android physical handler: the protocol gate", () => {
     const { driver, runner } = await world();
     runner.versionOutput = "adb: not a version\n";
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
     expect(runner.commands).toEqual([]);
@@ -299,7 +302,7 @@ describe("Android physical handler: the protocol gate", () => {
     const { driver, runner } = await world();
     runner.versionCode = 1;
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
     expect(runner.commands).toEqual([]);
@@ -309,7 +312,7 @@ describe("Android physical handler: the protocol gate", () => {
     const { driver, runner, probe } = await world();
     probe.failSendsWith(econnrefused());
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, osVersion: "34", present: true }]);
     expect(runner.rests.some(isDevicesListing)).toBe(true);
@@ -320,7 +323,7 @@ describe("Android physical handler: the protocol gate", () => {
     runner.versionOutput = "adb: not a version\n";
     probe.failSendsWith(econnrefused());
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
     expect(runner.commands).toEqual([]);
@@ -363,12 +366,12 @@ describe("Android physical handler: the protocol gate", () => {
 
   it("a server that matched again after a mismatch gets commands on the next call, and nothing restarts it", async () => {
     const { driver, runner, probe } = await world({ serverReply: VERSION_REPLY_40 });
-    expect(await driver.listPresentPhysical([PHONE])).toEqual([
+    expect(await driver.listPresentPhysical([{ driverDeviceId: PHONE }])).toEqual([
       { driverDeviceId: PHONE, present: false, reason: "not-present" },
     ]);
     probe.replyWith(VERSION_REPLY_41);
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, osVersion: "34", present: true }]);
     expect(runner.rests.flat()).not.toContain("kill-server");
@@ -378,8 +381,8 @@ describe("Android physical handler: the protocol gate", () => {
   it("Simlock's adb version runs once across several physical calls", async () => {
     const { driver, runner } = await world();
 
-    await driver.listPresentPhysical([PHONE]);
-    await driver.listPresentPhysical([PHONE]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     await driver.inspectPhysical(PHONE);
 
     expect(runner.calls.filter((call) => call.args[0] === "version")).toHaveLength(1);
@@ -388,10 +391,10 @@ describe("Android physical handler: the protocol gate", () => {
   it("after a failed adb version, the next call runs adb version again", async () => {
     const { driver, runner } = await world();
     runner.versionOutput = "adb: not a version\n";
-    await driver.listPresentPhysical([PHONE]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     runner.versionOutput = ADB_VERSION_41;
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(runner.calls.filter((call) => call.args[0] === "version")).toHaveLength(2);
     expect(present).toEqual([{ driverDeviceId: PHONE, osVersion: "34", present: true }]);
@@ -399,11 +402,13 @@ describe("Android physical handler: the protocol gate", () => {
 
   it("after the adb binary's size changes, the next call runs adb version again and uses the new number", async () => {
     const { driver, runner, filesystem } = await world();
-    expect(await driver.listPresentPhysical([PHONE])).toMatchObject([{ present: true }]);
+    expect(await driver.listPresentPhysical([{ driverDeviceId: PHONE }])).toMatchObject([
+      { present: true },
+    ]);
     runner.versionOutput = ADB_VERSION_40;
     await filesystem.writeFileAtomic(adb, "a much bigger binary after a platform-tools update");
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(runner.calls.filter((call) => call.args[0] === "version")).toHaveLength(2);
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
@@ -422,11 +427,13 @@ describe("Android physical handler: the protocol gate", () => {
       },
     });
     const { driver, runner } = await world({ filesystem });
-    expect(await driver.listPresentPhysical([PHONE])).toMatchObject([{ present: true }]);
+    expect(await driver.listPresentPhysical([{ driverDeviceId: PHONE }])).toMatchObject([
+      { present: true },
+    ]);
     runner.versionOutput = ADB_VERSION_40;
     modifiedAtMs = 2_000;
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(runner.calls.filter((call) => call.args[0] === "version")).toHaveLength(2);
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
@@ -537,7 +544,7 @@ describe("Android physical handler: scope", () => {
     const { driver, runner } = await world({ env: POISON });
 
     await driver.inspectPhysical(PHONE);
-    await driver.listPresentPhysical([PHONE]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     await driver.reclaim(PHYSICAL, { clean: "standard" });
 
     expect(runner.commands.length).toBeGreaterThan(5);
@@ -763,7 +770,7 @@ describe("Android physical handler: reclaim", () => {
     await held?.close().catch(() => undefined);
 
     await driver.inspectPhysical(PHONE);
-    await driver.listPresentPhysical([PHONE]);
+    await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     await driver.reclaim(PHYSICAL, { clean: "standard" });
 
     const uninstalls = runner.commands.filter((call) => isUninstall(restOf(call)));
@@ -784,7 +791,9 @@ describe("Android physical handler: independence from emulator calls", () => {
     const { driver, runner } = await world();
     runner.override((rest) => (isDevicesListing(rest) ? "hang" : undefined));
     let physicalSettled = false;
-    void driver.listPresentPhysical([PHONE]).then(() => (physicalSettled = true));
+    void driver
+      .listPresentPhysical([{ driverDeviceId: PHONE }])
+      .then(() => (physicalSettled = true));
 
     const reality = await driver.listManaged();
 
@@ -851,7 +860,7 @@ describe("Android physical handler: independence from emulator calls", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
     const command = await passthroughOf(driver, ["shell", "getprop"]);
 
     expect(emulatorSettled).toBe(false);

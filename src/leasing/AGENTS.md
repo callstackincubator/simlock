@@ -28,7 +28,6 @@ The queue:
 - A grant of a ready device wakes the queue, so the next waiter plans without another event.
 - A device made from an older baseline version is never granted: a copy that finishes after a save is deleted at the grant check, and its waiter plans again.
 - A request naming a baseline attempts no download.
-- `resolveSpec` refuses a plain request on a `virtualDevices: false` platform first (ADR 0080).
 - A request with `except` (ADR 0066) boots with the list. A ready warm device is shut down and prepared again under its `boot` claim, with no capacity reservation (plan `reboot-ready`, `ManagedDeviceLifecycle.rebootForLease`), except that at `new-devices-paused` the request waits `memory-pressure` instead; the grant is `booted`.
 - A driver requiring a reboot before grant sends ready virtual devices through the same claimed reboot path.
 - A slim baseline's `except` names go to `driver.resolveSpec` too, so an unknown name is `BAD_REQUEST`; a full baseline refuses `except`.

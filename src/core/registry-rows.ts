@@ -172,6 +172,7 @@ const DEVICE_COLUMNS = [
   "baseline_name",
   "baseline_version",
   "except_categories",
+  "hardware_serial",
 ] as const;
 
 const LEASE_COLUMNS = [
@@ -278,6 +279,7 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     ...physicalColumns(device),
     ...baselineColumns(device),
     device.except === undefined ? null : device.except.join(","),
+    device.physical ? (device.hardwareSerial ?? null) : null,
   ];
 }
 
@@ -513,6 +515,7 @@ function deviceFromRow(
       driverData: {},
       enrolledApps: appsByDevice.get(id) ?? [],
       physical: true,
+      ...present("hardwareSerial", reader.optText("hardware_serial")),
       ...present("reclaimingSince", reader.optInt("reclaiming_since")),
       ...present("absentReason", reader.optOneOf("absent_reason", ABSENT_REASONS)),
       spec: {

@@ -183,7 +183,7 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
   const FIRST = "00008110-001A2B3C4D5E";
   const PROBE_INTERVAL_MS = 7_000;
   const DEVICES: readonly FakePhysicalDevice[] = [
-    { apps: [], ids: [FIRST], model: "iPhone 15 Pro", osVersion: "18.4" },
+    { apps: [], hardwareSerial: "SER-1", ids: [FIRST], model: "iPhone 15 Pro", osVersion: "18.4" },
   ];
 
   async function build() {
@@ -309,6 +309,20 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
 
     expect(verbCalls(harness, "reclaim")).toHaveLength(1);
     expect(record(harness, id)).toMatchObject({ quarantineAttempts: 1, state: "quarantined" });
+  });
+
+  it("a physical retry reads presence with the record's driverDeviceId and hardwareSerial", async () => {
+    const harness = await build();
+    await enrollQuarantined(harness);
+    harness.driver.setPhysicalPresence(FIRST, true);
+
+    await advance(harness, harness.config.warmPool.quarantine.retryBackoffMs);
+
+    expect(
+      harness.driver.calls
+        .filter((call) => call.operation === "listPresentPhysical")
+        .map((call) => call.arguments[0]),
+    ).toEqual([[{ driverDeviceId: FIRST, hardwareSerial: "SER-1" }]]);
   });
 
   it("a physical retry whose presence read rejects makes no reclaim or destroy call, keeps quarantineAttempts, and re-arms after health.probeIntervalMs", async () => {

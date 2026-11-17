@@ -75,7 +75,9 @@ describe("IosSimctlDriver physical handler: files and limits", () => {
       .lock(UDID_A)
       .lock(UDID_B);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A, UDID_B]);
+    const result = await (
+      await lab.driver()
+    ).listPresentPhysical([{ driverDeviceId: UDID_A }, { driverDeviceId: UDID_B }]);
 
     expect(result).toMatchObject([{ present: true }, { present: true }]);
     expect(lab.written).toHaveLength(3);

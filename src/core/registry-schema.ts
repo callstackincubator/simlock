@@ -140,8 +140,20 @@ CREATE TABLE ended_lease_ids (
 ) STRICT;
 `;
 
+const REGISTRY_V7 = `
+ALTER TABLE devices ADD COLUMN hardware_serial TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4, REGISTRY_V5, REGISTRY_V6],
+  migrations: [
+    REGISTRY_V1,
+    REGISTRY_V2,
+    REGISTRY_V3,
+    REGISTRY_V4,
+    REGISTRY_V5,
+    REGISTRY_V6,
+    REGISTRY_V7,
+  ],
   name: "registry",
-  version: 6,
+  version: 7,
 };

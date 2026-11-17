@@ -124,7 +124,7 @@ consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-d
 |---|---|---|---|---|
 | `baseline.saved` | name, version, platform, model, OS version, mode, image tag (when the device has one), size in bytes (when it could be counted), lease id (the lease the save ended), requester id (the admin principal that ran `baseline save`) | once per save, after the `baselines` row is committed and before the saved device is deleted | BaselineService | implemented |
 | `baseline.removed` | name, version, reason (`operator` for `baseline remove`, `nuke` for `nuke --delete-devices`, `replaced` when a newer save of the name dropped it), requester id (the principal that ran the command; absent for a removal nobody asked for) | once per version deleted, after its row is deleted | BaselineService | implemented |
-| `baseline.stale` | name, version, reason (the driver's words: the runtime, image or emulator that changed) | when a check finds a baseline stale that had no stale reason before (again after it was fresh in between). The check runs at start, after `component.removed`, and before `baseline list` and `doctor` answer | BaselineService | implemented |
+| `baseline.stale` | name, version, reason (the driver's words: the runtime, image or emulator that changed, or an iOS baseline saved without a lineage record) | when a check finds a baseline stale that had no stale reason before (again after it was fresh in between). The check runs at start, after `component.removed`, after a save, and before `baseline list` and `doctor` answer | BaselineService | implemented |
 
 `BaselineService` (`src/core/baselines.ts`) is the only emitter; drivers keep and destroy the sources but never emit (architecture rule 5).
 

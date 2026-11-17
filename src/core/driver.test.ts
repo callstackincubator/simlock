@@ -215,10 +215,17 @@ describe("PhysicalInspection (ADR 0022 §5)", () => {
       // @ts-expect-error only the core can know a device is enrolled on the other platform
       reason: "enrolled-on-other-platform",
     };
+    const otherId: PhysicalInspection = {
+      enrollable: false,
+      message: "enrolled as another ID",
+      // @ts-expect-error only the core can know a phone is enrolled under another ID
+      reason: "enrolled-under-other-id",
+    };
     void otherPlatform;
+    void otherId;
   }
 
-  it("lets a driver refuse with every reason but enrolled-on-other-platform", () => {
+  it("lets a driver refuse with every reason but enrolled-on-other-platform and enrolled-under-other-id", () => {
     const reasons: Record<DriverRefusalReason, true> = {
       "developer-mode-off": true,
       locked: true,

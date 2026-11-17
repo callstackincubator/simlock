@@ -25,6 +25,7 @@ import {
   isPhysicalDriverDevice,
   type PhysicalDriverDevice,
   type VirtualDriverDevice,
+  type EnrolledPhysical,
   type PresentPhysical,
   type DriverToolVersion,
   type InstalledComponent,
@@ -218,10 +219,10 @@ export class AndroidDriver implements Driver {
       adb: sdk.adb,
       adbTools: this.#adbTools,
       filesystem: options.filesystem,
-      idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
+      idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
     });
-    this.#bootTimeoutMs = options.config?.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
+    this.#bootTimeoutMs = bootTimeoutFor(options);
     this.#ownership = new Ownership({
       adb: sdk.adb,
       adbTools: this.#adbTools,
@@ -232,14 +233,7 @@ export class AndroidDriver implements Driver {
     this.#filesystem = options.filesystem;
     this.#onDiagnostic = options.onDiagnostic;
     this.#processRunner = options.processRunner;
-    this.#physical = new AndroidPhysicalHandler({
-      adb: sdk.adb,
-      baseEnv: options.env,
-      filesystem: options.filesystem,
-      isBareShell: (args) => this.#passthroughRules.isBareShell(args),
-      processRunner: options.processRunner,
-      tcpProbe: options.tcpProbe,
-    });
+    this.#physical = this.#physicalFor(options, sdk);
     this.#passthroughRules = new PassthroughRules({
       adb: sdk.adb,
       adbServerPort,
@@ -321,10 +315,22 @@ export class AndroidDriver implements Driver {
       deviceTable: this.#deviceTable,
       emulator: this.#emulator,
       filesystem: options.filesystem,
-      idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
+      idGenerator: idGeneratorFor(options),
       ownership: this.#ownership,
       processRunner: options.processRunner,
       systemImages: this.#systemImages,
+    });
+  }
+
+  #physicalFor(options: AndroidDriverOptions, sdk: AndroidSdkPaths): AndroidPhysicalHandler {
+    return new AndroidPhysicalHandler({
+      adb: sdk.adb,
+      baseEnv: options.env,
+      filesystem: options.filesystem,
+      isBareShell: (args) => this.#passthroughRules.isBareShell(args),
+      networkDevices: options.config?.networkDevices ?? false,
+      processRunner: options.processRunner,
+      tcpProbe: options.tcpProbe,
     });
   }
 
@@ -703,8 +709,10 @@ export class AndroidDriver implements Driver {
     });
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    return this.#physical.listPresentPhysical(enrolledIds);
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    return this.#physical.listPresentPhysical(enrolled);
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
@@ -875,6 +883,14 @@ async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPat
     return location.paths;
   }
   throw new SdkMissingError(location.searched);
+}
+
+function idGeneratorFor(options: AndroidDriverOptions): IdGenerator {
+  return options.idGenerator ?? new SequentialIdGenerator();
+}
+
+function bootTimeoutFor(options: AndroidDriverOptions): number {
+  return options.config?.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
 }
 
 /**

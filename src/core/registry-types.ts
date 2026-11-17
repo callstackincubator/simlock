@@ -72,6 +72,7 @@ export interface PhysicalEnrollmentInput {
   readonly osVersion: string;
   readonly class: PhysicalClass;
   readonly apps: readonly string[];
+  readonly hardwareSerial?: string;
   /** why: who enrolled the phone, for `device.enrolled`; an operator's `device add` unless the worker's auto-enroller says otherwise. */
   readonly initiator?: "operator" | "auto";
 }

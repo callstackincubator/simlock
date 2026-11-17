@@ -98,6 +98,7 @@ export {
   type DriverRefusalReason,
   type VirtualDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   toDriverDevice,
   uninstallPlan,
