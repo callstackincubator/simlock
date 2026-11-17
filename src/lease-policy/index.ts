@@ -31,7 +31,7 @@
  *   could have kept, one running slow keeps trying against a lease the daemon has expired,
  *   and neither can extend a lease the daemon did not.
  */
-import { isSimlockError } from "../contract/index.js";
+import { isSimlockError, type AnySimlockError } from "../contract/index.js";
 import type { Clock, TimerHandle } from "../ports/index.js";
 
 /** ADR 0004 §2's "one third of the TTL". */
@@ -393,12 +393,22 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
 const STEADY_RECONNECT_DELAY_MS = 15_000;
 
+// why: the farm answered and said no, so another try would only repeat it: the token was refused or this client is too old for the farm.
+function isRefusal(error: unknown): error is AnySimlockError {
+  return (
+    isSimlockError(error) &&
+    (error.code === "UNAUTHENTICATED" || error.code === "PROTOCOL_VERSION_UNSUPPORTED")
+  );
+}
+
 export interface ReconnectOptions<T> {
   readonly clock: Clock;
   readonly deadline: number;
   readonly attempt: () => Promise<T>;
   readonly onReconnected: (answer: T) => void;
   readonly onDeadline: () => void;
+  readonly onLeaseGone: (error: unknown) => void;
+  readonly onRefused: (error: AnySimlockError) => void;
 }
 
 export interface Reconnect {
@@ -407,7 +417,7 @@ export interface Reconnect {
 
 // why: the reconnect half of a holder's policy (ADR 0081 §4): the typed client never reconnects, so a frontend tries again on a schedule, outside it, and none after the deadline.
 export function startReconnect<T>(options: ReconnectOptions<T>): Reconnect {
-  const { clock, deadline, attempt, onReconnected, onDeadline } = options;
+  const { clock, deadline, attempt, onReconnected, onDeadline, onLeaseGone, onRefused } = options;
   let stopped = false;
   let tries = 0;
   let timer: TimerHandle | undefined;
@@ -434,10 +444,18 @@ export function startReconnect<T>(options: ReconnectOptions<T>): Reconnect {
       if (stopped) return;
       stop();
       onReconnected(answer);
-    } catch {
+    } catch (error: unknown) {
       if (stopped) return;
-      tries += 1;
-      schedule();
+      if (isLeaseGone(error)) {
+        stop();
+        onLeaseGone(error);
+      } else if (isRefusal(error)) {
+        stop();
+        onRefused(error);
+      } else {
+        tries += 1;
+        schedule();
+      }
     }
   };
   schedule();

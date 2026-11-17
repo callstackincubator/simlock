@@ -164,6 +164,20 @@ async function runLease(
   const connectionLostSignal = new Promise<void>((resolve) => {
     notifyConnectionLost = resolve;
   });
+  const endHoldingLease = (code: string, reason: string): void => {
+    connectionLost = true;
+    if (ourLeaseId !== undefined) {
+      environment.stderr.write(
+        `${JSON.stringify({
+          error: {
+            code,
+            message: `${reason}; lease ${ourLeaseId} is still yours until its ttlDeadline ${String(ourLeaseDeadline)} -- renew it with \`simlock lease renew ${ourLeaseId}\` or let it expire`,
+          },
+        })}\n`,
+      );
+    }
+    notifyConnectionLost?.();
+  };
   // why: set once a held remote lease is granted: a drop then starts the reconnect instead of ending the command.
   let onDropped: (() => void) | undefined;
   const subscribe = (target: SimlockAdminClient): (() => void) => {
@@ -171,23 +185,14 @@ async function runLease(
       if (push.leaseId !== ourLeaseId) return;
       markLeaseLost(push);
     });
-    const offConnectionLost = target.onConnectionLost(() => {
-      if (onDropped !== undefined) {
+    const offConnectionLost = target.onConnectionLost((error) => {
+      if (onDropped === undefined) {
+        endHoldingLease("DAEMON_CONNECTION_LOST", "lost the daemon connection");
+      } else if (error.code === "UNAUTHENTICATED") {
+        endHoldingLease("UNAUTHENTICATED", error.message);
+      } else {
         onDropped();
-        return;
       }
-      connectionLost = true;
-      if (ourLeaseId !== undefined) {
-        environment.stderr.write(
-          `${JSON.stringify({
-            error: {
-              code: "DAEMON_CONNECTION_LOST",
-              message: `lost the daemon connection; lease ${ourLeaseId} is still yours until its ttlDeadline ${String(ourLeaseDeadline)} -- renew it with \`simlock lease renew ${ourLeaseId}\` or let it expire`,
-            },
-          })}\n`,
-        );
-      }
-      notifyConnectionLost?.();
     });
     const offUnhealthy = target.onDeviceUnhealthy((push) => {
       environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
@@ -309,6 +314,17 @@ async function runLease(
         reconnect = startReconnect({
           clock: environment.clock,
           deadline: ourLeaseDeadline ?? 0,
+          onLeaseGone: (error) => {
+            markLeaseLost({
+              deviceId: grantedLease.deviceId,
+              leaseId: grantedLease.id,
+              reason: "renew-rejected",
+            });
+            queueErrorWrite(error);
+          },
+          onRefused: (error) => {
+            endHoldingLease(error.code, error.message);
+          },
           onDeadline: () => {
             markLeaseLost({
               deviceId: grantedLease.deviceId,
