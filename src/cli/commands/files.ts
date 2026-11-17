@@ -9,9 +9,11 @@ import {
 } from "../args.js";
 import { connectDaemonClient, farmEndpoint } from "../connect.js";
 import { ERROR_TABLE, isSimlockError, SimlockError } from "../../contract/index.js";
-import type { HttpStreamAnswer, HttpStreamRequest } from "../../ports/index.js";
+import type { HttpStreamAnswer, HttpStreamRequest, TimerHandle } from "../../ports/index.js";
 import { resolveRemoteLeaseId } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
+
+const SILENCE_LIMIT_MS = 60_000;
 
 type Environment = CommandContext["environment"];
 
@@ -96,31 +98,67 @@ async function refusal(answered: HttpStreamAnswer, origin: string): Promise<Erro
   return unreachable(origin, `The farm at ${origin} answered ${String(answered.status)}`);
 }
 
-// why: one call to a route: its answer must be a success, whatever it carried otherwise; the caller's signal ends the wait.
+// why: a transfer has no total time limit: it ends after 60 s in which no byte moved either way, so every piece of either body that passes through `watch` starts the 60 s again.
+interface Transfer {
+  readonly signal: AbortSignal;
+  watch(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array>;
+}
+
+// why: one call to a route: its answer must be a success, whatever it carried otherwise.
 async function send(
   environment: Environment,
   folder: Folder,
-  signal: AbortSignal,
+  active: Transfer,
   request: Omit<HttpStreamRequest, "signal" | "token">,
 ): Promise<HttpStreamAnswer> {
   const answered = await environment.httpStream.request({
     ...request,
-    signal,
+    ...(request.body === undefined ? {} : { body: active.watch(request.body) }),
+    signal: active.signal,
     token: folder.token,
   });
-  if (answered.status >= 200 && answered.status <= 299) return answered;
-  throw await refusal(answered, folder.origin);
+  if (answered.status < 200 || answered.status > 299) throw await refusal(answered, folder.origin);
+  return { ...answered, body: active.watch(answered.body) };
 }
 
-// why: an error that is not a route's answer (a refused connection, a body cut on the way) is the farm not answering.
-async function transfer<T>(folder: Folder, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+// why: an error that is not a route's answer (a refused connection, a body cut on the way, a silence) is the farm not answering.
+async function transfer<T>(
+  environment: Environment,
+  folder: Folder,
+  work: (active: Transfer) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
+  let silent = false;
+  let timer: TimerHandle | undefined;
+  const restart = (): void => {
+    if (timer !== undefined) environment.clock.cancel(timer);
+    timer = environment.clock.setTimer(SILENCE_LIMIT_MS, () => {
+      silent = true;
+      controller.abort();
+    });
+  };
+  restart();
+  const watch = (body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> =>
+    body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(piece, output) {
+          restart();
+          output.enqueue(piece);
+        },
+      }),
+    );
   try {
-    return await work(controller.signal);
+    return await work({ signal: controller.signal, watch });
   } catch (error: unknown) {
     if (isSimlockError(error)) throw error;
-    throw unreachable(folder.origin, `No answer from ${folder.origin}`);
+    throw unreachable(
+      folder.origin,
+      silent
+        ? `No byte moved for ${String(SILENCE_LIMIT_MS / 1000)} s with ${folder.origin}`
+        : `No answer from ${folder.origin}`,
+    );
   } finally {
+    if (timer !== undefined) environment.clock.cancel(timer);
     controller.abort();
   }
 }
@@ -165,8 +203,8 @@ async function runPut(argv: readonly string[], context: CommandContext): Promise
   const folder = await folderOf(context, values.lease);
   const file = await environment.filesystem.openFile(absolute);
   try {
-    return await transfer(folder, async (signal) => {
-      const answered = await send(environment, folder, signal, {
+    return await transfer(environment, folder, async (active) => {
+      const answered = await send(environment, folder, active, {
         body: file.read(),
         contentLength: file.size,
         method: "PUT",
@@ -192,8 +230,8 @@ async function runGet(argv: readonly string[], context: CommandContext): Promise
   if (values.help) return 0;
   const name = requiredPositional(values.positionals, "a file name");
   const folder = await folderOf(context, values.lease);
-  return transfer(folder, async (signal) => {
-    const answered = await send(environment, folder, signal, {
+  return transfer(environment, folder, async (active) => {
+    const answered = await send(environment, folder, active, {
       method: "GET",
       url: fileRoute(folder, name),
     });
@@ -223,8 +261,8 @@ async function runList(argv: readonly string[], context: CommandContext): Promis
   const values = filesArgs(argv, environment);
   if (values.help) return 0;
   const folder = await folderOf(context, values.lease);
-  return transfer(folder, async (signal) => {
-    const answered = await send(environment, folder, signal, { method: "GET", url: folder.route });
+  return transfer(environment, folder, async (active) => {
+    const answered = await send(environment, folder, active, { method: "GET", url: folder.route });
     const listed = JSON.parse(await new Response(answered.body).text()) as unknown;
     environment.stdout.write(`${JSON.stringify(listed)}\n`);
     return 0;
@@ -237,8 +275,8 @@ async function runRemove(argv: readonly string[], context: CommandContext): Prom
   if (values.help) return 0;
   const name = requiredPositional(values.positionals, "a file name");
   const folder = await folderOf(context, values.lease);
-  return transfer(folder, async (signal) => {
-    await send(environment, folder, signal, { method: "DELETE", url: fileRoute(folder, name) });
+  return transfer(environment, folder, async (active) => {
+    await send(environment, folder, active, { method: "DELETE", url: fileRoute(folder, name) });
     return 0;
   });
 }

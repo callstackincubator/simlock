@@ -30,7 +30,7 @@ interface Options {
 
 async function workerRoutes(request: HttpStreamRequest): Promise<HttpStreamAnswer> {
   if (request.method === "PUT") return stored(request);
-  if (request.method === "DELETE") return { body: new Response(null).body as never, status: 204 };
+  if (request.method === "DELETE") return { body: new Response("").body as never, status: 204 };
   if (request.url.endsWith("/files")) {
     return answer(200, { files: [{ name: "app-debug.apk", size: 9 }] });
   }
