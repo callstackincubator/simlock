@@ -79,9 +79,16 @@ export class NodeNpmCli implements NpmCli {
     return this.#run(["root", "-g"], SHORT_LIMIT_MS, "30 seconds");
   }
 
+  // why: the Windows installer has no `npm` symlink, only a shell wrapper Node cannot parse.
+  async #script(node: string): Promise<string> {
+    const bundled = join(dirname(node), "node_modules", "npm", "bin", "npm-cli.js");
+    if (await this.options.filesystem.exists(bundled)) return bundled;
+    return this.options.filesystem.realpath(join(dirname(node), "npm"));
+  }
+
   async #run(args: readonly string[], timeoutMs: number, limit: string): Promise<NpmOutcome> {
     const node = this.options.execPath ?? process.execPath;
-    const script = await this.options.filesystem.realpath(join(dirname(node), "npm"));
+    const script = await this.#script(node);
     const result = await this.options.runner.run(node, [script, ...args], {
       cwd: this.options.dataDirectory,
       timeoutMs,
