@@ -121,6 +121,24 @@ async function send(
   return { ...answered, body: active.watch(answered.body) };
 }
 
+// why: a failure of this machine's disk (no folder, no permission, no room, a file in the way) is not the farm failing to answer, and the user must read what their disk said.
+const LOCAL_FILE_ERRORS = new Set([
+  "EACCES",
+  "EDQUOT",
+  "EEXIST",
+  "EISDIR",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTDIR",
+  "EPERM",
+  "EROFS",
+]);
+
+function isLocalFileError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && LOCAL_FILE_ERRORS.has(code);
+}
+
 // why: an error that is not a route's answer (a refused connection, a body cut on the way, a silence) is the farm not answering.
 async function transfer<T>(
   environment: Environment,
@@ -150,7 +168,7 @@ async function transfer<T>(
   try {
     return await work({ signal: controller.signal, watch });
   } catch (error: unknown) {
-    if (isSimlockError(error)) throw error;
+    if (isSimlockError(error) || isLocalFileError(error)) throw error;
     throw unreachable(
       folder.origin,
       silent
@@ -242,7 +260,10 @@ async function runGet(argv: readonly string[], context: CommandContext): Promise
       try {
         await environment.filesystem.writeFileStream(partial, answered.body);
       } catch (error: unknown) {
-        await environment.filesystem.rm(partial).catch(() => undefined);
+        // why: `wx` fails on a `.part` another run left; that file is not this run's to delete.
+        if ((error as { code?: unknown }).code !== "EEXIST") {
+          await environment.filesystem.rm(partial).catch(() => undefined);
+        }
         throw error;
       }
       await environment.filesystem.rename(partial, target);

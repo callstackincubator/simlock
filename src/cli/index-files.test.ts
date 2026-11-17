@@ -28,6 +28,8 @@ interface Options {
   readonly leases?: readonly ReturnType<typeof lease>[];
   // why: a real filesystem leaves the bytes written so far when a stream fails; the in-memory one writes nothing, so a test asks for the leftover.
   readonly leavesPartial?: boolean;
+  // why: files already in the working folder before the command runs.
+  readonly existing?: Readonly<Record<string, string>>;
 }
 
 async function workerRoutes(request: HttpStreamRequest): Promise<HttpStreamAnswer> {
@@ -52,6 +54,9 @@ async function files(
   const stream = new FakeHttpStreamClient();
   stream.reply = reply;
   await filesystem.writeFileAtomic("/work/project/big.bin", "");
+  for (const [name, contents] of Object.entries(options.existing ?? {})) {
+    await filesystem.writeFileAtomic(`/work/project/${name}`, contents);
+  }
   if (options.leavesPartial === true) {
     const written = filesystem.writeFileStream.bind(filesystem);
     filesystem.writeFileStream = async (path, body, writeOptions) => {
@@ -198,6 +203,26 @@ describe("CLI: simlock files", () => {
     expect(JSON.parse(cut.output.stderr).error.code).toBe("REMOTE_UNREACHABLE");
     expect(await cut.filesystem.exists("/work/project/copy.apk")).toBe(false);
     expect(await cut.filesystem.exists("/work/project/copy.apk.part")).toBe(false);
+
+    const localFailures: [string, string, Options?][] = [
+      ["a folder that does not exist", "out/copy.apk"],
+      ["a leftover part of another run", "copy.apk", { existing: { "copy.apk.part": "older" } }],
+    ];
+    for (const [title, output, options] of localFailures) {
+      const refused = await files(
+        ["files", "get", "app-debug.apk", "-o", output],
+        workerRoutes,
+        options,
+      );
+      expect(refused.code, title).toBe(1);
+      expect(refused.output.stderr, title).not.toContain("REMOTE_UNREACHABLE");
+      expect(refused.output.stderr, title).not.toContain("No answer from");
+      if (options?.existing !== undefined) {
+        expect(await refused.filesystem.readFile("/work/project/copy.apk.part"), title).toBe(
+          "older",
+        );
+      }
+    }
 
     const silent = new FakeClock(0);
     const abortedAfter: boolean[] = [];
