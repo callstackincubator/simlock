@@ -24,42 +24,121 @@ import {
 
 const endpoint = "/simlock/daemon.sock";
 
+// why: the shapes the fix adds; declared here so this test compiles before it lands.
+interface AccessEntry {
+  readonly sid: string;
+  readonly name: string;
+  readonly allow: boolean;
+  readonly rights: number;
+}
+interface DirectoryAccess {
+  readonly user: string;
+  readonly entries: readonly AccessEntry[];
+}
+type Prepare = (
+  filesystem: MemoryFilesystem,
+  path: string,
+  options: {
+    readonly platform: NodeJS.Platform;
+    readonly directoryAccess: { read(path: string): Promise<DirectoryAccess> };
+  },
+) => Promise<string | undefined>;
+
+const USER = "S-1-5-21-2160452881-2465010311-446649340-1001";
+const FULL = 0x1f01ff;
+const MODIFY = 0x1301bf;
+const READ_EXECUTE = 0x1200a9;
+// why: the masks are the ones `Get-Acl` returned on Windows 11 for the default home under
+// `C:\Users\<user>` and for a new folder on `D:\`.
+const OWNER_ONLY: readonly AccessEntry[] = [
+  { sid: "S-1-5-18", name: "NT AUTHORITY\\SYSTEM", allow: true, rights: FULL },
+  { sid: "S-1-5-32-544", name: "BUILTIN\\Administrators", allow: true, rights: FULL },
+  { sid: USER, name: "DESKTOP\\Szymon", allow: true, rights: FULL },
+  // why: `C:\Users\<user>` also grants an app capability traverse only, which reads nothing.
+  {
+    sid: "S-1-15-3-65536-3852923496",
+    name: "S-1-15-3-65536-3852923496",
+    allow: true,
+    rights: 0x100020,
+  },
+];
+const OTHER_DRIVE: readonly AccessEntry[] = [
+  { sid: "S-1-5-32-544", name: "BUILTIN\\Administrators", allow: true, rights: FULL },
+  { sid: "S-1-5-18", name: "NT AUTHORITY\\SYSTEM", allow: true, rights: FULL },
+  { sid: "S-1-5-11", name: "NT AUTHORITY\\Authenticated Users", allow: true, rights: MODIFY },
+  { sid: "S-1-5-32-545", name: "BUILTIN\\Users", allow: true, rights: READ_EXECUTE },
+];
+// why: quoted, since PowerShell reads an unquoted `(OI)` as a command; cmd.exe takes it too.
+const icaclsFix = (path: string): string =>
+  `icacls "${path}" /inheritance:r /grant:r "*${USER}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"`;
+const readable = (entries: readonly AccessEntry[]) => ({
+  read: () => Promise.resolve({ user: USER, entries }),
+});
+
 describe("prepareDataDirectory", () => {
-  it("warns on macOS and Linux when group or others can reach the folder, and never on Windows, whose mode bits Node makes up", async () => {
-    // why: on Windows Node reports 0o666 for every writable folder and 0o444 for a read-only
-    // one, whatever its ACL says, so the bits cannot tell who can open it.
+  it("on Windows warns from the folder's ACL only when another account can read or change it, names an icacls fix, and warns nothing when the ACL cannot be read; macOS and Linux keep the mode check", async () => {
+    // why: Node reports 0o666 for every writable folder on Windows, whatever its ACL says.
     const cases = [
-      { platform: "win32", mode: 0o666 },
-      { platform: "win32", mode: 0o444 },
-      { platform: "darwin", mode: 0o755 },
-      { platform: "linux", mode: 0o750 },
+      { name: "default-home", platform: "win32", mode: 0o666, access: readable(OWNER_ONLY) },
+      { name: "other-drive", platform: "win32", mode: 0o666, access: readable(OTHER_DRIVE) },
+      {
+        name: "read-only",
+        platform: "win32",
+        mode: 0o666,
+        access: readable([
+          ...OWNER_ONLY,
+          { sid: "S-1-5-32-545", name: "BUILTIN\\Users", allow: true, rights: 0x1 },
+        ]),
+      },
+      {
+        name: "change-only",
+        platform: "win32",
+        mode: 0o666,
+        access: readable([
+          ...OWNER_ONLY,
+          { sid: "S-1-5-21-1-2-3-1002", name: "DESKTOP\\Guest", allow: true, rights: 0x2 },
+        ]),
+      },
+      {
+        name: "unreadable",
+        platform: "win32",
+        mode: 0o666,
+        access: { read: () => Promise.reject(new Error("powershell exited 1")) },
+      },
+      { name: "macos-open", platform: "darwin", mode: 0o755, access: readable(OWNER_ONLY) },
+      { name: "linux-closed", platform: "linux", mode: 0o700, access: readable(OTHER_DRIVE) },
     ] as const;
-    // why: the platform parameter is the fix's; the alias lets this test compile before it lands.
-    const prepare: (
-      filesystem: MemoryFilesystem,
-      path: string,
-      platform: NodeJS.Platform,
-    ) => Promise<string | undefined> = prepareDataDirectory;
+    const prepare: Prepare = prepareDataDirectory;
     const warnings = [];
-    for (const [index, testCase] of cases.entries()) {
+    for (const testCase of cases) {
       const filesystem = new MemoryFilesystem();
-      const path = `/home/${index}`;
+      const path = `/home/${testCase.name}`;
       await filesystem.mkdirp(path);
       await filesystem.chmod(path, testCase.mode);
-      warnings.push([testCase.platform, await prepare(filesystem, path, testCase.platform)]);
+      const options = { platform: testCase.platform, directoryAccess: testCase.access };
+      warnings.push([testCase.name, await prepare(filesystem, path, options)]);
     }
 
     expect(warnings).toEqual([
-      ["win32", undefined],
-      ["win32", undefined],
+      ["default-home", undefined],
       [
-        "darwin",
-        "data directory /home/2 is accessible to other users (mode 755); run chmod 700 /home/2",
+        "other-drive",
+        `data directory /home/other-drive is accessible to other users (NT AUTHORITY\\Authenticated Users, BUILTIN\\Users); run ${icaclsFix("/home/other-drive")}`,
       ],
       [
-        "linux",
-        "data directory /home/3 is accessible to other users (mode 750); run chmod 700 /home/3",
+        "read-only",
+        `data directory /home/read-only is accessible to other users (BUILTIN\\Users); run ${icaclsFix("/home/read-only")}`,
       ],
+      [
+        "change-only",
+        `data directory /home/change-only is accessible to other users (DESKTOP\\Guest); run ${icaclsFix("/home/change-only")}`,
+      ],
+      ["unreadable", undefined],
+      [
+        "macos-open",
+        "data directory /home/macos-open is accessible to other users (mode 755); run chmod 700 /home/macos-open",
+      ],
+      ["linux-closed", undefined],
     ]);
   });
 });
