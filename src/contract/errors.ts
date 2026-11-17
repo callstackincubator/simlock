@@ -34,6 +34,10 @@ export interface ErrorDetailsMap {
   DAEMON_STOPPING: Record<string, never>;
   DAEMON_STARTUP_FAILED: Record<string, never>;
   DAEMON_CONNECTION_LOST: Record<string, never>;
+  // why: ADR 0081 §3: a remote typed client could not reach the farm at its URL (nothing listening, no answer in 10 s, a proxy's 502, no session path), as the local client's `DAEMON_CONNECTION_LOST` says for a socket.
+  REMOTE_UNREACHABLE: Record<string, never>;
+  // why: the farm refused the token at the upgrade, or ended the session when the token was revoked; HTTP has answered this code at 401 all along.
+  UNAUTHENTICATED: Record<string, never>;
 
   NO_CAPACITY: {
     readonly capacityReason?:
@@ -326,6 +330,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 1,
     httpStatus: 503,
   },
+  REMOTE_UNREACHABLE: {
+    code: "REMOTE_UNREACHABLE",
+    kind: "transport",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
+  UNAUTHENTICATED: { code: "UNAUTHENTICATED", kind: "protocol", cliExitCode: 1, httpStatus: 401 },
   NO_CAPACITY: { code: "NO_CAPACITY", kind: "domain", cliExitCode: 11, httpStatus: 503 },
   QUEUE_TIMEOUT: { code: "QUEUE_TIMEOUT", kind: "domain", cliExitCode: 10, httpStatus: 500 },
   PROVISION_FAILED: { code: "PROVISION_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },

@@ -6,7 +6,9 @@ import {
   SystemClock,
   type WebSocketClient,
   type WebSocketClientConnector,
+  WebSocketRefusedError,
 } from "../ports/index.js";
+import { type AnySimlockError, SimlockError } from "../contract/index.js";
 import type { ConnectOptions } from "./client.js";
 import { farmOrigin, farmTokenFits, farmUrlProblem } from "./farm-url.js";
 
@@ -74,15 +76,42 @@ export class RemoteSessionConnector implements IpcConnector {
   }
 
   async connect(origin: string): Promise<IpcConnection> {
-    const socket = await this.#options.webSocket.connect(
-      `${origin.replace(/^http/, "ws")}/v1/session`,
-      {
-        handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
-        headers: { authorization: `Bearer ${this.#options.token}` },
-      },
-    );
+    const { clock, token, webSocket } = this.#options;
+    const url = `${origin.replace(/^http/, "ws")}/v1/session`;
+    const socket = await new Promise<WebSocketClient>((resolve, reject) => {
+      // why: `ws` bounds its own handshake, but a connector that never settles must not hold the caller, so the wait has its own bound on the clock.
+      const timer = clock.setTimer(HANDSHAKE_TIMEOUT_MS, () =>
+        reject(unreachable("The farm did not answer within 10 s")),
+      );
+      webSocket
+        .connect(url, {
+          handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+          headers: { authorization: `Bearer ${token}` },
+        })
+        .then(resolve, (error: unknown) => reject(refusalOf(error)))
+        .finally(() => clock.cancel(timer));
+    });
     return new SessionLines(socket);
   }
+}
+
+function unreachable(message: string): SimlockError<"REMOTE_UNREACHABLE"> {
+  return new SimlockError("REMOTE_UNREACHABLE", "transport", message, {});
+}
+
+// why: a refusal at the upgrade is an HTTP answer: 401 and 403 are the farm judging the token, while anything else (a 404 where the path is not served, a proxy's 502) or no answer at all means the farm was not reached.
+function refusalOf(error: unknown): AnySimlockError {
+  if (error instanceof WebSocketRefusedError && error.status === 401) {
+    return new SimlockError("UNAUTHENTICATED", "protocol", "The farm refused the token", {});
+  }
+  if (error instanceof WebSocketRefusedError && error.status === 403) {
+    return new SimlockError("FORBIDDEN", "protocol", "The farm does not allow this token", {});
+  }
+  return unreachable(
+    error instanceof WebSocketRefusedError
+      ? `The farm answered ${String(error.status)} at its session path`
+      : `The farm could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+  );
 }
 
 // why: the wire reads `\n`-ended chunks, so each text message gets its newline back, and a write holding several lines goes out as one message per line.

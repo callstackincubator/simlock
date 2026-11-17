@@ -48,4 +48,4 @@ Streams:
 
 - **The notice buffer is the last frontend-held state.** It is in memory and resets on a daemon restart, so a polling client loses the health facts it had not drained. It needs a durable record of why a lease ended first.
 - **Single-lease reads answer 404, not 403, for an unowned lease.** `GET /v1/leases/{id}` and its `/events` dispatch `lease.get`, which answers `UNKNOWN_LEASE` for a lease that is not there and for one the caller does not own alike. Renew and release dispatch directly and answer 403.
-- **Error codes outside the contract union.** `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so a typed client sees `UNKNOWN_DAEMON_ERROR`.
+- **Error codes outside the contract union.** `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so a typed client sees `UNKNOWN_DAEMON_ERROR`.
