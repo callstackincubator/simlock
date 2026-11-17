@@ -23,6 +23,31 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   return runPut(parsed.flagArgs, context);
 }
 
+// why: the lease's folder is on its worker, so on the daemon's own machine it is a local folder and there is nothing to move over HTTP.
+async function farmOf(environment: CommandContext["environment"]) {
+  if (environment.remote === undefined) {
+    throw new UsageError(
+      "simlock files needs --url or SIMLOCK_URL: on the daemon's machine the lease's folder is a local folder",
+    );
+  }
+  return farmEndpoint(environment.remote);
+}
+
+async function localFile(environment: CommandContext["environment"], path: string) {
+  const absolute = resolve(environment.workingDirectory, path);
+  let kind: "file" | "directory";
+  try {
+    kind = (await environment.filesystem.stat(absolute)).kind;
+  } catch (error: unknown) {
+    if ((error as { code?: unknown }).code === "ENOENT") throw new UsageError(`No file ${path}`);
+    throw error;
+  }
+  if (kind === "directory") {
+    throw new UsageError(`${path} is a folder; a folder cannot be uploaded yet (#1636)`);
+  }
+  return absolute;
+}
+
 async function leaseOf(context: CommandContext, flag: string | undefined): Promise<string> {
   if (typeof flag === "string") return flag;
   const client = await connectDaemonClient(context.environment, context.token);
@@ -46,11 +71,11 @@ async function runPut(argv: readonly string[], context: CommandContext): Promise
   }
   const path = requiredPositional(values.positionals, "a file to upload");
   const name = typeof values.name === "string" ? values.name : basename(path);
+  const farm = await farmOf(environment);
+  const absolute = await localFile(environment, path);
   const leaseId = await leaseOf(context, values.lease as string | undefined);
-  const { token, url } = await farmEndpoint(
-    environment.remote as NonNullable<typeof environment.remote>,
-  );
-  const file = await environment.filesystem.openFile(resolve(environment.workingDirectory, path));
+  const { token, url } = farm;
+  const file = await environment.filesystem.openFile(absolute);
   try {
     const answered = await environment.httpStream.request({
       body: file.read(),
