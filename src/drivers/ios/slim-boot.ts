@@ -188,22 +188,35 @@ export class SlimBoot {
     });
     let writeError: string | undefined;
     try {
-      const file = join(folder, OVERRIDES_FILE_NAME);
-      const existing = await this.#readOverrides(file);
-      const merged = new Map([...existing, ...wanted]);
-      if (!sameEntries(existing, merged)) {
-        await this.#filesystem.mkdirp(folder, { mode: 0o700 });
-        await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
-      }
-      if (JSON.stringify(names) !== JSON.stringify(recorded)) {
-        await this.#filesystem.mkdirp(folder, { mode: 0o700 });
-        await this.#filesystem.writeFileAtomic(recordFile, JSON.stringify(names), { mode: 0o644 });
-      }
+      await this.#writeFiles(folder, wanted, { names, recorded });
     } catch (error: unknown) {
       writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
     return { kept, kind: "written", resolved, startedAt, wanted, writeError };
+  }
+
+  // why: the plist first, then the record: a restart between them leaves the old record, which still lists every name the plist may hold off (ADR 0083 S2).
+  async #writeFiles(
+    folder: string,
+    wanted: ReadonlyMap<string, boolean>,
+    record: { readonly names: readonly string[]; readonly recorded: readonly string[] },
+  ): Promise<void> {
+    const file = join(folder, OVERRIDES_FILE_NAME);
+    const existing = await this.#readOverrides(file);
+    const merged = new Map([...existing, ...wanted]);
+    if (!sameEntries(existing, merged)) {
+      await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+      await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
+    }
+    if (JSON.stringify(record.names) !== JSON.stringify(record.recorded)) {
+      await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+      await this.#filesystem.writeFileAtomic(
+        join(folder, RECORD_FILE_NAME),
+        JSON.stringify(record.names),
+        { mode: 0o644 },
+      );
+    }
   }
 
   // why: ADR 0083 S2: a record that is missing or cannot be read as a list of strings is an empty one, so an old simulator or a damaged file never fails a boot.
