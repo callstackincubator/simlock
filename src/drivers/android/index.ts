@@ -885,12 +885,6 @@ async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPat
   throw new SdkMissingError(location.searched);
 }
 
-/**
- * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
- * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
- * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
- * their defaults.
- */
 function idGeneratorFor(options: AndroidDriverOptions): IdGenerator {
   return options.idGenerator ?? new SequentialIdGenerator();
 }
@@ -899,6 +893,12 @@ function bootTimeoutFor(options: AndroidDriverOptions): number {
   return options.config?.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
 }
 
+/**
+ * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
+ * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
+ * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
+ * their defaults.
+ */
 function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
