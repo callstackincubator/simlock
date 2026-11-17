@@ -37,8 +37,8 @@ function connect(workers: WorkerRegistry, id: string, entry: Entry, physical = f
   });
 }
 
-// why: the gateway's answer to a plain lease must match the worker's (ADR 0080 §3), so the cases run through the coordinator, which routes with `assess` and `select`.
-describe("FleetLeaseCoordinator with phones-only workers (ADR 0080 §3)", () => {
+// why: the gateway's answer to a plain lease must match the worker's (ADR 0084 §3), so the cases run through the coordinator, which routes with `assess` and `select`.
+describe("FleetLeaseCoordinator with phones-only workers (ADR 0084 §3)", () => {
   const PLAIN = { model: "iPhone 17", platform: "ios" as const };
   const PHYSICAL = { physical: true as const, platform: "ios" as const };
 

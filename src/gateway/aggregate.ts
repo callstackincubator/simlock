@@ -221,7 +221,7 @@ interface CatalogBucket {
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly slimCategories: Set<string>;
-  /** why: ADR 0080 §3: stays true only while every worker reporting the platform says `virtualDevices: false`. */
+  /** why: ADR 0084 §3: stays true only while every worker reporting the platform says `virtualDevices: false`. */
   phonesOnly: boolean;
   readonly defaults: Set<string | undefined>;
   /** why: absent ones count as `undefined`, so one worker without a default image tag is a disagreement (ADR 0078 §3). */

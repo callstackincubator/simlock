@@ -277,14 +277,14 @@ function unknownModel(request: RoutableRequest): Rejection {
   };
 }
 
-// why: ADR 0080 §3: a plain request is refused with the phones-only message only when every known worker that has the platform says `virtualDevices: false`.
+// why: ADR 0084 §3: a plain request is refused with the phones-only message only when every known worker that has the platform says `virtualDevices: false`.
 function phonesOnlyEverywhere(known: readonly WorkerView[], request: RoutableRequest): boolean {
   return known
     .filter((worker) => hasPlatform(worker, request))
     .every((worker) => catalogOf(worker, request)?.virtualDevices === false);
 }
 
-// why: ADR 0080 §3 and the issue's I3 word the gateway's refusal for the fleet ("Every worker with <platform> …"), unlike the single worker's "This worker serves only…" in `VirtualDevicesOffError`.
+// why: ADR 0084 §3 and the issue's I3 word the gateway's refusal for the fleet ("Every worker with <platform> …"), unlike the single worker's "This worker serves only…" in `VirtualDevicesOffError`.
 function phonesOnly(request: RoutableRequest): Rejection {
   const { platform } = request;
   return {
