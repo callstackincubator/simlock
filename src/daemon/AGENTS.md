@@ -20,7 +20,6 @@ Start and stop:
 - On a worker, no request but `hello`, `status.get`, `daemon.stop` and `daemon.update` with `query` runs before converge ends. A gateway's dispatcher never parks.
 - `daemon.stop` is handled by the server, before the version and stopping gates. `daemon.update` skips only the version gate.
 - `daemon.started` is emitted only after converge, and never after `daemon.stopping`. A stop during converge arms nothing.
-- A failed claim or `admin.token` write: `start` disposes what the stop does, without `daemon.stopping` or the `admin.token` removal, then rejects. A stop already running is the one teardown instead: `start` rejects at once, and `startDaemon` waits for the stop before it rejects.
 - `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server. The entry then exits at once (`process.exit`), since a start that lost the claim keeps its drivers' children.
 - A bind failure of the HTTP listener fails the start and stops the daemon (`http-start-failed`).
 - `daemon.stop` releases nothing; leases persist with their deadlines.
@@ -34,7 +33,6 @@ Connections:
 - No protocol overlap leaves the connection open: every request but `daemon.stop` and `daemon.update` gets `PROTOCOL_VERSION_UNSUPPORTED`.
 - A closed connection only silences its pushes; the request, the lease and a running command go on.
 - `lease-lost` skips the connection that asked for that release.
-- On Windows the endpoint is a named pipe: none of the socket-file steps run, and a live one fails the bind with `address-in-use`.
 
 Update:
 

@@ -828,7 +828,7 @@ A daemon started on demand inherits the environment of the command that started 
 
 | Variable | Meaning |
 | --- | --- |
-| `ANDROID_HOME`, `ANDROID_SDK_ROOT` | Where the Android SDK is, tried in this order, then `~/Library/Android/sdk`. |
+| `ANDROID_HOME`, `ANDROID_SDK_ROOT` | Where the Android SDK is, tried in this order, then `~/Library/Android/sdk` (on Windows `%LOCALAPPDATA%\Android\Sdk`). |
 | `JAVA_HOME` | The JDK the Android SDK tools run on. |
 
 ### Set in a lease's environment
