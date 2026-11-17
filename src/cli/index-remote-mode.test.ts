@@ -6,7 +6,7 @@ import { FakeFarm } from "./test-remote.js";
 
 interface Setup {
   readonly url?: string;
-  readonly token?: string;
+  readonly token?: string | undefined;
   readonly adminToken?: string;
 }
 
@@ -25,6 +25,58 @@ function session(setup: Setup = {}, farm = new FakeFarm({ "status.get": () => EM
   const run = (argv: readonly string[]) => runCli(argv, environment);
   const launched = () => connectAdmin.mock.calls.length + connectExistingAdmin.mock.calls.length;
   return { farm, launched, output, run };
+}
+
+async function expectBadUrlsRefused(): Promise<void> {
+  const refused: [string, string][] = [
+    ["http://farm.example.com", "must be https://"],
+    ["https://farm.example.com/simlock", "origin only"],
+    ["https://farm.example.com/?x=1", "origin only"],
+    ["https://farm.example.com/#a", "origin only"],
+    ["farm.example.com", "must be https://"],
+    ["ws://farm.example.com", "must be https://"],
+  ];
+  for (const [url, message] of refused) {
+    const { farm, launched, output, run } = session({ token: "slk_t", url });
+    expect(await run(["status"]), url).toBe(2);
+    expect(output.stderr).toContain(message);
+    expect(farm.connections, url).toHaveLength(0);
+    expect(launched()).toBe(0);
+  }
+}
+
+async function expectLocalWithoutUrl(): Promise<void> {
+  const local: Setup[] = [{}, { url: "" }];
+  for (const setup of local) {
+    const { farm, launched, run } = session(setup);
+    expect(await run(["status"])).toBe(0);
+    expect(farm.connections).toHaveLength(0);
+    expect(launched()).toBe(1);
+  }
+}
+
+async function expectUrlWithDaemonFlagRefused(): Promise<void> {
+  for (const flag of ["--local", "--gateway"]) {
+    const { farm, launched, output, run } = session({ token: "slk_t" });
+    expect(await run(["status", "--url", "https://farm.example.com", flag])).toBe(2);
+    expect(output.stderr).toContain("--url cannot be used with --local or --gateway");
+    expect(farm.connections).toHaveLength(0);
+    expect(launched()).toBe(0);
+  }
+}
+
+async function expectNoToken(token: string | undefined): Promise<void> {
+  const tokenless = session({ url: "https://farm.example.com", token });
+  expect(await tokenless.run(["status"]), String(token?.length)).toBe(2);
+  expect(tokenless.output.stderr).toContain("No token: pass --token or set SIMLOCK_TOKEN");
+  expect(tokenless.farm.connections).toHaveLength(0);
+}
+
+async function expectEqualsFormRuns(): Promise<void> {
+  const equalsForm = session({ token: "slk_t" });
+  expect(await equalsForm.run(["status", "--json", "--url=https://farm.example.com"])).toBe(0);
+  expect(equalsForm.farm.requestTypes()).toEqual(["status.get"]);
+  expect(equalsForm.launched()).toBe(0);
 }
 
 describe("CLI: remote mode selection", () => {
@@ -49,56 +101,18 @@ describe("CLI: remote mode selection", () => {
       }
     }
 
-    const refused: [string, string][] = [
-      ["http://farm.example.com", "must be https://"],
-      ["https://farm.example.com/simlock", "origin only"],
-      ["https://farm.example.com/?x=1", "origin only"],
-      ["https://farm.example.com/#a", "origin only"],
-      ["farm.example.com", "must be https://"],
-      ["ws://farm.example.com", "must be https://"],
-    ];
-    for (const [url, message] of refused) {
-      const { farm, launched, output, run } = session({ token: "slk_t", url });
-      expect(await run(["status"]), url).toBe(2);
-      expect(output.stderr).toContain(message);
-      expect(farm.connections, url).toHaveLength(0);
-      expect(launched()).toBe(0);
-    }
+    await expectBadUrlsRefused();
 
-    const local: Setup[] = [{}, { url: "" }];
-    for (const setup of local) {
-      const { farm, launched, run } = session(setup);
-      expect(await run(["status"])).toBe(0);
-      expect(farm.connections).toHaveLength(0);
-      expect(launched()).toBe(1);
-    }
+    await expectLocalWithoutUrl();
     const flagged = session({ token: "slk_t", url: "https://farm.example.com" });
     expect(await flagged.run(["status", "--local"])).toBe(0);
     expect(flagged.farm.connections).toHaveLength(0);
     expect(flagged.launched()).toBe(1);
 
-    for (const flag of ["--local", "--gateway"]) {
-      const { farm, launched, output, run } = session({ token: "slk_t" });
-      expect(await run(["status", "--url", "https://farm.example.com", flag])).toBe(2);
-      expect(output.stderr).toContain("--url cannot be used with --local or --gateway");
-      expect(farm.connections).toHaveLength(0);
-      expect(launched()).toBe(0);
-    }
+    await expectUrlWithDaemonFlagRefused();
 
-    const unusable: (string | undefined)[] = [undefined, "", "x".repeat(4097)];
-    for (const token of unusable) {
-      const tokenless = session({
-        url: "https://farm.example.com",
-        ...(token === undefined ? {} : { token }),
-      });
-      expect(await tokenless.run(["status"]), String(token?.length)).toBe(2);
-      expect(tokenless.output.stderr).toContain("No token: pass --token or set SIMLOCK_TOKEN");
-      expect(tokenless.farm.connections).toHaveLength(0);
-    }
-    const equalsForm = session({ token: "slk_t" });
-    expect(await equalsForm.run(["status", "--json", "--url=https://farm.example.com"])).toBe(0);
-    expect(equalsForm.farm.requestTypes()).toEqual(["status.get"]);
-    expect(equalsForm.launched()).toBe(0);
+    for (const token of [undefined, "", "x".repeat(4097)]) await expectNoToken(token);
+    await expectEqualsFormRuns();
 
     const credentials = session({
       adminToken: "admin-secret",
