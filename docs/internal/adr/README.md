@@ -115,4 +115,4 @@ the status is stale.
 | [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
 | [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
 | [0080](0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) | An Android worker may enrol phones reached over the network | Accepted; narrows 0022 §6 and §7, and 0073 §2 and §5 |
-| [0082](0082-a-worker-may-serve-only-some-ios-device-modes.md) | A worker may serve only some iOS device modes | Proposed; narrows 0007 §3 and §4, 0008 §1, 0009 §4 and §5 |
+| [0082](0082-a-worker-may-serve-only-some-ios-device-modes.md) | A worker may serve only some iOS device modes | Accepted — not yet implemented; narrows 0007 §3 and §4, 0008 §1, 0009 §4 and §5 |
