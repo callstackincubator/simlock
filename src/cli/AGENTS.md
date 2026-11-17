@@ -15,7 +15,7 @@ Routing:
 
 Connect and auto-launch:
 
-- A missing or rejected credential is not an error: the command gets an `agent` session and one stderr `notice` line.
+- Against the local daemon, a missing or rejected credential is not an error: the command gets an `agent` session and one stderr `notice` line. With `--url`, a missing token is a usage error and a rejected one fails (`connectFarm`, `connect.ts:41`).
 - Auto-launch loads the config first, so a bad one fails on this command's stderr.
 - A launched daemon that exits fails the command at once, unless another daemon answers a last connect. A start through the service never reports an exit, so a daemon it refuses fails at the deadline with the `daemon.log` lines since the start.
 - An answered probe ends the startup window, a `starting` status included: later command failures keep their own codes even while a lease queues or boots.
