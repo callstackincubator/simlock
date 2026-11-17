@@ -58,7 +58,8 @@ list and this one the same.
   `*.repo.test.ts` files, the protocol and docs-surface checks, then the
   e2e typecheck. A test that reads the repository's files instead of
   importing code is named `*.repo.test.ts` and runs in about a second:
-  `pnpm test:changed` cannot select it, so the hook runs every one.
+  `pnpm test:changed` selects it only when the branch edits the test
+  itself, so the hook runs every one.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. CI's Fallow
   (`fallow --ci`) checks the whole tree and fails on any dead-code finding
   or clone group, `warn` rules included; complexity fails above the

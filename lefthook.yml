@@ -43,8 +43,8 @@ commit-msg:
     subject:
       run: node .agents/scripts/commit-msg-check.mjs {1}
 
-# These audit the whole branch against main, so they run once per push rather than on every
-# checkpoint commit.
+# These check the whole tree, or the whole branch against main, so they run once per push
+# rather than on every checkpoint commit.
 pre-push:
   piped: true
   commands:
