@@ -449,33 +449,36 @@ describe.skipIf(process.platform !== "darwin")(
       async () => {
         const diagnosticd = "com.apple.diagnosticd";
         const apsd = "com.apple.apsd";
-        const excluding = await withRealDaemon({
-          ios: { defaultMode: "slim", slim: { categories: [], exclude: [diagnosticd] } },
-        });
-        const { model, os } = await catalogModelWithOs(excluding, (versions) =>
+        // why: one lane home serves one env at a time (keepSeeds), so one daemon runs both configs in turn.
+        const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
+        const { model, os } = await catalogModelWithOs(env, (versions) =>
           versions.find((version) => Number(version.split(".")[0]) >= 26),
         );
-        const excluded = await leaseDetached(excluding, model, os, "slim-exclude");
-        await expectSlim(excluding, excluded.mode, "a worker with only an exclude must grant slim");
-        expect((await printDisabled(excluded)).has(diagnosticd)).toBe(true);
-        expect(
-          await runtimeRootProcesses("diagnosticd"),
-          "no diagnosticd runs while the excluding worker's device is booted",
-        ).toEqual([]);
-        await excluding.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        await env.withConfig(
+          { ios: { slim: { categories: [], exclude: [diagnosticd] } } },
+          async () => {
+            const excluded = await leaseDetached(env, model, os, "slim-exclude");
+            await expectSlim(env, excluded.mode, "a worker with only an exclude must grant slim");
+            expect((await printDisabled(excluded)).has(diagnosticd)).toBe(true);
+            expect(
+              await runtimeRootProcesses("diagnosticd"),
+              "no diagnosticd runs while the excluding worker's device is booted",
+            ).toEqual([]);
+            await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+          },
+        );
 
-        const including = await withRealDaemon({
-          ios: { defaultMode: "slim", slim: { include: [apsd] } },
+        await env.withConfig({ ios: { slim: { include: [apsd] } } }, async () => {
+          const included = await leaseDetached(env, model, os, "slim-include");
+          await expectSlim(env, included.mode, "a worker with only an include must grant slim");
+          const disabled = await printDisabled(included);
+          expect(disabled.has(apsd), "apsd is kept running by include").toBe(false);
+          expect(
+            [...ALL_LABELS].filter((label) => label !== apsd && !disabled.has(label)),
+            "every other category label is disabled",
+          ).toEqual([]);
+          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
         });
-        const included = await leaseDetached(including, model, os, "slim-include");
-        await expectSlim(including, included.mode, "a worker with only an include must grant slim");
-        const disabled = await printDisabled(included);
-        expect(disabled.has(apsd), "apsd is kept running by include").toBe(false);
-        expect(
-          [...ALL_LABELS].filter((label) => label !== apsd && !disabled.has(label)),
-          "every other category label is disabled",
-        ).toEqual([]);
-        await including.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
       },
     );
 
