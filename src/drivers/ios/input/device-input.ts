@@ -17,7 +17,6 @@ import type {
   Logger,
   ProcessRunner,
 } from "../../../ports/index.js";
-import { iosRuntimeVersionFromId } from "../runtime-version.js";
 import { stopProgram } from "../screen-capture.js";
 
 export interface IosDeviceInputOptions {
@@ -56,14 +55,7 @@ export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInpu
         await stopProgram(child, options.clock);
         throw error;
       }
-      return new IosDeviceInput(
-        options,
-        device.deviceId,
-        child,
-        size,
-        keysAvailable(device),
-        sizes,
-      );
+      return new IosDeviceInput(options, device.deviceId, child, size, sizes);
     },
   };
 }
@@ -75,15 +67,6 @@ function environmentFor(options: IosDeviceInputOptions): NodeJS.ProcessEnv {
   return options.deviceSet === undefined
     ? environment
     : { ...environment, SIMLOCK_IOS_DEVICE_SET: options.deviceSet };
-}
-
-// why: the iOS 27 guest ignores injected keys (F21), so keys are dropped there; a runtime that cannot
-// be read is treated the same, because a key that does nothing is worse than a key refused.
-function keysAvailable(device: VirtualDriverDevice | PhysicalDriverDevice): boolean {
-  const data = device.driverData as { runtimeId?: unknown } | null;
-  const runtimeId = typeof data?.runtimeId === "string" ? data.runtimeId : "";
-  const version = iosRuntimeVersionFromId(runtimeId);
-  return version !== undefined && version[0] < 27;
 }
 
 async function firstSize(
@@ -159,8 +142,10 @@ function within<T>(milliseconds: number, clock: Clock, work: Promise<T>): Promis
 
 // why: the helper reads serve-sim's JSON for each tag; JSON leaves out a scroll position the client
 // sent none of, so the helper scrolls under the centre.
-function frameOfMessage(message: Exclude<InputMessage, { kind: "button" }>): Uint8Array {
+function frameOfMessage(message: InputMessage): Uint8Array {
   switch (message.kind) {
+    case "button":
+      return frameOf(INPUT_TAG.button, { button: message.button });
     case "touch":
       return frameOf(INPUT_TAG.touch, { type: message.type, x: message.x, y: message.y });
     case "scroll":
@@ -186,7 +171,6 @@ class IosDeviceInput implements DeviceInput {
   readonly #udid: string;
   readonly #child: BytePipeProcess;
   #config: InputScreenConfig;
-  readonly #keys: boolean;
   readonly #configListeners = new Set<(config: InputScreenConfig) => void>();
   readonly #failedListeners = new Set<(error: Error) => void>();
   #closing: Promise<void> | undefined;
@@ -196,11 +180,9 @@ class IosDeviceInput implements DeviceInput {
     udid: string,
     child: BytePipeProcess,
     size: InputScreenConfig,
-    keys: boolean,
     sizes: AsyncGenerator<InputScreenConfig>,
   ) {
-    this.#keys = keys;
-    this.#config = this.#withKeys(size);
+    this.#config = size;
     void this.#follow(sizes);
     void child.exited.then((exit) => {
       this.#fail(new Error(`The input helper ${describeExit(exit)}`));
@@ -210,16 +192,12 @@ class IosDeviceInput implements DeviceInput {
     this.#child = child;
   }
 
-  #withKeys(size: InputScreenConfig): InputScreenConfig {
-    return this.#keys ? size : { ...size, keyboardUnavailable: true };
-  }
-
   // why: a foldable's helper sends a size again when the panel in use changes; a size equal to the
   // one held is no change, and the listeners hear only changes.
   async #follow(sizes: AsyncGenerator<InputScreenConfig>): Promise<void> {
     for await (const size of sizes) {
       if (size.width === this.#config.width && size.height === this.#config.height) continue;
-      this.#config = this.#withKeys(size);
+      this.#config = size;
       for (const listener of this.#configListeners) listener(this.#config);
     }
   }
@@ -227,9 +205,8 @@ class IosDeviceInput implements DeviceInput {
   send(message: InputMessage): Promise<void> {
     if (message.kind === "button") {
       if (message.button === "home") this.#home();
-      return Promise.resolve();
+      if (message.button !== "app_switcher" && message.button !== "lock") return Promise.resolve();
     }
-    if (message.kind === "key" && !this.#keys) return Promise.resolve();
     return this.#child.writeStdin(frameOfMessage(message)).catch((error: unknown) => {
       const failure = new Error(
         `The input helper stopped taking input: ${error instanceof Error ? error.message : String(error)}`,
@@ -239,8 +216,8 @@ class IosDeviceInput implements DeviceInput {
     });
   }
 
-  // why: Xcode 26 and later silently drop the HID home-button press, so Home brings SpringBoard
-  // forward the way serve-sim does; the app switcher and Lock have no such way and are dropped.
+  // why: Home keeps one owner, this launch of SpringBoard; the helper presses Home only as part of
+  // the app switcher (ADR 0085 section 3).
   #home(): void {
     const { deviceSet, logger, processRunner } = this.#options;
     const args = [
