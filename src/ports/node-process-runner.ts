@@ -581,8 +581,9 @@ function childStdio(
 }
 
 // why: a batch file's `cmd.exe` wrapper dies with its whole tree; a `killChildren` child with its
-// own children only; any other child alone.
+// own children only; any other child alone. Off Windows every child is `"child"`: its exit code
+// stands, as the kill there is the process group's own signal.
 function windowsKillOf(wrapped: boolean, killChildren: boolean): WindowsKill {
   if (wrapped) return "tree";
-  return killChildren ? "children" : "child";
+  return killChildren && process.platform === "win32" ? "children" : "child";
 }
