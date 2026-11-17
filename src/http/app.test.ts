@@ -52,6 +52,24 @@ describe("GET /v1/identity", () => {
   });
 });
 
+describe("GET /v1/session without an upgrade", () => {
+  it("answers 426 to a plain GET, and 404 to an upgrade on a host with no session acceptor", async () => {
+    const { app } = buildHarness();
+
+    const plain = await app.request("/v1/session", { headers: agentAuth });
+    expect(plain.status).toBe(426);
+    expect(plain.headers.get("upgrade")).toBe("websocket");
+    expect(await plain.json()).toMatchObject({ error: { code: "BAD_REQUEST" } });
+
+    const upgrade = await app.session(
+      new Request("http://127.0.0.1:4700/v1/session", {
+        headers: { ...agentAuth, upgrade: "websocket" },
+      }),
+    );
+    expect("response" in upgrade && upgrade.response.status).toBe(404);
+  });
+});
+
 describe("authentication and role/ownership (via the shared dispatcher)", () => {
   it("403s an agent reaching another requester's lease request (HTTP-only tracker resource guard)", async () => {
     const { app, dispatcher } = buildHarness();

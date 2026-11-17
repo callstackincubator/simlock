@@ -502,8 +502,14 @@ describe("the session path", () => {
 
     driver.hangMakeReady();
     const dropped = await live(other.secret);
-    // why: a model no warm device matches, so the request waits on the held `makeReady`.
-    void dropped.request("lease.request", { ...ask, model: "Pixel-B", requesterId: "agent-8" });
+    // why: a model no warm device matches, so the request waits on the held `makeReady`. The frame goes out raw: `request` would wait for a reply that never reaches a closed socket and reject unobserved ten seconds later.
+    dropped.socket.send(
+      JSON.stringify({
+        id: 1,
+        payload: { ...ask, model: "Pixel-B", requesterId: "agent-8" },
+        type: "lease.request",
+      }),
+    );
     await vi.waitFor(() => expect(pushes(dropped, "progress").length).toBeGreaterThan(0));
     dropped.socket.close();
     await vi.waitFor(() => expect(dropped.closed).toBeDefined());
