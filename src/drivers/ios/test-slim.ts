@@ -10,7 +10,9 @@ import {
   MemoryFilesystem,
   ScriptedProcessRunner,
   type Filesystem,
+  type Logger,
 } from "../../ports/index.js";
+import type { IosDriverConfig } from "./definition.js";
 import { IosSimctlDriver, type SlimmedFact, type SlimSkippedFact } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 
@@ -85,14 +87,12 @@ export async function plantManagedDevice(filesystem: Filesystem): Promise<void> 
 export async function createSlimDriver(
   runner: ScriptedProcessRunner,
   filesystem: Filesystem,
-  slim: {
-    readonly categories?: readonly string[];
-    readonly bootTimeoutMs: number;
-  },
+  slim: IosDriverConfig["slim"],
   onSlimmed?: (fact: SlimmedFact) => void,
   onSlimSkipped?: (fact: SlimSkippedFact) => void,
   slimByDefault = false,
   clock = new FakeClock(),
+  logger?: Logger,
 ): Promise<IosSimctlDriver> {
   return await IosSimctlDriver.create({
     database: await memorySourceDatabase(),
@@ -104,6 +104,7 @@ export async function createSlimDriver(
     idGenerator: { generate: () => "device-1" },
     ...(onSlimmed === undefined ? {} : { onSlimmed }),
     ...(onSlimSkipped === undefined ? {} : { onSlimSkipped }),
+    ...(logger === undefined ? {} : { logger }),
     launchdOverridesRoot: overridesRoot,
     processRunner: runner,
     config: { slim },
@@ -121,6 +122,11 @@ export function overridesPath(udid: string): string {
   return `${overridesFolder(udid)}/disabled.plist`;
 }
 
+/** why: ADR 0083 S2: the record of named services sits beside the overrides file. */
+export function recordPath(udid: string): string {
+  return `${overridesFolder(udid)}/simlock-managed.json`;
+}
+
 export function overridesPlist(entries: Readonly<Record<string, boolean>>): string {
   const lines = Object.entries(entries).map(
     ([label, off]) => `<key>${label}</key><${String(off)}/>`,
@@ -131,8 +137,12 @@ export function overridesPlist(entries: Readonly<Record<string, boolean>>): stri
 /** why: Records what is written and fails the one operation a test names, as a full or unwritable store would. */
 export class FaultyFilesystem extends MemoryFilesystem {
   readonly writes: string[] = [];
-  readonly modes: { folder?: number | undefined; file?: number | undefined } = {};
-  failing: "writeFileAtomic" | "mkdirp" | "rm" | "copyFile" | undefined;
+  readonly modes: {
+    folder?: number | undefined;
+    file?: number | undefined;
+    record?: number | undefined;
+  } = {};
+  failing: "writeFileAtomic" | "writeRecord" | "mkdirp" | "rm" | "copyFile" | undefined;
   failureMessage = "disk full";
 
   override async writeFileAtomic(
@@ -143,9 +153,13 @@ export class FaultyFilesystem extends MemoryFilesystem {
     if (this.failing === "writeFileAtomic" && path.endsWith("disabled.plist")) {
       throw new Error(this.failureMessage);
     }
+    if (this.failing === "writeRecord" && path.endsWith("simlock-managed.json")) {
+      throw new Error(this.failureMessage);
+    }
     await super.writeFileAtomic(path, contents, options);
     this.writes.push(path);
     if (path.endsWith("disabled.plist")) this.modes.file = options?.mode;
+    if (path.endsWith("simlock-managed.json")) this.modes.record = options?.mode;
   }
 
   override async mkdirp(path: string, options?: Parameters<MemoryFilesystem["mkdirp"]>[1]) {

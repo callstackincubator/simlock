@@ -23,6 +23,8 @@ import { type IosDriverData } from "./simulator-data.js";
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;
 const OVERRIDES_FILE_NAME = "disabled.plist";
+// why: ADR 0083 S2: the names the worker's `include` and `exclude` held at the last write.
+const RECORD_FILE_NAME = "simlock-managed.json";
 export const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
 const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
 
@@ -53,6 +55,7 @@ type SlimWrite =
       readonly kept: readonly SlimCategory[];
       readonly startedAt: number;
       readonly writeError: string | undefined;
+      readonly unconfigured: string | undefined;
     };
 
 type SlimPlan =
@@ -137,6 +140,13 @@ export class SlimBoot {
         from,
         join(this.#overridesFolder(copyUdid), OVERRIDES_FILE_NAME),
       );
+      const record = join(this.#overridesFolder(seedUdid), RECORD_FILE_NAME);
+      if (await this.#filesystem.exists(record)) {
+        await this.#filesystem.copyFile(
+          record,
+          join(this.#overridesFolder(copyUdid), RECORD_FILE_NAME),
+        );
+      }
     } catch (error: unknown) {
       this.#logger?.warn(
         `could not copy the launchd overrides of seed ${seedUdid} to ${copyUdid}: ${errorMessage(error)}`,
@@ -160,30 +170,77 @@ export class SlimBoot {
   ): Promise<SlimWrite> {
     const configured = resolveSlimCategories(slim.categories);
     const { kept, resolved } = splitByExcept(configured, except);
-    if (configured.categories.length === 0) {
-      return {
-        detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
-        kind: "no-categories",
-      };
+    const folder = this.#overridesFolder(udid);
+    const include = slim.include ?? [];
+    const exclude = slim.exclude ?? [];
+    const names = [...new Set([...include, ...exclude])].sort();
+    const recorded = await this.#readRecord(join(folder, RECORD_FILE_NAME));
+    const noCategories = configured.categories.length === 0;
+    const noCategoriesDetail = `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`;
+    // why: a name the worker dropped is still written back on (ADR 0083 §5), so a record or a name keeps the write going even with no category.
+    if (noCategories && names.length === 0 && recorded.length === 0) {
+      return { detail: noCategoriesDetail, kind: "no-categories" };
     }
 
     const startedAt = this.#clock.now();
-    const wanted = overridesFor(resolved.categories, kept);
-    let writeError: string | undefined;
-    try {
-      const folder = this.#overridesFolder(udid);
-      const file = join(folder, OVERRIDES_FILE_NAME);
-      const existing = await this.#readOverrides(file);
-      const merged = new Map([...existing, ...wanted]);
-      if (!sameEntries(existing, merged)) {
-        await this.#filesystem.mkdirp(folder, { mode: 0o700 });
-        await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
-      }
-    } catch (error: unknown) {
-      writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
-    }
+    const wanted = overridesFor(resolved.categories, kept, { exclude, include, recorded });
+    const writeError = await this.#tryWriteFiles(folder, wanted, { names, recorded });
+    // why: no category and no `exclude` is the unconfigured case, which logs its skip as before (ADR 0083 §4).
+    const unconfigured = noCategories && exclude.length === 0 ? noCategoriesDetail : undefined;
+    return { kept, kind: "written", resolved, startedAt, unconfigured, wanted, writeError };
+  }
 
-    return { kept, kind: "written", resolved, startedAt, wanted, writeError };
+  async #tryWriteFiles(
+    folder: string,
+    wanted: ReadonlyMap<string, boolean>,
+    record: { readonly names: readonly string[]; readonly recorded: readonly string[] },
+  ): Promise<string | undefined> {
+    try {
+      await this.#writeFiles(folder, wanted, record);
+      return undefined;
+    } catch (error: unknown) {
+      return `could not write the launchd overrides file: ${errorMessage(error)}`;
+    }
+  }
+
+  // why: the plist first, then the record: a restart between them leaves the old record, which still lists every name the plist may hold off (ADR 0083 S2).
+  async #writeFiles(
+    folder: string,
+    wanted: ReadonlyMap<string, boolean>,
+    record: { readonly names: readonly string[]; readonly recorded: readonly string[] },
+  ): Promise<void> {
+    const file = join(folder, OVERRIDES_FILE_NAME);
+    const existing = await this.#readOverrides(file);
+    const merged = new Map([...existing, ...wanted]);
+    if (!sameEntries(existing, merged)) {
+      await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+      await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
+    }
+    if (JSON.stringify(record.names) !== JSON.stringify(record.recorded)) {
+      await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+      await this.#filesystem.writeFileAtomic(
+        join(folder, RECORD_FILE_NAME),
+        JSON.stringify(record.names),
+        { mode: 0o644 },
+      );
+    }
+  }
+
+  // why: ADR 0083 S2: a record that is missing or cannot be read as a list of strings is an empty one, so an old simulator or a damaged file never fails a boot.
+  async #readRecord(file: string): Promise<readonly string[]> {
+    try {
+      if (!(await this.#filesystem.exists(file))) return [];
+      const parsed: unknown = JSON.parse(await this.#filesystem.readFile(file));
+      if (Array.isArray(parsed) && parsed.every((name) => typeof name === "string")) {
+        return parsed as string[];
+      }
+      throw new Error("it is not a list of strings");
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not read the record of named services ${file}: ${errorMessage(error)}`,
+      );
+      return [];
+    }
   }
 
   async #readOverrides(file: string): Promise<ReadonlyMap<string, boolean>> {
@@ -206,6 +263,10 @@ export class SlimBoot {
     if (write.kept.length > 0 && write.writeError !== undefined) {
       throw new KeptCategoriesError(write.writeError);
     }
+    // why: ADR 0083 §4: with no label written off the device is `full` whatever a readback would say, so none is run unless a kept category needs it.
+    if (write.kept.length === 0 && !writesOff(write)) {
+      return this.#unreadFull(device, data, write);
+    }
     const outcome = await this.#simctl.invoke(
       ["spawn", data.udid, "launchctl", "print-disabled", "system"],
       READBACK_TIMEOUT_MS,
@@ -218,6 +279,17 @@ export class SlimBoot {
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
     return this.#judgeReadBack(device, data, write, details, outcome.result.stdout);
+  }
+
+  #unreadFull(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+  ): DriverDevice {
+    const detail = [write.unconfigured, write.writeError].filter((part) => part !== undefined);
+    return detail.length === 0
+      ? this.#asIs(device, data, "full")
+      : this.#skipApply(device, data, detail.join("; "), "full");
   }
 
   #judgeReadBack(
@@ -242,8 +314,8 @@ export class SlimBoot {
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
 
-    // why: an except list naming the whole slim set slims nothing: full, no `device.slimmed`.
-    if (write.resolved.categories.length === 0) return this.#asIs(device, data, "full");
+    // why: nothing written off (an except list naming the whole slim set, or an include covering it) slims nothing: full, no `device.slimmed` (ADR 0083 §4).
+    if (!writesOff(write)) return this.#asIs(device, data, "full");
     this.#reportSlimmed(device, data, write);
     return this.#asIs(device, data, "slim");
   }
@@ -335,4 +407,8 @@ function readBackFailure(
   return outcome.kind === "timed-out"
     ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
     : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
+}
+
+function writesOff(write: Extract<SlimWrite, { readonly kind: "written" }>): boolean {
+  return [...write.wanted.values()].some(Boolean);
 }

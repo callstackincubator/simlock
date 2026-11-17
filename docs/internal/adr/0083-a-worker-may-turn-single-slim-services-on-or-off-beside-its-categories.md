@@ -1,6 +1,6 @@
 # 0083. A worker may turn single slim services on or off beside its categories
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-17
 - **Issue:** [#1644](https://github.com/callstackincubator/simlock/issues/1644) (requests [#1556](https://github.com/callstackincubator/simlock/issues/1556), [#1552](https://github.com/callstackincubator/simlock/issues/1552))
 - **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the managed labels gain the worker's named services and the ones it recorded, a never-disable label may be written `true`, and a record file sits beside the overrides) and §2 (a device is `slim` only when some label is written `true`); [ADR 0066](0066-a-slim-lease-may-keep-named-categories-running.md) §2 (a kept category also wins over a service the worker turns off by name).

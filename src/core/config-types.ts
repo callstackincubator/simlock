@@ -276,6 +276,8 @@ export interface DriverConfigEntry<Section = unknown> {
     simlockHome: string,
     settings: Readonly<Record<string, string | number | boolean>>,
   ) => Readonly<Record<string, string | number | boolean>>;
+  // why: ADR 0083 I4: runs on the merged config, after both layers, where a rule that spans keys of one section can be judged; it throws a `ConfigError`.
+  readonly check?: (section: never, config: Config) => void;
 }
 
 export interface ModuleConfigEntry {

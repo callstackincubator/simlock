@@ -11,6 +11,7 @@ import {
   plantManagedDevice,
   overridesFolder,
   overridesPath,
+  recordPath,
   overridesPlist,
   FaultyFilesystem,
   instanceId,
@@ -183,7 +184,7 @@ describe("IosSimctlDriver", () => {
 
   it.each([
     {
-      name: "copies the seed's disabled.plist to the new simulator",
+      name: "copies the seed's disabled.plist and its record of named services to the new simulator",
       seedHas: true,
       failing: undefined,
     },
@@ -199,6 +200,7 @@ describe("IosSimctlDriver", () => {
     if (seedHas) {
       await filesystem.mkdirp(overridesFolder(seedUdid));
       await filesystem.writeFileAtomic(overridesPath(seedUdid), overridesPlist({ "a.b": true }));
+      await filesystem.writeFileAtomic(recordPath(seedUdid), '["a.b"]');
     }
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
     filesystem.failing = failing;
@@ -233,7 +235,9 @@ describe("IosSimctlDriver", () => {
     ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
     const copied = failing === undefined && seedHas;
     expect(await filesystem.exists(overridesPath(driverData.udid))).toBe(copied);
+    expect(await filesystem.exists(recordPath(driverData.udid))).toBe(copied);
     if (copied) {
+      expect(await filesystem.readFile(recordPath(driverData.udid))).toBe('["a.b"]');
       expect(await filesystem.readFile(overridesPath(driverData.udid))).toBe(
         overridesPlist({ "a.b": true }),
       );
