@@ -215,6 +215,8 @@ function wrapSession(
     client.once("close", () => clock.cancel(expiry));
   }
   client.on("message", (data: RawData, isBinary: boolean) => {
+    // why: once the socket is closing (revoked, expired, refused) a peer that has not answered the close yet is served no more, for the 30 s ws waits.
+    if (client.readyState !== client.OPEN) return;
     // why: a session carries text lines only; a binary message closes the socket and runs nothing.
     if (isBinary) {
       client.close(1003, "binary message");

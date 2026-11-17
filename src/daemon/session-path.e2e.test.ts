@@ -150,7 +150,7 @@ describe("the session path", () => {
     const driver = new FakeDriver({
       availableOsVersions: ["18.0"],
       clock: new SystemClock(),
-      knownModels: ["Pixel-A", "Pixel-B"],
+      knownModels: ["Pixel-A", "Pixel-B", "Pixel-C"],
       // why: a real child process that reads its stdin and exits 0 only when all of it arrived.
       passthrough: () => ({
         args: [
@@ -327,7 +327,20 @@ describe("the session path", () => {
         expect(granted.ok).toBe(true);
       }
 
+      // why: a peer that never reads the close frame keeps its socket CLOSING for ws's 30 s timeout; it must not be served meanwhile.
+      const silent = (await openSession(port, agent.secret)).session as Session;
+      await silent.request("hello", hello);
+      silent.socket.pause();
+
       await daemon.dispatch("token.revoke", { id: agent.token.id }, admin);
+      silent.socket.send(
+        JSON.stringify({
+          id: 99,
+          payload: { model: "Pixel-B", platform: "android", requesterId: "after-revoke" },
+          type: "lease.request",
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       for (const revoked of [first, second]) {
         await vi.waitFor(() =>
@@ -487,10 +500,22 @@ describe("the session path", () => {
     expect(pushes(first, "lease-lost")[1]?.payload).toMatchObject({ leaseId: lease(expiring).id });
 
     driver.hangMakeReady();
-    const keyed = { ...ask, idempotencyKey: "same-request" };
-    const waiting = first.request("lease.request", keyed);
-    await vi.waitFor(() => expect(pushes(first, "progress").length).toBeGreaterThan(1));
-    const attached = second.request("lease.request", keyed);
+    // why: a model no warm device matches, so the request waits on the held `makeReady`.
+    const keyed = { ...ask, idempotencyKey: "same-request", model: "Pixel-B" };
+    const progressBefore = pushes(first, "progress").length;
+    let settled = false;
+    const waiting = first.request("lease.request", keyed).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() =>
+      expect(pushes(first, "progress").length).toBeGreaterThan(progressBefore),
+    );
+    let attachedSettled = false;
+    const attached = second.request("lease.request", keyed).finally(() => {
+      attachedSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect([settled, attachedSettled]).toEqual([false, false]);
     driver.releaseMakeReady();
     expect(lease(await attached).id).toBe(lease(await waiting).id);
     const held = await watcher.request("lease.list");
@@ -505,12 +530,13 @@ describe("the session path", () => {
     // why: a model no warm device matches, so the request waits on the held `makeReady`. The frame goes out raw: `request` would wait for a reply that never reaches a closed socket and reject unobserved ten seconds later.
     dropped.socket.send(
       JSON.stringify({
-        id: 1,
-        payload: { ...ask, model: "Pixel-B", requesterId: "agent-8" },
+        id: 2,
+        payload: { ...ask, model: "Pixel-C", requesterId: "agent-8" },
         type: "lease.request",
       }),
     );
     await vi.waitFor(() => expect(pushes(dropped, "progress").length).toBeGreaterThan(0));
+    expect(dropped.frames.some((frame) => frame.id === 2)).toBe(false);
     dropped.socket.close();
     await vi.waitFor(() => expect(dropped.closed).toBeDefined());
     driver.releaseMakeReady();
