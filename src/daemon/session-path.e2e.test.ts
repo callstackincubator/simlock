@@ -186,6 +186,8 @@ describe("the session path", () => {
       startDaemon({
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
+          // why: the default capacity derives from the host's CPUs, and a 4-CPU runner allows one Android device while this file holds two leases at once.
+          capacity: { config: { maxRunning: 4 }, strategy: "fixed" },
           http: {
             enabled: true,
             host: "127.0.0.1",
