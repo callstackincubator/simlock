@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeHttpStreamClient, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, FakeHttpStreamClient, MemoryFilesystem } from "../ports/index.js";
 import type { HttpStreamAnswer, HttpStreamRequest } from "../ports/index.js";
 import { runCli } from "./index.js";
 import { detachedGrant, outputCapture, realCliEnvironmentPorts } from "./test-index.js";
@@ -21,6 +21,9 @@ async function drain(request: HttpStreamRequest): Promise<string> {
 }
 
 interface Options {
+  readonly clock?: FakeClock;
+  // why: a file that streams in this many one-byte pieces, as a 2 GiB build does in many.
+  readonly pieces?: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly leases?: readonly ReturnType<typeof lease>[];
 }
@@ -46,7 +49,31 @@ async function files(
   const farm = new FakeFarm({ "lease.list": () => ({ leases }) });
   const stream = new FakeHttpStreamClient();
   stream.reply = reply;
-  const output = outputCapture(realCliEnvironmentPorts(filesystem), options.env ?? AGENT_A);
+  await filesystem.writeFileAtomic("/work/project/big.bin", "");
+  if (options.pieces !== undefined) {
+    const pieces = options.pieces;
+    const opened = filesystem.openFile.bind(filesystem);
+    filesystem.openFile = async (path) =>
+      path.endsWith("/big.bin")
+        ? {
+            close: async () => undefined,
+            read: () => {
+              let sent = 0;
+              return new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  if (sent === pieces) controller.close();
+                  else controller.enqueue(new Uint8Array([sent++]));
+                },
+              });
+            },
+            size: pieces,
+          }
+        : opened(path);
+  }
+  const output = outputCapture(
+    { ...realCliEnvironmentPorts(filesystem), clock: options.clock ?? new FakeClock(0) },
+    options.env ?? AGENT_A,
+  );
   const code = await runCli(argv, output.environmentWith({ httpStream: stream, webSocket: farm }));
   return { code, farm, filesystem, output, stream };
 }
@@ -150,6 +177,43 @@ describe("CLI: simlock files", () => {
     expect(JSON.parse(cut.output.stderr).error.code).toBe("REMOTE_UNREACHABLE");
     expect(await cut.filesystem.exists("/work/project/copy.apk")).toBe(false);
     expect(await cut.filesystem.exists("/work/project/copy.apk.part")).toBe(false);
+
+    const silent = new FakeClock(0);
+    const abortedAfter: boolean[] = [];
+    const stalled = await files(
+      ["files", "put", "app-debug.apk"],
+      async (request) => {
+        silent.advance(59_999);
+        abortedAfter.push(request.signal.aborted);
+        silent.advance(1);
+        abortedAfter.push(request.signal.aborted);
+        throw new Error("aborted");
+      },
+      { clock: silent },
+    );
+    expect(abortedAfter, "after 59.999 s and after 60 s of silence").toEqual([false, true]);
+    expect(stalled.code).toBe(1);
+    expect(JSON.parse(stalled.output.stderr).error.code).toBe("REMOTE_UNREACHABLE");
+
+    const moving = new FakeClock(0);
+    const long = await files(
+      ["files", "put", "big.bin"],
+      async (request) => {
+        const reader = (request.body as ReadableStream<Uint8Array>).getReader();
+        let bytes = 0;
+        for (let step = await reader.read(); !step.done; step = await reader.read()) {
+          bytes += step.value.length;
+          moving.advance(30_000);
+        }
+        abortedAfter.push(request.signal.aborted);
+        return answer(201, { name: "big.bin", size: bytes });
+      },
+      { clock: moving, pieces: 40 },
+    );
+    expect(abortedAfter.at(-1), "a 20-minute upload with bytes moving").toBe(false);
+    expect(long.code).toBe(0);
+    expect(JSON.parse(long.output.stdout)).toEqual({ lease: "lse_1", name: "big.bin", size: 40 });
+    expect(moving.now()).toBe(1_200_000);
 
     const refused: [string, readonly string[], string, Options?][] = [
       ["a missing local file", ["put", "nothing.apk"], "No file nothing.apk"],
