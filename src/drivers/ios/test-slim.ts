@@ -11,6 +11,7 @@ import {
   ScriptedProcessRunner,
   type Filesystem,
 } from "../../ports/index.js";
+import type { IosDriverConfig } from "./definition.js";
 import { IosSimctlDriver, type SlimmedFact, type SlimSkippedFact } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 
@@ -85,10 +86,7 @@ export async function plantManagedDevice(filesystem: Filesystem): Promise<void> 
 export async function createSlimDriver(
   runner: ScriptedProcessRunner,
   filesystem: Filesystem,
-  slim: {
-    readonly categories?: readonly string[];
-    readonly bootTimeoutMs: number;
-  },
+  slim: IosDriverConfig["slim"],
   onSlimmed?: (fact: SlimmedFact) => void,
   onSlimSkipped?: (fact: SlimSkippedFact) => void,
   slimByDefault = false,

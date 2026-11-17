@@ -12,6 +12,10 @@ export interface IosDriverConfig {
   readonly slim: {
     /** why: undefined disables every category the driver knows. */
     readonly categories?: readonly string[];
+    /** why: services a slim device keeps running whatever the categories turn off (ADR 0083 §2). */
+    readonly include?: readonly string[];
+    /** why: services a slim device turns off beside the categories (ADR 0083 §2). */
+    readonly exclude?: readonly string[];
     /** why: a slim device gets its own boot deadline, because CI runners are slow. */
     readonly bootTimeoutMs: number;
   };
