@@ -237,6 +237,17 @@ async function ctrlCWhileReconnectingBeforeTheGrantCancelsTheRequest(): Promise<
   expect(queued.farm.connections, "no reconnect timer outlives the command").toHaveLength(2);
   expect(closedConnections(queued)).toBe(true);
 
+  const dropWithCtrlC = holdRemoteLease(() => ({ "lease.request": () => NO_REPLY }));
+  await vi.waitFor(() => expect(leaseRequestsOf(dropWithCtrlC)).toHaveLength(1));
+  dropWithCtrlC.signals.emit("SIGINT");
+  dropWithCtrlC.farm.connections[0]?.peer.dropped(1006, "");
+  expect(await ends(dropWithCtrlC)).toBe(0);
+  expect(
+    dropWithCtrlC.stderr(),
+    "a cancel that meets the drop does not reconnect to the request",
+  ).not.toContain("reconnecting");
+  expect(dropWithCtrlC.farm.requestTypes()).toContain("lease.cancel");
+
   const hanging = holdRemoteLease(() => ({ "lease.request": () => NO_REPLY }));
   await dropWhileRequest(hanging);
   hanging.farm.unanswered = true;
@@ -310,13 +321,15 @@ async function queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway(): Promi
     await dropWhileRequest(gone);
     gone.farm.failure = new Error("connect ECONNREFUSED");
     gone.clock.advance(giveUpAt - 1 - gone.clock.now());
+    await settle();
     expect(gone.exitCode(), argv.join(" ")).toBeUndefined();
     gone.clock.advance(1);
     expect(await ends(gone), argv.join(" ")).toBe(1);
     expect(errorLine(gone.stderr()).code).toBe("REMOTE_UNREACHABLE");
     const tried = gone.attempts.length;
     gone.clock.advance(600_000);
-    expect(gone.attempts).toHaveLength(tried);
+    await settle();
+    expect(gone.attempts, "no try after the give-up").toHaveLength(tried);
   }
 }
 

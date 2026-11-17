@@ -297,6 +297,31 @@ async function queuedRequestIsReattachedAfterADrop(): Promise<void> {
   expect(cancelled.attempts, "no reconnect timer outlives the cancel").toHaveLength(tried);
   cancelled.stdin.end();
   await vi.waitFor(() => expect(cancelled.exitCode()).toBe(0));
+
+  const meets = await serveRemoteMcp(ENV, {
+    "lease.cancel": () => ({ result: "cancelled" }),
+    "lease.request": () => NO_REPLY,
+  });
+  const meetsAbort = new AbortController();
+  const meeting = meets.mcp
+    .request(
+      { method: "tools/call", params: { arguments: lease, name: "lease_simulator" } },
+      CallToolResultSchema,
+      { signal: meetsAbort.signal },
+    )
+    .catch((error: unknown) => error);
+  await vi.waitFor(() => expect(leaseRequestsOf(meets)).toHaveLength(1));
+  meets.farm.failure = new Error("connect ECONNREFUSED");
+  meetsAbort.abort();
+  meets.farm.connections[0]?.peer.dropped(1006, "");
+  await meeting;
+  await settle();
+  const metTried = meets.attempts.length;
+  meets.clock.advance(120_000);
+  await settle();
+  expect(meets.attempts, "a cancel that meets the drop starts no reconnect").toHaveLength(metTried);
+  meets.stdin.end();
+  await vi.waitFor(() => expect(meets.exitCode()).toBe(0));
 }
 
 describe("CLI: simlock mcp against a farm", () => {
