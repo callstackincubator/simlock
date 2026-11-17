@@ -141,7 +141,7 @@ export async function createHarness(
     readonly warmPool?: Partial<Config["warmPool"]>;
     /** why: how long a ready device may idle before the pool shuts it down. */
     readonly idleShutdownAfterMs?: number;
-    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0080). */
+    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0084). */
     readonly virtualDevices?: Readonly<Partial<Record<"android" | "ios", boolean>>>;
     /** why: starts the warm pool as the daemon's startup does, so it learns from the leases and reacts to events. */
     readonly startPool?: boolean;

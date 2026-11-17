@@ -166,14 +166,14 @@ export interface Config {
   readonly ios: {
     readonly defaultMode: DeviceMode;
     readonly defaultModels: DefaultModels;
-    /** why: false makes this worker serve only enrolled physical iOS devices (ADR 0080 §1). */
+    /** why: false makes this worker serve only enrolled physical iOS devices (ADR 0084 §1). */
     readonly virtualDevices: boolean;
   } & DriverConfigSection;
   readonly android: {
     /** why: the image tag an Android lease that names none gets where an image of it fits (ADR 0078 §1). */
     readonly defaultImageTag?: string;
     readonly defaultModels: DefaultModels;
-    /** why: false makes this worker serve only enrolled physical Android devices (ADR 0080 §1). */
+    /** why: false makes this worker serve only enrolled physical Android devices (ADR 0084 §1). */
     readonly virtualDevices: boolean;
   } & DriverConfigSection;
   /**
