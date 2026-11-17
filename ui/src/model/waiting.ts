@@ -65,6 +65,7 @@ const WHY_TEXT: Readonly<
   "global-running-limit": () => "Full: running limit",
   "no-free-physical": () => "Every matching device is leased or absent",
   "platform-running-limit": (platform) => `Full: running limit for ${platform}`,
+  "memory-pressure": () => "Full: host memory pressure",
   "ram-budget": () => "Full: RAM budget",
   "waiting-for-device": () => "A matching device is starting",
 };
@@ -84,6 +85,7 @@ const WORKER_WHY_TEXT: Readonly<
   Record<Exclude<GatewayReason, "full">, (platform: string) => string>
 > = {
   busy: () => "Busy with its own queue",
+  "cannot-keep-except": () => "Cannot keep these slim categories",
   "capability-missing": () => "Missing capability",
   disconnected: () => "Not connected",
   drained: () => "Drained",

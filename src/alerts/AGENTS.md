@@ -1,52 +1,25 @@
 # Alerts
 
 Does: a gateway sends chosen fleet events to webhook destinations (ADR 0035).
-Entry: `index.ts` (`createAlerts`). Built only by `../daemon/main.ts`, in the gateway branch, when
-`gateway.alerts.destinations` is not empty; a worker never builds it.
-Uses: bus (subscribe, types), ports (`Clock`, `IdGenerator`, `Logger`, `WebhookPoster`), core (config types and
-`ALERT_EVENTS`). Never imports anything else; `.dependency-cruiser.mjs` checks both directions.
-Imported by: `../daemon/main.ts` only.
 
-## Files
+## Rules
 
-| File               | Role                                                                                                       |
-| ------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `index.ts`         | `createAlerts`: one subscription per listed event, `stop()`                                                |
-| `queue.ts`         | `DestinationQueue`: one message at a time, tries, timeout, bounded wait                                    |
-| `sample.ts`        | `sendTest`: the one-try sample behind `Alerts.test`, outside the queues                                    |
-| `error-code.ts`    | `errorCode`: a network error's code, else `network-error`, never its message                               |
-| `formats/types.ts` | `AlertFormatDefinition`: `build` turns an envelope into headers and body                                   |
-| `formats/index.ts` | `ALERT_FORMAT_REGISTRY`, typed over core's `ALERT_FORMATS`                                                 |
-| `formats/generic/` | The envelope as JSON, signed with HMAC-SHA256                                                              |
-| `formats/slack/`   | `{text}` from a message table (`formats/slack/messages.ts`), `formats/slack/units.ts` cuts, escapes, sizes |
-
-## How it works
-
-1. The bus handler puts the envelope on the queue of every destination that lists the event and returns.
-2. A queue takes the oldest waiting message, builds its request once, then POSTs it: 10 s at most
-   per try, 3 tries, 1 s then 5 s between them. Network errors, timeouts, `429` and `5xx` are retried;
-   any other non-2xx status gives up at once. A queue holds 100 waiting messages and drops the oldest.
-3. `stop()` aborts the try in flight, cancels timers and empties the queues; it waits for nothing.
-4. `test(name)` (behind `simlock alerts test`) builds a sample envelope (event `alerts.test-sent`, a new
-   id from `idGenerator`, never on the bus) with the destination's format and POSTs it once, at once,
-   beside the queue: 10 s from the POST's start, then it aborts. It resolves, never rejects, with
-   `{ok: true, status}` or `{ok: false, reason}` (`unknown-destination`, `status`, `unreachable`,
-   `timeout`, `stopped`); `../gateway/dispatcher.ts` maps that to the contract's errors. `stop()` aborts
-   a test in flight (`stopped`) and a test after it posts nothing; neither writes a log line or counts
-   in "Alerts discarded at stop".
-
-Logs name the destination, never its URL or secret; a failed try is logged by code, never by an
-error's message. A format is added by a directory under `formats/`, an entry in the registry and in
-core's `ALERT_FORMATS`; the queue never names a format.
-
-## Slack messages
-
-`formats/slack/messages.ts` is a `Record<AlertEventName, …>`: an event added to `ALERT_EVENTS` does not
-compile until it has a message. Every variable part goes through `part()` (cut to 300 code points, then
-`&`, `<`, `>` escaped), and `worker.rejected` names what the connection claimed, never the registry.
-`createAlerts` takes `workerLabel(workerId)` (the gateway's view of the worker, from `../daemon/main.ts`)
-and falls back to the id; the message is built when it leaves the queue, so it names the worker as known
-then.
+- The bus handler only puts the envelope on each listed destination's queue and returns. Building
+  the request and every POST happen after it.
+- A message is built once, when it leaves the queue, so it names the worker as the gateway knows
+  it then. `workerLabel` falls back to the worker id.
+- `stop()` aborts the try in flight, cancels timers and empties the queues; it waits for nothing.
+- `test` runs beside the queues, one try, and resolves, never rejects. Its sample envelope
+  (`alerts.test-sent`) is never on the bus. `stop()` aborts a test in flight, and a test after
+  it posts nothing; neither writes a log line or counts in "Alerts discarded at stop".
+  `../gateway/dispatcher.ts` maps its result to the contract's errors.
+- Logs name the destination, never its URL or secret. A failed try is logged by code
+  (`errorCode`), never by an error's message.
+- The queue never names a format. A new format is a directory under `formats/`, an entry in
+  `ALERT_FORMAT_REGISTRY` and one in core's `ALERT_FORMATS`.
+- In `formats/slack/messages.ts` every variable part goes through `part()`, which cuts and
+  escapes it: Slack reads `&`, `<` and `>` as markup, and `<!channel>` pings a channel.
+- The Slack `worker.rejected` message names what the connection claimed, never the registry.
 
 ## Known gaps
 

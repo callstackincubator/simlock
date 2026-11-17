@@ -1,7 +1,6 @@
 import "./drawer.css";
 
 import { Dialog } from "@base-ui/react/dialog";
-import { Tabs } from "@base-ui/react/tabs";
 import { type ReactNode, useState } from "react";
 
 import { IconButton } from "./button";
@@ -49,51 +48,5 @@ export function Drawer(props: {
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>
-  );
-}
-
-export interface DrawerTab {
-  readonly value: string;
-  readonly label: string;
-  readonly keepMounted?: boolean;
-  readonly content: ReactNode;
-}
-
-// why: a tab that holds something running, such as a live screen, stays mounted while another tab
-// shows, so switching tabs never stops it.
-export function DrawerTabs(props: {
-  readonly tabs: readonly DrawerTab[];
-  readonly defaultValue?: string;
-  // why: a drawer whose tab lives in the address passes its value and hears the choice; the others
-  // keep theirs inside.
-  readonly value?: string;
-  readonly onValueChange?: (value: string) => void;
-  readonly label: string;
-}) {
-  const { defaultValue, label, onValueChange, tabs, value } = props;
-  return (
-    <Tabs.Root
-      className="drawer-tabs"
-      {...(value === undefined ? { defaultValue } : { value })}
-      onValueChange={(next) => onValueChange?.(String(next))}
-    >
-      <Tabs.List className="drawer-tab-list" aria-label={label}>
-        {tabs.map((tab) => (
-          <Tabs.Tab key={tab.value} value={tab.value} className="drawer-tab">
-            {tab.label}
-          </Tabs.Tab>
-        ))}
-      </Tabs.List>
-      {tabs.map((tab) => (
-        <Tabs.Panel
-          key={tab.value}
-          value={tab.value}
-          keepMounted={tab.keepMounted === true}
-          className="drawer-panel"
-        >
-          {tab.content}
-        </Tabs.Panel>
-      ))}
-    </Tabs.Root>
   );
 }

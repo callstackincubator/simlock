@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { authStrategies } from "../auth/index.js";
+import { driverConfigEntries } from "../driver-registry/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { capacityStrategyNames } from "./capacity/index.js";
 import { configValidators, type ModuleConfigEntry } from "./config.js";
@@ -54,7 +55,7 @@ function authKeys(): string[] {
 // and strategy lists, so their keys come from those lists; every other key from the shapes.
 function acceptedKeys(): string[] {
   const keys = capacityStrategyNames.flatMap((strategy) =>
-    Object.entries(configValidators(strategy, modules, authStrategies))
+    Object.entries(configValidators(strategy, modules, authStrategies, driverConfigEntries))
       .filter(([key]) => key !== "capabilities")
       .flatMap(([key, validator]) => keyPaths(validator, key)),
   );

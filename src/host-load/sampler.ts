@@ -16,7 +16,7 @@ interface HostLoadCpu {
   readonly limited: boolean;
 }
 
-interface HostLoadReading {
+export interface HostLoadReading {
   readonly ageMs: number;
   readonly cpu?: HostLoadCpu;
   readonly memory?: MemoryCounters;
@@ -27,6 +27,8 @@ interface HostLoadSamplerOptions {
   readonly clock: Clock;
   readonly probe: HostLoadProbe;
   readonly logger?: Logger;
+  /** why: called after each recorded reading, a failed read included, so a reader works from every reading and not from polling `current()`. */
+  readonly onReading?: (reading: HostLoadReading) => void;
 }
 
 const SAMPLE_INTERVAL_MS = 15_000;
@@ -144,6 +146,7 @@ export class HostLoadSampler {
       }
       this.#reading = { at: now, parts: {} };
       this.#markFirstReading();
+      this.#notify();
       return;
     }
     for (const part of ["cpu", "memory", "disk"] as const) {
@@ -159,6 +162,18 @@ export class HostLoadSampler {
     if (counters.disk !== undefined) parts.disk = counters.disk;
     this.#reading = { at: now, parts };
     this.#markFirstReading();
+    this.#notify();
+  }
+
+  #notify(): void {
+    const { onReading } = this.options;
+    const reading = this.current();
+    if (onReading === undefined || reading === undefined) return;
+    try {
+      onReading(reading);
+    } catch (error) {
+      this.#logger.warn("Host load reading listener failed", { error: describe(error) });
+    }
   }
 
   #note(part: Part, present: boolean): void {

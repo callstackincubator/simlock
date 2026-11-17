@@ -49,6 +49,15 @@ interface Fleet {
   readonly runsByPr?: Readonly<Record<number, readonly CheckRun[]>>;
   readonly target?: number;
   readonly feature?: Feature;
+  readonly bug?: Bug;
+}
+
+// why: the bug a PR from `bug/<number>` fixes, as fast-track.mjs reads it: the issue's labels
+// and the size of the PR.
+interface Bug {
+  readonly number: number;
+  readonly labels: readonly string[];
+  readonly lines: number;
 }
 
 // why: the feature behind the PRs' `Closes #<n>`: its parent link, sub-issues, the files each
@@ -139,9 +148,16 @@ if (method === "PUT" && path === "repos/o/r/pulls/" + fleet.target + "/merge" &&
     draft: fleet.draft,
     labels: fleet.labels.map((name) => ({ name })),
     body: fleet.body,
-    head: { ref: "chore/x", sha: "abc" + pr },
+    head: { ref: fleet.bug === null ? "chore/x" : "bug/" + fleet.bug.number, sha: "abc" + pr },
     mergeable: fleet.mergeable[Math.min(asked, fleet.mergeable.length - 1)],
+    additions: fleet.bug === null ? 0 : fleet.bug.lines,
+    deletions: 0,
+    changed_files: 1,
   };
+} else if (fleet.bug !== null && path === "repos/o/r/issues/" + fleet.bug.number) {
+  value = { state: "open", assignees: [], labels: fleet.bug.labels.map((name) => ({ name })) };
+} else if (fleet.bug !== null && path === "repos/o/r/issues/" + fleet.target + "/comments") {
+  value = page([]);
 } else if (path === "repos/o/r/commits/abc" + pr + "/check-runs") {
   if (fields.page === "1") fs.appendFileSync(d + "/gated", pr + "\\n");
   const pending = fields.page === "1" && count("run-reads") < fleet.pendingReads;
@@ -212,6 +228,7 @@ function fleetFile(fleet: Fleet) {
     runsByPr: f.runsByPr,
     target: f.target,
     feature: f.feature ?? null,
+    bug: f.bug ?? null,
   };
 }
 
@@ -303,6 +320,19 @@ describe("merge-pr.sh gates on the PR", { timeout: 20_000 }, () => {
     const result = gate({ labels: ["task", "needs-hardware"] });
     expect(result.merged).toBe(false);
     expect(result.output).toContain("not merged: PR #7 is labelled needs-hardware");
+  });
+
+  it("does not merge the fix of a fast-tracked bug that fails the exit check, before it looks at CI", () => {
+    const result = gate({
+      runs: [run("failure")],
+      bug: { number: 5, labels: ["bug:ready", "fast-track"], lines: 251 },
+    });
+
+    expect(result.merged).toBe(false);
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("fast-track: #5 held: PR #7 changes 251 lines, over 250");
+    expect(result.output).toContain("not merged: PR #7 is held by the fast track");
+    expect(result.output).not.toContain("CI not green");
   });
 
   it("does not merge a PR whose body fails pr-body-check.mjs, before it looks at CI", () => {

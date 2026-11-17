@@ -48,16 +48,22 @@ export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInpu
       const child = options.launcher.start(options.command, [device.deviceId, "--input"], {
         env: environmentFor(options),
       });
+      const sizes = sizesOf(child, options.logger);
       let size: InputScreenConfig;
       try {
-        size = await within(READY_DEADLINE_MS, options.clock, readConfig(child));
+        size = await within(READY_DEADLINE_MS, options.clock, firstSize(child, sizes));
       } catch (error) {
         await stopProgram(child, options.clock);
         throw error;
       }
-      const keys = keysAvailable(device);
-      const config: InputScreenConfig = keys ? size : { ...size, keyboardUnavailable: true };
-      return new IosDeviceInput(options, device.deviceId, child, config, keys);
+      return new IosDeviceInput(
+        options,
+        device.deviceId,
+        child,
+        size,
+        keysAvailable(device),
+        sizes,
+      );
     },
   };
 }
@@ -80,30 +86,59 @@ function keysAvailable(device: VirtualDriverDevice | PhysicalDriverDevice): bool
   return version !== undefined && version[0] < 27;
 }
 
+async function firstSize(
+  child: BytePipeProcess,
+  sizes: AsyncGenerator<InputScreenConfig>,
+): Promise<InputScreenConfig> {
+  const step = await sizes.next();
+  if (!step.done) return step.value;
+  const exit = await child.exited;
+  throw new Error(
+    `The input helper ${describeExit(exit)}${exit.error === undefined ? " before it reported the screen size" : ""}`,
+  );
+}
+
 // why: the helper's stdout is the stream's envelope (a 4-byte length counting the tag, a tag, the
-// payload); the first 0x82 is its size, written once its HID client is set up.
-async function readConfig(child: BytePipeProcess): Promise<InputScreenConfig> {
+// payload); each 0x82 is a screen size, the first once its HID client is set up, a later one when
+// the panel in use changes. A frame that is not a size is warned about and the next is waited for.
+async function* sizesOf(
+  child: BytePipeProcess,
+  logger: Logger | undefined,
+): AsyncGenerator<InputScreenConfig> {
   const reader = child.stdout.getReader();
   let buffered = new Uint8Array();
   for (;;) {
     const step = await reader.read();
-    if (step.done) {
-      const exit = await child.exited;
-      throw new Error(
-        `The input helper ${describeExit(exit)}${exit.error === undefined ? " before it reported the screen size" : ""}`,
-      );
-    }
+    if (step.done) return;
     buffered = Uint8Array.from([...buffered, ...step.value]);
-    if (buffered.length < FRAME_HEADER_BYTES) continue;
-    const length = new DataView(buffered.buffer).getUint32(0);
-    if (buffered.length < FRAME_HEADER_BYTES + length) continue;
-    const size = JSON.parse(
-      new TextDecoder().decode(
-        buffered.subarray(FRAME_HEADER_BYTES + 1, FRAME_HEADER_BYTES + length),
-      ),
-    ) as { width: number; height: number };
-    return { height: size.height, orientation: "portrait", width: size.width };
+    for (;;) {
+      if (buffered.length < FRAME_HEADER_BYTES) break;
+      const length = new DataView(buffered.buffer).getUint32(0);
+      if (buffered.length < FRAME_HEADER_BYTES + length) break;
+      const payload = buffered.subarray(FRAME_HEADER_BYTES + 1, FRAME_HEADER_BYTES + length);
+      buffered = buffered.slice(FRAME_HEADER_BYTES + length);
+      const size = parseSize(payload);
+      if (size === undefined)
+        logger?.warn("The input helper sent a screen size that did not parse");
+      else yield size;
+    }
   }
+}
+
+function parseSize(payload: Uint8Array): InputScreenConfig | undefined {
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(payload));
+  } catch {
+    return undefined;
+  }
+  const { height, width } = (body ?? {}) as { height?: unknown; width?: unknown };
+  if (!isPixels(width) || !isPixels(height)) return undefined;
+  return { height, orientation: "portrait", width };
+}
+
+function isPixels(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 100_000;
 }
 
 function describeExit(exit: BytePipeExit): string {
@@ -150,8 +185,9 @@ class IosDeviceInput implements DeviceInput {
   readonly #options: IosDeviceInputOptions;
   readonly #udid: string;
   readonly #child: BytePipeProcess;
-  readonly #config: InputScreenConfig;
+  #config: InputScreenConfig;
   readonly #keys: boolean;
+  readonly #configListeners = new Set<(config: InputScreenConfig) => void>();
   readonly #failedListeners = new Set<(error: Error) => void>();
   #closing: Promise<void> | undefined;
 
@@ -159,17 +195,33 @@ class IosDeviceInput implements DeviceInput {
     options: IosDeviceInputOptions,
     udid: string,
     child: BytePipeProcess,
-    config: InputScreenConfig,
+    size: InputScreenConfig,
     keys: boolean,
+    sizes: AsyncGenerator<InputScreenConfig>,
   ) {
     this.#keys = keys;
+    this.#config = this.#withKeys(size);
+    void this.#follow(sizes);
     void child.exited.then((exit) => {
       this.#fail(new Error(`The input helper ${describeExit(exit)}`));
     });
     this.#options = options;
     this.#udid = udid;
     this.#child = child;
-    this.#config = config;
+  }
+
+  #withKeys(size: InputScreenConfig): InputScreenConfig {
+    return this.#keys ? size : { ...size, keyboardUnavailable: true };
+  }
+
+  // why: a foldable's helper sends a size again when the panel in use changes; a size equal to the
+  // one held is no change, and the listeners hear only changes.
+  async #follow(sizes: AsyncGenerator<InputScreenConfig>): Promise<void> {
+    for await (const size of sizes) {
+      if (size.width === this.#config.width && size.height === this.#config.height) continue;
+      this.#config = this.#withKeys(size);
+      for (const listener of this.#configListeners) listener(this.#config);
+    }
   }
 
   send(message: InputMessage): Promise<void> {
@@ -211,7 +263,8 @@ class IosDeviceInput implements DeviceInput {
 
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
     listener(this.#config);
-    return () => undefined;
+    this.#configListeners.add(listener);
+    return () => this.#configListeners.delete(listener);
   }
 
   // why: a helper that is closing, or already failed, has told its listeners; a second word would

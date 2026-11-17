@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BaselineEntry } from "../../../src/contract/index";
-import { baselineRows } from "./baselines";
+import { baselineRows, filterBaselineRows, groupLabels, searchBaselineRows } from "./baselines";
 import type { WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-11-03T12:00:00Z");
@@ -33,22 +33,15 @@ function worker(id: string, label?: string): WorkerView {
 }
 
 describe("baselineRows", () => {
-  it("shows each entry's columns in the console's formats, ordered by name then worker", () => {
+  it("orders iOS before Android, then by name and worker, and words each row in the console's formats", () => {
     const rows = baselineRows(
       [
-        entry({
-          imageTag: "google_apis",
-          note: "app 4.2, test user",
-          sizeBytes: 4.5 * 2 ** 30,
-          workerId: "w2",
-        }),
+        entry({ imageTag: "google_apis", sizeBytes: 4.5 * 2 ** 30, workerId: "w2" }),
         entry({
           name: "login",
           platform: "ios",
           model: "iPhone 17",
           osVersion: "27.0",
-          mode: "slim",
-          version: 1,
           workerId: "w1",
         }),
         entry({ name: "checkout", workerId: "w1", sizeBytes: 300 * 2 ** 20 }),
@@ -57,37 +50,52 @@ describe("baselineRows", () => {
       [worker("w1", "mac-mini-2"), worker("w2", "mac-studio-1")],
       NOW,
     );
-
     expect(rows.map((row) => [row.name, row.worker])).toEqual([
+      ["login", "mac-mini-2"],
       ["alpha", "w9"],
       ["checkout", "mac-mini-2"],
       ["checkout", "mac-studio-1"],
-      ["login", "mac-mini-2"],
     ]);
-    expect(rows[2]).toMatchObject({
-      mode: "full",
-      model: "Pixel 9 / google_apis",
-      note: "app 4.2, test user",
-      os: "36",
-      platform: "Android",
-      saved: "2 h ago",
-      savedAt: "2026-11-03T10:00:00Z",
+    expect(rows[3]).toMatchObject({
+      built: "2 h ago",
+      detail: "Pixel 9 / google_apis · Android 36",
       size: "4.5 GiB",
-      version: 2,
+      state: "ready",
     });
-    expect(rows[1]?.size).toBe("300 MiB");
-    expect(rows[3]).toMatchObject({ model: "iPhone 17", platform: "iOS", note: "" });
+    expect(rows[0]).toMatchObject({ detail: "iPhone 17 · iOS 27.0", size: "—" });
+    expect(rows[2]?.size).toBe("300 MiB");
   });
 
-  it("leaves the worker out when no entry carries one, and shows an entry with no size as a dash", () => {
-    const [row] = baselineRows([entry()], [], NOW);
-    expect(row?.worker).toBeUndefined();
-    expect(row?.size).toBe("—");
-  });
-
-  it("marks an entry with a stale reason stale, word for word", () => {
+  it("marks an entry with a stale reason stale, word for word, and filters and searches before grouping", () => {
     const reason = "runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed";
-    const rows = baselineRows([entry({ staleReason: reason }), entry({ name: "ok" })], [], NOW);
-    expect(rows.map((row) => row.stale)).toEqual([reason, undefined]);
+    const rows = baselineRows(
+      [entry({ name: "old", platform: "ios", staleReason: reason }), entry({ name: "fresh" })],
+      [],
+      NOW,
+    );
+    expect(rows.map((row) => row.staleReason)).toEqual([reason, undefined]);
+    expect(filterBaselineRows(rows, "stale").map((row) => row.name)).toEqual(["old"]);
+    expect(filterBaselineRows(rows, "ready").map((row) => row.name)).toEqual(["fresh"]);
+    expect(filterBaselineRows(rows, "all")).toHaveLength(2);
+    expect(searchBaselineRows(filterBaselineRows(rows, "all"), "CORESIMULATOR")).toHaveLength(1);
+    expect(searchBaselineRows(rows, "nothing")).toHaveLength(0);
+  });
+
+  it("counts a group's matching rows and names the platform and the count, with no size", () => {
+    const rows = baselineRows(
+      [
+        entry({ name: "a", sizeBytes: 2 ** 30 }),
+        entry({ name: "b" }),
+        entry({ name: "c", platform: "ios", sizeBytes: 2 ** 30 }),
+        entry({ name: "d", platform: "ios", sizeBytes: 2 ** 30 }),
+      ],
+      [],
+      NOW,
+    );
+    expect(groupLabels(rows).get("android")).toBe("Android · 2 baselines");
+    expect(groupLabels(rows).get("ios")).toBe("iOS · 2 baselines");
+    expect(groupLabels(rows.filter((row) => row.name === "b")).get("android")).toBe(
+      "Android · 1 baseline",
+    );
   });
 });

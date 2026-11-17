@@ -1,6 +1,6 @@
 import type { EventBus } from "../bus/index.js";
 import type { BaselineEntry } from "../contract/index.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import { assertVirtual, type Platform, type VirtualDevice } from "./domain.js";
 import type { Driver, DriverSource } from "./driver.js";
@@ -8,6 +8,7 @@ import { NoDriverError } from "./driver-catalog.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { Registry, ReleasedLease } from "./registry.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
+import { DeviceBusyError } from "./physical-enrollment.js";
 import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
@@ -104,6 +105,7 @@ export interface BaselineServiceOptions {
   readonly decisions: SerializedDecision;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "dispose">;
+  readonly logger?: Logger | undefined;
   readonly reclaim: Pick<ReclaimCoordinator, "retireSaved">;
   readonly registry: { readonly snapshot: Pick<Registry["snapshot"], "leases" | "virtualDevices"> };
   readonly state: StateDatabase;
@@ -169,6 +171,13 @@ export class BaselineService {
       });
     await this.#destroyIdleOlderDevices(baseline.name, baseline.version);
     await this.#dropReplaced(request.requesterId);
+    try {
+      await this.checkStale();
+    } catch (error: unknown) {
+      this.options.logger?.warn(
+        `could not check baselines after a save: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     return { baseline, leaseId: request.leaseId };
   }
 
@@ -432,7 +441,7 @@ export class BaselineService {
       const claim = this.options.claims.tryClaim(device.id, "cleanup");
       if (claim === undefined) {
         for (const held of claimed) held.claim.release();
-        throw new Error(`Device ${device.id} made from baseline ${name} is busy`);
+        throw new DeviceBusyError(device.id, device.state === "reclaiming" ? "reclaiming" : "busy");
       }
       claimed.push({ claim, device });
     }

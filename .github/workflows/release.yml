@@ -4,18 +4,19 @@ name: Release
 # irreversible happens before the package is built and checked:
 #
 #   plan      the next version (0.X for a feature, 0.X.Y for a patch, from package.json), after
-#             checking that main's CI passed on this commit and that the tag and the npm version
-#             are free
-#   build     the package at that version, on macOS with Xcode 27 so dist/bin/ holds both iOS
-#             capture programs (Linux cannot build them); its tarball is the one artifact every
-#             later job ships
-#   tag       the release commit (package.json, CHANGELOG.md) and the tag v0.X.Y, pushed to main
-#   publish   that tarball to npm through trusted publishing (OIDC, no stored token), with
-#             provenance
-#   release   the GitHub release, with the same notes as CHANGELOG.md and the tarball attached
+#             checking that main's CI passed on this commit, that the tag is free, that
+#             @simlock/e2e exists on npm, and that the version is free for both packages
+#   build     both packages at that version, on macOS with Xcode 27 so dist/bin/ holds both iOS
+#             capture programs (Linux cannot build them); their two tarballs are the artifacts
+#             every later job ships
+#   tag       the release commit (both package.json files, CHANGELOG.md) and the tag v0.X.Y,
+#             pushed to main
+#   publish   both tarballs to npm, @simlock/e2e first, through trusted publishing (OIDC, no
+#             stored token), with provenance
+#   release   the GitHub release, with the same notes as CHANGELOG.md and both tarballs attached
 #   website   the docs site, from the release commit (.github/workflows/website.yml)
 #
-# `dry_run` stops after build, with the tarball to inspect, and may run from any branch (a release
+# `dry_run` stops after build, with the tarballs to inspect, and may run from any branch (a release
 # only from main). The version and changelog arithmetic is `node scripts/release.mjs`.
 #
 # Why it is shaped this way:
@@ -29,14 +30,15 @@ name: Release
 #   branch can mint one.
 # - Every job works from the commit plan saw (`github.sha`), and the release commit is pushed only
 #   if main still points there, so main moving during the run cannot change what ships. The
-#   tarball publish and release attach is the one build proved.
+#   tarballs published and attached are the ones build proved.
 # - Nightly builds would be a `schedule` trigger: plan would name a channel, with a version like
 #   0.X.Y-nightly.<date> and the `nightly` dist-tag, and tag, release and website would skip for
 #   it. Nothing else changes.
 #
-# One-time setup, outside this file: an npm trusted publisher for `simlock` (owner
-# callstackincubator, repository simlock, workflow release.yml, environment release, with
-# `npm publish` allowed); a `release` environment on the repository whose deployments may come
+# One-time setup, outside this file: the `simlock` organisation on npm, a 0.0.0 placeholder of
+# @simlock/e2e published by hand, and an npm trusted publisher for each of `simlock` and
+# `@simlock/e2e` (owner callstackincubator, repository simlock, workflow release.yml,
+# environment release, with `npm publish` allowed); a `release` environment on the repository whose deployments may come
 # from main only; main's ruleset letting GitHub Actions push. Agents cannot start this workflow
 # (`gh workflow run` is denied in .claude/settings.json).
 
@@ -111,7 +113,7 @@ jobs:
           if [ -n "$previous" ]; then range="$previous..HEAD"; else range=HEAD; fi
           git log --format='%s%n%b' "$range" | node scripts/release.mjs plan --bump "$BUMP" | tee -a "$GITHUB_OUTPUT"
           echo "previous_tag=$previous" | tee -a "$GITHUB_OUTPUT"
-      - name: The tag and the npm version are free
+      - name: The tag and the npm versions are free
         env:
           VERSION: ${{ steps.next.outputs.version }}
           TAG: ${{ steps.next.outputs.tag }}
@@ -121,11 +123,24 @@ jobs:
             echo "::error::$TAG exists already"
             exit 1
           fi
-          published=$(curl -fsS https://registry.npmjs.org/simlock | jq -r --arg v "$VERSION" '.versions[$v].version // empty')
-          if [ -n "$published" ]; then
-            echo "::error::simlock@$VERSION is on npm already"
-            exit 1
-          fi
+          # why: npm binds a trusted publisher only to a package that exists, so the first version of
+          # @simlock/e2e is published by hand; a release does not start before that (ADR 0077 §4).
+          for name in simlock @simlock/e2e; do
+            status=$(curl -sS -o "$RUNNER_TEMP/npm.json" -w '%{http_code}' "https://registry.npmjs.org/${name/\//%2F}")
+            if [ "$status" = 404 ] && [ "$name" = "@simlock/e2e" ]; then
+              echo "::error::@simlock/e2e is not on npm yet: create the simlock organisation, publish a 0.0.0 placeholder by hand and add its trusted publisher, then run the release again"
+              exit 1
+            fi
+            if [ "$status" != 200 ]; then
+              echo "::error::npm answered $status for $name"
+              exit 1
+            fi
+            published=$(jq -r --arg v "$VERSION" '.versions[$v].version // empty' "$RUNNER_TEMP/npm.json")
+            if [ -n "$published" ]; then
+              echo "::error::$name@$VERSION is on npm already"
+              exit 1
+            fi
+          done
 
   build:
     name: Build
@@ -175,13 +190,22 @@ jobs:
           # why: `prepare` installs git hooks, which a tarball does not need and this checkout
           # cannot run.
           pnpm pack --config.ignore-scripts=true --pack-destination "$RUNNER_TEMP/package"
+          pnpm --dir packages/e2e pack --config.ignore-scripts=true --pack-destination "$RUNNER_TEMP/package"
           cd "$RUNNER_TEMP/package"
           tar tzf "simlock-$VERSION.tgz" | tee contents.txt
           for file in package/dist/cli/main.js package/dist/bin/simlock-screen-capture package/dist/bin/simlock-device-capture package/dist/vendor/scrcpy/NOTICE.md; do
             grep -qx "$file" contents.txt || { echo "::error::$file is not in the tarball"; exit 1; }
           done
+          tar tzf "simlock-e2e-$VERSION.tgz" | tee contents.txt
+          for file in package/dist/index.js package/dist/index.d.ts; do
+            grep -qx "$file" contents.txt || { echo "::error::$file is not in the @simlock/e2e tarball"; exit 1; }
+          done
+          if grep -q '\.test\.' contents.txt; then
+            echo "::error::the @simlock/e2e tarball holds a test file"
+            exit 1
+          fi
           rm contents.txt
-          shasum -a 256 "simlock-$VERSION.tgz" | tee SHA256SUMS.txt
+          shasum -a 256 "simlock-$VERSION.tgz" "simlock-e2e-$VERSION.tgz" | tee SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
@@ -231,7 +255,7 @@ jobs:
           node scripts/release.mjs changelog "$VERSION" "$PREVIOUS" "$RUNNER_TEMP/notes/notes.md"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json CHANGELOG.md
+          git add package.json packages/e2e/package.json CHANGELOG.md
           git commit -m "chore(release): $VERSION"
           git tag -a "$TAG" -m "simlock $VERSION"
           git show --stat HEAD
@@ -279,28 +303,50 @@ jobs:
         with:
           name: package
           path: ${{ runner.temp }}/package
-      - name: The tarball is the planned version, and npm can publish without a token
+      - name: The tarballs are the planned version, and npm can publish without a token
         working-directory: ${{ runner.temp }}/package
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -o pipefail
           shasum -a 256 -c SHA256SUMS.txt
-          packed=$(tar -xOzf "simlock-$VERSION.tgz" package/package.json | jq -r .version)
-          if [ "$packed" != "$VERSION" ]; then
-            echo "::error::the tarball is simlock@$packed, not $VERSION"
-            exit 1
-          fi
+          for tarball in "simlock-$VERSION.tgz" "simlock-e2e-$VERSION.tgz"; do
+            name=$(tar -xOzf "$tarball" package/package.json | jq -r .name)
+            packed=$(tar -xOzf "$tarball" package/package.json | jq -r .version)
+            if [ "$packed" != "$VERSION" ]; then
+              echo "::error::the tarball is $name@$packed, not $VERSION"
+              exit 1
+            fi
+          done
           # why: Node's process.versions has no npm key; the version comes from npm itself.
           npm_version=$(npm --version)
           echo "npm $npm_version"
           node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }' "$npm_version"
-      - name: Publish
+      # why: @simlock/e2e goes first, so a failure there leaves simlock unpublished and the release
+      # can be run again (ADR 0077 §4). A run again skips a package whose version is on npm, so a
+      # release that stopped between the two publishes finishes by re-running the failed job.
+      - name: Publish @simlock/e2e
         working-directory: ${{ runner.temp }}/package
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
-        run: npm publish "simlock-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
+        run: |
+          if npm view "@simlock/e2e@$VERSION" version >/dev/null 2>&1; then
+            echo "@simlock/e2e@$VERSION is on npm already, skipping"
+            exit 0
+          fi
+          npm publish "simlock-e2e-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
+      - name: Publish simlock
+        working-directory: ${{ runner.temp }}/package
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
+        run: |
+          if npm view "simlock@$VERSION" version >/dev/null 2>&1; then
+            echo "simlock@$VERSION is on npm already, skipping"
+            exit 0
+          fi
+          npm publish "simlock-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
 
   release:
     name: GitHub release
@@ -328,7 +374,7 @@ jobs:
         run: |
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
             --title "$TAG" --notes-file "$RUNNER_TEMP/notes/notes.md" \
-            "simlock-$VERSION.tgz" SHA256SUMS.txt
+            "simlock-$VERSION.tgz" "simlock-e2e-$VERSION.tgz" SHA256SUMS.txt
 
   website:
     name: Website

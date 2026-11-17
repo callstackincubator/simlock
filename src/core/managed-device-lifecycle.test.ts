@@ -315,6 +315,23 @@ describe("ManagedDeviceLifecycle", () => {
     ).resolves.toMatchObject({ state: "shutdown" });
   });
 
+  it("rebootForLease ends its boot claim when recording the rebooted device throws", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    vi.spyOn(harness.registry, "recordRebootedDevice").mockRejectedValueOnce(
+      new Error("state.db is read-only"),
+    );
+
+    const claim = harness.claims.tryClaim(ready.id, "boot");
+    if (claim === undefined) throw new Error("the device was already claimed");
+
+    await expect(harness.lifecycle.rebootForLease(ready, claim, ["store"])).rejects.toThrow(
+      "state.db is read-only",
+    );
+
+    expect(harness.claims.isClaimed(ready.id)).toBe(false);
+  });
+
   describe("recoverLeased", () => {
     it("reboots a leased device under its own lease id without a registry transition", async () => {
       const harness = await createHarness();

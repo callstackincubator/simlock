@@ -5,9 +5,11 @@
 #
 # A PR in a stack (a feature's task PRs, delivery rule 15) is merged with every PR below it, so
 # every one of them must pass the gates; `gh stack merge` then merges them bottom to top, all or
-# nothing. Gates, in order, for each: the PR is open and not a draft; it carries no needs-hardware label; its body
+# nothing. Gates, in order, for each: the PR is open and not a draft; it carries no needs-hardware label; from a
+# `bug/<n>` branch, fast-track.mjs's exit check passes (delivery rule 17); its body
 # passes pr-body-check.mjs (a `## Review` section with its counts line, no "spec needs" line,
-# the agent footer); every CI check passed or was skipped; and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
+# the agent footer); every CI check passed or was skipped; from a `refactor/<n>` branch,
+# refactor-check.mjs passes (delivery rule 18); and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
 # that fails and exits 1, or exits 2 when checks are still pending at the deadline. While it
 # waits it prints one line per poll to stderr, `merge-pr: #<pr> pending <n> check(s) (<up to 3
 # names>), <m> min waited`, and `merge-pr: #<pr> re-running the failed jobs of run <id>: <jobs>`
@@ -123,6 +125,9 @@ gates() {
   [ "$(pull .state)" = open ] || fail "PR #$pr is not open"
   [ "$(pull '.draft | tostring')" = false ] || fail "PR #$pr is still a draft"
   pull '.labels[].name' | grep -qx needs-hardware && fail "PR #$pr is labelled needs-hardware"
+  bug=$(pull .head.ref | sed -n 's#^bug/\([0-9][0-9]*\)$#\1#p')
+  [ -z "$bug" ] || node "$(dirname "$0")/fast-track.mjs" "$bug" --pr "$pr" ||
+    fail "PR #$pr is held by the fast track (above)"
   node "$(dirname "$0")/pr-body-check.mjs" "$pr" || fail "PR #$pr body fails pr-body-check.mjs (above)"
 
   red_checks
@@ -141,6 +146,12 @@ gates() {
     fi
   fi
   [ -z "$bad" ] || fail "CI not green on PR #$pr: $(echo "$bad" | tr '\n' ';')"
+
+  # why: last of the PR's own gates, since it prepares two worktrees and runs the mutants.
+  if pull .head.ref | grep -qE '^refactor/[0-9]+$'; then
+    node "$(dirname "$0")/refactor-check.mjs" --pr "$pr" ||
+      fail "PR #$pr fails refactor-check.mjs (above; delivery rule 18)"
+  fi
 
   # why: GitHub computes mergeability lazily; `null` (not computed yet) settles within seconds.
   for _ in 1 2 3 4 5 6; do

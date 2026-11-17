@@ -174,9 +174,11 @@ describe("FakeDriver", () => {
     driver.setPhysicalPresence("A", true);
     driver.holdPresenceReads("A");
     let answer: readonly unknown[] | undefined;
-    const read = driver.listPresentPhysical(["B", "A"]).then((entries) => {
-      answer = entries;
-    });
+    const read = driver
+      .listPresentPhysical([{ driverDeviceId: "B" }, { driverDeviceId: "A" }])
+      .then((entries) => {
+        answer = entries;
+      });
 
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(answer).toBeUndefined();
@@ -196,7 +198,7 @@ describe("FakeDriver", () => {
     driver.releasePresenceReads();
 
     const answer = await Promise.race([
-      driver.listPresentPhysical(["A"]),
+      driver.listPresentPhysical([{ driverDeviceId: "A" }]),
       new Promise((resolve) => setTimeout(() => resolve("held"), 25)),
     ]);
 
@@ -209,7 +211,13 @@ describe("FakeDriver", () => {
     driver.setPhysicalPresence("B", true, { osVersion: "18.5" });
     driver.setPhysicalPresence("C", false);
 
-    await expect(driver.listPresentPhysical(["A", "B", "C"])).resolves.toEqual([
+    await expect(
+      driver.listPresentPhysical([
+        { driverDeviceId: "A" },
+        { driverDeviceId: "B" },
+        { driverDeviceId: "C" },
+      ]),
+    ).resolves.toEqual([
       { driverDeviceId: "A", present: false, reason: "locked" },
       { driverDeviceId: "B", osVersion: "18.5", present: true },
       { driverDeviceId: "C", present: false, reason: "not-present" },
@@ -221,7 +229,7 @@ describe("FakeDriver", () => {
     driver.setPhysicalPresence("A", true, { osVersion: "18.5" });
     driver.setPhysicalPresence("A", true);
 
-    await expect(driver.listPresentPhysical(["A"])).resolves.toEqual([
+    await expect(driver.listPresentPhysical([{ driverDeviceId: "A" }])).resolves.toEqual([
       { driverDeviceId: "A", osVersion: "1.0", present: true },
     ]);
   });

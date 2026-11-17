@@ -1,5 +1,3 @@
-import { createHash, type Hash } from "node:crypto";
-
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import { agentDeviceModule } from "./definition.js";
 import { createWorkerWith } from "./worker.js";
@@ -16,6 +14,7 @@ export class FakeAgentDeviceHealth implements AgentDeviceHealthProbe {
     this.#answer = { body };
   }
 
+  // fallow-ignore-next-line unused-class-member -- the agent-device tests call it on fakes their test-* helpers build.
   rejectWith(error: Error): void {
     this.#answer = { error };
   }
@@ -47,6 +46,7 @@ interface FakeAgentDeviceLease {
     readonly deviceKey: unknown;
   };
   readonly ttlMs: unknown;
+  readonly retainOnClose: boolean;
 }
 
 interface FakeFailure {
@@ -76,8 +76,8 @@ export interface FakeInventoryDevice {
 }
 
 export interface FakeAllocateReplyEdit {
-  readonly runId?: string;
-  readonly clientId?: string;
+  readonly runId?: string | undefined;
+  readonly clientId?: string | undefined;
 }
 
 interface Gate {
@@ -141,6 +141,12 @@ function errorEnvelope(id: unknown, failure: FakeFailure): Response {
 }
 
 const ARTIFACT_PIECE_BYTES = 64 * 1024;
+const ARTIFACT_PATTERN_PERIOD = 251;
+// why: byte n of an artifact is n % 251, so every piece is a view of this one buffer and a 2 GiB artifact costs no fill.
+const ARTIFACT_PATTERN = Uint8Array.from(
+  { length: ARTIFACT_PIECE_BYTES + ARTIFACT_PATTERN_PERIOD },
+  (_, index) => index % ARTIFACT_PATTERN_PERIOD,
+);
 const UPLOAD_TEXT_LIMIT = 1024 * 1024;
 
 export interface FakeArtifact {
@@ -150,28 +156,26 @@ export interface FakeArtifact {
   readonly contentLength: "size" | "none" | string;
 }
 
-export interface FakeUploadSummary {
-  readonly bytes: number;
-  readonly sha256: string;
-}
-
 export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly requests: FakeAgentDeviceRequest[] = [];
   readonly leases = new Map<string, FakeAgentDeviceLease>();
+  // why: agent-device's `close` ends only the lease its session was opened on; a session a command makes after a restart holds none, until `open` runs again.
+  readonly #sessionLeases = new Set<string>();
+  readonly #lostSessions = new Set<string>();
+  // why: agent-device's `close` names the session it shut in its reply; a `close <app>` with no session closes the app only and names none.
+  readonly #openSessions = new Set<string>();
   readonly abortedCommands: string[] = [];
   readonly abortedReleases: string[] = [];
   // why: the ids of releases whose request was hung up on before the fake answered, so a test can wait until the hang-up has reached the daemon side.
   readonly hungUpReleases: string[] = [];
   readonly refused: string[] = [];
-  // why: a direct upload keeps its text only up to 1 MiB, so a test can move 2 GiB; `uploadSummaries` holds each one's size and digest.
+  // why: a direct upload keeps its text only up to 1 MiB; a larger one is kept as its size.
   readonly uploads: string[] = [];
-  readonly uploadSummaries: FakeUploadSummary[] = [];
   // why: what the artifact route produced and whether its body was cancelled, so a test can tell a stream that stopped from one that was drained.
   artifactBytesProduced = 0;
   artifactBodyCancelled = false;
   artifactRequests = 0;
   #artifact: FakeArtifact | undefined;
-  #artifactHash: Hash = createHash("sha256");
   // why: the headers the proxy sent the daemon with each upload preflight, so a test can see which of the caller's credentials reached it.
   readonly preflightHeaders: Record<string, string>[] = [];
   baseUrl = "http://127.0.0.1:47001";
@@ -183,10 +187,12 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly releaseReplies: string[] = [];
   onHeartbeat: (() => Promise<void>) | undefined;
   #unavailable: string | undefined;
+  #unavailableRetriable = false;
   #unreachable = false;
   #failAllocate: FakeFailure | undefined;
   #failRelease: FakeFailure | undefined;
   #failHeartbeat: FakeFailure | undefined;
+  #failHeartbeatAfterAllocate: FakeFailure | undefined;
   #failCommand: FakeFailure | undefined;
   #failCommandStatus: { readonly status: number; readonly body: string } | undefined;
   readonly #goneReasons = new Map<string, FakeLeaseGoneReason>();
@@ -198,6 +204,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #streamChunks: readonly string[] | undefined;
   #restarts = 0;
   readonly #running = new Set<RunningCommand>();
+  // why: agent-device keeps one process-wide set of the `meta.requestId`s it is handling and refuses a second request carrying one already there.
+  readonly #inFlightRequestIds = new Set<string>();
   #releaseWaitsForCommands = true;
   #commandsOutliveRequests = false;
   #hangRelease = false;
@@ -215,7 +223,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   current(): AgentDeviceUpstreamState {
     if (this.#unavailable !== undefined) {
-      return { reason: this.#unavailable, state: "unavailable" };
+      return {
+        reason: this.#unavailable,
+        retriable: this.#unavailableRetriable,
+        state: "unavailable",
+      };
     }
     return {
       baseUrl: this.baseUrl,
@@ -226,8 +238,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     };
   }
 
-  setUnavailable(reason: string | undefined): void {
+  setUnavailable(reason: string | undefined, retriable = false): void {
     this.#unavailable = reason;
+    this.#unavailableRetriable = retriable;
   }
 
   setUnreachable(unreachable: boolean): void {
@@ -244,6 +257,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   failNextHeartbeat(failure: FakeFailure): void {
     this.#failHeartbeat = failure;
+  }
+
+  // why: a restart test needs the heartbeat that follows the re-allocate to fail, not the one that finds the lease gone.
+  failHeartbeatAfterNextAllocate(failure: FakeFailure): void {
+    this.#failHeartbeatAfterAllocate = failure;
   }
 
   failNextCommand(failure: FakeFailure): void {
@@ -334,12 +352,6 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#artifact = artifact;
     this.artifactBytesProduced = 0;
     this.artifactBodyCancelled = false;
-    this.#artifactHash = createHash("sha256");
-  }
-
-  // why: the digest of every byte the artifact route produced so far, to compare with what the agent received.
-  producedDigest(): string {
-    return this.#artifactHash.copy().digest("hex");
   }
 
   #artifactResponse(): Response {
@@ -358,11 +370,10 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
             return;
           }
           const length = Math.min(ARTIFACT_PIECE_BYTES, artifact.size - produced);
-          const piece = new Uint8Array(length);
-          for (let index = 0; index < length; index += 1) piece[index] = (produced + index) % 251;
+          const start = produced % ARTIFACT_PATTERN_PERIOD;
+          const piece = ARTIFACT_PATTERN.subarray(start, start + length);
           produced += length;
           this.artifactBytesProduced += length;
-          this.#artifactHash.update(piece);
           controller.enqueue(piece);
         },
       },
@@ -376,18 +387,15 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   }
 
   async #keepUpload(request: Request): Promise<void> {
-    const hash = createHash("sha256");
     const kept: Uint8Array[] = [];
     let bytes = 0;
     const reader = request.body?.getReader();
     for (;;) {
       const next = await reader?.read();
       if (next === undefined || next.done) break;
-      hash.update(next.value);
       bytes += next.value.length;
       if (bytes <= UPLOAD_TEXT_LIMIT) kept.push(next.value);
     }
-    this.uploadSummaries.push({ bytes, sha256: hash.digest("hex") });
     this.uploads.push(
       bytes <= UPLOAD_TEXT_LIMIT
         ? Buffer.concat(kept).toString("utf8")
@@ -400,6 +408,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.generation += 1;
     this.baseUrl = `http://127.0.0.1:${47_001 + this.#restarts}`;
     this.token = `daemon-token-${this.generation}`;
+    for (const leaseId of this.leases.keys()) this.#lostSessions.add(leaseId);
+    this.#sessionLeases.clear();
+    this.#openSessions.clear();
     this.leases.clear();
   }
 
@@ -459,6 +470,27 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     const call = await readRpc(request, tenantHeader);
     const { id, meta, method, params, tenant } = call;
     this.requests.push({ method: request.method, params, path: "/rpc", rpcMethod: method, tenant });
+    const requestId = meta["requestId"];
+    if (typeof requestId !== "string") return this.#dispatch(request, call);
+    if (this.#inFlightRequestIds.has(requestId)) {
+      return errorEnvelope(id, {
+        code: "INVALID_ARGS",
+        details: { reason: "duplicate_request_id", requestId },
+        message: `Request ID is already in flight: ${requestId}`,
+      });
+    }
+    this.#inFlightRequestIds.add(requestId);
+    try {
+      return await this.#dispatch(request, call);
+    } finally {
+      this.#inFlightRequestIds.delete(requestId);
+    }
+  }
+
+  async #dispatch(
+    request: Request,
+    { id, meta, method, params, tenant }: Awaited<ReturnType<typeof readRpc>>,
+  ): Promise<Response> {
     switch (method.replace(/^agent[_-]device\./, "")) {
       case "lease.allocate":
         return this.#allocate(id, params, tenant);
@@ -508,13 +540,20 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       runId: params["runId"],
     };
     this.#replyDeviceKey = undefined;
+    this.#failHeartbeat = this.#failHeartbeatAfterAllocate;
+    this.#failHeartbeatAfterAllocate = undefined;
     const edit = this.#replyEdit;
     this.#replyEdit = undefined;
     const picked = this.#replyDevice;
     this.#replyDevice = undefined;
+    if (!this.#lostSessions.has(leaseId)) {
+      this.#sessionLeases.add(leaseId);
+      this.#openSessions.add(leaseId);
+    }
     this.leases.set(leaseId, {
       address,
       leaseId,
+      retainOnClose: params["retainOnClose"] === true,
       scope,
       tenant,
       ttlMs: params["ttlMs"],
@@ -522,7 +561,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, {
       data: {
         ...replyDevice(picked, address),
-        lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
+        lease: {
+          ...scope,
+          ...edit,
+          leaseId,
+          tenantId: tenant,
+          ttlMs: params["ttlMs"],
+          ...(params["retainOnClose"] === true ? { retainOnClose: true } : {}),
+        },
       },
       ok: true,
     });
@@ -540,6 +586,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         code: "UNAUTHORIZED",
         details: { reason },
         message: reason.toLowerCase().replaceAll("_", " "),
+      });
+    }
+    const keys = ["runId", "leaseProvider", "clientId", "deviceKey"] as const;
+    if (keys.some((key) => present(params[key]) && lease.scope[key] !== params[key])) {
+      return errorEnvelope(id, {
+        code: "UNAUTHORIZED",
+        details: { reason: "LEASE_SCOPE_MISMATCH" },
+        message: "lease scope mismatch",
       });
     }
     return envelope(id, { data: { lease: params }, ok: true });
@@ -648,6 +702,10 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         { headers: { "content-type": "application/x-ndjson" } },
       );
     }
+    if (command === "open" && typeof leaseId === "string" && this.leases.has(leaseId)) {
+      this.#sessionLeases.add(leaseId);
+    }
+    const closed = this.#closeReply(command, params, leaseId);
     const endedLeases = this.#endOnClose(command, params, leaseId);
     const failure = this.#failCommand;
     this.#failCommand = undefined;
@@ -678,27 +736,73 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       }
     }
     if (endedLeases.length > 0) {
-      const data = command === "batch" ? { endedLeases, results: [] } : { endedLeases };
+      const data = command === "batch" ? { endedLeases, results: [] } : { ...closed, endedLeases };
       return envelope(id, { command, data, ok: true });
     }
+    if (closed !== undefined) return envelope(id, { command, data: closed, ok: true });
     return envelope(id, { command, ok: true });
   }
 
-  // why: agent-device ends the lease a `close`, or a `batch` with a close step, closes with, and names it in the reply's `endedLeases` instead of waiting for a release.
+  // why: a command on a lease makes its session if none is open, and a close shuts it; a batch's close step answers inside `results`.
+  #closeReply(
+    command: string,
+    params: Record<string, unknown>,
+    leaseId: unknown,
+  ): Record<string, unknown> | undefined {
+    if (typeof leaseId !== "string") return undefined;
+    if (!closesLease(command, params)) {
+      if (command !== "devices") this.#openSessions.add(leaseId);
+      return undefined;
+    }
+    if (command === "batch") this.#openSessions.add(leaseId);
+    const data = closeData(params, this.#openSessions.delete(leaseId));
+    if (command !== "batch" || data === undefined) return data;
+    return { results: [{ command: "close", data, ok: true, step: 1 }] };
+  }
+
+  // why: agent-device names a plain lease ended by close in `endedLeases` instead of waiting for a release.
   #endOnClose(
     command: string,
     params: Record<string, unknown>,
     leaseId: unknown,
   ): readonly { readonly leaseId: string; readonly outcome: "released" }[] {
-    const flags = (params["flags"] ?? {}) as Record<string, unknown>;
-    const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
-    const closes =
-      command === "close" ||
-      (command === "batch" &&
-        steps.some((step) => (step as { readonly command?: unknown }).command === "close"));
-    if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
+    if (
+      !closesLease(command, params) ||
+      typeof leaseId !== "string" ||
+      !this.#sessionLeases.has(leaseId) ||
+      this.leases.get(leaseId)?.retainOnClose ||
+      !this.leases.delete(leaseId)
+    )
+      return [];
+    this.#sessionLeases.delete(leaseId);
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+// why: agent-device names the session it closed, or for `close <app>` with no session open only the app.
+function closeData(
+  params: Record<string, unknown>,
+  sessionOpen: boolean,
+): Record<string, unknown> | undefined {
+  if (sessionOpen) {
+    const session = String(params["session"] ?? "default");
+    return { message: `Closed: ${session}`, session };
+  }
+  const positionals = Array.isArray(params["positionals"])
+    ? (params["positionals"] as unknown[])
+    : [];
+  if (positionals.length === 0) return undefined;
+  return { app: positionals[0], message: `Closed: ${String(positionals[0])}` };
+}
+
+function closesLease(command: string, params: Record<string, unknown>): boolean {
+  const flags = (params["flags"] ?? {}) as Record<string, unknown>;
+  const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
+  return (
+    command === "close" ||
+    (command === "batch" &&
+      steps.some((step) => (step as { readonly command?: unknown }).command === "close"))
+  );
 }
 
 // why: agent-device's allocate reply names no device; only a test that asks for one gets one.

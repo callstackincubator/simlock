@@ -6,10 +6,10 @@ import {
   NoopLogger,
   type TimerHandle,
 } from "../ports/index.js";
-import type { Config } from "./config.js";
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import {
   automaticCleanupRules,
+  type CleanupConfig,
   type CleanupRule,
   type Proposal,
   type RegistryView,
@@ -19,7 +19,7 @@ import { stableError } from "./stable-error.js";
 
 export interface CleanupReaperOptions {
   readonly clock: Clock;
-  readonly config: Config;
+  readonly config: CleanupConfig;
   readonly eventBus: EventBus;
   readonly executor: CleanupActionExecutor;
   readonly filesystem: Filesystem;

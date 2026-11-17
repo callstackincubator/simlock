@@ -49,9 +49,12 @@ function asFleet<Value>(value: Value): Value extends undefined ? undefined : Fle
 
 export class FleetQueue {
   readonly #queue: WaitQueue;
+  /** why: the priority the admission command answered, kept by waiter; a waiter with none has 0. */
+  readonly #priorities = new WeakMap<object, number>();
 
   constructor(options: FleetQueueOptions) {
     this.#queue = new WaitQueue({
+      priorityOf: (waiter) => this.#priorities.get(waiter) ?? 0,
       clock: options.clock,
       idGenerator: options.idGenerator,
       onDepthChange: options.onDepthChange,
@@ -85,8 +88,19 @@ export class FleetQueue {
     return asFleet(this.#queue.findPendingWaiter(requesterId, platform));
   }
 
-  create(request: DeviceRequest, options: LeaseRequestOptions, id?: string): FleetWaiter {
-    return asFleet(this.#queue.create(request, options, id));
+  create(
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    id?: string,
+    priority = 0,
+  ): FleetWaiter {
+    const waiter = this.#queue.create(request, options, id);
+    this.#priorities.set(waiter, priority);
+    return asFleet(waiter);
+  }
+
+  positionOf(waiter: FleetWaiter): number {
+    return this.#queue.positionOf(waiter as never);
   }
 
   enqueue(waiter: FleetWaiter): boolean {

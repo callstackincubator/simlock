@@ -401,7 +401,7 @@ export class ReclaimCoordinator {
     let absentReason: AbsentReason | undefined;
     try {
       const driver = this.options.drivers.get(device.spec.platform);
-      const reads = await readPhysicalPresenceDetail(driver, [device.driverDeviceId]);
+      const reads = await readPhysicalPresenceDetail(driver, [device]);
       const read = reads.get(device.driverDeviceId);
       if (read?.present !== true) absentReason = read?.reason ?? "not-present";
     } catch (readError: unknown) {

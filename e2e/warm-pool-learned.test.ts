@@ -54,7 +54,7 @@ async function grants(env: TestEnv): Promise<readonly { payload: { source: strin
 }
 
 describe("a worker with no targets keeps the kinds it has leased", () => {
-  it("creates nothing while the first lease is held, makes a new device of the kind in place of the deleted one, leaves it ready through a cleanup run, and grants the next lease of its kind warm", async () => {
+  it("makes a spare copy while the first lease is held, grants the next lease of its kind warm, and makes a new ready copy in place of the deleted one after a release", async () => {
     const env = await withDaemon({
       configOverrides: {
         limits: { maxRunning: 2, ios: { maxDevices: 2, maxRunning: 2 } },
@@ -62,22 +62,23 @@ describe("a worker with no targets keeps the kinds it has leased", () => {
       driverScript: { ios: IOS },
     });
     const first = await lease(env, "a1");
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    expect(await devices(env)).toHaveLength(1);
-
-    expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-    await waitFor(() => ready(env), { label: "the pool makes a new device of the released kind" });
-    expect((await env.cli(["cleanup"])).code).toBe(0);
-
-    const [kept] = await live(env);
-    expect(kept?.state).toBe("ready");
-    expect(kept?.id).not.toBe(first.device.id);
+    await waitFor(async () => (await live(env)).some((device) => device.state === "ready"), {
+      label: "the pool makes a spare copy while the first lease is held",
+    });
     const second = await lease(env, "a2");
-    expect(second.device.id).toBe(kept?.id);
+    expect(second.device.id).not.toBe(first.device.id);
     expect((await grants(env)).map((entry) => entry.payload.source)).toEqual([
       "provisioned",
       "warm",
     ]);
+
+    expect((await env.cli(["release", first.lease.id])).code).toBe(0);
+    await waitFor(async () => (await live(env)).some((device) => device.state === "ready"), {
+      label: "the pool makes a new ready copy of the released kind",
+    });
+    const kept = (await live(env)).find((device) => device.state === "ready");
+    expect(kept?.id).not.toBe(first.device.id);
+    expect(kept?.id).not.toBe(second.device.id);
   });
   it("shuts the device down when the pool is off and boots it again from the record when the pool is back on, before any lease", async () => {
     const env = await withDaemon({

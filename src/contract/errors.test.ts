@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  admissionDeniedError,
+  admissionFailedError,
   CODES_WITH_DECLARED_DETAILS,
   ERROR_TABLE,
   fromWireError,
+  leaseEndedError,
   isSimlockError,
 } from "./errors.js";
 
@@ -86,6 +89,37 @@ describe("SimlockError", () => {
       httpStatus: 409,
       kind: "domain",
     });
+  });
+
+  it("a caller refused with LEASE_ENDED sees its message with the id and the end time, HTTP 409 and CLI exit 13", () => {
+    const error = leaseEndedError("ad-7f3a", Date.UTC(2026, 10, 10, 14, 2, 11));
+
+    expect(error.message).toBe(
+      "Lease ad-7f3a ended at 2026-11-10T14:02:11.000Z; choose a new lease id",
+    );
+    expect(error.details).toEqual({
+      endedAt: Date.UTC(2026, 10, 10, 14, 2, 11),
+      leaseId: "ad-7f3a",
+    });
+    expect(ERROR_TABLE.LEASE_ENDED).toEqual({
+      cliExitCode: 13,
+      code: "LEASE_ENDED",
+      httpStatus: 409,
+      kind: "domain",
+    });
+  });
+
+  it("a caller refused by the admission policy sees the reason or the cause in the message, HTTP 403 for a refusal and 503 for no decision, CLI exit 16 for both", () => {
+    expect(admissionDeniedError("budget used").message).toBe(
+      "The gateway's admission policy refused this request: budget used",
+    );
+    expect(admissionFailedError("exited 1").message).toBe(
+      "The gateway's admission policy could not decide on this request (exited 1)",
+    );
+    expect([TABLE.ADMISSION_DENIED, TABLE.ADMISSION_FAILED]).toEqual([
+      { cliExitCode: 16, code: "ADMISSION_DENIED", httpStatus: 403, kind: "domain" },
+      { cliExitCode: 16, code: "ADMISSION_FAILED", httpStatus: 503, kind: "domain" },
+    ]);
   });
 
   it("answers the two baseline request codes as domain errors with HTTP 422: a mismatch with exit 2, a stale baseline with exit 12, each with its declared details", () => {

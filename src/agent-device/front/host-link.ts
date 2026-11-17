@@ -5,6 +5,7 @@ import type { AgentDeviceHost } from "../host/host.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
 import { frontReplyFor, notAvailable } from "../shared/replies.js";
 import { classifyCall, readRpcBody } from "../shared/rpc.js";
+import { workerTenant } from "../shared/tenant.js";
 
 export type LinkStatus =
   | {
@@ -13,7 +14,7 @@ export type LinkStatus =
       readonly leaseMaxTtlMs?: number;
       readonly platforms: readonly AgentDevicePlatform[];
     }
-  | { readonly state: "unavailable"; readonly reason: string }
+  | { readonly state: "unavailable"; readonly reason: string; readonly retriable: boolean }
   // why: the lease may still exist, but only its worker can say, and the worker is not connected or not yet read.
   | { readonly state: "unreachable" };
 
@@ -23,6 +24,7 @@ export interface AdoptableLease {
   readonly address: string;
   readonly platform: "ios" | "android";
   readonly model: string;
+  readonly physical?: boolean;
   readonly target: string;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
@@ -35,7 +37,7 @@ export interface HostLink {
   readonly leaseRequires?: readonly string[];
   status(leaseId?: string, identity?: Identity): Promise<LinkStatus>;
   forward(request: Request, identity: Identity, leaseId?: string): Promise<Response>;
-  // why: only the gateway's link adopts leases made before the front's map was empty; a worker's map is in memory and has no entry for a lease it made before a restart, but that lease is ended, not adopted.
+  // why: a link adopts leases made before the front's map was empty: the gateway's from its index, a worker's from its registry snapshot.
   adoptable?(identity: Identity): readonly AdoptableLease[];
   // why: a lease the front asked for in this process is its allocate's to keep or release, never to adopt.
   asked?(leaseId: string): void;
@@ -51,7 +53,7 @@ interface RoutedHosts {
 
 type Role = keyof RoutedHosts;
 
-// why: a client reads `/health` before it names a lease, so it pins the simulator daemon's proxy and daemon ids; the phone daemon's differ and would refuse every phone call, so a phone call carries no pin and a phone-daemon restart ends the lease at its next heartbeat, as a simulator-daemon restart does.
+// why: a client reads `/health` before it names a lease, so it pins the simulator daemon's proxy and daemon ids; the phone daemon's differ and would refuse every phone call, so a phone call carries no pin.
 function dropInstancePins(request: Request): void {
   request.headers.delete("x-agent-device-instance");
   request.headers.delete("x-agent-device-upstream-instance");
@@ -61,6 +63,7 @@ function dropInstancePins(request: Request): void {
 export class RoutedHostLink implements HostLink {
   readonly readsLeaseHeader = true;
   readonly #roles = new Map<string, Role>();
+  readonly #asked = new Set<string>();
 
   constructor(
     private readonly hosts: RoutedHosts,
@@ -78,23 +81,75 @@ export class RoutedHostLink implements HostLink {
     if (role === "phones") {
       const status = await this.#phoneStatus();
       if (status.state === "unavailable") {
-        return frontReplyFor(request, notAvailable(status.reason));
+        return frontReplyFor(request, notAvailable(status.reason, status.retriable));
       }
       dropInstancePins(request);
     }
-    return this.hosts[role].forward(request, identity);
+    // why: a relayed call's principal is the gateway's tenant already, which names its lease; a worker's own call gets its lease's tenant here.
+    const tenant =
+      identity.via === "relay" ? identity.principal : workerTenant(identity.principal, leaseId);
+    return this.hosts[role].forward(request, identity, tenant);
+  }
+
+  asked(leaseId: string): void {
+    this.#asked.add(leaseId);
+  }
+
+  // why: after a worker restart the front map is empty, but the registry still holds the caller's leases, so each one the front made (requester id is its lease id) is rebuilt as an entry.
+  adoptable(identity: Identity): readonly AdoptableLease[] {
+    const { devices, leases } = this.registry.snapshot;
+    return leases.flatMap((lease) => {
+      if (
+        lease.requesterId !== lease.id ||
+        lease.ownerId !== identity.principal ||
+        this.#asked.has(lease.id)
+      ) {
+        return [];
+      }
+      const adopted = this.#adopted(
+        lease,
+        devices.find((candidate) => candidate.id === lease.deviceId),
+      );
+      return adopted === undefined ? [] : [adopted];
+    });
+  }
+
+  #adopted(
+    lease: ModuleRegistryView["snapshot"]["leases"][number],
+    device: ModuleRegistryView["snapshot"]["devices"][number] | undefined,
+  ): AdoptableLease | undefined {
+    if (device === undefined) return undefined;
+    const { spec } = device;
+    const address = spec.physical ? device.driverDeviceId : device.address;
+    if (address === undefined || address === "") return undefined;
+    if (spec.physical) this.#roles.set(lease.id, "phones");
+    return {
+      address,
+      leaseId: lease.id,
+      model: spec.model,
+      platform: spec.platform,
+      ...(spec.physical ? { physical: true } : {}),
+      target: "mobile",
+      ttlDeadline: lease.ttlDeadline,
+      ttlMs: lease.ttlMs,
+    };
   }
 
   // why: a lease that ended no longer needs its daemon remembered, and the map holds only live phone leases.
   forget(leaseId: string): void {
     this.#roles.delete(leaseId);
+    this.#asked.delete(leaseId);
   }
 
   // why: the phone daemon's reason is named with its role, so an agent can tell it from the simulator daemon's.
   async #phoneStatus(): Promise<LinkStatus> {
     const status = await this.hosts.phones.status();
     return status.state === "unavailable"
-      ? { reason: `phone daemon: ${status.reason}`, state: "unavailable" }
+      ? {
+          reason: `phone daemon: ${status.reason}`,
+          retriable: status.retriable,
+          state: "unavailable",
+        }
       : status;
   }
 

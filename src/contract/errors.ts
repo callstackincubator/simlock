@@ -11,6 +11,7 @@ const DEVICE_NOT_ENROLLABLE_REASONS = [
   "unreadable",
   "virtual-device",
   "enrolled-on-other-platform",
+  "enrolled-under-other-id",
 ] as const;
 
 export type DeviceNotEnrollableReason = (typeof DEVICE_NOT_ENROLLABLE_REASONS)[number];
@@ -38,6 +39,7 @@ export interface ErrorDetailsMap {
     readonly capacityReason?:
       | "device-limit"
       | "ram-budget"
+      | "memory-pressure"
       | "global-running-limit"
       | "platform-running-limit";
   };
@@ -52,6 +54,13 @@ export interface ErrorDetailsMap {
    * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the
    * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
   LEASE_ID_TAKEN: { readonly leaseId: string };
+  /** why: `lease.request` named a `leaseId` whose lease ended within `lease.endedIdRetentionMs`
+   * (ADR 0074 §4); `endedAt` is when, in milliseconds since the epoch. The request is stored nowhere. */
+  LEASE_ENDED: { readonly leaseId: string; readonly endedAt: number };
+  /** why: the gateway's admission command (ADR 0074 §1) refused the request; `reason` is the command's own, 1 to 500 characters. */
+  ADMISSION_DENIED: { readonly reason: string };
+  /** why: the gateway's admission command could not decide, and the gateway fails closed; `cause` names why, at most 600 characters. */
+  ADMISSION_FAILED: { readonly cause: string };
   NO_DRIVER: { readonly platform: Platform };
   CAPABILITY_MISSING: { readonly capabilities: readonly string[] };
   RELAY_TARGET_MISSING: { readonly target: string };
@@ -120,6 +129,8 @@ export interface ErrorDetailsMap {
   PASSTHROUGH_REFUSED: { readonly tool: string };
   UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
   EXEC_TIMEOUT: Record<string, never>;
+  /** why: ADR 0067 §5: the lease file named by `stdinFile` could not be read to its end after `bytesRead` bytes, and the command was stopped. */
+  STDIN_FILE_FAILED: { readonly name: string; readonly bytesRead: number };
   /** why: `device.rotate` on a lease that is not on an iOS phone or tablet simulator; `class` is the physical class, the simulator's model family, or `emulator`. */
   ROTATION_UNSUPPORTED: {
     readonly leaseId: string;
@@ -129,6 +140,15 @@ export interface ErrorDetailsMap {
   };
   /** why: `device.rotate` could not reach the lease's input helper; `reason` is the driver's text, cut to 200 characters. */
   INPUT_UNAVAILABLE: { readonly leaseId: string; readonly reason: string };
+  /** why: ADR 0067 §4: a lease's file upload passed 2 GiB. */
+  FILE_TOO_LARGE: { readonly name: string };
+  /** why: ADR 0067 §4: an upload would take a lease's folder past 4 GiB. */
+  LEASE_FILES_FULL: { readonly leaseId: string; readonly usedBytes: number };
+  UNKNOWN_FILE: { readonly name: string };
+  /** why: ADR 0067 §6: no byte of an upload's body arrived for 330 s. */
+  UPLOAD_STALLED: { readonly name: string };
+  /** why: ADR 0067 §2: another request is uploading the same file name. */
+  FILE_BUSY: { readonly name: string };
   DOCTOR_UNAVAILABLE: Record<string, never>;
   HISTORY_NOT_KEPT: { readonly oldestTs: number };
   HISTORY_UNAVAILABLE: Record<string, never>;
@@ -210,6 +230,9 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   NO_CAPACITY: true,
   REQUESTER_ALREADY_LEASED: true,
   LEASE_ID_TAKEN: true,
+  LEASE_ENDED: true,
+  ADMISSION_DENIED: true,
+  ADMISSION_FAILED: true,
   NO_DRIVER: true,
   CAPABILITY_MISSING: true,
   RELAY_TARGET_MISSING: true,
@@ -217,6 +240,12 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNKNOWN_MODEL: true,
   HISTORY_NOT_KEPT: true,
   INSUFFICIENT_DISK_SPACE: true,
+  FILE_TOO_LARGE: true,
+  LEASE_FILES_FULL: true,
+  UNKNOWN_FILE: true,
+  STDIN_FILE_FAILED: true,
+  UPLOAD_STALLED: true,
+  FILE_BUSY: true,
   LICENSE_NOT_ACCEPTED: true,
   DOWNLOAD_TIMEOUT: true,
   DOWNLOADS_DISABLED: true,
@@ -322,6 +351,26 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 13,
     httpStatus: 409,
   },
+  // why: 409 and exit 13 like `LEASE_ID_TAKEN`: the id clashes with a lease that recently ended.
+  LEASE_ENDED: {
+    code: "LEASE_ENDED",
+    kind: "domain",
+    cliExitCode: 13,
+    httpStatus: 409,
+  },
+  // why: the operator's policy said no (403) or could not answer (503, the gateway fails closed); exit 16 for both: the policy, not the request's shape, decided.
+  ADMISSION_DENIED: {
+    code: "ADMISSION_DENIED",
+    kind: "domain",
+    cliExitCode: 16,
+    httpStatus: 403,
+  },
+  ADMISSION_FAILED: {
+    code: "ADMISSION_FAILED",
+    kind: "domain",
+    cliExitCode: 16,
+    httpStatus: 503,
+  },
   NO_DRIVER: { code: "NO_DRIVER", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   CAPABILITY_MISSING: {
     code: "CAPABILITY_MISSING",
@@ -350,6 +399,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 422,
   },
   UNKNOWN_LEASE: { code: "UNKNOWN_LEASE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  // why: a lease's file routes (ADR 0067): a refused upload or a missing file is a fact about the request, not a state of the host.
+  FILE_TOO_LARGE: { code: "FILE_TOO_LARGE", kind: "domain", cliExitCode: 1, httpStatus: 413 },
+  LEASE_FILES_FULL: { code: "LEASE_FILES_FULL", kind: "domain", cliExitCode: 1, httpStatus: 413 },
+  UNKNOWN_FILE: { code: "UNKNOWN_FILE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  STDIN_FILE_FAILED: { code: "STDIN_FILE_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
+  UPLOAD_STALLED: { code: "UPLOAD_STALLED", kind: "domain", cliExitCode: 1, httpStatus: 408 },
+  FILE_BUSY: { code: "FILE_BUSY", kind: "domain", cliExitCode: 1, httpStatus: 409 },
   // why: a lease's tunnel socket refuses with these (ADR 0054 section 7), so every surface reports them alike.
   TUNNEL_UNSUPPORTED: {
     code: "TUNNEL_UNSUPPORTED",
@@ -643,6 +699,35 @@ export function isSimlockError(error: unknown): error is AnySimlockError {
   return error instanceof SimlockError;
 }
 
+/** why: the worker's admission and the gateway's both refuse an ended lease id, so the message lives once. */
+export function leaseEndedError(leaseId: string, endedAt: number): SimlockError<"LEASE_ENDED"> {
+  return new SimlockError(
+    "LEASE_ENDED",
+    "domain",
+    `Lease ${leaseId} ended at ${new Date(endedAt).toISOString()}; choose a new lease id`,
+    { endedAt, leaseId },
+  );
+}
+
+/** why: the gateway's refusals by its admission command (ADR 0074 §1), worded once. */
+export function admissionDeniedError(reason: string): SimlockError<"ADMISSION_DENIED"> {
+  return new SimlockError(
+    "ADMISSION_DENIED",
+    "domain",
+    `The gateway's admission policy refused this request: ${reason}`,
+    { reason },
+  );
+}
+
+export function admissionFailedError(cause: string): SimlockError<"ADMISSION_FAILED"> {
+  return new SimlockError(
+    "ADMISSION_FAILED",
+    "domain",
+    `The gateway's admission policy could not decide on this request (${cause})`,
+    { cause },
+  );
+}
+
 /** why: the CLI and MCP raise this one error from two places, so the wording lives once. */
 export function gatewayNotPresentError(): SimlockError<"GATEWAY_NOT_PRESENT"> {
   return new SimlockError(
@@ -660,9 +745,9 @@ export function gatewayNotPresentError(): SimlockError<"GATEWAY_NOT_PRESENT"> {
  * preserved, rather than throwing a parse failure. This is deliberately permissive about
  * `details` -- it trusts the caller's parsed value rather than re-validating per-code detail
  * shapes against `ErrorDetailsMap`, since the wire's `error.details` has no schema of its own
- * yet (today's daemon does not even send one for most codes -- see `DaemonServer#respondError`
- * in this PR, which now accepts but does not populate `details` for most cases). Tightening
- * this with real per-code detail schemas is left as follow-up.
+ * yet (today's daemon does not even send one for most codes -- see `respondError` in
+ * `src/daemon/server-connection.ts`, which now accepts but does not populate `details` for most
+ * cases). Tightening this with real per-code detail schemas is left as follow-up.
  */
 export function fromWireError(code: string, message: string, details?: unknown): AnySimlockError {
   const entry = (ERROR_TABLE as Record<string, ErrorTableEntry>)[code];

@@ -50,6 +50,7 @@ export interface ModuleEndedLease {
   readonly ownerId: string;
   readonly deviceId: string;
   readonly platform: Platform;
+  readonly grantedAt: number;
   readonly reason: "explicit" | "killed" | "expired" | "device-lost";
 }
 
@@ -219,6 +220,16 @@ export interface ModuleDeviceTcp {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<TcpStream>;
+  supportsEmulatorPort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): boolean;
+  connectEmulatorPort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
 }
 
 export interface WorkerContext<C> {
@@ -264,6 +275,7 @@ export interface FleetLease {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  readonly idChosenByRequester?: boolean;
 }
 
 export interface FleetLeases {
@@ -313,6 +325,8 @@ export interface ModuleHttpResponse {
   readonly description: string;
   readonly contentTypes?: readonly string[];
   readonly headers?: Readonly<Record<string, string>>;
+  // why: a header the answer may leave out is published `required: false`; `headers` are always sent.
+  readonly optionalHeaders?: Readonly<Record<string, string>>;
   readonly errorCodes?: readonly string[];
 }
 

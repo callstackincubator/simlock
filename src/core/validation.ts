@@ -127,6 +127,21 @@ export function numberAtLeast(minimum: number): Validator {
   };
 }
 
+export function numberInRange(minimum: number, maximum: number): Validator {
+  return (value: unknown, path: string) => {
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < minimum ||
+      value > maximum
+    ) {
+      throw invalidValue(path, `a number between ${minimum} and ${maximum}`);
+    }
+
+    return value;
+  };
+}
+
 export function integerInRange(minimum: number, maximum: number): Validator {
   return (value: unknown, path: string) => {
     if (

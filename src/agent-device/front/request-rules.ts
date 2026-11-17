@@ -133,11 +133,11 @@ function checkTypes(unit: Unit): void {
   }
 }
 
-// why: the daemon behind the front does not know these two keys, so a request that is not the flat allocate form must not carry them; the flat allocate is exempt because simlock reads them from it.
+// why: the daemon behind the front does not know these keys, so a request that is not the flat allocate form must not carry them; the flat allocate is exempt because simlock reads them from it.
 function ruleLeaseKeys(check: Check, unit: Unit): void {
   if (isFlat(unit)) return;
   for (const place of places(unit)) {
-    for (const key of ["osVersion", "imageTag"]) {
+    for (const key of ["osVersion", "imageTag", "deviceBaseline", "deviceMode", "deviceExcept"]) {
       if (!(key in place)) continue;
       delete place[key];
       check.changed = true;
@@ -388,7 +388,7 @@ export async function checkRequest(
   } catch (error) {
     if (error instanceof Refused) return { kind: "refused", reply: error.reply };
     if (error instanceof LeaseCheckFailed) {
-      return { kind: "refused", reply: failure(error.message) };
+      return { kind: "refused", reply: failure(error.message, 502, true) };
     }
     throw error;
   }
@@ -422,8 +422,9 @@ async function run(
 }
 
 function ruleDevicesAnswer(check: Check, main: Unit): void {
-  if (main.command === "devices" && Boolean(check.meta["requestProgress"])) {
-    throw refuse("refused: devices does not stream through simlock");
+  if (main.command === "devices" && present(check.meta["requestProgress"])) {
+    delete check.meta["requestProgress"];
+    check.changed = true;
   }
 }
 

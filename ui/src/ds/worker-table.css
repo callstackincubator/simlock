@@ -1,0 +1,152 @@
+.fleet-name {
+  color: var(--text);
+  font: 500 13.5px/1.45 var(--font-mono);
+  text-decoration: none;
+}
+
+.fleet-table {
+  min-width: 0;
+}
+
+.fleet-metric {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.fleet-metric .load-bar,
+.fleet-metric-empty {
+  flex: 1;
+  min-width: 0;
+}
+
+.fleet-metric-empty {
+  display: block;
+  height: 4px;
+  background: var(--track);
+}
+
+.fleet-metric b {
+  width: 34px;
+  flex: none;
+  font: 500 12px var(--font-mono);
+  text-align: right;
+}
+
+.fleet-table td.fleet-actions {
+  text-align: right;
+}
+
+.fleet-table .fleet-actions .button {
+  max-width: 100%;
+}
+
+/* Under 1100px (a phone, or the collapsed-sidebar layout) the table gives way to a list: a worker is
+ * a name and its pill, one muted line of figures and its menu. Group bands are the table's own. */
+.fleet-list {
+  display: none;
+}
+
+@media (max-width: 1099.98px) {
+  .fleet-wide {
+    display: none;
+  }
+
+  .fleet-list {
+    display: block;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+}
+
+.fleet-list-group {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  margin: 0;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font: 500 var(--text-2xs) var(--font-mono);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.fleet-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fleet-item.row-warn {
+  background: var(--row-warn);
+}
+
+.fleet-item.row-error {
+  background: var(--row-error);
+}
+
+/* why: the same overlay as a table row's hover, so a tinted row keeps its tint under it. */
+.fleet-item:hover {
+  background-image: linear-gradient(var(--row-hover), var(--row-hover));
+}
+
+.fleet-item-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.fleet-item-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+}
+
+.fleet-item-head .fleet-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-item-head .hint-subject {
+  flex: none;
+}
+
+.fleet-item-line {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The list's ⋯ is as quiet as the table's: a muted icon, a surface only under the pointer. */
+.fleet-item .icon-button {
+  flex: none;
+  width: 26px;
+  min-height: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.fleet-item .icon-button:hover {
+  background: var(--surface-2);
+}
+
+.fleet-list-count {
+  margin: 0;
+  padding: var(--space-2) 14px;
+  font-size: var(--text-xs);
+}

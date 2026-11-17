@@ -7,8 +7,8 @@ export {
   type Config,
   type ConfigOverrides,
   type DaemonMode,
-  // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
-  type DownloadPolicy,
+  driverConfig,
+  type DriverConfigEntry,
   effectiveAllowDownload,
   loadConfig,
   loadConfigWithDefaults,
@@ -17,6 +17,10 @@ export {
   REDACTED_VALUE,
   redactConfig,
 } from "./config.js";
+export {
+  // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
+  type DownloadPolicy,
+} from "./config-types.js";
 export {
   type AbsentReason,
   DEVICE_CLASSES,
@@ -47,11 +51,14 @@ export {
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
 export {
+  booleanValue,
   ConfigError,
   integerInRange,
   invalidValue,
   nonEmptyString,
   objectValidator,
+  positiveNumber,
+  stringArray,
 } from "./validation.js";
 export {
   BootTimeoutError,
@@ -91,6 +98,7 @@ export {
   type DriverRefusalReason,
   type VirtualDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   toDriverDevice,
   uninstallPlan,
@@ -102,6 +110,8 @@ export {
   UnknownModelError,
   BaselineMismatchError,
   BaselineStaleError,
+  BadDeviceRequestError,
+  KeptCategoriesError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
 export {
@@ -113,6 +123,7 @@ export {
 } from "./driver-catalog.js";
 export {
   DeviceTcpError,
+  unsupportedEmulatorPortMessage,
   unsupportedTunnelMessage,
   type DeviceReverse,
   type DeviceTcp,
@@ -185,6 +196,7 @@ export {
 export { SerializedDecision } from "./serialized-decision.js";
 export {
   type CapacityReader,
+  type MemoryPressureReader,
   type CatalogReader,
   type LeaseExpirer,
   type PassthroughResolver,
@@ -216,14 +228,16 @@ export {
   type PassthroughContext,
   type ReclaimResult,
 } from "./driver.js";
-export { type Core, type CorePorts, createCore } from "./create-core.js";
+export { type Core, type CoreConfig, type CorePorts, createCore } from "./create-core.js";
 export { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
 export {
   DeviceBusyError,
   DeviceNotEnrollableError,
   PhysicalEnrollment,
+  PhysicalInspectionError,
   UnknownEnrolledDeviceError,
 } from "./physical-enrollment.js";
+export { PhysicalAutoEnrollment } from "./physical-auto-enrollment.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {
   baselineMismatch,

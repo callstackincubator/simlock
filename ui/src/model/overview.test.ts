@@ -5,7 +5,6 @@ import { figuresOf } from "./figures";
 import { overviewOf } from "./overview";
 import { statsOf } from "./test-support";
 import type { WaitingRequest } from "./waiting";
-import { workerRow } from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
@@ -77,54 +76,54 @@ function unread(id: string): WorkerView {
 }
 
 describe("the overview", () => {
-  it("counts the fleet's headline figures from what the workers, the queue and the daemon's figures say", () => {
+  it("draws the six tiles in order from what the workers, the queue and the daemon's figures say, each with its destination", () => {
     const requests = [
-      { createdAt: NOW - 74_000, id: "r1" },
-      { createdAt: NOW - 10_000, id: "r2" },
+      { createdAt: NOW - 74_000, id: "r1", requesterId: "a", spec: { platform: "ios" } },
+      { createdAt: NOW - 10_000, id: "r2", requesterId: "b", spec: { platform: "ios" } },
     ] as unknown as WaitingRequest[];
     const stats = statsOf({
       bucketMs: 60_000,
-      from: NOW - 60 * 60_000,
+      from: NOW - 6 * 60 * 60_000,
       granted: 3,
       to: NOW,
       waitP95: 38_000,
     });
 
-    const { ending, tiles, wait } = overviewOf({
-      figures: { data: figuresOf(stats, "1h", NOW), kind: "ready" },
+    const { tiles } = overviewOf({
+      figures: { data: figuresOf(stats, "6h", NOW), kind: "ready" },
       leases: [],
       now: NOW,
+      range: "6h",
       requests,
       workers: fleet,
     });
 
-    const shown = [...tiles, wait, ending];
-    expect(shown.map((tile) => [tile?.label, tile?.value, tile?.unit])).toEqual([
-      ["Leased", "2", "of 4 · 1 ready"],
-      ["Waiting", "2", "longest 1 min 14 s"],
-      ["Workers", "2", "of 3"],
-      ["Wait p95", "38 s", "last hour"],
-      ["Ending soon", "0", "under 5 min"],
+    expect(tiles.map((tile) => [tile.label, tile.value, tile.unit, tile.to])).toEqual([
+      ["Leased", "2", "/ 4", "/leases"],
+      ["Ready", "1", "warm", "/fleet"],
+      ["Waiting", "2", "max 1 min 14 s", "/queue"],
+      ["Wait p95", "38 s", "last 6 hours", "/usage?range=6h"],
+      ["Ending soon", "0", "< 5 min", "/leases"],
+      ["Workers", "2", "/ 3", "/fleet"],
     ]);
   });
 
-  it("shows Ending soon as unknown, not zero, while the leases cannot be read", () => {
-    const { ending } = overviewOf({ now: NOW, requests: [], workers: fleet });
+  it("shows Ending soon, Wait p95 and Waiting as unknown, never zero, while their reads are missing", () => {
+    const loading = overviewOf({ now: NOW, requests: undefined, workers: fleet });
 
-    expect([ending.value, ending.unit]).toEqual(["—", undefined]);
-  });
-
-  it("has no Wait p95 tile while the daemon's figures are loading or refused", () => {
-    const shown = [{ kind: "loading" }, { kind: "refused", message: "no" }] as const;
-
-    const waits = shown.map(
-      (figures) => overviewOf({ figures, now: NOW, requests: [], workers: fleet }).wait,
+    const unknown = loading.tiles.filter((tile) =>
+      ["Ending soon", "Wait p95", "Waiting"].includes(tile.label),
     );
-
-    expect(waits).toEqual([undefined, undefined]);
+    expect(unknown.map((tile) => [tile.label, tile.value, tile.unit])).toEqual([
+      ["Waiting", "—", undefined],
+      ["Wait p95", "—", undefined],
+      ["Ending soon", "—", undefined],
+    ]);
+    expect(loading.queue).toEqual({ unavailable: "The queue could not be read." });
+    expect(loading.ending).toEqual({ unavailable: "The leases could not be read." });
   });
 
-  it("lists the first four problems in the Inbox's order, each linked to its own page and toned by how bad it is, and leaves heads-ups out", () => {
+  it("makes the banner from the Inbox's problems in its order, with the first one linked and the rest counted, and leaves heads-ups out", () => {
     const lease = {
       deviceId: "a",
       grantedAt: NOW - 60_000,
@@ -136,87 +135,127 @@ describe("the overview", () => {
       ttlDeadline: NOW + 100_000,
       ttlMs: 900_000,
     };
-    const workers = [
-      ...fleet,
-      worker("down-2", [], { connection: "disconnected" }),
-      worker("down-3", [], { connection: "disconnected" }),
-    ];
-    const { inbox } = overviewOf({
-      items: inboxItems(workers, { leases: [lease], now: NOW }),
-      leases: [],
+    const workers = [...fleet, worker("down-2", [], { connection: "disconnected" })];
+    const items = inboxItems(workers, { leases: [lease], now: NOW });
+
+    const { banner } = overviewOf({ items, leases: [], now: NOW, requests: [], workers });
+
+    expect(banner).toEqual({
+      count: 4,
+      first: { text: "Pixel 8 on mini-2 · quarantined", to: "/inbox/mini-2%2Fd%2Fquarantined" },
+      more: 3,
+      title: "4 things need you",
+    });
+    expect(overviewOf({ items: [], now: NOW, requests: [], workers }).banner).toBeUndefined();
+  });
+
+  it("lists the longest-waiting requests and the soonest-ending leases, each linked", () => {
+    const requests = ["r1", "r2", "r3", "r4"].map((id, index) => ({
+      createdAt: NOW - (40 - index * 10) * 1_000,
+      id,
+      queuePosition: index + 1,
+      requesterId: `codex:${id}`,
+      spec: { platform: "ios" },
+      stage: "queued",
+    })) as unknown as WaitingRequest[];
+    const ends = (id: string, deadline: number) => ({
+      deviceId: "a",
+      grantedAt: NOW - 60_000,
+      id,
+      idChosenByRequester: false,
+      lastRenewedAt: NOW - 30_000,
+      ownerId: "tok_1",
+      requesterId: "release-bot",
+      ttlDeadline: deadline,
+      ttlMs: 900_000,
+      workerId: "mini-1",
+    });
+
+    const { ending, queue } = overviewOf({
+      leases: [ends("late", NOW + 250_000), ends("soon", NOW + 156_000), ends("far", NOW + 9e5)],
+      now: NOW,
+      requests,
+      workers: fleet,
+    });
+
+    expect(queue).toMatchObject({ meta: "4 waiting · longest 40 s" });
+    expect(
+      "rows" in queue && queue.rows.map((row) => [row.place, row.holder, row.waited, row.to]),
+    ).toEqual([
+      ["#1", "codex:r1", "40 s", "/queue/r1"],
+      ["#2", "codex:r2", "30 s", "/queue/r2"],
+      ["#3", "codex:r3", "20 s", "/queue/r3"],
+    ]);
+    expect(ending).toMatchObject({ meta: "2 under 5 min" });
+    expect(
+      "rows" in ending && ending.rows.map((row) => [row.holder, row.remaining, row.to]),
+    ).toEqual([
+      ["release-bot", "2:36", "/leases/soon/"],
+      ["release-bot", "4:10", "/leases/late/"],
+    ]);
+  });
+
+  it("lists the Fleet page's own rows for the card, a worker with an issue first, and cuts them at eight", () => {
+    const { fleet: card } = overviewOf({ now: NOW, requests: [], workers: fleet });
+
+    expect(card.total).toBe(3);
+    expect(
+      card.attention.map((row) => [row.name, row.health.tone, row.health.word, row.to]),
+    ).toEqual([
+      ["mini-2", "warn", "drained", "/fleet/mini-2"],
+      ["down-1", "error", "disconnected", "/fleet/down-1"],
+    ]);
+    expect(card.healthy.map((row) => row.name)).toEqual(["mini-1"]);
+    expect(card.healthy[0]?.slotsLabel).toBe("2 leased, 1 ready, 3 free");
+    expect(card.attention[1]?.meters).toEqual([]);
+
+    const many = Array.from({ length: 12 }, (_, index) => worker(`w-${index}`, []));
+    const cut = overviewOf({
       now: NOW,
       requests: [],
-      workers,
-    });
-
-    expect(inbox.problems).toBe(5);
-    expect(inbox.needsYou.map((item) => [item.word, item.tone, item.subject, item.to])).toEqual([
-      ["quarantined", "error", "Pixel 8 on mini-2", "/inbox/mini-2%2Fd%2Fquarantined"],
-      ["disconnected", "error", "down-1", "/inbox/down-1%2Fdisconnected"],
-      ["disconnected", "error", "down-2", "/inbox/down-2%2Fdisconnected"],
-      ["disconnected", "error", "down-3", "/inbox/down-3%2Fdisconnected"],
-    ]);
-
-    // why: the Needs you panel reads only /v1/inbox and /v1/workers; the Waiting and Ending soon
-    // tiles read requests and leases, so a lease about to end or a queued request must not move it.
-    const expiring = { ...lease, ttlDeadline: NOW + 1_000 };
-    const request = { createdAt: NOW - 5_000 } as unknown as WaitingRequest;
-    const items = inboxItems(workers, { leases: [lease], now: NOW });
-    const withOthers = overviewOf({
-      items,
-      leases: [expiring],
-      now: NOW,
-      requests: [request],
-      workers,
-    });
-    expect(withOthers.inbox).toEqual(inbox);
+      workers: [...many, worker("down-9", [], { connection: "disconnected" })],
+    }).fleet;
+    expect(cut.total).toBe(13);
+    expect(cut.attention.map((row) => row.name)).toEqual(["down-9"]);
+    expect(cut.healthy).toHaveLength(7);
   });
 
-  it("gives each worker the row Fleet draws: its health, its slots and its use, and a lost worker no use", () => {
-    const { workers } = overviewOf({ now: NOW, requests: [], workers: fleet });
-
-    expect(workers.map((row) => [row.name, row.health.tone, row.health.word])).toEqual([
-      ["mini-1", "ok", "connected"],
-      ["mini-2", "warn", "drained"],
-      ["down-1", "error", "disconnected"],
-    ]);
-    expect(workers).toEqual(fleet.map((worker) => workerRow(worker)));
-    expect(workers[0]?.slotsLabel).toBe("2 leased, 1 ready, 3 free");
-    expect(workers[2]).not.toHaveProperty("use");
-  });
-
-  it("leaves the fleet's lease and device figures unknown, not zero, while a connected worker is starting", () => {
+  it("leaves the fleet's lease figure unknown, not zero, while a connected worker is starting, alone or beside one that reports", () => {
     const alone = overviewOf({ now: NOW, requests: [], workers: [unread("mini-3")] });
 
     expect(alone.tiles.map((tile) => [tile.label, tile.value])).toEqual([
       ["Leased", "—"],
+      ["Ready", "0"],
       ["Waiting", "0"],
+      ["Wait p95", "—"],
+      ["Ending soon", "—"],
       ["Workers", "1"],
     ]);
-
     expect(alone.capacity.map((p) => [p.name, p.notRead, p.parts.length])).toEqual([
       ["iOS", 1, 0],
       ["Android", 1, 0],
     ]);
 
-    expect(alone.workers).toEqual([workerRow(unread("mini-3"))]);
-
     const reporting = worker("mini-1", [device("a", "leased", "ios"), device("b", "ready", "ios")]);
-    const mixed = overviewOf({
-      now: NOW,
-      requests: [],
-      workers: [reporting, unread("mini-3")],
-    });
+    const mixed = overviewOf({ now: NOW, requests: [], workers: [reporting, unread("mini-3")] });
 
     expect(mixed.tiles.map((tile) => [tile.label, tile.value])).toEqual([
       ["Leased", "—"],
+      ["Ready", "1"],
       ["Waiting", "0"],
+      ["Wait p95", "—"],
+      ["Ending soon", "—"],
       ["Workers", "2"],
     ]);
-
-    expect(mixed.workers.map((r) => [r.name, r.slotsLabel])).toEqual([
+    expect(mixed.capacity.map((p) => [p.name, p.notRead])).toEqual([
+      ["iOS", 1],
+      ["Android", 1],
+    ]);
+    expect(
+      [...mixed.fleet.attention, ...mixed.fleet.healthy].map((row) => [row.name, row.slotsLabel]),
+    ).toEqual([
+      ["mini-3", "No devices"],
       ["mini-1", "1 leased, 1 ready, 4 free"],
-      ["mini-3", workerRow(unread("mini-3")).slotsLabel],
     ]);
   });
 

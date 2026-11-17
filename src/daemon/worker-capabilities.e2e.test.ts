@@ -1,25 +1,16 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -45,17 +36,18 @@ describe("a worker's capabilities through a gateway", () => {
   }) {
     const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-caps-gateway-"));
     directories.push(gatewayDirectory);
-    const port = await freeLoopbackPort();
-    const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-      role: "gateway",
-      dataDirectory: gatewayDirectory,
-      filesystem: new MemoryFilesystem(),
-      hostInfo: new FakeHostInfo({ arch: "x64", os: "Linux", osVersion: "6.8.0" }),
-      logger: new NoopLogger(),
-      optionalModules: [agentDeviceModuleWith({})],
-      version: "1.0.0-e2e",
-    });
+    const { port, started: gateway } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        role: "gateway",
+        dataDirectory: gatewayDirectory,
+        filesystem: new MemoryFilesystem(),
+        hostInfo: new FakeHostInfo({ arch: "x64", os: "Linux", osVersion: "6.8.0" }),
+        logger: new NoopLogger(),
+        optionalModules: [agentDeviceModuleWith({})],
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(gateway);
     const { secret } = await gateway.dispatch(
       "token.create",

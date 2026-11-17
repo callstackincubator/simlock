@@ -116,6 +116,7 @@ export {
   FakeTcpPeer,
   FakeTcpStreamConnector,
   NodeTcpStreamConnector,
+  type LoopbackHost,
   type TcpStream,
   type TcpStreamConnector,
 } from "./tcp-stream.js";
@@ -133,6 +134,7 @@ export { LoggingProcessRunner } from "./logging-process-runner.js";
 export {
   exitCodeOf,
   ExecOutputDeliveryStalledError,
+  InputStreamFailedError,
   NodeProcessRunner,
   type ProcessHandle,
   ProcessSpawnError,
@@ -159,6 +161,7 @@ export {
   WindowsHostLoadProbe,
 } from "./host-load.js";
 export {
+  FakeSqliteOpener,
   filterSqliteExperimentalWarning,
   inTransaction,
   isLockError,

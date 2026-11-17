@@ -1,17 +1,13 @@
-/* Buttons. Primary is filled orange with dark text, secondary is outlined, quiet is text only. */
-
 .button {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-weight: 500;
-  letter-spacing: var(--label-tracking);
-  text-transform: uppercase;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 0 var(--space-4);
+  min-height: 30px;
+  padding: 0 12px;
   border: 1px solid var(--accent);
-  border-radius: var(--radius);
+  border-radius: 8px;
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--text-sm);
@@ -22,6 +18,12 @@
     background-color var(--duration),
     border-color var(--duration),
     color var(--duration);
+}
+
+.button-sm {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .button:hover {
@@ -40,7 +42,7 @@
 
 .button-secondary {
   border-color: var(--border-strong);
-  background: transparent;
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -62,6 +64,26 @@
   color: var(--text);
 }
 
+/* Danger is the error colour on an outline, as the reference's Release is: never filled. */
+.button-danger {
+  border-color: color-mix(in srgb, var(--status-error) 45%, var(--surface));
+  background: var(--surface);
+  color: var(--status-error);
+}
+
+.button-danger:hover {
+  border-color: var(--status-error);
+  background: var(--surface);
+  color: var(--status-error);
+}
+
+/* The small button of a panel's own actions: 26px tall. */
+.button-sm {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 /* A button that does nothing here, such as Next on the last page. It keeps its place and its
  * focus; its text and edge go quiet. */
 .button[aria-disabled="true"],
@@ -72,17 +94,16 @@
   cursor: default;
 }
 
-/* A square button that holds an icon alone. It has a button's edge and its 40px height. */
 .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  min-height: 40px;
+  width: 30px;
+  min-height: 30px;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
+  border-radius: 8px;
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
 }
@@ -90,4 +111,11 @@
 .icon-button:hover {
   border-color: var(--text);
   background: var(--surface);
+}
+
+/* A compact button for a card's header or a banner. */
+.button-sm {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
 }

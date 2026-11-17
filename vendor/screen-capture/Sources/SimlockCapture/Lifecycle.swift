@@ -84,6 +84,9 @@ final class Session: @unchecked Sendable {
     private var writtenBytes = 0
     private var _viewerGone = false
     var scaler: Scaler?
+    /// The picture size `scaler` was built for: a source whose picture changes size (a foldable
+    /// switching panels, an iPhone rotating) gets a scaler of its own for the new size.
+    var scalerInput = Dimensions(width: 0, height: 0)
     var scaledSize = Dimensions(width: 0, height: 0)
     /// The way out every end goes through: nil for a clean stop, else the one line to print last.
     let exitRequest = OneShot<String?>()
@@ -182,10 +185,11 @@ func prepareForEncode(
     guard options.maxDimension > 0, max(width, height) > options.maxDimension else {
         return buffer
     }
-    // why: sized once, from the first picture — a rotation changes the long edge and the scale factor
-    // with it, and rebuilding the scaler mid-stream is out of scope for this task (see the module's
-    // known gaps).
-    if session.scaler == nil {
+    // why: rebuilt whenever the picture changes size, so a foldable that switches panels or an iPhone
+    // that rotates keeps its own proportions instead of being squeezed into the first picture's.
+    let input = Dimensions(width: width, height: height)
+    if session.scaler == nil || session.scalerInput != input {
+        session.scalerInput = input
         let factor = Double(options.maxDimension) / Double(max(width, height))
         // Even dimensions: H.264 4:2:0 rejects an odd chroma plane.
         let targetWidth = max(2, Int(Double(width) * factor) & ~1)
@@ -199,33 +203,45 @@ func prepareForEncode(
 
 // MARK: - The encode loop
 
+/// The longest a stream goes without a key frame, in arrival time.
+let maxKeyframeGapNanos: UInt64 = 5_000_000_000
+
 /// Runs the encode loop until the viewer goes away. `newest(1)` on the stream means a slow encoder or
 /// a relay that stops draining drops old frames instead of queueing them without bound, which is the
 /// behaviour a live view needs.
 ///
 /// The first frame forces an IDR so the viewer that just asked for the stream can start decoding
-/// immediately rather than waiting for the encoder's own keyframe interval; after that VideoToolbox
-/// spaces IDRs itself (`MaxKeyFrameInterval = fps * 5`, from serve-sim's encoder).
+/// immediately rather than waiting for the encoder's own keyframe interval. After that the loop forces
+/// one whenever 5 s of arrival time have passed since the last key frame, whatever its cause, so a
+/// still screen (a few frames a second) still gives a new decoder a picture within 5 s; the encoder's
+/// own `MaxKeyFrameInterval` counts frames and would stretch to half a minute at the idle floor.
 func encodeLoop(_ frames: AsyncStream<Pending>, options: Options, session: Session) async {
     let intervalNanos = UInt64(1_000_000_000 / Double(options.fps))
     var lastSent: UInt64 = 0
     var started = false
-    var metaEmitted = false
+    var metaSize: Dimensions?
+    var lastKeyframe: UInt64 = 0
     let encoder = H264Encoder(fps: options.fps, bitrate: options.bitrate)
     let jpegEncoder = VideoEncoder(quality: 0.7)
     for await frame in frames {
         if started, frame.atNanos &- lastSent < intervalNanos { continue }
         lastSent = frame.atNanos
-        let forceKeyframe = !started
+        let forceKeyframe = !started || frame.atNanos &- lastKeyframe >= maxKeyframeGapNanos
         started = true
 
         guard let prepared = prepareForEncode(frame.buffer, options: options, session: session) else {
             continue
         }
         // The meta frame rides the first picture because that is the first moment the encoded
-        // geometry (post-scale) is known.
-        if !metaEmitted {
-            metaEmitted = true
+        // geometry (post-scale) is known. A picture of another size gets a meta frame of its own,
+        // ahead of the fresh parameter sets and keyframe the encoder sends for it, so a viewer learns the
+        // new size before the first picture drawn at it.
+        let size = Dimensions(width: CVPixelBufferGetWidth(prepared), height: CVPixelBufferGetHeight(prepared))
+        if metaSize != size {
+            if metaSize != nil {
+                log("picture size changed to \(size.width)x\(size.height)")
+            }
+            metaSize = size
             let meta: [String: Any] = [
                 "udid": options.udid,
                 "codec": options.codec == "avcc" ? "h264" : "mjpeg",
@@ -251,6 +267,7 @@ func encodeLoop(_ frames: AsyncStream<Pending>, options: Options, session: Sessi
             if let description = encoded.description {
                 Wire.emit(.description, description, countedBy: session)
             }
+            if encoded.kind == .keyframe { lastKeyframe = frame.atNanos }
             Wire.emit(
                 encoded.kind == .keyframe ? .keyframe : .delta,
                 encoded.avcc,

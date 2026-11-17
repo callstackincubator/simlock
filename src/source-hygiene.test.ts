@@ -26,29 +26,7 @@ type SizedFile = { path: string; lines: number };
  * why: ADR 0063 section 3. These files were over their limit when the size test landed; each may
  * only shrink. A PR that has to grow one raises its number here, as a visible line of its diff.
  */
-const SHRINK_ONLY: Record<string, number> = {
-  "src/agent-device/edge.test.ts": 4506,
-  "src/cli/index.test.ts": 11542,
-  "src/contract/schemas.ts": 1497,
-  "src/core/config.test.ts": 2519,
-  "src/core/doctor.test.ts": 3534,
-  "src/core/registry.test.ts": 2901,
-  "src/core/warm-pool/converger.test.ts": 2965,
-  "src/daemon/dispatcher.test.ts": 6284,
-  "src/daemon/main.test.ts": 5255,
-  "src/daemon/main.ts": 1916,
-  "src/daemon/server.test.ts": 4380,
-  "src/daemon/server.ts": 1803,
-  "src/drivers/ios/index.test.ts": 5873,
-  "src/drivers/ios/index.ts": 2671,
-  "src/gateway/dispatcher.test.ts": 3022,
-  "src/gateway/fleet-coordinator.test.ts": 5283,
-  "src/gateway/fleet-coordinator.ts": 1659,
-  "src/http/app.test.ts": 3487,
-  "src/leasing/create-leasing.test.ts": 5276,
-  "src/leasing/lease-acquisition-coordinator.test.ts": 3691,
-  "src/leasing/lease-acquisition-coordinator.ts": 1622,
-};
+const SHRINK_ONLY: Record<string, number> = {};
 
 const CODE_LIMIT = 1400;
 const TEST_LIMIT = 2500;
@@ -120,12 +98,17 @@ function sha256Sums(name: string): [string, string][] {
 /**
  * why: a committed binary is never searched as text -- built fixtures the e2e lane installs, and
  * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (a packed server APK), and
- * the website's fonts and images. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
+ * the website's fonts and images, and the nine approved console design renders. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
  * is a claim about their contents, so for `vendor/` the test that compares this list against the
  * files in `vendor/` that actually carry a NUL is what makes the skip mean something.
  */
 const isCommittedBinary = (name: string): boolean =>
-  name.startsWith("e2e/fixtures/") || pinnedVendoredArtifacts.has(name) || isWebsiteAsset(name);
+  name.startsWith("e2e/fixtures/") ||
+  pinnedVendoredArtifacts.has(name) ||
+  isWebsiteAsset(name) ||
+  /^docs\/internal\/console-redesign\/renders\/(?:1-overview|2-fleet|3-worker|4-streaming|5-leases-empty|6-leases-selected|7-baselines|8-activity|mosaic)\.png$/.test(
+    name,
+  );
 
 /**
  * why: the website ships its own fonts and the images `pnpm og` renders (the social card, the
@@ -145,7 +128,7 @@ const isWebsiteAsset = (name: string): boolean =>
  * tracked file in the repository (testing rule 4), not just the directories this test
  * happened to name. The exceptions are the committed binaries `isCommittedBinary` names:
  * built binaries committed for tests, the vendored third-party artifacts, and the
- * website's fonts and images, none of which is ever searched as text. Untracked and ignored files are out of scope:
+ * website's fonts and images, and approved design renders, none of which is searched as text. Untracked and ignored files are out of scope:
  * they are not part of what anyone clones or searches.
  */
 describe("tracked files", () => {
@@ -231,6 +214,27 @@ describe("tracked files", () => {
     expect(trackedFiles.filter(isCommittedBinary)).toEqual([]);
     expect(isWebsiteAsset("website/src/fonts/Switzer-Regular.woff2")).toBe(true);
     expect(isWebsiteAsset("website/src/site/content.ts")).toBe(false);
+    for (const name of [
+      "1-overview.png",
+      "2-fleet.png",
+      "3-worker.png",
+      "4-streaming.png",
+      "5-leases-empty.png",
+      "6-leases-selected.png",
+      "7-baselines.png",
+      "8-activity.png",
+      "mosaic.png",
+    ]) {
+      expect(isCommittedBinary(`docs/internal/console-redesign/renders/${name}`), name).toBe(true);
+    }
+    for (const name of [
+      "docs/internal/console-redesign/renders/9-other.png",
+      "docs/internal/console-redesign/renders/1-overview.md",
+      "docs/internal/console-redesign/PLAN.md",
+      "src/unexpected.png",
+    ]) {
+      expect(isCommittedBinary(name), name).toBe(false);
+    }
     expect(trackedFiles).toContain("e2e/appduct-fixtures.test.ts");
   });
 

@@ -9,7 +9,8 @@ import { useFigures } from "./figures";
 import { useNow, useRouteQuery } from "./live";
 import { bothViews, loadView, mapView } from "./resource";
 
-export type { Overview, OverviewInbox, PlatformCapacity } from "../model/overview";
+export type { Overview, PlatformCapacity, QueueCard } from "../model/overview";
+export type { OverviewFleet } from "../model/overview";
 
 export function useOverview(range: ConsoleRange): LoadView<Overview> {
   const workers = loadView(useRouteQuery<WorkerList>("/v1/workers"));
@@ -18,8 +19,9 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
   const leases = useRouteQuery<LeaseList>("/v1/leases");
   const figures = useFigures(range);
   const now = useNow();
-  // why: a daemon that keeps no queue of its own answers 501, and the Waiting tile then counts none
-  // instead of hiding the fleet behind "not available".
+  // why: a daemon that keeps no queue of its own answers 501, and the Waiting tile then counts none;
+  // a refused read is not known, so the Queue and Waiting show it unavailable, never as zero.
+  const queueRefusal = asked.kind === "refused" ? asked.message : undefined;
   const waiting: LoadView<WaitingList> =
     asked.kind === "unsupported" || asked.kind === "refused"
       ? { data: { requests: [] }, kind: "ready" }
@@ -28,11 +30,19 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
     bothViews(bothViews(workers, waiting), inbox),
     ([[workerList, waitingList], inboxList]) =>
       overviewOf({
+        updatedAt: now.server,
         figures,
         items: inboxList.items,
-        leases: leases.error === undefined ? leases.data?.leases : undefined,
+        leases:
+          leases.error !== undefined
+            ? undefined
+            : leases.data === undefined
+              ? "loading"
+              : leases.data.leases,
         now: now.server,
-        requests: waitingList.requests,
+        range,
+        requests: queueRefusal === undefined ? waitingList.requests : undefined,
+        ...(queueRefusal === undefined ? {} : { queueRefusal }),
         workers: workerList.workers,
       }),
   );

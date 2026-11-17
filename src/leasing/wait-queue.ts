@@ -30,8 +30,9 @@ export interface LeaseRequestOptions {
    */
   readonly idempotencyKey?: string;
   /**
-   * ADR 0020: the lease ID the requester chose. The granted lease has exactly this ID; the
-   * requester guarantees it is unique for all time, and while the request waits it holds the ID.
+   * why: ADR 0020: the lease ID the requester chose. The granted lease has exactly this ID; a live
+   * lease or waiting request holds it, and one whose lease ended is refused for
+   * `lease.endedIdRetentionMs` (ADR 0074 §4).
    * An option of the request, not part of the device it names.
    */
   readonly leaseId?: string;
@@ -222,6 +223,11 @@ export interface WaitQueueOptions {
   readonly idGenerator: IdGenerator;
   readonly onTimeout?: (waiter: Waiter) => void;
   readonly onDepthChange?: ((depth: number, line: QueueLine) => void) | undefined;
+  /**
+   * why: ADR 0074 §2: a gateway serves a higher priority first, equal priorities in arrival order.
+   * Unset (a worker's queue), every waiter has priority 0 and the line stays in arrival order.
+   */
+  readonly priorityOf?: ((waiter: Waiter) => number) | undefined;
 }
 
 export function lineOf(request: DeviceRequest): QueueLine {
@@ -251,12 +257,17 @@ export class WaitQueue {
     return [...this.#waiters];
   }
 
+  /** why: the waiter's place in its line, 1 for the next served; 0 when it is not queued. */
+  positionOf(waiter: Waiter): number {
+    return this.#line(lineOf(waiter.request)).indexOf(waiter as MutableWaiter) + 1;
+  }
+
   places(): readonly QueuePlace[] {
     return [...this.#pendingWaiters].map((waiter) =>
       waiter.state === "queued"
         ? {
             id: waiter.id,
-            queuePosition: this.#line(lineOf(waiter.request)).indexOf(waiter) + 1,
+            queuePosition: this.positionOf(waiter),
             ...(waiter.reason === undefined ? {} : { reason: waiter.reason }),
           }
         : { id: waiter.id },
@@ -337,11 +348,10 @@ export class WaitQueue {
     mutable.reason = reason;
 
     if (!this.#waiters.includes(mutable)) {
-      this.#waiters.push(mutable);
+      this.#insert(mutable);
       const line = lineOf(mutable.request);
-      const depth = this.#line(line).length;
-      this.options.onDepthChange?.(depth, line);
-      this.notifyProgress(mutable, { queuePosition: depth, stage: "queued" });
+      this.options.onDepthChange?.(this.#line(line).length, line);
+      this.notifyProgress(mutable, { queuePosition: this.positionOf(mutable), stage: "queued" });
     }
     mutable.state = "queued";
     this.#armTimeout(mutable);
@@ -498,6 +508,18 @@ export class WaitQueue {
       this.options.clock.cancel(waiter.timer);
       waiter.timer = undefined;
     }
+  }
+
+  /** why: after the last waiter of at least this priority, so equal priorities keep arrival order. */
+  #insert(waiter: MutableWaiter): void {
+    const { priorityOf } = this.options;
+    if (priorityOf === undefined) {
+      this.#waiters.push(waiter);
+      return;
+    }
+    const priority = priorityOf(waiter);
+    const behind = this.#waiters.findIndex((queued) => priorityOf(queued) < priority);
+    this.#waiters.splice(behind === -1 ? this.#waiters.length : behind, 0, waiter);
   }
 
   #line(line: QueueLine): MutableWaiter[] {

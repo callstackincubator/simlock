@@ -1,31 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-
-import type { DeviceRecord, LeaseRecord } from "../core/index.js";
 import { DeviceTcpError } from "../core/index.js";
 import { FakeDeviceTcp } from "../core/testing.js";
 import type { WorkerModule } from "../modules/index.js";
-import { fakeWorkerContext } from "../modules/testing.js";
 import { type FakeClock, MemoryLeaseSocket } from "../ports/index.js";
-import { tunnelModule } from "./index.js";
-
-const IDENTITY = { principal: "tok_holder", role: "agent" } as const;
-
-function frame(tag: number, conn: number, body = ""): Uint8Array {
-  const bytes = new TextEncoder().encode(body);
-  const out = new Uint8Array(5 + bytes.length);
-  out[0] = tag;
-  new DataView(out.buffer).setUint32(1, conn);
-  out.set(bytes, 5);
-  return out;
-}
-
-function frames(socket: MemoryLeaseSocket): { tag: number; conn: number; body: string }[] {
-  return socket.sent.map((sent) => ({
-    body: new TextDecoder().decode(sent.subarray(5)),
-    conn: new DataView(sent.buffer, sent.byteOffset).getUint32(1),
-    tag: sent[0] ?? -1,
-  }));
-}
+import { IDENTITY, attach, ending, frame, frames, hello, setup } from "./test-worker.js";
 
 function sentData(socket: MemoryLeaseSocket, conn: number): number {
   return socket.sent
@@ -48,63 +26,6 @@ function oversizeData(conn: number): Uint8Array {
   bytes[0] = 0x03;
   new DataView(bytes.buffer).setUint32(1, conn);
   return bytes;
-}
-
-function ending(reason: "device-lost" | "expired" | "explicit" | "killed") {
-  return {
-    deviceId: "dev_1",
-    leaseId: "L-1",
-    ownerId: "tok_holder",
-    platform: "android",
-    reason,
-  } as const;
-}
-
-function hello(...tunnels: { kind: string; devicePort: number }[]): Uint8Array {
-  return frame(0x01, 0, JSON.stringify({ tunnels }));
-}
-
-async function setup(
-  platform = "android",
-  physical = false,
-): Promise<{
-  readonly worker: WorkerModule;
-  readonly deviceTcp: FakeDeviceTcp;
-  readonly clock: FakeClock;
-}> {
-  const { clock, ctx } = await fakeWorkerContext("tunnel", {});
-  const deviceTcp = new FakeDeviceTcp();
-  const registry = {
-    snapshot: {
-      devices: [{ id: "dev_1", physical, spec: { platform } } as unknown as DeviceRecord],
-      leases: [
-        { deviceId: "dev_1", id: "L-1" } as unknown as LeaseRecord,
-        { deviceId: "dev_1", id: "L-2" } as unknown as LeaseRecord,
-      ],
-    },
-  };
-  const loaded = await tunnelModule.loadWorker();
-  const worker = loaded.createWorker({
-    ...ctx,
-    deviceTcp: {
-      connect: (_platform, device, port, signal) => deviceTcp.connect(device, port, signal),
-      supports: (named) => named === "android",
-      reverse: (_platform, device, port, signal) => deviceTcp.reverse(device, port, signal),
-    },
-    registry,
-  });
-  return { clock, deviceTcp, worker };
-}
-
-async function attach(worker: WorkerModule, leaseId = "L-1"): Promise<MemoryLeaseSocket> {
-  const opened = await worker.socket?.open(new Request("http://simlock/tunnel"), IDENTITY, {
-    deviceId: "dev_1",
-    id: leaseId,
-  });
-  expect(opened).toBeTypeOf("function");
-  const socket = new MemoryLeaseSocket();
-  if (typeof opened === "function") opened(socket);
-  return socket;
 }
 
 async function carriesOneTunnel(): Promise<void> {
@@ -266,19 +187,20 @@ describe("a worker's tunnel socket", () => {
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        message: "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels",
         platform: "ios",
         tunnels: [{ devicePort: 9229, kind: "forward" }],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        message: "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels",
         platform: "ios",
         tunnels: [reverse(5173)],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iPhone; tunnels need an Android emulator or phone",
+        message:
+          "the lease is on an iPhone; tunnels need an Android emulator or phone, or an iOS simulator",
         physical: true,
         platform: "ios",
         tunnels: [reverse(5173)],
@@ -636,6 +558,7 @@ describe("a worker's tunnel socket", () => {
     await pair.worker.hooks?.beforeDeviceReclaim?.(
       {
         deviceId: "dev_1",
+        grantedAt: 1_000,
         leaseId: "L-1",
         ownerId: "tok_holder",
         platform: "android",
@@ -658,6 +581,7 @@ describe("a worker's tunnel socket", () => {
     await failing.worker.hooks?.beforeDeviceReclaim?.(
       {
         deviceId: "dev_1",
+        grantedAt: 1_000,
         leaseId: "L-1",
         ownerId: "tok_holder",
         platform: "android",
@@ -708,6 +632,7 @@ describe("a worker's tunnel socket", () => {
     await reclaimed.worker.hooks?.beforeDeviceReclaim?.(
       {
         deviceId: "dev_1",
+        grantedAt: 1_000,
         leaseId: "L-1",
         ownerId: "tok_holder",
         platform: "android",
@@ -755,6 +680,27 @@ describe("a worker's tunnel socket", () => {
     await vi.waitFor(() => expect(abortedRace.deviceTcp.reverseLog).toEqual([5173]));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(abortedRace.deviceTcp.reversed).toEqual([5173]);
+  });
+
+  it("closes at an aborted lease end the reverses whose close needs no reclaim and leaves the others to it", async () => {
+    const tunnel = { devicePort: 5173, kind: "reverse" };
+    for (const [holdsDeviceRule, reversedAfter] of [
+      [false, []],
+      [true, [5173]],
+    ] as const) {
+      const { deviceTcp, worker } = await setup();
+      deviceTcp.holdsDeviceRule = holdsDeviceRule;
+      const socket = await attach(worker);
+      socket.receive(hello(tunnel));
+      await vi.waitFor(() => expect(deviceTcp.reversed).toEqual([5173]));
+      const aborted = new AbortController();
+      aborted.abort();
+      await worker.hooks?.beforeDeviceReclaim?.(ending("device-lost"), aborted.signal);
+      expect(socket.closed).toEqual({ code: 4001, reason: "device-lost" });
+      expect(deviceTcp.reversed, `holdsDeviceRule ${String(holdsDeviceRule)}`).toEqual(
+        reversedAfter,
+      );
+    }
   });
 
   it("keeps an idle relay alive with a heartbeat every 5 s and closes it with an 0xF1 {code, reason}", async () => {
@@ -813,115 +759,5 @@ describe("a worker's tunnel socket", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(heartbeats()).toBe(2);
     expect(clock.pendingTimerCount).toBe(idleTimers);
-  });
-});
-
-describe("a worker's tunnel socket with forward tunnels", () => {
-  const tunnels = [
-    { devicePort: 9229, kind: "forward" },
-    { devicePort: 5173, kind: "reverse" },
-  ];
-  const open = (conn: number, devicePort: number, kind = "forward"): Uint8Array =>
-    frame(0x02, conn, JSON.stringify({ devicePort, kind }));
-
-  async function ready() {
-    const { deviceTcp, worker } = await setup();
-    deviceTcp.listening.add(9229);
-    const socket = await attach(worker);
-    socket.receive(hello(...tunnels));
-    await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-    expect(deviceTcp.reversed).toEqual([5173]);
-    return { deviceTcp, socket, worker };
-  }
-
-  it("refuses a caller OPEN that is not an even rising id for a forward tunnel of the socket with BAD_REQUEST and close 4003, and counts caller and device connections together toward 256", async () => {
-    const accepted = await ready();
-    accepted.socket.receive(open(2, 9229));
-    await vi.waitFor(() => expect(accepted.deviceTcp.connections).toHaveLength(1));
-    expect(accepted.socket.closed).toBeUndefined();
-
-    const cases = [
-      { frames: [open(2, 9230)], message: "OPEN must name a forward tunnel of this socket" },
-      { frames: [open(2, 5173)], message: "OPEN must name a forward tunnel of this socket" },
-      {
-        frames: [open(2, 9229, "reverse")],
-        message: "OPEN must name a forward tunnel of this socket",
-      },
-      { frames: [open(1, 9229)], message: "OPEN needs an even connection id above the last" },
-      {
-        frames: [open(2, 9229), open(2, 9229)],
-        message: "OPEN needs an even connection id above the last",
-      },
-      {
-        frames: [open(4, 9229), open(2, 9229)],
-        message: "OPEN needs an even connection id above the last",
-      },
-      {
-        frames: [frame(0x02, 2, "{nope")],
-        message: "OPEN must name a forward tunnel of this socket",
-      },
-    ];
-    for (const bad of cases) {
-      const { socket } = await ready();
-      for (const sent of bad.frames) socket.receive(sent);
-      await vi.waitFor(() => expect(socket.closed).toEqual({ code: 4003, reason: bad.message }));
-      expect(frames(socket).at(-1)).toEqual({
-        body: JSON.stringify({ code: "BAD_REQUEST", message: bad.message }),
-        conn: 0,
-        tag: 0x82,
-      });
-    }
-
-    const { deviceTcp, socket } = await ready();
-    for (let conn = 2; conn <= 512; conn += 2) {
-      if (conn <= 256) deviceTcp.openFromDevice(5173);
-      else socket.receive(open(conn, 9229));
-    }
-    await vi.waitFor(() => expect(deviceTcp.connections).toHaveLength(128));
-    socket.receive(open(514, 9229));
-    await vi.waitFor(() =>
-      expect(frames(socket).at(-1)).toEqual({
-        body: '{"reason":"too many connections"}',
-        conn: 514,
-        tag: 0x06,
-      }),
-    );
-    expect(deviceTcp.connections).toHaveLength(128);
-    const past = deviceTcp.openFromDevice(5173);
-    await vi.waitFor(() => expect(past.closed).toBe(true));
-    expect(socket.closed).toBeUndefined();
-
-    const failing = await ready();
-    failing.deviceTcp.listening.delete(9229);
-    failing.deviceTcp.connectFailures.set(9231, new DeviceTcpError("TUNNEL_FAILED", "timeout"));
-    failing.socket.receive(open(2, 9229));
-    await vi.waitFor(() =>
-      expect(frames(failing.socket).at(-1)).toEqual({
-        body: '{"reason":"closed"}',
-        conn: 2,
-        tag: 0x06,
-      }),
-    );
-    expect(failing.socket.closed).toBeUndefined();
-
-    const silent = await ready();
-    silent.deviceTcp.connectFailures.set(9229, new DeviceTcpError("TUNNEL_FAILED", "timeout"));
-    silent.socket.receive(open(2, 9229));
-    await vi.waitFor(() =>
-      expect(frames(silent.socket).at(-1)).toEqual({
-        body: '{"reason":"timeout"}',
-        conn: 2,
-        tag: 0x06,
-      }),
-    );
-
-    const ended = await ready();
-    await ended.worker.hooks?.beforeDeviceReclaim?.(
-      ending("expired"),
-      new AbortController().signal,
-    );
-    ended.socket.receive(open(2, 9229));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(ended.deviceTcp.connections).toHaveLength(0);
   });
 });

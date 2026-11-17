@@ -3,6 +3,7 @@ name: spec-reviewer
 description: The blind spec review from delivery rule 14. Spawned only by the reviewer agent, which passes the inputs directory and the round. Reads; runs nothing.
 model: sonnet
 effort: medium
+autoCompactWindow: 300000
 tools: Read, Grep, Glob
 ---
 

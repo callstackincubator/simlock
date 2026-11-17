@@ -1,138 +1,143 @@
 import "./fleet.css";
 
 import {
+  ButtonLink,
   ChoiceChips,
-  type Column,
-  DataTable,
   Link,
   Loaded,
-  Meter,
+  type LoadView,
+  LogRow,
   Page,
-  type Paging,
+  Pill,
   SearchField,
-  Slots,
-  Status,
-  Toolbar,
+  StatusDot,
+  type WorkerTableGroup,
+  WorkerTable,
 } from "../../ds";
 import {
+  type FleetRow,
+  type LogEventRow,
   type FleetPage,
   useFleet,
-  useWorkerMenu,
   useFleetAddress,
+  useFleetEvents,
+  useWorkerMenu,
   WORKER_FILTERS,
-  type WorkerRow,
 } from "../../state/workers";
+import { StreamingPage, LegacyWatchRedirect } from "./streaming-page";
 import { WorkerPageScreen } from "./worker-page";
 
 export function FleetScreen() {
-  const { deviceId, workerId } = useFleetAddress();
-  return workerId === undefined ? (
-    <FleetTable />
-  ) : (
-    <WorkerPageScreen id={workerId} deviceId={deviceId} />
+  const { deviceId, streaming, workerId } = useFleetAddress();
+  if (workerId === undefined) return <FleetTable />;
+  if (streaming === true && deviceId !== undefined) {
+    return <StreamingPage workerId={workerId} deviceId={deviceId} />;
+  }
+  return (
+    <>
+      <LegacyWatchRedirect workerId={workerId} deviceId={deviceId} />
+      <WorkerPageScreen id={workerId} deviceId={deviceId} />
+    </>
   );
 }
 
 function FleetTable() {
   const view = useFleet();
+  const log = useFleetEvents();
   return (
     <Page
       title="Fleet"
-      actions={view.kind === "ready" ? <span className="muted">{view.data.meta}</span> : null}
+      actions={
+        <ButtonLink variant="primary" to={ADD_WORKER_URL}>
+          Add worker
+        </ButtonLink>
+      }
     >
-      <Loaded view={view}>{(page) => <FleetBody page={page} />}</Loaded>
+      <Loaded view={view}>{(page) => <FleetBody page={page} log={log} />}</Loaded>
     </Page>
   );
 }
 
-export function FleetBody({ page }: { readonly page: FleetPage }) {
+const ADD_WORKER_URL = "https://callstackincubator.github.io/simlock/docs/gateway/joining-workers";
+
+export function FleetBody({
+  log,
+  page,
+}: {
+  readonly page: FleetPage;
+  readonly log: LoadView<{ readonly rows: readonly LogEventRow[] }>;
+}) {
+  const entries = useWorkerMenu();
+  const none = page.attention.length === 0 && page.healthy.length === 0;
   return (
     <>
-      <Toolbar
-        start={
-          <ChoiceChips
-            legend="Show workers"
-            choices={WORKER_FILTERS}
-            value={page.filter}
-            onChange={page.setFilter}
-          />
-        }
-        end={<SearchField label="Search workers" value={page.query} onChange={page.search} />}
-      />
-      <WorkersTable
-        rows={page.rows}
-        empty={page.empty ? "No workers have connected." : "No worker matches."}
-        paging={page.paging}
-      />
+      <div className="fleet-controls">
+        <ChoiceChips
+          legend="Show workers"
+          choices={WORKER_FILTERS}
+          value={page.filter}
+          onChange={page.setFilter}
+        />
+        <SearchField
+          label="Search workers"
+          placeholder="Filter workers"
+          value={page.query}
+          onChange={page.search}
+        />
+      </div>
+      {none ? (
+        <p className="muted">{page.empty ? "No workers have connected." : "No worker matches."}</p>
+      ) : null}
+      {none ? null : <WorkerTable groups={groups(page)} entries={entries} />}
+      <Loaded view={log}>{(shown) => <FleetLog rows={shown.rows} />}</Loaded>
     </>
   );
 }
 
-// why: the Overview draws this same table, every worker and no pager, so it passes no `paging`.
-export function WorkersTable(props: {
-  readonly rows: readonly WorkerRow[];
-  readonly empty: string;
-  readonly paging?: Paging;
-}) {
-  const entries = useWorkerMenu();
-  return (
-    <DataTable
-      label="Workers"
-      rows={props.rows}
-      columns={COLUMNS}
-      rowId={(row) => row.id}
-      rowTo={(row) => row.to}
-      menu={{ entries, label: (row) => `Actions for ${row.name}` }}
-      empty={props.empty}
-      {...(props.paging === undefined ? {} : { paging: props.paging })}
-      wide
-    />
-  );
+function groups(page: FleetPage): readonly WorkerTableGroup<FleetRow>[] {
+  return [
+    {
+      id: "attention" as const,
+      label: `Needs attention ${page.attention.length}`,
+      rows: page.attention,
+    },
+    { id: "healthy" as const, label: `Healthy ${page.healthy.length}`, rows: page.healthy },
+  ].filter((group) => group.rows.length > 0);
 }
 
-function MeterCell({ label, row }: { readonly label: string; readonly row: WorkerRow }) {
-  const meter = row.meters.find((candidate) => candidate.label === label);
-  if (meter?.percent === undefined) return <>—</>;
+function FleetLog({ rows }: { readonly rows: readonly LogEventRow[] }) {
   return (
-    <span className="worker-meter">
-      <span className="mono">{meter.percent}%</span>
-      <Meter percent={meter.percent} tone={meter.tone} size="thin" />
-    </span>
+    <section className="fleet-log" aria-label="Worker events">
+      <header className="fleet-log-head">
+        <h2 className="fleet-label">Worker events</h2>
+        <Pill tone="ok">live</Pill>
+        <span className="fleet-log-count">last hour · {rows.length}</span>
+      </header>
+      {rows.length === 0 ? (
+        <p className="muted fleet-log-empty">No worker events in the last hour.</p>
+      ) : (
+        <ul className="fleet-log-list" aria-label="Worker events">
+          {rows.map((row) => (
+            <li key={row.id}>
+              <LogRow
+                time={<time dateTime={row.iso}>{row.time}</time>}
+                status={
+                  <StatusDot
+                    tone={row.squareTone}
+                    label={row.squareTone === "idle" ? "info" : row.squareTone}
+                  />
+                }
+                event={<Link to={row.to}>{row.name}</Link>}
+                subject={row.subject}
+                detail={row.detail}
+                {...(row.tone === undefined || row.tone === "ok" || row.tone === "idle"
+                  ? {}
+                  : { tone: row.tone })}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
-
-const COLUMNS: readonly Column<WorkerRow>[] = [
-  {
-    cell: (row) => (
-      <span className="worker-name">
-        <Link to={row.to} title={row.name}>
-          {row.name}
-        </Link>
-        {row.system === undefined && row.version === undefined ? null : (
-          <span className="worker-system">
-            {[row.system, row.version].filter((part) => part !== undefined).join(" · ")}
-          </span>
-        )}
-      </span>
-    ),
-    header: "Worker",
-  },
-  {
-    cell: (row) => (
-      <span className="worker-name">
-        <Status tone={row.health.tone}>{row.health.word}</Status>
-        {row.stage === undefined ? null : <span className="worker-system">{row.stage}</span>}
-      </span>
-    ),
-    header: "State",
-  },
-  { cell: (row) => <Slots slots={row.slots} label={row.slotsLabel} />, header: "Slots" },
-  {
-    cell: (row) => (row.use === undefined ? "—" : `${row.use.running} / ${row.use.limit}`),
-    header: "Use",
-    mono: true,
-  },
-  { cell: (row) => <MeterCell label="CPU" row={row} />, header: "CPU" },
-  { cell: (row) => <MeterCell label="Memory" row={row} />, header: "Memory" },
-  { cell: (row) => <MeterCell label="Disk" row={row} />, header: "Disk" },
-];

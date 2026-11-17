@@ -10,7 +10,7 @@ import { androidDeviceDataTable } from "../drivers/android/index.js";
 import { iosDeviceDataTable } from "../drivers/ios/index.js";
 import { FakeClock, NodeFilesystem, NodeSqliteOpener, NoopLogger } from "../ports/index.js";
 import { openStateDatabase } from "../state/index.js";
-import { productionDeviceDataTables } from "./main.js";
+import { productionDeviceDataTables } from "./driver-discovery.js";
 
 describe("the production device-data tables", () => {
   it("a registry restarted on one state.db returns an iOS and an Android device's driverData unchanged", async () => {

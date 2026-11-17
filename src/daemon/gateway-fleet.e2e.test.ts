@@ -1,5 +1,5 @@
 /**
- * ADR 0005 §35's one e2e test: "two fake-driver workers and a gateway in one process tree and
+ * why: ADR 0005 §35's one e2e test: "two fake-driver workers and a gateway in one process tree and
  * leases through the gateway". A real gateway daemon and two real worker daemons (each with a
  * `FakeDriver` instead of real simulator tooling), joined over a real WebSocket uplink on
  * loopback -- not the in-memory uplink port `service.test.ts`/`worker-link.test.ts` script,
@@ -12,7 +12,7 @@
  * exercise (see `fleet-coordinator.test.ts`'s own two-worker tests for the pass-over and
  * dispatch-race cases this file does not re-prove).
  *
- * A fixed port, matching `main.test.ts`'s own real-HTTP tests (`describe("startDaemon HTTP
+ * A fixed port, matching `main-stop.test.ts`'s own real-HTTP tests (`describe("startDaemon HTTP
  * gateway bind failure")`) rather than a dynamically-chosen one: the worker's `gateway.url` has
  * to be known before that worker's daemon is constructed, and this codebase's other real-socket
  * tests already accept a fixed port's small collision risk over that chicken-and-egg problem.
@@ -24,12 +24,12 @@
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { ProtocolRange } from "../contract/index.js";
 import type { AlertDestination, PassthroughCommand } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
@@ -39,8 +39,10 @@ import {
   FakeNpmCli,
   FakeUpdaterLauncher,
   MemoryFilesystem,
+  NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  ScriptedProcessRunner,
   resolveDaemonSocketPath,
   SystemClock,
 } from "../ports/index.js";
@@ -59,15 +61,6 @@ function passthroughOptions(command: PassthroughCommand): object {
  * this file overlap -- two worktrees running the suite at once, or Stryker's parallel runners
  * -- with an `EADDRINUSE` that has nothing to do with the code under test.
  */
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
 const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0" };
 /** Picked by `startGateway`/`startRestartableGateway` just before each gateway listens, so the
  * port is free for as short a time as possible; the restart test reuses its own port across
@@ -136,28 +129,43 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   });
 
   async function startGateway(
-    alerts: { destinations?: readonly AlertDestination[]; poster?: FakeWebhookPoster } = {},
+    alerts: {
+      admission?: readonly string[];
+      destinations?: readonly AlertDestination[];
+      poster?: FakeWebhookPoster;
+    } = {},
     extra: Partial<StartDaemonOptions> = {},
   ): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
     directories.push(directory);
-    gatewayPort = await freeLoopbackPort();
-    const daemon = await startDaemon({
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
-        ...(alerts.destinations === undefined
-          ? {}
-          : { gateway: { alerts: { destinations: alerts.destinations } } }),
-      },
-      role: "gateway",
-      dataDirectory: directory,
-      filesystem: new MemoryFilesystem(),
-      hostInfo: new FakeHostInfo(GATEWAY_HOST),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-      ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
-      ...extra,
-    });
+    const { port: picked, started: daemon } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port },
+          ...(alerts.destinations === undefined && alerts.admission === undefined
+            ? {}
+            : {
+                gateway: {
+                  ...(alerts.destinations === undefined
+                    ? {}
+                    : { alerts: { destinations: alerts.destinations } }),
+                  ...(alerts.admission === undefined
+                    ? {}
+                    : { admission: { command: alerts.admission } }),
+                },
+              }),
+        },
+        role: "gateway",
+        dataDirectory: directory,
+        filesystem: new MemoryFilesystem(),
+        hostInfo: new FakeHostInfo(GATEWAY_HOST),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+        ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
+        ...extra,
+      }),
+    );
+    gatewayPort = picked;
     daemons.push(daemon);
     return daemon;
   }
@@ -178,17 +186,19 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-restart-"));
     directories.push(directory);
     const filesystem = new MemoryFilesystem();
-    restartGatewayPort = await freeLoopbackPort();
-    const daemon = await startDaemon({
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
-      },
-      role: "gateway",
-      dataDirectory: directory,
-      filesystem,
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+    const { port: picked, started: daemon } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        role: "gateway",
+        dataDirectory: directory,
+        filesystem,
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
+    restartGatewayPort = picked;
     daemons.push(daemon);
     return { daemon, filesystem, directory };
   }
@@ -215,12 +225,18 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     /** why: a worker on another protocol range is the gateway's `incompatible` worker. */
     readonly protocolVersion?: ProtocolRange;
     readonly npm?: NpmCli;
+    /** why: a worker that runs a real command runs it in its lease folder, which has to exist on disk. */
+    readonly realFilesystem?: boolean;
+    /** why: holds the gateway's first catalog read open, so a view shows `connected` before it lists the worker's model. */
+    readonly catalogLatencyMs?: number;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
       (await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`)));
     if (options.existing === undefined) directories.push(directory);
-    const filesystem = options.existing?.filesystem ?? new MemoryFilesystem();
+    const filesystem =
+      options.existing?.filesystem ??
+      (options.realFilesystem === true ? new NodeFilesystem() : new MemoryFilesystem());
     const driver = new FakeDriver({
       availableOsVersions: ["18.0"],
       // why: a real command, so `device.exec` proves a real child process actually ran on
@@ -233,6 +249,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       }),
       clock: new SystemClock(),
       knownModels: [options.model],
+      ...(options.catalogLatencyMs === undefined
+        ? {}
+        : { latencyMs: { listCatalog: options.catalogLatencyMs } }),
       platform: "android",
     });
     options.onDriver?.(driver);
@@ -342,6 +361,28 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     expect(status.daemon.update).toMatchObject(installing);
   });
 
+  it("a gateway configured with gateway.admission.command asks that command about a new request and refuses it when the command denies", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["/etc/simlock/policy.ts"], command: "bun" },
+        result: { code: 0, stderr: "", stdout: '{"deny":"budget used"}' },
+      },
+    ]);
+    const gateway = await startGateway(
+      { admission: ["bun", "/etc/simlock/policy.ts"] },
+      { processRunner: runner },
+    );
+
+    await expect(
+      gateway.dispatch(
+        "lease.request",
+        { model: "Pixel-B", platform: "android", noWait: true },
+        agentSession(),
+      ),
+    ).rejects.toMatchObject({ code: "ADMISSION_DENIED" });
+    expect(runner.calls).toHaveLength(1);
+  });
+
   it("emits queue.changed once when the gateway has started, with depth 0, and no capacity.changed of its own", async () => {
     const gateway = await startGateway();
 
@@ -380,10 +421,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       model: "Pixel-B",
       token: tokenB,
       stdout: "hello-from-b",
+      realFilesystem: true,
     });
 
-    // Both uplinks dial on their own schedule outside `startDaemon`'s own returned promise
-    // (`main.ts` fires `gatewayUplink.start()` without awaiting it) -- wait for the gateway to
+    // why: Both uplinks dial on their own schedule outside `startDaemon`'s own returned promise
+    // (`worker-composition.ts` fires `gatewayUplink.start()` without awaiting it) -- wait for the gateway to
     // actually see both usably (C3, round 1 review) before leasing, not merely `connected`.
     await vi.waitFor(async () => {
       const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
@@ -488,7 +530,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   /**
    * why: #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
    * rebuild, proved together over real processes and a real WebSocket restart -- not the
-   * scripted uplink `fleet-coordinator.test.ts` and `dispatcher.test.ts` already cover each
+   * scripted uplink `fleet-coordinator.test.ts` and `dispatcher-leases.test.ts` already cover each
    * piece of in isolation (including §27a's ownership round trip, pinned there too). What only
    * this shape of test can catch: the gateway's own persisted state (`instance.json`,
    * the drained workers and join tokens in `state.db`) actually surviving a real `stop()`/`startDaemon()` cycle, and
@@ -537,15 +579,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const workerBId = beforeDrain.find((worker) => worker.label === "worker-b")?.id;
     if (workerBId === undefined) throw new Error("worker-b never connected");
 
-    // Lease worker-a's own device -- the fleet client below must still be able to renew this
-    // exact lease after everything that follows.
-    // P2 (round 1 review, #119): `requesterId` set explicitly, distinct from the session
-    // principal -- `agentSession({ principal: "fleet-owner" })` alone makes `ownerId` and
-    // `requesterId` the same string (`dispatcher.ts` defaults both to `session.principal`), so
-    // the §27a assertion below (owner authorizes, requester does not) could not tell the two
-    // fields apart: mutating `lease-index.ts` to re-derive `ownerId` from `requesterId` on
-    // rebuild would still pass. With a distinct `requesterId`, only a genuinely separate
-    // `ownerId` on the rebuilt entry can authorize the renew below.
+    // why: a `requesterId` distinct from the session principal, because with both defaulted to
+    // `session.principal` the renew below would still pass if the rebuilt index re-derived
+    // `ownerId` from `requesterId`.
     const grant = await firstGateway.dispatch(
       "lease.request",
       {
@@ -631,6 +667,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       stdout: "hello-from-b",
       gatewayUrl: restartGatewayUrl(),
       existing: { directory: workerB.directory, filesystem: workerB.filesystem },
+      // why: #1628: the catalog lands after `connected` and `drained`; held here so the wait below must cover it on every run.
+      catalogLatencyMs: 1_000,
     });
     await vi.waitFor(
       async () => {
@@ -638,6 +676,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         const view = workers.find((worker) => worker.id === workerBId);
         expect(view?.connection).toBe("connected");
         expect(view?.drained).toBe(true);
+        // why: `connected` and `drained` show before the catalog read lands; a fresh gateway has no older catalog, so routing answers UNKNOWN_MODEL until then.
+        expect(view?.catalog?.some((entry) => entry.models.includes("Pixel-B"))).toBe(true);
       },
       { timeout: 15_000 },
     );

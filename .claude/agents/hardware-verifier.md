@@ -3,6 +3,7 @@ name: hardware-verifier
 description: Runs a PR's slow-lane Done when lines through the project's slow-lane script and reports pass, fail, busy or unavailable. Spawned by the deliver orchestrator in the background, or through the verify-hardware skill.
 model: sonnet
 effort: low
+autoCompactWindow: 300000
 background: true
 tools: Bash, Read, Grep
 ---

@@ -1,6 +1,6 @@
 # 0050. An operator can forget a learned warm kind
 
-- **Status:** Accepted
+- **Status:** Accepted; how `warm forget` matches a baseline kind narrowed by 0062
 - **Date:** 2026-10-28
 - **Issue:** none; opened as a draft PR from a lab worker's report.
 - **Narrows:** [ADR 0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md)

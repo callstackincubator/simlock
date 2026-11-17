@@ -1,86 +1,176 @@
 import { z } from "zod";
-
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
+import { defineOperation } from "./operation-definition.js";
 import {
-  EVENTS_PAGE_MAX,
-  EVENTS_WORKER_MAX,
-  EVENTS_PAGE_WITH_SINCE_MESSAGE,
-  eventsPageWithoutSince,
-} from "./events-page.js";
-import { INPUT_ORIENTATIONS } from "./orientation.js";
-import { parseOsConstraint } from "./os-range.js";
-import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
-import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
+  baselineList,
+  baselineRemove,
+  baselineSave,
+  cleanupRun,
+  configGet,
+  daemonStop,
+  daemonUpdate,
+  doctorRun,
+  eventsReplay,
+  eventsSubscribe,
+  eventsUnsubscribe,
+  listGet,
+  nukeRun,
+  tokenCreate,
+  tokenList,
+  tokenRevoke,
+  usageGet,
+  warmForget,
+} from "./operations-admin.js";
 import {
-  capabilityNameSchema,
-  cleanupRuleSummarySchema,
-  configSchema,
+  alertsTest,
+  componentInstall,
+  componentList,
+  componentRemove,
+  deviceAdd,
+  deviceRemove,
+  identityGet,
+  inboxGet,
+  relayCancel,
+  relayRequest,
+  workerDrain,
+  workerInstallComponent,
+  workerList,
+  workerRemove,
+  workerUndrain,
+  workerUpdate,
+} from "./operations-fleet.js";
+import { leaseRequest } from "./operations-lease-request.js";
+import {
+  deviceExec,
+  deviceRotate,
+  driverPassthrough,
+  leaseCancel,
+  leaseGet,
+  leaseList,
+  leaseRelease,
+  leaseReleaseAll,
+  leaseRenew,
+} from "./operations-leases.js";
+import {
+  capabilityListSchema,
   daemonHealthSchema,
   daemonModeSchema,
   daemonUpdateFields,
-  type DeviceClass,
-  deviceClassSchema,
-  updateRequestedVersionSchema,
-  deviceRecordSchema,
-  doctorReportSchema,
-  eventEnvelopeSchema,
-  EVENT_ID_PATTERN,
-  hostFactsSchema,
-  requesterIdSchema,
   historyStatusSchema,
+  hostFactsSchema,
   hostLoadSchema,
-  baselineEntrySchema,
-  baselineNameSchema,
-  baselineNoteSchema,
-  imageTagSchema,
-  leaseGrantSchema,
-  leaseRecordSchema,
-  nukeReportSchema,
-  passthroughCommandSchema,
   platformCatalogSchema,
   platformSchema,
-  proposalSchema,
   statusCapacitySchema,
-  statusWarmPoolSchema,
   statusDeviceSchema,
   statusInstallsSchema,
   statusLeaseSchema,
-  tokenRecordSchema,
-  tokenRoleSchema,
-  usageOutputSchema,
-  usageWindowSchema,
-  inboxItemSchema,
+  statusWarmPoolSchema,
   waitingRequestSchema,
-  capabilityListSchema,
-  WARM_POOL_LEARNED_KINDS_MAX,
-  WARM_POOL_NAME_MAX,
   workerViewSchema,
 } from "./schemas.js";
 
-export type Effect = "read" | "write";
-
-export interface OperationDefinition<
-  Name extends string = string,
-  InputSchema extends z.ZodType = z.ZodType,
-  OutputSchema extends z.ZodType = z.ZodType,
-> {
-  readonly name: Name;
-  readonly role: Role | ((input: z.infer<InputSchema>) => Role);
-  readonly effect: Effect | ((input: z.infer<InputSchema>) => Effect);
-  readonly input: InputSchema;
-  readonly output: OutputSchema;
-  readonly authorize?: (input: z.infer<InputSchema>, context: AuthorizeContext) => boolean;
-}
-
-function defineOperation<
-  Name extends string,
-  InputSchema extends z.ZodType,
-  OutputSchema extends z.ZodType,
->(
-  definition: OperationDefinition<Name, InputSchema, OutputSchema>,
-): OperationDefinition<Name, InputSchema, OutputSchema> {
-  return definition;
-}
+export type { Effect, OperationDefinition } from "./operation-definition.js";
+export {
+  LEASE_ID_PATTERN,
+  leaseIdSchema,
+  refuseModelWithClass,
+  leaseRequestFields,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseRequest,
+  requestedDevice,
+  requestedClass,
+} from "./operations-lease-request.js";
+export {
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseCancel,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseRenew,
+  leaseRelease,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  driverPassthrough,
+  LEASE_FILE_NAME_PATTERN,
+  EXEC_STDIN_MAX_LENGTH,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  deviceExec,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseList,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseGet,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseReleaseAll,
+} from "./operations-leases.js";
+export {
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  doctorRun,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  listGet,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  cleanupRun,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  nukeRun,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  warmForget,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  baselineSave,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  baselineList,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  baselineRemove,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  configGet,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  daemonStop,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  daemonUpdate,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  eventsReplay,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  usageGet,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  eventsSubscribe,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  eventsUnsubscribe,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  tokenCreate,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  tokenList,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  tokenRevoke,
+} from "./operations-admin.js";
+export {
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  workerList,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  workerDrain,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  workerUndrain,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  workerRemove,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  workerUpdate,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  componentInstall,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  componentList,
+  WORKER_RESULT_MESSAGE_MAX_LENGTH,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  workerInstallComponent,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  componentRemove,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  deviceAdd,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  deviceRemove,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  relayRequest,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  relayCancel,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  alertsTest,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  inboxGet,
+} from "./operations-fleet.js";
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const catalogGet = defineOperation({
@@ -121,1059 +211,6 @@ export const statusGet = defineOperation({
     /** why: Absent, not empty, from a worker: an empty array would read as a gateway with no workers. */
     workers: z.array(workerViewSchema).optional(),
   }),
-});
-
-/**
- * The lease ID a requester may choose (ADR 0020 §1): ASCII, 1 to 64 characters, starting with a
- * letter or digit, then letters, digits, `-` and `_`, case-sensitive. It has no `.`, so it can
- * never look like a gateway's `<worker>.<lease ID>`. The one definition: a gateway reads it too,
- * to decide which reported lease it names bare.
- */
-export const LEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-
-export const leaseIdSchema = z.string().regex(LEASE_ID_PATTERN);
-
-/**
- * why: a component's version (`26.4`, `35`) reaches the driver unread and becomes an installer
- * argument, so its shape is bounded here (safety rule 10): no whitespace or control character, no
- * `;` (sdkmanager's package path separator), no leading `-` (an option). An exact `osVersion` in
- * `lease.request` is held to it too, because a downloadable missing runtime installs that string.
- */
-const componentVersionSchema = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[^\s\p{Cc};]+$/u, "must contain no whitespace, control character or ';'")
-  .refine((version) => !version.startsWith("-"), "must not start with '-'");
-
-const EXACT_OS_VERSION_BOUND =
-  "an exact OS version is 1 to 64 characters, none of them whitespace, a control character or `;`, and does not start with `-`";
-
-const leaseRequestBaseSchema = z
-  .object({
-    model: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
-    class: deviceClassSchema.optional(),
-    platform: platformSchema,
-    // why: A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
-    // before the handler, and its error would stand in for `BAD_REQUEST`.
-    osVersion: z.string().optional(),
-    mode: z.enum(["slim", "full"]).optional(),
-    imageTag: imageTagSchema.optional(),
-    baseline: baselineNameSchema.optional(),
-    physical: z.boolean().optional(),
-    requesterId: requesterIdSchema.optional(),
-    allowDownload: z.boolean().optional(),
-    noWait: z.boolean().optional(),
-    timeoutMs: z.number().finite().positive().optional(),
-    /** why: Capped by the dispatcher's handler, not here: the cap is daemon config this module cannot see. */
-    ttlMs: z.number().finite().positive().optional(),
-    owner: z.string().optional(),
-    idempotencyKey: z.string().min(1).max(200).optional(),
-    leaseId: leaseIdSchema.optional(),
-    fleetRequestId: z.string().min(1).max(200).optional(),
-    requires: z
-      .array(capabilityNameSchema)
-      .max(8)
-      .refine((names) => new Set(names).size === names.length, "a capability name appears twice")
-      .optional(),
-  })
-  .strict();
-
-export function refuseModelWithClass(
-  modelField = "model",
-): <T extends { readonly model?: unknown; readonly class?: unknown }>(
-  input: T,
-  context: z.RefinementCtx,
-) => void {
-  return (input, context) => {
-    if (input.model !== undefined && input.class !== undefined) {
-      context.addIssue({
-        code: "custom",
-        message: `a request names a model or a class, not both: send only one of \`${modelField}\` and \`class\``,
-        path: ["class"],
-      });
-    }
-  };
-}
-
-function refuseBaselineWithClass(): <
-  T extends { readonly baseline?: unknown; readonly class?: unknown },
->(
-  input: T,
-  context: z.RefinementCtx,
-) => void {
-  return (input, context) => {
-    if (input.baseline !== undefined && input.class !== undefined) {
-      context.addIssue({
-        code: "custom",
-        message:
-          "a request names a baseline or a class, not both: send only one of `baseline` and `class`",
-        path: ["class"],
-      });
-    }
-  };
-}
-
-/** why: `allowDownload: false` passes because the CLI always sends it. */
-function refusePhysicalWithImageFields(): <
-  T extends {
-    readonly physical?: boolean | undefined;
-    readonly mode?: unknown;
-    readonly imageTag?: unknown;
-    readonly baseline?: unknown;
-    readonly allowDownload?: boolean | undefined;
-  },
->(
-  input: T,
-  context: z.RefinementCtx,
-) => void {
-  return (input, context) => {
-    if (input.physical !== true) return;
-    const refused = [
-      input.mode === undefined ? undefined : "mode",
-      input.imageTag === undefined ? undefined : "imageTag",
-      input.baseline === undefined ? undefined : "baseline",
-      input.allowDownload === true ? "allowDownload" : undefined,
-    ];
-    for (const field of refused) {
-      if (field === undefined) continue;
-      context.addIssue({
-        code: "custom",
-        message: `\`${field}\` has no meaning for a physical device`,
-        path: [field],
-      });
-    }
-  };
-}
-
-// why: a replay would have to be checked against a capability state that changed since.
-function refuseRequiresWithIdempotencyKey(): <
-  T extends { readonly requires?: unknown; readonly idempotencyKey?: string | undefined },
->(
-  input: T,
-  context: z.RefinementCtx,
-) => void {
-  return (input, context) => {
-    if (input.requires === undefined || input.idempotencyKey === undefined) return;
-    context.addIssue({
-      code: "custom",
-      message: "requires cannot be combined with idempotencyKey",
-      path: ["requires"],
-    });
-  };
-}
-
-function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
-  input: T,
-  context: z.RefinementCtx,
-) => void {
-  return (input, context) => {
-    if (input.osVersion === undefined) return;
-    const parsed = parseOsConstraint(input.osVersion);
-    if (!parsed.ok) {
-      context.addIssue({
-        code: "custom",
-        message: parsed.message,
-        path: ["osVersion"],
-      });
-      return;
-    }
-    if (
-      parsed.constraint.kind === "exact" &&
-      !componentVersionSchema.safeParse(parsed.constraint.version).success
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: EXACT_OS_VERSION_BOUND,
-        path: ["osVersion"],
-      });
-    }
-  };
-}
-
-export const leaseRequestFields = leaseRequestBaseSchema;
-
-const leaseRequestInputSchema = leaseRequestBaseSchema
-  .superRefine(refuseModelWithClass())
-  .superRefine(refuseBaselineWithClass())
-  .superRefine(refuseBadOsVersion())
-  .superRefine(refusePhysicalWithImageFields())
-  .superRefine(refuseRequiresWithIdempotencyKey());
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseRequest = defineOperation({
-  name: "lease.request",
-  role: "agent",
-  effect: "write",
-  input: leaseRequestInputSchema,
-  output: leaseGrantSchema,
-  // why: No `authorize` hook on purpose: any agent session may request under an arbitrary
-  // `requesterId` (printable, at most 256 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
-});
-
-export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
-  return {
-    ...(input.model === undefined ? {} : { model: input.model }),
-    ...(input.class === undefined ? {} : { class: input.class }),
-    platform: input.platform,
-    ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-    ...(input.mode === undefined ? {} : { mode: input.mode }),
-    ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
-    ...(input.baseline === undefined ? {} : { baseline: input.baseline }),
-    ...(input.physical === true ? { physical: true as const } : {}),
-  };
-}
-
-export function requestedClass(request: {
-  readonly model?: undefined;
-  readonly class?: DeviceClass | undefined;
-}): DeviceClass;
-export function requestedClass(request: {
-  readonly model?: string | undefined;
-  readonly class?: DeviceClass | undefined;
-}): DeviceClass | undefined;
-export function requestedClass(request: {
-  readonly model?: string | undefined;
-  readonly class?: DeviceClass | undefined;
-}): DeviceClass | undefined {
-  if (request.class !== undefined) return request.class;
-  return request.model === undefined ? "phone" : undefined;
-}
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseCancel = defineOperation({
-  name: "lease.cancel",
-  role: "agent",
-  effect: "write",
-  input: z.object({
-    requesterId: requesterIdSchema.optional(),
-    platform: platformSchema.optional(),
-  }),
-  output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
-  /**
-   * why: ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
-   * request's *recorded owner* (`pendingRequestOwner`, ADR §4's `ownerId` -- always the
-   * creating session's principal, never the caller-suppliable `requesterId`), not on comparing
-   * `requesterId` to the principal directly -- that comparison would forbid exactly the case
-   * ADR §4 exists for: one connection (`principal: "host"`) proxying many agents, each under
-   * its own `requesterId` (`"agent-7"`). Deliberately not `ownsLease` (that hook resolves a
-   * *lease's* recorded `ownerId` from the registry; a pending, not-yet-granted request has no
-   * lease yet to look up -- `pendingRequestOwner` is the wait-queue equivalent). An omitted
-   * `requesterId` defaults to the principal the same way the handler's own default does (see
-   * `dispatcher.ts`'s `#leaseCancel`), so it always resolves to a request this principal owns.
-   * A `requesterId` with no pending request resolves `pendingRequestOwner` to `undefined`,
-   * which is treated as authorized (same convention as `ownsLease`) so the handler's own
-   * `not-found` surfaces instead of a misleading `FORBIDDEN`.
-   */
-  authorize: (input, context) => {
-    if (context.role === "admin") return true;
-    const owner = context.pendingRequestOwner(
-      input.requesterId ?? context.principal,
-      input.platform,
-    );
-    return owner === undefined || owner === context.principal;
-  },
-});
-
-/**
- * ADR 0004 §1: the only thing that keeps a lease alive, on every transport. An omitted `ttlMs`
- * re-applies the lease's own stored width -- never `lease.defaultTtlMs` -- so a lease granted
- * for four hours does not shrink to fifteen minutes the first time something renews it. A
- * `ttlMs` above `lease.maxTtlMs` is `BAD_REQUEST`, checked in the dispatcher's handler where
- * that config value is visible.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseRenew = defineOperation({
-  name: "lease.renew",
-  role: "agent",
-  effect: "write",
-  input: z.object({ leaseId: z.string(), ttlMs: z.number().finite().positive().optional() }),
-  output: leaseRecordSchema,
-  authorize: ownsLease((input) => input.leaseId),
-});
-
-export const leaseRelease = defineOperation({
-  name: "lease.release",
-  role: "agent",
-  effect: "write",
-  input: z.object({ leaseId: z.string() }),
-  output: z.object({ leaseId: z.string() }),
-  authorize: ownsLease((input) => input.leaseId),
-});
-
-/**
- * Builds the scoped command behind `simlock simctl` / `simlock adb`. It lives in the daemon
- * rather than the CLI because only the driver that proved a device root knows which flag points
- * its tool at that root, and which verbs would change a device's lifecycle behind the registry's
- * back -- neither is knowledge a frontend is entitled to (ADR 0003 §11: frontends render the
- * contract and nothing else).
- *
- * `role: "agent"`: the wrappers exist so a lease holder can reach a contained device, which is
- * an agent's job. It grants no authority of its own -- the refusal list lives in the driver, and
- * what comes back is a command the caller could have written had it known the root path, which
- * ADR 0001 is explicit is an accident boundary rather than a security one.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const driverPassthrough = defineOperation({
-  name: "driver.passthrough",
-  role: "agent",
-  effect: "read",
-  input: z.object({ args: z.array(z.string()), tool: z.string().min(1) }),
-  output: passthroughCommandSchema,
-});
-
-/**
- * Runs `simctl`, `adb` or `devicectl` **on the machine that owns the device** and streams the output back
- * (ADR 0005 §19a). The difference from `driver.passthrough` is where the process runs, not
- * what it is: the same driver resolves the same scoped command with the same refusals --
- * the daemon then spawns it itself instead of handing the caller a command line it could only
- * run if it happened to be on that machine. That is what makes a leased device reachable from
- * a remote HTTP agent today, and through a gateway later, without a second network path.
- *
- * `role: "agent"`, gated on the lease's requester: driving a device is an agent's job, but --
- * unlike `driver.passthrough`, which only builds a string -- this one actually runs a command
- * against a machine, so it is gated on the caller being who the lease was granted to (see the
- * `authorize` hook below). `leaseId` is that proof: for `simctl` and `adb` the command's own
- * arguments may leave the device out and the daemon parses none of them: the driver puts the
- * lease's device where the tool expects it (ADR 0047 §1) and refuses a command that names
- * another one.
- *
- * A bare `adb shell` (nothing to run) is refused by the driver on this path, because there is
- * no terminal to attach it to and it would otherwise sit until `exec.timeoutMs` -- the same
- * `PASSTHROUGH_REFUSED` a lifecycle verb gets. Locally, where the CLI hands the tool its own
- * terminal, it stays allowed and interactive.
- *
- * `stdin` is a **one-shot string**, not a stream: it is written to the child's stdin and the
- * pipe is then closed. ADR §19c is explicit that there is no pseudo-terminal here, so
- * line-oriented commands (`adb shell getprop`, `simctl spawn`) work and full-screen or
- * interactive ones (`adb shell` with no argument, a curses UI) do not -- and a client that
- * could feed such a program keystrokes over time would only make that failure slower to
- * discover. Locally, `simlock adb shell` still spawns with inherited stdio and stays fully
- * interactive (ADR §19c).
- *
- * `tool` is an open string, exactly as `driver.passthrough`'s is, and for the same reason:
- * which wrappers exist is the drivers' answer, not the contract's. A name no driver on that
- * machine wraps comes back as `UNKNOWN_PASSTHROUGH_TOOL` -- the code that already means
- * precisely that, at the 422/exit-2 it already carries -- rather than as a `BAD_REQUEST`,
- * which would say the request was malformed when it was merely aimed at a tool this host does
- * not have. `BAD_REQUEST` on this operation means the body's shape is wrong, nothing more.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const deviceExec = defineOperation({
-  name: "device.exec",
-  role: "agent",
-  effect: "write",
-  input: z
-    .object({
-      leaseId: z.string(),
-      tool: z.string().min(1),
-      args: z.array(z.string()),
-      stdin: z.string().optional(),
-      /**
-       * why: Who this command is being run *for* -- the requester the lease is attributed to (ADR
-       * 0003 §4), not the connection's principal. Read **only on an admin session**, where it
-       * is the gateway case: a gateway holds one admin session over its uplink and proxies
-       * many agents through it, each under its own namespaced requester id (ADR 0005
-       * §19b/§27). A non-admin session that supplies one at all is refused by `authorize`
-       * below rather than having it quietly ignored -- ADR 0003 §2 puts a contract
-       * operation's answer in the dispatcher, not a transport, and a request that names an
-       * identity and is answered as if it had not is the kind of silence that reads like
-       * authorization (round 4, F4).
-       */
-      requesterId: requesterIdSchema.optional(),
-    })
-    .strict(),
-  /**
-   * why: Only the exit code: every byte the command wrote already left as `output` pushes while it
-   * ran (see `pushes.ts`), so an answer that also carried the output would mean the daemon had
-   * buffered all of it -- which ADR §19e forbids, and which is why there is no size cap here
-   * to speak of either.
-   */
-  output: z.object({ exitCode: z.number() }),
-  /**
-   * why: `ownsLease` for an agent, and something stricter for an admin.
-   *
-   * An **agent** session is gated exactly like `lease.renew`: its principal against the
-   * lease's `ownerId`. It may not supply `requesterId` at all -- round 4, F4: this used to be
-   * read and then silently ignored, which left the rule "an agent may not name a
-   * `requesterId`" living only in the HTTP route (`src/http/app.ts`) rather than here, so the
-   * unix socket (and the future uplink, and any `simlock/client` consumer) answered a request
-   * naming an identity as if it had named none. A non-admin session naming one at all is now
-   * `FORBIDDEN` on every transport, uniformly, whether or not the name it chose happens to
-   * match anything real.
-   *
-   * An **admin** session does not get `ownsLease`'s bypass on this operation. Every other
-   * admin-bypasses hook is about an operator reaching past ownership on their own machine;
-   * this one is the check a gateway's uplink session runs against, and a bypass there would
-   * mean any admin-role connection could drive every lease on the worker -- the exact hole
-   * §19b's "ownership is checked at the gateway, and again at the worker" exists to close.
-   * So an admin is held to the lease's `requesterId` instead: it names the agent it is
-   * proxying for (defaulting to its own principal), and a mismatch is `FORBIDDEN`. An
-   * operator who means to reach another agent's device names that agent explicitly, which is
-   * a deliberate act rather than an implicit privilege.
-   *
-   * An unknown lease id resolves to `undefined` on either lookup and is treated as
-   * authorized, the same convention `ownsLease` uses, so the handler's own `UNKNOWN_LEASE`
-   * surfaces instead of a misleading `FORBIDDEN`.
-   */
-  authorize: authorizeOneLeaseCall,
-});
-
-/**
- * ADR 0005 §20: the element carries an optional `workerId` -- absent from a worker's own
- * answer, set by a gateway, which lists the leases its worker views report. Additive, so a
- * client that never talks to a gateway sees exactly what it saw before.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseList = defineOperation({
-  name: "lease.list",
-  role: "agent",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({ leases: z.array(statusLeaseSchema) }),
-});
-
-// why: no `authorize` hook -- the handler answers `UNKNOWN_LEASE` for a lease the caller does not own, as `lease.list` hides it (ADR 0044 §3), so "not yours" and "not there" look the same.
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseGet = defineOperation({
-  name: "lease.get",
-  role: "agent",
-  effect: "read",
-  input: z.object({ leaseId: z.string() }),
-  output: z.object({ lease: statusLeaseSchema }),
-});
-
-const doctorRunInputSchema = z.object({
-  fix: z.boolean().optional(),
-  /**
-   * why: Destroys every orphan the run finds (ADR 0001, decision 5) -- the single opt-in exception
-   * to registry-only destruction (safety rule 1). Its own flag rather than part of `fix`, so a
-   * `doctor --fix` already running unattended in CI does not acquire a destructive behaviour on
-   * upgrade.
-   */
-  purgeOrphans: z.boolean().optional(),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const doctorRun = defineOperation({
-  name: "doctor.run",
-  /**
-   * why: The role genuinely depends on the input: `fix: false` (read-only, shells out per device)
-   * is agent-visible; `fix: true` (applies safe fixes to registry-owned devices) is admin
-   * only -- see ADR §3's matrix, which lists `doctor.run` twice for exactly this reason. A
-   * function-of-input role, rather than an `authorize` hook, is the right tool here: `authorize`
-   * (ADR §1's `ownsLease` example) is for *ownership* checks against a specific resource once a
-   * role has already cleared the gate; this is a *role* decision, and it is entirely computable
-   * from the already-validated input with no session/resource context needed. Keeping it as
-   * `role` also means the dispatcher's role-check step (PR 2) stays uniform -- "compute the
-   * required role from the input, compare to the session role" -- for every operation, instead
-   * of `doctor.run` needing a second, bespoke gating path.
-   */
-  role: (input: z.infer<typeof doctorRunInputSchema>): Role =>
-    input.fix || input.purgeOrphans ? "admin" : "agent",
-  effect: (input: z.infer<typeof doctorRunInputSchema>): Effect =>
-    input.fix || input.purgeOrphans ? "write" : "read",
-  input: doctorRunInputSchema,
-  output: doctorReportSchema,
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseReleaseAll = defineOperation({
-  name: "lease.release-all",
-  role: "admin",
-  effect: "write",
-  input: z.object({}),
-  output: z.object({ leaseIds: z.array(z.string()) }),
-});
-
-/** Arm order is load-bearing: a full record matches the first arm, so a worker's answer is unchanged. */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const listGet = defineOperation({
-  name: "list.get",
-  role: "admin",
-  effect: "read",
-  input: z.object({ kind: z.enum(["devices", "leases", "rules", "requests"]).optional() }),
-  output: z.union([
-    z.array(deviceRecordSchema),
-    z.array(statusDeviceSchema),
-    z.array(statusLeaseSchema),
-    z.array(cleanupRuleSummarySchema),
-    z.array(waitingRequestSchema),
-  ]),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const cleanupRun = defineOperation({
-  name: "cleanup.run",
-  role: "admin",
-  effect: (input: { dryRun?: boolean | undefined }): Effect => (input.dryRun ? "read" : "write"),
-  input: z.object({ dryRun: z.boolean().optional(), rule: z.string().optional() }),
-  output: z.array(proposalSchema),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const nukeRun = defineOperation({
-  name: "nuke.run",
-  role: "admin",
-  effect: "write",
-  input: z.object({ deleteDevices: z.boolean().optional() }),
-  output: nukeReportSchema,
-});
-
-const warmKindSchema = z.object({
-  platform: platformSchema,
-  model: z.string().max(WARM_POOL_NAME_MAX),
-  osVersion: z.string().max(WARM_POOL_NAME_MAX),
-  mode: z.enum(["slim", "full"]),
-  imageTag: imageTagSchema.optional(),
-  baseline: baselineNameSchema.optional(),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const warmForget = defineOperation({
-  name: "warm.forget",
-  role: "admin",
-  effect: "write",
-  input: z.object({
-    platform: platformSchema,
-    model: z.string().min(1).max(WARM_POOL_NAME_MAX),
-    osVersion: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
-    mode: z.enum(["slim", "full"]).optional(),
-    imageTag: imageTagSchema.optional(),
-  }),
-  output: z.object({ forgotten: z.array(warmKindSchema).max(WARM_POOL_LEARNED_KINDS_MAX) }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const baselineSave = defineOperation({
-  name: "baseline.save",
-  role: "admin",
-  effect: "write",
-  input: z
-    .object({
-      leaseId: z.string().min(1).max(256),
-      name: baselineNameSchema,
-      note: baselineNoteSchema.optional(),
-    })
-    .strict(),
-  output: z.object({ baseline: baselineEntrySchema, leaseId: z.string().max(256) }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const baselineList = defineOperation({
-  name: "baseline.list",
-  role: "agent",
-  effect: "read",
-  input: z.object({}).strict(),
-  output: z.object({ baselines: z.array(baselineEntrySchema).max(1000) }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const baselineRemove = defineOperation({
-  name: "baseline.remove",
-  role: "admin",
-  effect: "write",
-  // why: `workerId` names the worker a gateway forwards the remove to; a gateway requires it and strips it, a worker refuses it.
-  input: z
-    .object({
-      name: baselineNameSchema,
-      workerId: z.string().min(1).max(EVENTS_WORKER_MAX).optional(),
-    })
-    .strict(),
-  output: z.object({
-    name: baselineNameSchema,
-    versions: z.array(z.number().int().min(1)).max(1000),
-    deletedDevices: z.array(z.string().max(256)).max(1000),
-  }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const configGet = defineOperation({
-  name: "config.get",
-  role: "admin",
-  effect: "read",
-  input: z.object({ showSecrets: z.boolean().optional() }),
-  output: configSchema,
-});
-
-// fallow-ignore-next-line unused-export -- see the comment above.
-export const daemonStop = defineOperation({
-  name: "daemon.stop",
-  role: "admin",
-  effect: "write",
-  input: z.object({}),
-  output: z.object({ stopping: z.literal(true) }),
-});
-
-// why: `DaemonServer` dispatches it on a connection whose protocol range does not overlap (like `daemon.stop`), so its input and answer never change shape.
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const daemonUpdate = defineOperation({
-  name: "daemon.update",
-  role: "admin",
-  effect: "write",
-  input: z
-    .object({
-      version: updateRequestedVersionSchema.optional(),
-      force: z.boolean().optional(),
-      query: z.boolean().optional(),
-    })
-    .refine(
-      (input) => input.query !== true || (input.version === undefined && input.force === undefined),
-      {
-        message: "query takes no other field",
-      },
-    ),
-  output: z.object({
-    started: z.boolean(),
-    upToDate: z.boolean(),
-    resolved: updateRequestedVersionSchema.nullable(),
-    version: daemonUpdateFields.version,
-    health: daemonHealthSchema,
-    update: daemonUpdateFields.update,
-    lastUpdateFailure: daemonUpdateFields.lastUpdateFailure,
-    latestVersion: daemonUpdateFields.latestVersion,
-  }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const eventsReplay = defineOperation({
-  name: "events.replay",
-  role: "admin",
-  effect: "read",
-  input: z
-    .object({
-      beforeId: z.string().regex(EVENT_ID_PATTERN).optional(),
-      limit: z.number().int().min(1).max(EVENTS_PAGE_MAX).optional(),
-      sinceTs: z.number().optional(),
-      workerId: z.string().min(1).max(EVENTS_WORKER_MAX).optional(),
-    })
-    .refine(eventsPageWithoutSince, { message: EVENTS_PAGE_WITH_SINCE_MESSAGE }),
-  output: z.array(eventEnvelopeSchema),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const usageGet = defineOperation({
-  name: "usage.get",
-  role: "admin",
-  effect: "read",
-  input: usageWindowSchema,
-  output: usageOutputSchema,
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const eventsSubscribe = defineOperation({
-  name: "events.subscribe",
-  role: "admin",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({ subscribed: z.literal(true), subscriptionId: z.string() }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const eventsUnsubscribe = defineOperation({
-  name: "events.unsubscribe",
-  role: "admin",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({ subscribed: z.literal(false) }),
-});
-
-// why: ADR §11 makes the daemon the only owner of the tokens, and that move has landed: both
-// dispatchers handle these three, the CLI reaches them as admin round-trips from
-// `src/cli/commands/token.ts`, and no CLI code reads the token store itself. The declarations live
-// here because the `OPERATIONS` map every dispatcher validates against is built from this file.
-
-// fallow-ignore-next-line unused-export -- reachable from outside this file only through OPERATIONS.
-export const tokenCreate = defineOperation({
-  name: "token.create",
-  role: "admin",
-  effect: "write",
-  input: z.object({ role: tokenRoleSchema, label: z.string().optional() }),
-  output: z.object({ secret: z.string(), token: tokenRecordSchema }),
-});
-
-// fallow-ignore-next-line unused-export -- same as tokenCreate above.
-export const tokenList = defineOperation({
-  name: "token.list",
-  role: "admin",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({ tokens: z.array(tokenRecordSchema) }),
-});
-
-// fallow-ignore-next-line unused-export -- same as tokenCreate above.
-export const tokenRevoke = defineOperation({
-  name: "token.revoke",
-  role: "admin",
-  effect: "write",
-  input: z.object({ id: z.string() }),
-  output: z.object({ revoked: z.boolean() }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const workerList = defineOperation({
-  name: "worker.list",
-  role: "admin",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({ workers: z.array(workerViewSchema) }),
-});
-
-/**
- * ADR 0005 §9: a drained worker keeps its existing leases and receives no new dispatches --
- * the operator's tool for taking a machine down without killing anyone's device. This PR
- * records the flag (persisted, so it survives a worker reconnect and a gateway restart) and
- * reports it; #118's dispatcher is what honours it, because this PR has no dispatch to skip.
- *
- * Idempotent: draining an already-drained worker succeeds and changes nothing. An id the
- * gateway has no view of is `UNKNOWN_WORKER` -- draining a machine that is not in the fleet is
- * a typo, and answering "done" would leave an operator believing a machine was taken out of
- * service when nothing was.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const workerDrain = defineOperation({
-  name: "worker.drain",
-  role: "admin",
-  effect: "write",
-  input: z.object({ workerId: z.string().min(1) }),
-  output: z.object({ workerId: z.string(), drained: z.literal(true) }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const workerUndrain = defineOperation({
-  name: "worker.undrain",
-  role: "admin",
-  effect: "write",
-  input: z.object({ workerId: z.string().min(1) }),
-  output: z.object({ workerId: z.string(), drained: z.literal(false) }),
-});
-
-/**
- * ADR 0005 §8: forgets a *disconnected* worker's view. A connected one is refused with
- * `WORKER_CONNECTED` -- removing it would only make the gateway forget a machine that is about
- * to announce itself again on its very next refresh, which is a confusing no-op rather than an
- * operator action.
- *
- * `removed: false` is the answer for an id with no view: unlike drain, "forget this" is
- * already true of something the gateway has never heard of or has already forgotten, so it is
- * an outcome to report rather than an error to raise (the same shape `token.revoke` uses).
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const workerRemove = defineOperation({
-  name: "worker.remove",
-  role: "admin",
-  effect: "write",
-  input: z.object({ workerId: z.string().min(1) }),
-  output: z.object({ workerId: z.string(), removed: z.boolean() }),
-});
-
-// why: ADR 0042 §2: the gateway sends `daemon.update` over that worker's uplink and answers with the worker's own answer plus the id.
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const workerUpdate = defineOperation({
-  name: "worker.update",
-  role: "admin",
-  effect: "write",
-  input: z.object({
-    workerId: z.string().min(1),
-    version: updateRequestedVersionSchema.optional(),
-    force: z.boolean().optional(),
-  }),
-  output: daemonUpdate.output.extend({ workerId: z.string() }),
-});
-
-/**
- * Installs one iOS simulator runtime or Android system image without leasing a device (ADR 0010
- * §6). Admin-only: the command is an operator's consent to a multi-GB download, which
- * `downloads.policy: "never"` still refuses (§4). Not durable: a daemon stop ends the install,
- * and running it again is the recovery. `component` echoes the version asked for; `version` is
- * the exact one installed or found.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const componentInstall = defineOperation({
-  name: "component.install",
-  role: "admin",
-  effect: "write",
-  input: z.object({ platform: platformSchema, version: componentVersionSchema }),
-  output: z.object({
-    platform: platformSchema,
-    component: z.string(),
-    outcome: z.enum(["installed", "already-installed"]),
-    version: z.string(),
-  }),
-});
-
-/**
- * Every installed iOS simulator runtime and Android system image on this machine, ordered by
- * platform, then version, then variant. A read for any session. `installedBySimlock` is true only
- * when Simlock's record of an install names this exact component; `installedAt` is that
- * record's time. `devices` counts Simlock's own devices of this platform and version in any
- * state but deleted, so two variants of one version show the same count; `foreignDevices`
- * counts the devices outside Simlock that use it. `variant` tells two components of one
- * version apart, in the platform's own words; `sizeBytes` is absent when it could not be read.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const componentList = defineOperation({
-  name: "component.list",
-  role: "agent",
-  effect: "read",
-  input: z.object({ platform: platformSchema.optional() }),
-  output: z.object({
-    components: z.array(
-      z.object({
-        platform: platformSchema,
-        version: z.string(),
-        variant: z.string().optional(),
-        sizeBytes: z.number().int().nonnegative().optional(),
-        installedBySimlock: z.boolean(),
-        installedAt: z.number().int().optional(),
-        devices: z.number().int().nonnegative(),
-        foreignDevices: z.number().int().nonnegative(),
-      }),
-    ),
-  }),
-});
-
-const WORKER_ID_MAX_LENGTH = 128;
-
-/** The longest error message a relayed result carries. A worker's message is a claim, cut to
- * this before it is stored in a result (safety rule 10). */
-export const WORKER_RESULT_MESSAGE_MAX_LENGTH = 1024;
-
-const workerInstallTargetsSchema = z.union([
-  z.literal("all"),
-  z
-    .array(z.string().min(1).max(WORKER_ID_MAX_LENGTH))
-    .min(1)
-    .max(64)
-    .refine((ids) => new Set(ids).size === ids.length, "worker ids must be distinct"),
-]);
-
-const workerInstallResultSchema = z.object({
-  workerId: z.string(),
-  label: z.string().optional(),
-  outcome: z.enum(["installed", "already-installed", "refused", "failed", "skipped", "unknown"]),
-  version: z.string().max(64).optional(),
-  error: z
-    .object({
-      code: z.string().max(64),
-      message: z.string().max(WORKER_RESULT_MESSAGE_MAX_LENGTH),
-    })
-    .optional(),
-});
-
-/**
- * ADR 0010 §7: installs one component on named workers, or on every connected one, through a
- * gateway. The gateway asks each target at the same time with `component.install`, and each
- * worker answers for itself under its own `downloads.policy`. One result per worker, in
- * ascending worker id. Progress arrives as `component-progress` pushes carrying `workerId`.
- * A worker answers `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const workerInstallComponent = defineOperation({
-  name: "worker.install-component",
-  role: "admin",
-  effect: "write",
-  input: z.object({
-    platform: platformSchema,
-    version: componentVersionSchema,
-    workers: workerInstallTargetsSchema,
-  }),
-  output: z.object({ results: z.array(workerInstallResultSchema) }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const componentRemove = defineOperation({
-  name: "component.remove",
-  role: "admin",
-  effect: "write",
-  input: z.object({
-    platform: platformSchema,
-    version: componentVersionSchema,
-    dryRun: z.boolean().optional(),
-  }),
-  output: z.object({
-    platform: platformSchema,
-    version: z.string(),
-    outcome: z.enum(["removed", "would-remove"]),
-    sizeBytes: z.number().int().nonnegative().optional(),
-    residue: z.string().optional(),
-  }),
-});
-
-const ENROLLED_DEVICE_ID_MAX_LENGTH = 200;
-
-const enrollmentDeviceIdSchema = z
-  .string()
-  .min(1)
-  .max(ENROLLED_DEVICE_ID_MAX_LENGTH)
-  .refine(
-    (id) => [...id].every((character) => !/\s/u.test(character) && !isControlCharacter(character)),
-    "must not contain whitespace or control characters",
-  )
-  .refine((id) => !id.startsWith("-"), "must not start with -");
-
-function isControlCharacter(character: string): boolean {
-  const code = character.codePointAt(0) ?? 0;
-  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-}
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const deviceAdd = defineOperation({
-  name: "device.add",
-  role: "admin",
-  effect: "write",
-  input: z.object({ platform: platformSchema, id: enrollmentDeviceIdSchema }).strict(),
-  output: z.object({
-    id: z.string(),
-    driverDeviceId: z.string(),
-    platform: platformSchema,
-    model: z.string(),
-    osVersion: z.string(),
-    class: z.enum(["phone", "tablet"]),
-    appCount: z.number().int().nonnegative(),
-    reenrolled: z.boolean(),
-  }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const deviceRemove = defineOperation({
-  name: "device.remove",
-  role: "admin",
-  effect: "write",
-  input: z.object({ id: enrollmentDeviceIdSchema }).strict(),
-  output: z.object({ id: z.string(), driverDeviceId: z.string() }),
-});
-
-const RELAY_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] as const;
-
-const relayUrlSchema = z
-  .string()
-  .max(4096)
-  .refine((value) => {
-    try {
-      const { protocol } = new URL(value);
-      return protocol === "http:" || protocol === "https:";
-    } catch {
-      return false;
-    }
-  });
-
-/**
- * One HTTP exchange a gateway hands to a module on a worker, over the gateway's uplink. The
- * request body arrives, and the response body leaves, on the byte channel `channel` names (ADR 0028);
- * the head leaves as a `relay-head` push keyed by this call's frame id. The
- * answer comes once the response body has ended, or `{ cancelled: true }` once a `relay.cancel` took
- * effect. With `twoWay` (GET, no body) both directions of the channel stay open: the answer comes once
- * both have ended. Admin only, and on a worker only the gateway's own uplink session may call it.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const relayRequest = defineOperation({
-  name: "relay.request",
-  role: "admin",
-  effect: "write",
-  input: z
-    .object({
-      relayId: relayIdSchema,
-      target: capabilityNameSchema,
-      method: z.enum(RELAY_METHODS),
-      url: relayUrlSchema,
-      headers: relayHeadersSchema,
-      tenant: z.string().min(1).max(300),
-      leaseId: leaseIdSchema.optional(),
-      hasBody: z.boolean(),
-      twoWay: z.literal(true).optional(),
-      channel: relayChannelSchema,
-    })
-    .strict()
-    .refine((input) => !input.hasBody || (input.method !== "GET" && input.method !== "HEAD"), {
-      message: "hasBody is not allowed with GET or HEAD",
-    })
-    .refine((input) => input.twoWay !== true || (input.method === "GET" && !input.hasBody), {
-      message: "twoWay needs GET and no body",
-    }),
-  output: z.object({ cancelled: z.literal(true).optional() }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const relayCancel = defineOperation({
-  name: "relay.cancel",
-  role: "admin",
-  effect: "write",
-  input: z.object({ relayId: relayIdSchema }).strict(),
-  output: z.object({}),
-});
-
-/**
- * why: ADR 0035 §1: asks the gateway to post one sample message to one of its alert destinations,
- * once, outside the destination's queue. `destination` is only looked up by name among the
- * configured ones, never used in a URL.
- */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const alertsTest = defineOperation({
-  name: "alerts.test",
-  role: "admin",
-  effect: "write",
-  input: z.object({ destination: z.string().min(1).max(32) }),
-  output: z.object({ destination: z.string(), status: z.number() }),
-});
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const inboxGet = defineOperation({
-  name: "inbox.get",
-  role: "admin",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({ items: z.array(inboxItemSchema) }),
-});
-
-const identityGet = defineOperation({
-  name: "identity.get",
-  role: "agent",
-  effect: "read",
-  input: z.object({}),
-  output: z.object({
-    principal: z.string(),
-    name: z.string(),
-    role: z.enum(["admin", "agent"]),
-    via: z.enum(["token", "proxy", "socket", "uplink"]),
-    signOutUrl: z.string().optional(),
-  }),
-});
-
-/**
- * why: `device.exec`'s and `device.rotate`'s one rule, so a gateway's admin session is held to the lease's requester on both.
- */
-function authorizeOneLeaseCall(
-  input: { readonly leaseId: string; readonly requesterId?: string | undefined },
-  context: AuthorizeContext,
-): boolean {
-  if (context.role !== "admin") {
-    if (input.requesterId !== undefined) return false;
-    const ownerId = context.ownerId(input.leaseId);
-    return ownerId === undefined || ownerId === context.principal;
-  }
-  const requesterId = input.requesterId ?? context.principal;
-  const leaseRequesterId = context.leaseRequesterId(input.leaseId);
-  return leaseRequesterId === undefined || leaseRequesterId === requesterId;
-}
-
-/**
- * why: turns a leased iOS phone or tablet simulator, through the lease's device input, whether or not the input module is on.
- */
-const deviceRotate = defineOperation({
-  name: "device.rotate",
-  role: "agent",
-  effect: "write",
-  input: z
-    .object({
-      leaseId: z.string().min(1).max(256),
-      orientation: z.enum(INPUT_ORIENTATIONS),
-      // why: rotate always refused an empty requesterId, so the shared format also keeps min(1).
-      requesterId: requesterIdSchema.pipe(z.string().min(1)).optional(),
-    })
-    .strict(),
-  output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),
-  authorize: authorizeOneLeaseCall,
 });
 
 export const OPERATIONS = {

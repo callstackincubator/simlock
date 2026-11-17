@@ -23,7 +23,6 @@ import { usePath, useSearch } from "./router";
 export type { WaitingQueue, WaitingRow } from "../model/waiting";
 
 export interface WaitingPage extends WaitingChoice {
-  readonly meta: string;
   readonly rows: readonly WaitingRow[];
   readonly paging: Paging;
   // why: the id in the URL stands even before the list has loaded, so the drawer can ask for it.
@@ -51,7 +50,6 @@ export function useWaiting(): LoadView<WaitingPage> {
   });
   return mapView(table, (all) => ({
     ...chooseWaiting(all.rows, id),
-    meta: all.meta,
     paging,
     rows: all.rows.map((row) => ({ ...row, to: row.to + keep })),
     urlId: id,

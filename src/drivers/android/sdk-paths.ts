@@ -174,3 +174,8 @@ function compareCommandLineToolVersions(left: string, right: string): number {
 
   return left.localeCompare(right);
 }
+
+/** why: `emulator -help` prints each option on its own line, so a flag counts as listed only at the start of a line, never inside another option's description. */
+export function emulatorHelpLists(usage: string, flag: string): boolean {
+  return new RegExp(`^\\s*${flag}(?:\\s|$)`, "m").test(usage);
+}

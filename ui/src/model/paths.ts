@@ -27,6 +27,16 @@ export function itemIdFrom(section: Section, path: string): string | undefined {
 export interface FleetAddress {
   readonly workerId?: string;
   readonly deviceId?: string;
+  readonly streaming?: true;
+}
+
+// why: the streaming page's address carries a marker between the ids and ends in `/`, so an id with a
+// dot is still served; `devices` in the worker's own second position is only ever a device id, so
+// only `<worker>/devices/<device>` names a stream.
+const STREAM = "devices";
+
+export function streamPath(workerId: string, deviceId: string): `/${string}` {
+  return `/fleet/${encodeURIComponent(workerId)}/${STREAM}/${encodeURIComponent(deviceId)}/`;
 }
 
 function decoded(segment: string): string {
@@ -37,16 +47,19 @@ function decoded(segment: string): string {
   }
 }
 
-// why: a worker's page is `/fleet/<workerId>` and its device drawer `/fleet/<workerId>/<deviceId>`,
-// each id encoded on its own, so a slash inside an id cannot be taken for the separator; a malformed
-// escape is kept as typed.
+// why: a worker's page is `/fleet/<workerId>`, its device drawer `/fleet/<workerId>/<deviceId>` and
+// the device's streaming page `/fleet/<workerId>/devices/<deviceId>/`, each id encoded on its own, so
+// a slash inside an id cannot be taken for the separator; a malformed escape is kept as typed.
 export function fleetAddress(path: string): FleetAddress {
   if (!path.startsWith("/fleet/")) return {};
-  const [worker, device] = path.slice("/fleet/".length).replace(/\/$/, "").split("/");
+  const segments = path.slice("/fleet/".length).replace(/\/$/, "").split("/");
+  const [worker, second, third] = segments;
   if (worker === undefined || worker === "") return {};
-  return device === undefined || device === ""
+  if (segments.length === 3 && second === STREAM && third !== undefined && third !== "")
+    return { deviceId: decoded(third), streaming: true, workerId: decoded(worker) };
+  return second === undefined || second === ""
     ? { workerId: decoded(worker) }
-    : { deviceId: decoded(device), workerId: decoded(worker) };
+    : { deviceId: decoded(second), workerId: decoded(worker) };
 }
 
 export function devicePath(workerId: string, deviceId: string): `/${string}` {

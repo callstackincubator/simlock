@@ -103,6 +103,7 @@ export default defineConfig({
             doc("using-devices/watching-the-screen", "Watch the screen"),
             doc("using-devices/agent-device", "agent-device"),
             doc("using-devices/remote-agents", "Remote agents over HTTP"),
+            doc("using-devices/ci", "Run tests from CI"),
             doc("using-devices/programmatic-client", "Programmatic client"),
             doc("using-devices/errors", "When a lease fails"),
           ],
@@ -127,7 +128,7 @@ export default defineConfig({
           items: [
             doc("gateway", "When you need a gateway"),
             doc("gateway/setup", "Set up a gateway"),
-            doc("gateway/joining-workers", "Join workers"),
+            doc("gateway/joining-workers", "Add a worker"),
             doc("gateway/routing", "How requests are routed"),
             doc("gateway/managing-workers", "Manage workers"),
             doc("gateway/access-control", "Access control"),

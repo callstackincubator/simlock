@@ -26,6 +26,7 @@ describe("the console's routes", () => {
       "/baselines",
       "/activity",
       "/usage",
+      "/settings",
     ]);
   });
 });

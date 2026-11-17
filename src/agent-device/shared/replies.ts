@@ -6,7 +6,8 @@ export interface FrontReply {
   readonly message: string;
   readonly code: ReplyCode;
   readonly status: number;
-  readonly details?: { readonly reason: string };
+  readonly details: { readonly reason: string };
+  readonly retriable: boolean;
 }
 
 export const LEASE_ENDED_MESSAGE = "lease ended by simlock; run disconnect, then open";
@@ -18,12 +19,15 @@ export function leaseEndedByHost(): FrontReply {
     details: { reason: "LEASE_ENDED_BY_HOST" },
     message: LEASE_ENDED_MESSAGE,
     status: 200,
+    retriable: false,
   };
 }
 
-export function notAvailable(reason: string): FrontReply {
+export function notAvailable(reason: string, retriable = true): FrontReply {
   return {
     code: "COMMAND_FAILED",
+    details: { reason: "SIMLOCK_UNAVAILABLE" },
+    retriable,
     message: `agent-device is not available on this simlock: ${reason}`,
     status: 503,
   };
@@ -49,11 +53,23 @@ export function isUnreachableAnswer(response: Response): boolean {
 }
 
 export function refusal(message: string, status = 400): FrontReply {
-  return { code: "INVALID_ARGS", message, status };
+  return {
+    code: "INVALID_ARGS",
+    details: { reason: "REFUSED_BY_SIMLOCK" },
+    retriable: false,
+    message,
+    status,
+  };
 }
 
-export function failure(message: string, status = 502): FrontReply {
-  return { code: "COMMAND_FAILED", message, status };
+export function failure(message: string, status = 502, retriable = false): FrontReply {
+  return {
+    code: "COMMAND_FAILED",
+    details: { reason: status === 504 ? "NO_DEVICE_IN_TIME" : "SIMLOCK_FAILED" },
+    retriable: status === 504 || retriable,
+    message,
+    status,
+  };
 }
 
 export function successReply(data: unknown, rpc: { readonly id: unknown }): Response {
@@ -63,7 +79,13 @@ export function successReply(data: unknown, rpc: { readonly id: unknown }): Resp
 export function frontReply(reply: FrontReply, rpc: { readonly id: unknown } | undefined): Response {
   if (rpc === undefined) {
     return Response.json(
-      { code: reply.code, error: reply.message, ok: false },
+      {
+        code: reply.code,
+        error: reply.message,
+        ok: false,
+        reason: reply.details.reason,
+        retriable: reply.retriable,
+      },
       { status: reply.status },
     );
   }
@@ -75,6 +97,7 @@ export function frontReply(reply: FrontReply, rpc: { readonly id: unknown } | un
           code: reply.code,
           ...(reply.details === undefined ? {} : { details: reply.details }),
           message: reply.message,
+          retriable: reply.retriable,
         },
         message: reply.message,
       },

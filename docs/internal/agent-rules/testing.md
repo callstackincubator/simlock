@@ -10,6 +10,12 @@ reads it, and may have to edit it. So the suite holds the fewest tests that
 prove the behaviour, each at the cheapest level that can prove it
 (rules 6 to 9).
 
+A pin (`*.pin.test.ts`) is the one exception. It records what code does
+today so a refactor can show it changed nothing, and the refactor's PR
+deletes it before merge (delivery rule 18). Only rule 2 binds a pin, and
+the test lint skips pin files. A pin the review promotes meets every rule
+here and moves into its module's test file.
+
 1. **A test's title is a claim, and the body must prove that claim.** A title
    that promises more than the body asserts is a defect, not a wording
    problem: it tells every later reader the case is covered when it is not,

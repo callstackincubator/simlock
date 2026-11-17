@@ -137,17 +137,19 @@ describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () 
   });
 
   /**
-   * why: `emulator.exe` runs the emulator itself as a child (`qemu-system-x86_64-headless.exe`);
-   * a kill that reached only the parent left that child running with its RAM and console port.
-   * The child here is `detached` because libuv otherwise puts it in a job object that ends it with
-   * its parent, which `emulator.exe` does not do for qemu.
+   * why: `emulator.exe` runs qemu as its child, and a kill that reached only the parent left qemu
+   * running with the guest's RAM. The first emulator's qemu also starts the host's one
+   * `netsimd.exe`, which every emulator's network goes through, so the grandchild here must
+   * outlive the kill. Each process is `detached` because libuv otherwise puts it in a job
+   * object that ends it with its parent, which neither `emulator.exe` nor qemu does.
    */
-  it("ends the children of an .exe spawned with killTree, not only the .exe, and reports no exit code", async () => {
-    await withParentOfDetachedChild({ killTree: true }, async (handle, childPid) => {
+  it("ends an .exe spawned with killChildren and its child, leaves its grandchild running, and reports no exit code", async () => {
+    await withProcessChain({ killChildren: true }, async (handle, { child, grandchild }) => {
       handle.kill("SIGKILL");
 
       await expect(handle.wait()).resolves.toMatchObject({ code: null });
-      await expect.poll(() => isAlive(childPid), { timeout: 5_000 }).toBe(false);
+      await expect.poll(() => isAlive(child), { timeout: 10_000 }).toBe(false);
+      expect(isAlive(grandchild)).toBe(true);
     });
   });
 
@@ -155,12 +157,12 @@ describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () 
    * why: an `adb` client can start the adb server as its child, and for a phone that is the
    * shared 5037 server, which a timed-out command must not take down with it.
    */
-  it("kills an .exe spawned without killTree alone, leaving its children running", async () => {
-    await withParentOfDetachedChild({}, async (handle, childPid) => {
+  it("kills an .exe spawned without killChildren alone, leaving its children running", async () => {
+    await withProcessChain({}, async (handle, { child }) => {
       handle.kill("SIGKILL");
 
       await handle.wait();
-      expect(isAlive(childPid)).toBe(true);
+      expect(isAlive(child)).toBe(true);
     });
   });
 
@@ -198,30 +200,34 @@ exit /b 0
   });
 });
 
-async function withParentOfDetachedChild(
+async function withProcessChain(
   options: ProcessRunOptions,
-  use: (handle: ProcessHandle, childPid: number) => Promise<void>,
+  use: (handle: ProcessHandle, pids: { child: number; grandchild: number }) => Promise<void>,
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "simlock exe "));
-  const pidFile = join(directory, "child.pid");
-  const childScript = `require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)`;
-  const parentScript = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}, process.argv[1]], { detached: true, stdio: 'ignore' }); setInterval(() => {}, 1000)`;
+  const childPidFile = join(directory, "child.pid");
+  const grandchildPidFile = join(directory, "grandchild.pid");
+  const grandchild = `require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)`;
+  const child = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, process.argv[2]], { detached: true, stdio: 'ignore' }); require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)`;
+  const parent = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(child)}, process.argv[1], process.argv[2]], { detached: true, stdio: 'ignore' }); setInterval(() => {}, 1000)`;
   let handle: ProcessHandle | undefined;
-  let childPid: number | undefined;
+  const pids: number[] = [];
   try {
     handle = new NodeProcessRunner().spawn(
       process.execPath,
-      ["-e", parentScript, pidFile],
+      ["-e", parent, childPidFile, grandchildPidFile],
       options,
     );
-    await expect
-      .poll(() => readFile(pidFile, "utf8").catch(() => ""), { timeout: 5_000 })
-      .not.toBe("");
-    childPid = Number(await readFile(pidFile, "utf8"));
-    await use(handle, childPid);
+    for (const file of [childPidFile, grandchildPidFile]) {
+      await expect
+        .poll(() => readFile(file, "utf8").catch(() => ""), { timeout: 10_000 })
+        .not.toBe("");
+      pids.push(Number(await readFile(file, "utf8")));
+    }
+    await use(handle, { child: pids[0] ?? 0, grandchild: pids[1] ?? 0 });
   } finally {
     handle?.kill("SIGKILL");
-    if (childPid !== undefined && isAlive(childPid)) process.kill(childPid);
+    for (const pid of pids) if (isAlive(pid)) process.kill(pid);
     await rm(directory, { force: true, recursive: true });
   }
 }

@@ -12,6 +12,7 @@ import { ApiError } from "../data/api";
 import { readStream, type StreamMeta, type StreamStats } from "../data/stream";
 import {
   deviceScreen,
+  plainSentence,
   type Readout,
   type ScreenPhase,
   screenView,
@@ -136,12 +137,12 @@ export function refusalOf(error: unknown): string {
   // why: an unknown route and an unknown device are the same answer, because a daemon with
   // `capabilities.stream.enabled` off does not mount the route at all and answers like any path it has not heard of.
   if (error.status === 404) {
-    return `${error.message} A stream is only offered where capabilities.stream.enabled is on.`;
+    return `${plainSentence(error.message)} A stream is only offered where capabilities.stream.enabled is on.`.trim();
   }
   if (error.status === 415) {
     return "This device cannot be streamed.";
   }
-  return error.message;
+  return plainSentence(error.message);
 }
 
 export interface CaptureSinks {

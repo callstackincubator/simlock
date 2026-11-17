@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ApiClient, Fetch } from "../data/api";
-import type { Preferences } from "../data/preferences";
+import { createPreferences } from "../data/preferences";
 import type { Session } from "../data/session";
 import { type Live, LiveContext } from "./live";
 import { ConsoleProvider } from "./services";
@@ -17,7 +17,7 @@ export function inConsole(node: ReactNode, mode?: Partial<Live["mode"]>): string
     confirm: () => Promise.resolve(),
     fetch: (() => Promise.reject(new Error("unused"))) as unknown as Fetch,
     notify: () => undefined,
-    preferences: {} as unknown as Preferences,
+    preferences: createPreferences(() => ({ getItem: () => null, setItem: () => undefined })),
     session: {} as unknown as Session,
   };
   const live = {

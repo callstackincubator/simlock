@@ -14,7 +14,7 @@ export function Status({ tone, children }: { readonly tone: Tone; readonly child
   );
 }
 
-// why: where a row has no room for the word, the square stands alone and carries the word as its
+// why: where a row has no room for the word, the dot stands alone and carries the word as its
 // accessible name and tooltip, so a screen reader and a pointer still read the state.
 export function StatusDot({ tone, label }: { readonly tone: Tone; readonly label: string }) {
   return (

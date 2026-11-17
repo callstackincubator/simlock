@@ -37,8 +37,12 @@ function repo(before: Record<string, string>, after: Record<string, string>): st
 }
 
 function lint(dir: string, ...args: string[]) {
+  return run(dir, "--base", "base", "--head", "HEAD", ...args);
+}
+
+function run(dir: string, ...args: string[]) {
   try {
-    const stdout = execFileSync("node", [SCRIPT, "--base", "base", "--head", "HEAD", ...args], {
+    const stdout = execFileSync("node", [SCRIPT, ...args], {
       cwd: dir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -117,6 +121,7 @@ describe("test-lint.mjs", () => {
         "e2e/slow-android.test.ts": file(
           "describe.skipIf(!hasAndroidSdk)('on an emulator', () => {});",
         ),
+        "src/a/grant.pin.test.ts": file('it.skip("records a grant", () => {});'),
       },
     },
     {
@@ -209,6 +214,139 @@ describe("test-lint.mjs", () => {
     },
   );
 
+  it("always-in-scope 8: passes a declaration the diff moves verbatim from another contract file, and flags a new one", () => {
+    const before = {
+      "src/contract/a.ts": file(
+        "// Old comment.",
+        "export const a = z.object({ name: z.string(), tags: z.array(z.string()) });",
+        "export const keep = 1;",
+      ),
+    };
+    const after = {
+      "src/contract/a.ts": file("export const keep = 1;"),
+      "src/contract/b.ts": file(
+        "export const a = z.object({",
+        "  name: z.string(),",
+        "  tags: z.array(z.string()),",
+        "});",
+        "export const b = z.object({",
+        "  label: z.string(),",
+        "});",
+      ),
+    };
+    expect(lint(repo(before, after))).toEqual({
+      status: 1,
+      lines: [`src/contract/b.ts:6: ${BOUND}`],
+    });
+  });
+
+  it("always-in-scope 8: passes declarations moved out of a source file the split deletes, which git would pair as a rename", () => {
+    const declaration = (name: string) =>
+      `export const ${name} = z.object({ name: z.string(), tags: z.array(z.string()) });`;
+    const dir = repo(
+      { "src/contract/schemas.ts": file(declaration("a"), declaration("b"), declaration("c")) },
+      { "src/contract/a-schemas.ts": file(declaration("a"), declaration("b")) },
+    );
+    execFileSync("git", ["rm", "-q", "src/contract/schemas.ts"], { cwd: dir });
+    execFileSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "--no-edit"],
+      {
+        cwd: dir,
+      },
+    );
+
+    expect(lint(dir)).toEqual({ status: 0, lines: [] });
+  });
+
+  it.each([
+    {
+      case: "a moved schema that loses a bound on a later line of its chain",
+      before: {
+        "src/contract/a.ts": file(
+          "export const a = z.object({",
+          "  name: z",
+          "    .string()",
+          "    .max(64),",
+          "});",
+        ),
+      },
+      after: {
+        "src/contract/a.ts": file(""),
+        "src/contract/b.ts": file(
+          "export const a = z.object({",
+          "  name: z",
+          "    .string()",
+          "    .min(1),",
+          "});",
+        ),
+      },
+      line: "src/contract/b.ts:3",
+    },
+    {
+      case: "a new copy in one file of a line bounded in place in another",
+      before: {
+        "src/contract/a.ts": file("export const a = z.object({", "  name: z.string(),", "});"),
+      },
+      after: {
+        "src/contract/a.ts": file(
+          "export const a = z.object({",
+          "  name: z.string().max(64),",
+          "});",
+        ),
+        "src/contract/b.ts": file("export const b = z.object({", "  name: z.string(),", "});"),
+      },
+      line: "src/contract/b.ts:2",
+    },
+    {
+      case: "a second copy of one moved schema",
+      before: {
+        "src/contract/a.ts": file("export const a = z.object({ name: z.string() });"),
+      },
+      after: {
+        "src/contract/a.ts": file(""),
+        "src/contract/b.ts": file("export const a = z.object({ name: z.string() });"),
+        "src/contract/c.ts": file("export const a = z.object({ name: z.string() });"),
+      },
+      line: "src/contract/c.ts:1",
+    },
+  ])("always-in-scope 8: flags $case", ({ before, after, line }) => {
+    expect(lint(repo(before, after))).toEqual({ status: 1, lines: [`${line}: ${BOUND}`] });
+  });
+
+  it("testing 5, 6 and 10: passes a split that moves tests unchanged into a new file, and flags a line or an internal import the split adds", () => {
+    const dir = repo(
+      {
+        ...LEASING_INDEX,
+        "src/leasing/queue.test.ts": file(
+          'import { admit } from "./queue.js";',
+          "it('admits', () => {});",
+          "it('rejects', () => { expect(admit()).rejects.toBeInstanceOf(Error); });",
+        ),
+      },
+      {
+        "src/leasing/queue.test.ts": file(
+          'import { admit } from "./queue.js";',
+          "it('admits', () => {});",
+        ),
+        "src/leasing/queue-rejects.test.ts": file(
+          'import { admit } from "./queue.js";',
+          'import { plan } from "./planner.js";',
+          "it('rejects', () => { expect(admit()).rejects.toBeInstanceOf(Error); });",
+          "it.skip('plans', () => {});",
+        ),
+      },
+    );
+
+    const result = lint(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.lines).toEqual([
+      `src/leasing/queue-rejects.test.ts:4: ${SKIP}`,
+      `src/leasing/queue-rejects.test.ts:2: ${INTERNAL}`,
+    ]);
+  });
+
   it("judges only the lines the diff adds in the files given, and never a pattern inside a string or comment", () => {
     const dir = repo(
       { "src/a/old.test.ts": file("it.skip('old', () => {});") },
@@ -225,5 +363,50 @@ describe("test-lint.mjs", () => {
 
     expect(lint(dir, "src/a/old.test.ts")).toEqual({ status: 0, lines: [] });
     expect(lint(dir)).toEqual({ status: 1, lines: [`src/a/other.test.ts:1: ${SKIP}`] });
+  });
+
+  it("in a merge the commit hook judges only the lines the merge adds, not those the merged branch brings or the branch already committed", () => {
+    const dir = repo(
+      {
+        "src/contract/a.ts": file("export const a = 1;"),
+        "src/a/old.test.ts": file("it('old', () => {});"),
+      },
+      { "src/a/mine.test.ts": file("it('mine', () => {});") },
+    );
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        cwd: dir,
+        stdio: "pipe",
+      });
+    write(dir, {
+      "src/a/mine.test.ts": file(
+        "it('mine', () => {});",
+        "it.skip('committed on the branch', () => {});",
+      ),
+    });
+    git("commit", "-q", "-am", "branch commits its own line");
+    git("switch", "-q", "base");
+    write(dir, {
+      "src/contract/a.ts": file(
+        "export const a = 1;",
+        "export const b = z.object({ name: z.string() });",
+      ),
+      "src/a/old.test.ts": file("it('old', () => {});", "it.skip('theirs', () => {});"),
+    });
+    git("commit", "-q", "-am", "base moves on");
+    git("switch", "-q", "work");
+    git("merge", "-q", "--no-commit", "--no-ff", "base");
+    write(dir, {
+      "src/a/mine.test.ts": file(
+        "it('mine', () => {});",
+        "it.skip('committed on the branch', () => {});",
+        "it.only('merged', () => {});",
+      ),
+    });
+    git("add", "-A");
+
+    expect(
+      run(dir, "--base", "HEAD", "src/a/mine.test.ts", "src/a/old.test.ts", "src/contract/a.ts"),
+    ).toEqual({ status: 1, lines: [`src/a/mine.test.ts:3: ${SKIP}`] });
   });
 });

@@ -48,16 +48,20 @@ const present = (value: unknown): boolean => value !== undefined && value !== nu
 interface Plan {
   readonly leaseId: string;
   readonly platform: "ios" | "android";
+  readonly bootTarget: string;
   readonly model?: string;
+  readonly baseline?: string;
   readonly class?: "phone" | "tv" | "desktop";
   readonly imageTag?: string;
   readonly osVersion?: string;
+  readonly mode?: "slim" | "full";
+  readonly except?: readonly string[];
   readonly physical?: true;
   readonly ttlMs?: number;
 }
 
 // why: connect proxy names the backend that rents the platform (ios-instance, android-instance) on every allocate; any other backend is a different kind of device.
-const BACKEND_OF_PLATFORM: Record<string, string> = {
+export const BACKEND_OF_PLATFORM: Record<string, string> = {
   android: "android-instance",
   ios: "ios-instance",
 };
@@ -73,7 +77,6 @@ function notPlain(params: Record<string, unknown>): boolean {
   const provider = params["leaseProvider"];
   return (
     foreignBackend(params) ||
-    params["retainOnClose"] === true ||
     (present(provider) && provider !== "proxy") ||
     Object.entries(params).some(
       ([key, value]) => present(value) && (key.startsWith("provider") || key.startsWith("aws")),
@@ -112,26 +115,39 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
 
 function holderReply(holder: Awaited<ReturnType<FrontContext["link"]["status"]>>): FrontReply {
   if (holder.state === "unreachable") return workerUnreachable();
-  return notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING);
+  return notAvailable(
+    holder.state === "unavailable" ? holder.reason : NO_CEILING,
+    holder.state === "unavailable" && holder.retriable,
+  );
 }
 
 function stringFields(fields: ReturnType<typeof leaseCallFields>) {
   return {
     ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
     ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
+    ...(present(fields.deviceMode) ? { mode: fields.deviceMode as "slim" | "full" } : {}),
+    ...(present(fields.deviceExcept) ? { except: fields.deviceExcept as readonly string[] } : {}),
   };
+}
+
+// why: a named model wins over a class, and a baseline names a device of its own, so it replaces the class and rides beside a model.
+function chosenDevice(fields: ReturnType<typeof leaseCallFields>) {
+  const { device, deviceBaseline, target } = fields;
+  const baseline = typeof deviceBaseline === "string" ? { baseline: deviceBaseline } : {};
+  if (typeof device === "string" && device !== "") return { model: device, ...baseline };
+  if (typeof deviceBaseline === "string") return baseline;
+  const klass = typeof target === "string" ? CLASS_OF_TARGET[target] : undefined;
+  return klass === undefined ? {} : { class: klass };
 }
 
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
-  const device =
-    typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
-  const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
   const ttlMs = chosenTtl(fields.ttlMs, cap);
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
-    ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
+    bootTarget: typeof fields.target === "string" ? fields.target : "mobile",
+    ...chosenDevice(fields),
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
     ...(ttlMs === undefined ? {} : { ttlMs }),
@@ -176,7 +192,7 @@ function requiresOf(context: FrontContext): { readonly requires?: string[] } {
 }
 
 function leaseInput(context: FrontContext, plan: Plan) {
-  const { leaseId, platform, ...constraints } = plan;
+  const { leaseId, platform, bootTarget: _bootTarget, ...constraints } = plan;
   return {
     ...constraints,
     leaseId,
@@ -249,7 +265,14 @@ async function requestLease(
       reply:
         mapped.code === "QUEUE_TIMEOUT"
           ? failure("timed out waiting for a device; nothing was leased", 504)
-          : refusal(`refused by simlock: ${mapped.message}`),
+          : {
+              ...refusal(`refused by simlock: ${mapped.message}`),
+              ...(mapped.code === "WORKER_UNREACHABLE"
+                ? { details: { reason: "WORKER_UNREACHABLE" }, retriable: true }
+                : ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_CONNECTION_LOST"].includes(mapped.code)
+                  ? { details: { reason: "SIMLOCK_UNAVAILABLE" }, retriable: true }
+                  : {}),
+            },
     };
   } finally {
     settled = true;
@@ -267,7 +290,10 @@ function forwardedBody(
 ) {
   const {
     device: _device,
+    deviceBaseline: _deviceBaseline,
+    deviceExcept: _deviceExcept,
     deviceKey: _deviceKey,
+    deviceMode: _deviceMode,
     imageTag: _imageTag,
     osVersion: _osVersion,
     physical: _physical,
@@ -345,22 +371,24 @@ export async function allocate(
 
 async function keepOrRelease(
   context: FrontContext,
-  { request, identity, plan, grant, address }: Granted,
+  { request, identity, call, plan, grant, address }: Granted,
   reply: Parameters<typeof relay>[0],
   reading: { readonly result: Record<string, unknown> },
 ): Promise<Response | undefined> {
   if (!request.signal.aborted) {
     context.map.add(plan.leaseId, {
       address,
+      bootTarget: plan.bootTarget,
       deadline: grant.lease.ttlDeadline,
       identity,
       model: grant.device.spec.model,
       physical: grant.device.spec.physical === true,
       platform: plan.platform,
+      ...(call.params["retainOnClose"] === true ? { retainOnClose: true } : {}),
       ttlMs: grant.lease.ttlMs,
       ...replyFacts(reading.result),
     });
-    return relay(withGrantedDevice(reply, grant.device.spec));
+    return relay(withGrantedDevice(reply, grant.device));
   }
   const lease = replyData(reading.result)?.["lease"];
   const named =
@@ -396,17 +424,22 @@ async function settleNoReply(
 // why: agent-device's reply names the lease but not which model, OS and image Simlock picked, so the front adds that beside the lease for the CLI.
 function withGrantedDevice<T extends { text: string | undefined }>(
   reply: T,
-  spec: Grant["device"]["spec"],
+  device: Grant["device"],
 ): T {
   if (reply.text === undefined) return reply;
   const body = JSON.parse(reply.text) as Record<string, unknown>;
   const lease = asRecord(asRecord(asRecord(body["result"])?.["data"])?.["lease"]);
   if (lease === undefined) return reply;
   lease["device"] = {
-    model: spec.model,
-    osVersion: spec.osVersion,
-    physical: spec.physical,
-    ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+    [addressField(device.spec.platform)]: device.spec.physical
+      ? device.driverDeviceId
+      : device.address,
+    model: device.spec.model,
+    osVersion: device.spec.osVersion,
+    physical: device.spec.physical,
+    ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
+    ...(device.spec.baseline === undefined ? {} : { baseline: device.spec.baseline }),
+    ...(device.mode === undefined ? {} : { deviceMode: device.mode }),
   };
   return { ...reply, text: JSON.stringify(body) };
 }

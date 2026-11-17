@@ -19,12 +19,16 @@
 //
 // and in `src/contract/*.ts` (not tests) an added `z.string()` with no `.max(`, `.length(`,
 // `.regex(`, `.uuid(` or `.datetime(` on its chain, a `z.array(` with no `.max(` or `.length(`,
-// or any `z.record(` fails (always-in-scope 8), unless a `why:` comment sits right above it.
+// or any `z.record(` fails (always-in-scope 8), unless a `why:` comment sits right above it or
+// its whole top-level declaration moved verbatim (whitespace, comments and trailing commas aside)
+// from another `src/contract/` file, one removal excusing one addition.
+// A pin (`*.pin.test.ts`) is skipped: only testing rule 2 binds it, and its PR deletes it
+// (delivery rule 18).
 // Strings and comments are never read as code, so a fixture in a string is no finding.
 // Each finding prints as `path:line: <what to do> (<rule>)` and the exit code is 1. <files>
 // restricts the paths, for the commit hook.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { changedFiles } from "./comments.mjs";
 
@@ -41,6 +45,7 @@ const MESSAGES = {
 
 const TEST_FILE = /\.test\.tsx?$/;
 const TIMING_FILE = /\.timing\.test\.tsx?$/;
+const PIN_FILE = /\.pin\.test\.tsx?$/;
 const SLOW_LANE = /^e2e\/slow-/;
 const CONTRACT_FILE = /^src\/contract\/[^/]+\.ts$/;
 const HELPER_FILE = /(?:^|\/)(?:testing|test-[^/]*)\.ts$/;
@@ -79,17 +84,18 @@ function sourceOf({ path: file, lines, added }) {
   return { file, lines, added, text, code, codeLines: code.split("\n"), starts: lineStarts(text) };
 }
 
-function testFindings(changed) {
+function testFindings(changed, split) {
   const source = sourceOf(changed);
   const rules = LINE_RULES.filter((entry) => entry.applies(source.file));
   const out = [...source.added]
     .sort((a, b) => a - b)
+    .filter((n) => !takeMovedLine(split.removed, source.lines[n - 1]))
     .flatMap((n) =>
       rules
         .filter((entry) => entry.breaks(source, n))
         .map((entry) => ({ path: source.file, line: n, rule: entry.rule })),
     );
-  const internal = internalImportLine(source);
+  const internal = internalImportLine(source, split.imported);
   if (internal !== undefined) out.push({ path: source.file, line: internal, rule: "internal" });
   return out;
 }
@@ -138,20 +144,22 @@ function optionalCallInExpect(code, offset, line) {
   });
 }
 
-function internalImportLine(source) {
-  if (!exists(`${path.posix.dirname(source.file)}/index.ts`)) return undefined;
-  const line = firstAddedInternalImport(source);
+function internalImportLine(source, imported) {
+  const dir = path.posix.dirname(source.file);
+  if (!exists(`${dir}/index.ts`)) return undefined;
+  const line = firstAddedInternalImport(source, imported.get(dir) ?? new Set());
   if (line === undefined) return undefined;
   const first = firstTestBlock(source.codeLines);
   if (first === -1) return undefined;
   return hasWhyAbove(source.lines, source.codeLines, first) ? undefined : line;
 }
 
-function firstAddedInternalImport({ text, code, starts, added }) {
-  const importRe =
-    /^[ \t]*import\s+(type\s+)?(?:[^;]*?)\bfrom\s*["']\.\/([^"'/]+?)(?:\.[jt]sx?)?["']/gm;
-  return [...text.matchAll(importRe)]
-    .filter((m) => isInternalValueImport(m, code))
+const IMPORT_RE =
+  /^[ \t]*import\s+(type\s+)?(?:[^;]*?)\bfrom\s*["']\.\/([^"'/]+?)(?:\.[jt]sx?)?["']/gm;
+
+function firstAddedInternalImport({ text, code, starts, added }, carried) {
+  return [...text.matchAll(IMPORT_RE)]
+    .filter((m) => isInternalValueImport(m, code) && !carried.has(m[2]))
     .map((m) => lineOf(starts, m.index + m[0].length - 1))
     .find((line) => added.has(line));
 }
@@ -167,10 +175,63 @@ function firstTestBlock(codeLines) {
   return codeLines.findIndex((l) => /^\s*(?:it|test)\b[\w.]*\s*\(/.test(l));
 }
 
-function contractFindings(changed) {
+function takeMovedLine(removed, line) {
+  const text = line.trim();
+  const n = removed.get(text) ?? 0;
+  if (n === 0) return false;
+  removed.set(text, n - 1);
+  return true;
+}
+
+// why: a split moves tests between files unchanged, so a line the diff adds to one test file while
+// it removes the same line from another is not new (one removal excuses one addition), and a test
+// file that imports an internal sibling a test file of its directory already imported before the
+// split carries that file's reason with it rather than adding a new one.
+function splitTests(base, head) {
+  const from = gitText(["merge-base", base, head ?? "HEAD"]).trim();
+  const range = head === undefined ? [from] : [from, head];
+  return { removed: removedTestLines(range), imported: internalImportsBefore(from, range) };
+}
+
+function removedTestLines(range) {
+  const removed = new Map();
+  const diff = gitText([
+    "diff",
+    "-U0",
+    "--no-color",
+    "--no-renames",
+    ...range,
+    "--",
+    "*.test.ts",
+    "*.test.tsx",
+  ]);
+  const lines = diff.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("--- "));
+  for (const text of lines.map((line) => line.slice(1).trim()).filter((text) => text !== "")) {
+    removed.set(text, (removed.get(text) ?? 0) + 1);
+  }
+  return removed;
+}
+
+function internalImportsBefore(from, range) {
+  const imported = new Map();
+  const shrunk = gitText(["diff", "--name-only", "--no-renames", "--diff-filter=MD", ...range]);
+  for (const file of shrunk.split("\n").filter((f) => TEST_FILE.test(f))) {
+    const text = revisionText(from, file);
+    const code = mask(text);
+    const dir = path.posix.dirname(file);
+    const names = imported.get(dir) ?? new Set();
+    for (const m of text.matchAll(IMPORT_RE)) if (isInternalValueImport(m, code)) names.add(m[2]);
+    imported.set(dir, names);
+  }
+  return imported;
+}
+
+function contractFindings(changed, moved) {
   const source = sourceOf(changed);
+  const excused = movedDeclarations(source, moved.get(source.file));
   return [...source.code.matchAll(/\bz\s*\.\s*(string|array|record)\s*\(/g)]
     .filter((m) => unboundedAddedShape(source, m))
+    .filter((m) => !excused.some((d) => d.start <= m.index && m.index < d.end))
     .map((m) => ({
       path: source.file,
       line: lineOf(source.starts, m.index + m[0].length - 1),
@@ -185,6 +246,140 @@ function unboundedAddedShape(source, m) {
   if (BOUNDED_BY[m[1]].some((name) => chain.includes(name))) return false;
   const statement = lineOf(source.starts, m.index);
   return !hasWhyAbove(source.lines, source.codeLines, statement - 1, 1);
+}
+
+// why: the head declarations of one file that the diff moved in from another contract file, each
+// one the earliest with added lines among those of its text, as many as the move excuses.
+function movedDeclarations(source, counts = new Map()) {
+  const left = new Map(counts);
+  return declarations(source.text).filter((d) => {
+    const n = left.get(d.key) ?? 0;
+    const touched = lineRange(source.starts, d).some((line) => source.added.has(line));
+    if (n === 0 || !touched) return false;
+    left.set(d.key, n - 1);
+    return true;
+  });
+}
+
+function lineRange(starts, { start, end }) {
+  const first = lineOf(starts, start);
+  return Array.from({ length: lineOf(starts, end - 1) - first + 1 }, (_, i) => first + i);
+}
+
+// why: a split moves whole schemas between contract files unchanged, so a moved one is not new
+// wire input. The unit is a whole top-level declaration (whitespace, comments and trailing commas
+// aside): one the diff removes from a contract file excuses at most one identical declaration it
+// adds to another, so a bound dropped anywhere in a moved schema, or a new copy of a line bounded
+// in place, is still judged. Maps each file to its excused declaration texts and their counts.
+function movedContractDeclarations(base, head) {
+  const from = gitText(["merge-base", base, head ?? "HEAD"]).trim();
+  const removed = [];
+  const added = new Map();
+  for (const file of changedContractFiles(from, head)) {
+    const before = keyCounts(revisionText(from, file));
+    const after = keyCounts(head === undefined ? workingText(file) : revisionText(head, file));
+    removed.push(...surplus(before, after).map((key) => ({ file, key })));
+    added.set(file, surplus(after, before));
+  }
+  const moved = new Map();
+  for (const [file, keys] of added) {
+    for (const key of keys) {
+      const at = removed.findIndex((r) => r.key === key && r.file !== file);
+      if (at === -1) continue;
+      removed.splice(at, 1);
+      const counts = moved.get(file) ?? new Map();
+      moved.set(file, counts.set(key, (counts.get(key) ?? 0) + 1));
+    }
+  }
+  return moved;
+}
+
+// why: every contract file the diff touches, deleted ones too, since a split may empty a file;
+// `--no-renames`, so a source file git pairs with its biggest part still lists its removed side.
+function changedContractFiles(from, head) {
+  const range = head === undefined ? [from] : [from, head];
+  const names = gitText([
+    "diff",
+    "--name-only",
+    "--no-renames",
+    ...range,
+    "--",
+    "src/contract/",
+  ]).split("\n");
+  if (head === undefined) {
+    names.push(
+      ...gitText(["ls-files", "--others", "--exclude-standard", "src/contract/"]).split("\n"),
+    );
+  }
+  return [...new Set(names)].filter((f) => CONTRACT_FILE.test(f)).sort();
+}
+
+// why: each key once for every copy <counts> holds beyond what <other> holds.
+function surplus(counts, other) {
+  return [...counts].flatMap(([key, n]) => Array(Math.max(0, n - (other.get(key) ?? 0))).fill(key));
+}
+
+function keyCounts(text) {
+  const counts = new Map();
+  for (const { key } of declarations(text)) counts.set(key, (counts.get(key) ?? 0) + 1);
+  return counts;
+}
+
+// why: each top-level statement of <text> as {start, end, key}: it ends at a `;` outside every
+// bracket, or at a `}` that closes its last bracket at the end of a line (an interface, a
+// function). The key is its text without comments, whitespace outside strings, or trailing commas.
+function declarations(text) {
+  const { code, kinds } = maskWithKinds(text);
+  const out = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (start === -1 && !/\s/.test(c)) start = i;
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) depth--;
+    const ends = depth === 0 && (c === ";" || (c === "}" && endsBlock(code, i + 1)));
+    if (!ends || start === -1) continue;
+    out.push({ start, end: i + 1, key: keyOf(text, kinds, start, i + 1) });
+    start = -1;
+  }
+  return out;
+}
+
+function endsBlock(code, from) {
+  const rest = /^[ \t]*\n\s*(\S?)/.exec(code.slice(from));
+  if (rest === null) return code.slice(from).trim() === "";
+  return rest[1] === "" || !".,;)]?:|&=".includes(rest[1]);
+}
+
+function keyOf(text, kinds, start, end) {
+  const kept = [];
+  for (let i = start; i < end; i++) {
+    if (kinds[i] === "comment" || (kinds[i] === undefined && /\s/.test(text[i]))) continue;
+    if (kinds[i] === undefined && ")]}".includes(text[i]) && kept.at(-1)?.code === ",") kept.pop();
+    kept.push({ ch: text[i], code: kinds[i] === undefined ? text[i] : null });
+  }
+  return kept.map((k) => k.ch).join("");
+}
+
+function revisionText(rev, file) {
+  try {
+    return execFileSync("git", ["show", `${rev}:${file}`], {
+      encoding: "utf8",
+      maxBuffer: 1 << 28,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return "";
+  }
+}
+
+function workingText(file) {
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
+function gitText(args) {
+  return execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
 }
 
 function chainMethods(code, from) {
@@ -258,9 +453,14 @@ function exists(file) {
 // fixture written as a string in a test is not a finding. Each scanner reads one kind of token at
 // `s.i` and moves past it; what none of them claims is code.
 function mask(text) {
-  const s = { text, out: text.split(""), i: 0, braces: [], last: "" };
+  return maskWithKinds(text).code;
+}
+
+// why: the masked code, and for each blanked index whether a comment or a string held it.
+function maskWithKinds(text) {
+  const s = { text, out: text.split(""), kinds: [], i: 0, braces: [], last: "" };
   while (s.i < text.length) (SCANNERS.find((scanner) => scanner.at(s)) ?? CODE).scan(s);
-  return s.out.join("");
+  return { code: s.out.join(""), kinds: s.kinds };
 }
 
 const SCANNERS = [
@@ -273,14 +473,17 @@ const SCANNERS = [
 ];
 const CODE = { scan: scanCode };
 
-function blank(s, from, to) {
-  for (let k = from; k < to; k++) if (s.out[k] !== "\n") s.out[k] = " ";
+function blank(s, from, to, kind = "string") {
+  for (let k = from; k < to; k++) {
+    s.kinds[k] = kind;
+    if (s.out[k] !== "\n") s.out[k] = " ";
+  }
 }
 
 function skipComment(s, terminator, length) {
   const found = s.text.indexOf(terminator, s.i + 2);
   const stop = found === -1 ? s.text.length : found + length;
-  blank(s, s.i, stop);
+  blank(s, s.i, stop, "comment");
   s.i = stop;
 }
 
@@ -353,10 +556,13 @@ for (let i = 0; i < args.length; i++) {
 if (base === undefined || (args.includes("--head") && head === undefined)) usage();
 
 const findings = [];
+const moved = movedContractDeclarations(base, head);
+const split = splitTests(base, head);
 for (const file of changedFiles({ base, head, files: files.length > 0 ? files : null })) {
-  if (TEST_FILE.test(file.path)) findings.push(...testFindings(file));
+  if (PIN_FILE.test(file.path)) continue;
+  if (TEST_FILE.test(file.path)) findings.push(...testFindings(file, split));
   else if (CONTRACT_FILE.test(file.path) && !HELPER_FILE.test(file.path)) {
-    findings.push(...contractFindings(file));
+    findings.push(...contractFindings(file, moved));
   }
 }
 const seen = new Set();

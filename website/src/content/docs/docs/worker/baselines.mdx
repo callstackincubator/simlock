@@ -5,7 +5,7 @@ description: Prepare a simulator or emulator once, save it under a name, and let
 
 import { Aside } from '@astrojs/starlight/components';
 
-A baseline is a simulator or emulator you set up once and saved under a name, for example `checkout`, with your app installed and a test user signed in. An agent that leases with `--baseline checkout` gets its own copy of that device, so it can start testing without installing or signing in first (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
+A baseline is a simulator or emulator you set up once and save under a name, for example `checkout`, with your app installed and a test user signed in. An agent that leases with `--baseline checkout` gets its own copy of that device, so it can start testing without installing the app or signing in first (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
 
 Before you start:
 
@@ -43,7 +43,7 @@ Before you start:
    Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35 ended.
    ```
 
-Simlock shuts the device down cleanly before copying it, so everything you prepared is in the baseline.
+Everything you prepared on the device is in the baseline.
 
 The name is 1 to 64 characters of `a-z`, `0-9`, `.`, `_` and `-`, and starts with a letter or digit. The note is optional: one line, up to 200 characters. A bad name or note is refused before anything happens to the lease.
 
@@ -72,7 +72,7 @@ login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11
   stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
 ```
 
-A baseline is stale when the iOS runtime, Android system image or emulator it was saved with has changed or been removed. The reason is on the line under it. A lease that names a stale baseline fails with `BASELINE_STALE`. Install that runtime or image again and the baseline works again; or save a new version from a device on the runtime you have now.
+A baseline is stale when the iOS runtime, Android system image or emulator it was saved with has changed or been removed. An iOS baseline is stale too when it was saved before Simlock kept each simulator in its own folders, or from a lease made before that; save it again from a new lease. The reason is on the line under it. A lease that names a stale baseline fails with `BASELINE_STALE`. Install that runtime or image again and the baseline works again; or save a new version from a device on the runtime you have now.
 
 ## Remove a baseline
 
@@ -85,7 +85,7 @@ Remove baseline login v1? [y/N] y
 Removed baseline login v1.
 ```
 
-This deletes every version of `login` and the idle copies made from it. If an agent is still using a copy, Simlock refuses with `BASELINE_IN_USE` and names the lease; remove it after that lease ends. Pass `--yes` to skip the question, for example in a script.
+This deletes every version of `login` and the idle copies made from it. If an agent is still using a copy, Simlock refuses with `BASELINE_IN_USE` and names the lease; remove it after that lease ends. If a copy is still being cleaned up after its lease ended, Simlock refuses with `DEVICE_BUSY`; try again in a moment. Pass `--yes` to skip the question, for example in a script.
 
 `simlock nuke --delete-devices` removes every baseline on the worker.
 
@@ -95,8 +95,9 @@ This deletes every version of `login` and the idle copies made from it. If an ag
 | --- | --- | --- |
 | `BASELINE_SAVE_FAILED` | The lease has ended, but Simlock could not copy the device. The message says why. No baseline was saved, and the device is kept aside for `simlock doctor`. | Lease a new device, prepare it again and save again. |
 | `UNKNOWN_BASELINE` | No baseline on this worker has that name. | Check the name with `simlock baseline list`. |
-| `BASELINE_STALE` | The runtime or image the baseline needs is gone. | Install it again, or save a new version. |
+| `BASELINE_STALE` | The runtime or image the baseline needs is gone, or an iOS baseline was saved before simulators stopped sharing folders, or from a lease made before that. | Install it again, or save a new version. |
 | `BASELINE_IN_USE` | `remove` was refused because a lease uses a copy. | Wait for that lease to end, then remove. |
+| `DEVICE_BUSY` | `remove` was refused because a copy is being cleaned up or another operation holds it. | Try again in a moment. |
 | `FORBIDDEN` | The session does not have the admin role. | Run the command as an admin. |
 
 `simlock doctor` lists each baseline's files on disk under `sources`. Files that belong to no baseline are reported as orphans; only `simlock doctor --purge-orphans` deletes them.

@@ -70,6 +70,26 @@ describe("FleetLeaseIndex", () => {
     });
   });
 
+  describe("onEnded", () => {
+    it("tells the listener each lease that ended -- by release, by a worker's relayed fact, by missing two snapshots -- and nothing for a worker it forgets", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      const ended: string[] = [];
+      index.onEnded((gone) => ended.push(gone.gatewayLeaseId));
+      index.add(entry({ gatewayLeaseId: "a", workerLeaseId: "la" }));
+      index.add(entry({ gatewayLeaseId: "b", workerLeaseId: "lb" }));
+      index.add(entry({ gatewayLeaseId: "c", workerLeaseId: "lc", workerId: "wrk_3" }));
+      index.add(entry({ gatewayLeaseId: "d", workerLeaseId: "ld", workerId: "wrk_2" }));
+
+      index.remove("a");
+      index.removeByWorkerLease("wrk_1", "lb");
+      index.rebuildFromWorker("wrk_3", []);
+      index.rebuildFromWorker("wrk_3", []);
+      index.forgetWorker("wrk_2");
+
+      expect(ended).toEqual(["a", "b", "c"]);
+    });
+  });
+
   describe("add / resolve / lookups", () => {
     it("resolves an entry by gateway id, by (workerId, workerLeaseId), by ownerId and by requesterId", () => {
       const index = new FleetLeaseIndex(PREFIX);
@@ -383,6 +403,7 @@ describe("FleetLeaseIndex", () => {
       expect(index.resolve("ad-7f3a")).toEqual({
         gatewayLeaseId: "ad-7f3a",
         grantedAt: 1,
+        idChosenByRequester: true,
         ownerId: "alice-principal",
         requesterId: "alice",
         workerId: "wrk_1",

@@ -4,16 +4,21 @@ import type { Clock } from "../../ports/index.js";
 const MAX_PRINCIPALS_PER_REFRESH = 100;
 
 interface DeviceFacts {
+  readonly bootTarget?: string;
   readonly platform?: "ios" | "android";
   readonly model?: string;
   readonly name?: string;
   readonly target?: string;
   readonly physical?: boolean;
+  // why: a re-allocate after agent-device restarts must keep the lease open after the runner's `close`, as the first allocate asked.
+  readonly retainOnClose?: boolean;
   readonly deviceKey?: string;
   // why: an adopted entry was rebuilt after a gateway restart and has no device key until a call names one.
   readonly adopted?: boolean;
   // why: agent-device's device list was read for this lease's name, so a device it did not name is not asked about again.
   readonly named?: boolean;
+  // why: the front allocated this lease again after agent-device forgot it, so no agent-device session holds it and a close names it in no `endedLeases`.
+  readonly restored?: boolean;
 }
 
 export interface FrontMapEntry extends DeviceFacts {
@@ -29,8 +34,10 @@ export interface HeldView extends DeviceFacts {
   readonly identity: Identity;
   readonly address: string;
   readonly ttlMs: number;
+  readonly deadline: number;
   readonly endedAt?: number;
   readonly endedBy?: EndedBy;
+  readonly releasing?: boolean;
 }
 
 export interface ListedLease {
@@ -38,10 +45,11 @@ export interface ListedLease {
   readonly ttlDeadline: number;
 }
 
-interface Held extends Omit<DeviceFacts, "deviceKey" | "name" | "named"> {
+interface Held extends Omit<DeviceFacts, "deviceKey" | "name" | "named" | "restored"> {
   deviceKey?: string;
   name?: string;
   named?: boolean;
+  restored?: boolean;
   readonly identity: Identity;
   readonly address: string;
   ttlMs: number;
@@ -100,9 +108,19 @@ export class FrontMap {
     if (name !== undefined) held.name = name;
   }
 
+  markRestored(leaseId: string): void {
+    const held = this.#held.get(leaseId);
+    if (held !== undefined) held.restored = true;
+  }
+
   setTtl(leaseId: string, ttlMs: number): void {
     const held = this.#held.get(leaseId);
     if (held !== undefined) held.ttlMs = ttlMs;
+  }
+
+  setDeadline(leaseId: string, deadline: number): void {
+    const held = this.#held.get(leaseId);
+    if (held !== undefined) held.deadline = deadline;
   }
 
   beginRelease(leaseId: string): void {

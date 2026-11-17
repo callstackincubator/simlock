@@ -49,6 +49,8 @@ export interface ProvisionDeviceOptions {
    * handoff, so a request planning in between sees a device that is on its way, and whose.
    */
   readonly claim?: { readonly kind: "boot"; readonly owner?: string };
+  /** why: the categories a slim lease keeps running, handed to the driver at the boot before the grant (ADR 0066 §2). */
+  readonly except?: readonly string[];
   readonly onProgress?: (progress: ProvisionProgress) => void;
   readonly reservation: CapacityReservation;
 }
@@ -168,7 +170,11 @@ export class DeviceProvisioner {
   ): Promise<ReadyDeviceHandoff> {
     try {
       options.onProgress?.({ stage: "booting", etaMs: bootEstimate() });
-      const ready = await this.options.lifecycle.readyProvisionedForLease(device, bootClaim);
+      const ready = await this.options.lifecycle.readyProvisionedForLease(
+        device,
+        bootClaim,
+        options.except,
+      );
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);
       return ready;

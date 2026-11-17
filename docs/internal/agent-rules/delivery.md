@@ -17,7 +17,7 @@ it before anything else happens to it.
 | `request:new`      | feature request form                | Inbox. Never picked up, body never edited.                |
 | `bug:new`          | bug report form                     | An agent may triage it (rule 8), and nothing more.        |
 | `bug:needs-info`   | triage agent                        | Could not reproduce. Waiting on the reporter.             |
-| `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
+| `bug:ready`        | maintainer, or the fast track (17)  | An agent may fix it.                                      |
 | `bug:blocked`      | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `feature:spec`     | spec session, on creation           | Spec in progress, business and technical together.        |
 | `feature:planned`  | spec session, with its tasks ready  | Split into tasks. Never picked up itself.                 |
@@ -25,23 +25,37 @@ it before anything else happens to it.
 | `task:draft`       | spec session, on creation           | Scope written; technical spec or its spec check missing.  |
 | `task:ready`       | spec session, after the spec check  | An agent may implement it once its Depends on allow.      |
 | `task:blocked`     | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
+| `refactor:new`     | anyone, or the `refactor` routine   | A proposed refactor (rule 18). Nothing is built from it.  |
+| `refactor:ready`   | maintainer, or the routine (18)     | An agent may build it.                                    |
+| `refactor:blocked` | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 
-Two labels sit outside that scheme. `flaky-test` marks a bug that names a
+Five labels sit outside that scheme. `upstream` marks a `<kind>:blocked`
+issue whose blocker is an issue or PR in a dependency, linked from its
+`## Waiting on upstream` comment (one `Upstream: <owner>/<repo>#<n>
+(<package>)` line per link). The maintainer, or an agent on the
+maintainer's request, posts that comment and adds the label together with
+`<kind>:blocked`; the weekly `check-upstream` routine reads
+those links and says when they are fixed in a release, and only the
+maintainer moves the issue back. `flaky-test` marks a bug that names a
 test failing without a code change (testing rule 5). `needs-hardware` marks
 a pull request parked because a Done when line needs a slow-lane run that
-has not happened (rule 16).
+has not happened (rule 16). `fast-track` marks a bug the fast track set
+ready, not the maintainer (rule 17). `auto-refactor` marks a refactor PR
+the `refactor` routine started, not the maintainer (rule 18).
 
 Transitions per kind:
 
 - **request**: `new` until closed. Closed as not planned, or as completed with
   a comment naming the feature it became.
-- **bug**: `new` → `ready` when the maintainer accepts the triage report,
-  with `needs-info` as a side-trip that returns to `new` when the reporter
-  answers.
+- **bug**: `new` → `ready` when the maintainer accepts the triage report
+  or the fast track passes it (rule 17), with `needs-info` as a side-trip
+  that returns to `new` when the reporter answers.
 - **feature**: `spec` → `planned` when the spec session has set its tasks
   ready, then closed when its last sub-issue closes (rule 9).
 - **task**: `draft` → `ready` when its spec check passes, and back to
   `draft` if the technical spec is emptied or the maintainer moves it.
+- **refactor**: `new` → `ready` when the maintainer sets it, or the
+  `refactor` routine does on an issue it opened (rule 18).
 - **any kind**: `ready` → `blocked` (for a bug under triage, `new` →
   `blocked`) when an agent stops on a blocker it names in its handoff. The
   maintainer clears it by re-adding the label it came from.
@@ -52,13 +66,16 @@ is open, done means closed as completed.
 
 ## Rules
 
-1. **An agent acts only on `bug:new` (triage only), `bug:ready` and
-   `task:ready`.** Nothing else is work. The work on `bug:new` is the
-   triage report (rule 8); only the maintainer moves a bug to `bug:ready`,
-   after reading it. Agents never label their way into work: only a
+1. **An agent acts only on `bug:new` (triage only), `bug:ready`,
+   `task:ready` and `refactor:ready`.** Nothing else is work. The work on `bug:new` is the
+   triage report (rule 8); the maintainer moves a bug to `bug:ready`
+   after reading it, or the fast-track script does (rule 17). Agents
+   never label their way into work: only a
    maintainer, automation a maintainer configured, or the spec session
    that wrote a task and saw its spec check pass (rule 7) moves an issue
-   to a state an agent may act on. The maintainer's say on a task is
+   to a state an agent may act on. The one exception is the `refactor`
+   routine, which may set `refactor:ready` on an issue it opened when rule
+   18's three conditions hold. The maintainer's say on a task is
    the spec session, which they sit through; they can move a task back to
    `task:draft` at any time. A `task:ready` task runs once every issue
    under its Depends on is closed, or is a task of the same feature whose
@@ -122,14 +139,18 @@ is open, done means closed as completed.
    that they could not before, and how anyone would check it. An
    implementation detail belongs there only when it *is* a requirement — "no
    inbound port on the worker" is an outcome; "use a WebSocket" is not.
-   Implementation lives in an ADR or in a task. The same spec session
-   writes both halves: the business sections and the tasks.
+   Implementation lives in an ADR and in the feature's design tables
+   (Behaviours, Stored state, Interfaces, Existing code), each fact once.
+   The same spec session writes the business sections, the design and the
+   tasks.
 
-7. **A task carries both halves.** A task's Scope is the slice of the parent's
-   outcome it delivers; its Technical spec is what a delivery agent needs to
-   build it without asking: the facts it rests on, modules touched,
-   contract and event changes, which rules in this directory are in play,
-   and the tests to write phrased as claims. A fact is what existing code,
+7. **The design is checked before a task is written, and a task names
+   its rows.** A task's Scope is the slice of the parent's outcome it
+   delivers; its Technical spec names the parent's design rows it
+   delivers and adds what a delivery agent needs to build them without
+   asking: the facts no row holds, modules touched, which rules in this
+   directory are in play, and one test per Behaviours row. A task never
+   restates a row. A fact is what existing code,
    another tool or the machine does today; each cites the line or the
    command output it was read from, never a summary. It need not repeat
    what `always-in-scope.md` lists, and a small gap it leaves is an
@@ -138,19 +159,21 @@ is open, done means closed as completed.
    lint runs before the check: `.agents/scripts/spec-lint.mjs` checks the
    body's structure, the spec session fixes its blocking lines before any
    checker starts, and the issue-state workflow moves a task whose lint
-   fails back to `task:draft`. Before
-   a task gets `task:ready`, the spec session has the `check-spec` skill
-   read the body as posted, with a fresh context, and fixes in the body
-   what it reports; the same checker then rechecks only what the fix
-   changed. The maintainer approves the feature, its ADRs and its tasks
-   once, at the end.
+   fails back to `task:draft`. Fresh `spec-checker` agents read the
+   feature's design against the code before any task exists, and the
+   tasks against the design before they get `task:ready`; the spec
+   session fixes what they report, and the same checker rechecks only
+   what the fix changed. The maintainer approves the feature, its design
+   and its ADRs once, before the tasks are written; a later finding that
+   needs a decision goes back to them.
 
 8. **Triage produces a report, not a fix.** An agent triaging a `bug:new`
    issue reproduces the bug as a failing test whose title states the claim
    the test proves, finds the root cause, and posts one comment with exactly
    these sections: *Reproduction*, *Root cause* (with file and line),
    *Simplest fix*, *Alternatives rejected* (at most three, one line each),
-   *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
+   *Risk* (at most three bullets), *Fast track* (rule 17's five lines), and
+   *Side findings* when there are any. The root cause says first whether this is a defect
    (the code does the wrong thing) or a gap (nothing is wrong and something
    is missing); for a gap the test's expectation is a proposal
    and the report says so; `bug:ready` on a gap accepts that proposal. A
@@ -158,7 +181,8 @@ is open, done means closed as completed.
    its own `bug:new` issue and listed under Side findings, not described in
    the report. It pushes the failing test to a
    `bug/<number>-repro` branch and opens no pull request. It then unassigns
-   itself and leaves the label at `bug:new`. If it cannot reproduce, it
+   itself and leaves the label at `bug:new`; it never runs the fast-track
+   script on its own report. If it cannot reproduce, it
    moves the issue to `bug:needs-info`, says exactly what is missing, and
    unassigns itself.
 
@@ -252,15 +276,135 @@ is open, done means closed as completed.
     the loop gives up, the PR gets `needs-hardware` and waits for the
     maintainer.
 
+17. **An easy bug goes from its report to `main` without waiting for the
+    maintainer.** Two checks by `.agents/scripts/fast-track.mjs` decide
+    "easy". Both read facts; neither asks an agent how sure it is.
+    *Entry.* The triage report ends with a Fast track section of five
+    lines, each `yes` or `no — <why>`:
+    - **Defect**: the code does the wrong thing; not a gap, not a decision.
+    - **Fix tried**: the Simplest fix, applied in the working tree, made
+      the reproduction pass and kept the tests next to it green, and was
+      then discarded.
+    - **Nothing public added or broken**: no command, flag, config key,
+      route, tool, event, error code or wire field is added or removed, and
+      nothing a caller does today stops working.
+    - **No ADR or rule changed**: the fix follows every accepted ADR and
+      rule as written.
+    - **One fix**: no rejected alternative would change what a user sees,
+      and no other repository could carry the fix.
+
+    Five times `yes` in a report posted from an account that can write to
+    the repo, a `bug/<n>-repro` branch, and no person's comment after the
+    report: the script sets `bug:ready` and `fast-track`. One
+    `no`: the bug stays `bug:new` and waits for the maintainer, as any bug
+    did before. *Exit.* The gate (rule 15) runs the script on the fix's PR
+    and refuses one that changes more than 250 lines or 8 files, touches
+    a surface file `docs-surface-check.mjs` lists (the command tree, the
+    config, the error table, the MCP tools, an HTTP source, the client
+    exports, the event map), the protocol version or an ADR, or carries a
+    `## Decision taken` comment. A fix elsewhere, a console screen or a
+    command's output included, is not held for its path.
+    An `Assumption:` line is a minor decision and passes. A held PR stays
+    open and ready: the maintainer merges it, or removes `fast-track` and
+    lets the gate through. The orchestrator runs the script, never the
+    agent that wrote the report or the fix, and no sub-agent removes
+    `fast-track` (the tool guard refuses both).
+
+18. **A refactor changes structure, never behaviour, and needs no spec.**
+    *Kind.* A refactor issue is `refactor:new`, `refactor:ready` or
+    `refactor:blocked`. Its branch is `refactor/<n>`. Its PR title reads
+    `refactor(<module>): …`, and so do the commits that refactor, each
+    ending `(#<n>)`; the pin commit and the commit that deletes the pins
+    read `test(pin): … (#<n>)`. A change that cannot keep every line of
+    this rule is a task, not a refactor.
+
+    *Body.* `docs/internal/templates/refactor.md`: **Why** (one or two
+    sentences), **Target shape** (what moves where, or what replaces
+    what), **Out of bounds** (the modules and files it must not touch),
+    **Done when** (structural checks, such as "no file in `src/daemon/`
+    over 1,400 lines", never a behaviour). No Facts, no Technical spec, no
+    spec check; `spec-lint.mjs` checks only those four sections.
+
+    *Behaviour* is everything testing rule 3 counts as visible: results,
+    error codes and messages, printed text, events, stored records, wire
+    shapes, the calls to other tools and their order, and time limits.
+    The exports of every module's `index.ts`, every surface file
+    `docs-surface-check.mjs` lists, the protocol version and every ADR
+    stay as they are. Today's behaviour is kept even when it is wrong.
+
+    *Who sets `refactor:ready`.* The maintainer, on any refactor issue.
+    The `refactor` routine, on an issue it opened, when all three hold:
+    1. the target is a measurement: a file over a cut-off an accepted ADR
+       sets, or a Fallow refactoring or duplication finding; the issue
+       quotes the command and the output line;
+    2. no open PR, claimed issue or `task:ready` task's Modules touched
+       names a file of the target;
+    3. the Target shape follows from an accepted ADR or from the
+       measurement, so it takes no new decision.
+
+    The routine opens one issue per run, for one module, and its PR
+    carries `auto-refactor`. It reads the cut-offs, the Fallow config and
+    the ADRs and never edits them: a threshold is the maintainer's call.
+
+    *Pins.* Where the existing tests do not reach the code it moves, the
+    implementer adds pins: tests in `*.pin.test.ts` files that record what
+    the code does today, golden-master tables included. A pin drives the
+    nearest seam the refactor does not move, so the refactor cannot break
+    the pin itself. Pins are the branch's first commit, `test(pin): …`,
+    with nothing else in it, and pass on the base; there they replace
+    tests-first, and a pin that fails on the base is a bug or a
+    misunderstanding, never something to fix. `pnpm mutate --touched-by
+    <head>`, run on that commit, mutates the source lines the refactor
+    moves or changes; every mutant must die against the pins and the
+    existing tests. Only testing rule 2 binds a pin, and test-lint skips
+    them. The PR's last commit deletes every pin, unless the code review
+    promotes one that covers a real gap: it then meets all of testing.md
+    and moves into the module's test file.
+
+    *Evidence.* `.agents/scripts/refactor-check.mjs --pr <m>` runs in
+    the gate (rule 15), which refuses a refactor PR it fails:
+    1. **Tests unchanged.** Every test title at the merge base is still
+       at the head, pins aside, whichever file holds it; a title only the
+       head has (a promoted pin) is listed for the code review. A line a
+       test file adds or removes that did not move (no other line of the
+       diff reads the same) fails when it asserts (`expect(`, `assert`);
+       every other such line is listed for the code review.
+    2. **Surface unchanged.** Every module `index.ts` exports the same
+       names with the same types at both ends, and no surface file, ADR
+       or protocol version changed.
+    3. **Pins passed, and are gone.** The first commit's pins pass on the
+       current merge base and on the head with the pins put back; no later
+       commit adds or edits a pin, and none is left at the head. A base
+       branch merged in moves the merge base, so its changes are never
+       read as the refactor's.
+    4. **Survivors killed.** The mutation run of *Pins*, repeated on that
+       merge base with the pins, leaves no mutant alive.
+
+    The PR body carries `Tests: <n> before, <n> after.` and `Mutation:`
+    with the run's last line.
+
+    *Stops.* A refactor that needs to change behaviour, an existing
+    test's expected value or the surface stops with a handoff saying
+    `spec needs: a task for <what>`. A bug found on the way is opened as
+    `bug:new` and pinned as it is, not fixed. A mutant no pin can kill
+    without reaching an internal file stops with `spec needs: a task; no
+    seam pins <lines>`. "While I'm here" is a stop.
+
+    *Review.* No spec lens. The code lens reads the refactor section of
+    its brief, which lists the hidden behaviour changes; the claims lens
+    covers manuals, comments and test titles. A refactor PR that passes
+    `refactor-check.mjs`, its review and CI merges through the gate
+    without the maintainer, whatever its size.
+
 ## Procedures
 
 **Claiming work.** Find it, claim it, branch, and finish with a PR that
 closes the issue:
 
 ```bash
-gh issue list --search 'label:bug:ready,task:ready no:assignee'
+gh issue list --search 'label:bug:ready,task:ready,refactor:ready no:assignee'
 node .agents/scripts/claim.mjs <n>    # refuses a closed, claimed or not-ready issue, or a task its Depends on hold back
-.agents/scripts/worktree.sh task/<n>    # or bug/<n>, feature/<n>; resumes origin/<branch>
+.agents/scripts/worktree.sh task/<n>    # or bug/<n>, refactor/<n>, feature/<n>; resumes origin/<branch>
 ```
 
 The PR body contains `Closes #<n>`. For a bug, branch from `bug/<n>-repro`
@@ -286,8 +430,8 @@ retyping the steps. `deliver` is the orchestrator: it claims, then hands
 each stage to a background agent — `implementer`, `reviewer`,
 `hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
 `spec-session` and `triage-bug` cover the rest; `spec-session` starts with
-selective exploration (rule 4) and ends with the `spec-checker` agent
-(rule 7).
+selective exploration (rule 4) and has the `spec-checker` agent check the
+design, then the tasks (rule 7).
 
 ## Automation
 
@@ -316,7 +460,7 @@ rules mechanically, so nobody has to remember them:
   fails it, and so does a PR that closes a task or a bug from any branch
   but that issue's `<kind>/<n>`.
 
-The judgment call stays manual by design: `bug:new` → `bug:ready`, once
-the maintainer has read the triage report. A task needs none: the spec
-session the maintainer sits through sets `task:ready` once its check
-passes (rule 1).
+`bug:new` → `bug:ready` is the maintainer's call once they have read the
+triage report, except for a bug the fast track passes (rule 17). A task
+needs none: the spec session the maintainer sits through sets
+`task:ready` once its check passes (rule 1).

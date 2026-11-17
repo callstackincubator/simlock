@@ -6,14 +6,15 @@ import {
   type WarmPoolReader,
   type CatalogReader,
   type ComponentInstaller,
-  type Config,
   type Core,
+  type CoreConfig,
   createCore,
   type DeviceMode,
   type DeviceSpec,
   type Driver,
   type LeaseExpirer,
   type LeaseRequestFailure,
+  type MemoryPressureReader,
   type ModelPreferences,
   type NukeExecutor,
   type PassthroughResolver,
@@ -21,7 +22,7 @@ import {
   type Registry,
   type SerializedDecision,
 } from "../core/index.js";
-import { createLeasing, type Leasing } from "./create-leasing.js";
+import { createLeasing, type Leasing, type LeasingConfig } from "./create-leasing.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import type {
   DeviceModeReader,
@@ -36,19 +37,23 @@ import type { LeaseHealthMonitor } from "./lease-health-monitor.js";
  * import this file, and `pnpm lint` enforces it. Anything production code also uses belongs on
  * `index.ts`.
  */
+export type TestEngineConfig = CoreConfig & LeasingConfig;
+
 export interface TestEngineOptions {
   readonly clock: Clock;
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: TestEngineConfig;
   readonly decisions: SerializedDecision;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
   readonly logger?: Logger | undefined;
+  readonly memoryPressure?: MemoryPressureReader | undefined;
   readonly registry: Registry;
   readonly state: StateDatabase;
   readonly systemStats: SystemStats;
   readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
+  readonly defaultImageTags?: Readonly<Partial<Record<Platform, string>>> | undefined;
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
   readonly modelPreferences?: ModelPreferences | undefined;
   readonly leaseEndParticipants?: readonly LeaseEndParticipant[] | undefined;
@@ -92,6 +97,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     drivers: options.drivers,
     eventBus: options.eventBus,
     logger: options.logger,
+    ...(options.memoryPressure === undefined ? {} : { memoryPressure: options.memoryPressure }),
     modelPreferences: options.modelPreferences,
     registry: options.registry,
     state: options.state,
@@ -102,6 +108,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     components: options.components,
     config: options.config,
     core,
+    defaultImageTags: options.defaultImageTags,
     defaultModes: options.defaultModes,
     describeFailure: options.describeFailure ?? describeTestFailure,
     eventBus: options.eventBus,
