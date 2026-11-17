@@ -148,6 +148,13 @@ export {
   type StreamingProcessResult,
 } from "./process-runner.js";
 export {
+  type AccessEntry,
+  type DirectoryAccess,
+  type DirectoryAccessReader,
+  FakeDirectoryAccessReader,
+  PowerShellDirectoryAccessReader,
+} from "./directory-access.js";
+export {
   type CpuCounters,
   type CpuTimes,
   DarwinHostLoadProbe,

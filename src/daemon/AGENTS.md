@@ -51,7 +51,7 @@ Relays (worker side):
 
 Cooperative identity, not a hostile-process boundary.
 
-- Every socket peer is the same OS user; file modes are the real boundary. An existing data directory is never chmod'ed; the daemon warns when group or others can reach it. On Windows no directory guards the pipe: see [ports](../ports/AGENTS.md).
+- Every socket peer is the same OS user; file modes are the real boundary. An existing data directory is never chmod'ed; the daemon warns when group or others can reach it. On Windows it reads the folder's ACL (`DirectoryAccessReader`, PowerShell) instead of the mode bits Node makes up, and an unreadable ACL warns nothing. No directory guards the pipe there: see [ports](../ports/AGENTS.md).
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - A worker that joins a fleet grants its gateway `admin` over itself, and must not be able to crash, stall or corrupt it: see [gateway](../gateway/AGENTS.md#rules).
 - An `agent` token is shell access to the worker: `device.exec` runs host tools as the daemon's user, with only the keys `execBaseEnvironment` (`exec-env.ts`) keeps plus the command's own.
