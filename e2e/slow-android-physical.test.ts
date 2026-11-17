@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deviceStreamUrl,
+  freeLoopbackPort,
   type TestEnv,
   waitFor,
   waitForDeviceState,
@@ -14,6 +15,7 @@ const execFileAsync = promisify(execFile);
 
 const SERIAL = process.env["SIMLOCK_PHYSICAL_ANDROID"];
 const APK = process.env["SIMLOCK_PHYSICAL_ANDROID_APK"];
+const NETWORK = process.env["SIMLOCK_PHYSICAL_ANDROID_NETWORK"];
 
 const PROBE_INTERVAL_MS = 2_000;
 const EXEC_TIMEOUT_MS = 5_000;
@@ -26,6 +28,14 @@ const TAG = { alive: 0x06, description: 0x01, keyframe: 0x02, delta: 0x03, meta:
 const missing =
   SERIAL === undefined || SERIAL === ""
     ? "SIMLOCK_PHYSICAL_ANDROID"
+    : APK === undefined || APK === ""
+      ? "SIMLOCK_PHYSICAL_ANDROID_APK"
+      : undefined;
+
+// why: the network case has its own gate, so a lane with a USB phone only still runs the USB cases.
+const missingNetwork =
+  NETWORK === undefined || NETWORK === ""
+    ? "SIMLOCK_PHYSICAL_ANDROID_NETWORK"
     : APK === undefined || APK === ""
       ? "SIMLOCK_PHYSICAL_ANDROID_APK"
       : undefined;
@@ -45,6 +55,7 @@ interface Rig {
   readonly env: TestEnv;
   readonly base: string;
   readonly auth: Record<string, string>;
+  readonly port: number;
 }
 
 async function adbOut(serial: string, args: readonly string[]): Promise<string> {
@@ -83,15 +94,19 @@ async function serverPid(): Promise<string> {
   return stdout.trim().split("\n")[0] ?? "";
 }
 
-async function rig(options: { readonly execTimeoutMs?: number } = {}): Promise<Rig> {
+async function rig(
+  options: { readonly execTimeoutMs?: number; readonly networkDevices?: boolean } = {},
+): Promise<Rig> {
   const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: {
       ...(options.execTimeoutMs === undefined
         ? {}
         : { exec: { timeoutMs: options.execTimeoutMs } }),
+      ...(options.networkDevices === true ? { android: { networkDevices: true } } : {}),
       health: { probeIntervalMs: PROBE_INTERVAL_MS, stableObservations: 2 },
       http: { enabled: true, host: "127.0.0.1", port },
       capabilities: {
+        ...(options.networkDevices === true ? { tunnel: { enabled: true } } : {}),
         stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
       },
     },
@@ -114,7 +129,7 @@ async function rig(options: { readonly execTimeoutMs?: number } = {}): Promise<R
     authorization: `Bearer ${(created.json as { secret: string }).secret}`,
     "content-type": "application/json",
   };
-  return { auth, base, env };
+  return { auth, base, env, port };
 }
 
 async function enroll(env: TestEnv, serial: string): Promise<Record<string, unknown>> {
@@ -437,6 +452,81 @@ describe.skipIf(missing !== undefined)(
         expect(body).toContain("EXEC_TIMEOUT");
         expect(await serverPid()).toBe(pidBefore);
         await daemon.env.cli(["release", grant.lease.id]);
+      },
+    );
+  },
+);
+
+// why: the case needs a phone adb lists with no usb: field, which only an operator can connect; it runs when both the address and an APK are named.
+describe.skipIf(missingNetwork !== undefined)(
+  missingNetwork === undefined
+    ? "Android physical phone over the network (real adb)"
+    : `Android physical phone over the network (skipped: ${missingNetwork} is not set)`,
+  { tags: ["slow", "android", "physical"] },
+  () => {
+    const address = NETWORK as string;
+    const apk = APK as string;
+
+    it(
+      "under android.networkDevices a phone listed by adb over the network is enrolled under its address and leased with ANDROID_SERIAL set to it, device.exec, the screen and a reverse tunnel work on it, and releasing uninstalls an app installed during the lease",
+      { timeout: 10 * MINUTE },
+      async () => {
+        const name = await installApk(address, apk);
+        await uninstall(address, name);
+        const enrolledApps = await userAppsOf(address);
+        try {
+          const daemon = await rig({ networkDevices: true });
+          const added = await enroll(daemon.env, address);
+          expect(added["driverDeviceId"]).toBe(address);
+          const grant = await leasePhysical(daemon.env);
+          expect(grant.environment["ANDROID_SERIAL"]).toBe(address);
+          expect(grant.environment["ANDROID_ADB_SERVER_PORT"]).toBe("5037");
+
+          const hardwareSerial = (
+            await adbOut(address, ["shell", "getprop", "ro.serialno"])
+          ).trim();
+          expect(await exec(daemon, grant.lease.id, ["shell", "getprop", "ro.serialno"])).toContain(
+            hardwareSerial,
+          );
+
+          const response = await streamOf(daemon, grant.device.id);
+          if (response.body === null) throw new Error("the stream answered without a body");
+          const frames = await readFrames(response.body, (read) =>
+            read.some((frame) => frame.tag === TAG.keyframe),
+          );
+          expect(frames.map((frame) => frame.tag)).toContain(TAG.keyframe);
+
+          const created = await daemon.env.cli(["token", "create", "--role", "operator"]);
+          expect(created.code, created.stderr).toBe(0);
+          const callerPort = String(await freeLoopbackPort());
+          const tunnel = daemon.env.cliBackground([
+            "--token",
+            (created.json as { secret: string }).secret,
+            "tunnel",
+            "reverse",
+            callerPort,
+            "--url",
+            `http://127.0.0.1:${String(daemon.port)}`,
+            "--lease",
+            grant.lease.id,
+          ]);
+          expect(await tunnel.firstStdoutLine(60_000)).toBe(
+            `reverse device:${callerPort} -> localhost:${callerPort} (lease ${grant.lease.id})`,
+          );
+          tunnel.kill("SIGINT");
+          expect((await tunnel.waitForExit(10_000)).code).toBe(0);
+
+          expect(await installApk(address, apk)).toBe(name);
+          const released = await daemon.env.cli(["release", grant.lease.id]);
+          expect(released.code, released.stderr).toBe(0);
+          await waitForDeviceState(daemon.env, address, "ready", { timeout: 3 * MINUTE });
+
+          const after = await userAppsOf(address);
+          expect(after).not.toContain(name);
+          for (const kept of enrolledApps) expect(after).toContain(kept);
+        } finally {
+          await uninstall(address, name).catch(() => undefined);
+        }
       },
     );
   },

@@ -71,4 +71,14 @@ describe("the Android driver's keys of the android config section", () => {
     expect(warn).toHaveBeenCalledWith('Unknown config key: "android.emulator.launchArgs"');
     expect(section.emulator).toEqual(defaults);
   });
+
+  it("take android.networkDevices true or false, default it to false, and refuse a string naming the key", async () => {
+    expect((await load({})).section.networkDevices).toBe(false);
+    expect((await load({ android: { networkDevices: true } })).section.networkDevices).toBe(true);
+    expect((await load({ android: { networkDevices: false } })).section.networkDevices).toBe(false);
+
+    await expect(load({ android: { networkDevices: "yes" } })).rejects.toThrow(
+      'Invalid config value for "android.networkDevices"',
+    );
+  });
 });
