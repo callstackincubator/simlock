@@ -46,6 +46,41 @@ async function stubNpm(
   return { npm, dataDirectory, script };
 }
 
+// why: #1664: the official Windows installer puts node.exe, a POSIX shell wrapper named `npm` and
+// `node_modules/npm/bin/npm-cli.js` side by side, with no symlink (Node 22.23.5, Windows 11). The
+// wrapper's first lines are copied from that install; node reads them as JavaScript and fails.
+const WINDOWS_NPM_WRAPPER = `#!/usr/bin/env bash
+
+# This is used by the Node.js installer, which expects the cygwin/mingw
+# shell script to already be present in the npm dependency folder.
+
+(set -o igncr) 2>/dev/null && set -o igncr; # cygwin encoding fix
+`;
+
+async function windowsLayoutNpm(): Promise<{
+  npm: NodeNpmCli;
+  dataDirectory: string;
+  script: string;
+}> {
+  const tree = await realpath(await mkdtemp(join(tmpdir(), "simlock-npm-")));
+  trees.push(tree);
+  const dataDirectory = join(tree, "data");
+  await mkdir(dataDirectory);
+  const nodejs = join(tree, "nodejs");
+  await mkdir(join(nodejs, "node_modules", "npm", "bin"), { recursive: true });
+  await symlink(process.execPath, join(nodejs, "node"));
+  await writeFile(join(nodejs, "npm"), WINDOWS_NPM_WRAPPER);
+  const script = join(nodejs, "node_modules", "npm", "bin", "npm-cli.js");
+  await writeFile(script, STUB_NPM);
+  const npm = new NodeNpmCli({
+    runner: new NodeProcessRunner(),
+    filesystem: new NodeFilesystem(),
+    dataDirectory,
+    execPath: join(nodejs, "node"),
+  });
+  return { npm, dataDirectory, script };
+}
+
 describe("NodeNpmCli", () => {
   it("runs npm with the daemon's Node, in its data directory", async () => {
     const { npm, dataDirectory, script } = await stubNpm();
@@ -61,6 +96,24 @@ describe("NodeNpmCli", () => {
       const seen = JSON.parse(outcome.ok ? outcome.output : "{}") as Record<string, unknown>;
       expect(seen).toEqual({ argv, script, cwd: dataDirectory });
     }
+  });
+
+  it("runs npm-cli.js from node_modules beside Node when npm there is the installer's shell wrapper", async () => {
+    const { npm, dataDirectory, script } = await windowsLayoutNpm();
+
+    const outcomes = [
+      await npm.view("simlock@0.4.0"),
+      await npm.install("simlock@0.4.0"),
+      await npm.globalRoot(),
+    ];
+
+    expect(outcomes).toEqual(
+      [
+        ["view", "simlock@0.4.0", "version"],
+        ["i", "-g", "simlock@0.4.0"],
+        ["root", "-g"],
+      ].map((argv) => ({ ok: true, output: JSON.stringify({ argv, script, cwd: dataDirectory }) })),
+    );
   });
 
   it("keeps the last 2000 characters of npm's stderr when it fails", async () => {
