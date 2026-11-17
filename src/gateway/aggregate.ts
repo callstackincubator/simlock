@@ -254,7 +254,28 @@ function addCatalogEntry(
   entry: PlatformCatalog,
   workerId: string,
 ): void {
-  const bucket = byPlatform.get(entry.platform) ?? {
+  const bucket = byPlatform.get(entry.platform) ?? emptyBucket();
+  byPlatform.set(entry.platform, bucket);
+  addNames(bucket, entry, workerId);
+  addModelClasses(bucket.modelClasses, entry);
+  addCustomModels(bucket.customModels, entry);
+  bucket.phonesOnly &&= entry.virtualDevices === false;
+  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
+  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
+  bucket.defaults.add(entry.defaultRuntime);
+  bucket.imageTagDefaults.add(entry.defaultImageTag);
+  bucket.classDefaults.push(listedClassDefaults(entry));
+}
+
+function addNames(bucket: CatalogBucket, entry: PlatformCatalog, workerId: string): void {
+  for (const model of entry.models) annotate(bucket.models, model, workerId);
+  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
+  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
+  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
+}
+
+function emptyBucket(): CatalogBucket {
+  return {
     classDefaults: [],
     customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
@@ -268,19 +289,6 @@ function addCatalogEntry(
     phonesOnly: true,
     slimCategories: new Set<string>(),
   };
-  byPlatform.set(entry.platform, bucket);
-  for (const model of entry.models) annotate(bucket.models, model, workerId);
-  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
-  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
-  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
-  addModelClasses(bucket.modelClasses, entry);
-  addCustomModels(bucket.customModels, entry);
-  bucket.phonesOnly &&= entry.virtualDevices === false;
-  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
-  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
-  bucket.defaults.add(entry.defaultRuntime);
-  bucket.imageTagDefaults.add(entry.defaultImageTag);
-  bucket.classDefaults.push(listedClassDefaults(entry));
 }
 
 /**
