@@ -1,0 +1,12 @@
+{
+  "tiers": {
+    "opus": "gpt-6.1-sol",
+    "sonnet": "gpt-6.1-terra",
+    "haiku": "gpt-6-luna"
+  },
+  "agents": {
+    "reviewer": "gpt-6.1-sol",
+    "spec-reviewer": "gpt-6.1-sol",
+    "claims-reviewer": "gpt-6.1-sol"
+  }
+}

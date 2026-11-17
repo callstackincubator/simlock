@@ -2,7 +2,7 @@
 // PreToolUse hook: stops a sub-agent, or a whole session, that has used too much or is stuck.
 //
 // Usage is read from the session's transcripts by usage.mjs: <session>.jsonl plus
-// <session>/subagents/*.jsonl, in "input-token equivalents" (input 1, cache write 1.25, cache
+// <session>/subagents/*.jsonl (a Codex rollout counts alone: its sub-agents are files of their own), in "input-token equivalents" (input 1, cache write 1.25, cache
 // read 0.1, output 5) and in turns (assistant messages).
 //
 //   stall       → the same Bash command, run twice with the same result, is blocked the third
@@ -73,10 +73,15 @@ fs.writeFileSync(stateFile, JSON.stringify(state));
 const fmt = (n) => `${(n / 1e6).toFixed(1)}M`;
 const cmd = input.tool_input?.command ?? "";
 
-// why: inside a sub-agent, transcript_path can be the session's own; agent_id names the sub-agent.
+// why: inside a Claude sub-agent, transcript_path can be the session's own and agent_id names the
+// sub-agent's file; a Codex sub-agent's transcript_path is its own rollout, and its session has no
+// subagents folder (codex-hook.mjs sets SIMLOCK_HARNESS).
+const codex = process.env.SIMLOCK_HARNESS === "codex";
 const agentFile =
   typeof input.agent_id === "string"
-    ? path.join(subDir, `agent-${input.agent_id.replace(/^agent-/, "")}.jsonl`)
+    ? codex
+      ? main
+      : path.join(subDir, `agent-${input.agent_id.replace(/^agent-/, "")}.jsonl`)
     : input.transcript_path !== main
       ? input.transcript_path
       : null;

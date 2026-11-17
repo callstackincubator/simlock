@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/.agents/scripts/codex-hook.mjs\"; [ -f \"$f\" ] && exec node \"$f\"; exit 0",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/.agents/scripts/codex-hook.mjs\"; [ -f \"$f\" ] && exec node \"$f\"; exit 0",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/.agents/scripts/codex-hook.mjs\"; [ -f \"$f\" ] && exec node \"$f\"; exit 0",
+            "timeout": 120,
+            "additionalContextLimit": 5000
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "implementer|reviewer|hardware-verifier",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/.agents/scripts/codex-hook.mjs\"; [ -f \"$f\" ] && exec node \"$f\"; exit 0",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

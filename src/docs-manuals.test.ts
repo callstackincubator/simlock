@@ -143,7 +143,7 @@ describe("module manuals, flow docs and the architecture map", () => {
 
   it("name files and exported names, never a private member", () => {
     expect(privateMembers("docs/internal/templates/manual.md")).toEqual([
-      "docs/internal/templates/manual.md:23: `#field`",
+      "docs/internal/templates/manual.md:24: `#field`",
     ]);
     expect([...manuals, ...flows].flatMap(privateMembers)).toEqual([]);
   });

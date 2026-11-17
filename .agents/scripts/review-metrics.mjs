@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // `node .agents/scripts/review-metrics.mjs --pr <M> [--issue <N>] [--findings <file.json>] [--json]`:
-// what each agent run of a PR's delivery used, read from Claude Code's own transcripts, so no
-// agent writes a number by hand.
+// what each agent run of a PR's delivery used, read from Claude Code's own transcripts and
+// Codex's rollouts, so no agent writes a number by hand.
 //
 // A run belongs to the PR when its prompt's first line is the ledger tag the deliver and review
 // skills write, `ledger: pr=<M> issue=<N> stage=<stage> round=<round> role=<role> lens=<lens>`
 // (keys in any order, any of them `-`), naming pr=<M> or, before the PR exists, issue=<N>. It
 // reads every transcript under $CLAUDE_CONFIG_DIR/projects (default ~/.claude/projects),
-// subagents' too, and counts each API message once (one message is written as several lines
-// with the same id). Cost comes from the price table below; a model it does not list makes the
-// cost unknown, never zero.
+// subagents' too, and every rollout under $CODEX_HOME/sessions (default ~/.codex/sessions), and
+// counts each API message once (a Claude message is written as several lines with the same id;
+// a Codex response is one `token_usage_record`). Cost comes from the price table below; a model
+// it does not list, every Codex model today, makes the cost unknown, never zero.
 //
 // --replay reports the runs tagged stage=replay instead (review-replay.sh); without it they are
 // left out, so a replay never counts as the PR's delivery work.
@@ -18,7 +19,8 @@
 // role, class, outcome, path and, when present, round) and adds the outcome and class counts. --json prints the ledger
 // (runs, totals, findings) instead of the summary lines.
 import { readFileSync } from "node:fs";
-import { parsed, projectsRoot, tagOf, transcripts } from "./transcripts.mjs";
+import { parsed, tagOf, transcriptRoots, transcripts } from "./transcripts.mjs";
+import { codexUsage } from "./usage.mjs";
 import { option } from "./cli-args.mjs";
 
 // $ per million tokens: input, output, cache read, 5-minute cache write, 1-hour cache write.
@@ -42,8 +44,8 @@ if (pr === null || !/^\d+$/.test(pr) || (issue !== null && !/^\d+$/.test(issue))
   process.exit(64);
 }
 
-const root = projectsRoot();
-const runs = transcripts(root)
+const runs = transcriptRoots()
+  .flatMap((root) => transcripts(root))
   .map((file) => ({ file, tag: tagOf(file) }))
   .filter(({ tag }) => tag !== null && (tag.pr === pr || (issue !== null && tag.issue === issue)))
   // why: a replay (stage=replay, review-replay.sh) re-reviews a frozen snapshot of a merged PR;
@@ -128,11 +130,21 @@ function run(file, tag) {
 function read(file) {
   const records = readFileSync(file, "utf8").split("\n").map(parsed).filter(Boolean);
   const stamps = records.map((r) => r.timestamp).filter((t) => typeof t === "string");
-  const messages = new Map();
-  for (const { message } of records.filter((r) => r.type === "assistant")) {
-    if (message?.usage && message.id) messages.set(message.id, message);
+  const s = { messages: new Map(), model: "unknown" };
+  for (const r of records) noteRecord(r, s);
+  return { messages: s.messages, startedAt: stamps[0] ?? null, finishedAt: stamps.at(-1) ?? null };
+}
+
+// why: a Codex token_usage_record names no model; the turn's turn_context before it does.
+function noteRecord(r, s) {
+  if (r.type === "assistant" && r.message?.usage && r.message.id) {
+    s.messages.set(r.message.id, r.message);
+  } else if (r.type === "turn_context" && typeof r.payload?.model === "string") {
+    s.model = r.payload.model;
+  } else if (r.type === "token_usage_record" && r.payload?.usage) {
+    const id = r.payload.response_id ?? `codex-${s.messages.size}`;
+    s.messages.set(id, { model: s.model, usage: codexUsage(r.payload.usage) });
   }
-  return { messages, startedAt: stamps[0] ?? null, finishedAt: stamps.at(-1) ?? null };
 }
 
 // why: PRICES lists its rates in this order: input, output, cache read, 5-minute, 1-hour write.
