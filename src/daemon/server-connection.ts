@@ -11,6 +11,7 @@ export interface SessionIdentity {
   readonly name: string;
   readonly via: "token" | "proxy";
   readonly signOutUrl?: string;
+  readonly close: (code: number, reason: string) => void;
 }
 
 export interface Connection {

@@ -91,6 +91,8 @@ export interface DispatcherOptions {
    * clear `DispatchError` when it is missing rather than crashing on `undefined.create(...)`.
    */
   readonly tokens?: TokenOperations;
+  // why: ADR 0081 §2: a revoked token's open sessions close at once; the daemon server holds them, and is built after the dispatcher.
+  readonly closeSessionsForToken?: (tokenId: string) => void;
   readonly health: () => "starting" | "running" | "failed";
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;

@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { redactConfig } from "../core/index.js";
-import { type IpcConnection, type Logger, NoopLogger } from "../ports/index.js";
+import {
+  type IpcConnection,
+  type Logger,
+  NoopLogger,
+  type SessionConnection,
+} from "../ports/index.js";
 import { parseRequestFrame, type RequestFrame } from "../daemon-protocol/index.js";
 import {
   normalizeProtocolVersion,
@@ -106,6 +111,7 @@ export class DaemonServer {
       this.#workerDispatcher = buildDispatcher(options, {
         awaitReady: () => this.#awaitReady(),
         health: () => this.#health,
+        closeSessionsForToken: (tokenId) => this.closeSessionsForToken(tokenId),
       });
       this.#dispatcher = this.#workerDispatcher;
     } else {
@@ -477,8 +483,22 @@ export class DaemonServer {
    * why: ADR 0081 §2: a remote caller's WebSocket session is accepted with the identity its token
    * gave at the upgrade (`requireAuth`), so `hello` decides neither its role nor its principal.
    */
-  acceptSession(socket: IpcConnection, session: DispatchSession): void {
-    this.#accept(socket, session.role, undefined, session);
+  acceptSession(socket: SessionConnection, session: DispatchSession): void {
+    this.#accept(socket, session.role, undefined, session, (code, reason) =>
+      socket.closeWith(code, reason),
+    );
+  }
+
+  /**
+   * why: ADR 0081 §2: the token is checked once, at the upgrade, so a revoked token's open sessions
+   * are closed here, at once; a session's principal is its token's id.
+   */
+  closeSessionsForToken(tokenId: string): void {
+    for (const connection of this.#connections) {
+      if (connection.session?.via === "token" && connection.principal === tokenId) {
+        connection.session.close(4003, "token revoked");
+      }
+    }
   }
 
   #accept(
@@ -486,6 +506,7 @@ export class DaemonServer {
     forcedRole?: Role,
     link?: LinkConnection,
     session?: DispatchSession,
+    closeSession?: (code: number, reason: string) => void,
   ): void {
     // why: a stopping daemon still listens until `host.stop()`; a connection opened before the connections are closed gets `DAEMON_STOPPING` (or the `daemon.stop` reply) from the dispatch gates, and only one arriving after that would never be closed.
     if (this.#closingConnections) {
@@ -505,9 +526,10 @@ export class DaemonServer {
       // token's principal from the start, and `hello` keeps it.
       principal: session?.principal ?? "",
       session:
-        session === undefined
+        session === undefined || closeSession === undefined
           ? undefined
           : {
+              close: closeSession,
               name: session.name ?? session.principal,
               via: session.via === "proxy" ? "proxy" : "token",
               ...(session.signOutUrl === undefined ? {} : { signOutUrl: session.signOutUrl }),

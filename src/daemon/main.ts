@@ -555,6 +555,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     clock,
     errorCode: classifyError,
     closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
+    closeSessionsForToken: (tokenId) => daemon.closeSessionsForToken(tokenId),
     config,
     coordinator: fleetCoordinator,
     directory: gatewayService,
