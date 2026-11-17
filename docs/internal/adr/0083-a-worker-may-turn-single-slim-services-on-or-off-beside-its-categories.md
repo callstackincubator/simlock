@@ -78,8 +78,10 @@ or an `--except` that leaves nothing off grants `full`, as today.
 The file also holds lines the runtime wrote, so Simlock cannot tell its
 own lines from them once a name leaves both lists. Beside each
 simulator's `disabled.plist`, Simlock keeps a record of the `include` and
-`exclude` names it last wrote. A recorded name in neither list is written
-`false` at the next `prepare`, and the record is rewritten. It is copied
+`exclude` names it last wrote. A recorded name in neither list stays a
+managed label at the next `prepare`, written by §2 as any other name: `true`
+when a slimmed category the lease does not keep lists it, `false` otherwise.
+The record is then rewritten. It is copied
 with the file and removed with its folder. Without it, an idle simulator
 that survives a restart, or a baseline's copy, keeps a reverted `exclude`
 off with no warning. The file's name and shape are in the feature.
