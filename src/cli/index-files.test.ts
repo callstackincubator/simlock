@@ -107,6 +107,48 @@ describe("CLI: simlock files", () => {
     ]);
     expect(removed.output.stdout).toBe("");
 
+    const failures: [string, readonly string[], number, string, number][] = [
+      ["FILE_TOO_LARGE", ["put", "app-debug.apk"], 413, "FILE_TOO_LARGE", 1],
+      ["LEASE_FILES_FULL", ["put", "app-debug.apk"], 413, "LEASE_FILES_FULL", 1],
+      ["FILE_BUSY", ["put", "app-debug.apk"], 409, "FILE_BUSY", 1],
+      ["INSUFFICIENT_DISK_SPACE", ["put", "app-debug.apk"], 422, "INSUFFICIENT_DISK_SPACE", 12],
+      ["UPLOAD_STALLED", ["put", "app-debug.apk"], 408, "UPLOAD_STALLED", 1],
+      ["UNKNOWN_LEASE", ["list"], 404, "UNKNOWN_LEASE", 1],
+      ["UNKNOWN_FILE on get", ["get", "gone.apk"], 404, "UNKNOWN_FILE", 1],
+      ["UNKNOWN_FILE on rm", ["rm", "gone.apk"], 404, "UNKNOWN_FILE", 1],
+      ["UNAUTHENTICATED", ["get", "app-debug.apk"], 401, "UNAUTHENTICATED", 1],
+    ];
+    for (const [title, words, status, code, exit] of failures) {
+      const result = await files(["files", ...words], async () =>
+        answer(status, { error: { code, message: `m ${code}` } }),
+      );
+      expect(result.code, title).toBe(exit);
+      expect(JSON.parse(result.output.stderr), title).toEqual({
+        error: { code, message: `m ${code}` },
+      });
+      expect(result.output.stdout, title).toBe("");
+    }
+    const unreachable = await files(["files", "list"], async () => {
+      throw new Error("connect ECONNREFUSED");
+    });
+    expect(unreachable.code).toBe(1);
+    expect(JSON.parse(unreachable.output.stderr)).toEqual({
+      error: { code: "REMOTE_UNREACHABLE", message: `No answer from ${URL}` },
+    });
+    const cut = await files(["files", "get", "app-debug.apk", "-o", "copy.apk"], async () => ({
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (controller.desiredSize === 1) controller.enqueue(new TextEncoder().encode("apk"));
+          else controller.error(new Error("socket hang up"));
+        },
+      }),
+      status: 200,
+    }));
+    expect(cut.code).toBe(1);
+    expect(JSON.parse(cut.output.stderr).error.code).toBe("REMOTE_UNREACHABLE");
+    expect(await cut.filesystem.exists("/work/project/copy.apk")).toBe(false);
+    expect(await cut.filesystem.exists("/work/project/copy.apk.part")).toBe(false);
+
     const refused: [string, readonly string[], string, Options?][] = [
       ["a missing local file", ["put", "nothing.apk"], "No file nothing.apk"],
       ["a folder", ["put", "build"], "build is a folder; a folder cannot be uploaded yet (#1636)"],
