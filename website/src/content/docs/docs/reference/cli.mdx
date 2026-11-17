@@ -50,12 +50,13 @@ These flags work anywhere on the command line, before or after the command.
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token `simlock tunnel` sends to a worker or gateway. `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
+| `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token for a farm (see [Remote mode](#remote-mode)). `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
+| `--url <url>` | The farm to run the command on: a standalone worker or a gateway, `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. `--url=<url>` also works. A `--url` that is not valid is a usage error. | `SIMLOCK_URL`. See [Remote mode](#remote-mode) |
 | `--gateway` | Send the command to this machine's gateway, the daemon in `~/.simlock/gateway`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--local` | Send the command to this machine's worker, the daemon in `~/.simlock`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--help`, `-h` | As the first word, or with no command: print the list of commands. | — |
 
-`--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`.
+`--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`. So is `--url` with either of them.
 
 <Aside type="caution">
 The CLI takes these flags out of the whole command line, including the arguments after `simctl` and `adb`. `simlock adb shell echo --local` runs `adb shell echo` against the worker. Quote or rename an argument that collides with one of them.
@@ -68,6 +69,24 @@ With `--gateway`, the command goes to the gateway. With `--local`, it goes to th
 `simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`. When the command goes to the gateway (`--gateway`, or a machine that has only a gateway), `setup` installs the skill, never connects to it and prints `machine      not checked: setup does not check a gateway`; otherwise it checks the worker.
 
 When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
+
+### Remote mode
+
+With a farm URL (`--url`, else `SIMLOCK_URL`; an empty `SIMLOCK_URL` counts as unset) and a token (`--token`, else `SIMLOCK_TOKEN`), every command whose work is the daemon's runs on that farm instead of this machine's daemon. The token's role is the command's role: an agent token gets the agent commands, an operator token gets every command. Nothing starts a daemon on this machine, falls back to an agent session or reads `SIMLOCK_ADMIN_TOKEN` or the `admin.token` file. A URL with no token is a usage error (`No token: pass --token or set SIMLOCK_TOKEN`). A token the farm refuses fails with `UNAUTHENTICATED` (exit 1), and a farm that does not answer with `REMOTE_UNREACHABLE` (exit 1).
+
+`--local` or `--gateway` beats `SIMLOCK_URL`, so a variable left in a shell does not stop you from reaching this machine's daemon.
+
+These commands act on this machine and exit 2 in remote mode, with `` `simlock <command>` acts on this machine; it does not run with --url or SIMLOCK_URL. Run it on the daemon's machine, or unset SIMLOCK_URL. ``: `daemon start`, `daemon stop`, `daemon status`, `daemon logs`, `daemon install`, `daemon uninstall`, `config set` and `setup`.
+
+A few commands differ in remote mode:
+
+- `simlock simctl` and `simlock adb` always run on the lease's worker, as `device.exec`, also when the farm is a standalone worker. A path in their arguments names a file on the worker.
+- Without `--lease`, `simctl`, `adb` and `rotate` use the one lease whose requester is this command's requester: `SIMLOCK_AGENT_ID`, else the agent session's id, else this process. Another requester's lease on the same token is never picked. With no such lease, or with several, the command is a usage error.
+- `simlock lease` whose requester is this process prints one notice saying that later commands need `SIMLOCK_AGENT_ID` or `--lease`.
+- `events --since` replays the farm's history; it never reads this machine's `history.db`.
+- `baseline list` and `baseline remove` follow the farm's mode, a worker or a gateway, not this machine's folder.
+
+A held `simlock lease` still ends when its connection drops.
 
 ### Admin credential
 
@@ -803,8 +822,8 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_HOME` | The folder Simlock keeps everything in. The worker uses it directly; a gateway uses its `gateway` subfolder. A path so long that the daemon's socket path would pass the system limit fails with `USAGE` (exit 2). | `~/.simlock` |
 | `SIMLOCK_ADMIN_TOKEN` | An admin credential: an operator token or the daemon's `admin.token` secret. Used when `--token` is not given. | Unset: the CLI reads `admin.token` |
 | `SIMLOCK_AGENT_ID` | The requester identity: printable, no control characters, at most 256 characters. When set, it wins over the session variables below. | Unset |
-| `SIMLOCK_URL` | The worker or gateway `simlock tunnel` calls, when `--url` is not given; the same rules as `--url`. | Unset |
-| `SIMLOCK_TOKEN` | The bearer token `simlock tunnel` sends, when `--token` is not given. | Unset |
+| `SIMLOCK_URL` | The farm every command runs on, when `--url` is not given; the same rules as `--url`. See [Remote mode](#remote-mode). | Unset |
+| `SIMLOCK_TOKEN` | The bearer token sent to the farm, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
 | `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |
 | `PI_SESSION_ID` | Set by [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#shell-tool-session-environment) for the commands its `bash` and `powershell` tools run. Gives the identity `pi:<id>`. | — |

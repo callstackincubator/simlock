@@ -55,6 +55,9 @@ Run 'simlock --version' (or -v) to print the installed version.
 Pass --token <secret> anywhere on the command line to set the credential a command
 sends; the CLI reference lists the default resolution order.
 
+Pass --url <url> anywhere on the command line (or set SIMLOCK_URL and SIMLOCK_TOKEN) to run
+the command on a remote worker or gateway instead of this machine's daemon.
+
 Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.
 Pass --local anywhere on the command line to reach this machine's worker even when only a gateway has run here.`;
 

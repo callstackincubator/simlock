@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 An agent on another machine leases and uses devices through Simlock's HTTP API, with an agent token. The same calls work against a single worker and against a gateway.
 
-Most `simlock` commands only talk to the daemon on their own machine, so they can't do this for you. The exception is [`simlock tunnel`](#tunnels).
+With `SIMLOCK_URL` and `SIMLOCK_TOKEN` set, the `simlock` commands run against the farm too, so an agent needs no `curl` (see [Use the CLI](#use-the-cli)). `simlock tunnel` always reaches a farm this way.
 
 ## Before you start
 
@@ -39,6 +39,21 @@ The secret is shown only once. Every request sends it as `Authorization: Bearer 
 <Aside type="danger">
 An agent token reaches the whole worker, not only one device. A command run through `exec` runs on the worker as the daemon's user, and can read and write files anywhere that user can. For example, `adb pull` writes a file to any path you choose on the worker. Through a gateway, the command runs on whichever worker holds the device. Give agent tokens only to agents you would let run commands on those machines.
 </Aside>
+
+## Use the CLI
+
+Set the farm and the token, and name who the leases are for:
+
+```sh
+export SIMLOCK_URL=https://simlock.example.com
+export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
+export SIMLOCK_AGENT_ID=ci-job-42
+simlock lease --platform android --detach
+simlock adb shell getprop ro.build.version.release
+simlock release <lease-id>
+```
+
+Every command runs on the farm with the token's role, and starts no daemon on this machine. `simlock adb` and `simlock simctl` run on the lease's worker, in the lease that `SIMLOCK_AGENT_ID` took, so two agents that share a token each reach their own device. Without `SIMLOCK_AGENT_ID` each process is its own requester: `simlock lease` prints a notice, and later commands need `--lease <id>`. Commands that act on the daemon's own machine, such as `daemon start` and `setup`, exit 2. The [CLI reference](/simlock/docs/reference/cli#remote-mode) lists the rest.
 
 ## Lease a device
 
