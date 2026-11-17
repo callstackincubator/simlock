@@ -1,6 +1,6 @@
 # 0081. A remote caller speaks the daemon protocol over one WebSocket path, with its token's identity
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-17
 - **Issue:** [#1635](https://github.com/callstackincubator/simlock/issues/1635) (request [#945](https://github.com/callstackincubator/simlock/issues/945))
 - **Narrows:** [ADR 0003](0003-one-typed-daemon-contract-behind-every-frontend.md)
