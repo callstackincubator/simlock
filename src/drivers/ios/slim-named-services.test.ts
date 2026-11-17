@@ -240,6 +240,14 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
     expect(dropped.written?.[gamed]).toBe(true);
     expect(dropped.record).toEqual([gamed]);
 
+    const droppedWithNoCategory = await boot({
+      slim: { categories: [] },
+      plist: { [diagnosticd]: true },
+      record: JSON.stringify([diagnosticd]),
+    });
+    expect(droppedWithNoCategory.written?.[diagnosticd]).toBe(false);
+    expect(droppedWithNoCategory.record).toEqual([]);
+
     const none = await boot({ slim: { exclude: [gamed] } });
     expect(none.warn).not.toHaveBeenCalled();
     expect(none.record).toEqual([gamed]);

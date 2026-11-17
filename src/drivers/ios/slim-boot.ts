@@ -169,7 +169,12 @@ export class SlimBoot {
   ): Promise<SlimWrite> {
     const configured = resolveSlimCategories(slim.categories);
     const { kept, resolved } = splitByExcept(configured, except);
-    if (configured.categories.length === 0 && (slim.exclude ?? []).length === 0) {
+    const folder = this.#overridesFolder(udid);
+    const recordFile = join(folder, RECORD_FILE_NAME);
+    const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
+    const recorded = await this.#readRecord(recordFile);
+    // why: a name the worker dropped is still written back on (ADR 0083 §5), so a record or a name keeps the write going even with no category.
+    if (configured.categories.length === 0 && names.length === 0 && recorded.length === 0) {
       return {
         detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
         kind: "no-categories",
@@ -177,10 +182,6 @@ export class SlimBoot {
     }
 
     const startedAt = this.#clock.now();
-    const folder = this.#overridesFolder(udid);
-    const recordFile = join(folder, RECORD_FILE_NAME);
-    const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
-    const recorded = await this.#readRecord(recordFile);
     const wanted = overridesFor(resolved.categories, kept, {
       exclude: slim.exclude ?? [],
       include: slim.include ?? [],
