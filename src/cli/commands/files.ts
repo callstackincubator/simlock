@@ -8,6 +8,8 @@ import {
   withHelpHint,
 } from "../args.js";
 import { connectDaemonClient, farmEndpoint } from "../connect.js";
+import { ERROR_TABLE, isSimlockError, SimlockError } from "../../contract/index.js";
+import type { HttpStreamAnswer, HttpStreamRequest } from "../../ports/index.js";
 import { resolveRemoteLeaseId } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
 
@@ -20,6 +22,7 @@ const FILES_USAGE =
   "       simlock files rm <name> [--lease <id>]\n";
 
 interface Folder {
+  readonly origin: string;
   readonly leaseId: string;
   readonly token: string;
   /** why: the folder's route without the file name, so a call appends `/<name>` or nothing. */
@@ -61,7 +64,65 @@ async function folderOf(context: CommandContext, flag: unknown): Promise<Folder>
       await client.close();
     }
   }
-  return { leaseId, route: `${url}/v1/leases/${encodeURIComponent(leaseId)}/files`, token };
+  return {
+    leaseId,
+    origin: url,
+    route: `${url}/v1/leases/${encodeURIComponent(leaseId)}/files`,
+    token,
+  };
+}
+
+function unreachable(origin: string, reason: string): SimlockError<"REMOTE_UNREACHABLE"> {
+  return new SimlockError("REMOTE_UNREACHABLE", "transport", reason, { url: origin });
+}
+
+// why: a route answers `{ error: { code, message } }` with the code `ERROR_TABLE` knows, so the command fails with that code and its exit code; any other refusal is the farm not answering as a worker does.
+async function refusal(answered: HttpStreamAnswer, origin: string): Promise<Error> {
+  let error: { code?: unknown; message?: unknown } | undefined;
+  try {
+    error = (JSON.parse(await new Response(answered.body).text()) as { error?: typeof error })
+      .error;
+  } catch {
+    error = undefined;
+  }
+  if (
+    typeof error?.code === "string" &&
+    typeof error.message === "string" &&
+    error.code in ERROR_TABLE
+  ) {
+    const code = error.code as keyof typeof ERROR_TABLE;
+    return new SimlockError(code, ERROR_TABLE[code].kind, error.message, {} as never);
+  }
+  return unreachable(origin, `The farm at ${origin} answered ${String(answered.status)}`);
+}
+
+// why: one call to a route: its answer must be a success, whatever it carried otherwise; the caller's signal ends the wait.
+async function send(
+  environment: Environment,
+  folder: Folder,
+  signal: AbortSignal,
+  request: Omit<HttpStreamRequest, "signal" | "token">,
+): Promise<HttpStreamAnswer> {
+  const answered = await environment.httpStream.request({
+    ...request,
+    signal,
+    token: folder.token,
+  });
+  if (answered.status >= 200 && answered.status <= 299) return answered;
+  throw await refusal(answered, folder.origin);
+}
+
+// why: an error that is not a route's answer (a refused connection, a body cut on the way) is the farm not answering.
+async function transfer<T>(folder: Folder, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  try {
+    return await work(controller.signal);
+  } catch (error: unknown) {
+    if (isSimlockError(error)) throw error;
+    throw unreachable(folder.origin, `No answer from ${folder.origin}`);
+  } finally {
+    controller.abort();
+  }
 }
 
 async function localFile(environment: Environment, path: string): Promise<string> {
@@ -104,22 +165,22 @@ async function runPut(argv: readonly string[], context: CommandContext): Promise
   const folder = await folderOf(context, values.lease);
   const file = await environment.filesystem.openFile(absolute);
   try {
-    const answered = await environment.httpStream.request({
-      body: file.read(),
-      contentLength: file.size,
-      method: "PUT",
-      signal: new AbortController().signal,
-      token: folder.token,
-      url: fileRoute(folder, name),
+    return await transfer(folder, async (signal) => {
+      const answered = await send(environment, folder, signal, {
+        body: file.read(),
+        contentLength: file.size,
+        method: "PUT",
+        url: fileRoute(folder, name),
+      });
+      const reply = JSON.parse(await new Response(answered.body).text()) as {
+        name: string;
+        size: number;
+      };
+      environment.stdout.write(
+        `${JSON.stringify({ lease: folder.leaseId, name: reply.name, size: reply.size })}\n`,
+      );
+      return 0;
     });
-    const reply = JSON.parse(await new Response(answered.body).text()) as {
-      name: string;
-      size: number;
-    };
-    environment.stdout.write(
-      `${JSON.stringify({ lease: folder.leaseId, name: reply.name, size: reply.size })}\n`,
-    );
-    return 0;
   } finally {
     await file.close();
   }
@@ -131,25 +192,30 @@ async function runGet(argv: readonly string[], context: CommandContext): Promise
   if (values.help) return 0;
   const name = requiredPositional(values.positionals, "a file name");
   const folder = await folderOf(context, values.lease);
-  const answered = await environment.httpStream.request({
-    method: "GET",
-    signal: new AbortController().signal,
-    token: folder.token,
-    url: fileRoute(folder, name),
-  });
-  if (typeof values.output === "string") {
-    const target = resolve(environment.workingDirectory, values.output);
-    // why: the bytes land beside the target and move into place whole, so a download that fails never leaves a part of the file under its name.
-    const partial = `${target}.part`;
-    await environment.filesystem.writeFileStream(partial, answered.body);
-    await environment.filesystem.rename(partial, target);
+  return transfer(folder, async (signal) => {
+    const answered = await send(environment, folder, signal, {
+      method: "GET",
+      url: fileRoute(folder, name),
+    });
+    if (typeof values.output === "string") {
+      const target = resolve(environment.workingDirectory, values.output);
+      // why: the bytes land beside the target and move into place whole, so a download that fails never leaves a part of the file under its name.
+      const partial = `${target}.part`;
+      try {
+        await environment.filesystem.writeFileStream(partial, answered.body);
+      } catch (error: unknown) {
+        await environment.filesystem.rm(partial).catch(() => undefined);
+        throw error;
+      }
+      await environment.filesystem.rename(partial, target);
+      return 0;
+    }
+    const reader = answered.body.getReader();
+    for (let step = await reader.read(); !step.done; step = await reader.read()) {
+      environment.stdoutBytes(step.value);
+    }
     return 0;
-  }
-  const reader = answered.body.getReader();
-  for (let step = await reader.read(); !step.done; step = await reader.read()) {
-    environment.stdoutBytes(step.value);
-  }
-  return 0;
+  });
 }
 
 async function runList(argv: readonly string[], context: CommandContext): Promise<number> {
@@ -157,15 +223,12 @@ async function runList(argv: readonly string[], context: CommandContext): Promis
   const values = filesArgs(argv, environment);
   if (values.help) return 0;
   const folder = await folderOf(context, values.lease);
-  const answered = await environment.httpStream.request({
-    method: "GET",
-    signal: new AbortController().signal,
-    token: folder.token,
-    url: folder.route,
+  return transfer(folder, async (signal) => {
+    const answered = await send(environment, folder, signal, { method: "GET", url: folder.route });
+    const listed = JSON.parse(await new Response(answered.body).text()) as unknown;
+    environment.stdout.write(`${JSON.stringify(listed)}\n`);
+    return 0;
   });
-  const listed = JSON.parse(await new Response(answered.body).text()) as unknown;
-  environment.stdout.write(`${JSON.stringify(listed)}\n`);
-  return 0;
 }
 
 async function runRemove(argv: readonly string[], context: CommandContext): Promise<number> {
@@ -174,13 +237,10 @@ async function runRemove(argv: readonly string[], context: CommandContext): Prom
   if (values.help) return 0;
   const name = requiredPositional(values.positionals, "a file name");
   const folder = await folderOf(context, values.lease);
-  await environment.httpStream.request({
-    method: "DELETE",
-    signal: new AbortController().signal,
-    token: folder.token,
-    url: fileRoute(folder, name),
+  return transfer(folder, async (signal) => {
+    await send(environment, folder, signal, { method: "DELETE", url: fileRoute(folder, name) });
+    return 0;
   });
-  return 0;
 }
 
 export { run };

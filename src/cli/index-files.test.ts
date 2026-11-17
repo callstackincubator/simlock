@@ -135,11 +135,13 @@ describe("CLI: simlock files", () => {
     expect(JSON.parse(unreachable.output.stderr)).toEqual({
       error: { code: "REMOTE_UNREACHABLE", message: `No answer from ${URL}` },
     });
+    let sent = false;
     const cut = await files(["files", "get", "app-debug.apk", "-o", "copy.apk"], async () => ({
       body: new ReadableStream<Uint8Array>({
         pull(controller) {
-          if (controller.desiredSize === 1) controller.enqueue(new TextEncoder().encode("apk"));
-          else controller.error(new Error("socket hang up"));
+          if (sent) controller.error(new Error("socket hang up"));
+          else controller.enqueue(new TextEncoder().encode("apk"));
+          sent = true;
         },
       }),
       status: 200,
