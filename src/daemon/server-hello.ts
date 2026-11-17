@@ -56,6 +56,17 @@ export class Handshake {
       return;
     }
     const payload = parsedHello.data;
+    // why: ADR 0081 §2: a session already has its token's identity, so a credential is refused rather than used and one connection never carries two.
+    if (connection.session !== undefined && payload.credential !== undefined) {
+      await respondError(
+        connection.socket,
+        frame.id,
+        "BAD_REQUEST",
+        "A session's identity is its token: send no credential in hello",
+      );
+      await connection.socket.close();
+      return;
+    }
     // why: ADR 0003 §6: the daemon prefers the client's `protocolRange` when present, and treats a
     // bare `protocolVersion` as `{n, n}` only when it is not -- `helloRequestSchema` already
     // guarantees at least one of the two is present.
