@@ -56,11 +56,14 @@ flowchart TD
 
 ### 2. The check is on the resolved mode, in leasing's one resolve step
 
-Leasing checks the mode the driver resolved, not the one asked for, so a
-slim request that would fall back to full (§4 of ADR 0007) is refused on a
-worker without full instead of being granted full. Lease requests, warm
-targets and learned kinds all pass that one step, so all are refused the
-same way, and a warm target that cannot be met is reported by doctor.
+Leasing checks the asked, default or baseline mode before it resolves the
+spec, so nothing is downloaded for it, and checks the mode the driver
+resolved after, so a slim request that would fall back to full (§4 of ADR
+0007) is refused on a worker without full instead of being granted full.
+Lease requests and warm targets pass that one step, so both are refused
+the same way, and a warm target that cannot be met is reported by doctor.
+Learned kinds are planned from their stored spec, so the warm pool's own
+catalog check forgets one whose mode is not served.
 
 A slim boot whose readback fails still records `full` (ADR 0007 §8) and
 is granted as today: the check is a planning rule, not a promise about
