@@ -83,8 +83,35 @@ function decoded(writes: readonly Uint8Array[]): { tag: number; body: unknown }[
 }
 
 describe("iOS device input", () => {
-  it("touches, buttons, scrolls, keys and rotations on an iOS simulator reach the HID helper", async () => {
+  it("a socket client presses a button on an iOS simulator: app_switcher and lock reach the helper, home launches SpringBoard, back is dropped", async () => {
     const { factory, launcher, processRunner } = setup();
+    const opening = factory.open(simulator(), new AbortController().signal);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+    const input = (await opening) as DeviceInput;
+
+    for (const button of ["app_switcher", "lock"] as const) {
+      input.send({ button, kind: "button" });
+    }
+    expect(decoded(launcher.last.stdinWrites)).toEqual([
+      { body: { button: "app_switcher" }, tag: INPUT_TAG.button },
+      { body: { button: "lock" }, tag: INPUT_TAG.button },
+    ]);
+    expect(processRunner.calls).toEqual([]);
+
+    input.send({ button: "home", kind: "button" });
+    input.send({ button: "back", kind: "button" });
+    expect(decoded(launcher.last.stdinWrites)).toHaveLength(2);
+    expect(processRunner.calls).toEqual([
+      {
+        args: ["simctl", "--set", DEVICE_SET, "launch", "UDID-1", "com.apple.springboard"],
+        command: "xcrun",
+        options: { timeoutMs: 10_000 },
+      },
+    ]);
+  });
+
+  it("touches, scrolls, keys and rotations on an iOS simulator reach the HID helper", async () => {
+    const { factory, launcher } = setup();
     const opening = factory.open(simulator(), new AbortController().signal);
     expect(launcher.starts).toEqual([
       {
@@ -108,21 +135,6 @@ describe("iOS device input", () => {
       { body: { type: "end", x: 0.5, y: 0.5 }, tag: INPUT_TAG.touch },
     ]);
     const writtenBefore = launcher.last.stdinWrites.length;
-
-    input.send({ button: "app_switcher", kind: "button" });
-    input.send({ button: "lock", kind: "button" });
-    input.send({ button: "back", kind: "button" });
-    expect(processRunner.calls).toEqual([]);
-    expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
-    input.send({ button: "home", kind: "button" });
-    expect(processRunner.calls).toEqual([
-      {
-        args: ["simctl", "--set", DEVICE_SET, "launch", "UDID-1", "com.apple.springboard"],
-        command: "xcrun",
-        options: { timeoutMs: 10_000 },
-      },
-    ]);
-    expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
 
     input.send({ dx: 0, dy: 0.5, kind: "scroll", x: 0.5, y: 0.25 });
     input.send({ dx: -0.25, dy: 0, kind: "scroll" });
