@@ -5,13 +5,16 @@
 // one without the other prints the surfaces it changed and the exit code is 1. The surface is:
 //
 //   cli        src/cli/tree.ts, the command tree
-//   config     src/core/config.ts, the config type, defaults and validator
+//   config     src/core/config.ts and the parts it re-exports (config-types.ts, -defaults.ts,
+//              -validators.ts, -role-checks.ts, -helpers.ts, -alerts.ts): the config type, defaults
+//              and validator
 //   errors     the ERROR_TABLE object in src/contract/errors.ts
 //   mcp        each `registerTool(` name and definition object in src/mcp/server.ts, and the
 //              tool schemas in src/mcp/contracts.ts
 //   http       each `declareRoute(...)` call in src/http/*.ts
 //   client     src/client/index.ts and src/admin/index.ts, the package's two exports
 //   events     the EventMap interface in src/bus/index.ts, which EventName is the keys of
+//   e2e-provider  packages/e2e/src/index.ts, the options and export of @simlock/e2e
 //
 // A part counts as changed when its code differs once comments and whitespace are dropped, so
 // a comment or a reflow is no change. A commit in the range with the trailer `Docs: none
@@ -49,7 +52,13 @@ const tools = (text) =>
 
 const SURFACES = [
   { name: "cli", files: ["src/cli/tree.ts"], parts: whole },
-  { name: "config", files: ["src/core/config.ts"], parts: whole },
+  {
+    name: "config",
+    files: ["", "-types", "-defaults", "-validators", "-role-checks", "-helpers", "-alerts"].map(
+      (part) => `src/core/config${part}.ts`,
+    ),
+    parts: whole,
+  },
   {
     name: "errors",
     files: ["src/contract/errors.ts"],
@@ -60,6 +69,7 @@ const SURFACES = [
   { name: "http", files: httpFiles(), parts: calls(/declareRoute\(/g) },
   { name: "client", files: ["src/client/index.ts", "src/admin/index.ts"], parts: whole },
   { name: "events", files: ["src/bus/index.ts"], parts: block(/export interface EventMap \{/) },
+  { name: "e2e-provider", files: ["packages/e2e/src/index.ts"], parts: whole },
 ];
 
 const changed = [...new Set(SURFACES.filter(changes).map((s) => s.name))];

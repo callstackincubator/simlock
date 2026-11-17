@@ -68,9 +68,10 @@ export default {
     },
     {
       name: "testing-only-in-tests",
-      comment: "only a *.test.ts file or a test-*.ts helper imports a testing.ts or test-*.ts file",
+      comment:
+        "only a *.test.ts file, a test-*.ts helper or a testing.ts entry imports a testing.ts or test-*.ts file",
       severity: "error",
-      from: { pathNot: testFile },
+      from: { pathNot: linkTestFile },
       to: { path: "(^|/)(testing|test-[^/]+)\\.tsx?$" },
     },
     {
@@ -99,6 +100,22 @@ export default {
       severity: "error",
       from: { path: "^src/link/", pathNot: linkTestFile },
       to: { path: "^src/ports/", dependencyTypesNot: ["type-only"] },
+    },
+    {
+      name: "packages-not-from-root-code",
+      comment:
+        "a package under packages/ never imports src/, ui/ or e2e/: it reaches simlock the way a user does, over its published addresses (ADR 0077 §3)",
+      severity: "error",
+      from: { path: "^packages/" },
+      to: { path: "^(src|ui|e2e)/" },
+    },
+    {
+      name: "packages-not-in-root-code",
+      comment:
+        "src/, ui/ and e2e/ never import packages/; an e2e test file may, to drive a package against a real daemon (ADR 0077 §3)",
+      severity: "error",
+      from: { path: "^(src|ui|e2e)/", pathNot: "^e2e/.*\\.test\\.tsx?$" },
+      to: { path: "^packages/" },
     },
     direction(
       "core-not-leasing",
@@ -151,6 +168,18 @@ export default {
       { path: "^src/(http|gateway|drivers|daemon|cli|mcp|leasing)/" },
     ),
     direction(
+      "not-lease-files",
+      "core, leasing, the drivers, the gateway and the contract import nothing from lease-files: the daemon builds it and the HTTP frontend serves it",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/lease-files/" },
+    ),
+    direction(
+      "lease-files-imports-little",
+      "lease-files reads and writes through the Filesystem port and knows leases only by the types it takes from leasing; it imports no frontend, gateway, driver or core",
+      "^src/lease-files/",
+      { path: "^src/(http|gateway|drivers|daemon|cli|mcp|core)/" },
+    ),
+    direction(
       "host-load-imports-ports-only",
       "host-load reads the machine through the HostLoadProbe port and imports no other component",
       "^src/host-load/",
@@ -201,9 +230,9 @@ export default {
     {
       name: "definition-is-light",
       comment:
-        "a module's definition.ts imports its own module only for types or by dynamic import, so reading the registry loads no module code",
+        "a module's or a driver's definition.ts imports its own module only for types or by dynamic import, so reading a registry loads no module or driver code",
       severity: "error",
-      from: { path: "^src/([^/]+)/definition\\.ts$" },
+      from: { path: "^src/((?:drivers/)?[^/]+)/definition\\.ts$" },
       to: {
         dependencyTypesNot: ["type-only", "dynamic-import"],
         path: "^src/$1/",
@@ -234,9 +263,11 @@ export default {
     {
       name: "main-loads-modules-lazily",
       comment:
-        "main.ts imports nothing from src/agent-device, of any type: a module reaches a daemon only through the module host",
+        "the composition root (main.ts and its parts: worker-composition.ts, driver-discovery.ts, composition-support.ts, entry-support.ts) imports nothing from src/agent-device, of any type: a module reaches a daemon only through the module host",
       severity: "error",
-      from: { path: "^src/daemon/main\\.ts$" },
+      from: {
+        path: "^src/daemon/(main|worker-composition|driver-discovery|composition-support|entry-support)\\.ts$",
+      },
       to: { path: "^src/agent-device/" },
     },
     direction(

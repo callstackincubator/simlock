@@ -39,6 +39,11 @@ log are per-test) and, in the fast lane, points `SIMLOCK_DRIVERS_MODULE` at
 hardware without knowing the difference. Both variables are documented in
 the [CLI reference](../website/src/content/docs/docs/reference/cli.mdx).
 
+A slow flow started with `keepSeeds` shares one home with the other such
+flows, one at a time: `$TMPDIR/simlock-lane-home`. When a flow ends, everything
+in it is deleted but its instance id and the drivers' ready seeds, so config,
+state, socket and log are still per-test.
+
 The fake driver reads a JSON script file, re-read on every call so a test can
 change behaviour mid-flight, and appends every call it receives to a log file.
 Assertions like "`doctor --fix` never destroyed a device" or "a missing runtime
@@ -53,6 +58,21 @@ never triggered a download" read that log.
   the point is confidence in a release, not branch coverage.
 - Never weaken an assertion to get green. If a flow trips a real bug, mark that
   assertion (`it.fails`) with a comment naming the suspected cause.
+- In the slow lane a new daemon home makes its seeds again: the first lease of
+  each platform takes 40 to 60 s, a later one 5 to 20 s. A real-driver flow
+  passes `keepSeeds: true` to `withDaemon` or `withSharedDaemon`: its home is
+  then the lane's one reused home, which each flow finds as a home no flow has
+  used, but for the ready seeds earlier flows made. A flow that proves the
+  making of a seed (the smoke files, the pool-off flow of
+  `slow-warm-pool.test.ts`), or runs under `drivers.ios.deviceSet: "default"`,
+  leaves it out. A new case joins a flow whose daemon already has the device
+  it needs, before it starts a daemon of its own.
+- A slow case that proves how Simlock leases, queues or ends a lease, and not
+  what a device does, runs on one platform: `leasingCase` in
+  `slow-agent-device.test.ts` runs it on Android, or on iOS where no Android
+  SDK is installed.
+- A wait in a slow flow carries its own bound, a few times its slowest pass,
+  so a hang fails with the wait's name and not with the test's timeout.
 
 Hooks must be registered at module scope. Vitest resolves `beforeEach`/`afterEach`
 from the call stack active during _collection_, so a hook registered from inside a

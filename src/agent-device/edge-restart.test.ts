@@ -1,0 +1,437 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  heartbeat,
+  setUpWithPhone,
+  advance,
+  listed,
+  devices,
+  release,
+  tapDispatch,
+  track,
+} from "./test-edge.js";
+import {
+  notAvailable,
+  type Rig,
+  type Envelope,
+  sleep,
+  setUp,
+  envelopeOf,
+  hex,
+  granted,
+  allocatesReceived,
+  runCommand,
+  leases,
+  principals,
+  secrets,
+  sessionFor,
+} from "./test-support.js";
+
+describe("the agent-device front, through the whole worker daemon: after agent-device restarts", () => {
+  it.each([
+    ["a simulator lease", "simulator", { platform: "android" }, {}],
+    [
+      "a phone lease, whose allocate reaches the phone daemon",
+      "phone",
+      { platform: "android", physical: true },
+      {},
+    ],
+    [
+      "an entry allocated with retainOnClose, whose re-allocate carries it",
+      "simulator",
+      { platform: "android", retainOnClose: true },
+      {},
+    ],
+    [
+      "a heartbeat carrying deviceKey, clientId and runId, whose re-allocate carries all three",
+      "simulator",
+      { platform: "android" },
+      { deviceKey: "ios:mobile:00008110-001A2B3C4D5E" },
+    ],
+  ] as const)(
+    "after agent-device restarts on a worker, an agent's next heartbeat succeeds and the simlock lease is kept on the same device: %s",
+    async (_case, daemon, allocateExtra, heartbeatExtra) => {
+      const rig: Rig = await setUpWithPhone();
+      const fake = daemon === "phone" ? rig.phone : rig.fake;
+      if ("deviceKey" in heartbeatExtra) fake.nameDeviceKeyInNextReply(heartbeatExtra.deviceKey);
+      await granted(rig, 1, allocateExtra);
+      const before = fake.leases.get(hex(1));
+      expect(before).toBeDefined();
+      fake.restart();
+      expect(fake.leases.has(hex(1))).toBe(false);
+
+      const answer = await envelopeOf(await heartbeat(rig, 1, heartbeatExtra));
+      expect(answer.error).toBeUndefined();
+      expect(answer.result).toMatchObject({ ok: true });
+      const after = fake.leases.get(hex(1));
+      expect(after?.address).toBe(before?.address);
+      expect(after?.retainOnClose).toBe(before?.retainOnClose);
+      expect(await listed(rig)).toEqual([hex(1)]);
+
+      expect((await envelopeOf(await heartbeat(rig, 1, heartbeatExtra))).error).toBeUndefined();
+      const opened = await envelopeOf(await runCommand(rig, "open", 1));
+      expect(opened.error).toBeUndefined();
+      expect(opened.result).toMatchObject({ ok: true });
+      expect(fake.rpcRequests("agent_device.command").at(-1)?.tenant).toBe(
+        fake.leases.get(hex(1))?.tenant,
+      );
+    },
+  );
+
+  it.each([
+    ["agent-device restarted alone, the front's entry kept", "agent-device", {}, true],
+    ["the standalone worker restarted, the entry rebuilt", "worker", {}, true],
+    [
+      "agent-device restarted alone, an entry allocated with retainOnClose",
+      "agent-device",
+      { retainOnClose: true },
+      false,
+    ],
+  ] as const)(
+    "after a restart, a close with no open since names no ended lease; the front ends the simlock lease unless the entry keeps retainOnClose: %s",
+    async (_case, restarted, allocateExtra, ends) => {
+      const first = await setUpWithPhone();
+      await granted(first, 1, { platform: "android", ...allocateExtra });
+      const rig =
+        restarted === "worker"
+          ? await first.restart(() => {
+              first.fake.restart();
+            })
+          : (first.fake.restart(), first);
+      expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+      expect((await envelopeOf(await runCommand(rig, "snapshot", 1))).result).toMatchObject({
+        ok: true,
+      });
+
+      const closed = await envelopeOf(await runCommand(rig, "close", 1));
+
+      expect(closed.result).toMatchObject({ ok: true });
+      expect(JSON.stringify(closed)).not.toContain("endedLeases");
+      if (ends) {
+        await expect.poll(async () => listed(rig)).toEqual([]);
+        await expect.poll(() => rig.fake.rpcRequests("agent_device.lease.release").length).toBe(1);
+        expect(rig.fake.leases.has(hex(1))).toBe(false);
+      } else {
+        await sleep(50);
+        expect(await listed(rig)).toEqual([hex(1)]);
+        expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    ["a batch whose steps end with a close ends it", "batch", true],
+    ["a close agent-device answers with an error keeps it", "failed", false],
+    ["a `close <app>` with no session open closes the app only and keeps it", "app", false],
+  ] as const)(
+    "after agent-device restarts, a close that names no ended lease and its simlock lease: %s",
+    async (_case, close, ends) => {
+      const rig = await setUpWithPhone();
+      await granted(rig, 1, { platform: "android" });
+      rig.fake.restart();
+      expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+      if (close !== "app") {
+        expect((await envelopeOf(await runCommand(rig, "snapshot", 1))).error).toBeUndefined();
+      }
+      if (close === "failed") {
+        rig.fake.failNextCommand({
+          code: "COMMAND_FAILED",
+          details: { session: "default" },
+          message: "close failed",
+        });
+      }
+
+      const answer = await envelopeOf(
+        close === "batch"
+          ? await runCommand(rig, "batch", 1, {
+              flags: { batchSteps: [{ command: "snapshot" }, { command: "close" }] },
+            })
+          : await runCommand(
+              rig,
+              "close",
+              1,
+              close === "app" ? { positionals: ["com.example"] } : {},
+            ),
+      );
+
+      expect(JSON.stringify(answer)).not.toContain("endedLeases");
+      if (ends) {
+        await expect.poll(async () => listed(rig)).toEqual([]);
+        await expect.poll(() => rig.fake.rpcRequests("agent_device.lease.release").length).toBe(1);
+      } else {
+        expect(answer.error === undefined).toBe(close === "app");
+        await sleep(50);
+        expect(await listed(rig)).toEqual([hex(1)]);
+        expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+      }
+    },
+  );
+
+  it("while a re-allocate fails, the agent gets the retryable reply and the simlock lease stays listed, and a later heartbeat recovers", async () => {
+    const restoring = "the lease is being restored after an agent-device restart; try again";
+    const cases = [
+      [
+        "allocate answered `LEASE_ID_IN_USE`",
+        async (rig: Rig) => {
+          rig.fake.failNextAllocate({
+            code: "INVALID_ARGS",
+            details: { reason: "LEASE_ID_IN_USE" },
+            message: "lease id in use",
+          });
+          return heartbeat(rig, 1);
+        },
+        `${notAvailable}${restoring}`,
+      ],
+      [
+        "allocate unanswered for 10 s",
+        async (rig: Rig) => {
+          rig.fake.holdAllocate();
+          const pending = track(heartbeat(rig, 1));
+          await expect.poll(() => allocatesReceived(rig, 1)).toHaveLength(2);
+          await advance(rig, 9_000);
+          expect(pending.done()).toBe(false);
+          await advance(rig, 1_000);
+          await expect.poll(() => pending.done(), { timeout: 2_000 }).toBe(true);
+          rig.fake.letAllocateGo();
+          return pending.promise;
+        },
+        `${notAvailable}${restoring}`,
+      ],
+      [
+        "allocate accepted with no release scope",
+        async (rig: Rig) => {
+          rig.fake.editNextAllocateReply({ runId: undefined });
+          return heartbeat(rig, 1);
+        },
+        `${notAvailable}${restoring}`,
+      ],
+      [
+        "agent-device still starting",
+        async (rig: Rig) => {
+          rig.fake.setUnavailable("starting", true);
+          const response = await heartbeat(rig, 1);
+          rig.fake.setUnavailable(undefined);
+          return response;
+        },
+        `${notAvailable}starting`,
+      ],
+    ] as const;
+    for (const [label, failing, message] of cases) {
+      const rig: Rig = await setUp();
+      await granted(rig, 1);
+      rig.fake.restart();
+      const before = allocatesReceived(rig, 1).length;
+
+      const answer = await envelopeOf(await failing(rig));
+
+      expect(answer.error).toMatchObject({ data: { retriable: true }, message });
+      if (label === "agent-device still starting") {
+        expect(allocatesReceived(rig, 1)).toHaveLength(before);
+      }
+      expect(await listed(rig)).toEqual([hex(1)]);
+      const recovered = await envelopeOf(await heartbeat(rig, 1));
+      expect(recovered.error).toBeUndefined();
+      expect(recovered.result).toMatchObject({ ok: true });
+    }
+  });
+
+  it("two heartbeats at once after a restart send one re-allocate, and both succeed", async () => {
+    const rig: Rig = await setUp();
+    await granted(rig, 1);
+    rig.fake.restart();
+    rig.fake.holdAllocate();
+
+    const both = Promise.all([heartbeat(rig, 1), heartbeat(rig, 1)]);
+    await expect.poll(() => allocatesReceived(rig, 1)).toHaveLength(2);
+    await sleep(50);
+    rig.fake.letAllocateGo();
+    const answers = await Promise.all((await both).map((response) => envelopeOf(response)));
+
+    expect(answers.map((answer) => answer.error)).toEqual([undefined, undefined]);
+    expect(answers.map((answer) => answer.result)).toEqual([
+      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: true }),
+    ]);
+    expect(allocatesReceived(rig, 1)).toHaveLength(2);
+  });
+
+  it("after a restart, a heartbeat on a lease whose release is running answers ended and sends no re-allocate, a restored lease is renewed, and a second heartbeat's other error is relayed", async () => {
+    const deadline = async (rig: Rig) =>
+      (await leases(rig)).find((lease) => lease.id === hex(1))?.ttlDeadline;
+    const cases = [
+      [
+        "a release is running",
+        async (rig: Rig) => {
+          // why: the entry is marked releasing only while simlock's own release runs, after agent-device has already dropped the lease.
+          const tap = tapDispatch(rig);
+          let answer: Envelope | undefined;
+          tap.beforeNext("lease.release", async () => {
+            answer = await envelopeOf(await heartbeat(rig, 1));
+          });
+          await release(rig, 1);
+          expect(answer?.error).toMatchObject({
+            data: { details: { reason: "LEASE_ENDED_BY_HOST" } },
+          });
+          expect(allocatesReceived(rig, 1)).toHaveLength(1);
+        },
+      ],
+      [
+        "the lease is restored",
+        async (rig: Rig) => {
+          const before = await deadline(rig);
+          rig.fake.restart();
+          await advance(rig, 5_000);
+          const answer = await envelopeOf(await heartbeat(rig, 1));
+          expect(answer.result).toMatchObject({ ok: true });
+          expect(await deadline(rig)).toBe((before as number) + 5_000);
+        },
+      ],
+      [
+        "the second heartbeat fails with another error",
+        async (rig: Rig) => {
+          const before = await deadline(rig);
+          rig.fake.restart();
+          await advance(rig, 5_000);
+          rig.fake.failHeartbeatAfterNextAllocate({
+            code: "COMMAND_FAILED",
+            message: "daemon is busy",
+          });
+          const answer = await envelopeOf(await heartbeat(rig, 1));
+          expect(answer.error).toMatchObject({
+            data: { code: "COMMAND_FAILED" },
+            message: "daemon is busy",
+          });
+          expect(await listed(rig)).toEqual([hex(1)]);
+          expect(await deadline(rig)).toBe(before);
+        },
+      ],
+    ] as const;
+    for (const [, check] of cases) {
+      const rig: Rig = await setUp();
+      await granted(rig, 1);
+      await check(rig);
+    }
+  });
+
+  it.each([
+    ["a simulator lease", "simulator"],
+    ["a phone lease, whose re-allocate reaches the phone daemon", "phone"],
+  ] as const)(
+    "after a standalone worker restarts, the agent's next heartbeat succeeds on the same device: %s",
+    async (_case, daemon) => {
+      const first = await setUpWithPhone();
+      const fake = daemon === "phone" ? first.phone : first.fake;
+      await granted(
+        first,
+        1,
+        daemon === "phone" ? { physical: true, platform: "android" } : { platform: "android" },
+      );
+      const before = fake.leases.get(hex(1));
+      const rig = await first.restart(() => {
+        first.fake.restart();
+        first.phone.restart();
+      });
+      expect(fake.leases.has(hex(1))).toBe(false);
+
+      const answer = await envelopeOf(await heartbeat(rig, 1));
+
+      expect(answer.error).toBeUndefined();
+      expect(answer.result).toMatchObject({ ok: true });
+      expect(fake.leases.get(hex(1))?.address).toBe(before?.address);
+      expect(await listed(rig)).toEqual([hex(1)]);
+      const opened = await envelopeOf(await runCommand(rig, "open", 1));
+      expect(opened.result).toMatchObject({ ok: true });
+    },
+  );
+
+  it.each([
+    ["a phone lease's first call, snapshot, reaches the phone daemon", "snapshot"],
+    ["standalone boot is answered by the front with the lease's mobile target", "boot"],
+  ] as const)(
+    "after a standalone worker restarts, an adopted lease's first call that is not a heartbeat is routed as before the restart: %s",
+    async (_case, name) => {
+      const first = await setUpWithPhone();
+      await granted(first, 1, { physical: true, platform: "android" });
+      const rig = await first.restart(() => {
+        first.fake.restart();
+        first.phone.restart();
+      });
+
+      const answer = await envelopeOf(await runCommand(rig, name, 1));
+
+      if (name === "snapshot") {
+        expect(answer.result).toMatchObject({ command: "snapshot", ok: true });
+        expect(rig.phone.rpcRequests("agent_device.command")).toHaveLength(1);
+        expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+      } else {
+        expect(answer.result).toMatchObject({ ok: true, data: { target: "mobile", booted: true } });
+        expect(rig.phone.rpcRequests("agent_device.command")).toEqual([]);
+        expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    ["an iOS lease, agent-device restarted", "ios", "ios-instance", "agent-device"],
+    ["an Android lease, agent-device restarted", "android", "android-instance", "agent-device"],
+    ["an iOS lease, standalone worker restarted", "ios", "ios-instance", "worker"],
+  ] as const)(
+    "after a restart, the re-allocate names the backend the lease's first allocate named, which the heartbeat does not carry: %s",
+    async (_case, platform, backend, restarted) => {
+      const first = platform === "ios" ? await setUp() : await setUpWithPhone();
+      await granted(first, 1, { backend, platform });
+      const rig =
+        restarted === "worker"
+          ? await first.restart(() => {
+              first.fake.restart();
+            })
+          : (first.fake.restart(), first);
+
+      const answer = await envelopeOf(await heartbeat(rig, 1));
+
+      expect(answer.error).toBeUndefined();
+      expect(allocatesReceived(rig, 1).map((request) => request.params?.["backend"])).toEqual([
+        backend,
+        backend,
+      ]);
+    },
+  );
+
+  it("after a standalone worker restarts, a lease of another token is not adopted: standalone boot naming it is refused as not the token's device", async () => {
+    const first = await setUpWithPhone();
+    await granted(first, 2, { platform: "android" }, { token: secrets.two });
+    const rig = await first.restart(() => {
+      first.fake.restart();
+      first.phone.restart();
+    });
+
+    const answer = await envelopeOf(await runCommand(rig, "boot", 2));
+
+    expect(JSON.stringify(answer)).toContain("refused: simlock picks the device");
+    expect(answer.result).not.toMatchObject({ ok: true });
+    expect(rig.fake.rpcRequests("agent_device.command")).toEqual([]);
+    expect(await listed(rig)).toEqual([hex(2)]);
+  });
+
+  it("after a standalone worker restarts, a lease whose requester id is not its id is not adopted: the token's devices answer leaves its device out", async () => {
+    const first = await setUpWithPhone();
+    const outside = await first.daemon.dispatch(
+      "lease.request",
+      { platform: "android", requesterId: "made-outside-the-front" },
+      sessionFor(principals.one),
+    );
+    const rig = await first.restart(() => {
+      first.fake.restart();
+      first.phone.restart();
+    });
+    const device = (await devices(rig)).find(
+      (candidate) => candidate.id === (outside.lease as { deviceId: string }).deviceId,
+    );
+    rig.fake.listDevices([{ id: String(device?.address) }]);
+
+    const answer = await envelopeOf(await runCommand(rig, "devices", undefined));
+
+    expect(device?.address).toBeDefined();
+    expect(answer.result?.["data"]).toEqual({ devices: [] });
+  });
+});

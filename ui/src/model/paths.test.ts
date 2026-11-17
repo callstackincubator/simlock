@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { devicePath, fleetAddress, inboxPath, itemIdFrom, itemPath } from "./paths";
+import {
+  devicePath,
+  type FleetAddress,
+  fleetAddress,
+  inboxPath,
+  itemIdFrom,
+  itemPath,
+  streamPath,
+} from "./paths";
 
 describe("an item's page path", () => {
   it("carries any id, a slash or a space included, and reads it back whole", () => {
@@ -49,5 +57,81 @@ describe("a worker's page and its device drawer", () => {
       deviceId: "dev_1",
       workerId: "%E0%A4%A",
     });
+  });
+});
+
+describe("a device's streaming page", () => {
+  it("follows either a device address and retains both opaque ids, marking the streaming page alone", () => {
+    const cases: readonly {
+      readonly address: string;
+      readonly case: string;
+      readonly wants: FleetAddress;
+    }[] = [
+      {
+        address: devicePath("wrk_1", "dev_1"),
+        case: "the drawer address keeps its old reading",
+        wants: { deviceId: "dev_1", workerId: "wrk_1" },
+      },
+      {
+        address: streamPath("wrk_1", "dev_1"),
+        case: "the streaming address names both ids",
+        wants: { deviceId: "dev_1", streaming: true, workerId: "wrk_1" },
+      },
+      {
+        address: streamPath("mac-studio-01.local", "iPhone 16.dev"),
+        case: "a dot in either id",
+        wants: { deviceId: "iPhone 16.dev", streaming: true, workerId: "mac-studio-01.local" },
+      },
+      {
+        address: streamPath("wrk 1", "dev/1"),
+        case: "a slash in the device id",
+        wants: { deviceId: "dev/1", streaming: true, workerId: "wrk 1" },
+      },
+      {
+        address: streamPath("wrk/1", "dev 1"),
+        case: "a slash in the worker id",
+        wants: { deviceId: "dev 1", streaming: true, workerId: "wrk/1" },
+      },
+      {
+        address: streamPath("a%b", "100%"),
+        case: "a percent sign in either id",
+        wants: { deviceId: "100%", streaming: true, workerId: "a%b" },
+      },
+      {
+        address: "/fleet/%E0%A4%A/devices/%E0%A4%B/",
+        case: "a malformed escape in either id",
+        wants: { deviceId: "%E0%A4%B", streaming: true, workerId: "%E0%A4%A" },
+      },
+      {
+        address: "/fleet/devices/dev_1/",
+        case: "`devices` as the worker's id, so nothing marks a stream",
+        wants: { deviceId: "dev_1", workerId: "devices" },
+      },
+      {
+        address: "/fleet/wrk_1/devices",
+        case: "no device id after the marker",
+        wants: { deviceId: "devices", workerId: "wrk_1" },
+      },
+      {
+        address: "/fleet/wrk_1/devices/dev_1/extra",
+        case: "an extra segment past the device id",
+        wants: { deviceId: "devices", workerId: "wrk_1" },
+      },
+    ];
+
+    for (const { address, case: name, wants } of cases) {
+      expect(fleetAddress(address), `${name}: ${address}`).toEqual(wants);
+    }
+
+    for (const { device, worker } of [
+      { device: "dev_1", worker: "wrk_1" },
+      { device: "iPhone 16.dev", worker: "mac-studio-01.local" },
+      { device: "dev/1", worker: "wrk 1" },
+      { device: "100%", worker: "a%b" },
+    ]) {
+      expect(streamPath(worker, device), worker).toBe(
+        `/fleet/${encodeURIComponent(worker)}/devices/${encodeURIComponent(device)}/`,
+      );
+    }
   });
 });

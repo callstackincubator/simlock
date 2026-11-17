@@ -61,7 +61,14 @@ async function admitted(worker: WorkerModule): Promise<MemoryLeaseSocket> {
 }
 
 function ended(reason: ModuleEndedLease["reason"]): ModuleEndedLease {
-  return { deviceId: "dev_1", leaseId: "L-1", ownerId: "tok_holder", platform: "android", reason };
+  return {
+    deviceId: "dev_1",
+    grantedAt: 1_000,
+    leaseId: "L-1",
+    ownerId: "tok_holder",
+    platform: "android",
+    reason,
+  };
 }
 
 function endLease(

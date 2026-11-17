@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Deliver a ready task, bug or planned feature end to end, unattended — claim, delegate implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
+description: Deliver a ready task, a bug (new or ready), a ready refactor or planned feature end to end, unattended — claim, delegate triage, implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
 model: opus
 effort: medium
 ---
@@ -10,7 +10,7 @@ effort: medium
 You are the orchestrator. Never write code, run tests or review a diff
 yourself. Read issues, decide the next step, delegate it, and reason over
 the report block that comes back. Rules: `docs/internal/agent-rules/delivery.md`
-rules 1, 2, 3, 9, 14, 15 and 16.
+rules 1, 2, 3, 9, 14, 15, 16, 17 and 18.
 
 **Delegating.** Start each stage with the Agent tool, in the background:
 `subagent_type` `implementer`, `reviewer` or `hardware-verifier`; a short
@@ -129,15 +129,24 @@ origin/main`.
 gh issue view <N> --json number,title,labels,assignees,body
 ```
 
-- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`: one
-  issue; go to step 2.
+- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`,
+  `refactor:ready`: one issue; go to step 2.
 - `feature:planned`: walk its open sub-issues (step 3).
-- `bug:new`, unassigned: triage is the only work (delivery rules 1 and 8).
-  A triage report already on the thread with no newer reply: stop, it
-  waits on the maintainer's `bug:ready`. Otherwise run the `triage-bug`
-  procedure: start one `bug-triager` in the background with the issue
-  number, wait for its report, print it, and stop. Never add `bug:ready`:
-  it is the maintainer's call after reading the report.
+- `bug:new`, unassigned: triage, then the fast track (delivery rules 8
+  and 17). With no triage report on the thread, or a person's reply newer
+  than the last one, run the `triage-bug` procedure: start one
+  `bug-triager` in the background with the issue number and wait for its
+  report. Then, unless the run was started with `no-fast-track`:
+
+  ```bash
+  node .agents/scripts/fast-track.mjs <N>
+  ```
+
+  Exit 0: the script set `bug:ready`; go to step 2 in this same run. Exit
+  1: print the report and the script's `held:` line, and stop; the bug
+  waits for the maintainer. Never add `bug:ready` yourself, and never
+  argue with a `no` line.
+
 - Anything else, or assigned to someone else: stop and say why (rule 1).
 
 ## 2. Deliver one issue
@@ -151,7 +160,8 @@ section and the latest `## Handoff` comment, and go on from the next stage
 they name; never build again or restart review at round 1.
 
 1. **Implement**, one fresh `implementer` per mode, in the **Order**
-   `implementer.md` gives. An audit run takes no `fixes`, so a CI failure
+   `implementer.md` gives; a refactor runs `mode: refactor` alone, and its
+   `## Review` counts line starts `Spec review: skipped.` (rule 18). An audit run takes no `fixes`, so a CI failure
    waits for the fix run after the audit (item 2). `spec needs` under
    `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number; it picks the lenses
@@ -285,7 +295,9 @@ they name; never build again or restart review at round 1.
    base branch. Red CI: one `implementer` fix run with the failing test
    titles and the run id. Either way, the `fix-check` review in item 3
    (none for a fix to tests outside the PR's diff), then the gate again. Any other exit, or red CI a second time: park with the
-   line it printed.
+   line it printed. `held by the fast track` (rule 17) parks like any
+   refusal: Blocked on is the script's `held:` line and "the maintainer
+   merges the PR, or removes `fast-track`"; the PR stays ready.
 
 After every stage, update the PR body's `### Status` section (`issue-body.mjs
 <M> --pr set-section Status <file>`) so any session can resume from GitHub

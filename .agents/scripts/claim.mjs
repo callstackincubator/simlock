@@ -3,12 +3,14 @@
 // user, the one way an agent assigns an issue (delivery rule 2; the tool guard refuses `gh
 // issue edit --add-assignee`). It refuses, exit 1 with one `claim: #<n> ...` line saying why, an
 // issue that is closed, has an assignee, or carries no label an agent may act on (delivery rule
-// 1): `bug:new` with `--triage` and only then, `bug:ready`, `task:ready`. A `task:ready` task
+// 1): `bug:new` with `--triage` and only then, `bug:ready`, `task:ready`, `refactor:ready`. A `task:ready` task
 // also needs every issue its `## Depends on` names closed, or a sub-issue of the same feature
 // whose PR (from `<kind>/<m>`) is open and not a draft. Then it assigns the user, and prints
 // `claim: #<n> assigned to <login>`; when someone else got the issue at the same moment it
 // unassigns the user again and refuses. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync } from "node:child_process";
+
+import { repository } from "./cli-args.mjs";
 
 const [number] = process.argv.slice(2);
 const triage = process.argv.includes("--triage");
@@ -22,14 +24,14 @@ const labels = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
 const assignees = issue.assignees.map((a) => a.login);
 if (issue.state !== "open") refuse("is closed");
 if (assignees.length > 0) refuse(`is assigned to ${assignees.join(", ")}; it is theirs`);
-const work = triage ? ["bug:new"] : ["bug:ready", "task:ready"];
+const work = triage ? ["bug:new"] : ["bug:ready", "task:ready", "refactor:ready"];
 const label = labels.find((l) => work.includes(l));
 if (label === undefined) {
   refuse(
     `carries ${labels.filter((l) => /^\w+:/.test(l)).join(", ") || "no state label"}; ` +
       (triage
         ? "triage takes a bug:new issue"
-        : "an agent acts on bug:ready and task:ready (with --triage, bug:new)"),
+        : "an agent acts on bug:ready, task:ready and refactor:ready (with --triage, bug:new)"),
   );
 }
 if (label === "task:ready") {
@@ -41,7 +43,7 @@ if (label === "task:ready") {
     if (other.state === "closed") continue;
     const kind = other.labels
       .map((l) => (typeof l === "string" ? l : l.name))
-      .find((l) => /^(task|bug):/.test(l))
+      .find((l) => /^(task|bug|refactor):/.test(l))
       ?.split(":")[0];
     const sameFeature = parent !== null && parentOf(dep) === parent;
     const reviewed =
@@ -85,12 +87,4 @@ function api(method, at, ...extra) {
 function refuse(why) {
   console.error(`claim: #${number} ${why}. Not claimed.`);
   process.exit(1);
-}
-
-function repository() {
-  if (process.env.GH_REPO) return process.env.GH_REPO;
-  const url = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
-  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url);
-  if (match === null) throw new Error(`Cannot read owner/name from origin ${url}; set GH_REPO`);
-  return `${match[1]}/${match[2]}`;
 }

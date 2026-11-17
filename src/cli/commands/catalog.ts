@@ -34,6 +34,13 @@ async function run(
   }
 }
 
+function phonesOnlyLine(entry: CatalogGetOutput["platforms"][number]): string[] {
+  if (entry.virtualDevices !== false) return [];
+  return [
+    `  Virtual devices: off (${entry.platform}.virtualDevices is false); only enrolled physical devices are leased`,
+  ];
+}
+
 function formatCatalog(response: CatalogGetOutput): string {
   if (response.platforms.length === 0) return "No platforms available.";
   return response.platforms
@@ -69,7 +76,11 @@ function formatCatalog(response: CatalogGetOutput): string {
       );
       return [
         `Platform: ${entry.platform}`,
+        ...phonesOnlyLine(entry),
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
+        ...(entry.defaultImageTag === undefined
+          ? []
+          : [`  Default image tag: ${esc(entry.defaultImageTag)}`]),
         models.length > 0 ? "  Models:" : "  Models: (none)",
         ...models,
         ...(entry.images === undefined

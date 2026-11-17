@@ -10,14 +10,18 @@ copies "Tests agents run"; change both together (a repo test compares them).
 | ---------------------------------------------- | -------------------------------------------- |
 | Unit tests that import what the branch changed | `pnpm test:changed`                          |
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
+| One console DOM test file (`*.dom.test.tsx`)   | `pnpm exec vitest run --project ui-dom <file>` |
 | One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
 | Console specs the diff touched, Chromium only (1) | `pnpm test:console --project=chromium <spec files>` |
+| Console screenshots, when a page's look changes (3) | `pnpm console:screenshots`              |
 | Website build and its HTTP API check (2)       | `pnpm --dir website install && pnpm --dir website build && node website/scripts/check-openapi.mjs` |
 
 (1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
 `src/contract/`, and only the spec files the diff changed or whose page
-it changes: the whole lane is CI's, on every push. A stage agent never
+it changes: the whole lane is CI's, on every push. The lane holds only
+what needs a real daemon or a real browser engine; a page's behaviour is a
+DOM test, which `pnpm test:changed` runs. A stage agent never
 runs it without a spec file (the tool guard refuses), never in the
 background, and sets `timeout: 600000` on the Bash call: the default
 120 s moves the run to the background, where it holds the agent's
@@ -26,13 +30,17 @@ report until it ends.
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.
 
+(3) Writes `docs/internal/console-redesign/current/*.png` from the fixture
+pages; it compares nothing. Open the pictures the change touched.
+
 ## Checks agents never run
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
 `pnpm format`, `pnpm format:check`,
-`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
+`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine and a
+refactor's `--touched-by` run, below), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine), `.agents/scripts/test-lint.mjs`. A PreToolUse hook
@@ -56,15 +64,28 @@ list and this one the same.
   after ` -- `, and one that no longer hides a finding fails. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the timing
   tests, the e2e lane in three shards); the Quality check passes only when all of them
-  do. The console lane runs in four shards
-  (the required Console check passes only when they all do) on
-  every push to `main`, and on a pull request when it changes a source, UI,
-  console spec or build file: in every browser when it changes `ui/` or the
-  console specs, else in Chromium only.
+  do. The console DOM tests run with the unit tests. The console lane runs
+  in Chromium in two shards (the required Console check passes only when
+  they all do) on every push to `main`, and on a pull request when it
+  changes a source, UI, console spec or build file.
 
 ## Mutation testing
 
-Not part of delivery. The weekly `harden-tests` routine runs `pnpm mutate
+Part of delivery for a refactor only (delivery rule 18). On the branch's
+pin commit, `pnpm mutate --touched-by <head>` mutates the source lines that
+commit has and `<head>` moves or changes, and runs them against the pins
+and the existing tests; it exits 0 only when every mutant died. The
+implementer runs it before the refactor, and the gate again through
+`refactor-check.mjs`; the results cache in the clone's git directory, so a
+second run on unchanged lines is quick.
+
+`node .agents/scripts/refactor-check.mjs --pr <m>` is the gate's
+refactor check (delivery rule 18): it fetches the PR, prepares detached
+worktrees of the merge base or pin commit and of the head, and compares
+test titles, the module surfaces, the pins and the mutants. `--base <sha>
+--head <sha>` checks two commits of this clone with no PR.
+
+Otherwise not part of delivery. The weekly `harden-tests` routine runs `pnpm mutate
 <base> --max-lines 1500` on `main` for the source lines changed since
 `<base>`, newest files first up to that many lines, kills the survivors that
 change behaviour a caller or user can see, and opens one tests-only PR. The
@@ -74,9 +95,9 @@ mutant those leave alive gets a second run with every related test file.
 
 ## Routines
 
-Claude Code routines run these skills on a schedule, each but one opening
-one PR that goes through the reviews its diff's kind gets and the merge
-gate:
+Claude Code routines run these skills on a schedule. All but the three
+named below the table open one PR that goes through the reviews its diff's
+kind gets and the merge gate:
 
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
@@ -85,9 +106,14 @@ gate:
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
 | Recurring findings | `recurring-findings` | weekly |
+| Refactor           | `refactor`          | weekly |
+| Upstream check     | `check-upstream`    | weekly |
 
 `recurring-findings` opens draft task issues instead of a PR, and skips
-the ending below. Every other routine ends the same way; its skill adds
+the ending below. `check-upstream` only comments on `upstream` issues, and
+skips it too. `refactor` opens one `refactor:new` issue from a
+measured target and, when delivery rule 18's three conditions hold, sets
+it ready and runs `deliver` on it, whose gate ends it instead. Every other routine ends the same way; its skill adds
 only what it changes:
 
 1. `reviewer` with the PR number, round 1, started as the `review` skill
@@ -125,11 +151,14 @@ Swift build is skipped and iOS streams report unavailable. Neither build checks
 a CoreDevice version: the device program is the one place that enforces that
 pin.
 
-The build steps run through Turborepo (`turbo.json`): `pnpm build`,
-`pnpm build:e2e` and the test scripts that build first run the
-`build:*:run` scripts and skip each one whose inputs (listed per step in
-`turbo.json`) did not change, restoring its `dist/` files from `.turbo/cache`
-in this worktree. Any `package.json` change reruns every step. A capture
+The repository is a pnpm workspace (ADR 0077): `simlock` at the root and
+`@simlock/e2e` under `packages/e2e`. The build steps run through Turborepo
+(`turbo.json`): `pnpm build`, `pnpm build:e2e` and the test scripts that build
+first run the root package's `//#build:*:run` tasks (and `pnpm build` also
+`@simlock/e2e#build`, `tsc` to `packages/e2e/dist/`) and skip each one whose
+inputs (listed per step in `turbo.json`) did not change, restoring its
+`dist/` files from `.turbo/cache` in this worktree. A new `turbo run` call
+names the `//#` ids. Any `package.json` change reruns every step. A capture
 build that skipped Swift (no Xcode selected) is cached too: once Xcode is
 selected, run `pnpm build:capture --force`.
 
@@ -138,7 +167,10 @@ screen, which means real devices and the slow lane. The lanes cover what this
 repo writes -- the stream module, the drivers' capture code against fakes, the
 envelope -- and the console lane runs a stand-in program that writes the same
 envelope from stills (`e2e/console/screen-capture.ts`), named by the fake
-driver's `screenCaptureCommand`. A change to the Swift program is checked by
+driver's `screenCaptureCommand`. On a Mac with Xcode, `swift test
+--package-path vendor/screen-capture` runs the Swift tests (the envelope's
+size changes, the log-line parser, the panel follower and its watchdog). A
+change to the Swift program that reads a real screen is checked by
 hand on a machine with a simulator, where
 `node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` turns the
 bytes it wrote into Annex-B and counts each tag, and `ffprobe out.264` says
@@ -153,7 +185,8 @@ Tests that start real simulators or emulators. Run them only through
   and writes `<log>.exit` when the run ends.
 - Each test's `daemon.log*` files are copied, pass or fail, to
   `<log without .log>-daemons/<home name>/` next to the log before its home
-  is deleted (`SIMLOCK_E2E_LOG_DIR`).
+  is deleted (`SIMLOCK_E2E_LOG_DIR`); a flow in the lane's reused home
+  (`keepSeeds`, see `e2e/README.md`) gets `simlock-lane-home-<6 hex digits>/`.
 - Exit 75: another run holds the lock; the script prints the holder.
 - Exit 69: the machine is unfit (low disk, another tool at the
   wrong version or not built); the script prints why.
@@ -175,9 +208,11 @@ The machine can run a line only if:
 | ---------- | ---------------------------------------------------------- |
 | iOS        | `uname -s` is `Darwin`; `xcrun simctl list runtimes` lists one |
 | Android    | `command -v emulator adb` finds both                       |
+| iOS window | the iOS check; `mdfind "kMDItemCFBundleIdentifier == 'com.apple.dt.Devices'"` prints a path; `stat -f %Su /dev/console` is not `root` (someone is logged in); `pgrep -x DeviceHub` finds nothing (the test starts DeviceHub itself with `-shutdownStartedDevicesOnQuit NO` and quits it at the end). Run `scripts/slow-e2e.sh e2e/slow-ios-window.test.ts` |
 | Physical iOS | `uname -s` is `Darwin`; `SIMLOCK_PHYSICAL_IOS` is the UDID of an iPhone on USB (trusted, Developer Mode on, unlocked, Auto-Lock Never); `SIMLOCK_PHYSICAL_IOS_APP` is a `.app` signed for it. `/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /Library/Developer/PrivateFrameworks/CoreDevice.framework/Resources/Info.plist` prints a version whose major is 642 or later (streaming a phone needs the CoreDevice of Xcode 27 or later; the framework is machine-wide and does not follow `xcode-select`). DeviceHub and Xcode are not running during the lane. The stream cases need the iPhone on iOS 27 or later; an older iPhone runs the refusal case instead. Run `scripts/slow-e2e.sh --physical e2e/slow-ios-physical.test.ts` |
+| iOS foldable | the iOS check; `xcrun simctl list runtimes` lists iOS 27.1 or later and `xcrun simctl list devicetypes` lists `iPhone Duo`; `SIMLOCK_E2E_AGENT_DEVICE` names agent-device 0.21.35 or later; `command -v ffmpeg` finds it. Run `scripts/slow-e2e.sh e2e/slow-ios-foldable.test.ts` |
 | agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `SIMLOCK_E2E_AGENT_DEVICE` (in `.slow-lane.env`) is the absolute path of `bin/agent-device.mjs` in an install of the agent-device version `package.json` pins for `@agent-device/proxy` (`npm install -g agent-device@<version>`, or a checkout at tag `v<version>` built with `pnpm install && pnpm build && pnpm build:android`, the last building the Android snapshot helper); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
-| Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
+| Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK; `SIMLOCK_PHYSICAL_ANDROID_NETWORK` beside it names an address `adb devices -l` lists in state `device` with no `usb:` field, for the network case. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
 | agent-device with a physical phone | the agent-device through simlock checks above (the Android or iOS one), and the Physical Android checks with `SIMLOCK_PHYSICAL_ANDROID`, or the Physical iOS checks with `SIMLOCK_PHYSICAL_IOS`; for iOS also `SIMLOCK_E2E_IOS_TEAM_ID` and `SIMLOCK_E2E_IOS_BUNDLE_ID` (in `.slow-lane.env`); set `SIMLOCK_E2E_IOS_PROVISIONING_PROFILE` and `SIMLOCK_E2E_IOS_SIGNING_IDENTITY` only for manual signing, which an Xcode-managed profile fails. Run `scripts/slow-e2e.sh --physical e2e/slow-agent-device-physical.test.ts` |
 | Physical Android, a person at the phone | the Physical Android checks above, and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-android-physical-manual.test.ts` |
 | Physical iOS, a person at the phone | the Physical iOS checks above, a passcode set on the phone (locking it then needs the passcode), and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-ios-physical-manual.test.ts` |

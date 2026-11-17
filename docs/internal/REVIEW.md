@@ -57,6 +57,7 @@ without that assessment leave the finding unresolved, never rejected.
 Select independent lenses by work, not size alone. ADR-only: spec. Docs or
 comments: spec and claims. Tests: spec, code/tests and affected claims.
 Other changes: spec and code/both, plus affected claims. No issue: skip spec.
+Refactor: code/behaviour and claims; no spec (delivery rule 18).
 Add a separate code/tests lens for complex fixtures or high-risk coverage;
 split behavior and tests responsibilities explicitly.
 A large mechanical diff alone does not warrant two code reviewers. Record

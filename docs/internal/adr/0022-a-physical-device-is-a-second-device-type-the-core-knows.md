@@ -1,6 +1,6 @@
 # 0022. A physical device is a second device type the core knows
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-10
 - **Issue:** [#428](https://github.com/callstackincubator/simlock/issues/428)
 - **Supersedes:** nothing. Amends [ADR 0001](0001-simlock-owned-device-roots.md):
@@ -11,6 +11,12 @@
   catalog (§6). Amends [ADR
   0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) §1–2
   for physical devices (§7). Amends the agent rules listed in §12.
+- **Amended:** §2 on 2026-11-07, on the maintainer's decision (#1410): a
+  deleted record stays for `devices.deletedRetentionMs` (default 1 h), not
+  for good.
+- **Narrowed by:** [ADR 0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md)
+  §3, §5 and §6: under `devices.autoEnroll` a worker enrols the phones
+  plugged into it.
 - **Depends on:** ADR 0001, 0003, 0015, 0017, 0018, 0019.
 
 ## Context
@@ -98,7 +104,8 @@ stateDiagram-v2
 
 The virtual machine is unchanged. The physical one has no `provisioning`
 or `shutdown`. `deleted` on a physical record means unenrolled: the record
-stays, like every deleted record, and nothing on the device changed.
+stays for `devices.deletedRetentionMs`, like every deleted record, and
+nothing on the device changed.
 
 `device add` of an enrolled device re-records its apps and is allowed from
 `ready`, `absent` and `quarantined`; it ends in `ready` (from `absent` only

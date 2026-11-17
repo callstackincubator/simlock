@@ -27,8 +27,8 @@
 #   briefs/                every file in .agents/briefs/ as the base has it: each reviewer's
 #                          brief, and calibration.md, the findings reviews raised lately that
 #                          were rejected, which every reviewer reads first
-#   issue.md               the issue the PR closes: the second segment of a <kind>/<n> branch,
-#                          else the first "Closes #n" in the PR body
+#   issue.md               the issue the PR closes: the second segment of a <kind>/<n> branch
+#                          (feature/<n>-adr[-suffix] is the feature <n>), else the first "Closes #n" in the PR body
 #   feature.md             the issue's parent: its GitHub parent, else its "Part of #n" line
 #   triage.md              a bug's triage report: the last comment with a Simplest fix section
 #   spec/                  every ADR that issue.md, feature.md, triage.md or the diff's ADR hunks
@@ -167,8 +167,10 @@ git show "$rules_ref:docs/internal/adr/README.md" >"$out/rules/adr-index.md"
 
 issue=
 case $head_ref in
-  bug/* | feature/* | task/*)
+  bug/* | feature/* | refactor/* | task/*)
     n=${head_ref#*/}
+    # why: a feature's ADR branch is feature/<N>-adr (or -adr-<suffix>); its issue is the feature <N>.
+    case $head_ref in feature/[0-9]*-adr | feature/[0-9]*-adr-*) n=${n%%-adr*} ;; esac
     case $n in '' | *[!0-9]*) ;; *) issue=$n ;; esac
     ;;
 esac

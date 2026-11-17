@@ -5,7 +5,7 @@ description: Make a real iPhone, iPad or Android phone plugged into a worker lea
 
 import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-Enrol a phone or tablet plugged into a worker and agents can lease it with `--physical`, the same way they lease a simulator. Simlock records the apps on the device when you enrol it, and after each lease it uninstalls every app that is not on that list.
+Enrol a phone or tablet plugged into a worker, and agents can lease it with `--physical`, the same way they lease a simulator. When you enrol it, Simlock records which apps are on it. After each lease, it uninstalls every app that is not on that list. It never erases the device.
 
 ## Before you start
 
@@ -25,9 +25,9 @@ Enrol on the machine the device is plugged into, from the user account that runs
 <TabItem label="Android">
 
 - The Android SDK with `platform-tools` (see [Requirements](/simlock/docs/introduction/requirements)).
-- Connected by USB, with USB debugging turned on and authorized for this machine.
-- Reached through the adb server on port 5037, the one plain `adb` and Android Studio use. Simlock starts it if none is running and never stops it. Its version must match the `adb` in the SDK's `platform-tools`; `simlock doctor` reports `adb-protocol-mismatch` when it does not.
-- Simlock cannot see an Android lock screen, so a locked phone is still leased. Keep it unlocked, or turn on **Stay awake** in the developer options.
+- Connected by USB, with USB debugging turned on and authorized for this machine. To enrol a phone that adb reaches over the network instead, see [Phones reached over the network](#android-phones-reached-over-the-network).
+- The adb that is running (the one Android Studio and plain `adb` use) must be the same version as the `adb` in the SDK's `platform-tools`. `simlock doctor` reports `adb-protocol-mismatch` when it is not. See [No Android phone is seen](#no-android-phone-is-seen).
+- Simlock cannot tell when an Android phone is locked, so a locked phone is still leased. Keep it unlocked, or turn on **Stay awake** in the developer options.
 
 </TabItem>
 </Tabs>
@@ -82,7 +82,7 @@ Enrol on the machine the device is plugged into, from the user account that runs
 
 Agents can now lease it. See [Physical devices](/simlock/docs/using-devices/physical-devices).
 
-Simlock keeps the device under one ID whatever you typed: the UDID for an iPhone or iPad, the serial for an Android phone. Use that ID with `device remove`. On Android the OS is shown as the API level. Every Android device is a phone; an iPad is a tablet.
+Simlock knows the device by its UDID (iPhone or iPad) or its serial (Android), whatever you typed. Use that ID with `device remove`. On Android, the OS version shows as the API level. Every Android device is listed as a phone; an iPad is a tablet.
 
 Add `--json` for the full result:
 
@@ -90,16 +90,64 @@ Add `--json` for the full result:
 {"id":"dev_5b0e7c21-9d4a-4f3e-8a16-c2e47f09d3b8","driverDeviceId":"00008110-001A2B3C4D5E","platform":"ios","model":"iPhone 15 Pro","osVersion":"18.4","class":"phone","appCount":12,"reenrolled":false}
 ```
 
-## What enrolment records
+## Android phones reached over the network
 
-Enrolment records the model, the OS version, whether it is a phone or a tablet, and the device's app list:
+A phone with no USB path to the worker (wired by Ethernet, or on Wi-Fi) can be enrolled when the worker's adb server reaches it. Set `android.networkDevices` to `true` in the worker's `config.json` and restart the daemon:
+
+```json
+{ "android": { "networkDevices": true } }
+```
+
+Then connect the phone yourself, once, and enrol it by the name adb lists it under:
+
+```bash
+adb connect 192.168.1.5:5555
+simlock device add --platform android 192.168.1.5:5555
+```
+
+A phone paired with Android 11 wireless debugging is listed under a name like `adb-R58Y61A60HN-r7wg2G._adb-tls-connect._tcp`; enrol it by that name. Simlock never runs `adb pair` and never handles a pairing code.
+
+- **The address is the ID.** The enrolled ID is the name adb lists the phone under. Simlock also keeps the phone's own hardware serial (`getprop ro.serialno`) and reads it before it grants the phone or cleans it up. A different phone answering at the address (DHCP gave it away) reads `absent (not-present)`, is never granted, and loses no app.
+- **One phone, one record.** A phone whose hardware serial is already enrolled, over USB or under another address, is refused `enrolled-under-other-id`, whatever `android.networkDevices` says.
+- **Simlock reconnects it.** Every `health.probeIntervalMs` the worker runs `adb connect` for each enrolled `host:port` phone adb no longer lists, for example after the adb server restarted. A phone listed by an mDNS name is reconnected by adb itself. One that does not answer delays the grants of the worker's other Android phones by up to 10 seconds.
+- **Emulators are never phones.** An emulator is refused `unsupported-kind` whatever it is connected through.
+- **Moving a phone.** A phone that gets a new address reads absent. Remove it with `simlock device remove` and add it at its new address.
+- **Turning the key off** leaves network phones enrolled. They read `absent (not-present)` and are not reconnected.
+
+<Aside type="danger">
+With both `android.networkDevices` and `devices.autoEnroll` on, the worker enrols every network phone that adb lists, including a developer's own Wi-Fi phone connected to that worker, and uninstalls its apps when a lease ends. Turn both on only where every phone adb reaches is a test phone. Anyone who can reach a phone's adb port with an authorized key can drive it outside Simlock; securing that network is yours.
+</Aside>
+
+## Enrol phones automatically
+
+An admin can let the worker enrol the phones plugged into it. Set `devices.autoEnroll` to `true` in the worker's `config.json` and restart the daemon:
+
+```json
+{ "devices": { "autoEnroll": true } }
+```
+
+From then on, every `health.probeIntervalMs` (30 seconds by default) the worker enrols each phone plugged in by USB that `simlock device add` would accept, with no command. With `android.networkDevices` on too, it also enrols the network phones adb lists; run `adb connect` once for each. The `device.enrolled` event of such a phone says `initiator: "auto"`.
+
+<Aside type="danger">
+Turn it on only where every phone plugged into the worker is a test phone. Each enrolled phone has every app that was not on it at enrolment uninstalled when a lease ends, so a personal phone charging on the worker would lose its apps.
+</Aside>
+
+- **A phone that cannot be enrolled yet** (locked, untrusted, Developer Mode off and so on) is tried again at every run. The daemon log gets one line each time the reason changes: `auto-enroll: ios 00008110-001A2B3C4D5E not enrolled: <message>`, with the same message `device add` prints.
+- **A phone you removed stays out.** After `simlock device remove`, or after Simlock unenrols a phone that kept failing its cleanup, the worker does not enrol it again while it stays plugged in. Unplug it for `health.stableObservations` runs in a row (about a minute) and plug it back in, or run `simlock device add` yourself. The worker forgets which phones are held out when it restarts, so a restart enrols a removed phone that is still plugged in.
+- **A phone already enrolled** is left alone, whatever its state.
+- **A platform that cannot be read** is skipped for that run, and the log says `auto-enroll: could not list <platform> phones: <message>` once for each new message. A worker with no driver for a platform lists nothing for it.
+- **The key is read at start.** Change it, then restart the daemon.
+
+## Keep an app on the device between leases
+
+Enrolment records the model, the OS version, whether it is a phone or a tablet, and the list of apps on the device:
 
 - On iOS, the apps `devicectl` lists: the ones installed by Xcode or `devicectl`. App Store and TestFlight apps are not on the list, and Simlock never touches them.
 - On Android, the user-installed apps.
 
-When a lease ends, Simlock uninstalls every app it can see that is not on this list. The device is then ready for the next lease.
+When a lease ends, Simlock uninstalls every app it can see that is not on this list.
 
-To keep an app you installed on purpose, enrol the device again after installing it, so the app joins its list:
+To keep an app you installed on purpose, enrol the device again after you install it, so the app joins the list:
 
 ```sh
 simlock device add --platform ios 00008110-001A2B3C4D5E
@@ -109,7 +157,7 @@ simlock device add --platform ios 00008110-001A2B3C4D5E
 Enrolled iPhone 15 Pro (iOS 18.4) as 00008110-001A2B3C4D5E again, 13 user apps recorded.
 ```
 
-Enrolling again keeps the device's record and reads its model, OS version and app list anew. It also makes a quarantined or absent device that is connected ready again.
+Enrolling again reads the model, OS version and app list again. It also brings back a device that shows as quarantined or absent, once it is connected.
 
 If an app on the list is gone when a lease ends, Simlock reports it in the `device.reclaimed` event and does not reinstall it.
 
@@ -118,7 +166,7 @@ If an app on the list is gone when a lease ends, Simlock reports it in the `devi
 - It never erases or resets the device. It does not reset settings, files, accounts, keychain items or system apps, and it does not clear the data of apps on the list.
 - It never deletes a physical device. Cleanup, `nuke` and `nuke --delete-devices` leave it enrolled.
 - `device remove` sends nothing to the device. It only makes Simlock forget it.
-- It never isolates the device from other tools. Every tool on the machine can see an enrolled device, so an agent can reach a device it did not lease.
+- It does not hide the device from other tools. Anything on the machine can see an enrolled device, so an agent can reach a device it did not lease.
 
 <Aside type="caution">
 Enrol a device in one Simlock installation only. A second installation would uninstall the first one's apps whenever it ends a lease.
@@ -149,7 +197,7 @@ Removed 00008110-001A2B3C4D5E. It is no longer enrolled; nothing on the device c
 | Reason | Fix |
 | --- | --- |
 | `not-connected` | Connect the device by USB. On Android, check that `adb devices` lists it. |
-| `network-only` | The device is reachable only over Wi-Fi. Connect it by USB. |
+| `network-only` | The device is reachable only over Wi-Fi. Connect it by USB, or on Android set `android.networkDevices` to `true`. |
 | `untrusted` | iOS: tap **Trust This Computer**. Android: accept the USB debugging prompt on the phone. |
 | `developer-mode-off` | Turn on Developer Mode and restart the device when asked. |
 | `os-too-old` | Update the device to iOS or iPadOS 17 or later. |
@@ -158,6 +206,7 @@ Removed 00008110-001A2B3C4D5E. It is no longer enrolled; nothing on the device c
 | `unreadable` | Simlock could not read the device. The message names the step that failed. Reconnect it and try again. |
 | `virtual-device` | The ID belongs to a simulator or emulator. Only real devices can be enrolled. |
 | `enrolled-on-other-platform` | The device is already enrolled under the other platform. |
+| `enrolled-under-other-id` | The same phone is already enrolled under another ID. The message names that ID. Run `device remove` on it first, then add the phone again. |
 
 Other errors:
 
@@ -171,7 +220,7 @@ Other errors:
 
 ### An enrolled device shows as absent
 
-Simlock checks which enrolled devices are connected every `health.probeIntervalMs` (30 seconds by default). A device missing for `health.stableObservations` checks in a row (2 by default, so about a minute) becomes `absent`, and `simlock status` says why:
+A device that has been unreachable for about a minute shows as `absent`, and `simlock status` says why. (Simlock checks every `health.probeIntervalMs`, 30 seconds by default, and waits for `health.stableObservations` misses in a row, 2 by default.)
 
 | Status | Meaning | Fix |
 | --- | --- | --- |
@@ -183,11 +232,11 @@ A lease on a device that becomes absent ends, with reason `device-lost`. When th
 
 ### A device is quarantined
 
-If Simlock cannot uninstall the leftover apps while the device is connected, the device becomes `quarantined` and Simlock retries in the background. When the retries run out, Simlock unenrols the device; it never deletes anything else on it. Fix the cause shown in `simlock status`, then enrol the device again.
+If Simlock cannot uninstall the leftover apps after a lease, the device shows as `quarantined`, nobody can lease it, and Simlock tries again in the background. If it keeps failing, Simlock unenrols the device; it deletes nothing else on it. Fix the cause shown in `simlock status`, then enrol the device again.
 
 ### No Android phone is seen
 
-If `simlock doctor` reports `adb-protocol-mismatch`, the adb server on port 5037 and the SDK's `adb` disagree. Until they match, Simlock reads every physical Android phone as not present and refuses `device add`. Stop the running server and start it with the SDK's `adb`:
+If `simlock doctor` reports `adb-protocol-mismatch`, the adb that is running is a different version from the SDK's `adb`. Until they match, every physical Android phone shows as not present and `device add` fails. Restart adb with the SDK's copy:
 
 ```sh
 adb kill-server

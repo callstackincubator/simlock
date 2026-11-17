@@ -18,6 +18,7 @@
   width: min(28rem, calc(100% - var(--space-8)));
   padding: var(--space-6);
   border: 1px solid var(--border-strong);
+  border-radius: 10px;
   background: var(--bg);
   transform: translate(-50%, -50%);
 }
@@ -61,7 +62,7 @@
   min-height: 40px;
   padding: 0 var(--space-3);
   border: 1px solid var(--border-strong);
-  background: var(--field);
+  background: var(--surface-2);
   color: var(--text);
   font-family: var(--font-mono);
 }

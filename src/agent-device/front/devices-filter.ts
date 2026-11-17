@@ -33,7 +33,7 @@ export async function filterDevices(
     held = new Set((await tokenDevices(context, identity)).map((device) => device.address));
   } catch (error) {
     if (!(error instanceof LeaseCheckFailed)) throw error;
-    return frontReply(failure(error.message), rpc);
+    return frontReply(failure(error.message, 502, true), rpc);
   }
   const kept = devices.filter((device) => held.has(String(asRecord(device)?.["id"])));
   const body = JSON.parse(text) as { result: { data: Record<string, unknown> } };
@@ -110,7 +110,7 @@ export async function devicesThroughGateway(
     held = await tokenDevices(context, identity);
   } catch (error) {
     if (!(error instanceof LeaseCheckFailed)) throw error;
-    return frontReply(failure(error.message), read);
+    return frontReply(failure(error.message, 502, true), read);
   }
   if (held.length === 0) return emptyList(read);
   if (await anyUnreachable(context, identity, held)) return frontReply(workerUnreachable(), read);
@@ -119,7 +119,7 @@ export async function devicesThroughGateway(
   const pieces = await Promise.all(
     held.map(async (lease) => {
       const forwarded = new Request(request.url, {
-        body: read.text,
+        body: withLeaseRequestId(read.text, lease.leaseId),
         headers: withoutLength(request.headers),
         method: request.method,
         signal,
@@ -148,6 +148,21 @@ export async function devicesThroughGateway(
   const body = JSON.parse(firstList.text) as { result: { data: Record<string, unknown> } };
   body.result.data["devices"] = lists.flatMap((entry) => entry.devices);
   return relay({ response: firstList.response, text: JSON.stringify(body) });
+}
+
+// why: agent-device refuses a request id already in flight, and two leases on one worker share one daemon, so each forward carries its own id.
+function withLeaseRequestId(text: string, leaseId: string): string {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const meta = asRecord(asRecord(asRecord(body)?.["params"])?.["meta"]);
+  const requestId = meta?.["requestId"];
+  if (meta === undefined || typeof requestId !== "string") return text;
+  meta["requestId"] = `${requestId}:${leaseId}`;
+  return JSON.stringify(body);
 }
 
 function withoutLength(source: Headers): Headers {

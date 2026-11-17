@@ -126,13 +126,17 @@ describe("the agent-device upstream adapter over the supervisor", () => {
     const starting = harness.supervisor.start();
     starting.catch(() => undefined);
 
-    expect(harness.upstream.current()).toEqual({ reason: "starting", state: "unavailable" });
+    expect(harness.upstream.current()).toEqual({
+      reason: "starting",
+      retriable: true,
+      state: "unavailable",
+    });
   });
 });
 
 describe("the agent-device host's authenticate", () => {
   const upstream: AgentDeviceUpstream = {
-    current: () => ({ reason: "starting", state: "unavailable" }),
+    current: () => ({ reason: "starting", retriable: true, state: "unavailable" }),
     fetch: async () => new Response(null),
   };
 

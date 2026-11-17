@@ -17,6 +17,7 @@ const STRING_FIELDS = [
   "deviceKey",
   "osVersion",
   "imageTag",
+  "deviceBaseline",
 ] as const;
 const BOOLEAN_FIELDS = ["physical"] as const;
 const INTEGER_FIELDS = ["shardAll", "shardSplit"] as const;

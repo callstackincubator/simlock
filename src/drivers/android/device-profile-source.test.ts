@@ -143,9 +143,9 @@ describe("UserDeviceProfileSource", () => {
   });
 
   it("reports a devices.xml with a newline embedded in a device name as a diagnostic and produces no profile", async () => {
-    // Stands in for `<d:manufacturer>Google\ndisk.dataPartition.path=/evil</d:manufacturer>`:
+    // why: Stands in for `<d:manufacturer>Google\ndisk.dataPartition.path=/evil</d:manufacturer>`:
     // a value that would inject an arbitrary extra config.ini line once
-    // `AndroidDriver#applyHardwareProperties` merges it in. Embedded directly (not via an XML
+    // `AvdConfig#applyHardwareProperties` merges it in. Embedded directly (not via an XML
     // entity) since `extractText` only trims leading/trailing whitespace, not internal
     // characters.
     const filesystem = await filesystemWithDevicesXml(

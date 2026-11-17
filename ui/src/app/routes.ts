@@ -9,8 +9,9 @@ import { UsageScreen } from "../screens/usage";
 import { BaselinesScreen } from "../screens/baselines";
 import { QueueScreen } from "../screens/queue";
 import { FleetScreen } from "../screens/fleet";
+import { SettingsScreen } from "../screens/settings";
 
-export type NavGroup = "Operate" | "Observe";
+export type NavGroup = "Operate" | "Observe" | "Settings";
 
 export interface Route {
   readonly path: `/${string}`;
@@ -41,6 +42,13 @@ export const ROUTES: readonly Route[] = [
     path: "/activity",
   },
   { Screen: UsageScreen, group: "Observe", icon: "usage", label: "Usage", path: "/usage" },
+  {
+    Screen: SettingsScreen,
+    group: "Settings",
+    icon: "settings",
+    label: "Settings",
+    path: "/settings",
+  },
 ];
 
 // why: a section's own pages live under its path (`/fleet/<id>`), so a path belongs to the route

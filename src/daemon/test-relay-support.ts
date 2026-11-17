@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, type Hash } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { connect, createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,33 +8,31 @@ import { expect, vi } from "vitest";
 
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayRelay } from "../gateway/index.js";
-import { MemoryFilesystem, NoopLogger, SystemClock, type Logger } from "../ports/index.js";
+import {
+  MemoryFilesystem,
+  NodeFilesystem,
+  NoopLogger,
+  SystemClock,
+  type Logger,
+} from "../ports/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { linkPair, TappedTransport, type LinkPair } from "../link/testing.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { RelayTarget, RelayTargets, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
 
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
 
-export const adminSession: DispatchSession = {
+export const relayAdminSession: DispatchSession = {
   manageEventSubscription: () => undefined,
   principal: "test-operator",
   role: "admin",
   via: "socket",
 };
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -181,7 +179,8 @@ export async function startWorker(
         platform: "android",
       }),
     ],
-    filesystem: new MemoryFilesystem(),
+    // why: some tests run a real command on this worker, in a lease folder that has to exist on disk.
+    filesystem: new NodeFilesystem(),
     logger,
     relayTargets,
     version: "1.0.0-e2e",
@@ -327,6 +326,10 @@ export interface FleetOptions {
   readonly gatewayUrl?: (gatewayPort: number) => string | Promise<string>;
   // why: a test starts the gateway behind an identity-aware proxy, so http.proxyAuth is set.
   readonly proxyAuth?: Record<string, unknown>;
+  // why: a test gives the worker options of its own, such as lower lease file limits.
+  readonly worker?: Partial<StartDaemonOptions>;
+  // why: a test gives the gateway options of its own, such as a lower file silence bound.
+  readonly gateway?: Partial<StartDaemonOptions>;
 }
 
 export async function startFleet(context: FleetContext, options: FleetOptions = {}) {
@@ -334,45 +337,48 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const execCommand = options.execCommand;
   const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
   directories.push(gatewayDirectory);
-  const port = await freeLoopbackPort();
-  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
-  const gateway = await startDaemon({
-    configOverrides: {
-      http: {
-        enabled: true,
-        host: "127.0.0.1",
-        port,
-        ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+  const { port, started: gateway } = await startOnFreePort((candidate) =>
+    startDaemon({
+      configOverrides: {
+        http: {
+          enabled: true,
+          host: "127.0.0.1",
+          port: candidate,
+          ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+        },
       },
-    },
-    role: "gateway",
-    dataDirectory: gatewayDirectory,
-    filesystem: new MemoryFilesystem(),
-    gatewayRelay: (given) => {
-      relay = given;
-    },
-    gatewayUplinks: (uplinks) => {
-      const listen = uplinks.listen.bind(uplinks);
-      uplinks.listen = (handlers) =>
-        listen({
-          ...handlers,
-          accept: (uplink) => {
-            const tap = new TappedTransport(uplink.connection);
-            taps.push(tap);
-            handlers.accept({ ...uplink, connection: tap });
-          },
-        });
-    },
-    logger: new NoopLogger(),
-    version: "1.0.0-e2e",
-  });
+      role: "gateway",
+      dataDirectory: gatewayDirectory,
+      filesystem: new MemoryFilesystem(),
+      gatewayRelay: (given) => {
+        relay = given;
+      },
+      gatewayUplinks: (uplinks) => {
+        const listen = uplinks.listen.bind(uplinks);
+        uplinks.listen = (handlers) =>
+          listen({
+            ...handlers,
+            accept: (uplink) => {
+              const tap = new TappedTransport(uplink.connection);
+              taps.push(tap);
+              handlers.accept({ ...uplink, connection: tap });
+            },
+          });
+      },
+      logger: new NoopLogger(),
+      version: "1.0.0-e2e",
+      ...options.gateway,
+    }),
+  );
   daemons.push(gateway);
+  // why: the hook may open its own listener, and listen(0) can draw the port freeLoopbackPort freed; the gateway holds it first.
+  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   const { secret } = await gateway.dispatch(
     "token.create",
     { label: "worker-a", role: "worker" },
-    adminSession,
+    relayAdminSession,
   );
   const driverOptions =
     execCommand === undefined ? {} : { passthrough: () => execCommand, passthroughTools: ["adb"] };
@@ -382,6 +388,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     { "agent-device": target, echo: target },
     {
       ...(twoWayTarget === undefined ? {} : { relayTwoWayTargets: { echo: twoWayTarget } }),
+      ...options.worker,
       configOverrides: {
         gateway: { label: "worker-a", token: secret, url: workerDials },
       },
@@ -399,7 +406,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   let workerId = "";
   await vi.waitFor(
     async () => {
-      const { workers } = await gateway.dispatch("worker.list", {}, adminSession);
+      const { workers } = await gateway.dispatch("worker.list", {}, relayAdminSession);
       const ready = workers.find(
         (view) => view.connection === "connected" && view.capacity && view.catalog?.length,
       );
@@ -463,48 +470,4 @@ export function startCountingProxy(targetPort: number): Promise<CountingProxy> {
       });
     });
   });
-}
-
-const CHECKPOINT = 64 * MIB;
-const checkpoints = new Map<string, Hash[]>();
-
-function checkpointsFor(total: number, seed: number): Hash[] {
-  const key = `${String(total)}:${String(seed)}`;
-  const known = checkpoints.get(key);
-  if (known !== undefined) return known;
-  const states: Hash[] = [];
-  const hash = createHash("sha256");
-  for (let offset = 0; offset < total; offset += CHECKPOINT) {
-    states.push(hash.copy());
-    hash.update(patternBytes(Math.min(CHECKPOINT, total - offset), seed, offset));
-  }
-  checkpoints.set(key, states);
-  return states;
-}
-
-/** why: the digest of the pattern with the chunk `[first, first + firstSize)` and the chunk `[second, second + secondSize)` exchanged, where `first + firstSize <= second`. */
-export function patternDigestSwapped(
-  total: number,
-  seed: number,
-  swap: {
-    readonly first: number;
-    readonly second: number;
-    readonly firstSize: number;
-    readonly secondSize: number;
-  },
-): string {
-  const states = checkpointsFor(total, seed);
-  const start = Math.floor(swap.first / CHECKPOINT) * CHECKPOINT;
-  const hash = (states[start / CHECKPOINT] as Hash).copy();
-  const feed = (from: number, to: number) => {
-    for (let offset = from; offset < to; offset += MIB) {
-      hash.update(patternBytes(Math.min(MIB, to - offset), seed, offset));
-    }
-  };
-  feed(start, swap.first);
-  hash.update(patternBytes(swap.secondSize, seed, swap.second));
-  feed(swap.first + swap.firstSize, swap.second);
-  hash.update(patternBytes(swap.firstSize, seed, swap.first));
-  feed(swap.second + swap.secondSize, total);
-  return hash.digest("hex");
 }

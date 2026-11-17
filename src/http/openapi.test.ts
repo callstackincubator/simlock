@@ -104,13 +104,14 @@ describe("buildOpenApiDocument", () => {
     expect(Object.keys(responseOf(post, "201").headers ?? {})).toEqual(["Location"]);
     expect(
       Object.fromEntries(
-        ["404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
+        ["403", "404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
       ),
     ).toEqual({
+      "403": ["ADMISSION_DENIED", "FORBIDDEN"],
       "404": ["UNKNOWN_BASELINE"],
-      "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+      "409": ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
       "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
-      "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
+      "503": ["NO_CAPACITY", "ADMISSION_FAILED", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
     const leaseShape = replySchema(operation("/v1/leases/{id}", "get"), "200").properties
       ?.lease as {
@@ -152,7 +153,7 @@ describe("buildOpenApiDocument", () => {
       "get /v1/lease-requests/{id}/events 404": ["UNKNOWN_LEASE_REQUEST"],
       "get /v1/leases/{id} 404": ["UNKNOWN_LEASE"],
       "get /v1/leases/{id}/events 404": ["UNKNOWN_LEASE"],
-      "post /v1/leases/{id}/exec 404": ["UNKNOWN_LEASE"],
+      "post /v1/leases/{id}/exec 404": ["UNKNOWN_LEASE", "UNKNOWN_FILE"],
       "post /v1/leases/{id}/exec 501": ["UNSUPPORTED_IN_GATEWAY_MODE"],
       "post /v1/leases/{id}/exec 504": ["EXEC_TIMEOUT"],
       "post /v1/leases/{id}/renew 404": ["UNKNOWN_LEASE"],
@@ -405,8 +406,19 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "simlock-stream-codec",
       "simlock-stream-fps",
       "simlock-stream-height",
+      "simlock-stream-keyframe-ms",
       "simlock-stream-width",
     ]);
+    expect(
+      Object.entries(okHeaders(device))
+        .filter(([, header]) => (header as { required?: boolean }).required === false)
+        .map(([name]) => name),
+    ).toEqual(["simlock-stream-keyframe-ms"]);
+    expect(
+      Object.entries(okHeaders(device)).filter(
+        ([, header]) => (header as { required?: boolean }).required !== false,
+      ).length,
+    ).toBe(4);
     expect(
       sortedKeys(document.paths).filter(
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",

@@ -1,6 +1,6 @@
 # 0054. A lease holder tunnels device ports to its own machine
 
-- **Status:** Accepted
+- **Status:** Accepted; §2, §5 and §6 and the iOS Consequence narrowed by [ADR 0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md)
 - **Date:** 2026-10-30
 - **Issue:** [#1110](https://github.com/callstackincubator/simlock/issues/1110)
 - **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) Non-goals ("A
@@ -175,7 +175,7 @@ sequenceDiagram
 - The first daemon-contract helper for a module's own socket protocol.
 - A third file loads `ws`, and only when `simlock tunnel` runs.
 - Each worker reserves loopback ports 47000 to 47999 for tunnels.
-- iOS simulators are not covered: their `reverse` would be a port on the
+- iOS simulators are not covered (ADR 0064 covers them): their `reverse` would be a port on the
   worker shared by every lease, the host-port problem #162 owns.
 
 ## Alternatives considered

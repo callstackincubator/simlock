@@ -42,7 +42,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 15. `onSocketClaimed`, nothing awaited: the event history starts (opens `history.db`, sets a damaged one aside, migrates the projections, writes the ring, prunes, rebuilds a projection whose check failed; a newer stored version or a failed migration stops the daemon, exit 1); agent-device starts; the uplink dials once
     the first host load reading is in; HTTP starts when `http.enabled`.
 
-Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop
+Converge (`src/daemon/worker-composition.ts` `convergeStartup`), one step after another. Once a stop
 reaches its settle step, the steps after the read are skipped. Before step 16 it
 removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside each device root and in
 the data directory (`sweepWriteLeftovers`).
@@ -68,7 +68,10 @@ Before step 16, a driver with `deviceTcp` sweeps the reverse rules into 47000-47
        `device.shutdown` (initiator `startup-interrupted-reclaim`).
     3. Spent deletes: `shutdown` devices that may not be granted again are deleted
        inline. A failed delete is logged; the device stays `shutdown`.
-    4. Warm pool and capacity observer start. The pool closes the lease rows of its learned-kind
+    4. Idle devices of a `virtualDevices: false` platform: a `ready` one is shut down, then each
+       is deleted (initiator `virtual-devices-off`). Claimed and leased ones are skipped.
+    5. Baselines `checkStale` (a failure is logged), so a baseline the driver calls stale is known before the first lease.
+    6. Warm pool and capacity observer start. The pool closes the lease rows of its learned-kind
        record whose lease the registry no longer holds, and its first pass boots the recorded kinds.
 22. `queue.changed` with the first depth. Converge done → health `running`.
 
@@ -131,8 +134,10 @@ platform runs the deferred reclaim (step 21.2).
    watcher and background reclaims; core drains the warm pool.
    Then core shuts down every ready device with no lease (`core.shutdownIdle`, initiator
    `daemon-stop`; leased devices keep running), before any driver is disposed.
-6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
-   stop, every driver's `dispose` (all tried; failures logged), then the worker lock is
+6. Dispose — core and leasing timers, `ComponentInstaller.close`, then leasing stops planning
+   and waits for every lease request already provisioning or booting (a failed boot destroys its
+   device; a queued request starts nothing and ends with the daemon), then the modules' stop
+   (`beforeDriversDispose`: agent-device stop), then every driver's `dispose` (all tried; failures logged), then the worker lock is
    released (after the drivers, so no other worker sweeps while this one still acts on devices),
    then the event history stops (cancels its prune timer, closes `history.db`), so the stop's own
    events are written. A start that fails in the build releases the lock in `startDaemon`.

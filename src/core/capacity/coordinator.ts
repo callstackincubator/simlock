@@ -10,6 +10,13 @@ import type {
   RunningCapacity,
 } from "./strategy.js";
 
+/** why: the one thing capacity reads of a worker's memory pressure, so it never names host-load. */
+export interface MemoryPressureStepReader {
+  current(): { readonly step: "none" | "warming-paused" | "new-devices-paused" } | undefined;
+}
+
+const NEW_DEVICES_PAUSED: CapacityRefusal = { ok: false, reason: "memory-pressure" };
+
 /** A releasable capacity reservation. Releasing it more than once is safe. */
 export interface CapacityReservation {
   release(): void;
@@ -51,7 +58,13 @@ export class CapacityCoordinator {
   constructor(
     private readonly strategy: CapacityStrategy,
     private readonly onReservationsChanged: () => void = () => undefined,
+    private readonly memoryPressure?: MemoryPressureStepReader,
   ) {}
+
+  /** why: checked before the strategy is asked, under every strategy (ADR 0068 §4). */
+  newDevicesPaused(): boolean {
+    return this.memoryPressure?.current()?.step === "new-devices-paused";
+  }
 
   /**
    * Reserves both a future device slot and its future running slot.
@@ -62,6 +75,7 @@ export class CapacityCoordinator {
     device: PlannedCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
+    if (this.newDevicesPaused()) return NEW_DEVICES_PAUSED;
     const provision = this.canProvision(device, devices);
     if (!provision.ok) return provision;
 
@@ -85,6 +99,7 @@ export class CapacityCoordinator {
     device: RegisteredCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
+    if (this.newDevicesPaused()) return NEW_DEVICES_PAUSED;
     const boot = this.canBoot(device, devices);
     if (!boot.ok) return boot;
     const running = this.canReserveRunning(device.platform, devices);
@@ -115,6 +130,7 @@ export class CapacityCoordinator {
     device: RegisteredCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
+    if (this.newDevicesPaused()) return NEW_DEVICES_PAUSED;
     const boot = this.canBoot(device, devices);
     if (!boot.ok) return boot;
 

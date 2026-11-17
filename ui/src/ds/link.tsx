@@ -37,8 +37,13 @@ export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>,
   readonly to: string;
 }
 
+// why: an address outside the console is a plain link the browser follows, in a tab of its own.
+const EXTERNAL = /^https?:\/\//;
+
 export function Link({ onClick, to, ...rest }: LinkProps) {
   const navigate = useContext(NavigateContext);
+  if (EXTERNAL.test(to))
+    return <a rel="noreferrer" target="_blank" {...rest} href={to} onClick={onClick} />;
   const follow = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event);
     if (navigate === undefined || !opensInThisTab(event)) return;

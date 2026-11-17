@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { FakeDriverPlatformScript, ScriptedPhysicalDevice } from "./fake-driver/types.js";
 import {
-  freeLoopbackPort,
   waitFor,
   waitForDeviceState,
   withDaemon,
+  withHttpDaemon,
   type TestEnv,
 } from "./helpers/index.js";
 import { observeFor } from "./helpers/physical-state.js";
@@ -85,30 +85,29 @@ interface Status {
   readonly waiting: readonly Waiting[];
 }
 
-async function startWith(
-  devices: {
-    readonly ios?: readonly ScriptedPhysicalDevice[];
-    readonly android?: readonly ScriptedPhysicalDevice[];
-  },
-  options: {
-    readonly config?: Record<string, unknown>;
-    readonly ios?: FakeDriverPlatformScript;
-    readonly http?: number;
-  } = {},
-): Promise<TestEnv> {
-  const config = {
-    ...options.config,
-    ...(options.http === undefined
-      ? {}
-      : { http: { enabled: true, host: "127.0.0.1", port: options.http } }),
-  };
-  const env = await withDaemon({
-    configOverrides: config,
+interface PhysicalDevices {
+  readonly ios?: readonly ScriptedPhysicalDevice[];
+  readonly android?: readonly ScriptedPhysicalDevice[];
+}
+
+function daemonOptions(
+  devices: PhysicalDevices,
+  options: { readonly config?: Record<string, unknown>; readonly ios?: FakeDriverPlatformScript },
+  http?: number,
+) {
+  return {
+    configOverrides: {
+      ...options.config,
+      ...(http === undefined ? {} : { http: { enabled: true, host: "127.0.0.1", port: http } }),
+    },
     driverScript: {
       android: { ...ANDROID_BASE, physicalDevices: devices.android ?? [] },
       ios: { ...IOS_BASE, ...options.ios, physicalDevices: devices.ios ?? [] },
     },
-  });
+  };
+}
+
+async function enrollDevices(env: TestEnv, devices: PhysicalDevices): Promise<void> {
   for (const [platform, list] of [
     ["ios", devices.ios ?? []],
     ["android", devices.android ?? []],
@@ -118,7 +117,24 @@ async function startWith(
       expect(added.code, added.stderr).toBe(0);
     }
   }
+}
+
+async function startWith(
+  devices: PhysicalDevices,
+  options: {
+    readonly config?: Record<string, unknown>;
+    readonly ios?: FakeDriverPlatformScript;
+  } = {},
+): Promise<TestEnv> {
+  const env = await withDaemon(daemonOptions(devices, options));
+  await enrollDevices(env, devices);
   return env;
+}
+
+async function startWithHttp(devices: PhysicalDevices) {
+  const started = await withHttpDaemon((port) => daemonOptions(devices, {}, port));
+  await enrollDevices(started.env, devices);
+  return started;
 }
 
 function physical(agent: string, ...extra: readonly string[]): string[] {
@@ -674,11 +690,8 @@ describe("a waiting physical request in the queue views", () => {
 });
 
 describe("a waiting physical request ends", () => {
-  async function waitingBehindHolder(config: Record<string, unknown> = {}, http?: number) {
-    const env = await startWith(
-      { ios: [IPHONE_A] },
-      { config, ...(http === undefined ? {} : { http }) },
-    );
+  async function waitingBehindHolder(config: Record<string, unknown> = {}) {
+    const env = await startWith({ ios: [IPHONE_A] }, { config });
     await granted(env, physical("agent-holder"));
     return env;
   }
@@ -696,8 +709,8 @@ describe("a waiting physical request ends", () => {
   });
 
   it("cancelled when its requester cancels", async () => {
-    const port = await freeLoopbackPort();
-    const env = await waitingBehindHolder({}, port);
+    const { env, port } = await startWithHttp({ ios: [IPHONE_A] });
+    await granted(env, physical("agent-holder"));
     const base = `http://127.0.0.1:${String(port)}`;
     await waitFor(
       async () => {

@@ -8,7 +8,13 @@ describe("the fleet types a module sees, declared by shape", () => {
     expectTypeOf<FleetLease>().toEqualTypeOf<
       Pick<
         FleetLeaseEntry,
-        "gatewayLeaseId" | "workerId" | "workerLeaseId" | "requesterId" | "ownerId" | "grantedAt"
+        | "gatewayLeaseId"
+        | "workerId"
+        | "workerLeaseId"
+        | "requesterId"
+        | "ownerId"
+        | "grantedAt"
+        | "idChosenByRequester"
       >
     >();
   });

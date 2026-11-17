@@ -3,43 +3,23 @@ import { describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION_RANGE } from "../src/contract/index.js";
 import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
-import type { FakeDriverRefusalReason, ScriptedPhysicalDevice } from "./fake-driver/types.js";
-import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
-import { readEnrolledApps } from "./helpers/state-db.js";
-
-const UDID = "00008110-001A2B3C4D5E";
-const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
-const APPS = Array.from({ length: 12 }, (_, index) => `com.example.app${String(index)}`);
-
-const IPHONE: ScriptedPhysicalDevice = {
-  apps: APPS,
-  class: "phone",
-  ids: [UDID, ALIAS],
-  model: "iPhone 15 Pro",
-  osVersion: "18.4",
-};
-
-const PIXEL: ScriptedPhysicalDevice = {
-  apps: ["com.example.mail"],
-  class: "phone",
-  ids: ["R58M123ABC"],
-  model: "Pixel 9",
-  osVersion: "15",
-};
-
-const IOS_BASE = {
-  availableOsVersions: ["18.4"],
-  defaultModels: { phone: ["iPhone 16"] },
-  knownModels: ["iPhone 16", "iPhone 15 Pro"],
-  modelClasses: { "iPhone 15 Pro": "phone", "iPhone 16": "phone" },
-} as const;
-
-const ANDROID_BASE = {
-  availableOsVersions: ["35"],
-  defaultModels: { phone: ["Pixel 9"] },
-  knownModels: ["Pixel 9"],
-  modelClasses: { "Pixel 9": "phone" },
-} as const;
+import type { FakeDriverRefusalReason } from "./fake-driver/types.js";
+import {
+  ALIAS,
+  HttpDaemon,
+  IPHONE,
+  PIXEL,
+  Row,
+  UDID,
+  add,
+  bearer,
+  httpDaemon,
+  inspectCalls,
+  leaseGrant,
+  named,
+  rows,
+  startDaemon,
+} from "./test-physical-enrollment.js";
 
 const REFUSALS: readonly FakeDriverRefusalReason[] = [
   "not-connected",
@@ -52,114 +32,6 @@ const REFUSALS: readonly FakeDriverRefusalReason[] = [
   "unreadable",
   "virtual-device",
 ];
-
-interface Row {
-  readonly id: string;
-  readonly driverDeviceId?: string;
-  readonly state: string;
-  readonly physical: boolean;
-  readonly class?: string;
-  readonly workerId?: string;
-  readonly spec: { readonly model: string; readonly platform: string; readonly osVersion: string };
-}
-
-interface Added {
-  readonly id: string;
-  readonly driverDeviceId: string;
-  readonly platform: string;
-  readonly model: string;
-  readonly osVersion: string;
-  readonly class: string;
-  readonly appCount: number;
-  readonly reenrolled: boolean;
-}
-
-async function startDaemon(
-  options: {
-    readonly ios?: Record<string, unknown>;
-    readonly android?: Record<string, unknown>;
-    readonly platforms?: readonly ("ios" | "android")[];
-    readonly http?: number;
-  } = {},
-): Promise<TestEnv> {
-  return withDaemon(daemonOptions(options));
-}
-
-function daemonOptions(options: Parameters<typeof startDaemon>[0] = {}) {
-  return {
-    ...(options.platforms === undefined ? {} : { fakeDriverPlatforms: options.platforms }),
-    ...(options.http === undefined
-      ? {}
-      : { configOverrides: { http: { enabled: true, host: "127.0.0.1", port: options.http } } }),
-    driverScript: {
-      android: { ...ANDROID_BASE, ...options.android },
-      ios: { ...IOS_BASE, ...options.ios },
-    },
-  };
-}
-
-async function rows(env: TestEnv): Promise<Row[]> {
-  const result = await env.cli(["list", "--devices"]);
-  expect(result.code, result.stderr).toBe(0);
-  return result.json as Row[];
-}
-
-async function inspectCalls(env: TestEnv): Promise<readonly unknown[]> {
-  return (await env.driverLog.calls()).filter((call) => call.operation === "inspectPhysical");
-}
-
-async function named(env: TestEnv, ...names: string[]) {
-  return (await env.events()).filter((entry) => names.includes(entry.event));
-}
-
-async function add(env: TestEnv, platform: string, id: string): Promise<Added> {
-  const result = await env.cli(["device", "add", "--platform", platform, id, "--json"]);
-  expect(result.code, result.stderr).toBe(0);
-  return result.json as Added;
-}
-
-async function leaseGrant(
-  env: TestEnv,
-  platform: string,
-  agent: string,
-): Promise<{ device: { driverDeviceId: string; address: string } }> {
-  const result = await env.cli(["lease", "--platform", platform, "--agent-id", agent, "--detach"]);
-  expect(result.code, result.stderr).toBe(0);
-  return result.json as { device: { driverDeviceId: string; address: string } };
-}
-
-interface HttpDaemon {
-  readonly env: TestEnv;
-  readonly base: string;
-}
-
-async function httpDaemon(options: {
-  readonly ios?: Record<string, unknown>;
-  readonly android?: Record<string, unknown>;
-}): Promise<HttpDaemon> {
-  const { env, port } = await withHttpDaemon((port) => daemonOptions({ ...options, http: port }));
-  const base = `http://127.0.0.1:${String(port)}`;
-  await waitFor(
-    async () => {
-      try {
-        return (await fetch(`${base}/v1/healthz`)).ok;
-      } catch {
-        return false;
-      }
-    },
-    { label: "HTTP API accepting connections" },
-  );
-  return { base, env };
-}
-
-async function bearer(env: TestEnv, role: "agent" | "operator"): Promise<Record<string, string>> {
-  const created = await env.cli(["token", "create", "--role", role]);
-  expect(created.code, created.stderr).toBe(0);
-  return {
-    authorization: `Bearer ${(created.json as { secret: string }).secret}`,
-    "content-type": "application/json",
-  };
-}
 
 interface ErrorBody {
   readonly error: {
@@ -214,6 +86,7 @@ describe("simlock device add", () => {
       driverDeviceId: UDID,
       model: "iPhone 15 Pro",
       osVersion: "18.4",
+      initiator: "operator",
       platform: "ios",
       reenrolled: false,
     });
@@ -295,7 +168,7 @@ describe("simlock device add", () => {
 
   it("by a client whose hello range ends at the previous protocol version is refused with PROTOCOL_VERSION_UNSUPPORTED, so it never sends device.add to a daemon that would answer UNKNOWN_REQUEST", async () => {
     const daemon = await httpDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const previous = PROTOCOL_VERSION_RANGE.max - 1;
+    const previous = PROTOCOL_VERSION_RANGE.min - 1;
     const wire = new SimlockWire(await new NodeIpcTransport().connect(daemon.env.socketPath));
 
     try {
@@ -396,6 +269,33 @@ describe("simlock device add", () => {
     });
   });
 
+  it("of a phone whose hardware serial another record holds answers enrolled-under-other-id with the message and the canonicalId that record holds, over the CLI and HTTP, and writes no second record", async () => {
+    const network = "192.168.1.5:5555";
+    const daemon = await httpDaemon({
+      android: {
+        physicalDevices: [PIXEL, { ...PIXEL, hardwareSerial: PIXEL.ids[0], ids: [network] }],
+      },
+    });
+    const enrolled = await add(daemon.env, "android", PIXEL.ids[0] as string);
+    const message = `this phone (hardware serial ${PIXEL.ids[0]}) is enrolled as ${PIXEL.ids[0]}; remove that record first`;
+
+    const result = await daemon.env.cli(["device", "add", "--platform", "android", network]);
+    const http = await postDevice(daemon, { id: network, platform: "android" });
+
+    expect(result.code, result.stderr).toBe(12);
+    expect(result.error).toEqual({ code: "DEVICE_NOT_ENROLLABLE", message });
+    expect(http.status).toBe(422);
+    expect(http.body.error).toEqual({
+      canonicalId: PIXEL.ids[0],
+      code: "DEVICE_NOT_ENROLLABLE",
+      id: network,
+      message,
+      platform: "android",
+      reason: "enrolled-under-other-id",
+    });
+    expect((await rows(daemon.env)).map((row) => row.id)).toEqual([enrolled.id]);
+  });
+
   it("without --platform exits 2 with USAGE and the driver log has no inspectPhysical call", async () => {
     const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
     await env.driverLog.clear();
@@ -494,166 +394,5 @@ describe("simlock device remove", () => {
     const byId = new Map((await rows(env)).map((row) => [row.id, row.state]));
     expect(byId.get(first.id)).toBe("deleted");
     expect(byId.get(second.id)).toBe("ready");
-  });
-});
-
-describe("an enrolled physical device", () => {
-  it("is not granted to a lease --platform ios: the lease gets a simulator", async () => {
-    const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const enrolled = await add(env, "ios", UDID);
-
-    const grant = await env.cli(["lease", "--platform", "ios", "--agent-id", "sim", "--detach"]);
-
-    expect(grant.code, grant.stderr).toBe(0);
-    const device = (grant.json as { device: { id: string; physical: boolean } }).device;
-    expect(device.physical).toBe(false);
-    expect(device.id).not.toBe(enrolled.id);
-  });
-
-  it("shows its canonical ID as driverDeviceId in status --json from an operator and from an agent session and in list --devices, and a simulator's status entry has none", async () => {
-    const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
-    await add(env, "ios", UDID);
-    const simulator = await leaseGrant(env, "ios", "sim-agent");
-
-    const operator = await env.cli(["status", "--json"]);
-    const agent = await env.cli(["--token", "not-an-admin-credential", "status", "--json"]);
-
-    for (const status of [operator, agent]) {
-      expect(status.code, status.stderr).toBe(0);
-      const devices = (status.json as { devices: Row[] }).devices;
-      const physical = devices.find((device) => device.physical);
-      const virtual = devices.find((device) => !device.physical);
-      expect(physical?.driverDeviceId).toBe(UDID);
-      expect(virtual).toBeDefined();
-      expect(virtual?.driverDeviceId).toBeUndefined();
-    }
-    const listed = (await rows(env)).find((row) => row.physical);
-    expect(listed?.driverDeviceId).toBe(UDID);
-    expect(simulator.device.driverDeviceId).not.toBe(UDID);
-  });
-});
-
-describe("device add over HTTP", () => {
-  it("POST /v1/devices with an operator token enrols the device; with an agent token it is 403 FORBIDDEN and no inspectPhysical call is made; a body with a worker field or any other unknown field is 400 BAD_REQUEST", async () => {
-    const { base, env } = await httpDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const agent = await bearer(env, "agent");
-    const operator = await bearer(env, "operator");
-    const post = (headers: Record<string, string>, body: unknown) =>
-      fetch(`${base}/v1/devices`, { body: JSON.stringify(body), headers, method: "POST" });
-
-    const refused = await post(agent, { id: UDID, platform: "ios" });
-    expect(refused.status).toBe(403);
-    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
-    expect(await inspectCalls(env)).toEqual([]);
-
-    for (const extra of [{ worker: "w1" }, { nickname: "mine" }]) {
-      const bad = await post(operator, { id: UDID, platform: "ios", ...extra });
-      expect(bad.status).toBe(400);
-      expect(((await bad.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
-    }
-    expect(await inspectCalls(env)).toEqual([]);
-
-    const accepted = await post(operator, { id: UDID, platform: "ios" });
-    expect(accepted.status).toBe(200);
-    expect(await accepted.json()).toMatchObject({
-      appCount: 12,
-      driverDeviceId: UDID,
-      reenrolled: false,
-    });
-    expect((await rows(env)).filter((row) => row.state === "ready")).toHaveLength(1);
-  });
-
-  it("DELETE /v1/devices/<canonical ID> with an operator token unenrols the device; with an agent token it is 403 FORBIDDEN and the record stays ready", async () => {
-    const { base, env } = await httpDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const enrolled = await add(env, "ios", UDID);
-    const agent = await bearer(env, "agent");
-    const operator = await bearer(env, "operator");
-    const remove = (headers: Record<string, string>) =>
-      fetch(`${base}/v1/devices/${encodeURIComponent(UDID)}`, { headers, method: "DELETE" });
-
-    const refused = await remove(agent);
-    expect(refused.status).toBe(403);
-    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
-    expect((await rows(env)).find((row) => row.id === enrolled.id)?.state).toBe("ready");
-
-    const accepted = await remove(operator);
-    expect(accepted.status).toBe(200);
-    expect(await accepted.json()).toEqual({ driverDeviceId: UDID, id: enrolled.id });
-    expect((await rows(env)).find((row) => row.id === enrolled.id)?.state).toBe("deleted");
-  });
-});
-
-describe("device add through a gateway", () => {
-  async function fleet(): Promise<{ gateway: TestEnv; worker: TestEnv; workerId: string }> {
-    const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-      role: "gateway",
-      driver: "none",
-    }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    expect(minted.code, minted.stderr).toBe(0);
-    const { secret } = minted.json as { secret: string };
-    const worker = await withDaemon({
-      configOverrides: { gateway: { label: "w1", token: secret, url: `ws://127.0.0.1:${port}` } },
-      driverScript: { ios: { ...IOS_BASE, physicalDevices: [IPHONE] } },
-    });
-    let workerId = "";
-    await waitFor(
-      async () => {
-        const listed = await gateway.cli(["worker", "list", "--json"]);
-        const workers = (listed.json as { workers?: { id: string; connection: string }[] } | null)
-          ?.workers;
-        const connected = workers?.find((entry) => entry.connection === "connected");
-        workerId = connected?.id ?? "";
-        return connected !== undefined;
-      },
-      { label: "the worker is connected to the gateway" },
-    );
-    return { gateway, worker, workerId };
-  }
-
-  it("shows a device enrolled on worker w1's own daemon in the gateway's list --devices on w1 with its driverDeviceId", async () => {
-    const { gateway, worker, workerId } = await fleet();
-
-    const added = await worker.cli(["device", "add", "--platform", "ios", UDID]);
-    expect(added.code, added.stderr).toBe(0);
-
-    await waitFor(
-      async () => {
-        const listed = await gateway.cli(["list", "--devices"]);
-        const device = (listed.json as Row[] | null)?.find((row) => row.physical);
-        return device?.workerId === workerId && device.driverDeviceId === UDID;
-      },
-      { label: "the gateway lists the enrolled device on w1" },
-    );
-  });
-
-  it("answers device add and device remove with UNSUPPORTED_IN_GATEWAY_MODE and exit 2, saying to run the command on the worker the device is plugged into, and no worker's driver log has an inspectPhysical call", async () => {
-    const { gateway, worker } = await fleet();
-    await worker.driverLog.clear();
-
-    const added = await gateway.cli(["device", "add", "--platform", "ios", UDID]);
-    const removed = await gateway.cli(["device", "remove", UDID]);
-
-    for (const result of [added, removed]) {
-      expect(result.code, result.stderr).toBe(2);
-      expect(result.error?.code).toBe("UNSUPPORTED_IN_GATEWAY_MODE");
-      expect(result.error?.message).toContain("worker the device is plugged into");
-    }
-    expect(await inspectCalls(worker)).toEqual([]);
-  });
-});
-
-describe("android enrolment", () => {
-  it("records the apps the driver lists and shows the device with its Android OS version", async () => {
-    const env = await startDaemon({ android: { physicalDevices: [PIXEL] } });
-
-    const result = await env.cli(["device", "add", "--platform", "android", "R58M123ABC"]);
-
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      "Enrolled Pixel 9 (Android 15) as R58M123ABC, 1 user app recorded.\n",
-    );
-    expect(readEnrolledApps(env)).toEqual([["com.example.mail"]]);
   });
 });

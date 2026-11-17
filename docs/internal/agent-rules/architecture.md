@@ -12,11 +12,13 @@ grounds for rejecting a change even if it works.
    outside `drivers/ios` may reference simctl concepts (UDIDs are opaque
    strings to the core); nothing outside `drivers/android` may reference
    AVDs, snapshots, adb serials, or ports. This extends to configuration and
-   to the lease environment: `drivers.<platform>.*` config entries and the
-   `environment` map a driver returns with a grant are **opaque to the core**
-   — it stores, merges, and forwards them without interpreting a single key.
-   A core module that knows what `deviceRoot` means for iOS, or that
-   `ANDROID_ADB_SERVER_PORT` is a port, has leaked.
+   to the lease environment: `drivers.<platform>.*` config entries, the
+   keys a driver declares under its platform's section (`ios.slim`,
+   `android.emulator`; ADR 0065) and the `environment` map a driver
+   returns with a grant are **opaque to the core** — it stores, merges,
+   and forwards them without interpreting a single key. A core module
+   that knows what `deviceRoot` means for iOS, what `ios.slim` holds, or
+   that `ANDROID_ADB_SERVER_PORT` is a port, has leaked.
 3. **Adding a driver must require zero core changes.** If a new driver needs
    a core edit, the driver interface has leaked — fix the interface, don't
    special-case the core.
@@ -41,8 +43,8 @@ grounds for rejecting a change even if it works.
    `ProcessRunner`, `Clock`, `SystemStats`, …) injected at startup — never
    import `fs`/`child_process` or call `Date.now()`/`setTimeout` directly in
    application code. Tests use the in-memory/fake implementations; if a new
-   external dependency appears, define its port first. The ports are listed
-   in [the ports manual](../../../src/ports/AGENTS.md).
+   external dependency appears, define its port first:
+   [the ports manual](../../../src/ports/AGENTS.md) says how.
 10. **A rule is enforced in exactly one place.** Never implement the same
     decision twice — not in two modules, not on two code paths through one
     module, not "once for the fast path and once for the general path". If
@@ -117,8 +119,7 @@ grounds for rejecting a change even if it works.
     by its own path (#825 Decisions, `.dependency-cruiser.mjs`). A single-file
     component's surface is what the file exports, and a component whose
     surface has grown past one file becomes a directory with an index, not
-    a second file others reach into. Each module's manual,
-    `src/<module>/AGENTS.md`, names its files and its surface.
+    a second file others reach into.
 15. **Dependencies point from the optional to the required, never back.**
     The lease transaction (request book, queue, acquisition, planner,
     provisioner, lifecycle, release, reclaim, registry, capacity) is the

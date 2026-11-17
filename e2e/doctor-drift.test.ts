@@ -59,9 +59,7 @@ describe("doctor and drift", () => {
           targets: [{ count: 4, model: "iPhone 16", osVersion: "18.4", platform: "ios" }],
         },
       },
-    });
-    await env.driverScript.set({
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+      driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
     });
 
     // why: a released device is deleted, so A, C, D and E are the four idle devices the warm pool keeps ready; B is leased from the fifth slot throughout as the "must skip a leased device" case.

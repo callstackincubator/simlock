@@ -17,16 +17,23 @@ import type {
   WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
+  MemoryPressureReader,
   PassthroughResolver,
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
-import { Doctor, type OptionalModuleFinding, type ServiceCheck } from "./doctor.js";
+import {
+  Doctor,
+  type DoctorConfig,
+  type OptionalModuleFinding,
+  type ServiceCheck,
+} from "./doctor.js";
 import type { DeviceMode, Platform, TargetResolution, WaitingDemand } from "./domain.js";
 import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from "./nuke-service.js";
+import { PhysicalAutoEnrollment } from "./physical-auto-enrollment.js";
 import { PhysicalEnrollment } from "./physical-enrollment.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
@@ -38,8 +45,12 @@ import { readStartup, type StartupRead } from "./startup-read.js";
 import { BaselineService } from "./baselines.js";
 import { WarmPool } from "./warm-pool/index.js";
 
+export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "devices" | "health" | "idle">;
+
 interface CoreOptions {
   readonly clock: Clock;
+  /** why: the worker's memory pressure step; absent when host load is off, so a reader sees no step. */
+  readonly memoryPressure?: MemoryPressureReader;
   /**
    * The daemon's one `ComponentInstaller`, built and closed by the composition root. Warm-pool
    * provisioning and startup convergence never install through it (safety rule 4); every device
@@ -47,7 +58,7 @@ interface CoreOptions {
    * §8).
    */
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: CoreConfig;
   /**
    * The one decision gate every registry write runs inside. Passed in rather than built here
    * because `components` writes the registry too and must share it.
@@ -105,6 +116,7 @@ class CorePortMissingError extends Error {
 }
 
 export interface Core {
+  readonly memoryPressure: MemoryPressureReader;
   readonly capacity: CapacityCoordinator;
   readonly capacityReader: CapacityReader;
   readonly warmPoolReader: WarmPoolReader;
@@ -119,6 +131,7 @@ export interface Core {
   readonly doctor: Doctor;
   readonly drivers: DriverCatalog;
   readonly enrollment: PhysicalEnrollment;
+  readonly autoEnrollment: PhysicalAutoEnrollment;
   readonly nuke: NukeService;
   readonly provisioner: DeviceProvisioner;
   readonly quarantine: QuarantineCoordinator;
@@ -152,8 +165,14 @@ export interface Core {
   dispose(): void;
 }
 
+const NO_MEMORY_PRESSURE: MemoryPressureReader = {
+  current: () => undefined,
+  onReading: () => () => undefined,
+};
+
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
+  const memoryPressure = options.memoryPressure ?? NO_MEMORY_PRESSURE;
   let ports: CorePorts | undefined;
   const port = <Name extends keyof CorePorts>(name: Name): CorePorts[Name] => {
     if (ports === undefined) throw new CorePortMissingError(name);
@@ -177,6 +196,7 @@ export function createCore(options: CoreOptions): Core {
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(options.config.capacity, options.systemStats),
     () => capacityObserver.changed(),
+    memoryPressure,
   );
   const devices = () => capacityDevices(registry.snapshot.virtualDevices);
   const capacityReader: CapacityReader = {
@@ -198,6 +218,10 @@ export function createCore(options: CoreOptions): Core {
   const drivers = new DriverCatalog(options.drivers, {
     logger: options.logger,
     preferences: options.modelPreferences,
+    virtualDevices: {
+      android: options.config.android.virtualDevices,
+      ios: options.config.ios.virtualDevices,
+    },
   });
   const deviceLifecycle = new ManagedDeviceLifecycle(
     drivers,
@@ -239,6 +263,7 @@ export function createCore(options: CoreOptions): Core {
     eventBus: options.eventBus,
     leaseSave: () => port("leaseSave"),
     lifecycle: deviceLifecycle,
+    logger: options.logger,
     reclaim,
     registry,
     state: options.state,
@@ -254,6 +279,8 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
+  // why: a waiting request is only planned again by an event; the step lifting is the one that frees it.
+  options.eventBus.subscribe("memory.pressure-changed", notifyAvailability);
   // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {
@@ -277,6 +304,15 @@ export function createCore(options: CoreOptions): Core {
     decisions,
     drivers,
     physicalDeviceReady,
+    registry,
+  });
+  const autoEnrollment = new PhysicalAutoEnrollment({
+    clock: options.clock,
+    config: options.config,
+    drivers,
+    enrollment,
+    logger: options.logger,
+    notifyAvailability,
     registry,
   });
   const cleanup = new CleanupExecutor({
@@ -307,6 +343,7 @@ export function createCore(options: CoreOptions): Core {
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    memoryPressure,
     provisioner,
     registry,
     state: options.state,
@@ -358,6 +395,29 @@ export function createCore(options: CoreOptions): Core {
   const startup = new StartupConverger({
     claims,
     decisions,
+    idleDeletion: {
+      // why: a failed shutdown or delete must not stop the daemon from starting: the device stays in the state it reached and the next start tries again (ADR 0084 §2).
+      deleteIdle: async (device) => {
+        try {
+          const stopped =
+            device.state === "ready"
+              ? await deviceLifecycle.shutdown(device, "virtual-devices-off", "cleanup")
+              : device;
+          if (stopped !== undefined) {
+            await deviceLifecycle.destroy(stopped, "virtual-devices-off", "cleanup");
+          }
+        } catch (error: unknown) {
+          options.logger?.warn("Could not delete an idle device at start", {
+            deviceId: device.id,
+            error: stableError(error),
+            platform: device.spec.platform,
+          });
+        }
+      },
+      platforms: (["ios", "android"] as const).filter(
+        (platform) => !drivers.virtualDevices(platform),
+      ),
+    },
     interruptedReclaimRecovery: {
       recoverInterruptedReclaim: async (device) => {
         await reclaim.recoverInterrupted(device.id);
@@ -384,6 +444,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
+    memoryPressure,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     baselines,
@@ -396,6 +457,7 @@ export function createCore(options: CoreOptions): Core {
     doctor,
     drivers,
     enrollment,
+    autoEnrollment,
     nuke,
     provisioner,
     quarantine,
@@ -410,6 +472,13 @@ export function createCore(options: CoreOptions): Core {
       await startup.converge(read);
       await dropReplacedBaselines();
       await listStartupSources(options.drivers, options.logger);
+      try {
+        await baselines.checkStale();
+      } catch (error: unknown) {
+        options.logger?.warn(
+          `could not check baselines at startup: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       warmPool.start();
       capacityObserver.start();
     },

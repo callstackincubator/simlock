@@ -46,7 +46,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with alive frames, and ends when its lease is released under a viewer",
+      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with a key frame at least every 5.5 s, and ends when its lease is released under a viewer",
       { timeout: 480_000 },
       async () => {
         const { env, port } = await withHttpDaemon((httpPort) => ({
@@ -76,6 +76,9 @@ describe.skipIf(ANDROID_SDK === undefined)(
           expect(lease.code, `lease failed: ${lease.stdout} ${lease.stderr}`).toBe(0);
           const leaseId = (lease.json as { lease: { id: string } }).lease.id;
           const deviceId = (lease.json as { device: { id: string } }).device.id;
+          // why: Simlock's adb server lists every emulator it announced, so a command without
+          // `-s` answers "more than one device" and the device checks below would never hold.
+          const serial = (lease.json as { device: { address: string } }).device.address;
           const streamUrl = await deviceStreamUrl(baseUrl, env.home, deviceId);
           const created = await env.cli(["token", "create", "--role", "operator"]);
           expect(created.code, created.stderr).toBe(0);
@@ -121,8 +124,17 @@ describe.skipIf(ANDROID_SDK === undefined)(
 
           await waitFor(
             async () => {
-              const processes = await env.cli(["adb", "shell", "ps", "-A", "-o", "ARGS"]);
-              const files = await env.cli(["adb", "shell", "ls", "/data/local/tmp"]);
+              const processes = await env.cli([
+                "adb",
+                "-s",
+                serial,
+                "shell",
+                "ps",
+                "-A",
+                "-o",
+                "ARGS",
+              ]);
+              const files = await env.cli(["adb", "-s", serial, "shell", "ls", "/data/local/tmp"]);
               return (
                 processes.code === 0 &&
                 !processes.stdout.includes("com.genymobile.scrcpy.Server") &&
@@ -145,6 +157,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
           if (watching.body === null) throw new Error("the stream answered without a body");
           const watched = watching.body.getReader();
           const tags: number[] = [];
+          const keyFrameAt: number[] = [];
           let buffered = new Uint8Array(0);
           let ended = false;
           const reading = (async () => {
@@ -159,6 +172,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
                 const length = new DataView(buffered.buffer, buffered.byteOffset).getUint32(0);
                 if (buffered.length < 4 + length) break;
                 tags.push(buffered[4]!);
+                if (buffered[4] === TAG.keyframe) keyFrameAt.push(Date.now());
                 buffered = buffered.slice(4 + length);
               }
             }
@@ -167,9 +181,22 @@ describe.skipIf(ANDROID_SDK === undefined)(
           await new Promise((resolve) => setTimeout(resolve, 45_000));
           expect(ended, "a still screen's stream ended inside the silence bound").toBe(false);
           expect(tags).toContain(TAG.keyframe);
-          // why: an `alive` frame is the evidence the screen went still and the stream was kept open
-          // for it; a screen that kept painting would pass the line above without proving anything.
-          expect(tags, "no alive frame: the screen never went still").toContain(TAG.alive);
+
+          // why: ADR 0079 §5: the driver's reset video makes a still screen's encoder send a key frame
+          // at least every 5 s (it resets after 4 s of none), so a viewer that joins or resets its decoder
+          // never waits longer. The first 15 s are left out: an emulator that has just booted is still
+          // rendering and takes 2 to 5 s to answer its first resets (gaps of 6 to 9 s on this lane),
+          // then 0.2 to 0.5 s, so only the settled gaps measure the bound.
+          const settledAt = keyFrameAt[0]! + 15_000;
+          const settled = keyFrameAt.filter((at) => at >= settledAt);
+          expect(
+            settled.length,
+            "fewer than 4 key frames after the first 15 s of a still screen",
+          ).toBeGreaterThanOrEqual(4);
+          const gaps = settled.slice(1).map((at, index) => at - settled[index]!);
+          expect(Math.max(...gaps), `key frame gaps in ms: ${gaps.join(", ")}`).toBeLessThanOrEqual(
+            5_500,
+          );
 
           // why: the viewer leaves while the screen is still, the case where the server writes
           // nothing and only the close can end it; the device must be left with no server and no jar.
@@ -177,8 +204,17 @@ describe.skipIf(ANDROID_SDK === undefined)(
           await reading;
           await waitFor(
             async () => {
-              const processes = await env.cli(["adb", "shell", "ps", "-A", "-o", "ARGS"]);
-              const files = await env.cli(["adb", "shell", "ls", "/data/local/tmp"]);
+              const processes = await env.cli([
+                "adb",
+                "-s",
+                serial,
+                "shell",
+                "ps",
+                "-A",
+                "-o",
+                "ARGS",
+              ]);
+              const files = await env.cli(["adb", "-s", serial, "shell", "ls", "/data/local/tmp"]);
               return (
                 processes.code === 0 &&
                 !processes.stdout.includes("com.genymobile.scrcpy.Server") &&

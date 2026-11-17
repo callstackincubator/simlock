@@ -1,10 +1,69 @@
-import { NodeSqliteOpener, type SqliteDatabase } from "../../ports/index.js";
-import { androidSourceDataOwner } from "./source-data.js";
+export {
+  ANDROID_SDK_ROOT,
+  ANDROID_HOME_DIRECTORY,
+  memoryAndroidSourceDatabase,
+  processResult,
+  userAvd,
+  InstallReflectingProcessRunner,
+  pixelDevices,
+  twoPixelDevices,
+  writeDevicesXml,
+  customDeviceXml,
+  fitDevices,
+  HOST_IMAGES,
+  testLibraryProfile,
+  customFitXml,
+  userListing,
+  answeringAvdPath,
+  simlockHome,
+  instanceId,
+  avdDirectory,
+  binaries,
+  ok,
+  WorkingDirectoryFilesystem,
+} from "./test-sdk-fixtures.js";
+
+export type { FitImage, Refusal } from "./test-sdk-fixtures.js";
+
+export {
+  EmulatorExitingRunner,
+  emulatorHelpListing,
+  seedEmulatorLine,
+  bootingAt,
+  seedStages,
+  makingTheSeed,
+  writeSeedFiles,
+  androidFilesystem,
+  makingASeedFrom,
+  fitHarness,
+  seedConfig,
+  libraryHarness,
+  markWriteExpectation,
+  createdFromPackage,
+  taggedHarness,
+} from "./test-seed-harness.js";
+
+export type { BuildProvisioner } from "./test-seed-harness.js";
+
+export {
+  bootProbes,
+  adbServerPort,
+  adbServerPid,
+  adbRecordPath,
+  scopedEnv,
+  PHYSICAL_DEVICE,
+  emulatorLaunchArgs,
+  provisionedHarness,
+  createDriver,
+  recordRunningAdbServer,
+} from "./test-driver-harness.js";
+
+export {
+  EmulatorHost,
+  RecordingRunner,
+  consolePortOf,
+  emptyLines,
+  copyPathExpectation,
+} from "./test-emulator-host.js";
 
 export { locateSdk, type AndroidSdkPaths } from "./sdk-paths.js";
-
-export async function memoryAndroidSourceDatabase(): Promise<SqliteDatabase> {
-  const database = await new NodeSqliteOpener().open(":memory:", { readOnly: false });
-  for (const migration of androidSourceDataOwner.migrations) database.exec(migration);
-  return database;
-}

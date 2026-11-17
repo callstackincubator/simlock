@@ -190,6 +190,20 @@ describe("PhysicalEnrollment", () => {
     expect(physicalRecords(harness)[0]).not.toHaveProperty("quarantinedAt");
   });
 
+  it("makes a quarantined physical device deleted with no quarantine fields when its retries run out", async () => {
+    const harness = await build();
+    const { device } = await harness.core.enrollment.add("ios", UDID);
+    await quarantine(harness, device.id);
+
+    await harness.registry.deleteQuarantined(device.id, "quarantine");
+
+    const record = physicalRecords(harness)[0];
+    expect(record).toMatchObject({ id: device.id, state: "deleted" });
+    expect(record).not.toHaveProperty("quarantinedAt");
+    expect(record).not.toHaveProperty("quarantineAttempts");
+    expect(record).not.toHaveProperty("quarantineNextRetryAt");
+  });
+
   it("answers DEVICE_BUSY leased to add and remove of a leased device, and changes nothing", async () => {
     const harness = await build();
     const { device } = await harness.core.enrollment.add("ios", UDID);
@@ -247,6 +261,27 @@ describe("PhysicalEnrollment", () => {
         name: "DeviceBusyError",
         reason: "reclaiming",
       });
+    }
+  });
+
+  it("never enrols again an ID that got a record first: an operator's add, or an add then a remove, that commits between an auto add's inspection and its commit leaves no new record", async () => {
+    for (const removed of [false, true]) {
+      const harness = await build();
+      const held = holdInspection(harness.driver, 1);
+      const auto = harness.core.enrollment.add("ios", UDID, { initiator: "auto" });
+      await vi.waitFor(() => expect(held.reached).toHaveBeenCalled());
+      await harness.core.enrollment.add("ios", UDID);
+      if (removed) await harness.core.enrollment.remove(UDID);
+
+      held.release();
+
+      await expect(auto, `removed ${removed}`).resolves.toBe("skipped");
+      expect(live(harness), `removed ${removed}`).toHaveLength(removed ? 0 : 1);
+      expect(physicalRecords(harness), `removed ${removed}`).toHaveLength(1);
+      expect(
+        enrolledEvents(harness).map((entry) => entry.payload),
+        `removed ${removed}`,
+      ).toMatchObject([{ initiator: "operator", reenrolled: false }]);
     }
   });
 
@@ -560,6 +595,86 @@ describe("PhysicalEnrollment", () => {
     expect(again.device.id).not.toBe(first.device.id);
     expect(live(harness)).toHaveLength(1);
     expect(physicalRecords(harness)).toHaveLength(2);
+  });
+
+  it("refuses a phone whose hardware serial another live record already holds, whatever either one's transport, naming that record, and writes nothing; a deleted holder refuses nothing", async () => {
+    const usb = { ids: ["R58Y61A60HN"] };
+    const network = { hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.5:5555"] };
+    const otherAddress = { hardwareSerial: "R58Y61A60HN", ids: ["192.168.1.9:5555"] };
+    const cases = [
+      { candidate: network, holder: usb, holds: "R58Y61A60HN" },
+      { candidate: otherAddress, holder: network, holds: "192.168.1.5:5555" },
+      { candidate: usb, holder: network, holds: "192.168.1.5:5555" },
+    ];
+
+    for (const { candidate, holder, holds } of cases) {
+      const control = await build([candidate]);
+      await control.core.enrollment.add("ios", candidate.ids[0] as string);
+      expect(live(control)).toHaveLength(1);
+      const harness = await build([holder, candidate]);
+      await harness.core.enrollment.add("ios", holder.ids[0] as string);
+
+      const refused = harness.core.enrollment.add("ios", candidate.ids[0] as string);
+
+      await expect(refused).rejects.toMatchObject({
+        canonicalId: holds,
+        message: `this phone (hardware serial R58Y61A60HN) is enrolled as ${holds}; remove that record first`,
+        name: "DeviceNotEnrollableError",
+        reason: "enrolled-under-other-id",
+      });
+      expect(live(harness).map((device) => device.driverDeviceId)).toEqual([holder.ids[0]]);
+
+      await harness.core.enrollment.remove(holder.ids[0] as string);
+      await harness.core.enrollment.add("ios", candidate.ids[0] as string);
+      expect(live(harness).map((device) => device.driverDeviceId)).toEqual([candidate.ids[0]]);
+    }
+  });
+
+  it("re-enrols with the hardware serial the new read carries, and refuses a clash that appears after an inspection, at the first commit or the second, leaving the record as it was", async () => {
+    const network = "192.168.1.5:5555";
+    const taking = await build([{ hardwareSerial: "SER-1", ids: [network] }]);
+    await taking.core.enrollment.add("ios", network);
+    const same = await taking.core.enrollment.add("ios", network);
+    expect(same.reenrolled, "same ID, same serial").toBe(true);
+    taking.driver.setPhysicalDevices([{ hardwareSerial: "SER-2", ids: [network] }]);
+    const again = await taking.core.enrollment.add("ios", network);
+    expect(again.reenrolled).toBe(true);
+    expect(live(taking).map((device) => device.hardwareSerial)).toEqual(["SER-2"]);
+    taking.driver.setPhysicalDevices([{ ids: [network] }]);
+    await taking.core.enrollment.add("ios", network);
+    expect(live(taking)[0]).not.toHaveProperty("hardwareSerial");
+
+    const first = await build([{ ids: ["SER-9"] }, { hardwareSerial: "SER-9", ids: [network] }]);
+    const held = holdInspection(first.driver, 1);
+    const racing = first.core.enrollment.add("ios", network);
+    const lost = expect(racing).rejects.toMatchObject({
+      canonicalId: "SER-9",
+      reason: "enrolled-under-other-id",
+    });
+    await vi.waitFor(() => expect(held.reached).toHaveBeenCalled());
+    await first.core.enrollment.add("ios", "SER-9");
+    held.release();
+    await lost;
+    expect(live(first).map((device) => device.driverDeviceId)).toEqual(["SER-9"]);
+
+    const second = await build([{ hardwareSerial: "SER-1", ids: [network] }, { ids: ["SER-9"] }]);
+    await second.core.enrollment.add("ios", network);
+    await second.core.enrollment.add("ios", "SER-9");
+    const original = second.driver.inspectPhysical.bind(second.driver);
+    let calls = 0;
+    vi.spyOn(second.driver, "inspectPhysical").mockImplementation(async (id) => {
+      calls += 1;
+      const read = await original(id);
+      return calls === 2 && read.enrollable ? { ...read, hardwareSerial: "SER-9" } : read;
+    });
+    const before = JSON.stringify(live(second));
+
+    await expect(second.core.enrollment.add("ios", network)).rejects.toMatchObject({
+      canonicalId: "SER-9",
+      reason: "enrolled-under-other-id",
+    });
+
+    expect(JSON.stringify(live(second))).toBe(before);
   });
 
   it("names the device in its error when the second read names another device or a read fails", async () => {

@@ -201,6 +201,8 @@ describe("gateway smoke", () => {
         "--fake-exec-exit=3",
         "--fake-exec-echo-stdin",
       ],
+      // why: `device.exec` runs in the lease's folder on the worker, which lives under lease-files.
+      cwd: expect.stringContaining("lease-files"),
       platform: "android",
       stdin: "",
     });

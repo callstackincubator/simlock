@@ -275,6 +275,7 @@ export class ComponentInstaller {
    * covers an `ended` install too, which never has a call: settling it empties its list, and
    * nothing joins it after.
    */
+  // fallow-ignore-next-line unused-class-member -- called through core's ports, and by its tests through the test-* harness.
   inProgress(): readonly ComponentInstallInProgress[] {
     const listed: ComponentInstallInProgress[] = [];
     for (const queue of this.#queues.values()) {
@@ -465,6 +466,7 @@ export class ComponentInstaller {
    * Simlock device in `list` and in a removal's checks, so a removal cannot start under a
    * device the registry does not hold yet (ADR 0010 §8).
    */
+  // fallow-ignore-next-line unused-class-member -- called through core's ports, and by its tests through the test-* harness.
   claimProvision(spec: Pick<DeviceSpec, "osVersion" | "platform">): () => void {
     const key = componentKey(spec.platform, spec.osVersion);
     const removal = this.#removals.get(spec.platform);

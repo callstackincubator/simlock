@@ -12,7 +12,7 @@
   },
   {
     "type": "dependency",
-    "from": "src/agent-device/gateway-front.test.ts",
+    "from": "src/agent-device/test-gateway.ts",
     "to": "src/ports/uplink-websocket.ts",
     "unresolvedTo": "../ports/uplink-websocket.js",
     "dependencyTypes": ["local", "type-only", "import"],

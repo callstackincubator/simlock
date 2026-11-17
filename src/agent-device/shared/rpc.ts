@@ -98,12 +98,18 @@ export interface LeaseCallFields {
   readonly deviceKey: unknown;
   readonly imageTag: unknown;
   readonly osVersion: unknown;
+  readonly deviceBaseline: unknown;
+  readonly deviceMode: unknown;
+  readonly deviceExcept: unknown;
 }
 
 export function leaseCallFields(params: Record<string, unknown>): LeaseCallFields {
   return {
     device: params["device"],
+    deviceBaseline: params["deviceBaseline"],
     deviceKey: params["deviceKey"],
+    deviceExcept: params["deviceExcept"],
+    deviceMode: params["deviceMode"],
     imageTag: params["imageTag"],
     leaseId: params["leaseId"],
     osVersion: params["osVersion"],

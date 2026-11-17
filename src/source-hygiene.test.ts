@@ -20,6 +20,49 @@ const lsFiles = (args: string[]): string[] =>
     .split("\0")
     .filter((name) => name.length > 0);
 
+type SizedFile = { path: string; lines: number };
+
+/**
+ * why: ADR 0063 section 3. These files were over their limit when the size test landed; each may
+ * only shrink. A PR that has to grow one raises its number here, as a visible line of its diff.
+ */
+const SHRINK_ONLY: Record<string, number> = {};
+
+const CODE_LIMIT = 1400;
+const TEST_LIMIT = 2500;
+
+const TEST_FILE_NAME = /(?:\.test\.|\.spec\.)|^test-|^testing\./;
+
+const sizeFailures = (files: SizedFile[], shrinkOnly: Record<string, number>): string[] => {
+  const tracked = new Set(files.map((file) => file.path));
+  const fileFailures = files.flatMap(({ path, lines }) => {
+    const isTest = TEST_FILE_NAME.test(basename(path));
+    const limit = isTest ? TEST_LIMIT : CODE_LIMIT;
+    const listed = shrinkOnly[path];
+    if (listed === undefined) {
+      return lines > limit
+        ? [
+            `${path}: ${lines} lines; a ${isTest ? "test" : "code"} file may have at most ${limit}. Split it (ADR 0063).`,
+          ]
+        : [];
+    }
+    if (lines <= limit) {
+      return [
+        `${path}: ${lines} lines, within its limit now. Remove it from the shrink-only list.`,
+      ];
+    }
+    return lines > listed
+      ? [
+          `${path}: ${lines} lines, longer than its listed ${listed}. A listed file may only shrink (ADR 0063).`,
+        ]
+      : [];
+  });
+  const goneFailures = Object.keys(shrinkOnly)
+    .filter((path) => !tracked.has(path))
+    .map((path) => `${path}: listed but not tracked. Remove it from the shrink-only list.`);
+  return [...fileFailures, ...goneFailures];
+};
+
 /**
  * why: a vendored artifact lands untracked -- the directory is complete, at the right checksum,
  * long before anybody stages it, and a check that read only the index would wave a half-vendored
@@ -55,12 +98,17 @@ function sha256Sums(name: string): [string, string][] {
 /**
  * why: a committed binary is never searched as text -- built fixtures the e2e lane installs, and
  * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (a packed server APK), and
- * the website's fonts and images. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
+ * the website's fonts and images, and the nine approved console design renders. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
  * is a claim about their contents, so for `vendor/` the test that compares this list against the
  * files in `vendor/` that actually carry a NUL is what makes the skip mean something.
  */
 const isCommittedBinary = (name: string): boolean =>
-  name.startsWith("e2e/fixtures/") || pinnedVendoredArtifacts.has(name) || isWebsiteAsset(name);
+  name.startsWith("e2e/fixtures/") ||
+  pinnedVendoredArtifacts.has(name) ||
+  isWebsiteAsset(name) ||
+  /^docs\/internal\/console-redesign\/renders\/(?:1-overview|2-fleet|3-worker|4-streaming|5-leases-empty|6-leases-selected|7-baselines|8-activity|mosaic)\.png$/.test(
+    name,
+  );
 
 /**
  * why: the website ships its own fonts and the images `pnpm og` renders (the social card, the
@@ -80,7 +128,7 @@ const isWebsiteAsset = (name: string): boolean =>
  * tracked file in the repository (testing rule 4), not just the directories this test
  * happened to name. The exceptions are the committed binaries `isCommittedBinary` names:
  * built binaries committed for tests, the vendored third-party artifacts, and the
- * website's fonts and images, none of which is ever searched as text. Untracked and ignored files are out of scope:
+ * website's fonts and images, and approved design renders, none of which is searched as text. Untracked and ignored files are out of scope:
  * they are not part of what anyone clones or searches.
  */
 describe("tracked files", () => {
@@ -96,6 +144,66 @@ describe("tracked files", () => {
       }
     });
 
+  const SIZED_EXTENSIONS = /\.(ts|tsx|mts|mjs|js|cjs)$/;
+  const SIZED_DIRECTORIES = /^(src|ui|e2e|scripts|\.agents\/scripts)\//;
+  const trackedSizes = trackedFiles
+    .filter((name) => SIZED_DIRECTORIES.test(name) && SIZED_EXTENSIONS.test(name))
+    .map((name) => ({
+      path: name,
+      lines: readFileSync(join(REPO_ROOT, name)).filter((byte) => byte === 0x0a).length,
+    }));
+
+  it("fails a file over its size limit that is not on the shrink-only list, naming the file, its lines and the limit", () => {
+    const failures = sizeFailures(
+      [
+        { path: "src/a/ok.ts", lines: 1400 },
+        { path: "src/a/big.ts", lines: 1401 },
+        { path: "src/a/ok.test.ts", lines: 2500 },
+        { path: "src/a/big.test.ts", lines: 2501 },
+        { path: "src/a/test-x.ts", lines: 2501 },
+        { path: "src/a/testing.ts", lines: 2501 },
+      ],
+      {},
+    );
+    expect(failures).toEqual([
+      "src/a/big.ts: 1401 lines; a code file may have at most 1400. Split it (ADR 0063).",
+      "src/a/big.test.ts: 2501 lines; a test file may have at most 2500. Split it (ADR 0063).",
+      "src/a/test-x.ts: 2501 lines; a test file may have at most 2500. Split it (ADR 0063).",
+      "src/a/testing.ts: 2501 lines; a test file may have at most 2500. Split it (ADR 0063).",
+    ]);
+    expect(
+      sizeFailures(trackedSizes, SHRINK_ONLY).filter((line) => line.includes("may have at most")),
+    ).toEqual([]);
+  });
+
+  it("fails a listed file that grew past its listed length or no longer needs the entry", () => {
+    const list = {
+      "src/a/same.ts": 1500,
+      "src/a/shrunk.ts": 1500,
+      "src/a/grew.ts": 1500,
+      "src/a/under.ts": 1500,
+      "src/a/gone.ts": 1500,
+    };
+    expect(
+      sizeFailures(
+        [
+          { path: "src/a/same.ts", lines: 1500 },
+          { path: "src/a/shrunk.ts", lines: 1450 },
+          { path: "src/a/grew.ts", lines: 1501 },
+          { path: "src/a/under.ts", lines: 1400 },
+        ],
+        list,
+      ),
+    ).toEqual([
+      "src/a/grew.ts: 1501 lines, longer than its listed 1500. A listed file may only shrink (ADR 0063).",
+      "src/a/under.ts: 1400 lines, within its limit now. Remove it from the shrink-only list.",
+      "src/a/gone.ts: listed but not tracked. Remove it from the shrink-only list.",
+    ]);
+    expect(
+      sizeFailures(trackedSizes, SHRINK_ONLY).filter((line) => !line.includes("may have at most")),
+    ).toEqual([]);
+  });
+
   it("were enumerated from the git index", () => {
     // why: Without this, an `execFileSync` that returned nothing would leave `it.each` with an
     // empty list and the suite would pass while checking no file at all.
@@ -106,6 +214,27 @@ describe("tracked files", () => {
     expect(trackedFiles.filter(isCommittedBinary)).toEqual([]);
     expect(isWebsiteAsset("website/src/fonts/Switzer-Regular.woff2")).toBe(true);
     expect(isWebsiteAsset("website/src/site/content.ts")).toBe(false);
+    for (const name of [
+      "1-overview.png",
+      "2-fleet.png",
+      "3-worker.png",
+      "4-streaming.png",
+      "5-leases-empty.png",
+      "6-leases-selected.png",
+      "7-baselines.png",
+      "8-activity.png",
+      "mosaic.png",
+    ]) {
+      expect(isCommittedBinary(`docs/internal/console-redesign/renders/${name}`), name).toBe(true);
+    }
+    for (const name of [
+      "docs/internal/console-redesign/renders/9-other.png",
+      "docs/internal/console-redesign/renders/1-overview.md",
+      "docs/internal/console-redesign/PLAN.md",
+      "src/unexpected.png",
+    ]) {
+      expect(isCommittedBinary(name), name).toBe(false);
+    }
     expect(trackedFiles).toContain("e2e/appduct-fixtures.test.ts");
   });
 

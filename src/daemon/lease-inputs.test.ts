@@ -6,6 +6,7 @@ import { createLeaseInputs } from "./lease-inputs.js";
 const device = { id: "device-1", platform: "ios" } as never;
 const ended = {
   deviceId: "device-1",
+  grantedAt: 1_000,
   leaseId: "lease-1",
   ownerId: "owner-1",
   platform: "ios",

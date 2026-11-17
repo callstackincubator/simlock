@@ -2,10 +2,11 @@ import type { EventBus } from "../bus/index.js";
 import type { Registry } from "../core/index.js";
 
 /**
- * ADR 0003 §8's three lease-scoped push facts, translated once from the raw event bus into a
+ * why: ADR 0003 §8's three lease-scoped push facts, translated once from the raw event bus into a
  * shape that already carries the owning principal -- "pushed to every live connection whose
  * principal owns the lease". `DaemonServer` is the socket-side consumer (its per-connection
- * push routing lives in `#notifyLeaseLost`/`#notifyDeviceUnhealthy`/`#notifyDeviceRecovered`);
+ * push routing lives in `ConnectionPushes`' `notifyLeaseLost`/`notifyDeviceUnhealthy`/
+ * `notifyDeviceRecovered`);
  * `LeaseNoticeBuffer` (HTTP, `src/http/notices.ts`) is the other -- both subscribe to the same
  * instance instead of each independently subscribing to the raw bus and re-deriving `ownerId`
  * (or, for `notices.ts` before this PR, not needing it at all because it only ever kept the

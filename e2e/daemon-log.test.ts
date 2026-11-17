@@ -1,9 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:net";
 
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon, type TestEnv } from "./helpers/index.js";
 
 /**
  * What `daemon.log` records, read back from the file a real daemon wrote: one `operation` line
@@ -43,21 +42,6 @@ async function leaseDetached(env: TestEnv): Promise<string> {
   return (lease.json as { lease: { id: string } }).lease.id;
 }
 
-/** Config validation rejects `http.port: 0`, so a free port is found first. */
-async function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      probe.close(() => {
-        if (address === null || typeof address === "string") reject(new Error("no port"));
-        else resolve(address.port);
-      });
-    });
-  });
-}
-
 describe("daemon.log", () => {
   it("a scripted boot failure leaves a line naming the device and the driver's error text", async () => {
     const env = await withDaemon();
@@ -92,13 +76,12 @@ describe("daemon.log", () => {
   });
 
   it("at debug, a device.exec command leaves one process line with its exit code and no line holding its output", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port },
         log: { level: "debug" },
       },
-    });
+    }));
     await env.driverScript.set(IOS);
     const baseUrl = `http://127.0.0.1:${port}`;
     await waitFor(

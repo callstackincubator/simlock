@@ -3,6 +3,7 @@ name: claims-reviewer
 description: The blind claims review from delivery rule 14 — checks that comments, docs, test titles and printed strings are true of the code at the reviewed commit. Spawned only by the reviewer agent, which passes the inputs directory, a read-only worktree and the round.
 model: sonnet
 effort: medium
+autoCompactWindow: 300000
 tools: Read, Grep, Glob, Bash
 ---
 

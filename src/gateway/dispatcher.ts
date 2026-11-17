@@ -681,8 +681,8 @@ export class GatewayDispatcher {
    * and its `lease.maxTtlMs` caps what its own clients may ask for, both before anything is
    * dispatched". `owner` (§27a, narrowed round 3 review H3) is read only from `session.
    * isGatewayUplink` -- never merely `role === "admin"`, which HTTP's `operator` token also maps
-   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher.ts`'s own
-   * `#leaseRequest` used to share with this one.
+   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher-leases.ts`'s
+   * `leaseRequest` used to share with this one.
    *
    * Unlike the worker, nothing ever forwards *into* a gateway's own front door the way this
    * gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005, so no
@@ -715,6 +715,9 @@ export class GatewayDispatcher {
       {
         // why: `input.allowDownload` stays accepted and is not passed on: only installed runtimes
         // count through a gateway (ADR 0009 §3).
+        // why: ADR 0074 §1: the admission command reads the request as the caller sent it, without what is not the device's ask.
+        admissionRequest: withoutCallerIdentity(input),
+        ...(input.metadata === undefined ? {} : { admissionMetadata: input.metadata }),
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
         requesterId: input.requesterId ?? principalAsRequester(session.principal),
@@ -799,6 +802,7 @@ export class GatewayDispatcher {
         tool: input.tool,
         args: input.args,
         ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+        ...(input.stdinFile === undefined ? {} : { stdinFile: input.stdinFile }),
       },
       session,
     );
@@ -850,4 +854,15 @@ function relayedUpdateError(error: unknown, workerId: string): unknown {
     });
   }
   return new DispatchError(error.code, error.message, error.details);
+}
+
+/** why: the admission command is told who asks in its own fields, so `request` leaves out `requesterId`, `idempotencyKey` and `metadata`. */
+function withoutCallerIdentity(input: object): Record<string, unknown> {
+  const {
+    idempotencyKey: _key,
+    metadata: _metadata,
+    requesterId: _requester,
+    ...request
+  } = input as Record<string, unknown>;
+  return request;
 }

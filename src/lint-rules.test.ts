@@ -534,6 +534,10 @@ describe("a module's definition.ts, read by the registry without loading the mod
     "src/heavy/definition.ts": 'import { heavy } from "./impl.js";\nexport const d = heavy;\n',
     "src/heavy/impl.ts": "export const heavy = 1;\n",
     "src/heavy/index.ts": "export {};\n",
+    "src/drivers/heavy/definition.ts":
+      'import { heavy } from "./impl.js";\nexport const d = heavy;\n',
+    "src/drivers/heavy/impl.ts": "export const heavy = 1;\n",
+    "src/drivers/heavy/index.ts": "export {};\n",
     "src/light/definition.ts":
       'import type { Light } from "./impl.js";\nexport type D = Light;\nexport const load = () => import("./impl.js");\n',
     "src/light/impl.ts": "export type Light = number;\n",
@@ -554,11 +558,14 @@ describe("a module's definition.ts, read by the registry without loading the mod
     return cruise(dir, ["src"]);
   }
 
-  it("dependency-cruiser fails a definition.ts that imports a value from its own module, and passes a type-only and a dynamic-import one", () => {
+  it("dependency-cruiser fails a module's or a driver's definition.ts that imports a value from its own module, and passes a type-only and a dynamic-import one", () => {
     const found = worldViolations();
 
     expect(
       found.filter((v) => v.from === "src/heavy/definition.ts").map((v) => v.rule.name),
+    ).toEqual(["definition-is-light"]);
+    expect(
+      found.filter((v) => v.from === "src/drivers/heavy/definition.ts").map((v) => v.rule.name),
     ).toEqual(["definition-is-light"]);
     expect(found.filter((v) => v.from === "src/light/definition.ts")).toEqual([]);
   });
@@ -613,6 +620,34 @@ describe("main.ts imports nothing from any module", () => {
   });
 });
 
+describe("the composition root's parts import nothing from any module", () => {
+  function partViolations(file: string): string[] {
+    const dir = join(scratch, `main-part-lazy-${counter++}`);
+    const world: Record<string, string> = {
+      "src/agent-device/index.ts": "export const value = 1;\n",
+      [file]: 'import { value } from "../agent-device/index.js";\nexport { value };\n',
+    };
+    for (const [path, contents] of Object.entries(world)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src"])
+      .filter((v) => v.from === file)
+      .map((v) => v.rule.name);
+  }
+
+  it.each([
+    "src/daemon/worker-composition.ts",
+    "src/daemon/driver-discovery.ts",
+    "src/daemon/composition-support.ts",
+    "src/daemon/entry-support.ts",
+  ])("dependency-cruiser fails a value import of src/agent-device from %s", (file) => {
+    expect(partViolations(file)).toContain("main-loads-modules-lazily");
+  });
+});
+
 describe("src/auth imports little", () => {
   function authViolations(source: string): string[] {
     const dir = join(scratch, `auth-little-${counter++}`);
@@ -639,6 +674,66 @@ describe("src/auth imports little", () => {
     expect(
       authViolations('import { value } from "../core/index.js";\nexport { value };\n'),
     ).toContain("auth-imports-little");
+  });
+});
+
+describe("packages/ and the root code stay apart", () => {
+  function packageViolations(world: Readonly<Record<string, string>>): string[] {
+    const dir = join(scratch, `packages-apart-${counter++}`);
+    // why: depcruise fails on a folder that is not there, so each one the lint names gets a file.
+    const empty = Object.fromEntries(
+      ["src/x.ts", "ui/src/none.ts", "e2e/none.ts", "packages/none.ts"].map((path) => [
+        path,
+        "export {};\n",
+      ]),
+    );
+    for (const [path, contents] of Object.entries({ ...empty, ...world })) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src", "ui", "e2e", "packages"])
+      .filter((v) => v.rule.name.startsWith("packages-"))
+      .map((v) => `${v.rule.name} ${v.from} -> ${v.to}`)
+      .sort();
+  }
+
+  const lib = { "packages/e2e/src/lib.ts": "export const lib = 1;\n" };
+  const root = { "src/core/index.ts": "export const core = 1;\n" };
+
+  it("dependency-cruiser fails an import from src/ into packages/e2e and one back, and passes a package importing itself and an e2e test importing a package", () => {
+    expect(
+      packageViolations({
+        ...lib,
+        ...root,
+        "packages/e2e/src/index.ts": 'import "./lib.js";\nexport {};\n',
+        "e2e/provider.test.ts": 'import "../packages/e2e/src/lib.js";\nexport {};\n',
+      }),
+    ).toEqual([]);
+    expect(
+      packageViolations({
+        ...lib,
+        "src/daemon.ts": 'import "../packages/e2e/src/lib.js";\nexport {};\n',
+        "ui/src/page.ts": 'import "../../packages/e2e/src/lib.js";\nexport {};\n',
+        "e2e/helpers.ts": 'import "../packages/e2e/src/lib.js";\nexport {};\n',
+      }),
+    ).toEqual([
+      "packages-not-in-root-code e2e/helpers.ts -> packages/e2e/src/lib.ts",
+      "packages-not-in-root-code src/daemon.ts -> packages/e2e/src/lib.ts",
+      "packages-not-in-root-code ui/src/page.ts -> packages/e2e/src/lib.ts",
+    ]);
+    expect(
+      packageViolations({
+        ...root,
+        "packages/e2e/src/index.ts":
+          'import "../../../src/core/index.js";\nimport "../../../ui/src/none.js";\nimport "../../../e2e/none.js";\nexport {};\n',
+      }),
+    ).toEqual([
+      "packages-not-from-root-code packages/e2e/src/index.ts -> e2e/none.ts",
+      "packages-not-from-root-code packages/e2e/src/index.ts -> src/core/index.ts",
+      "packages-not-from-root-code packages/e2e/src/index.ts -> ui/src/none.ts",
+    ]);
   });
 });
 

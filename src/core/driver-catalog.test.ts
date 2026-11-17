@@ -6,6 +6,7 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
 } from "./driver.js";
+import type { DeviceTcp } from "./device-tcp.js";
 import { FakeDeviceTcp } from "./fake-device-tcp.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog, NoDriverError, UnknownPassthroughToolError } from "./driver-catalog.js";
@@ -61,15 +62,75 @@ describe("DriverCatalog", () => {
     expect(catalog.supportsDeviceTcp("ios", simulator)).toBe(false);
     await catalog.reverseDevicePort("android", simulator, 5173, signal);
     expect(deviceTcp.reversed).toEqual([5173]);
-    for (const [device, noun] of [
-      [simulator, "an iOS simulator"],
-      [phone, "an iPhone"],
+    for (const [device, message] of [
+      [simulator, "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels"],
+      [
+        phone,
+        "the lease is on an iPhone; tunnels need an Android emulator or phone, or an iOS simulator",
+      ],
     ] as const) {
       await expect(catalog.reverseDevicePort("ios", device, 5173, signal)).rejects.toEqual(
-        expect.objectContaining({
-          code: "TUNNEL_UNSUPPORTED",
-          message: `the lease is on ${noun}; tunnels need an Android emulator or phone`,
-        }),
+        expect.objectContaining({ code: "TUNNEL_UNSUPPORTED", message }),
+      );
+    }
+  });
+
+  it("delegates an emulator port to a driver whose deviceTcp has the emulator members, and answers TUNNEL_UNSUPPORTED, naming the device, for one without them or without a deviceTcp", async () => {
+    const clock = new FakeClock();
+    const deviceTcp = new FakeDeviceTcp();
+    deviceTcp.emulatorPortsListening.add("adb");
+    const withoutMembers: DeviceTcp = {
+      connect: (device, port, signal) => deviceTcp.connect(device, port, signal),
+      reverse: (device, port, signal) => deviceTcp.reverse(device, port, signal),
+      supports: () => true,
+      sweep: (devices) => deviceTcp.sweep(devices),
+    };
+    const catalog = new DriverCatalog([
+      new FakeDriver({ availableOsVersions: ["14"], clock, deviceTcp, platform: "android" }),
+      new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock,
+        deviceTcp: withoutMembers,
+        platform: "ios",
+      }),
+    ]);
+    const bare = new DriverCatalog([
+      new FakeDriver({ availableOsVersions: ["14"], clock, platform: "android" }),
+    ]);
+    const emulator = { address: "", deviceId: "emu", driverData: {}, physical: false } as const;
+    const phone = { ...emulator, enrolledApps: [], physical: true } as const;
+    const signal = new AbortController().signal;
+
+    expect(catalog.supportsEmulatorPort("android", emulator)).toBe(true);
+    expect(catalog.supportsEmulatorPort("ios", emulator)).toBe(false);
+    expect(bare.supportsEmulatorPort("android", emulator)).toBe(false);
+    await catalog.connectEmulatorPort("android", emulator, "adb", signal);
+    expect(deviceTcp.emulatorConnections.map(({ name }) => name)).toEqual(["adb"]);
+    const cases = [
+      {
+        device: emulator,
+        message:
+          "emulator adb: the lease is on an iOS simulator; emulator ports need an Android emulator",
+        platform: "ios",
+        target: catalog,
+      },
+      {
+        device: phone,
+        message: "emulator adb: the lease is on an iPhone; emulator ports need an Android emulator",
+        platform: "ios",
+        target: catalog,
+      },
+      {
+        device: phone,
+        message:
+          "emulator adb: the lease is on an Android phone; emulator ports need an Android emulator",
+        platform: "android",
+        target: bare,
+      },
+    ] as const;
+    for (const { device, message, platform, target } of cases) {
+      await expect(target.connectEmulatorPort(platform, device, "adb", signal)).rejects.toEqual(
+        expect.objectContaining({ code: "TUNNEL_UNSUPPORTED", message }),
       );
     }
   });

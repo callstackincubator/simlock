@@ -16,7 +16,8 @@ like yours that were rejected lately: read it first.
 
 Answer four questions, and only these:
 
-1. Is every line of Scope and Done when (for a bug: the Simplest fix; for a
+1. Is every line of Scope and Done when, and every row of `feature.md` the
+   task names under Rows (for a bug: the Simplest fix; for a
    feature: every Completion condition) delivered by the diff? One line
    each, by position: `Done when 3: <hunk path:line>`, `Done when 3: not
    delivered`, or `Done when 3: differently: <how, at most 15 words>`.

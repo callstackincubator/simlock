@@ -9,7 +9,7 @@ import { optionalModules } from "../module-registry/index.js";
 import { createHttpApp, type HttpMount } from "./app.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { DECLARED_ROUTES } from "./route-declarations.js";
-import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from "./test-fakes.js";
+import { FakeDispatcher, FakeRegistry, noLeaseFiles, sequenceIdGenerator } from "./test-fakes.js";
 
 function coverageProblems(registered: readonly string[], declared: readonly string[]): string[] {
   const known = new Set(declared);
@@ -28,7 +28,6 @@ function buildApp(mounts: readonly HttpMount[] = []) {
   const registry = new FakeRegistry();
   return createHttpApp({
     clock,
-    config: testConfig(),
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),
@@ -37,6 +36,7 @@ function buildApp(mounts: readonly HttpMount[] = []) {
     ownerRoutedFacts: new OwnerRoutedFactBus(eventBus, registry),
     registry,
     auth: fakeAuth(new Map()),
+    leaseFiles: noLeaseFiles,
     mounts,
   });
 }
@@ -109,6 +109,7 @@ describe("the routes createHttpApp registers", () => {
         "baselines",
         "catalog",
         "components",
+        "config",
         "devices",
         "events",
         "healthz",

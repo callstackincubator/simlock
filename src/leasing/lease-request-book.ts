@@ -328,7 +328,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       .some((record) => record.leaseId === leaseId && !isSettled(record));
   }
 
-  /** The id of the stored request that was granted `leaseId`, while that record is retained. */
+  // fallow-ignore-next-line unused-class-member -- reached through the HTTP tracker's `requests` option and the gateway coordinator's `requests` field, whose types Fallow does not follow.
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.store
       .leaseRequests()
@@ -411,13 +411,18 @@ function storedResult<Grant>(record: LeaseRequestRecord<Grant>): Promise<Grant> 
 /** An omitted field equals only an omitted one: a request naming no mode is not one naming the worker's default. */
 function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
   return (
-    left.platform === right.platform &&
-    left.model === right.model &&
-    left.class === right.class &&
-    left.osVersion === right.osVersion &&
-    left.mode === right.mode &&
-    left.imageTag === right.imageTag &&
-    left.baseline === right.baseline &&
+    SAME_DEVICE_FIELDS.every((field) => left[field] === right[field]) &&
+    (left.except ?? []).join(",") === (right.except ?? []).join(",") &&
     (left.physical === true) === (right.physical === true)
   );
 }
+
+const SAME_DEVICE_FIELDS = [
+  "platform",
+  "model",
+  "class",
+  "osVersion",
+  "mode",
+  "imageTag",
+  "baseline",
+] as const;

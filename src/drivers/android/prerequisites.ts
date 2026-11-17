@@ -1,6 +1,6 @@
 import type { MissingPrerequisite, PrerequisiteCheck } from "../../core/index.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
-import { adbPath, emulatorPath, locateSdk, sdkToolBin } from "./sdk-paths.js";
+import { adbPath, emulatorHelpLists, emulatorPath, locateSdk, sdkToolBin } from "./sdk-paths.js";
 
 const SDKMANAGER_TIMEOUT_MS = 30_000;
 const EMULATOR_HELP_TIMEOUT_MS = 30_000;
@@ -11,7 +11,6 @@ const REQUIRED_EMULATOR_FLAGS = [
   "-no-snapshot-save",
   "-grpc",
   "-grpc-use-token",
-  "-crash-report-mode",
 ] as const;
 const COMMAND_LINE_TOOLS_PAGE = "https://developer.android.com/studio#command-line-tools-only";
 
@@ -109,9 +108,7 @@ async function outdatedEmulator(
   });
   // why: some emulators print their usage to stderr.
   const usage = `${result.stdout}\n${result.stderr}`;
-  const unsupported = REQUIRED_EMULATOR_FLAGS.filter(
-    (flag) => !new RegExp(`^\\s*${flag}(?:\\s|$)`, "m").test(usage),
-  );
+  const unsupported = REQUIRED_EMULATOR_FLAGS.filter((flag) => !emulatorHelpLists(usage, flag));
   if (unsupported.length === 0) return undefined;
   return {
     message: `The installed Android emulator does not accept ${unsupported.join(", ")}, which Simlock passes on every launch.`,

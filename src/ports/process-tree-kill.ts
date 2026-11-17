@@ -1,0 +1,91 @@
+import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
+
+import type { ProcessRunOptions } from "./process-runner-types.js";
+
+const TASKKILL_TIMEOUT_MS = 10_000;
+
+export function runLimits({
+  maxStdoutBytes,
+  signal,
+}: ProcessRunOptions): Pick<ProcessRunOptions, "maxStdoutBytes" | "signal"> {
+  return {
+    ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
+    ...(signal === undefined ? {} : { signal }),
+  };
+}
+
+/**
+ * why: Windows has no process groups, and a batch file runs under a `cmd.exe` wrapper
+ * (`windows-command.ts`): signalling the wrapper alone would leave the script's own processes,
+ * `sdkmanager`'s Java, running. `taskkill /T` walks the tree from the wrapper's pid, so it runs
+ * while the wrapper is still alive; the wrapper outlives what it runs, since a script runs its
+ * commands in the foreground. Windows ends a process on any signal, so `/F` is no harsher than
+ * `child.kill`. `taskkill` makes the wrapper exit with a code where `child.kill` reports a
+ * signal, so the handle reports the signal it sent instead. Should `taskkill` itself fail, the
+ * wrapper alone is killed as before.
+ */
+function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
+  const fallback = () => {
+    if (isRunning(child)) child.kill(signal);
+  };
+  const taskkill = spawnChildProcess("taskkill", ["/pid", String(pid), "/T", "/F"], {
+    stdio: "ignore",
+    timeout: TASKKILL_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  taskkill.once("error", fallback);
+  taskkill.once("exit", (code) => {
+    if (code !== 0) fallback();
+  });
+}
+
+/**
+ * why: Signals the child's whole process group (children are spawned `detached`, so the group is
+ * the unit that actually dies), or on Windows a batch file's whole tree and any other child
+ * alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
+ * kill identically -- a timeout that only reached the direct child would leave a tool's own
+ * subprocesses running.
+ *
+ * Guarded on `child.exitCode`/`child.signalCode` -- both still `null` only while the child is
+ * actually running -- before ever calling `process.kill(-pid, signal)` directly: that call
+ * bypasses `ChildProcess.kill`'s own "already exited" guard, and `wait()` can defer settling
+ * up to `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild holding
+ * stdio open, or a stalled delivery). Node frees a reaped pid for the kernel to recycle, so a
+ * timeout firing in that window without this guard could signal a process group the kernel has
+ * already handed to someone else -- latent before this PR, but `device.exec` is what makes the
+ * timing remotely triggerable.
+ */
+export function killProcessTree(
+  child: ChildProcess,
+  pid: number,
+  signal: NodeJS.Signals,
+  wrapped: boolean,
+): void {
+  if (!isRunning(child)) return;
+
+  if (process.platform === "win32") {
+    if (wrapped) killWindowsProcessTree(child, pid, signal);
+    else child.kill(signal);
+    return;
+  }
+
+  try {
+    process.kill(-pid, signal);
+  } catch (error: unknown) {
+    if (isNoSuchProcessError(error)) {
+      return;
+    }
+
+    throw error;
+  }
+}
+
+// why: a wrapper that already exited, its output still held open by a grandchild, is never
+// signalled, so its own exit code stands rather than a kill nobody sent.
+export function isRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+function isNoSuchProcessError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+}

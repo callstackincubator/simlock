@@ -18,7 +18,7 @@ import { type RawData, WebSocket } from "ws";
 
 import type { FakeDriverScript } from "../fake-driver/types.js";
 import { cli, cliBackground, type CliBackgroundHandle, type CliResult } from "../helpers/cli.js";
-import { freeLoopbackPort } from "../helpers/port.js";
+import { startOnFreePort } from "../helpers/port.js";
 import { REPO_ROOT } from "../helpers/repo-root.js";
 import { waitFor } from "../helpers/wait.js";
 
@@ -38,6 +38,8 @@ export interface RunningDaemon extends ConsoleDaemon {
   cliBackground(args: readonly string[]): CliBackgroundHandle;
   writeDriverScript(script: FakeDriverScript): Promise<void>;
   stop(): Promise<void>;
+  /** why: a stop waits for a boot still running (#1200), so a test that needs the daemon gone mid-boot ends its process instead. */
+  kill(): Promise<void>;
   start(): Promise<void>;
   dispose(options?: { readonly preservePages?: readonly Page[] }): Promise<void>;
   /** why: stats read completed minutes only, so this moves the usage rows two minutes back. */
@@ -211,43 +213,66 @@ const FAKE_CAPACITY = {
   ramBudget: { iosBytesPerDevice: 1024 * 1024, androidBytesPerDevice: 1024 * 1024 },
 };
 
+// why: `freeLoopbackPort` releases its port, so another process can take it before the daemon binds
+// it. A failed start carries the daemon log's tail, which names EADDRINUSE, so the start runs again on a new port.
 export async function startDaemon(
   mode: "worker" | "gateway",
   options: StartOptions = {},
 ): Promise<RunningDaemon> {
-  const home = await mkdtemp(join(tmpdir(), "simlock-console-"));
-  const port = await freeLoopbackPort();
-  const scriptPath = join(home, "fake-driver-script.json");
-  // why: a gateway lives in `<home>/gateway` and every CLI call that reaches it says `--gateway` (ADR 0034).
-  const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
-  const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
+  const { started } = await startOnFreePort(async (port) => {
+    try {
+      return await startDaemonOn(port, mode, options);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message.includes("EADDRINUSE")) {
+        throw Object.assign(error, { code: "EADDRINUSE" });
+      }
+      throw error;
+    }
+  });
+  return started;
+}
+
+// why: split out of `startDaemonOn` so the config file's branches stay apart from the daemon's start.
+function daemonConfig(mode: "worker" | "gateway", port: number, options: StartOptions) {
   const { http: extraHttp, ...extraConfig } = options.config ?? {};
   // why: a worker that joins a gateway may not enable HTTP (it is reached through the gateway), so it defaults off; a test's explicit `http.enabled` still wins, so an invalid override is not silently repaired.
   const joined = (extraConfig.gateway as { url?: unknown } | undefined)?.url !== undefined;
-  const httpConfig = {
+  const http = {
     enabled: !joined,
     host: "127.0.0.1",
     port,
     ...(extraHttp as object | undefined),
   };
+  const config = {
+    ...(mode === "worker" ? FAKE_CAPACITY : {}),
+    http,
+    ...extraConfig,
+    // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
+    ...(mode === "worker"
+      ? {
+          capabilities: {
+            "agent-device": { enabled: false },
+            ...(extraConfig.capabilities as object | undefined),
+          },
+        }
+      : {}),
+  };
+  return { config, httpEnabled: http.enabled };
+}
+
+async function startDaemonOn(
+  port: number,
+  mode: "worker" | "gateway",
+  options: StartOptions,
+): Promise<RunningDaemon> {
+  const home = await mkdtemp(join(tmpdir(), "simlock-console-"));
+  const scriptPath = join(home, "fake-driver-script.json");
+  // why: a gateway lives in `<home>/gateway` and every CLI call that reaches it says `--gateway` (ADR 0034).
+  const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
+  const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
+  const { config, httpEnabled } = daemonConfig(mode, port, options);
   await mkdir(dataDirectory, { recursive: true });
-  await writeFile(
-    join(dataDirectory, "config.json"),
-    JSON.stringify({
-      ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      http: httpConfig,
-      ...extraConfig,
-      // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
-      ...(mode === "worker"
-        ? {
-            capabilities: {
-              "agent-device": { enabled: false },
-              ...(extraConfig.capabilities as object | undefined),
-            },
-          }
-        : {}),
-    }),
-  );
+  await writeFile(join(dataDirectory, "config.json"), JSON.stringify(config));
   if (options.driverScript !== undefined) {
     await writeFile(scriptPath, JSON.stringify(options.driverScript));
   }
@@ -286,6 +311,15 @@ export async function startDaemon(
     }
     if (discovery.error !== undefined) throw discovery.error;
     if (stopError !== undefined) throw stopError;
+  };
+  const kill = async () => {
+    const discovery = await discoverDaemonPids(socketPath);
+    if (discovery.error !== undefined) throw discovery.error;
+    for (const pid of discovery.pids) {
+      daemonPids.add(pid);
+      process.kill(pid, "SIGKILL");
+    }
+    await waitForDaemonPidsToExit(daemonPids);
   };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
@@ -335,7 +369,7 @@ export async function startDaemon(
     await start();
     const status = await cli([...gatewayFlag, "status", "--json"], env);
     const url = (status.json as { daemon: { consoleUrl?: string } }).daemon.consoleUrl;
-    if (httpConfig.enabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
+    if (httpEnabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
     else expect(url).toBeUndefined();
     const mint = async (role: string) => {
       const minted = await cli([...gatewayFlag, "token", "create", "--role", role], env);
@@ -371,6 +405,7 @@ export async function startDaemon(
       socketPath,
       start,
       stop,
+      kill,
       async prepareHistoricalUsage() {
         await stop();
         // why: the daemon writes history.db until its process exits, not until its socket goes.
@@ -409,7 +444,7 @@ export interface Fleet {
 }
 
 /** why: a gateway pins a join token to the first worker that joins with it, so each worker needs its own. */
-export async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
+async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);
   return (minted.json as { secret: string }).secret;
@@ -488,7 +523,7 @@ export async function disposeFleet(
   await fleet.gateway.dispose(options);
 }
 
-export const OLD_PROTOCOL = { max: 3, min: 1 } as const;
+const OLD_PROTOCOL = { max: 3, min: 1 } as const;
 
 export async function joinOldWorker(
   gateway: RunningDaemon,
@@ -551,6 +586,8 @@ export interface ProxiedDaemon {
   readonly signedOutUrl: string;
   readonly daemon: RunningDaemon;
   setMode(mode: ProxyMode): void;
+  // why: the proxy's session ends: every request but the daemon's health check goes to its login page.
+  endSession(): void;
   holdIdentity(): () => void;
   reset(): void;
   dispose(): Promise<void>;
@@ -574,20 +611,25 @@ export async function startProxiedDaemon(
   let held: Promise<void> | undefined;
   let daemonPort = 0;
   const listen = (server: Server, port: number) =>
-    new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+    new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
   const close = (server: Server) =>
     new Promise<void>((resolve) => {
       server.closeAllConnections();
       server.close(() => resolve());
     });
 
-  const idpPort = await freeLoopbackPort();
   const idp = createServer((req, res) => {
     const signedOut = req.url === "/signed-out";
     res.setHeader("content-type", "text/html");
     res.end(`<h1>${signedOut ? "Signed out of the proxy" : "Proxy login"}</h1>`);
   });
-  await listen(idp, idpPort);
+  const { port: idpPort } = await startOnFreePort((port) => listen(idp, port));
   const loginUrl = `http://127.0.0.1:${idpPort}/login`;
   const signedOutUrl = `http://127.0.0.1:${idpPort}/signed-out`;
 
@@ -628,8 +670,7 @@ export async function startProxiedDaemon(
     }
     void forward(req, res);
   });
-  const proxyPort = await freeLoopbackPort();
-  await listen(proxy, proxyPort);
+  const { port: proxyPort } = await startOnFreePort((port) => listen(proxy, port));
   let daemon: RunningDaemon;
   try {
     daemon = await startDaemon("worker", {
@@ -657,6 +698,7 @@ export async function startProxiedDaemon(
       await Promise.all([close(proxy), close(idp)]);
       await daemon.dispose();
     },
+    endSession: () => void (mode = "redirect"),
     holdIdentity() {
       let release: () => void = () => {};
       held = new Promise<void>((resolve) => (release = resolve));
@@ -676,10 +718,7 @@ export async function startProxiedDaemon(
   };
 }
 
-export const test = base.extend<
-  { proxied: ProxiedDaemon },
-  { daemon: RunningDaemon; gateway: RunningDaemon; proxiedDaemon: ProxiedDaemon }
->({
+export const test = base.extend<object, { daemon: RunningDaemon; gateway: RunningDaemon }>({
   page: async ({ context }, use) => {
     const page = await context.newPage();
     activePages.add(page);
@@ -689,19 +728,6 @@ export const test = base.extend<
       activePages.delete(page);
       await page.close();
     }
-  },
-  proxiedDaemon: [
-    // oxlint-disable-next-line no-empty-pattern -- as below.
-    async ({}, use) => {
-      const proxied = await startProxiedDaemon();
-      await use(proxied);
-      await proxied.dispose();
-    },
-    { scope: "worker", timeout: 60_000 },
-  ],
-  proxied: async ({ proxiedDaemon }, use) => {
-    proxiedDaemon.reset();
-    await use(proxiedDaemon);
   },
   daemon: [
     // oxlint-disable-next-line no-empty-pattern -- Playwright requires a destructuring pattern here, even an empty one.
@@ -755,11 +781,7 @@ export const NAV = [
   { label: "Baselines", path: "/baselines" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
-] as const;
-
-export const NAV_GROUPS = [
-  { label: "Operate", links: ["Fleet", "Leases", "Queue", "Baselines"] },
-  { label: "Observe", links: ["Activity", "Usage"] },
+  { label: "Settings", path: "/settings" },
 ] as const;
 
 export const NAV_LABELS = NAV.map((entry) => entry.label);
@@ -780,62 +802,4 @@ export async function openFromNav(page: Page, label: string): Promise<void> {
     await nav.getByRole("button", { name: "Open menu" }).click();
   }
   await nav.getByRole("link", { name: label, exact: true }).click();
-}
-
-// why: a host with one lease held by `surface-agent`, for checks that need the console's menu,
-// dialog and toast open.
-export async function startHostWithLease(): Promise<RunningDaemon> {
-  const host = await startDaemon("worker", {
-    driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-  });
-  const granted = await host.cli([
-    "lease",
-    "--platform",
-    "ios",
-    "--device",
-    "iPhone 16",
-    "--os",
-    "18.4",
-    "--agent-id",
-    "surface-agent",
-    "--detach",
-  ]);
-  expect(granted.code, granted.stderr).toBe(0);
-  return host;
-}
-
-// why: signs in on Leases and opens, in turn, an error toast (a release the daemon never answers),
-// the row's menu over it, and the release dialog over it, calling `check` with each open.
-export async function withActionSurfaces(
-  page: Page,
-  host: RunningDaemon,
-  check: (surface: "toast" | "menu" | "dialog") => Promise<void>,
-): Promise<void> {
-  await page.goto(new URL("/leases", host.url).toString());
-  await signIn(page, host.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-  const row = page.locator("main tbody tr").filter({ hasText: "surface-agent" });
-  const menuButton = row.getByRole("button", { name: "Actions for surface-agent" });
-  const dialog = page.getByRole("alertdialog", { name: "Release surface-agent's lease?" });
-  await page.route("**/v1/leases/*", (route) =>
-    route.request().method() === "DELETE" ? route.abort() : route.continue(),
-  );
-  await menuButton.click();
-  await page.getByRole("menuitem", { name: "Release lease" }).click();
-  await dialog.getByRole("button", { name: "Release lease" }).click();
-  await expect(
-    page.getByRole("region", { name: "Notifications" }).getByText("The daemon did not answer."),
-  ).toBeVisible();
-  await settled(page);
-  await check("toast");
-
-  await menuButton.click();
-  await expect(page.getByRole("menuitem", { name: "Release lease" })).toBeVisible();
-  await settled(page);
-  await check("menu");
-
-  await page.getByRole("menuitem", { name: "Release lease" }).click();
-  await expect(dialog).toBeVisible();
-  await settled(page);
-  await check("dialog");
 }

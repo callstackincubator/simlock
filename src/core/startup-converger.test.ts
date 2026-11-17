@@ -56,6 +56,7 @@ function createHarness(
   const converger = new StartupConverger({
     claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
     decisions: new SerializedDecision(),
+    idleDeletion: { deleteIdle: async () => undefined, platforms: [] },
     interruptedReclaimRecovery: recovery,
     quarantineRestore,
     registry: {

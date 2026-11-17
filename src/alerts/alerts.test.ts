@@ -113,14 +113,26 @@ describe("alerts", () => {
       module: "quarantine",
     });
 
+  const pressure = (h: Harness) =>
+    h.eventBus.republish({
+      id: "evt_pressure",
+      timestamp: 43,
+      event: "memory.pressure-changed",
+      payload: { from: "none", to: "warming-paused", workerId: "wrk_8" } as never,
+      module: "host-load",
+    });
+
   it.each([
     ["a gateway-own worker.connected", gatewayOwn, "wrk_1"],
     ["a republished device.quarantine-abandoned", relayed, "wrk_9"],
+    ["a republished memory.pressure-changed", pressure, "wrk_8"],
   ])(
     "posts a listed event to a generic destination as the envelope with Content-Type, User-Agent, X-Simlock-Event, X-Simlock-Delivery and a signature that verifies with the secret (%s)",
     async (_name, emitEnvelope, workerId) => {
       const h = harness([
-        destination({ events: ["worker.connected", "device.quarantine-abandoned"] }),
+        destination({
+          events: ["worker.connected", "device.quarantine-abandoned", "memory.pressure-changed"],
+        }),
       ]);
       const envelope = emitEnvelope(h);
       await settle();
@@ -157,7 +169,7 @@ describe("alerts", () => {
     });
   });
 
-  it("each of the eleven events posts its message word for word", async () => {
+  it("each of the twelve events posts its message word for word", async () => {
     const rows: [EventName, Record<string, unknown>, string][] = [
       [
         "worker.connected",
@@ -220,6 +232,31 @@ describe("alerts", () => {
         "component.install-failed",
         { workerId: "wrk_1", platform: "ios", componentId: "runtime-18", error: "no space" },
         "❌ Installing ios runtime-18 on wrk_1 failed: no space.",
+      ],
+      [
+        "memory.pressure-changed",
+        {
+          workerId: "wrk_1",
+          from: "none",
+          to: "new-devices-paused",
+          cause: { trigger: "level", availablePercent: 8, level: "critical" },
+        },
+        "🧠 Worker wrk_1 paused new devices: memory pressure critical.",
+      ],
+      [
+        "memory.pressure-changed",
+        {
+          workerId: "wrk_1",
+          from: "none",
+          to: "warming-paused",
+          cause: { trigger: "floor", availablePercent: 15, floorPercent: 20 },
+        },
+        "🧠 Worker wrk_1 paused warming: 15% of memory available (floor 20%).",
+      ],
+      [
+        "memory.pressure-changed",
+        { workerId: "wrk_1", from: "warming-paused", to: "none" },
+        "✅ Worker wrk_1 is no longer under memory pressure.",
       ],
     ];
     const events = [...new Set(rows.map(([event]) => event))] as AlertDestination["events"];

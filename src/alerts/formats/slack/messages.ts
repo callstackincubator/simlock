@@ -15,6 +15,13 @@ function more(count: unknown): string {
     : "";
 }
 
+function pressureCause(cause: unknown): string {
+  const fields = (typeof cause === "object" && cause !== null ? cause : {}) as Payload;
+  return fields.trigger === "level"
+    ? `memory pressure ${part(fields.level)}`
+    : `${part(fields.availablePercent)}% of memory available (floor ${part(fields.floorPercent)}%)`;
+}
+
 export const SLACK_MESSAGES: Record<AlertEventName | "alerts.test-sent", Message> = {
   "worker.connected": (p, worker) =>
     p.version === undefined
@@ -35,6 +42,11 @@ export const SLACK_MESSAGES: Record<AlertEventName | "alerts.test-sent", Message
     `⏳ Device ${part(p.deviceId)} on ${worker} has been ${part(p.state)} for ${formatAge(p.ageMs)}.`,
   "disk.pressure-detected": (p, worker) =>
     `💾 Worker ${worker} is low on disk: ${formatBytes(p.freeBytes)} free (threshold ${formatBytes(p.threshold)}).`,
+  "memory.pressure-changed": (p, worker) => {
+    if (p.to === "none") return `✅ Worker ${worker} is no longer under memory pressure.`;
+    const paused = p.to === "new-devices-paused" ? "new devices" : "warming";
+    return `🧠 Worker ${worker} paused ${paused}: ${pressureCause(p.cause)}.`;
+  },
   "component.install-failed": (p, worker) =>
     `❌ Installing ${part(p.platform)} ${part(p.componentId)} on ${worker} failed: ${part(p.error)}.`,
   "alerts.test-sent": (p) =>

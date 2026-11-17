@@ -34,9 +34,11 @@ import {
   type PhysicalDriverDevice,
   type VirtualDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   type ReclaimResult,
   removeListedComponent,
+  BadDeviceRequestError,
   RuntimeMissingError,
   UnknownModelError,
   uninstallPlan,
@@ -57,6 +59,7 @@ export type FakeDriverOperation =
   | "listManaged"
   | "inspectPhysical"
   | "listPresentPhysical"
+  | "listAttachedPhysical"
   | "listCatalog"
   | "listComponents"
   | "removeComponent"
@@ -75,6 +78,7 @@ export interface FakePhysicalDevice {
   readonly osVersion?: string;
   readonly class?: PhysicalClass;
   readonly apps?: readonly string[];
+  readonly hardwareSerial?: string;
   readonly refusal?: { readonly reason: DriverRefusalReason; readonly message: string };
 }
 
@@ -87,6 +91,8 @@ export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   /** why: the image tag a device made for a request naming none really carries, which a saved source reports. */
   readonly defaultImageTag?: string;
+  /** why: models whose resolve with an image tag is refused as a missing runtime, as a real driver refuses a misfit or an image built for another CPU. */
+  readonly taggedRefusals?: readonly string[];
   readonly clock: Clock;
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
   readonly installProgress?: readonly number[];
@@ -98,6 +104,8 @@ export interface FakeDriverOptions {
   readonly fullCleanReclaimEstimateMs?: number;
   readonly mode?: DeviceMode | undefined;
   readonly slimmableOsVersions?: readonly string[];
+  /** why: the categories this worker slims; a request's `except` naming another is refused at resolve, as the iOS driver does. Absent: every name is accepted. */
+  readonly slimCategories?: readonly string[];
   readonly knownModels?: readonly string[];
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
@@ -160,6 +168,7 @@ export class FakeDriver implements Driver {
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
   readonly #mode: DeviceMode | undefined;
   readonly #slimmableOsVersions: ReadonlySet<string>;
+  readonly #slimCategories: ReadonlySet<string> | undefined;
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
@@ -174,6 +183,7 @@ export class FakeDriver implements Driver {
   readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
   readonly #defaultImageTag: string | undefined;
+  readonly #taggedRefusals: ReadonlySet<string>;
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
@@ -204,6 +214,8 @@ export class FakeDriver implements Driver {
     this.#estimateMs = options.estimateMs;
     this.#mode = options.mode;
     this.#slimmableOsVersions = new Set(options.slimmableOsVersions ?? []);
+    this.#slimCategories =
+      options.slimCategories === undefined ? undefined : new Set(options.slimCategories);
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
@@ -213,6 +225,7 @@ export class FakeDriver implements Driver {
     this.#defaultModels = options.defaultModels;
     this.#images = options.images;
     this.#defaultImageTag = options.defaultImageTag;
+    this.#taggedRefusals = new Set(options.taggedRefusals);
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
@@ -262,6 +275,11 @@ export class FakeDriver implements Driver {
     if (this.#knownModels !== undefined && !this.#knownModels.has(request.model)) {
       throw new UnknownModelError(this.platform, request.model);
     }
+    this.#assertTaggedFits(request);
+    const unknownCategory = request.except?.find((name) => !this.#slimCategories?.has(name));
+    if (this.#slimCategories !== undefined && unknownCategory !== undefined) {
+      throw new BadDeviceRequestError(`unknown slim category "${unknownCategory}"`);
+    }
 
     const osVersion =
       request.imageTag === undefined
@@ -278,6 +296,12 @@ export class FakeDriver implements Driver {
         ? { mode: "slim" as const }
         : {}),
     };
+  }
+
+  #assertTaggedFits(request: ExactDeviceRequest): void {
+    if (request.imageTag !== undefined && this.#taggedRefusals.has(request.model)) {
+      throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
+    }
   }
 
   #resolveOsVersion(requested: string | undefined): string {
@@ -462,6 +486,7 @@ export class FakeDriver implements Driver {
   }
 
   /** why: what a saved source holds, for a test to compare with what the device held. */
+  // fallow-ignore-next-line unused-class-member -- tests read it on fakes their test-* helpers build.
   sourceFiles(sourceId: string): ReadonlyMap<string, string> | undefined {
     return this.#sourceFiles.get(sourceId);
   }
@@ -492,7 +517,11 @@ export class FakeDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly except?: readonly string[];
+    },
   ): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);
@@ -582,14 +611,16 @@ export class FakeDriver implements Driver {
     this.#physicalDevices = devices;
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    await this.#beforeCall("listPresentPhysical", enrolledIds);
-    if (enrolledIds.some((id) => this.#heldPresenceReads.has(id))) {
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    await this.#beforeCall("listPresentPhysical", enrolled);
+    if (enrolled.some(({ driverDeviceId }) => this.#heldPresenceReads.has(driverDeviceId))) {
       await new Promise<void>((resolve) => {
         this.#pendingPresenceReads.push(resolve);
       });
     }
-    return enrolledIds.map((driverDeviceId) => {
+    return enrolled.map(({ driverDeviceId }) => {
       if (this.#presentPhysical.has(driverDeviceId)) {
         return {
           driverDeviceId,
@@ -603,6 +634,21 @@ export class FakeDriver implements Driver {
         reason: this.#absentReasons.get(driverDeviceId) ?? "not-present",
       };
     });
+  }
+
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    await this.#beforeCall("listAttachedPhysical");
+    const devices = this.#physicalDevices ?? this.#scriptedPhysicalDevices ?? [];
+    const attached = devices
+      .filter((device) =>
+        device.ids.some((id) => {
+          const reason = this.#absentReasons.get(id);
+          return this.#presentPhysical.has(id) || reason === "locked" || reason === "untrusted";
+        }),
+      )
+      .map((device) => device.ids[0])
+      .filter((id) => id !== undefined);
+    return [...new Set(attached)].sort();
   }
 
   setPhysicalPresence(
@@ -648,6 +694,7 @@ export class FakeDriver implements Driver {
       defaultRuntime: newestVersion(this.#availableOsVersions),
       ...(this.#images === undefined ? {} : { images: [...this.#images] }),
       ...(this.#customModels === undefined ? {} : { customModels: [...this.#customModels] }),
+      ...(this.#slimCategories === undefined ? {} : { slimCategories: [...this.#slimCategories] }),
       modelAliases: { ...this.#modelAliases },
       modelClasses: { ...this.#modelClasses },
       modelRuntimes: Object.fromEntries(
@@ -855,6 +902,7 @@ function readPhysical(device: FakePhysicalDevice, id: string): PhysicalInspectio
     enrollable: true,
     model: device.model ?? "Fake Phone",
     osVersion: device.osVersion ?? "1.0",
+    ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
   };
 }
 

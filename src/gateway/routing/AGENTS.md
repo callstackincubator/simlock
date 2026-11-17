@@ -1,63 +1,34 @@
 # Gateway routing
 
 Does: picks the worker for one fleet request, or says it cannot be served. Pure, over views.
-Entry: `index.ts`; composed in `../routing.ts` → `createRoutingPolicy(gateway.routing)` →
-`{ assess, explain, select }`. Only policy: `warm-then-free`.
-Uses: contract, core (catalog match only). Called by: `../fleet-coordinator.ts`.
 Flows: [device selection](../../../docs/internal/flows/device-selection.md), [gateway](../AGENTS.md).
 
-## Files
-
-| File                | Role                                                                                                                                                      |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serviceability.ts` | `assess`: the fast-fail table, over every view                                                                                                            |
-| `pipeline.ts`       | `runStages`; `FilterStage`, `RankStage`                                                                                                                   |
-| `request-match.ts`  | `matchRequest`, `deviceFit`, `physicalMatch` over a view's catalog; `baselineEntry`, `withBaseline`, `baselineMismatchOf` for a request naming a baseline |
-| `view-state.ts`     | `viewLoadKey`: the view fields a refusal is remembered against                                                                                            |
-| `stages/`           | One file per stage                                                                                                                                        |
-
-## How it works
-
-1. **Assess** (`assess`), first that applies wins: a request naming a baseline first: no known worker holds it → `UNKNOWN_BASELINE`; no holder fits it (core `baselineMismatch`, through `baselineMismatchOf`) → `BASELINE_MISMATCH` (the first holder in worker id order); no fitting holder is fresh → `BASELINE_STALE`; the rest of the table then runs over the fitting, fresh holders, each request narrowed by `withBaseline` (the baseline's model, OS, mode and image tag). Then: no worker passes `takes-requests` →
-   `NO_CAPACITY` (`no-worker`); no known worker has the platform → `NO_DRIVER`; none lists the
-   model or class → `UNKNOWN_MODEL`; none pairs it with a fitting runtime → `RUNTIME_MISSING`
-   (`downloadable: false`); a known worker could, but none taking requests can → `NO_CAPACITY`;
-   `requires` met by none that could → `CAPABILITY_MISSING`. Else route or wait.
-   Physical: no known worker enrols a fitting device → `UNKNOWN_MODEL`. Known = not `incompatible`.
-2. **Select** (`runStages`): workers sorted by id. A filter drops; a rank keeps its best scorers,
-   abstains when the best is 0 or less, and a settling rank ends the walk. Pick the first left,
-   only if some rank decided. A physical request skips stages with `appliesToPhysical: false`.
-3. **Explain** (`explainStages`, `RoutingPolicy.explain`): why each view would not be picked, in
-   worker id order, deciding nothing. A filter's `check(worker, request)` answers a reason to drop
-   or `undefined` to keep (`runStages` keeps on `undefined`); a rank may add `zeroReason` for a
-   worker it scores 0. Per view: the first filter reason in stage order, else the first rank zero
-   reason, else none. The coordinator adds its memos on top of this (`../AGENTS.md`).
-4. The reported stage is the last rank that removed a worker, else the last that decided.
-   `reason` is `warm-hit` when that stage is `warm-hit`, else `free-capacity`.
-
-| Stage              | Kind          | Keeps or prefers                                                                                                                                              | Physical |
-| ------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `takes-requests`   | filter        | connected, not drained, not updating, capacity and catalog read this session (`starting`: a catalog held)                                                     | yes      |
-| `has-capabilities` | filter        | every `requires` entry `available`                                                                                                                            | yes      |
-| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device                                                         | yes      |
-| `has-baseline`     | filter        | a request naming a baseline: the worker holds it (`no-baseline`), it fits (`baseline-mismatch`), it is fresh (`baseline-stale`)                               | no       |
-| `healthy`          | filter        | health `running`                                                                                                                                              | yes      |
-| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                                                                            | no       |
-| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); for a baseline, a copy of its current version in its mode; physical: a pickable one | yes      |
-| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                                                                                  | no       |
-| `ram-budget`       | rank          | `atRamBudget` not true                                                                                                                                        | no       |
-| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                                                                        | no       |
-
-A physical request has one rank, `warm-hit`: with no pickable device nothing is picked, and it waits.
-
 ## Rules
+
+Stages:
 
 - Stages read the view and the request only. No clock, no I/O, no state.
 - A filter returns its own reason and a rank its own zero reason. The pipeline and the policy
   name no stage and compare no stage name.
-- `can-serve` and the fleet table (`assess`) ask the same helpers in the same order, so the reason
+- `gateway.routing` names a whole list; stage order is code, never config.
+- A rank abstains when its best score is 0 or less, and a settling rank ends the walk. A worker
+  is picked only if some rank decided: filters alone pick no one.
+- Workers are walked in id order, and the pick is the first one left.
+- A physical request skips every stage with `appliesToPhysical: false`. That leaves it one rank,
+  `warm-hit`: with no pickable device nothing is picked, and the request waits.
+- `explain` decides nothing: it gives, per view, the reason `select` would pass it over.
+
+Serviceability (`assess`):
+
+- The first check that applies wins, so the order of the checks is the answer a caller gets.
+- A request naming a baseline is checked first; the rest of the table then runs over the
+  fitting, fresh holders only, with the request narrowed by `withBaseline`.
+- A known worker is one that is not `incompatible`. What no known worker could serve is rejected
+  with its own code; what a known worker could serve but none taking requests can is `NO_CAPACITY`.
+  An updating worker counts as taking requests here, so a request only it can serve waits.
+- `can-serve` and `assess` ask the same helpers in the same order, so the reason
   `can-serve` gives is the code the table would reject with. `has-baseline` and `assess` share
   `baselineEntry` and `withBaseline`; no field of a baseline is compared in the gateway.
-- `gateway.routing` names a whole list; stage order is code, never config.
+- A request with `except` (ADR 0066 §5) is checked after the model and runtime rows and before the capacity row.
 - Downloads never make a worker able to serve: only installed runtimes count.
 - `matchRequest` gives the model name the gateway forwards, so the worker resolves what routing matched.

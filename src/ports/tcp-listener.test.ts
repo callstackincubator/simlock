@@ -48,5 +48,27 @@ describe("NodeTcpListenerFactory", () => {
     const again = await factory.listen(port);
     expect(again?.port).toBe(port);
     await again?.close();
+
+    const v6 = await factory.listen(port, "::1");
+    expect(v6?.address).toBe("::1");
+    expect(await factory.listen(port, "::1")).toBeUndefined();
+    const arrived = new Promise<void>((resolve) => v6?.onConnection(() => resolve()));
+    const v6Client = await new NodeTcpStreamConnector().connect(port, 1000, "::1");
+    await arrived;
+    v6Client.close();
+    await v6?.close();
+  });
+
+  it("reports the port it bound when asked for any free port, and still answers undefined for a taken one", async () => {
+    const factory = new NodeTcpListenerFactory();
+    const listener = await factory.listen(0);
+    expect(listener?.port).toBeGreaterThan(0);
+    const port = listener?.port ?? 0;
+    const arrived = new Promise<void>((resolve) => listener?.onConnection(() => resolve()));
+    const client = await new NodeTcpStreamConnector().connect(port, 1000);
+    await arrived;
+    client.close();
+    expect(await factory.listen(port)).toBeUndefined();
+    await listener?.close();
   });
 });
