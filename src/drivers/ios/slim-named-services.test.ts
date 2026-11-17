@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { KeptCategoriesError } from "../../core/index.js";
 import { FakeClock, ScriptedProcessRunner, type Logger } from "../../ports/index.js";
 import type { IosDriverConfig } from "./definition.js";
-import type { SlimmedFact, SlimSkippedFact } from "./index.js";
+import { SLIM_CATEGORIES, type SlimmedFact, type SlimSkippedFact } from "./index.js";
 import {
   createSlimDriver,
   driverData,
@@ -19,10 +20,25 @@ import {
 
 const slim18_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
 const diagnosticd = "com.apple.diagnosticd";
+// why: spelled out, not imported: the labels simslim never disables (ADR 0060 §1).
+const neverDisabled = ["com.apple.assistantd", "com.apple.gamed", "com.apple.sharingd"];
+
+/** why: What launchd prints once the worker's categories and the named services are off. */
+function disabledReadback(
+  categories: readonly string[],
+  off: readonly string[],
+  on: readonly string[] = [],
+): Record<string, string> {
+  const labels = SLIM_CATEGORIES.filter((category) => categories.includes(category.name))
+    .flatMap((category) => category.labels)
+    .filter((label) => !neverDisabled.includes(label) && !on.includes(label));
+  return Object.fromEntries([...labels, ...off].map((label) => [label, "disabled"]));
+}
 
 async function boot(options: {
   readonly slim: Omit<IosDriverConfig["slim"], "bootTimeoutMs">;
   readonly readback?: Readonly<Record<string, string>>;
+  readonly readbackFails?: boolean;
   readonly except?: readonly string[];
   readonly plist?: Readonly<Record<string, boolean>>;
   readonly record?: string;
@@ -54,7 +70,10 @@ async function boot(options: {
     ...calls.slice(0, 3),
     {
       match: calls[3]!.match,
-      result: { code: 0, stderr: "", stdout: printDisabled(options.readback ?? {}) },
+      result:
+        options.readbackFails === true
+          ? { code: 1, stderr: "boom\n", stdout: "" }
+          : { code: 0, stderr: "", stdout: printDisabled(options.readback ?? {}) },
     },
   ]);
   const onSlimmed = vi.fn<(fact: SlimmedFact) => void>();
@@ -89,16 +108,103 @@ async function boot(options: {
 }
 
 describe("IosSimctlDriver makeReady with include and exclude names", () => {
+  const apsd = "com.apple.apsd";
+  const everyCategory = SLIM_CATEGORIES.map((category) => category.name);
+  const slimMode = { result: expect.objectContaining({ mode: "slim" }) };
+  const fullMode = { result: expect.objectContaining({ mode: "full" }) };
+
   it("grants the mode the readback shows for the named services", async () => {
     const excludeOnly = await boot({
       slim: { categories: [], exclude: [diagnosticd] },
       readback: { [diagnosticd]: "disabled" },
     });
     expect(excludeOnly.written?.[diagnosticd]).toBe(true);
-    expect(excludeOnly.outcome).toEqual({ result: expect.objectContaining({ mode: "slim" }) });
+    expect(excludeOnly.outcome).toEqual(slimMode);
     expect(excludeOnly.onSlimmed).toHaveBeenCalledWith(
       expect.objectContaining({ categories: [], labelCount: 1 }),
     );
+
+    const all = disabledReadback(everyCategory, [diagnosticd]);
+    const asWritten = await boot({ slim: { exclude: [diagnosticd] }, readback: all });
+    expect(asWritten.outcome).toEqual(slimMode);
+    expect(asWritten.onSlimmed).toHaveBeenCalledWith(
+      expect.objectContaining({ categories: everyCategory, labelCount: Object.keys(all).length }),
+    );
+
+    const excludeEnabled = await boot({
+      slim: { exclude: [diagnosticd] },
+      readback: { ...all, [diagnosticd]: "enabled" },
+    });
+    expect(excludeEnabled.outcome).toEqual(fullMode);
+    expect(excludeEnabled.onSlimmed).not.toHaveBeenCalled();
+    expect(excludeEnabled.onSlimSkipped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: expect.stringContaining(
+          `managed labels did not read back as written at boot; first: ${diagnosticd}`,
+        ),
+      }),
+    );
+
+    const includeDisabled = await boot({
+      slim: { include: [apsd] },
+      readback: disabledReadback(everyCategory, []),
+    });
+    expect(includeDisabled.outcome).toEqual(fullMode);
+    expect(includeDisabled.onSlimmed).not.toHaveBeenCalled();
+
+    const readbackFails = await boot({ slim: { exclude: [diagnosticd] }, readbackFails: true });
+    expect(readbackFails.outcome).toEqual(slimMode);
+    expect(readbackFails.onSlimSkipped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: "could not read back the launchd overrides: exit 1: boom",
+      }),
+    );
+
+    const nothingOff = await boot({
+      slim: {
+        categories: ["store"],
+        include: SLIM_CATEGORIES.find((c) => c.name === "store")!.labels,
+      },
+    });
+    expect(nothingOff.outcome).toEqual(fullMode);
+    expect(nothingOff.onSlimmed).not.toHaveBeenCalled();
+
+    const exceptCoversSet = await boot({ slim: { categories: ["store"] }, except: ["store"] });
+    expect(exceptCoversSet.outcome).toEqual(fullMode);
+    expect(exceptCoversSet.onSlimmed).not.toHaveBeenCalled();
+
+    const noCategories = await boot({ slim: { categories: [] } });
+    expect(noCategories.outcome).toEqual(fullMode);
+    expect(noCategories.written).toBeUndefined();
+    expect(noCategories.onSlimSkipped).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "apply-failed" }),
+    );
+  });
+
+  it("fails a lease's boot only on its kept categories", async () => {
+    const storeLabels = SLIM_CATEGORIES.find((category) => category.name === "store")!.labels;
+    const keptLabel = storeLabels[0]!;
+    const base = disabledReadback(everyCategory, [diagnosticd], storeLabels);
+    const slim = { exclude: [diagnosticd] };
+
+    const kept = await boot({ slim, except: ["store"], readback: base });
+    expect(kept.outcome).toEqual(slimMode);
+
+    const keptDisabled = await boot({
+      slim,
+      except: ["store"],
+      readback: { ...base, [keptLabel]: "disabled" },
+    });
+    expect(keptDisabled.outcome).toEqual({
+      error: new KeptCategoriesError(`1 kept labels are not enabled; first: ${keptLabel}`),
+    });
+
+    const excludeEnabled = await boot({
+      slim,
+      except: ["store"],
+      readback: { ...base, [diagnosticd]: "enabled" },
+    });
+    expect(excludeEnabled.outcome).toEqual(fullMode);
   });
 });
 
