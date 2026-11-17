@@ -33,13 +33,15 @@ const STARTING_FAILURE_CODES: ReadonlySet<string> = new Set([
 const STARTING_WAIT_EXTRA_MS = 30_000;
 
 // why: the adapter loads on the first transfer, so a command that moves no file never loads node:http for it.
-function lazyHttpStream(): HttpStreamClient {
-  return {
-    request: async (request) => {
-      const { NodeHttpStreamClient } = await import("../ports/index.js");
-      return new NodeHttpStreamClient().request(request);
-    },
-  };
+function httpStreamOf(supplied: HttpStreamClient | undefined): HttpStreamClient {
+  return (
+    supplied ?? {
+      request: async (request) => {
+        const { NodeHttpStreamClient } = await import("../ports/index.js");
+        return new NodeHttpStreamClient().request(request);
+      },
+    }
+  );
 }
 
 // why: a real stdout takes the bytes as they are; a stdout a test or a host supplied is a text sink, so the bytes go to it as text.
@@ -493,7 +495,7 @@ export function buildCliEnvironment(
         return new FetchHttpJsonClient().get(url, token);
       },
     },
-    httpStream: ports.httpStream ?? lazyHttpStream(),
+    httpStream: httpStreamOf(ports.httpStream),
     ...tcpPorts(ports),
     ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
