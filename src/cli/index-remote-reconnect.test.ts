@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { FakeClock, WebSocketRefusedError } from "../ports/index.js";
+import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import { runCli } from "./index.js";
 import { detachedGrant, outputCapture, realCliEnvironmentPorts, settle } from "./test-index.js";
 import { FakeFarm, type FarmAnswer } from "./test-remote.js";
@@ -136,6 +137,42 @@ async function reconnectAnswersDecideTheEnd(): Promise<void> {
   expect(revoked.attempts).toHaveLength(1);
 }
 
+async function silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound(): Promise<void> {
+  const silent = holdRemoteLease();
+  await vi.waitFor(() => expect(silent.farm.requestTypes()).toEqual(["lease.request"]));
+  silent.clock.advance(45_000);
+  await vi.waitFor(() => expect(silent.stderr()).toContain("lost the connection"));
+  silent.signals.emit("SIGINT");
+  expect(await ends(silent)).toBe(0);
+
+  const reachable = holdRemoteLease();
+  await dropped(reachable);
+  await vi.waitFor(() => expect(reachable.stderr()).toContain("lost the connection"));
+  reachable.signals.emit("SIGINT");
+  expect(await ends(reachable)).toBe(0);
+  expect(reachable.farm.requestTypes()).toEqual(["lease.request", "lease.release"]);
+  expect(reachable.farm.connections).toHaveLength(2);
+  expect(reachable.stderr()).not.toContain("still yours");
+
+  const refused = holdRemoteLease();
+  await dropped(refused);
+  await vi.waitFor(() => expect(refused.stderr()).toContain("lost the connection"));
+  refused.farm.failure = new Error("connect ECONNREFUSED");
+  refused.signals.emit("SIGINT");
+  expect(await ends(refused)).toBe(0);
+  expect(errorLine(refused.stderr()).message).toContain("lease lse_env is still yours until");
+
+  const silentFarm = holdRemoteLease();
+  await dropped(silentFarm);
+  await vi.waitFor(() => expect(silentFarm.stderr()).toContain("lost the connection"));
+  silentFarm.farm.unanswered = true;
+  silentFarm.signals.emit("SIGINT");
+  await vi.waitFor(() => expect(silentFarm.attempts.length).toBeGreaterThan(1));
+  silentFarm.clock.advance(RELEASE_TIMEOUT_MS);
+  expect(await ends(silentFarm)).toBe(0);
+  expect(errorLine(silentFarm.stderr()).message).toContain("lease lse_env is still yours until");
+}
+
 async function rideOutADropBeforeTheDeadline(): Promise<void> {
   const held = holdRemoteLease();
   await vi.waitFor(() => expect(held.farm.requestTypes()).toEqual(["lease.request"]));
@@ -183,5 +220,6 @@ describe("CLI: a held remote lease across a network drop", () => {
     await rideOutADropBeforeTheDeadline();
     await neverBackBeforeTheDeadline();
     await reconnectAnswersDecideTheEnd();
+    await silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound();
   });
 });
