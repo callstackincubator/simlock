@@ -38,7 +38,9 @@ export function config(
   warmPool: Partial<Config["warmPool"]> = {},
 ): TestEngineConfig {
   return {
+    android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    ios: { virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -121,6 +123,8 @@ export async function createHarness(
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
     readonly state?: StateDatabase;
+    /** why: the first id this process mints, so a second process on the same `state` does not mint the first one's ids. */
+    readonly firstId?: number;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     /** why: a participant holds a released device in `reclaiming` until it returns. */
@@ -137,6 +141,8 @@ export async function createHarness(
     readonly warmPool?: Partial<Config["warmPool"]>;
     /** why: how long a ready device may idle before the pool shuts it down. */
     readonly idleShutdownAfterMs?: number;
+    /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0084). */
+    readonly virtualDevices?: Readonly<Partial<Record<"android" | "ios", boolean>>>;
     /** why: starts the warm pool as the daemon's startup does, so it learns from the leases and reacts to events. */
     readonly startPool?: boolean;
   } = {},
@@ -146,7 +152,7 @@ export async function createHarness(
   const bus = new EventBus(clock);
   const driver =
     options.driver ?? new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  let nextId = options.state === undefined ? 1 : 1_000;
+  let nextId = options.firstId ?? (options.state === undefined ? 1 : 1_000);
   const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
@@ -165,7 +171,9 @@ export async function createHarness(
   );
   const engineConfig: TestEngineConfig = {
     ...baseConfig,
+    android: { virtualDevices: options.virtualDevices?.android ?? true },
     capacity: capacityConfig(baseConfig, options),
+    ios: { virtualDevices: options.virtualDevices?.ios ?? true },
   };
   const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
   const drivers = options.drivers ?? [driver];

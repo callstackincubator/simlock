@@ -218,6 +218,10 @@ export function createCore(options: CoreOptions): Core {
   const drivers = new DriverCatalog(options.drivers, {
     logger: options.logger,
     preferences: options.modelPreferences,
+    virtualDevices: {
+      android: options.config.android.virtualDevices,
+      ios: options.config.ios.virtualDevices,
+    },
   });
   const deviceLifecycle = new ManagedDeviceLifecycle(
     drivers,
@@ -391,6 +395,29 @@ export function createCore(options: CoreOptions): Core {
   const startup = new StartupConverger({
     claims,
     decisions,
+    idleDeletion: {
+      // why: a failed shutdown or delete must not stop the daemon from starting: the device stays in the state it reached and the next start tries again (ADR 0084 §2).
+      deleteIdle: async (device) => {
+        try {
+          const stopped =
+            device.state === "ready"
+              ? await deviceLifecycle.shutdown(device, "virtual-devices-off", "cleanup")
+              : device;
+          if (stopped !== undefined) {
+            await deviceLifecycle.destroy(stopped, "virtual-devices-off", "cleanup");
+          }
+        } catch (error: unknown) {
+          options.logger?.warn("Could not delete an idle device at start", {
+            deviceId: device.id,
+            error: stableError(error),
+            platform: device.spec.platform,
+          });
+        }
+      },
+      platforms: (["ios", "android"] as const).filter(
+        (platform) => !drivers.virtualDevices(platform),
+      ),
+    },
     interruptedReclaimRecovery: {
       recoverInterruptedReclaim: async (device) => {
         await reclaim.recoverInterrupted(device.id);

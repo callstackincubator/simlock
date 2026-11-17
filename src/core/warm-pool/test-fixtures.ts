@@ -293,7 +293,7 @@ export function harness(
         };
       },
     },
-    catalog: { listCatalog: options.catalog ?? (async () => []) },
+    catalog: { listCatalog: options.catalog ?? (async () => []), virtualDevices: () => true },
     claims: {
       claim: (id) => claims.claim(id),
       isClaimed: (id) => claims.isClaimed(id),

@@ -50,6 +50,7 @@ describe("Doctor: warm pool targets", () => {
     readonly limit?: { ios?: number; android?: number; global?: number };
     readonly figures?: ReturnType<typeof figuresOf>;
     readonly driver?: Omit<ConstructorParameters<typeof FakeDriver>[0], "clock">;
+    readonly virtualDevices?: Partial<Record<"ios" | "android", boolean>>;
   }): Promise<DoctorFinding[]> {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
@@ -60,6 +61,8 @@ describe("Doctor: warm pool targets", () => {
       clock,
       config: {
         ...base,
+        android: { virtualDevices: options.virtualDevices?.android ?? true },
+        ios: { virtualDevices: options.virtualDevices?.ios ?? true },
         warmPool: {
           ...base.warmPool,
           enabled: options.enabled ?? true,
@@ -146,6 +149,61 @@ describe("Doctor: warm pool targets", () => {
         remedy: "run simlock component install ios 27.0",
       }),
     ]);
+  });
+
+  it("names <platform>.virtualDevices for a configured target on a phones-only platform, and keeps today's findings with the key true or on the other platform", async () => {
+    const androidTarget = { model: "Pixel 9", osVersion: "36", platform: "android" } as const;
+    const target = "Pixel 9 / 36 / full";
+
+    const off = await findings({
+      figures: figuresOf([{ ...androidTarget, short: "unknown-model" }]),
+      virtualDevices: { android: false },
+    });
+    const on = await findings({
+      figures: figuresOf([{ ...androidTarget, short: "unknown-model" }]),
+    });
+    const otherOff = await findings({
+      figures: figuresOf([{ model: "iPhone 99", osVersion: "26.0", short: "unknown-model" }]),
+      virtualDevices: { android: false },
+    });
+
+    expect(off).toStrictEqual([
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${target} cannot be met: android.virtualDevices is false`,
+        platform: "android",
+        reason: "unknown-model",
+        remedy: "remove the target from warmPool.targets, or set android.virtualDevices true",
+        target,
+      },
+    ]);
+    expect(on).toStrictEqual([
+      expect.objectContaining({
+        message: "Pixel 9 is not a known Android model",
+        reason: "unknown-model",
+      }),
+    ]);
+    expect(otherOff).toStrictEqual([
+      expect.objectContaining({
+        message: "iPhone 99 is not a known iOS model",
+        platform: "ios",
+      }),
+    ]);
+  });
+
+  it("leaves a phones-only platform's reserveRunning out of the room the targets are checked against", async () => {
+    const ask = (virtualDevices: boolean) =>
+      findings({
+        limit: { global: 2 },
+        reserve: { android: 2, ios: 0 },
+        targets: [{ count: 2, model: "iPhone 17", platform: "ios" }],
+        virtualDevices: { android: virtualDevices },
+      });
+
+    expect(await ask(true)).toStrictEqual([
+      expect.objectContaining({ reason: "over-limit", target: "all targets" }),
+    ]);
+    expect(await ask(false)).toStrictEqual([]);
   });
 
   it("reports a target short with unknown-model as unreachable", async () => {
