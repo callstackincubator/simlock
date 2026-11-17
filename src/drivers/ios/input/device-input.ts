@@ -159,8 +159,10 @@ function within<T>(milliseconds: number, clock: Clock, work: Promise<T>): Promis
 
 // why: the helper reads serve-sim's JSON for each tag; JSON leaves out a scroll position the client
 // sent none of, so the helper scrolls under the centre.
-function frameOfMessage(message: Exclude<InputMessage, { kind: "button" }>): Uint8Array {
+function frameOfMessage(message: InputMessage): Uint8Array {
   switch (message.kind) {
+    case "button":
+      return frameOf(INPUT_TAG.button, { button: message.button });
     case "touch":
       return frameOf(INPUT_TAG.touch, { type: message.type, x: message.x, y: message.y });
     case "scroll":
@@ -227,7 +229,7 @@ class IosDeviceInput implements DeviceInput {
   send(message: InputMessage): Promise<void> {
     if (message.kind === "button") {
       if (message.button === "home") this.#home();
-      return Promise.resolve();
+      if (message.button !== "app_switcher" && message.button !== "lock") return Promise.resolve();
     }
     if (message.kind === "key" && !this.#keys) return Promise.resolve();
     return this.#child.writeStdin(frameOfMessage(message)).catch((error: unknown) => {
@@ -239,8 +241,8 @@ class IosDeviceInput implements DeviceInput {
     });
   }
 
-  // why: Xcode 26 and later silently drop the HID home-button press, so Home brings SpringBoard
-  // forward the way serve-sim does; the app switcher and Lock have no such way and are dropped.
+  // why: Home keeps one owner, this launch of SpringBoard; the helper presses Home only as part of
+  // the app switcher (ADR 0085 section 3).
   #home(): void {
     const { deviceSet, logger, processRunner } = this.#options;
     const args = [
