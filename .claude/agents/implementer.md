@@ -75,6 +75,9 @@ pages; it compares nothing. Open the pictures the change touched.
    artifact's notice and rows (`always-in-scope.md`).
 6. Never `git stash`, never the slow lane, never a check listed under
    "Checks agents never run"; the hooks and CI run them (toolchain).
+   Never `sed -i`: its flag differs between macOS and Linux, and a
+   pattern that misses changes nothing without an error. Change a file
+   with the Edit tool, or a script that fails when its match is missing.
 
 The issue body is the spec. Build exactly what it says, plus what
 `always-in-scope.md` lists. Do not claim, review, mark ready or merge.

@@ -41,7 +41,9 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    round. Spec and claims treat theirs as read-only. Spawn the selected `spec-reviewer`,
    `code-reviewer` and `claims-reviewer` together in the foreground
    (`run_in_background: false`), each
-   prompt the ledger tag line (`toolchain.md`, "Review measurement"), then
+   prompt the ledger tag line (your own prompt's first line, with `role=`
+   the lens's `spec`, `code` or `claims` and `lens=` a code lens's lens),
+   then
    inputs, worktree, round and lens, then the full text of
    `review-later-round.md` for a later round, and of the lens's own brief,
    each under a line naming the file: a lens opens nothing to learn its procedure, and the text is the
@@ -61,17 +63,23 @@ resolution ledger and the findings file with the PR.
 ```
 PR: #M  Round: <1|2|fix-check>  Kind: <kind>  Commit: <full sha>
 Assessment: complete | incomplete — <missing coverage>
-Risk: <routine|high|uncertain> — <reason and selected models/lenses>
-Spec review: n findings (b blocking) | skipped  Code review: n findings (b blocking) | skipped  Claims review: n findings (b blocking) | skipped
+Risk: <routine|high|uncertain> — <reason, selected models/lenses, any lens that did not run or that you ran yourself>
+Spec review: 0 findings (0 blocking)  Code review: 2 findings (1 blocking)  Claims review: skipped
 Fix: <ID role: path:line defect [class] impacts, or none>
 Ledger: <ID, origins, evidence, impacts, outcome, reason, fix/verification SHAs>
 Out of scope: <proven pre-existing unrelated defects, or none>
 Notes: <role: path:line claim, or none>
 Rejected: <role: ID [incorrect|intentional|nonblocking] claim — reason, or none>
 Spec needs: <unresolved decision, or none>
-Rerun: round 2 | fix-check | none
+Rerun: none
+Why: <what the next check must cover, or why none is left to run>
 Findings file: <path>
 ```
 
+A hook reads the review counts and `Rerun:` and sends back any other form.
+Each count is `<n> findings (<b> blocking)`, both numbers written even at
+zero, or the one word `skipped`. `Rerun:` is `round 2`, `fix-check` or
+`none`. Nothing else goes on either line: a note on a count goes on
+`Risk:`, the reason for the rerun on `Why:`.
 `Rerun: none` never means unresolved findings passed. A non-delivery PR
 gets one findings comment, ending `*Written by an agent.*`; push nothing.
