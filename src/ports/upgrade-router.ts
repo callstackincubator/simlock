@@ -63,7 +63,7 @@ export function createUpgradeRouter(options: UpgradeRouterOptions): {
     } else if (path === SESSION_PATH && options.session !== undefined) {
       const resolve = options.session;
       void upgradeSocket(resolve, sessionSockets, request, socket, head, (outcome, client) =>
-        outcome.accept(wrapSession(client)),
+        outcome.accept(wrapSession(client, clock, outcome.expiresAt)),
       );
     } else if (LEASE_SOCKET_PATH.test(path)) {
       void upgradeSocket(options.leaseSocket, sockets, request, socket, head, (outcome, client) =>
@@ -150,8 +150,8 @@ function bytesOf(data: RawData): Uint8Array {
   return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
 }
 
-function wrap(client: WebSocket, clock: Clock): LeaseSocket {
-  const closeListeners: (() => void)[] = [];
+// why: the lease sockets and the session share the ping: it ends the socket of a client that vanished without closing.
+function keepAlive(client: WebSocket, clock: Clock): void {
   let awaitingPong = false;
   let timer: ReturnType<Clock["setTimer"]> | undefined;
   const tick = (): void => {
@@ -167,9 +167,16 @@ function wrap(client: WebSocket, clock: Clock): LeaseSocket {
   client.on("pong", () => {
     awaitingPong = false;
   });
-  client.on("error", () => undefined);
   client.once("close", () => {
     if (timer !== undefined) clock.cancel(timer);
+  });
+}
+
+function wrap(client: WebSocket, clock: Clock): LeaseSocket {
+  const closeListeners: (() => void)[] = [];
+  keepAlive(client, clock);
+  client.on("error", () => undefined);
+  client.once("close", () => {
     for (const listener of closeListeners) listener();
   });
   return {
@@ -190,12 +197,29 @@ function wrap(client: WebSocket, clock: Clock): LeaseSocket {
 
 // why: the session's adapter. The daemon reads a connection as chunks split on `\n`, so each text
 // message gets its newline back; a `write` holding several lines goes out as one message per line.
-function wrapSession(client: WebSocket): SessionConnection {
+function wrapSession(
+  client: WebSocket,
+  clock: Clock,
+  expiresAt: number | undefined,
+): SessionConnection {
   const dataListeners = new Set<(chunk: string) => void>();
   const closeListeners = new Set<() => void>();
   const errorListeners = new Set<(error: Error) => void>();
   let closed = false;
-  client.on("message", (data: RawData) => {
+  keepAlive(client, clock);
+  // why: ADR 0081 §2: a session opened by an identity with an expiry (a proxy JWT) ends then, as HTTP streams do.
+  if (expiresAt !== undefined) {
+    const expiry = clock.setTimer(Math.max(0, expiresAt - clock.now()), () =>
+      client.close(4001, "identity expired"),
+    );
+    client.once("close", () => clock.cancel(expiry));
+  }
+  client.on("message", (data: RawData, isBinary: boolean) => {
+    // why: a session carries text lines only; a binary message closes the socket and runs nothing.
+    if (isBinary) {
+      client.close(1003, "binary message");
+      return;
+    }
     const chunk = `${bytesOf(data).toString()}\n`;
     for (const listener of dataListeners) listener(chunk);
   });

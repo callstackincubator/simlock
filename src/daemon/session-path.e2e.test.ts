@@ -108,6 +108,7 @@ describe("the session path", () => {
   const daemons: DaemonServer[] = [];
   const directories: string[] = [];
   const keyServers: Server[] = [];
+  let pumped: FakeClock | undefined;
 
   afterEach(async () => {
     await Promise.all(
@@ -120,7 +121,11 @@ describe("the session path", () => {
       ),
     );
     for (const socket of sockets.splice(0)) socket.terminate();
+    // why: a stop waits on timers of the daemon's clock, which a fake one never fires by itself.
+    const pump = setInterval(() => pumped?.advance(1_000), 10);
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
+    clearInterval(pump);
+    pumped = undefined;
     await Promise.all(
       directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
     );
@@ -340,15 +345,9 @@ describe("the session path", () => {
   });
 
   it("holds a session's limits: a message over 32 MiB or a binary one closes it, a silent peer is closed, a proxy identity ends at its expiry", async () => {
-    const clock = new FakeClock(Date.now());
+    const clock = new FakeClock(Math.floor(Date.now() / 1000) * 1000);
+    pumped = clock;
     const key = await createTestKey("ES256", "k1");
-    const jwt = await key.sign({
-      aud: "aud",
-      email: "alice@team.dev",
-      exp: Math.floor(clock.now() / 1000) + 300,
-      iss: "https://team.example",
-      sub: "7f3a",
-    });
     const { agent, port } = await farm(
       "worker",
       {
@@ -359,8 +358,8 @@ describe("the session path", () => {
       },
       clock,
     );
-    const live = async (options: Parameters<typeof openSession>[2] = {}, secret = agent.secret) => {
-      const { session } = await openSession(port, secret, options);
+    const live = async (options: Parameters<typeof openSession>[2] = {}, withToken = true) => {
+      const { session } = await openSession(port, withToken ? agent.secret : undefined, options);
       await (session as Session).request("hello", hello);
       return session as Session;
     };
@@ -374,7 +373,7 @@ describe("the session path", () => {
       stdin: "x".repeat(EXEC_STDIN_MAX_LENGTH),
       tool: "adb",
     });
-    expect(exec.error ?? exec.payload).toMatchObject({ exitCode: 0 });
+    expect(exec.payload).toMatchObject({ exitCode: 0 });
 
     const oversized = await live();
     oversized.socket.send(
@@ -394,20 +393,38 @@ describe("the session path", () => {
 
     const quiet = await live({ autoPong: false });
     const answering = await live();
+    let pings = 0;
+    answering.socket.on("ping", () => {
+      pings += 1;
+    });
     clock.advance(15_000);
+    await vi.waitFor(() => expect(pings).toBe(1), { timeout: 10_000 });
+    // why: the answering client's pong has to reach the daemon before the next ping tick, which the fake clock would otherwise fire at once.
+    await new Promise((resolve) => setTimeout(resolve, 100));
     clock.advance(14_999);
     expect(quiet.closed).toBeUndefined();
     clock.advance(1);
     await vi.waitFor(() => expect(quiet.closed?.code).toBe(1006), { timeout: 10_000 });
     expect(answering.closed).toBeUndefined();
 
+    const jwt = await key.sign({
+      aud: "aud",
+      email: "alice@team.dev",
+      exp: clock.now() / 1000 + 1,
+      iss: "https://team.example",
+      sub: "7f3a",
+    });
     const proxied = await live(
       { headers: { "cf-access-jwt-assertion": jwt, "sec-fetch-site": "same-origin" } },
-      undefined,
+      false,
     );
-    clock.advance(359_999);
+    // why: the identity ends 61 s from now (its `exp` plus the proxy strategy's 60 s grace); each ping needs its pong in real time before the next fake tick.
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 15_000) {
+      clock.advance(15_000);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     expect(proxied.closed).toBeUndefined();
-    clock.advance(1);
+    clock.advance(1_000);
     await vi.waitFor(
       () => expect(proxied.closed).toEqual({ code: 4001, reason: "identity expired" }),
       { timeout: 10_000 },
