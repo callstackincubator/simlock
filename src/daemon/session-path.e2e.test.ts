@@ -249,4 +249,35 @@ describe("the session path", () => {
       });
     }
   });
+
+  it("answers a session's hello as on the socket but for identity: its principal is not used, a credential is refused, an old range keeps it open", async () => {
+    for (const role of ["worker", "gateway"] as const) {
+      const { agent, operator, port } = await farm(role);
+
+      const named = (await openSession(port, agent.secret)).session as Session;
+      const reply = await named.request("hello", { ...hello, principal: "someone-else" });
+      expect(reply.payload).toMatchObject({ principal: agent.token.id, role: "agent" });
+
+      const credential = (await openSession(port, agent.secret)).session as Session;
+      const refused = await credential.request("hello", { ...hello, credential: "a-secret" });
+      expect(refused.error).toEqual({
+        code: "BAD_REQUEST",
+        message: "A session's identity is its token: send no credential in hello",
+      });
+      await vi.waitFor(() => expect(credential.closed).toBeDefined());
+
+      const old = (await openSession(port, operator.secret)).session as Session;
+      const mismatch = await old.request("hello", {
+        clientVersion: "e2e",
+        protocolRange: { max: 2, min: 1 },
+      });
+      expect(mismatch.error?.code).toBe("PROTOCOL_VERSION_UNSUPPORTED");
+      expect(old.closed).toBeUndefined();
+      expect((await old.request("daemon.update", { query: true })).ok).toBe(true);
+
+      const early = (await openSession(port, agent.secret)).session as Session;
+      expect((await early.request("identity.get")).error?.code).toBe("HANDSHAKE_REQUIRED");
+      await vi.waitFor(() => expect(early.closed).toBeDefined());
+    }
+  });
 });
