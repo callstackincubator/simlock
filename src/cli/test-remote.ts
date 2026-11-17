@@ -1,6 +1,9 @@
 import { PROTOCOL_VERSION_RANGE, type Role } from "../contract/index.js";
 import { FakeWebSocketClientConnector, type WebSocketClient } from "../ports/index.js";
 
+// why: an answer returns this to play a farm that accepted the request and is still working on it, as a queued lease request is.
+export const NO_REPLY = Symbol("no reply");
+
 export type FarmAnswer = (payload: unknown) => unknown;
 
 export interface FarmRequest {
@@ -32,7 +35,8 @@ export class FakeFarm extends FakeWebSocketClientConnector {
       queueMicrotask(() => {
         const frame = JSON.parse(text) as { id: number; type: string; payload: unknown };
         this.requests.push({ payload: frame.payload, type: frame.type });
-        connection.receive(new TextEncoder().encode(JSON.stringify(this.#reply(frame))));
+        const reply = this.#reply(frame);
+        if (reply !== NO_REPLY) connection.receive(new TextEncoder().encode(JSON.stringify(reply)));
       });
     };
     return peer;
@@ -61,6 +65,7 @@ export class FakeFarm extends FakeWebSocketClientConnector {
       };
     }
     const result = answer(frame.payload);
+    if (result === NO_REPLY) return NO_REPLY;
     if (result instanceof Error && "code" in result) {
       return { error: { code: result.code, message: result.message }, id: frame.id, ok: false };
     }

@@ -4,7 +4,7 @@ import { FakeClock, WebSocketRefusedError } from "../ports/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import { runCli } from "./index.js";
 import { detachedGrant, outputCapture, realCliEnvironmentPorts, settle } from "./test-index.js";
-import { FakeFarm, type FarmAnswer } from "./test-remote.js";
+import { FakeFarm, NO_REPLY, type FarmAnswer } from "./test-remote.js";
 
 const URL = "https://farm.example.com";
 const AGENT_A = { SIMLOCK_AGENT_ID: "agent-a", SIMLOCK_TOKEN: "slk_t", SIMLOCK_URL: URL };
@@ -22,10 +22,12 @@ interface Held {
   readonly signals: EventEmitter;
   readonly attempts: number[];
   stderr(): string;
+  stdout(): string;
 }
 
 function holdRemoteLease(
   answersFor: (clock: FakeClock) => Record<string, FarmAnswer> = () => ({}),
+  extraArgv: readonly string[] = [],
 ): Held {
   const clock = new FakeClock(0);
   const farm = new FakeFarm({ ...farmAnswers, ...answersFor(clock) });
@@ -42,7 +44,9 @@ function holdRemoteLease(
     webSocket: farm,
   });
   let exitCode: number | undefined;
-  void runCli(["lease", "--platform", "ios"], environment).then((code) => (exitCode = code));
+  void runCli(["lease", "--platform", "ios", ...extraArgv], environment).then(
+    (code) => (exitCode = code),
+  );
   return {
     attempts,
     clock,
@@ -50,6 +54,7 @@ function holdRemoteLease(
     farm,
     signals,
     stderr: () => output.stderr,
+    stdout: () => output.stdout,
   };
 }
 
@@ -173,6 +178,33 @@ async function silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound(): Pr
   expect(errorLine(silentFarm.stderr()).message).toContain("lease lse_env is still yours until");
 }
 
+const leaseRequestsOf = (held: Held) =>
+  held.farm.requests
+    .filter(({ type }) => type === "lease.request")
+    .map(({ payload }) => payload as { idempotencyKey?: string });
+
+async function dropWhileQueued(): Promise<void> {
+  let asked = 0;
+  const queued = holdRemoteLease(() => ({
+    "lease.request": () => (++asked === 1 ? NO_REPLY : detachedGrant),
+  }));
+  await vi.waitFor(() =>
+    expect(queued.farm.requests.map(({ type }) => type)).toContain("lease.request"),
+  );
+  queued.farm.connections[0]?.peer.dropped(1006, "");
+  await vi.waitFor(() => expect(queued.stderr()).toContain("lost the connection"));
+  expect(queued.stderr().trim()).toBe(
+    notice(`lost the connection to ${URL}; reconnecting to the waiting request`),
+  );
+  queued.clock.advance(1_000);
+  await vi.waitFor(() => expect(queued.stdout()).toContain("lse_env"));
+  const [first, again] = leaseRequestsOf(queued);
+  expect(first?.idempotencyKey).toMatch(/\S/);
+  expect(again?.idempotencyKey).toBe(first?.idempotencyKey);
+  queued.signals.emit("SIGINT");
+  expect(await ends(queued)).toBe(0);
+}
+
 async function rideOutADropBeforeTheDeadline(): Promise<void> {
   const held = holdRemoteLease();
   await vi.waitFor(() => expect(held.farm.requestTypes()).toEqual(["lease.request"]));
@@ -221,5 +253,6 @@ describe("CLI: a held remote lease across a network drop", () => {
     await neverBackBeforeTheDeadline();
     await reconnectAnswersDecideTheEnd();
     await silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound();
+    await dropWhileQueued();
   });
 });
