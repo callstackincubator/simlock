@@ -171,25 +171,22 @@ export class SlimBoot {
     const configured = resolveSlimCategories(slim.categories);
     const { kept, resolved } = splitByExcept(configured, except);
     const folder = this.#overridesFolder(udid);
-    const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
+    const include = slim.include ?? [];
+    const exclude = slim.exclude ?? [];
+    const names = [...new Set([...include, ...exclude])].sort();
     const recorded = await this.#readRecord(join(folder, RECORD_FILE_NAME));
-    // why: a name the worker dropped is still written back on (ADR 0083 §5), so a record or a name keeps the write going even with no category.
-    const noCategoriesDetail = `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`;
     const noCategories = configured.categories.length === 0;
+    const noCategoriesDetail = `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`;
+    // why: a name the worker dropped is still written back on (ADR 0083 §5), so a record or a name keeps the write going even with no category.
     if (noCategories && names.length === 0 && recorded.length === 0) {
       return { detail: noCategoriesDetail, kind: "no-categories" };
     }
 
     const startedAt = this.#clock.now();
-    const wanted = overridesFor(resolved.categories, kept, {
-      exclude: slim.exclude ?? [],
-      include: slim.include ?? [],
-      recorded,
-    });
+    const wanted = overridesFor(resolved.categories, kept, { exclude, include, recorded });
     const writeError = await this.#tryWriteFiles(folder, wanted, { names, recorded });
     // why: no category and no `exclude` is the unconfigured case, which logs its skip as before (ADR 0083 §4).
-    const unconfigured =
-      noCategories && (slim.exclude ?? []).length === 0 ? noCategoriesDetail : undefined;
+    const unconfigured = noCategories && exclude.length === 0 ? noCategoriesDetail : undefined;
     return { kept, kind: "written", resolved, startedAt, unconfigured, wanted, writeError };
   }
 
@@ -267,11 +264,8 @@ export class SlimBoot {
       throw new KeptCategoriesError(write.writeError);
     }
     // why: ADR 0083 §4: with no label written off the device is `full` whatever a readback would say, so none is run unless a kept category needs it.
-    if (write.kept.length === 0 && ![...write.wanted.values()].some(Boolean)) {
-      const detail = [write.unconfigured, write.writeError].filter((part) => part !== undefined);
-      return detail.length === 0
-        ? this.#asIs(device, data, "full")
-        : this.#skipApply(device, data, detail.join("; "), "full");
+    if (write.kept.length === 0 && !writesOff(write)) {
+      return this.#unreadFull(device, data, write);
     }
     const outcome = await this.#simctl.invoke(
       ["spawn", data.udid, "launchctl", "print-disabled", "system"],
@@ -285,6 +279,17 @@ export class SlimBoot {
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
     return this.#judgeReadBack(device, data, write, details, outcome.result.stdout);
+  }
+
+  #unreadFull(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+  ): DriverDevice {
+    const detail = [write.unconfigured, write.writeError].filter((part) => part !== undefined);
+    return detail.length === 0
+      ? this.#asIs(device, data, "full")
+      : this.#skipApply(device, data, detail.join("; "), "full");
   }
 
   #judgeReadBack(
@@ -310,7 +315,7 @@ export class SlimBoot {
     }
 
     // why: nothing written off (an except list naming the whole slim set, or an include covering it) slims nothing: full, no `device.slimmed` (ADR 0083 §4).
-    if (![...write.wanted.values()].some(Boolean)) return this.#asIs(device, data, "full");
+    if (!writesOff(write)) return this.#asIs(device, data, "full");
     this.#reportSlimmed(device, data, write);
     return this.#asIs(device, data, "slim");
   }
@@ -402,4 +407,8 @@ function readBackFailure(
   return outcome.kind === "timed-out"
     ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
     : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
+}
+
+function writesOff(write: Extract<SlimWrite, { readonly kind: "written" }>): boolean {
+  return [...write.wanted.values()].some(Boolean);
 }
