@@ -58,6 +58,26 @@ The grant is the same JSON line as for a simulator, with `device.physical` set t
 
 Physical requests have their own queue. A simulator request never waits behind a physical one, and a request for one phone model never waits behind a request for another.
 
+## Serve enrolled devices only
+
+To keep a worker for real phones, set `android.virtualDevices` or `ios.virtualDevices` to `false` and restart the worker:
+
+```bash
+simlock config set android.virtualDevices false
+simlock daemon stop && simlock daemon start
+```
+
+From then on the worker never creates, boots or keeps an emulator (or simulator) of that platform:
+
+- A lease without `--physical` fails at once with `UNKNOWN_MODEL` (exit 12), whatever else it asks for. It never waits and never downloads.
+- The warm pool boots nothing on that platform, and idle devices of it are deleted when the worker starts. A leased one runs to its release. Saved baselines stay.
+- `simlock catalog` says virtual devices are off for the platform.
+- A lease with `--physical`, the other platform and components work as before.
+
+```json
+{"error":{"code":"UNKNOWN_MODEL","message":"This worker serves only enrolled physical android devices (android.virtualDevices is false); ask for a physical device (--physical, or physical: true)"}}
+```
+
 ## Use the device
 
 `simlock simctl` and `simlock adb` only reach simulators and emulators. For a physical device, use the platform's own tools with the values from the grant's `environment`.

@@ -166,11 +166,15 @@ export interface Config {
   readonly ios: {
     readonly defaultMode: DeviceMode;
     readonly defaultModels: DefaultModels;
+    /** why: false makes this worker serve only enrolled physical iOS devices (ADR 0084 §1). */
+    readonly virtualDevices: boolean;
   } & DriverConfigSection;
   readonly android: {
     /** why: the image tag an Android lease that names none gets where an image of it fits (ADR 0078 §1). */
     readonly defaultImageTag?: string;
     readonly defaultModels: DefaultModels;
+    /** why: false makes this worker serve only enrolled physical Android devices (ADR 0084 §1). */
+    readonly virtualDevices: boolean;
   } & DriverConfigSection;
   /**
    * why: ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends

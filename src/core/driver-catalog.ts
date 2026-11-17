@@ -41,6 +41,8 @@ export type ModelPreferences = Readonly<
 export interface PlatformCatalog extends DriverCatalogEntry {
   readonly platform: Platform;
   readonly classDefaults: Readonly<Partial<Record<DeviceClass, string>>>;
+  /** why: `false` for a platform whose `<platform>.virtualDevices` is off (ADR 0084 §3); absent otherwise. */
+  readonly virtualDevices?: false;
 }
 
 export interface ScreenAvailability {
@@ -48,21 +50,45 @@ export interface ScreenAvailability {
   readonly reason?: string;
 }
 
+/** why: the catalog entry of a platform whose virtual devices are off: the platform stays so a gateway still routes phone requests to this worker (ADR 0084 §3). */
+function phonesOnlyEntry(platform: Platform): PlatformCatalog {
+  return {
+    classDefaults: {},
+    defaultRuntime: undefined,
+    modelAliases: {},
+    modelClasses: {},
+    modelRuntimes: {},
+    models: [],
+    platform,
+    runtimes: [],
+    virtualDevices: false,
+  };
+}
+
 export class DriverCatalog {
   readonly #drivers: ReadonlyMap<Platform, Driver>;
   readonly #logger: Logger;
   readonly #preferences: ModelPreferences;
+  readonly #virtualDevices: Readonly<Partial<Record<Platform, boolean>>>;
 
   constructor(
     drivers: readonly Driver[],
     options: {
       readonly logger?: Logger | undefined;
       readonly preferences?: ModelPreferences | undefined;
+      /** why: a platform set to `false` serves enrolled physical devices only (ADR 0084 §1). */
+      readonly virtualDevices?: Readonly<Partial<Record<Platform, boolean>>> | undefined;
     } = {},
   ) {
+    this.#virtualDevices = options.virtualDevices ?? {};
     this.#drivers = new Map(drivers.map((driver) => [driver.platform, driver]));
     this.#preferences = options.preferences ?? {};
     this.#logger = options.logger?.child("driver-catalog") ?? new NoopLogger();
+  }
+
+  /** why: false only for a platform whose `<platform>.virtualDevices` key is false (ADR 0084 §1). */
+  virtualDevices(platform: Platform): boolean {
+    return this.#virtualDevices[platform] !== false;
   }
 
   get(platform: Platform): Driver {
@@ -195,6 +221,7 @@ export class DriverCatalog {
   async listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]> {
     const listed = await Promise.all(
       this.select(platform).map(async (driver): Promise<PlatformCatalog | undefined> => {
+        if (!this.virtualDevices(driver.platform)) return phonesOnlyEntry(driver.platform);
         try {
           const entry = await driver.listCatalog();
           return {
