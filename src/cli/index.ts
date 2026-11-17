@@ -208,6 +208,26 @@ const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["setup"],
 ];
 
+// why: these commands act on the machine they run on (ADR 0081 §3), so with a farm's URL they have no machine to act on and stop before any connect.
+const REMOTE_REFUSED_PATHS: readonly (readonly string[])[] = [
+  ["daemon", "start"],
+  ["daemon", "stop"],
+  ["daemon", "status"],
+  ["daemon", "logs"],
+  ["daemon", "install"],
+  ["daemon", "uninstall"],
+  ["config", "set"],
+  ["setup"],
+];
+
+function refuseInRemoteMode(path: readonly string[], rest: readonly string[]): void {
+  if (!REMOTE_REFUSED_PATHS.some((refused) => refused.join(" ") === path.join(" "))) return;
+  if (rest.some(isHelp)) return;
+  throw new UsageError(
+    `\`simlock ${path.join(" ")}\` acts on this machine; it does not run with --url or SIMLOCK_URL. Run it on the daemon's machine, or unset SIMLOCK_URL.`,
+  );
+}
+
 const GATEWAY_ALSO_HERE_HINT =
   "A gateway also runs on this machine: run the command again with --gateway.";
 
@@ -273,6 +293,7 @@ export async function runCli(
       url !== undefined && daemonFlag === undefined
         ? { url, token: token ?? resolved.tunnelToken }
         : undefined;
+    if (remote !== undefined) refuseInRemoteMode(command.path, command.rest);
     return await command.module.run(command.rest, {
       path: command.path,
       environment: remote === undefined ? resolved : { ...resolved, remote },

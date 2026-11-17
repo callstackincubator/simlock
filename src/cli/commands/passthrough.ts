@@ -16,14 +16,16 @@ async function runPassthrough(
 ): Promise<number> {
   const { leaseFlag, sendStdin, rest } = extractLeadingFlags(args);
   const client = await connectDaemonClient(environment, token);
-  let daemon;
+  let viaExec: boolean;
   try {
-    ({ daemon } = await client.getStatus());
+    // why: a farm's worker owns no device on this machine either, so a remote command is `device.exec` whatever mode the farm answers.
+    viaExec =
+      environment.remote !== undefined || (await client.getStatus()).daemon.mode === "gateway";
   } catch (error: unknown) {
     await client.close();
     throw error;
   }
-  if (daemon.mode === "gateway") {
+  if (viaExec) {
     try {
       return await runRemotePassthrough(tool, rest, environment, client, leaseFlag, sendStdin);
     } finally {

@@ -24,8 +24,9 @@ export function selectOnlyLease(
     }
     return (leases[0] as { readonly id: string }).id;
   }
+  // why: through a farm one token can be shared by several agents, so a default lease is the requester's own whatever the role (ADR 0081); on this machine an agent's principal is its requester already.
   const own =
-    role === "admin"
+    role === "admin" || environment.remote !== undefined
       ? leases.filter((lease) => lease.requesterId === environment.requesterId)
       : leases;
   if (own.length === 0) {

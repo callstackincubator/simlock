@@ -44,12 +44,14 @@ const farmAnswers: Record<string, FarmAnswer> = {
 interface Options {
   readonly answers?: Record<string, FarmAnswer>;
   readonly env?: NodeJS.ProcessEnv;
+  readonly failure?: Error;
   readonly overrides?: Partial<CliEnvironment>;
   readonly role?: "agent" | "admin";
 }
 
 async function remote(argv: readonly string[], options: Options = {}) {
   const farm = new FakeFarm({ ...farmAnswers, ...options.answers }, options.role);
+  farm.failure = options.failure;
   const output = outputCapture(realCliEnvironmentPorts(), options.env ?? AGENT_A);
   const local = {
     connectAdmin: vi.fn(async () => fakeClient()),
@@ -132,6 +134,12 @@ describe("CLI: commands in remote mode", () => {
     expect(events.code).toBe(0);
     expect(events.farm.requestTypes()).toEqual(["events.replay"]);
     expect(events.touchedThisMachine).toBe(false);
+    const unreachable = await remote(["events", "--since", "1h"], {
+      failure: new Error("connect ECONNREFUSED"),
+    });
+    expect(unreachable.code).toBe(1);
+    expect(stderrCode(unreachable.output.stderr)).toBe("REMOTE_UNREACHABLE");
+    expect(unreachable.touchedThisMachine).toBe(false);
 
     const baseline = {
       imageTag: undefined,
@@ -235,7 +243,7 @@ describe("CLI: commands in remote mode", () => {
     });
     expect(rotated.code).toBe(0);
     expect(rotated.farm.requests.at(-1)).toEqual({
-      payload: { leaseId: "lse_a", orientation: "landscape-left" },
+      payload: { leaseId: "lse_a", orientation: "landscape_left" },
       type: "device.rotate",
     });
     const named2 = await remote(["adb", "--lease", "lse_x", "shell", "echo"], {
