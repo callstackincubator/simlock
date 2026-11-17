@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { connectSimlock } from "../client/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
@@ -30,7 +30,7 @@ describe("the typed client over a worker's session path", () => {
     );
   });
 
-  it("connectSimlock with a URL and a token reaches a worker with fake drivers over its real session path", async () => {
+  it("connectSimlock with a URL and a token reaches a worker with fake drivers over its real session path: it leases, renews, releases and hears lease-lost", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-remote-"));
     directories.push(directory);
     const { port, started } = await startOnFreePort(async (port) =>
@@ -52,11 +52,30 @@ describe("the typed client over a worker's session path", () => {
       url: `http://127.0.0.1:${String(port)}`,
     });
 
+    const url = `http://127.0.0.1:${String(port)}`;
+    const other = await connectSimlock({ token: agent.secret, url });
     await expect(client.identity()).resolves.toMatchObject({
       principal: agent.token.id,
       role: "agent",
       via: "token",
     });
+
+    const ask = { model: "Pixel-A", platform: "android" as const };
+    const first = await client.requestLease(ask);
+    await expect(client.renewLease({ leaseId: first.lease.id })).resolves.toMatchObject({
+      id: first.lease.id,
+    });
+    await client.releaseLease({ leaseId: first.lease.id });
+    await expect(client.listLeases()).resolves.toMatchObject({ leases: [] });
+
+    const lost = vi.fn();
+    client.onLeaseLost(lost);
+    const second = await client.requestLease(ask);
+    await other.releaseLease({ leaseId: second.lease.id });
+    await vi.waitFor(() =>
+      expect(lost).toHaveBeenCalledWith(expect.objectContaining({ leaseId: second.lease.id })),
+    );
+    await other.close();
     await client.close();
   });
 });
