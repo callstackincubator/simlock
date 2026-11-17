@@ -64,7 +64,7 @@ unless the maintainer explicitly authorizes its amendment. See
    and `vendor/README.md`'s index in the same change
    (vendor-and-third-party-code rule 11). A new first-level `vendor/`
    directory carries its license text under `LICENSES/` and a `NOTICE.md`;
-   `src/source-hygiene.test.ts` enforces that shape, and counts a vendored
+   `src/source-hygiene.repo.test.ts` enforces that shape, and counts a vendored
    binary as excluded from the text scan only where a `SHA256SUMS.txt` pins
    its digest (vendor-and-third-party-code rules 2, 3, 7).
 

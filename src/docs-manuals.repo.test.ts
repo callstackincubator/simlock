@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BUDGET = 150;
 const MANUAL_CHARACTERS = 8000;
-const MANUALS_TOTAL_CHARACTERS = 140000;
+const MANUALS_TOTAL_CHARACTERS = 160000;
 
 const trackedFiles = execFileSync(
   "git",

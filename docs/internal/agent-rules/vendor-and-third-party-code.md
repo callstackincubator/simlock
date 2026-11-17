@@ -22,7 +22,7 @@ this file is the rule that keeps the inventory true.
    in `src/`, `ui/`, `scripts/` or `e2e/`. `NOTICE.md`'s per-file origin table
    is what separates ours from theirs, and rule 6 makes that table mandatory
    precisely because the directory itself no longer does. The check
-   `src/source-hygiene.test.ts` runs is the licensing half of this claim, so a
+   `src/source-hygiene.repo.test.ts` runs is the licensing half of this claim, so a
    directory that fails it misrepresents itself. A file sitting at `vendor/`'s
    root is a packed archive, not a directory, and carries its license inside it
    (the tarball rule 1's npm case does not cover) — that is why the check is per
