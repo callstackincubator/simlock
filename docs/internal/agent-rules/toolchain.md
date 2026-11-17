@@ -10,6 +10,7 @@ copies "Tests agents run"; change both together (a repo test compares them).
 | ---------------------------------------------- | -------------------------------------------- |
 | Unit tests that import what the branch changed | `pnpm test:changed`                          |
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
+| Types across the project, before a commit      | `pnpm typecheck`                             |
 | One console DOM test file (`*.dom.test.tsx`)   | `pnpm exec vitest run --project ui-dom <file>` |
 | One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
@@ -37,7 +38,7 @@ pages; it compares nothing. Open the pictures the change touched.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
+`pnpm test:timing`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine and a
 refactor's `--touched-by` run, below), the whole
@@ -54,8 +55,12 @@ list and this one the same.
   (`.agents/scripts/commit-msg-check.mjs`) refuses a subject on
   `<kind>/<n>` that is not `<type>(<scope>): <what> (#<n>)`, and on
   `bug/<n>-repro` one that is not `test: reproduce #<n> — <claim>`.
-- **Push hook:** Fallow's audit (the findings the branch adds against
-  `origin/main`), then the e2e typecheck.
+- **Push hook:** CI's Fallow command on the whole tree, the
+  `*.repo.test.ts` files, the protocol and docs-surface checks, then the
+  e2e typecheck. A test that reads the repository's files instead of
+  importing code is named `*.repo.test.ts` and runs in about a second:
+  `pnpm test:changed` selects it only when the branch edits the test
+  itself, so the hook runs every one.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. CI's Fallow
   (`fallow --ci`) checks the whole tree and fails on any dead-code finding
   or clone group, `warn` rules included; complexity fails above the
@@ -194,6 +199,9 @@ Tests that start real simulators or emulators. Run them only through
 - It first stops what earlier runs left behind. By hand: `scripts/slow-e2e.sh
   clean` (refused while a run holds the lock). Never stop a simulator,
   emulator or daemon any other way.
+- `scripts/slow-e2e.sh check`: the checks a run starts with, without a
+  run. Exit 69 with why when the machine is unfit. While a lane runs it
+  stops nothing and checks only free disk and the other tools.
 - `scripts/slow-e2e.sh status`: the running test, the counts so far, how
   long the log has been quiet, and each failure. `scripts/slow-e2e.sh stop`
   ends the running lane and what it started.

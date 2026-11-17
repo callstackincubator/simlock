@@ -10,7 +10,7 @@ it holds the artifact(s), the license text(s) they require in `LICENSES/`, and a
 `NOTICE.md`: upstream and author, the exact commit or release, what was taken and
 what was left out, every deviation and why, the command that re-verifies it all
 against upstream, and — per file, because a directory here can hold our code
-beside theirs — which files are ours. `src/source-hygiene.test.ts` enforces
+beside theirs — which files are ours. `src/source-hygiene.repo.test.ts` enforces
 the three-part shape, and the rules are
 [`docs/internal/agent-rules/vendor-and-third-party-code.md`](../docs/internal/agent-rules/vendor-and-third-party-code.md);
 the whole inventory is [`docs/internal/VENDORED-CODE.md`](../docs/internal/VENDORED-CODE.md).

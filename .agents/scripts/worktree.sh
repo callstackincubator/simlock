@@ -6,7 +6,8 @@
 #   .agents/scripts/worktree.sh --detach <commit> [--prepare]
 #                                                  a new detached worktree at <commit>, in a
 #                                                  fresh folder under $TMPDIR (a review lens's or
-#                                                  a probe's); --prepare installs into it
+#                                                  a probe's); --prepare installs into it, and
+#                                                  may come before or after <commit>
 #   echo '{"name":"<name>"}' | .agents/scripts/worktree.sh
 #
 # The stdin form is what Claude Code's WorktreeCreate hook uses (.claude/settings.json): the
@@ -57,23 +58,37 @@ EOF
   )
 }
 
-if [ "${1:-}" = "--prepare" ]; then
+detach=
+case " $* " in
+  *" --detach "*) detach=1 ;;
+esac
+
+if [ -z "$detach" ] && [ "${1:-}" = "--prepare" ]; then
   prepare "${2:?usage: worktree.sh --prepare <dir>}"
   exit 0
 fi
 
 # why: a folder picked by hand (/tmp/rv1222-claims) already held the last round's commit, and the
 # reviewer read it as the new one; a fresh folder and a checked HEAD rule that out.
-if [ "${1:-}" = "--detach" ]; then
-  commit=$(git rev-parse --verify --quiet "${2:?usage: worktree.sh --detach <commit> [--prepare]}^{commit}") \
-    || { echo "worktree.sh: $2 is not a commit here; fetch it first" >&2; exit 1; }
+if [ -n "$detach" ]; then
+  install=
+  rev=
+  for arg in "$@"; do
+    case $arg in
+      --detach) ;;
+      --prepare) install=1 ;;
+      *) rev=$arg ;;
+    esac
+  done
+  commit=$(git rev-parse --verify --quiet "${rev:?usage: worktree.sh --detach <commit> [--prepare]}^{commit}") \
+    || { echo "worktree.sh: $rev is not a commit here; fetch it first" >&2; exit 1; }
   tmp=${TMPDIR:-/tmp}
   dir=$(mktemp -d "${tmp%/}/wt-$(echo "$commit" | cut -c1-9).XXXXXX")
   rmdir "$dir"
   git worktree add -q --detach "$dir" "$commit" >&2
   [ "$(git -C "$dir" rev-parse HEAD)" = "$commit" ] \
     || { echo "worktree.sh: $dir is not at $commit" >&2; exit 1; }
-  [ "${3:-}" != "--prepare" ] || prepare "$dir"
+  [ -z "$install" ] || prepare "$dir"
   echo "$dir"
   exit 0
 fi

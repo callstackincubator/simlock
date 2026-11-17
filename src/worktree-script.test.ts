@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,5 +85,37 @@ describe("worktree.sh", () => {
     expect(c).not.toBe(b);
     expect(git(c, "rev-parse", "HEAD")).toBe(second);
     expect(() => run(main, "--detach", "0000000")).toThrow();
+  });
+
+  it("--detach takes --prepare before or after the commit, and installs into the new worktree", () => {
+    const { root, main } = fixture();
+    const bin = join(root, "bin");
+    const installs = join(root, "installs");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "pnpm"),
+      `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\npwd >> "${installs}"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(main, "package.json"),
+      JSON.stringify({ devEngines: { packageManager: { name: "pnpm", version: "1.2.3" } } }),
+    );
+    git(main, "add", "package.json");
+    git(main, "commit", "-qm", "package.json");
+    const head = git(main, "rev-parse", "HEAD");
+    const detach = (...args: string[]) =>
+      execFileSync("sh", [SCRIPT, "--detach", ...args], {
+        cwd: main,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      }).trim();
+
+    const after = detach(head, "--prepare");
+    const before = detach("--prepare", head);
+
+    expect(git(after, "rev-parse", "HEAD")).toBe(head);
+    expect(git(before, "rev-parse", "HEAD")).toBe(head);
+    expect(readFileSync(installs, "utf8").trim().split("\n")).toEqual([after, before]);
   });
 });

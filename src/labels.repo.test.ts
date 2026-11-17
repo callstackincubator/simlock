@@ -14,7 +14,7 @@ interface Label {
 
 const labels = JSON.parse(readFileSync(LABELS, "utf8")) as readonly Label[];
 
-// The Labels workflow syncs this file to GitHub on every push to main. GitHub rejects the whole
+// why: the Labels workflow syncs this file to GitHub on every push to main. GitHub rejects the whole
 // sync on the first label it refuses, so one bad entry silently leaves every later label
 // uncreated.
 describe(".github/labels.json", () => {

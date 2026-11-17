@@ -22,6 +22,7 @@ you run are copied below, so you need not open it for them.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Unit tests that import what the branch changed      | `pnpm test:changed`                                                                                |
 | One unit test file                                  | `pnpm exec vitest run --project unit <file>`                                                       |
+| Types across the project, before a commit           | `pnpm typecheck`                                                                                   |
 | One console DOM test file (`*.dom.test.tsx`)        | `pnpm exec vitest run --project ui-dom <file>`                                                     |
 | One timing file (`*.timing.test.ts`)                | `pnpm exec vitest run --project timing <file>`                                                     |
 | Fast e2e files (builds first)                       | `pnpm test:e2e <files>`                                                                            |
