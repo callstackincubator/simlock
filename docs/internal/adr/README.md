@@ -116,5 +116,4 @@ the status is stale.
 | [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
 | [0080](0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) | An Android worker may enrol phones reached over the network | Accepted; narrows 0022 §6 and §7, and 0073 §2 and §5 |
 | [0083](0083-a-worker-may-turn-single-slim-services-on-or-off-beside-its-categories.md) | A worker may turn single slim services on or off beside its categories | Accepted; narrows 0060 §1, §2 and 0066 §2 |
-| [0083](0083-a-worker-may-turn-single-slim-services-on-or-off-beside-its-categories.md) | A worker may turn single slim services on or off beside its categories | Accepted — not yet implemented; narrows 0060 §1, §2 and 0066 §2 |
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
