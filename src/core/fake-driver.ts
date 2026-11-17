@@ -34,6 +34,7 @@ import {
   type PhysicalDriverDevice,
   type VirtualDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   type ReclaimResult,
   removeListedComponent,
@@ -77,6 +78,7 @@ export interface FakePhysicalDevice {
   readonly osVersion?: string;
   readonly class?: PhysicalClass;
   readonly apps?: readonly string[];
+  readonly hardwareSerial?: string;
   readonly refusal?: { readonly reason: DriverRefusalReason; readonly message: string };
 }
 
@@ -609,14 +611,16 @@ export class FakeDriver implements Driver {
     this.#physicalDevices = devices;
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    await this.#beforeCall("listPresentPhysical", enrolledIds);
-    if (enrolledIds.some((id) => this.#heldPresenceReads.has(id))) {
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    await this.#beforeCall("listPresentPhysical", enrolled);
+    if (enrolled.some(({ driverDeviceId }) => this.#heldPresenceReads.has(driverDeviceId))) {
       await new Promise<void>((resolve) => {
         this.#pendingPresenceReads.push(resolve);
       });
     }
-    return enrolledIds.map((driverDeviceId) => {
+    return enrolled.map(({ driverDeviceId }) => {
       if (this.#presentPhysical.has(driverDeviceId)) {
         return {
           driverDeviceId,
@@ -898,6 +902,7 @@ function readPhysical(device: FakePhysicalDevice, id: string): PhysicalInspectio
     enrollable: true,
     model: device.model ?? "Fake Phone",
     osVersion: device.osVersion ?? "1.0",
+    ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
   };
 }
 

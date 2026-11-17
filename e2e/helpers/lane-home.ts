@@ -13,6 +13,8 @@ type Row = Record<string, string | number | null>;
 interface KeptSeed {
   readonly table: string;
   readonly row: Row;
+  /** why: ADR 0076: an iOS seed's file record is its lineage's other half, so it is kept with the row. */
+  readonly files?: readonly Row[];
 }
 
 interface SeedTable {
@@ -77,13 +79,21 @@ export async function restoreKeptSeeds(home: string): Promise<void> {
   const seeds = JSON.parse(await readFile(join(home, KEPT_SEEDS_FILE), "utf8")) as KeptSeed[];
   const database = new DatabaseSync(join(home, "state.db"));
   try {
-    for (const { table, row } of seeds) {
+    for (const { table, row, files } of seeds) {
       const columns = Object.keys(row);
       database
         .prepare(
           `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
         )
         .run(...columns.map((column) => row[column] ?? null));
+      for (const file of files ?? []) {
+        const fileColumns = Object.keys(file);
+        database
+          .prepare(
+            `INSERT INTO ios_source_files (${fileColumns.join(", ")}) VALUES (${fileColumns.map(() => "?").join(", ")})`,
+          )
+          .run(...fileColumns.map((column) => file[column] ?? null));
+      }
     }
   } finally {
     database.close();
@@ -138,7 +148,13 @@ async function readySeeds(home: string): Promise<KeptSeed[]> {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     return SEED_TABLES.flatMap(({ table }) =>
-      readyRows(database, table).map((row) => ({ row, table })),
+      readyRows(database, table).map((row) => ({
+        row,
+        table,
+        ...(table === "ios_source_data"
+          ? { files: textRows(database, "ios_source_files", "source_id", String(row["source_id"])) }
+          : {}),
+      })),
     ).filter((seed) => existsSync(folderOf(seed)));
   } finally {
     database.close();
@@ -151,6 +167,17 @@ async function readySeeds(home: string): Promise<KeptSeed[]> {
  * is read as bytes and decoded here.
  */
 function readyRows(database: DatabaseSync, table: string): Row[] {
+  return textRows(database, table, undefined, undefined, "kind = 'seed' AND state = 'ready'");
+}
+
+/** why: the rows of a table with every text column read as bytes (see `readyRows`); a table the driver never made has none. */
+function textRows(
+  database: DatabaseSync,
+  table: string,
+  column?: string,
+  value?: string,
+  where = "1 = 1",
+): Row[] {
   const columns = database.prepare(`PRAGMA table_info(${table})`).all() as {
     name: string;
     type: string;
@@ -159,9 +186,10 @@ function readyRows(database: DatabaseSync, table: string): Row[] {
   const selected = columns.map(({ name, type }) =>
     type === "TEXT" ? `CAST(${name} AS BLOB) AS ${name}` : name,
   );
+  const filter = column === undefined ? where : `${column} = ?`;
   return database
-    .prepare(`SELECT ${selected.join(", ")} FROM ${table} WHERE kind = 'seed' AND state = 'ready'`)
-    .all()
+    .prepare(`SELECT ${selected.join(", ")} FROM ${table} WHERE ${filter}`)
+    .all(...(value === undefined ? [] : [value]))
     .map((row) =>
       Object.fromEntries(
         Object.entries(row).map(([name, value]) => [

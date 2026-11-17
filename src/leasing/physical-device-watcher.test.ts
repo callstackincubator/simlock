@@ -13,6 +13,7 @@ import {
   harnesses,
   holdNextReclaim,
   physicalRequest,
+  readEntriesOf,
   readsOf,
   recordStateWrites,
   startWatcher,
@@ -90,7 +91,7 @@ describe("PhysicalDeviceWatcher counting", () => {
     expect(readsOf(harness.driver)).toHaveLength(2);
   });
 
-  it("each read asks the driver only for the canonical IDs of that platform's enrolled records, deleted ones left out", async () => {
+  it("each read asks the driver only for the driverDeviceId, and the hardwareSerial when it has one, of that platform's enrolled records, deleted ones left out", async () => {
     const harness = await createHarness({ android: true });
     await enrollIphone(harness, "UDID-A");
     const removed = await enrollIphone(harness, "UDID-B");
@@ -99,6 +100,7 @@ describe("PhysicalDeviceWatcher counting", () => {
       apps: [],
       class: "phone",
       driverDeviceId: "EMU-1",
+      hardwareSerial: "SER-1",
       model: "Pixel 8",
       osVersion: "14",
       platform: "android",
@@ -108,8 +110,10 @@ describe("PhysicalDeviceWatcher counting", () => {
 
     await tick(harness);
 
-    expect(readsOf(harness.driver)).toEqual([["UDID-A"]]);
-    expect(readsOf(harness.androidDriver)).toEqual([["EMU-1"]]);
+    expect(readEntriesOf(harness.driver)).toEqual([[{ driverDeviceId: "UDID-A" }]]);
+    expect(readEntriesOf(harness.androidDriver)).toEqual([
+      [{ driverDeviceId: "EMU-1", hardwareSerial: "SER-1" }],
+    ]);
   });
 
   it("a read that rejects changes neither the count nor the state of that platform's devices", async () => {

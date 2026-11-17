@@ -1,6 +1,6 @@
 # Android driver
 
-Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server.
+Does: emulators in an owned AVD home behind Simlock's own adb server, and phones on the default adb server.
 Flows: [device selection](../../../docs/internal/flows/device-selection.md), [drivers](../AGENTS.md), [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
 ## Rules
@@ -43,7 +43,7 @@ Boot:
 
 Physical phones:
 
-- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it as a side effect when nothing listens. Phones are USB transports only.
+- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it when nothing listens. Under `android.networkDevices` (ADR 0080) a phone is its `ro.serialno`, not its address.
 - Before every command `DefaultAdbServerGate.check`: the 5037 server's protocol must equal Simlock's `adb version`; nothing listening is open. A mismatch or an unreadable answer sends no command and shows as advisory `adb-protocol-mismatch`.
 
 Profiles and components:

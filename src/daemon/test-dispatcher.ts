@@ -191,7 +191,7 @@ export async function buildDispatcher(
     readonly otherStallDrivers?: readonly FakeDriver[];
     /** why: a second platform's driver for the leasing engine, for a test that leases on both. */
     readonly extraDrivers?: readonly FakeDriver[];
-    readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
+    readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes" | "logger">;
     readonly physicalDevices?: readonly SeededPhysicalDevice[];
     /** why: rows a test writes to `state.db` before the registry loads. */
     readonly seedState?: (state: StateDatabase) => void;

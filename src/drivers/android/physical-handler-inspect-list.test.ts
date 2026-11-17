@@ -182,7 +182,7 @@ describe("Android physical handler: inspectPhysical", () => {
       return undefined;
     });
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
   });
@@ -216,11 +216,11 @@ describe("Android physical handler: listPresentPhysical", () => {
     );
 
     const present = await driver.listPresentPhysical([
-      PHONE,
-      "UNAUTH1",
-      "OFFLINE1",
-      "192.168.1.5:5555",
-      "MISSING1",
+      { driverDeviceId: PHONE },
+      { driverDeviceId: "UNAUTH1" },
+      { driverDeviceId: "OFFLINE1" },
+      { driverDeviceId: "192.168.1.5:5555" },
+      { driverDeviceId: "MISSING1" },
     ]);
 
     expect(present).toEqual([
@@ -236,7 +236,7 @@ describe("Android physical handler: listPresentPhysical", () => {
     const { driver, runner } = await world();
     runner.devicesOutput = devicesListing(USB_LINE, "OTHER99 device usb:1-2 transport_id:4");
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, osVersion: "34", present: true }]);
     expect(runner.rests.flat()).not.toContain("OTHER99");
@@ -251,7 +251,10 @@ describe("Android physical handler: listPresentPhysical", () => {
       const { driver, runner } = await world();
       runner.override((rest) => (isDevicesListing(rest) ? result : undefined));
 
-      const present = await driver.listPresentPhysical([PHONE, "SERIAL2"]);
+      const present = await driver.listPresentPhysical([
+        { driverDeviceId: PHONE },
+        { driverDeviceId: "SERIAL2" },
+      ]);
 
       expect(present).toEqual([
         { driverDeviceId: PHONE, present: false, reason: "not-present" },
@@ -264,7 +267,7 @@ describe("Android physical handler: listPresentPhysical", () => {
     const { driver, runner } = await world();
     runner.override((rest) => (isGetprop(rest) ? FAILED : undefined));
 
-    const present = await driver.listPresentPhysical([PHONE]);
+    const present = await driver.listPresentPhysical([{ driverDeviceId: PHONE }]);
 
     expect(present).toEqual([{ driverDeviceId: PHONE, present: false, reason: "not-present" }]);
   });
