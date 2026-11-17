@@ -221,6 +221,15 @@ async function runLease(
       .then(() => writeError((value) => environment.stderr.write(value), error))
       .catch(() => undefined);
   };
+  const adoptClient = async (next: SimlockAdminClient): Promise<void> => {
+    unsubscribe();
+    const previous = client;
+    client = next;
+    unsubscribe = subscribe(next);
+    await previous.close();
+  };
+  // why: set while a held remote lease has no connection: a release then has to connect first.
+  let disconnected = false;
   const releaseHeldLease = async (): Promise<void> => {
     // why: A dead connection can neither carry the release nor needs it: the lease outlives this
     // process either way, and `client.releaseLease` would only reject `DAEMON_CONNECTION_LOST`
@@ -234,11 +243,21 @@ async function runLease(
       await awaitWithin(
         environment.clock,
         RELEASE_TIMEOUT_MS,
-        client.releaseLease({ leaseId }),
+        (async () => {
+          if (disconnected) await adoptClient(await connectDaemonClient(environment, token));
+          return client.releaseLease({ leaseId });
+        })(),
         `Timed out releasing lease ${leaseId}`,
       );
     } catch (error: unknown) {
-      queueErrorWrite(error);
+      if (disconnected) {
+        endHoldingLease(
+          "DAEMON_CONNECTION_LOST",
+          `could not release the lease: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } else {
+        queueErrorWrite(error);
+      }
     }
   };
   let renewal: LeaseRenewal | undefined;
@@ -307,6 +326,7 @@ async function runLease(
     };
     if (farmOrigin !== undefined) {
       onDropped = () => {
+        disconnected = true;
         renewal?.stop();
         environment.stderr.write(
           `${JSON.stringify({ notice: `lost the connection to ${farmOrigin}; reconnecting until ${new Date(ourLeaseDeadline ?? 0).toISOString()} to keep lease ${grantedLease.id}` })}\n`,
@@ -340,14 +360,11 @@ async function runLease(
           attempt: async () => {
             const next = await connectDaemonClient(environment, token);
             const renewed = await next.renewLease({ leaseId: grantedLease.id });
-            unsubscribe();
-            const previous = client;
-            client = next;
-            unsubscribe = subscribe(next);
-            await previous.close();
+            await adoptClient(next);
             return renewed;
           },
           onReconnected: (renewed) => {
+            disconnected = false;
             ourLeaseDeadline = renewed.ttlDeadline;
             environment.stderr.write(
               `${JSON.stringify({ notice: `reconnected to ${farmOrigin}; lease ${grantedLease.id} renewed` })}\n`,
