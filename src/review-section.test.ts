@@ -53,9 +53,12 @@ describe("review-section.mjs", () => {
     expect(section).not.toContain("Rejected:");
   });
 
-  it("refuses a rejected line with no role or no disposition tag", () => {
-    expect(() =>
-      reviewSection({ findings: [], rounds: ["1"], rejected: "- code: src/a.ts:9 wrong — no" }),
-    ).toThrow("[incorrect|intentional|nonblocking]");
+  it.each([
+    ["no role", "- src/a.ts:9 wrong [incorrect] — no"],
+    ["no disposition tag", "- code: src/a.ts:9 wrong — no"],
+  ])("refuses a rejected line with %s", (_, line) => {
+    expect(() => reviewSection({ findings: [], rounds: ["1"], rejected: line })).toThrow(
+      "[incorrect|intentional|nonblocking]",
+    );
   });
 });
