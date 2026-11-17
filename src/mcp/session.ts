@@ -4,6 +4,7 @@ import {
   SimlockError,
   type DeviceOutputChunk,
   type ExecOutput,
+  type LeaseGrant,
   type LeaseProgress,
   type LeaseRecord,
   type LeaseRequestInput,
@@ -13,9 +14,11 @@ import {
 import { parseOrientation } from "../contract/index.js";
 import {
   awaitWithin,
+  reconnectWhileWaiting,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
   startReconnect,
+  UNREACHABLE_GIVE_UP_MS,
   type LeaseRenewal,
   type Reconnect,
 } from "../lease-policy/index.js";
@@ -185,10 +188,7 @@ export class McpSession {
         this.#farm === undefined
           ? { ...input }
           : { ...input, idempotencyKey: randomUUID(), requesterId: this.#farm.requesterId };
-      const grant = await client.requestLease(request, {
-        ...(onProgress === undefined ? {} : { onProgress }),
-        ...(signal === undefined ? {} : { signal }),
-      });
+      const grant = await this.#requestWithReattach(client, request, signal, onProgress);
       if (this.#closed) {
         // why: The session ended while the daemon was provisioning. `close()` does not queue behind
         // `#mutations`, so it has already stopped renewing: arming a timer now would leave a
@@ -205,6 +205,71 @@ export class McpSession {
       this.#startRenewal(grant.lease);
       return grant;
     });
+  }
+
+  /**
+   * why: ADR 0081 §4: against a farm a drop leaves the request queued there, so the request goes
+   * again under its idempotency key on the reconnect schedule and attaches to the one waiting. A
+   * cancel during the wait takes one bounded connection to cancel it, as the client's abort does
+   * on a live connection.
+   */
+  async #requestWithReattach(
+    first: SimlockClient,
+    request: LeaseRequestInput,
+    signal: AbortSignal | undefined,
+    onProgress: ((progress: LeaseProgressNotice) => void) | undefined,
+  ): Promise<LeaseGrant> {
+    const farm = this.#farm;
+    let client = first;
+    for (;;) {
+      try {
+        return await client.requestLease(request, {
+          ...(onProgress === undefined ? {} : { onProgress }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch (error: unknown) {
+        if (farm === undefined || !isSimlockError(error) || error.code !== "DAEMON_CONNECTION_LOST")
+          throw error;
+        this.#throwIfClosed();
+        this.#notify({
+          level: "warning",
+          message: `lost the connection to ${farm.origin}; reconnecting to the waiting request`,
+        });
+        try {
+          client = await reconnectWhileWaiting({
+            abandon: () => undefined,
+            // why: the connection is adopted by the session as it opens, so one that opens after the wait ended is the session's to close.
+            attempt: () => this.#clientForUse(this.#connectForRenew),
+            clock: this.#clock,
+            deadline: this.#clock.now() + UNREACHABLE_GIVE_UP_MS,
+            origin: farm.origin,
+            signal,
+          });
+        } catch (reconnectError: unknown) {
+          if (signal?.aborted === true) await this.#cancelWaitingRequest(request);
+          throw reconnectError;
+        }
+        if (signal?.aborted === true) {
+          await this.#cancelWaitingRequest(request);
+          throw new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {});
+        }
+      }
+    }
+  }
+
+  async #cancelWaitingRequest(request: LeaseRequestInput): Promise<void> {
+    try {
+      await awaitWithin(
+        this.#clock,
+        RELEASE_TIMEOUT_MS,
+        this.#clientForUse(this.#connectForRenew).then((client) =>
+          client.cancelLease({ platform: request.platform, requesterId: request.requesterId }),
+        ),
+        "Timed out cancelling the waiting lease request",
+      );
+    } catch {
+      // why: the cancelled call is the answer; a farm that stays out of reach holds the request until its own timeout.
+    }
   }
 
   release(input: ReleaseSimulatorInput): Promise<ReleaseSimulatorOutput> {

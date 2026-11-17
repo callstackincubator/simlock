@@ -10,7 +10,7 @@ import { runMcpStdio } from "../mcp/main.js";
 import { FakeClock, WebSocketRefusedError } from "../ports/index.js";
 import { runCli } from "./index.js";
 import { detachedGrant, outputCapture, realCliEnvironmentPorts, settle } from "./test-index.js";
-import { FakeFarm, type FarmAnswer } from "./test-remote.js";
+import { FakeFarm, NO_REPLY, type FarmAnswer } from "./test-remote.js";
 
 const URL = "https://farm.example.com";
 const ENV = { SIMLOCK_AGENT_ID: "agent-a", SIMLOCK_TOKEN: "slk_t", SIMLOCK_URL: URL };
@@ -50,12 +50,16 @@ interface Served {
   tool(name: string, input: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
-async function serveRemoteMcp(env: NodeJS.ProcessEnv = ENV): Promise<Served> {
+async function serveRemoteMcp(
+  env: NodeJS.ProcessEnv = ENV,
+  answers: Record<string, FarmAnswer> = {},
+): Promise<Served> {
   const clock = new FakeClock(0);
   // why: a renewal moves the deadline a TTL on from the clock, as the farm does.
   const farm = new FakeFarm({
     ...farmAnswers,
     "lease.renew": () => ({ ...detachedGrant.lease, ttlDeadline: clock.now() + 60_000 }),
+    ...answers,
   });
   const attempts: number[] = [];
   const connect = farm.connect.bind(farm);
@@ -241,6 +245,60 @@ async function endingTheSessionStopsTheReconnect(): Promise<void> {
   expect(served.attempts, "no reconnect timer outlives the session").toHaveLength(tried);
 }
 
+const leaseRequestsOf = (served: Served) =>
+  served.farm.requests
+    .filter(({ type }) => type === "lease.request")
+    .map(({ payload }) => payload as { idempotencyKey?: string });
+
+async function queuedRequestIsReattachedAfterADrop(): Promise<void> {
+  let asked = 0;
+  const served = await serveRemoteMcp(ENV, {
+    "lease.request": () => (++asked === 1 ? NO_REPLY : detachedGrant),
+  });
+  const granted = served.tool("lease_simulator", lease);
+  await vi.waitFor(() => expect(leaseRequestsOf(served)).toHaveLength(1));
+  served.farm.connections[0]?.peer.dropped(1006, "");
+  await vi.waitFor(() => expect(served.messages()).toHaveLength(1));
+  expect(served.messages()[0]).toBe(
+    `lost the connection to ${URL}; reconnecting to the waiting request`,
+  );
+  served.clock.advance(1_000);
+  expect(((await granted).lease as { id: string }).id).toBe("lse_env");
+  const [first, again] = leaseRequestsOf(served);
+  expect(first?.idempotencyKey).toMatch(/\S/);
+  expect(again?.idempotencyKey).toBe(first?.idempotencyKey);
+  served.stdin.end();
+  await vi.waitFor(() => expect(served.exitCode()).toBe(0));
+
+  const cancelled = await serveRemoteMcp(ENV, {
+    "lease.cancel": () => ({ result: "cancelled" }),
+    "lease.request": () => NO_REPLY,
+  });
+  const abort = new AbortController();
+  const waiting = cancelled.mcp
+    .request(
+      { method: "tools/call", params: { arguments: lease, name: "lease_simulator" } },
+      CallToolResultSchema,
+      { signal: abort.signal },
+    )
+    .catch((error: unknown) => error);
+  await vi.waitFor(() => expect(leaseRequestsOf(cancelled)).toHaveLength(1));
+  cancelled.farm.connections[0]?.peer.dropped(1006, "");
+  await vi.waitFor(() => expect(cancelled.messages()).toHaveLength(1));
+  abort.abort();
+  await waiting;
+  await vi.waitFor(() => expect(cancelled.farm.requestTypes()).toContain("lease.cancel"));
+  expect(cancelled.farm.requests.find(({ type }) => type === "lease.cancel")?.payload).toEqual(
+    expect.objectContaining({ platform: "ios", requesterId: "agent-a" }),
+  );
+  const tried = cancelled.attempts.length;
+  cancelled.clock.advance(120_000);
+  await settle();
+  expect(cancelled.attempts, "no reconnect timer outlives the cancel").toHaveLength(tried);
+  cancelled.stdin.end();
+  await vi.waitFor(() => expect(cancelled.exitCode()).toBe(0));
+}
+
 describe("CLI: simlock mcp against a farm", () => {
   it("remote simlock mcp serves its tools from the farm, rides out a drop, and releases at the end", async () => {
     await noTokenStopsAtStart();
@@ -248,5 +306,6 @@ describe("CLI: simlock mcp against a farm", () => {
     await dropsAreRiddenOut();
     await endsWithoutALease();
     await endingTheSessionStopsTheReconnect();
+    await queuedRequestIsReattachedAfterADrop();
   });
 });
