@@ -160,7 +160,7 @@ export class SlimBoot {
   ): Promise<SlimWrite> {
     const configured = resolveSlimCategories(slim.categories);
     const { kept, resolved } = splitByExcept(configured, except);
-    if (configured.categories.length === 0) {
+    if (configured.categories.length === 0 && (slim.exclude ?? []).length === 0) {
       return {
         detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
         kind: "no-categories",
@@ -168,7 +168,11 @@ export class SlimBoot {
     }
 
     const startedAt = this.#clock.now();
-    const wanted = overridesFor(resolved.categories, kept);
+    const wanted = overridesFor(resolved.categories, kept, {
+      exclude: slim.exclude ?? [],
+      include: slim.include ?? [],
+      recorded: [],
+    });
     let writeError: string | undefined;
     try {
       const folder = this.#overridesFolder(udid);
@@ -242,8 +246,8 @@ export class SlimBoot {
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
 
-    // why: an except list naming the whole slim set slims nothing: full, no `device.slimmed`.
-    if (write.resolved.categories.length === 0) return this.#asIs(device, data, "full");
+    // why: nothing written off (an except list naming the whole slim set, or an include covering it) slims nothing: full, no `device.slimmed` (ADR 0083 §4).
+    if (![...write.wanted.values()].some(Boolean)) return this.#asIs(device, data, "full");
     this.#reportSlimmed(device, data, write);
     return this.#asIs(device, data, "slim");
   }
