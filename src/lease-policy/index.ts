@@ -388,3 +388,41 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     },
   };
 }
+
+const FIRST_RECONNECT_DELAY_MS = 1_000;
+
+export interface ReconnectOptions<T> {
+  readonly clock: Clock;
+  readonly attempt: () => Promise<T>;
+  readonly onReconnected: (answer: T) => void;
+}
+
+export interface Reconnect {
+  stop(): void;
+}
+
+/**
+ * why: the reconnect half of a holder's policy (ADR 0081 §4): the typed client never reconnects,
+ * so a frontend tries again on a schedule, outside it, and this is the schedule.
+ */
+export function startReconnect<T>(options: ReconnectOptions<T>): Reconnect {
+  const { clock, attempt, onReconnected } = options;
+  let stopped = false;
+  let timer: TimerHandle | undefined = clock.setTimer(FIRST_RECONNECT_DELAY_MS, () => {
+    timer = undefined;
+    void attempt().then(
+      (answer) => {
+        if (!stopped) onReconnected(answer);
+      },
+      () => undefined,
+    );
+  });
+  return {
+    stop: (): void => {
+      stopped = true;
+      if (timer === undefined) return;
+      clock.cancel(timer);
+      timer = undefined;
+    },
+  };
+}

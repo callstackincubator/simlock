@@ -2,10 +2,12 @@ import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
+  startReconnect,
   type LeaseRenewal,
+  type Reconnect,
 } from "../../lease-policy/index.js";
 import { ERROR_TABLE, LEASE_LOST_EXIT_CODE } from "../../contract/index.js";
-import type { LeaseGrant } from "../../admin/index.js";
+import type { LeaseGrant, SimlockAdminClient } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
@@ -129,7 +131,15 @@ async function runLease(
     cancelledWhileWaiting = true;
     waitAbort.abort();
   });
-  const client = await connectDaemonClient(environment, token);
+  let client = await connectDaemonClient(environment, token);
+  // why: the farm's origin is what a reconnect notice names; it was checked when the connection was made.
+  const farmOrigin =
+    environment.remote === undefined
+      ? undefined
+      : (await import("../../simlock-client/farm-url.js")).checkedFarmUrl(
+          environment.remote.url,
+          "--url",
+        );
   let leaseLost = false;
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
@@ -149,35 +159,50 @@ async function runLease(
     leaseLost = true;
     notifyLeaseLost?.();
   };
-  const offLeaseLost = client.onLeaseLost((push) => {
-    if (push.leaseId !== ourLeaseId) return;
-    markLeaseLost(push);
-  });
   let connectionLost = false;
   let notifyConnectionLost: (() => void) | undefined;
   const connectionLostSignal = new Promise<void>((resolve) => {
     notifyConnectionLost = resolve;
   });
-  const offConnectionLost = client.onConnectionLost(() => {
-    connectionLost = true;
-    if (ourLeaseId !== undefined) {
-      environment.stderr.write(
-        `${JSON.stringify({
-          error: {
-            code: "DAEMON_CONNECTION_LOST",
-            message: `lost the daemon connection; lease ${ourLeaseId} is still yours until its ttlDeadline ${String(ourLeaseDeadline)} -- renew it with \`simlock lease renew ${ourLeaseId}\` or let it expire`,
-          },
-        })}\n`,
-      );
-    }
-    notifyConnectionLost?.();
-  });
-  const offUnhealthy = client.onDeviceUnhealthy((push) => {
-    environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
-  });
-  const offRecovered = client.onDeviceRecovered((push) => {
-    environment.stderr.write(`${JSON.stringify({ push: "device-recovered", ...push })}\n`);
-  });
+  // why: set once a held remote lease is granted: a drop then starts the reconnect instead of ending the command.
+  let onDropped: (() => void) | undefined;
+  const subscribe = (target: SimlockAdminClient): (() => void) => {
+    const offLeaseLost = target.onLeaseLost((push) => {
+      if (push.leaseId !== ourLeaseId) return;
+      markLeaseLost(push);
+    });
+    const offConnectionLost = target.onConnectionLost(() => {
+      if (onDropped !== undefined) {
+        onDropped();
+        return;
+      }
+      connectionLost = true;
+      if (ourLeaseId !== undefined) {
+        environment.stderr.write(
+          `${JSON.stringify({
+            error: {
+              code: "DAEMON_CONNECTION_LOST",
+              message: `lost the daemon connection; lease ${ourLeaseId} is still yours until its ttlDeadline ${String(ourLeaseDeadline)} -- renew it with \`simlock lease renew ${ourLeaseId}\` or let it expire`,
+            },
+          })}\n`,
+        );
+      }
+      notifyConnectionLost?.();
+    });
+    const offUnhealthy = target.onDeviceUnhealthy((push) => {
+      environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
+    });
+    const offRecovered = target.onDeviceRecovered((push) => {
+      environment.stderr.write(`${JSON.stringify({ push: "device-recovered", ...push })}\n`);
+    });
+    return () => {
+      offLeaseLost();
+      offUnhealthy();
+      offRecovered();
+      offConnectionLost();
+    };
+  };
+  let unsubscribe = subscribe(client);
   let heldLeaseId: string | undefined;
   // why: stderr lines keep the order their causes happened in even though each write waits on
   // the lazy error-code lookup: every async error write joins this chain, and the command's
@@ -212,6 +237,7 @@ async function runLease(
     }
   };
   let renewal: LeaseRenewal | undefined;
+  let reconnect: Reconnect | undefined;
   try {
     let grant: LeaseGrant;
     try {
@@ -253,24 +279,56 @@ async function runLease(
     else writeResult((value) => environment.stdout.write(value), result);
     if (termination === undefined) return 0;
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
-    renewal = startLeaseRenewal({
-      clock: environment.clock,
-      leaseId: grant.lease.id,
-      ttlMs: grant.lease.ttlMs,
-      ttlDeadline: grant.lease.ttlDeadline,
-      renew: (leaseId) => client.renewLease({ leaseId }),
-      onRenewed: (renewed) => {
-        ourLeaseDeadline = renewed.ttlDeadline;
-      },
-      onError: (error) => {
-        if (connectionLost) return;
-        queueErrorWrite(error);
-      },
-      onLeaseGone: (reason, error) => {
-        markLeaseLost({ deviceId: grant.lease.deviceId, leaseId: grant.lease.id, reason });
-        queueErrorWrite(error);
-      },
-    });
+    const grantedLease = grant.lease;
+    const beginRenewal = (ttlMs: number, ttlDeadline: number): void => {
+      renewal = startLeaseRenewal({
+        clock: environment.clock,
+        leaseId: grantedLease.id,
+        ttlMs,
+        ttlDeadline,
+        renew: (leaseId) => client.renewLease({ leaseId }),
+        onRenewed: (renewed) => {
+          ourLeaseDeadline = renewed.ttlDeadline;
+        },
+        onError: (error) => {
+          if (connectionLost) return;
+          queueErrorWrite(error);
+        },
+        onLeaseGone: (reason, error) => {
+          markLeaseLost({ deviceId: grantedLease.deviceId, leaseId: grantedLease.id, reason });
+          queueErrorWrite(error);
+        },
+      });
+    };
+    if (farmOrigin !== undefined) {
+      onDropped = () => {
+        renewal?.stop();
+        environment.stderr.write(
+          `${JSON.stringify({ notice: `lost the connection to ${farmOrigin}; reconnecting until ${new Date(ourLeaseDeadline ?? 0).toISOString()} to keep lease ${grantedLease.id}` })}\n`,
+        );
+        reconnect = startReconnect({
+          clock: environment.clock,
+          attempt: async () => {
+            const next = await connectDaemonClient(environment, token);
+            const renewed = await next.renewLease({ leaseId: grantedLease.id });
+            unsubscribe();
+            const previous = client;
+            client = next;
+            unsubscribe = subscribe(next);
+            await previous.close();
+            return renewed;
+          },
+          onReconnected: (renewed) => {
+            ourLeaseDeadline = renewed.ttlDeadline;
+            environment.stderr.write(
+              `${JSON.stringify({ notice: `reconnected to ${farmOrigin}; lease ${grantedLease.id} renewed` })}\n`,
+            );
+            beginRenewal(renewed.ttlMs, renewed.ttlDeadline);
+          },
+        });
+      };
+    }
+    beginRenewal(grant.lease.ttlMs, grant.lease.ttlDeadline);
     await Promise.race([termination.settled, leaseLostSignal, connectionLostSignal]);
     if (leaseLost) return LEASE_LOST_EXIT_CODE;
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
@@ -279,13 +337,11 @@ async function runLease(
     // why: Stopped before the release, always: a renew must never race the release of the lease it
     // is renewing, and no timer may outlive this command.
     renewal?.stop();
+    reconnect?.stop();
     await releaseHeldLease();
     await stderrWrites;
     termination?.dispose();
-    offLeaseLost();
-    offUnhealthy();
-    offRecovered();
-    offConnectionLost();
+    unsubscribe();
     await client.close();
   }
 }
