@@ -21,7 +21,7 @@ import {
 import { commandArgs, UsageError } from "../args.js";
 import { escapeControl } from "../escape.js";
 import { selectOnlyLease } from "../remote-lease.js";
-import { farmOrigin, farmTokenFits, farmUrlProblem } from "../../simlock-client/farm-url.js";
+import { checkedFarmUrl, FarmUrlError, farmTokenFits } from "../../simlock-client/farm-url.js";
 import type { CommandContext } from "../tree.js";
 import type { CliEnvironment } from "../types.js";
 
@@ -111,16 +111,12 @@ function checkedUrl(text: string | undefined): string {
   if (text === undefined || text === "") {
     throw new UsageError("No farm URL: pass --url or set SIMLOCK_URL");
   }
-  const problem = farmUrlProblem(text);
-  if (problem === "scheme") {
-    throw new UsageError(
-      "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
-    );
+  try {
+    return checkedFarmUrl(text, "--url");
+  } catch (error: unknown) {
+    if (error instanceof FarmUrlError) throw new UsageError(error.message);
+    throw error;
   }
-  if (problem === "origin") {
-    throw new UsageError("--url must be the farm's origin only: no path, query or fragment");
-  }
-  return farmOrigin(text);
 }
 
 function checkedToken(text: string | undefined): string {

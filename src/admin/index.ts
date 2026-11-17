@@ -120,6 +120,7 @@ export interface ConnectSimlockAdminOptions {
   readonly token?: string;
   readonly webSocket?: WebSocketClientConnector;
   readonly clock?: Clock;
+  readonly signal?: AbortSignal;
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake, requesting the

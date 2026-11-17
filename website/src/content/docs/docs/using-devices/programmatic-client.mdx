@@ -64,8 +64,9 @@ const client = await connectSimlock({
 });
 ```
 
-- **`url`** is the farm's origin, with no path, query or fragment. It must be `https://`, except `http://` for `127.0.0.1`, `[::1]` and `localhost`, and at most 2,048 characters. It cannot go with `endpoint`, `ipc` or `connection`, and `connectSimlockAdmin` takes no `credential` with it.
-- **`token`** is a token the farm knows, 1 to 4,096 characters. Its role is the session's role: an operator token gives `simlock/admin` every admin call, an agent token gives the agent calls. The token's own id is the principal, so `principal` has no effect here.
+- **`url`** is the farm's origin, with no path, query or fragment. It must be `https://`, except `http://` for `127.0.0.1`, `[::1]` and `localhost`, and at most 2,048 characters. It cannot go with `endpoint`, `ipc`, `connection` or `principal`, and `connectSimlockAdmin` takes no `credential` with it. A URL, a token or a mix of options that breaks these rules throws a `TypeError` before anything is sent.
+- **`token`** is a token the farm knows, 1 to 4,096 characters. Its role is the session's role: an operator token gives `simlock/admin` every admin call, an agent token gives the agent calls. The token's own id is the principal.
+- **`signal`** is an optional `AbortSignal`. Aborting it while the client connects stops the attempt, and the call rejects with the signal's reason. Once the client is connected, it ends nothing.
 
 The calls, the pushes and the version check work as on the daemon's machine. Three errors are new:
 

@@ -35,7 +35,7 @@ export interface ErrorDetailsMap {
   DAEMON_STARTUP_FAILED: Record<string, never>;
   DAEMON_CONNECTION_LOST: Record<string, never>;
   // why: ADR 0081 §3: a remote typed client could not reach the farm at its URL (nothing listening, no answer in 10 s, a proxy's 502, no session path), as the local client's `DAEMON_CONNECTION_LOST` says for a socket.
-  REMOTE_UNREACHABLE: Record<string, never>;
+  REMOTE_UNREACHABLE: { readonly url: string };
   // why: the farm refused the token at the upgrade, or ended the session when the token was revoked; HTTP has answered this code at 401 all along.
   UNAUTHENTICATED: Record<string, never>;
 
@@ -230,6 +230,7 @@ type CodeWithDeclaredDetails = {
 
 const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true> = {
   PROTOCOL_VERSION_UNSUPPORTED: true,
+  REMOTE_UNREACHABLE: true,
   QUEUE_TIMEOUT: true,
   NO_CAPACITY: true,
   REQUESTER_ALREADY_LEASED: true,

@@ -50,13 +50,22 @@ describe("the typed client over a farm's session path", () => {
 
     const farmUrl = "https://farm.example";
     const refused: [() => Promise<unknown>, RegExp][] = [
-      [() => connectSimlock({ ...options, url: "ftp://farm.example" }), /https:\/\//],
-      [() => connectSimlock({ ...options, url: "http://farm.example" }), /https:\/\//],
-      [() => connectSimlock({ ...options, url: "farm.example" }), /https:\/\//],
-      [() => connectSimlock({ ...options, url: `${farmUrl}/${"x".repeat(2048)}` }), /https:\/\//],
-      [() => connectSimlock({ ...options, url: `${farmUrl}/v1` }), /origin only/],
-      [() => connectSimlock({ ...options, url: `${farmUrl}/?x=1` }), /origin only/],
-      [() => connectSimlock({ ...options, url: `${farmUrl}/#top` }), /origin only/],
+      [
+        () => connectSimlock({ ...options, url: "ftp://farm.example" }),
+        /^`url` must be https:\/\//,
+      ],
+      [
+        () => connectSimlock({ ...options, url: "http://farm.example" }),
+        /^`url` must be https:\/\//,
+      ],
+      [() => connectSimlock({ ...options, url: "farm.example" }), /^`url` must be https:\/\//],
+      [
+        () => connectSimlock({ ...options, url: `${farmUrl}/${"x".repeat(2048)}` }),
+        /^`url` must be https:\/\//,
+      ],
+      [() => connectSimlock({ ...options, url: `${farmUrl}/v1` }), /farm's origin only/],
+      [() => connectSimlock({ ...options, url: `${farmUrl}/?x=1` }), /farm's origin only/],
+      [() => connectSimlock({ ...options, url: `${farmUrl}/#top` }), /farm's origin only/],
       [() => connectSimlock({ ...options, token: "x".repeat(4097), url: farmUrl }), /token/],
       [() => connectSimlock({ ...options, token: "", url: farmUrl }), /token/],
       [() => connectSimlock({ url: farmUrl, webSocket: farm }), /token/],
@@ -70,45 +79,74 @@ describe("the typed client over a farm's session path", () => {
       ],
       [() => connectSimlock({ ...options, ipc: {} as never, url: farmUrl }), /cannot be combined/],
       [
+        () => connectSimlock({ ...options, principal: "build-bot-1", url: farmUrl }),
+        /cannot be combined/,
+      ],
+      [
         () => connectSimlockAdmin({ ...options, credential: "c", url: farmUrl }),
         /cannot be combined/,
       ],
     ];
     // why: a check that is missing lets the call go on to connect, which then fails here by its message and not by hanging on a farm that never answers.
     farm.failure = new Error("must not connect");
-    for (const [attempt, message] of refused) await expect(attempt()).rejects.toThrow(message);
+    for (const [attempt, message] of refused) {
+      const error: unknown = await attempt().catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toMatch(message);
+    }
     expect(farm.connections).toHaveLength(2);
   });
 
-  it("fails to connect with a code a program can match: REMOTE_UNREACHABLE, UNAUTHENTICATED or FORBIDDEN", async () => {
+  it("fails to connect with a code a program can match, naming the farm: REMOTE_UNREACHABLE, UNAUTHENTICATED or FORBIDDEN", async () => {
     const clock = new FakeClock();
     const url = "https://farm.example";
-    const refusals: [string, (farm: FakeWebSocketClientConnector) => void, string][] = [
+    const unreachable = { code: "REMOTE_UNREACHABLE", details: { url } };
+    const refusals: [string, Error, object][] = [
       [
         "nothing listening",
-        (farm) => (farm.failure = new Error("connect ECONNREFUSED")),
-        "REMOTE_UNREACHABLE",
+        new Error("connect ECONNREFUSED"),
+        { ...unreachable, message: `No answer from ${url}: connect ECONNREFUSED` },
       ],
-      ["401", (farm) => (farm.failure = new WebSocketRefusedError(401, "{}")), "UNAUTHENTICATED"],
-      ["403", (farm) => (farm.failure = new WebSocketRefusedError(403, "{}")), "FORBIDDEN"],
+      [
+        "401",
+        new WebSocketRefusedError(401, "{}"),
+        {
+          code: "UNAUTHENTICATED",
+          message: `${url} refused the token: create one with \`simlock token create\` on the worker or gateway`,
+        },
+      ],
+      [
+        "403",
+        new WebSocketRefusedError(
+          403,
+          JSON.stringify({ error: { code: "FORBIDDEN", message: "A join token cannot connect" } }),
+        ),
+        { code: "FORBIDDEN", message: "A join token cannot connect" },
+      ],
       [
         "404 at the path",
-        (farm) => (farm.failure = new WebSocketRefusedError(404, "")),
-        "REMOTE_UNREACHABLE",
+        new WebSocketRefusedError(404, ""),
+        {
+          ...unreachable,
+          message: `${url} answers no Simlock session at /v1/session: is it a Simlock worker or gateway of this version or later?`,
+        },
       ],
       [
         "502 from a proxy",
-        (farm) => (farm.failure = new WebSocketRefusedError(502, "Bad Gateway")),
-        "REMOTE_UNREACHABLE",
+        new WebSocketRefusedError(502, "Bad Gateway"),
+        { ...unreachable, message: `${url} answered 502 to the session upgrade` },
       ],
     ];
-    for (const [name, arrange, code] of refusals) {
+    for (const [name, failure, expected] of refusals) {
       const farm = new FakeWebSocketClientConnector();
-      arrange(farm);
-      await expect(
-        connectSimlock({ clock, token: "sk_tok", url, webSocket: farm }),
-        name,
-      ).rejects.toMatchObject({ code });
+      farm.failure = failure;
+      const error: unknown = await connectSimlock({
+        clock,
+        token: "sk_tok",
+        url,
+        webSocket: farm,
+      }).catch((caught: unknown) => caught);
+      expect(error, name).toMatchObject(expected);
     }
 
     const silent = new FakeWebSocketClientConnector();
@@ -121,7 +159,64 @@ describe("the typed client over a farm's session path", () => {
     clock.advance(1);
     await flushMicrotasks();
     expect(state.state).toBe("rejected");
-    await expect(waiting).rejects.toMatchObject({ code: "REMOTE_UNREACHABLE" });
+    await expect(waiting).rejects.toMatchObject({
+      ...unreachable,
+      message: `No answer from ${url}: it did not answer in 10 s`,
+    });
+  });
+
+  it("stops connecting when the caller's signal aborts, and an abort after connecting ends nothing", async () => {
+    const clock = new FakeClock();
+    const url = "https://farm.example";
+    const reason = new Error("caller gave up");
+
+    const farm = new FakeWebSocketClientConnector();
+    farm.unanswered = true;
+    const controller = new AbortController();
+    const waiting = connectSimlock({
+      clock,
+      signal: controller.signal,
+      token: "sk_tok",
+      url,
+      webSocket: farm,
+    });
+    const state = promiseState(waiting);
+    await flushMicrotasks();
+    expect(state.state).toBe("pending");
+    controller.abort(reason);
+    await flushMicrotasks();
+    expect(state.state).toBe("rejected");
+    await expect(waiting).rejects.toBe(reason);
+
+    const early = AbortSignal.abort(reason);
+    const fresh = new FakeWebSocketClientConnector();
+    await expect(
+      connectSimlockAdmin({ clock, signal: early, token: "sk_tok", url, webSocket: fresh }),
+    ).rejects.toBe(reason);
+    expect(fresh.connections).toHaveLength(0);
+
+    const open = new FakeWebSocketClientConnector();
+    const later = new AbortController();
+    const connecting = connectSimlock({
+      clock,
+      signal: later.signal,
+      token: "sk_tok",
+      url,
+      webSocket: open,
+    });
+    await answerHello(open, 0, "agent");
+    const client = await connecting;
+    later.abort(reason);
+    await flushMicrotasks();
+    expect(open.connections[0]?.peer.closedWith).toBeUndefined();
+    const identity = client.identity();
+    await flushMicrotasks();
+    say((open.connections[0] as { peer: Peer }).peer, {
+      id: JSON.parse((open.connections[0] as { peer: Peer }).peer.sentText.at(-1) as string).id,
+      ok: true,
+      payload: { name: "n", principal: "tok_1", role: "agent", via: "token" },
+    });
+    await expect(identity).resolves.toMatchObject({ name: "n" });
   });
 
   describe("an open session", () => {
@@ -228,7 +323,10 @@ describe("the typed client over a farm's session path", () => {
       revoked.peer.dropped(4003, "token revoked");
       await flushMicrotasks();
       expect(pendingState.state).toBe("rejected");
-      await expect(pending).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+      await expect(pending).rejects.toMatchObject({
+        code: "UNAUTHENTICATED",
+        message: `${url} ended the session: the token was revoked`,
+      });
       await expect(revoked.client.identity()).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
     });
   });
