@@ -147,6 +147,22 @@ describe("the session path", () => {
   ) {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-session-"));
     directories.push(directory);
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.0"],
+      clock: new SystemClock(),
+      knownModels: ["Pixel-A", "Pixel-B"],
+      // why: a real child process that reads its stdin and exits 0 only when all of it arrived.
+      passthrough: () => ({
+        args: [
+          "-e",
+          `let n = 0; process.stdin.on("data", (c) => { n += c.length; }).on("end", () => process.exit(n === ${String(EXEC_STDIN_MAX_LENGTH)} ? 0 : 3));`,
+        ],
+        command: process.execPath,
+        env: {},
+      }),
+      passthroughTools: ["adb"],
+      platform: "android",
+    });
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
         ...(clock === undefined ? {} : { clock }),
@@ -163,24 +179,7 @@ describe("the session path", () => {
         ...(role === "gateway"
           ? { role: "gateway" as const }
           : {
-              drivers: [
-                new FakeDriver({
-                  availableOsVersions: ["18.0"],
-                  clock: new SystemClock(),
-                  knownModels: ["Pixel-A"],
-                  // why: a real child process that reads its stdin and exits 0 only when all of it arrived.
-                  passthrough: () => ({
-                    args: [
-                      "-e",
-                      `let n = 0; process.stdin.on("data", (c) => { n += c.length; }).on("end", () => process.exit(n === ${String(EXEC_STDIN_MAX_LENGTH)} ? 0 : 3));`,
-                    ],
-                    command: process.execPath,
-                    env: {},
-                  }),
-                  passthroughTools: ["adb"],
-                  platform: "android",
-                }),
-              ],
+              drivers: [driver],
             }),
         // why: the exec runs a real child process in the lease's folder, which has to exist.
         filesystem: new NodeFilesystem(),
@@ -194,6 +193,7 @@ describe("the session path", () => {
     return {
       agent: await make("holder", "agent"),
       daemon: started,
+      driver,
       join: await make("joiner", "worker"),
       make,
       operator: await make("op", "operator"),
@@ -429,5 +429,92 @@ describe("the session path", () => {
       () => expect(proxied.closed).toEqual({ code: 4001, reason: "identity expired" }),
       { timeout: 10_000 },
     );
+  });
+
+  it("carries calls and pushes over a session for the token's principal: progress, grant, attach, release, expiry, own-lease listing, events, and a close mid-request", async () => {
+    const clock = new FakeClock(Math.floor(Date.now() / 1000) * 1000);
+    pumped = clock;
+    const { agent, driver, make, operator, port } = await farm("worker", undefined, clock);
+    const other = await make("other", "agent");
+    const live = async (secret: string) => {
+      const { session } = await openSession(port, secret);
+      await (session as Session).request("hello", hello);
+      return session as Session;
+    };
+    const [first, second, stranger, watcher] = await Promise.all([
+      live(agent.secret),
+      live(agent.secret),
+      live(other.secret),
+      live(operator.secret),
+    ]);
+    const pushes = (session: Session, push: string) =>
+      session.frames.filter((frame) => frame.push === push);
+    const lease = (frame: Frame) =>
+      (frame.payload as { lease: { id: string; ownerId: string } }).lease;
+    const ask = { model: "Pixel-A", platform: "android" };
+    expect((await watcher.request("events.subscribe")).ok).toBe(true);
+
+    const granted = await first.request("lease.request", ask);
+    expect(lease(granted).ownerId).toBe(agent.token.id);
+    const grantedAt = first.frames.indexOf(granted);
+    expect(pushes(first, "progress").length).toBeGreaterThan(0);
+    expect(first.frames.findIndex((frame) => frame.push === "progress")).toBeLessThan(grantedAt);
+    await vi.waitFor(() => expect(pushes(watcher, "event").length).toBeGreaterThan(0));
+
+    const named = await stranger.request("lease.request", { ...ask, requesterId: "agent-7" });
+    expect(lease(named).ownerId).toBe(other.token.id);
+    const all = await watcher.request("lease.list");
+    expect(
+      (all.payload as { leases: { requesterId: string }[] }).leases
+        .map((entry) => entry.requesterId)
+        .sort(),
+    ).toEqual(["agent-7", agent.token.id].sort());
+    const own = await first.request("lease.list");
+    expect((own.payload as { leases: { id: string }[] }).leases.map((entry) => entry.id)).toEqual([
+      lease(granted).id,
+    ]);
+
+    await second.request("lease.release", { leaseId: lease(granted).id });
+    await vi.waitFor(() => expect(pushes(first, "lease-lost")).toHaveLength(1));
+    expect(pushes(second, "lease-lost")).toHaveLength(0);
+
+    const expiring = await first.request("lease.request", { ...ask, ttlMs: 60_000 });
+    for (let elapsed = 0; elapsed <= 60_000; elapsed += 15_000) {
+      clock.advance(15_000);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await vi.waitFor(() => expect(pushes(first, "lease-lost")).toHaveLength(2));
+    expect(pushes(first, "lease-lost")[1]?.payload).toMatchObject({ leaseId: lease(expiring).id });
+
+    driver.hangMakeReady();
+    const keyed = { ...ask, idempotencyKey: "same-request" };
+    const waiting = first.request("lease.request", keyed);
+    await vi.waitFor(() => expect(pushes(first, "progress").length).toBeGreaterThan(1));
+    const attached = second.request("lease.request", keyed);
+    driver.releaseMakeReady();
+    expect(lease(await attached).id).toBe(lease(await waiting).id);
+    const held = await watcher.request("lease.list");
+    expect(
+      (held.payload as { leases: { ownerId: string }[] }).leases.filter(
+        (entry) => entry.ownerId === agent.token.id,
+      ),
+    ).toHaveLength(1);
+
+    driver.hangMakeReady();
+    const dropped = await live(other.secret);
+    // why: a model no warm device matches, so the request waits on the held `makeReady`.
+    void dropped.request("lease.request", { ...ask, model: "Pixel-B", requesterId: "agent-8" });
+    await vi.waitFor(() => expect(pushes(dropped, "progress").length).toBeGreaterThan(0));
+    dropped.socket.close();
+    await vi.waitFor(() => expect(dropped.closed).toBeDefined());
+    driver.releaseMakeReady();
+    await vi.waitFor(async () => {
+      const after = await watcher.request("lease.list");
+      expect(
+        (after.payload as { leases: { requesterId: string }[] }).leases.map(
+          (entry) => entry.requesterId,
+        ),
+      ).toContain("agent-8");
+    });
   });
 });
