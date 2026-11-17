@@ -72,7 +72,10 @@ names is not believed, and a `hello` credential is refused rather than
 used, so one connection never carries two identities. Everything else in
 `hello`, the protocol range above all, works as on the socket. A session
 opened by an identity with an expiry (a proxy JWT) ends at that expiry,
-as HTTP streams do.
+as HTTP streams do. Because the token is checked once, at the upgrade,
+`token.revoke` closes every open session of that token at once, as a
+gateway already closes a revoked token's uplinks; otherwise a leaked
+token would keep its rights for as long as a session stays open.
 
 ### 3. Frontends choose remote by a URL
 
@@ -85,7 +88,11 @@ does locally, with the token's role; a command that acts on this machine
 remote mode. `simctl` and `adb` become `device.exec`, as through a gateway
 (ADR 0005 §19c), so their paths are the worker's and a relative path names
 the lease's folder. Files move over the existing lease-files routes, which
-stay HTTP: a WebSocket message is no place for a 2 GiB build.
+stay HTTP: a WebSocket message is no place for a 2 GiB build. They stay
+single files, as ADR 0067 has them; a folder such as an iOS `.app` is
+not uploaded here. In remote mode a command picks its default lease by
+the caller's requester id, not by the token, since one token may serve
+several agents.
 
 ### 4. A held lease outlives a dropped connection while its TTL lasts
 
@@ -95,8 +102,14 @@ after a dropped connection and keep renewing until the lease's deadline.
 A lease is TTL-first (ADR 0004), so a connection was never what kept it
 alive; reconnecting acquires no device, it only renews one the caller
 already holds. Only when the deadline passes without a renew is the lease
-lost. Locally a dropped socket still ends the held command as today: the
-daemon going away is not a network blip.
+lost. A drop before the grant re-attaches to the same request by its
+idempotency key, which a worker and a gateway already answer with the
+waiting request instead of a second one, so a granted device is never
+left with nobody renewing it. A drop that sends no close (sleep, a Wi-Fi
+switch) is noticed by silence: the farm pings, and a client that hears
+nothing for a bounded time treats the connection as lost. Locally a
+dropped socket still ends the held command as today: the daemon going
+away is not a network blip.
 
 ```mermaid
 sequenceDiagram
