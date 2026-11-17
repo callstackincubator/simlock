@@ -266,7 +266,13 @@ async function runGet(argv: readonly string[], context: CommandContext): Promise
         }
         throw error;
       }
-      await environment.filesystem.rename(partial, target);
+      try {
+        await environment.filesystem.rename(partial, target);
+      } catch (error: unknown) {
+        // why: the write finished, so this run owns the `.part`; a target that cannot take it (a folder) must not block the next run.
+        await environment.filesystem.rm(partial).catch(() => undefined);
+        throw error;
+      }
       return 0;
     }
     const reader = answered.body.getReader();

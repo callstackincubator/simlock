@@ -206,6 +206,7 @@ describe("CLI: simlock files", () => {
 
     const localFailures: [string, string, Options?][] = [
       ["a folder that does not exist", "out/copy.apk"],
+      ["a name taken by a folder", "build"],
       ["a leftover part of another run", "copy.apk", { existing: { "copy.apk.part": "older" } }],
     ];
     for (const [title, output, options] of localFailures) {
@@ -222,6 +223,7 @@ describe("CLI: simlock files", () => {
           "older",
         );
       }
+      expect(await refused.filesystem.exists("/work/project/build.part"), title).toBe(false);
     }
 
     const silent = new FakeClock(0);
