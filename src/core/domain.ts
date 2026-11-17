@@ -365,6 +365,8 @@ export interface PhysicalDevice extends DeviceRecordFields {
   readonly spec: PhysicalSpec;
   readonly state: PhysicalState;
   readonly enrolledApps: readonly string[];
+  /** why: a network phone's `ro.serialno`, kept so every presence read can check the address still reaches that phone (ADR 0080 §2); absent for a USB phone. */
+  readonly hardwareSerial?: string;
   readonly reclaimingSince?: number;
   readonly absentReason?: AbsentReason;
   readonly mode?: undefined;

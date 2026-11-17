@@ -23,7 +23,11 @@ describe("readPhysicalPresence", () => {
       { driverDeviceId: "B", present: false },
     ]);
 
-    const presence = await readPhysicalPresence(driver, ["A", "B", "C"]);
+    const presence = await readPhysicalPresence(driver, [
+      { driverDeviceId: "A" },
+      { driverDeviceId: "B" },
+      { driverDeviceId: "C" },
+    ]);
 
     expect(presence.get("A")).toBe(true);
     expect(presence.get("B")).toBe(false);
@@ -38,24 +42,30 @@ describe("readPhysicalPresence", () => {
     ]);
 
     return expect(
-      readPhysicalPresence(driver, ["A"]).then((presence) => [...presence]),
+      readPhysicalPresence(driver, [{ driverDeviceId: "A" }]).then((presence) => [...presence]),
     ).resolves.toEqual([["A", true]]);
   });
 
-  it("asks the driver only for the IDs it is given", async () => {
+  it("asks the driver only for the entries it is given, each with its hardware serial when it has one and nothing else", async () => {
     const driver = driverAnswering([{ driverDeviceId: "A", present: true }]);
 
-    await readPhysicalPresence(driver, ["A", "B"]);
+    await readPhysicalPresence(driver, [
+      { driverDeviceId: "A", hardwareSerial: "SER-A" },
+      { driverDeviceId: "B" },
+    ]);
 
     expect(driver.listPresentPhysical).toHaveBeenCalledTimes(1);
-    expect(driver.listPresentPhysical).toHaveBeenCalledWith(["A", "B"]);
+    expect(driver.listPresentPhysical).toHaveBeenCalledWith([
+      { driverDeviceId: "A", hardwareSerial: "SER-A" },
+      { driverDeviceId: "B" },
+    ]);
   });
 
   it("rejects when the driver rejects", async () => {
     const failure = new Error("usbmuxd went away");
     const driver = { listPresentPhysical: vi.fn().mockRejectedValue(failure) };
 
-    await expect(readPhysicalPresence(driver, ["A"])).rejects.toBe(failure);
+    await expect(readPhysicalPresence(driver, [{ driverDeviceId: "A" }])).rejects.toBe(failure);
   });
 });
 
@@ -66,7 +76,10 @@ describe("readPhysicalPresenceDetail", () => {
       { driverDeviceId: "B", present: true },
     ]);
 
-    const detail = await readPhysicalPresenceDetail(driver, ["A", "B"]);
+    const detail = await readPhysicalPresenceDetail(driver, [
+      { driverDeviceId: "A" },
+      { driverDeviceId: "B" },
+    ]);
 
     expect(detail.get("A")).toStrictEqual({ osVersion: "18.5", present: true });
     expect(detail.get("B")).toStrictEqual({ present: true });
@@ -78,7 +91,11 @@ describe("readPhysicalPresenceDetail", () => {
       { driverDeviceId: "B", present: false },
     ]);
 
-    const detail = await readPhysicalPresenceDetail(driver, ["A", "B", "C"]);
+    const detail = await readPhysicalPresenceDetail(driver, [
+      { driverDeviceId: "A" },
+      { driverDeviceId: "B" },
+      { driverDeviceId: "C" },
+    ]);
 
     expect(detail.get("A")).toStrictEqual({ present: false, reason: "locked" });
     expect(detail.get("B")).toStrictEqual({ present: false, reason: "not-present" });
@@ -94,7 +111,12 @@ describe("the latest presence read of a device", () => {
       { driverDeviceId: "LATEST-C", present: false },
     ]);
 
-    await readPhysicalPresenceDetail(driver, ["LATEST-A", "LATEST-B", "LATEST-C", "LATEST-D"]);
+    await readPhysicalPresenceDetail(driver, [
+      { driverDeviceId: "LATEST-A" },
+      { driverDeviceId: "LATEST-B" },
+      { driverDeviceId: "LATEST-C" },
+      { driverDeviceId: "LATEST-D" },
+    ]);
 
     expect(latestPresence("LATEST-A")).toStrictEqual({ present: true });
     expect(latestPresence("LATEST-B")).toStrictEqual({ present: false, reason: "locked" });
@@ -106,26 +128,30 @@ describe("the latest presence read of a device", () => {
     expect(latestPresence("LATEST-E")).toBeUndefined();
     await readPhysicalPresence(
       driverAnswering([{ driverDeviceId: "LATEST-E", present: false, reason: "untrusted" }]),
-      ["LATEST-E"],
+      [{ driverDeviceId: "LATEST-E" }],
     );
     expect(latestPresence("LATEST-E")).toStrictEqual({ present: false, reason: "untrusted" });
 
     const failing = { listPresentPhysical: vi.fn().mockRejectedValue(new Error("usbmuxd")) };
-    await expect(readPhysicalPresence(failing, ["LATEST-E"])).rejects.toThrow("usbmuxd");
-    await expect(readPhysicalPresenceDetail(failing, ["LATEST-E"])).rejects.toThrow("usbmuxd");
+    await expect(readPhysicalPresence(failing, [{ driverDeviceId: "LATEST-E" }])).rejects.toThrow(
+      "usbmuxd",
+    );
+    await expect(
+      readPhysicalPresenceDetail(failing, [{ driverDeviceId: "LATEST-E" }]),
+    ).rejects.toThrow("usbmuxd");
 
     expect(latestPresence("LATEST-E")).toStrictEqual({ present: false, reason: "untrusted" });
   });
 
   it("is changed the same way by the boolean read a grant makes, with the read's reason", async () => {
     await readPhysicalPresence(driverAnswering([{ driverDeviceId: "LATEST-F", present: true }]), [
-      "LATEST-F",
+      { driverDeviceId: "LATEST-F" },
     ]);
     expect(latestPresence("LATEST-F")).toStrictEqual({ present: true });
 
     await readPhysicalPresence(
       driverAnswering([{ driverDeviceId: "LATEST-F", present: false, reason: "locked" }]),
-      ["LATEST-F"],
+      [{ driverDeviceId: "LATEST-F" }],
     );
 
     expect(latestPresence("LATEST-F")).toStrictEqual({ present: false, reason: "locked" });

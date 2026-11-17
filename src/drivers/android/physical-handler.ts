@@ -5,6 +5,7 @@ import {
   PassthroughRefusedError,
   type PhysicalDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   type ReclaimResult,
   ScreenUnavailableError,
@@ -182,11 +183,13 @@ export class AndroidPhysicalHandler {
     };
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
     const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
     const entries = listing.kind === "ok" ? parseDevices(listing.stdout, this.#platform) : [];
     const answers: PresentPhysical[] = [];
-    for (const driverDeviceId of enrolledIds) {
+    for (const { driverDeviceId } of enrolled) {
       const usb = entries.filter((entry) => entry.serial === driverDeviceId && entry.usb);
       if (usb.some((entry) => entry.state === "device")) {
         const level = await this.#readText(driverDeviceId, [

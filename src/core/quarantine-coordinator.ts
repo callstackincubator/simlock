@@ -275,7 +275,7 @@ export class QuarantineCoordinator {
   async #presentForRetry(device: PhysicalDevice): Promise<boolean> {
     try {
       const driver = this.options.drivers.get(device.spec.platform);
-      const presence = await readPhysicalPresence(driver, [device.driverDeviceId]);
+      const presence = await readPhysicalPresence(driver, [device]);
       return presence.get(device.driverDeviceId) === true;
     } catch (error: unknown) {
       this.#logger.warn("quarantine presence read failed", {

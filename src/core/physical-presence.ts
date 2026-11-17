@@ -1,5 +1,5 @@
 import type { AbsentReason } from "./domain.js";
-import type { Driver, PresentPhysical } from "./driver.js";
+import type { Driver, EnrolledPhysical, PresentPhysical } from "./driver.js";
 
 export type PhysicalRead =
   | { readonly present: true; readonly osVersion?: string }
@@ -24,11 +24,14 @@ function remember(answer: ReadonlyMap<string, PhysicalRead>): void {
 }
 
 function reads(
-  ids: readonly string[],
+  enrolled: readonly EnrolledPhysical[],
   entries: readonly PresentPhysical[],
 ): ReadonlyMap<string, PhysicalRead> {
   const answer = new Map<string, PhysicalRead>(
-    ids.map((id) => [id, { present: false, reason: "not-present" }]),
+    enrolled.map(({ driverDeviceId }) => [
+      driverDeviceId,
+      { present: false, reason: "not-present" },
+    ]),
   );
   for (const entry of entries) {
     if (!answer.has(entry.driverDeviceId)) continue;
@@ -45,20 +48,28 @@ function reads(
   return answer;
 }
 
+/** why: a caller may hand over whole records; the driver is told only the ID and the hardware serial. */
+function asked(enrolled: readonly EnrolledPhysical[]): EnrolledPhysical[] {
+  return enrolled.map(({ driverDeviceId, hardwareSerial }) => ({
+    driverDeviceId,
+    ...(hardwareSerial === undefined ? {} : { hardwareSerial }),
+  }));
+}
+
 export async function readPhysicalPresenceDetail(
   driver: Pick<Driver, "listPresentPhysical">,
-  ids: readonly string[],
+  enrolled: readonly EnrolledPhysical[],
 ): Promise<ReadonlyMap<string, PhysicalRead>> {
-  const answer = reads(ids, await driver.listPresentPhysical(ids));
+  const answer = reads(enrolled, await driver.listPresentPhysical(asked(enrolled)));
   remember(answer);
   return answer;
 }
 
 export async function readPhysicalPresence(
   driver: Pick<Driver, "listPresentPhysical">,
-  ids: readonly string[],
+  enrolled: readonly EnrolledPhysical[],
 ): Promise<ReadonlyMap<string, boolean>> {
-  const answer = reads(ids, await driver.listPresentPhysical(ids));
+  const answer = reads(enrolled, await driver.listPresentPhysical(asked(enrolled)));
   remember(answer);
   return new Map([...answer].map(([id, read]) => [id, read.present]));
 }

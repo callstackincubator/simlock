@@ -25,6 +25,7 @@ import {
   isPhysicalDriverDevice,
   type PhysicalDriverDevice,
   type VirtualDriverDevice,
+  type EnrolledPhysical,
   type PresentPhysical,
   type DriverToolVersion,
   type InstalledComponent,
@@ -703,8 +704,10 @@ export class AndroidDriver implements Driver {
     });
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    return this.#physical.listPresentPhysical(enrolledIds);
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    return this.#physical.listPresentPhysical(enrolled);
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {

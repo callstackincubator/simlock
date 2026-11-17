@@ -22,6 +22,7 @@ import {
   type ReclaimResult,
   type VirtualDriverDevice,
   isPhysicalDriverDevice,
+  type EnrolledPhysical,
   type PresentPhysical,
   ensureOwnedRoot,
   type EnsureOwnedRootOptions,
@@ -459,8 +460,10 @@ export class IosSimctlDriver implements Driver {
     await this.#slimBoot.removeOverrides(udid);
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    return this.#physical.listPresent(enrolledIds);
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    return this.#physical.listPresent(enrolled.map((entry) => entry.driverDeviceId));
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
