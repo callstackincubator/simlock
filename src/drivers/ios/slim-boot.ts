@@ -171,12 +171,12 @@ export class SlimBoot {
     const configured = resolveSlimCategories(slim.categories);
     const { kept, resolved } = splitByExcept(configured, except);
     const folder = this.#overridesFolder(udid);
-    const recordFile = join(folder, RECORD_FILE_NAME);
     const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
-    const recorded = await this.#readRecord(recordFile);
+    const recorded = await this.#readRecord(join(folder, RECORD_FILE_NAME));
     // why: a name the worker dropped is still written back on (ADR 0083 §5), so a record or a name keeps the write going even with no category.
     const noCategoriesDetail = `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`;
-    if (configured.categories.length === 0 && names.length === 0 && recorded.length === 0) {
+    const noCategories = configured.categories.length === 0;
+    if (noCategories && names.length === 0 && recorded.length === 0) {
       return { detail: noCategoriesDetail, kind: "no-categories" };
     }
 
@@ -186,19 +186,24 @@ export class SlimBoot {
       include: slim.include ?? [],
       recorded,
     });
-    let writeError: string | undefined;
-    try {
-      await this.#writeFiles(folder, wanted, { names, recorded });
-    } catch (error: unknown) {
-      writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
-    }
-
+    const writeError = await this.#tryWriteFiles(folder, wanted, { names, recorded });
     // why: no category and no `exclude` is the unconfigured case, which logs its skip as before (ADR 0083 §4).
     const unconfigured =
-      configured.categories.length === 0 && (slim.exclude ?? []).length === 0
-        ? noCategoriesDetail
-        : undefined;
+      noCategories && (slim.exclude ?? []).length === 0 ? noCategoriesDetail : undefined;
     return { kept, kind: "written", resolved, startedAt, unconfigured, wanted, writeError };
+  }
+
+  async #tryWriteFiles(
+    folder: string,
+    wanted: ReadonlyMap<string, boolean>,
+    record: { readonly names: readonly string[]; readonly recorded: readonly string[] },
+  ): Promise<string | undefined> {
+    try {
+      await this.#writeFiles(folder, wanted, record);
+      return undefined;
+    } catch (error: unknown) {
+      return `could not write the launchd overrides file: ${errorMessage(error)}`;
+    }
   }
 
   // why: the plist first, then the record: a restart between them leaves the old record, which still lists every name the plist may hold off (ADR 0083 S2).
@@ -263,10 +268,10 @@ export class SlimBoot {
     }
     // why: ADR 0083 §4: with no label written off the device is `full` whatever a readback would say, so none is run unless a kept category needs it.
     if (write.kept.length === 0 && ![...write.wanted.values()].some(Boolean)) {
-      const detail = write.unconfigured ?? write.writeError;
-      return detail === undefined
+      const detail = [write.unconfigured, write.writeError].filter((part) => part !== undefined);
+      return detail.length === 0
         ? this.#asIs(device, data, "full")
-        : this.#skipApply(device, data, detail, "full");
+        : this.#skipApply(device, data, detail.join("; "), "full");
     }
     const outcome = await this.#simctl.invoke(
       ["spawn", data.udid, "launchctl", "print-disabled", "system"],

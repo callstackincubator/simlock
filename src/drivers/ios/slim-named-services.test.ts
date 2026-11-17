@@ -35,6 +35,26 @@ function disabledReadback(
   return Object.fromEntries([...labels, ...off].map((label) => [label, "disabled"]));
 }
 
+async function plantOverrides(
+  filesystem: FaultyFilesystem,
+  options: { readonly plist?: Readonly<Record<string, boolean>>; readonly record?: string },
+): Promise<void> {
+  const planted = [
+    [overridesPath(slim18_5.udid), options.plist && overridesPlist(options.plist)],
+    [recordPath(slim18_5.udid), options.record],
+  ] as const;
+  for (const [path, contents] of planted) {
+    if (contents === undefined) continue;
+    await filesystem.mkdirp(overridesFolder(slim18_5.udid));
+    await filesystem.writeFileAtomic(path, contents);
+  }
+  filesystem.writes.length = 0;
+}
+
+async function readJson(filesystem: FaultyFilesystem, path: string): Promise<unknown> {
+  return (await filesystem.exists(path)) ? JSON.parse(await filesystem.readFile(path)) : undefined;
+}
+
 async function boot(options: {
   readonly slim: Omit<IosDriverConfig["slim"], "bootTimeoutMs">;
   readonly readback?: Readonly<Record<string, string>>;
@@ -46,16 +66,7 @@ async function boot(options: {
 }) {
   const filesystem = new FaultyFilesystem();
   await plantManagedDevice(filesystem);
-  if (options.plist !== undefined || options.record !== undefined) {
-    await filesystem.mkdirp(overridesFolder(slim18_5.udid));
-  }
-  if (options.plist !== undefined) {
-    await filesystem.writeFileAtomic(overridesPath(slim18_5.udid), overridesPlist(options.plist));
-  }
-  if (options.record !== undefined) {
-    await filesystem.writeFileAtomic(recordPath(slim18_5.udid), options.record);
-  }
-  filesystem.writes.length = 0;
+  await plantOverrides(filesystem, options);
   if (options.failing !== undefined) filesystem.failing = options.failing;
   const warn = vi.fn<(message: string) => void>();
   const logger: Logger = {
@@ -98,12 +109,10 @@ async function boot(options: {
       (error: unknown) => ({ error }) as const,
     );
   const file = overridesPath(slim18_5.udid);
-  const written = (await filesystem.exists(file))
+  const written: Readonly<Record<string, boolean>> = (await filesystem.exists(file))
     ? parseOverrides(await filesystem.readFile(file))
-    : undefined;
-  const record = (await filesystem.exists(recordPath(slim18_5.udid)))
-    ? (JSON.parse(await filesystem.readFile(recordPath(slim18_5.udid))) as unknown)
-    : undefined;
+    : {};
+  const record = await readJson(filesystem, recordPath(slim18_5.udid));
   return { filesystem, onSlimSkipped, onSlimmed, outcome, record, warn, written };
 }
 
@@ -118,7 +127,7 @@ describe("IosSimctlDriver makeReady with include and exclude names", () => {
       slim: { categories: [], exclude: [diagnosticd] },
       readback: { [diagnosticd]: "disabled" },
     });
-    expect(excludeOnly.written?.[diagnosticd]).toBe(true);
+    expect(excludeOnly.written[diagnosticd]).toBe(true);
     expect(excludeOnly.outcome).toEqual(slimMode);
     expect(excludeOnly.onSlimmed).toHaveBeenCalledWith(
       expect.objectContaining({ categories: [], labelCount: 1 }),
@@ -175,7 +184,7 @@ describe("IosSimctlDriver makeReady with include and exclude names", () => {
 
     const noCategories = await boot({ slim: { categories: [] } });
     expect(noCategories.outcome).toEqual(fullMode);
-    expect(noCategories.written).toBeUndefined();
+    expect(noCategories.written).toEqual({});
     expect(noCategories.onSlimSkipped).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "apply-failed" }),
     );
@@ -198,6 +207,19 @@ describe("IosSimctlDriver makeReady with include and exclude names", () => {
       );
       expect(result.onSlimmed).not.toHaveBeenCalled();
     }
+
+    const unconfiguredWriteFails = await boot({
+      slim: { categories: [] },
+      plist: { [diagnosticd]: true },
+      record: JSON.stringify([diagnosticd]),
+      failing: "writeFileAtomic",
+    });
+    expect(unconfiguredWriteFails.outcome).toEqual(fullMode);
+    expect(unconfiguredWriteFails.onSlimSkipped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: expect.stringMatching(/none of the configured.*could not write the launchd/),
+      }),
+    );
 
     const nothingOffUnreadable = await boot({
       slim: {
@@ -243,29 +265,29 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
 
   it("writes each managed label as the precedence of the named services says, and keeps the record of the names", async () => {
     const included = await boot({ slim: { include: [apsd] } });
-    expect(included.written?.[apsd]).toBe(false);
-    expect(included.written?.[passd]).toBe(true);
+    expect(included.written[apsd]).toBe(false);
+    expect(included.written[passd]).toBe(true);
 
     const excluded = await boot({ slim: { exclude: [diagnosticd, gamed] } });
-    expect(excluded.written?.[diagnosticd]).toBe(true);
-    expect(excluded.written?.[gamed]).toBe(true);
+    expect(excluded.written[diagnosticd]).toBe(true);
+    expect(excluded.written[gamed]).toBe(true);
     expect(excluded.record).toEqual([diagnosticd, gamed]);
     expect(excluded.filesystem.modes.record).toBe(0o644);
 
     const kept = await boot({ slim: { exclude: [apsd] }, except: ["store"] });
-    expect(kept.written?.[apsd]).toBe(false);
+    expect(kept.written[apsd]).toBe(false);
 
     const unmanaged = await boot({ slim: {}, plist: { "com.example.unmanaged": true } });
-    expect(unmanaged.written?.["com.example.unmanaged"]).toBe(true);
-    expect(unmanaged.written?.[passd]).toBe(true);
+    expect(unmanaged.written["com.example.unmanaged"]).toBe(true);
+    expect(unmanaged.written[passd]).toBe(true);
 
     const dropped = await boot({
       slim: { exclude: [gamed] },
       plist: { [diagnosticd]: true },
       record: JSON.stringify([diagnosticd, gamed]),
     });
-    expect(dropped.written?.[diagnosticd]).toBe(false);
-    expect(dropped.written?.[gamed]).toBe(true);
+    expect(dropped.written[diagnosticd]).toBe(false);
+    expect(dropped.written[gamed]).toBe(true);
     expect(dropped.record).toEqual([gamed]);
     expect(dropped.filesystem.writes).toEqual([
       overridesPath(slim18_5.udid),
@@ -277,7 +299,7 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
       plist: { [diagnosticd]: true },
       record: JSON.stringify([diagnosticd]),
     });
-    expect(droppedWithNoCategory.written?.[diagnosticd]).toBe(false);
+    expect(droppedWithNoCategory.written[diagnosticd]).toBe(false);
     expect(droppedWithNoCategory.record).toEqual([]);
 
     const none = await boot({ slim: { exclude: [gamed] } });
@@ -292,7 +314,7 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
     expect(unreadable.warn).toHaveBeenCalledWith(
       expect.stringContaining("could not read the record of named services"),
     );
-    expect(unreadable.written?.[diagnosticd]).toBe(true);
+    expect(unreadable.written[diagnosticd]).toBe(true);
     expect(unreadable.record).toEqual([gamed]);
 
     const wrongShape = await boot({
