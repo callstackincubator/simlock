@@ -59,6 +59,23 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     ]);
   });
 
+  it("writes a file in place: the same file, emptied or filled, ending at the mode it is given", async () => {
+    const filesystem = create();
+    const file = `${temporaryDirectory}/emulator.log`;
+
+    await filesystem.mkdirp(temporaryDirectory);
+    await filesystem.writeFileAtomic(file, "old output", { mode: 0o644 });
+    const before = (await filesystem.stat(file)).identity;
+    await filesystem.writeFileInPlace(file, "", { mode: 0o600 });
+
+    await expect(filesystem.readFile(file)).resolves.toBe("");
+    expect((await filesystem.stat(file)).identity).toBe(before);
+    expect((await filesystem.stat(file)).mode).toBe(0o600);
+
+    await filesystem.writeFileInPlace(`${temporaryDirectory}/new.log`, "text", { mode: 0o600 });
+    await expect(filesystem.readFile(`${temporaryDirectory}/new.log`)).resolves.toBe("text");
+  });
+
   it("copies a file's contents over the target and leaves the source", async () => {
     const filesystem = create();
     await filesystem.mkdirp(temporaryDirectory);

@@ -66,6 +66,9 @@ describe("AdminSecretManager", () => {
       writeFileAtomic: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      writeFileInPlace: () => {
+        throw new Error("must not touch the filesystem");
+      },
       copyFile: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -160,6 +163,9 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       writeFileAtomic: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      writeFileInPlace: () => {
         throw new Error("must not touch the filesystem");
       },
       copyFile: () => {
