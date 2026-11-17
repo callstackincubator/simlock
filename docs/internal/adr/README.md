@@ -95,13 +95,13 @@ the status is stale.
 | [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) | A lease holder tunnels device ports to its own machine | Accepted; narrows 0005 Non-goals (port forwarding); §2, §5 and §6 and the iOS Consequence narrowed by 0064 |
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
-| [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
+| [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9; §1 and §2 narrowed by 0082 |
 | [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4; §5 narrowed by 0062 |
 | [0062](0062-the-warm-pool-learns-a-baseline-after-repeated-leases-and-follows-its-newest-version.md) | The warm pool learns a baseline after repeated leases, and follows its newest version | Accepted; narrows 0038 §1, §4, §5, §8, 0050 and 0061 §5 |
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md) | A tunnel reaches an iOS simulator's ports and an emulator's adb port | Accepted; narrows 0054 §2, §5, §6, 0001 §4 and 0005 Non-goals |
 | [0065](0065-a-driver-owns-its-config-keys-and-a-module-takes-the-sections-it-reads.md) | A driver owns its config keys, and a module takes the config sections it reads | Accepted |
-| [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6 |
+| [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6; §2 narrowed by 0082 |
 | [0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md) | A lease has a file folder on its worker that HTTP callers fill and read | Accepted; narrows 0005 Non-goals (file transfer) and §19b′, 0026 §1 (a core relay target) and 0028 §4 (a file PUT's deadline) |
 | [0068](0068-a-worker-pauses-warming-and-new-devices-under-host-memory-pressure.md) | A worker pauses warming and new devices under host memory pressure | Accepted; narrows 0029, adds a rank stage to 0009 |
 | [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Accepted; narrows 0038 §2 and §3 |
@@ -115,3 +115,4 @@ the status is stale.
 | [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
 | [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
 | [0080](0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) | An Android worker may enrol phones reached over the network | Accepted; narrows 0022 §6 and §7, and 0073 §2 and §5 |
+| [0082](0082-a-worker-may-turn-single-slim-services-on-or-off-beside-its-categories.md) | A worker may turn single slim services on or off beside its categories | Proposed; narrows 0060 §1, §2 and 0066 §2 |
