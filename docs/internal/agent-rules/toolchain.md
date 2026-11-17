@@ -196,6 +196,9 @@ Tests that start real simulators or emulators. Run them only through
 - It first stops what earlier runs left behind. By hand: `scripts/slow-e2e.sh
   clean` (refused while a run holds the lock). Never stop a simulator,
   emulator or daemon any other way.
+- `scripts/slow-e2e.sh check`: the checks a run starts with, without a
+  run. Exit 69 with why when the machine is unfit. While a lane runs it
+  stops nothing and checks only free disk and the other tools.
 - `scripts/slow-e2e.sh status`: the running test, the counts so far, how
   long the log has been quiet, and each failure. `scripts/slow-e2e.sh stop`
   ends the running lane and what it started.

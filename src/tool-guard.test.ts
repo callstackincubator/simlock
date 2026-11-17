@@ -605,14 +605,18 @@ describe("tool-guard.mjs", () => {
     ["sets from a command", () => 'F=$(mktemp); gh issue comment 9 --body-file "$F"'],
     [
       "sets only for the program",
-      (file: string) => `F=${file} gh issue comment 9 --body-file "$F"`,
+      (file: string) => `F=${file} true; gh issue comment 9 --body-file "$F"`,
     ],
     ["sets after the use", (file: string) => `gh issue comment 9 --body-file "$F"; F=${file}`],
     [
       "sets in a loop",
-      (file: string) => `for F in ${file}; do :; done; gh issue comment 9 --body-file "$F"`,
+      (file: string) =>
+        `F=${file}; for F in /tmp/other.md; do :; done; gh issue comment 9 --body-file "$F"`,
     ],
-    ["reads from input", () => 'read -r F; gh issue comment 9 --body-file "$F"'],
+    [
+      "reads from input",
+      (file: string) => `F=${file}; read -r F; gh issue comment 9 --body-file "$F"`,
+    ],
     [
       "expands with a default",
       (file: string) => `F=${file}; gh issue comment 9 --body-file "\${F:-x}"`,

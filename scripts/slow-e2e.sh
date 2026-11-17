@@ -8,8 +8,8 @@
 #                                 the log has been quiet; or the last run's log and exit code
 #   scripts/slow-e2e.sh stop      stops the running lane and what it started, and frees the lock
 #   scripts/slow-e2e.sh clean     stops what earlier runs left behind (refused while a lane runs)
-#   scripts/slow-e2e.sh check     the checks a run starts with: clean (not while a run holds the
-#                                 lock), then free disk and builds
+#   scripts/slow-e2e.sh check     the checks a run starts with: clean and the worker lock (neither
+#                                 while a run holds the lane lock), then free disk and builds
 #
 # Vitest arguments pass through: `-t <title>` runs one test, `--bail=1` stops at the first
 # failure. A run prints its log path and exits at once; it writes its exit code to <log>.exit
@@ -141,14 +141,15 @@ if command == "clean":
     clean()
 
 elif command == "check":
-    # why: a running lane's processes and home are not leftovers; cleaning under it fails its tests.
-    if not holder():
+    # why: a running lane's processes, home and worker are its own, not leftovers; cleaning under it fails its tests.
+    running = holder()
+    if not running:
         clean()
     problems = []
-    # why: a lane worker an aborted run left is already killed by clean(), so a live holder here is a worker outside the lane (ADR 0059 §4).
+    # why: with no lane running, a lane worker an aborted run left is already killed by clean(), so a live holder is a worker outside the lane (ADR 0059 §4).
     try:
         owner = json.loads(read(os.path.join(worker_lock, "owner.json"), "{}"))
-        if alive(owner["pid"]):
+        if not running and alive(owner["pid"]):
             print(f"not fit: a Simlock worker holds this machine (pid {owner['pid']}, folder {owner['folder']}); stop it first: SIMLOCK_HOME={owner['folder']} simlock daemon stop", file=sys.stderr)
             sys.exit(69)
     except (ValueError, KeyError, TypeError):
