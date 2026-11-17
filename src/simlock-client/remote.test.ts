@@ -74,6 +74,8 @@ describe("the typed client over a farm's session path", () => {
         /cannot be combined/,
       ],
     ];
+    // why: a check that is missing lets the call go on to connect, which then fails here by its message and not by hanging on a farm that never answers.
+    farm.failure = new Error("must not connect");
     for (const [attempt, message] of refused) await expect(attempt()).rejects.toThrow(message);
     expect(farm.connections).toHaveLength(2);
   });

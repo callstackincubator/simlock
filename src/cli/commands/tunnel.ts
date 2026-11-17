@@ -300,7 +300,7 @@ const SILENCE_TIMEOUT_MS = 45_000;
 const CLOSE_WAIT_MS = 2_000;
 const CLOSE_LEASE_ENDED = 4001;
 
-// why: a failure here carries the worker's own code, which can be one the contract's table does not hold (an HTTP 401 answers `UNAUTHENTICATED`), so the command prints its one JSON line itself.
+// why: a failure here carries the worker's own code, which can be one the contract's table does not hold, so the command prints its one JSON line itself.
 class TunnelFailure extends Error {
   constructor(
     readonly code: string,

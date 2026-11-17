@@ -78,10 +78,11 @@ export interface ConnectSimlockOptions {
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake as an agent-role
- * session (with `url` and `token`, as the token's role). Rejects with a `SimlockError` (`PROTOCOL_VERSION_UNSUPPORTED`,
- * `ADMIN_AUTHENTICATION_FAILED` never applies here since no credential is sent,
- * `DAEMON_CONNECTION_LOST` if the socket cannot be reached) without ever restarting the
- * daemon -- see `docs/internal/adr/0003-...md` §6. */
+ * session (with `url` and `token`, as the token's role). Rejects with a `SimlockError`
+ * (`PROTOCOL_VERSION_UNSUPPORTED`, `ADMIN_AUTHENTICATION_FAILED` never applies here since no
+ * credential is sent, `DAEMON_CONNECTION_LOST` if the socket cannot be reached,
+ * `REMOTE_UNREACHABLE` or `UNAUTHENTICATED` if a farm at `url` cannot be reached or refuses
+ * the token) without ever restarting the daemon -- see `docs/internal/adr/0003-...md` §6. */
 export async function connectSimlock(options: ConnectSimlockOptions): Promise<SimlockClient> {
   const remote = remoteConnectOptions(options);
   if (remote !== undefined) return connectSimlockClient(remote, false);
