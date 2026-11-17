@@ -64,6 +64,8 @@ export interface ConnectSimlockOptions {
   readonly endpoint?: string;
   readonly ipc?: IpcConnector;
   readonly principal?: string;
+  readonly url?: string;
+  readonly token?: string;
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake as an agent-role
