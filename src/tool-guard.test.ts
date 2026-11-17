@@ -83,6 +83,8 @@ describe("tool-guard.mjs", () => {
 
   it.each([
     "pnpm test:changed",
+    "pnpm typecheck",
+    "pnpm run typecheck",
     "pnpm exec vitest run --project unit src/a.test.ts",
     "pnpm test:e2e e2e/http-api.test.ts",
     "pnpm test:console --project=chromium e2e/console/sign-in.spec.ts",
@@ -183,6 +185,10 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("timeout: 600000");
   });
 
+  it("names the typecheck command when it refuses a sub-agent's tsc", () => {
+    expect(bash("pnpm exec tsc --noEmit").stderr).toContain("for types that is `pnpm typecheck`");
+  });
+
   it.each([
     ["git stash push -u", "never `git stash`"],
     ["git stash", "never `git stash`"],
@@ -205,6 +211,8 @@ describe("tool-guard.mjs", () => {
     "git push -u origin task/1",
     "git push origin HEAD:task/1",
     "git merge origin/main",
+    "git stash list",
+    "git -C ../x stash show -p stash@{0}",
     'git commit -m "test: never git stash or git rebase (#1)"',
   ])("lets a sub-agent run %s", (command) => {
     expect(bash(command, "a1", "implementer")).toEqual(OK);
@@ -569,5 +577,50 @@ describe("tool-guard.mjs", () => {
     ]) {
       expect(bash(command, null).stderr).toContain("pass `--body-file <file>`");
     }
+  });
+
+  it("reads a body file named through a variable the call sets once, to a literal, before the use", () => {
+    const good = `Done.\n\n${FOOTER}`;
+    const file = bodyFile(good);
+    const scratch = join(mkdtempSync(join(tmpdir(), "tool-guard-")), "new.md");
+
+    expect(bash(`F=${file}; gh issue comment 9 --body-file "$F"`, null)).toEqual(OK);
+    expect(bash(`export F="${file}"\ngh issue comment 9 --body-file \${F}`, null)).toEqual(OK);
+    expect(
+      bash(`D=${dirname(file)} && F="$D/body.md" && gh pr edit 9 --body-file "$F"`, null),
+    ).toEqual(OK);
+    expect(
+      bash(`F=${scratch}; cat > "$F" <<'EOF'\n${good}\nEOF\ngh pr edit 9 --body-file "$F"`, null),
+    ).toEqual(OK);
+    expect(
+      bash(`F=${bodyFile("Done.\n")}; gh issue comment 9 --body-file "$F"`, null).stderr,
+    ).not.toContain("pass `--body-file <file>`");
+  });
+
+  it.each([
+    [
+      "sets twice",
+      (file: string) => `F=/tmp/other.md; F=${file}; gh issue comment 9 --body-file "$F"`,
+    ],
+    ["sets from a command", () => 'F=$(mktemp); gh issue comment 9 --body-file "$F"'],
+    [
+      "sets only for the program",
+      (file: string) => `F=${file} gh issue comment 9 --body-file "$F"`,
+    ],
+    ["sets after the use", (file: string) => `gh issue comment 9 --body-file "$F"; F=${file}`],
+    [
+      "sets in a loop",
+      (file: string) => `for F in ${file}; do :; done; gh issue comment 9 --body-file "$F"`,
+    ],
+    ["reads from input", () => 'read -r F; gh issue comment 9 --body-file "$F"'],
+    [
+      "expands with a default",
+      (file: string) => `F=${file}; gh issue comment 9 --body-file "\${F:-x}"`,
+    ],
+  ])("refuses a body file named through a variable the call %s", (_what, command) => {
+    const result = bash(command(bodyFile(`Done.\n\n${FOOTER}`)), null);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("pass `--body-file <file>`");
   });
 });
