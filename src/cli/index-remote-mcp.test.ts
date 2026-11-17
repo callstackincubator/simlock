@@ -176,9 +176,8 @@ async function dropsAreRiddenOut(): Promise<void> {
     served.clock.advance(1_000);
     await vi.waitFor(() => expect(served.messages(), name).toHaveLength(2));
     expect(served.messages()[1], name).toBe(`reconnected to ${URL}; lease lse_env renewed`);
-    expect(served.farm.requestTypes().filter((type) => type === "lease.renew")).toHaveLength(
-      name === "a closed connection" ? 1 : 3,
-    );
+    expect(served.farm.requestTypes().at(-1), name).toBe("lease.renew");
+    expect(served.farm.connections, name).toHaveLength(2);
     expect(await served.tool("lease_status", {}), name).toEqual(
       expect.objectContaining({ held: true }),
     );

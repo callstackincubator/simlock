@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   isSimlockError,
   SimlockError,
@@ -14,7 +15,9 @@ import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
+  startReconnect,
   type LeaseRenewal,
+  type Reconnect,
 } from "../lease-policy/index.js";
 import type { Clock } from "../ports/index.js";
 import type {
@@ -60,10 +63,22 @@ export interface McpSessionOptions {
    * triggers have deliberately different powers -- see `#renewHeldLease`.
    */
   readonly connectForRenew: () => Promise<SimlockClient>;
+  /**
+   * why: Set when the session talks to a farm (ADR 0081): the farm's principal is the token, not
+   * this agent, so every lease request names `requesterId` and goes under a key of its own; and a
+   * dropped connection is ridden out by reconnecting and renewing on `startReconnect`'s
+   * schedule until the lease's deadline (ADR 0081 §4), with notices for the agent.
+   */
+  readonly farm?: { readonly origin: string; readonly requesterId: string };
 }
 
 export interface McpErrorResult {
   readonly code: string;
+  readonly message: string;
+}
+
+export interface SessionNotice {
+  readonly level: "info" | "warning";
   readonly message: string;
 }
 
@@ -144,6 +159,9 @@ export class McpSession {
    * it actually stands rather than as it stood at grant time -- see `release()`.
    */
   readonly #renewals = new Map<string, HeldLease>();
+  readonly #farm: McpSessionOptions["farm"];
+  readonly #reconnects = new Map<string, Reconnect>();
+  readonly #noticeListeners = new Set<(notice: SessionNotice) => void>();
   /** why: Lease ids already announced as lost, so one ending never reaches a listener twice -- see
    * `#announceLeaseLost`. */
   readonly #announcedLost = new Set<string>();
@@ -152,6 +170,7 @@ export class McpSession {
     this.#clock = options.clock;
     this.#connect = options.connect;
     this.#connectForRenew = options.connectForRenew;
+    this.#farm = options.farm;
   }
 
   lease(
@@ -162,7 +181,10 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      const request: LeaseRequestInput = { ...input };
+      const request: LeaseRequestInput =
+        this.#farm === undefined
+          ? { ...input }
+          : { ...input, idempotencyKey: randomUUID(), requesterId: this.#farm.requesterId };
       const grant = await client.requestLease(request, {
         ...(onProgress === undefined ? {} : { onProgress }),
         ...(signal === undefined ? {} : { signal }),
@@ -298,6 +320,11 @@ export class McpSession {
   onLeaseLost(listener: (notice: LeaseLostNotice) => void): () => void {
     this.#leaseLostListeners.add(listener);
     return () => this.#leaseLostListeners.delete(listener);
+  }
+
+  onNotice(listener: (notice: SessionNotice) => void): () => void {
+    this.#noticeListeners.add(listener);
+    return () => this.#noticeListeners.delete(listener);
   }
 
   onDeviceHealth(listener: (notice: DeviceHealthNotice) => void): () => void {
@@ -474,11 +501,75 @@ export class McpSession {
   #stopRenewal(leaseId: string): void {
     this.#renewals.get(leaseId)?.renewal.stop();
     this.#renewals.delete(leaseId);
+    this.#reconnects.get(leaseId)?.stop();
+    this.#reconnects.delete(leaseId);
   }
 
   #stopAllRenewals(): void {
     for (const held of this.#renewals.values()) held.renewal.stop();
     this.#renewals.clear();
+    for (const reconnect of this.#reconnects.values()) reconnect.stop();
+    this.#reconnects.clear();
+  }
+
+  #notify(notice: SessionNotice): void {
+    for (const listener of this.#noticeListeners) listener(notice);
+  }
+
+  /**
+   * why: ADR 0081 §4, the farm's half of a held lease: the connection dropped, but the lease
+   * lives until its deadline, so each held lease reconnects on `startReconnect`'s schedule and
+   * renews over the new connection. The renew timer is stopped meanwhile (its own retry would
+   * answer to the lease's cadence, not the schedule), and the typed client itself still never
+   * reconnects.
+   */
+  #rideOutDrop(): void {
+    const farm = this.#farm;
+    if (farm === undefined || this.#closed) return;
+    for (const [leaseId, held] of this.#renewals) {
+      if (this.#reconnects.has(leaseId)) continue;
+      held.renewal.stop();
+      const lease = held.lease;
+      const until = (): string =>
+        new Date(this.#renewals.get(leaseId)?.lease.ttlDeadline ?? 0).toISOString();
+      this.#notify({
+        level: "warning",
+        message: `lost the connection to ${farm.origin}; reconnecting until ${until()} to keep lease ${leaseId}`,
+      });
+      this.#reconnects.set(
+        leaseId,
+        startReconnect({
+          attempt: async () => {
+            const client = await this.#clientForUse(this.#connectForRenew);
+            return client.renewLease({ leaseId });
+          },
+          clock: this.#clock,
+          deadline: lease.ttlDeadline,
+          onDeadline: () => {
+            this.#reportLeaseLost({ deviceId: lease.deviceId, leaseId, reason: "renew-failed" });
+          },
+          onLeaseGone: () => {
+            this.#reportLeaseLost({ deviceId: lease.deviceId, leaseId, reason: "renew-rejected" });
+          },
+          onReconnected: (renewed) => {
+            this.#reconnects.delete(leaseId);
+            this.#startRenewal(renewed);
+            this.#notify({
+              level: "info",
+              message: `reconnected to ${farm.origin}; lease ${leaseId} renewed`,
+            });
+          },
+          onRefused: (error) => {
+            const deadline = until();
+            this.#stopRenewal(leaseId);
+            this.#notify({
+              level: "warning",
+              message: `${error.message}; lease ${leaseId} is still yours until ${deadline}`,
+            });
+          },
+        }),
+      );
+    }
   }
 
   #forgetLease(leaseId: string): void {
@@ -597,6 +688,7 @@ export class McpSession {
         if (this.#client === client) {
           this.#client = undefined;
           this.#unwireClient();
+          this.#rideOutDrop();
         }
       }),
     ];

@@ -116,6 +116,8 @@ This works when your client starts one server process per agent session. If it s
 </TabItem>
 </Tabs>
 
+To use a farm's devices instead of this machine's daemon, give the server the farm's `SIMLOCK_URL` and `SIMLOCK_TOKEN` (or `--url` and `--token`). It then starts no daemon, and if the network drops it reconnects and keeps renewing the lease until the lease's deadline, telling the agent with logging messages. A refused token, a lost lease or a passed deadline ends the lease the way it does on one machine.
+
 The server starts the daemon if it is not running. It renews the agent's lease while it runs, and releases it when the agent tool closes the connection. It sends the agent a short version of the rules when it connects, and the full text as the resource `simlock://instructions`.
 
 ### The tools

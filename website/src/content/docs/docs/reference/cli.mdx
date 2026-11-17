@@ -86,7 +86,7 @@ A few commands differ in remote mode:
 - `events --since` replays the farm's history; it never reads this machine's `history.db`.
 - `baseline list` and `baseline remove` follow the farm's mode, a worker or a gateway, not this machine's folder.
 
-A held `simlock lease` still ends when its connection drops.
+A held `simlock lease` and `simlock mcp` ride out a dropped connection, and 45 seconds with no ping from the farm counts as one. Each prints a `lost the connection to <url>` notice, then connects again after 1, 2, 4 and 8 seconds and every 15 seconds after that, and prints `reconnected to <url>; lease <id> renewed` once it renews. While the request still waits in the queue, the command sends it again under the same idempotency key, so the farm holds one request; if the worker restarted and dropped it, the command asks once more and says so. The tries stop at the lease's deadline, which ends the command as a lost lease (exit 14); a request that has no `--timeout` and cannot reach the farm for 5 minutes fails with `REMOTE_UNREACHABLE` (exit 1). A reconnect the farm refuses (`UNAUTHENTICATED`, `PROTOCOL_VERSION_UNSUPPORTED`) ends the command at once with that code, and the stderr line says the lease is still yours until its deadline. Ctrl-C while disconnected connects once to release the lease. On this machine's own daemon a dropped connection still ends the command.
 
 ### Admin credential
 
@@ -147,7 +147,7 @@ Without `--detach`, the command renews the lease every third of its TTL and rele
 
 - 0 after it released the lease on request. The same signal or exit while the request still waits in the queue cancels the request and exits 0, with nothing printed on stdout.
 - 14 when the daemon ended the lease first (TTL expiry, an operator's `release`, or a device that could not be recovered). A `lease-lost` line on stderr says why.
-- 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon dropped. The lease is not released and stays yours until its deadline; the stderr line names it.
+- 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon on this machine dropped. The lease is not released and stays yours until its deadline; the stderr line names it. With `--url` the command reconnects instead, as [Remote mode](#remote-mode) says.
 
 ### simlock lease renew
 
@@ -268,7 +268,7 @@ Start Simlock's MCP server on stdin and stdout, for an agent to call. It offers 
 simlock mcp
 ```
 
-Takes no flags other than the [global flags](#global-flags). Stdout carries only MCP messages; diagnostics go to stderr. The server starts the daemon on the first tool call that needs it, and releases its lease when it exits.
+Takes no flags other than the [global flags](#global-flags). Stdout carries only MCP messages; diagnostics go to stderr. The server starts the daemon on the first tool call that needs it, and releases its lease when it exits. With `--url` (or `SIMLOCK_URL`) and a token, it serves its tools from that farm, starts no daemon, and sends the lease request with the agent's requester id; without a token it exits 2. A dropped connection is ridden out as in [Remote mode](#remote-mode), and its notices reach the agent as MCP logging messages.
 
 ## simlock instructions
 
