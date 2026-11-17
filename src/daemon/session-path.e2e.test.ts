@@ -1,10 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer as createHttpServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+import { createTestKey, keySetBody, type TestKey } from "../auth/testing.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
@@ -99,8 +102,18 @@ const sockets: WebSocket[] = [];
 describe("the session path", () => {
   const daemons: DaemonServer[] = [];
   const directories: string[] = [];
+  const keyServers: Server[] = [];
 
   afterEach(async () => {
+    await Promise.all(
+      keyServers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
     for (const socket of sockets.splice(0)) socket.terminate();
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
     await Promise.all(
@@ -108,48 +121,132 @@ describe("the session path", () => {
     );
   });
 
-  async function worker() {
+  async function keyServer(key: TestKey): Promise<string> {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" }).end(keySetBody(key));
+    });
+    keyServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/keys`;
+  }
+
+  async function farm(role: "worker" | "gateway", proxyAuth?: Record<string, unknown>) {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-session-"));
     directories.push(directory);
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
-        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        configOverrides: {
+          http: {
+            enabled: true,
+            host: "127.0.0.1",
+            port,
+            ...(proxyAuth === undefined ? {} : { proxyAuth }),
+          },
+        },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
-        drivers: [
-          new FakeDriver({
-            availableOsVersions: ["18.0"],
-            clock: new SystemClock(),
-            knownModels: ["Pixel-A"],
-            platform: "android",
-          }),
-        ],
+        ...(role === "gateway"
+          ? { role: "gateway" as const }
+          : {
+              drivers: [
+                new FakeDriver({
+                  availableOsVersions: ["18.0"],
+                  clock: new SystemClock(),
+                  knownModels: ["Pixel-A"],
+                  platform: "android",
+                }),
+              ],
+            }),
         filesystem: new MemoryFilesystem(),
         logger: new NoopLogger(),
         version: "1.0.0-e2e",
       }),
     );
     daemons.push(started);
-    const agent = await started.dispatch("token.create", { label: "holder", role: "agent" }, admin);
-    return { agent, daemon: started, port };
+    const make = (label: string, kind: "agent" | "operator" | "worker") =>
+      started.dispatch("token.create", { label, role: kind }, admin);
+    return {
+      agent: await make("holder", "agent"),
+      daemon: started,
+      join: await make("joiner", "worker"),
+      make,
+      operator: await make("op", "operator"),
+      port,
+    };
   }
 
   const hello = { clientVersion: "e2e", protocolRange: PROTOCOL_VERSION_RANGE };
 
   it("opens a session on a worker and a gateway whose identity is the token's, or refuses the upgrade", async () => {
-    const { agent, port } = await worker();
-
-    const opened = await openSession(port, agent.secret);
-    expect(opened.status).toBe(101);
-    const session = opened.session as Session;
-    const reply = await session.request("hello", hello);
-    expect(reply.payload).toMatchObject({ principal: agent.token.id, role: "agent" });
-    const identity = await session.request("identity.get");
-    expect(identity.payload).toMatchObject({
-      name: "holder",
-      principal: agent.token.id,
-      role: "agent",
-      via: "token",
+    const key = await createTestKey("ES256", "k1");
+    const jwt = await key.sign({
+      aud: "aud",
+      email: "alice@team.dev",
+      exp: Math.floor(Date.now() / 1000) + 300,
+      iss: "https://team.example",
+      sub: "7f3a",
     });
+    const signedIn = { "cf-access-jwt-assertion": jwt };
+    const proxyAuth = {
+      audience: "aud",
+      header: "cf-access-jwt-assertion",
+      issuer: "https://team.example",
+      jwksUrl: await keyServer(key),
+    };
+    for (const role of ["worker", "gateway"] as const) {
+      const { agent, daemon, join, make, operator, port } = await farm(role, proxyAuth);
+
+      const opened = await openSession(port, agent.secret);
+      expect(opened.status).toBe(101);
+      const reply = await (opened.session as Session).request("hello", hello);
+      expect(reply.payload).toMatchObject({ principal: agent.token.id, role: "agent" });
+      const identity = await (opened.session as Session).request("identity.get");
+      expect(identity.payload).toMatchObject({
+        name: "holder",
+        principal: agent.token.id,
+        role: "agent",
+        via: "token",
+      });
+
+      const asOperator = (await openSession(port, operator.secret)).session as Session;
+      expect((await asOperator.request("hello", hello)).payload).toMatchObject({ role: "admin" });
+
+      const revoked = await make("gone", "agent");
+      await daemon.dispatch("token.revoke", { id: revoked.token.id }, admin);
+      const refusals: [string, Awaited<ReturnType<typeof openSession>>][] = [
+        ["no token", await openSession(port, undefined)],
+        ["unknown token", await openSession(port, "slk_unknown")],
+        ["revoked token", await openSession(port, revoked.secret)],
+        ["join token", await openSession(port, join.secret)],
+        [
+          "cross-site proxy",
+          await openSession(port, undefined, {
+            headers: { ...signedIn, "sec-fetch-site": "cross-site" },
+          }),
+        ],
+        ["other path", await openSession(port, agent.secret, { path: "/v1/session/x" })],
+      ];
+      expect(refusals.map(([name, result]) => [name, result.status, result.code])).toEqual([
+        ["no token", 401, "UNAUTHENTICATED"],
+        ["unknown token", 401, "UNAUTHENTICATED"],
+        ["revoked token", 401, "UNAUTHENTICATED"],
+        ["join token", 403, "FORBIDDEN"],
+        ["cross-site proxy", 403, "FORBIDDEN"],
+        ["other path", 404, undefined],
+      ]);
+
+      const proxied = await openSession(port, undefined, {
+        headers: { ...signedIn, "sec-fetch-site": "same-origin" },
+      });
+      expect(proxied.status).toBe(101);
+      const proxiedSession = proxied.session as Session;
+      expect((await proxiedSession.request("hello", hello)).payload).toMatchObject({
+        role: "admin",
+      });
+      expect((await proxiedSession.request("identity.get")).payload).toMatchObject({
+        name: "alice@team.dev",
+        via: "proxy",
+      });
+    }
   });
 });
