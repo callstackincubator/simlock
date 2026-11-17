@@ -16,7 +16,6 @@ Routing:
 Connect and auto-launch:
 
 - A missing or rejected credential is not an error: the command gets an `agent` session and one stderr `notice` line.
-- With a farm URL (`--url`, else `SIMLOCK_URL`) and no `--local` or `--gateway`, the router hands the command an environment with `remote` set. `connectDaemonClient` then connects to the farm with the token and nothing else: no `admin.token`, no agent fallback, no notice, no launch. A bad URL or a missing token is a usage error. The commands that act on this machine (`daemon *`, `config set`, `setup`) exit 2 before any connect.
 - Auto-launch loads the config first, so a bad one fails on this command's stderr.
 - A launched daemon that exits fails the command at once, unless another daemon answers a last connect. A start through the service never reports an exit, so a daemon it refuses fails at the deadline with the `daemon.log` lines since the start.
 - An answered probe ends the startup window, a `starting` status included: later command failures keep their own codes even while a lease queues or boots.
@@ -32,16 +31,16 @@ Holding a lease:
 
 Passthrough and tunnel:
 
-- `simctl` and `adb`: on a worker the scoped command runs here (`spawnPassthrough`). Through a gateway, or in remote mode, it is `device.exec`: the worker's driver fills the lease's device in and refuses another (ADR 0047). In remote mode the default lease is the requester's own, for an agent token and an operator token alike.
+- `simctl` and `adb`: on a worker the scoped command runs here (`spawnPassthrough`). Through a gateway it is `device.exec`: the worker's driver fills the lease's device in and refuses another (ADR 0047).
 - Without `--stdin`, stdin is never read and `stdin: ""` is sent (ADR 0058). A worker ignores `--stdin`.
-- `tunnel` talks to a worker or gateway over HTTP and a WebSocket, never the local daemon; its URL is the global `--url`, else `SIMLOCK_URL`. `ws` loads on the first connect, for this command only.
+- `tunnel` talks to a worker or gateway over HTTP and a WebSocket, never the local daemon. `ws` loads on the first connect, for this command only.
 - A forward tunnel binds its caller port before anything else, and holds accepted connections until `READY`.
 - `tunnel emulator adb`: a failed `adb connect` is a warning and the tunnel stays. Leaving always runs `adb disconnect`, and the exit code is the command's own.
 
 Events and history:
 
 - `events --follow`: subscribe, then replay, then print buffered pushes not already replayed (by `eventKey`).
-- `--since` without `--follow` never launches a daemon; with none running it reads `history.db` itself, read-only. In remote mode it always asks the farm.
+- `--since` without `--follow` never launches a daemon; with none running it reads `history.db` itself, read-only.
 - `stats` computes no figure: it prints what `usage.get` answers.
 
 Output:
