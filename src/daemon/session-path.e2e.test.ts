@@ -35,6 +35,7 @@ interface Session {
   readonly socket: WebSocket;
   readonly frames: Frame[];
   readonly closed: { code: number; reason: string } | undefined;
+  readonly pings: number;
   request(type: string, payload?: unknown): Promise<Frame>;
 }
 
@@ -58,6 +59,10 @@ async function openSession(
   sockets.push(socket);
   const frames: Frame[] = [];
   const state: { closed: { code: number; reason: string } | undefined } = { closed: undefined };
+  let pings = 0;
+  socket.on("ping", () => {
+    pings += 1;
+  });
   socket.on("message", (data) => frames.push(JSON.parse(String(data)) as Frame));
   socket.on("close", (code, reason) => {
     state.closed = { code, reason: reason.toString("utf8") };
@@ -88,6 +93,9 @@ async function openSession(
     get closed() {
       return state.closed;
     },
+    get pings() {
+      return pings;
+    },
     request: async (type, payload) => {
       next += 1;
       const id = next;
@@ -103,6 +111,17 @@ async function openSession(
 }
 
 const sockets: WebSocket[] = [];
+
+// why: the daemon closes a socket whose pong is missing at the next ping tick, and a fake clock fires that tick at once. The client's ping, then a request answered on the same socket, show the pong reached the daemon first, with no sleep that a loaded runner can overrun.
+async function tick(clock: FakeClock, ms: number, sessions: readonly Session[]): Promise<void> {
+  const before = sessions.map((session) => session.pings);
+  clock.advance(ms);
+  await vi.waitFor(
+    () => expect(sessions.map((session) => session.pings)).toEqual(before.map((n) => n + 1)),
+    { timeout: 10_000 },
+  );
+  for (const session of sessions) await session.request("identity.get");
+}
 
 describe("the session path", () => {
   const daemons: DaemonServer[] = [];
@@ -406,14 +425,7 @@ describe("the session path", () => {
 
     const quiet = await live({ autoPong: false });
     const answering = await live();
-    let pings = 0;
-    answering.socket.on("ping", () => {
-      pings += 1;
-    });
-    clock.advance(15_000);
-    await vi.waitFor(() => expect(pings).toBe(1), { timeout: 10_000 });
-    // why: the answering client's pong has to reach the daemon before the next ping tick, which the fake clock would otherwise fire at once.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await tick(clock, 15_000, [answering]);
     clock.advance(14_999);
     expect(quiet.closed).toBeUndefined();
     clock.advance(1);
@@ -432,10 +444,7 @@ describe("the session path", () => {
       false,
     );
     // why: the identity ends 61 s from now (its `exp` plus the proxy strategy's 60 s grace); each ping needs its pong in real time before the next fake tick.
-    for (let elapsed = 0; elapsed < 60_000; elapsed += 15_000) {
-      clock.advance(15_000);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 15_000) await tick(clock, 15_000, [proxied]);
     expect(proxied.closed).toBeUndefined();
     clock.advance(1_000);
     await vi.waitFor(
@@ -493,8 +502,7 @@ describe("the session path", () => {
 
     const expiring = await first.request("lease.request", { ...ask, ttlMs: 60_000 });
     for (let elapsed = 0; elapsed <= 60_000; elapsed += 15_000) {
-      clock.advance(15_000);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await tick(clock, 15_000, [first, second, stranger, watcher]);
     }
     await vi.waitFor(() => expect(pushes(first, "lease-lost")).toHaveLength(2));
     expect(pushes(first, "lease-lost")[1]?.payload).toMatchObject({ leaseId: lease(expiring).id });
