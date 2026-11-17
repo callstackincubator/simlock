@@ -168,7 +168,7 @@ release and records nothing.
 | --- | --- | --- | --- |
 | `baseline.saved` | `simlock baseline save` kept a device as a baseline. | `name`, `version`, `platform`, `model`, `osVersion`, `mode`, `imageTag` when the device has one, `sizeBytes` when known, `leaseId`, `requesterId` | Relayed |
 | `baseline.removed` | One version of a baseline was deleted, by `baseline remove`, by `nuke --delete-devices` or because a newer save of the name replaced it. | `name`, `version`, `reason` (`operator`, `nuke` or `replaced`), `requesterId` when someone asked | Relayed |
-| `baseline.stale` | A baseline became stale: the runtime, system image or emulator it was made with changed after the save. | `name`, `version`, `reason` | Relayed |
+| `baseline.stale` | A baseline became stale: the runtime, system image or emulator it was made with changed, or an iOS baseline was saved in a way that cannot be copied safely and must be saved again. A check runs after a save too. | `name`, `version`, `reason` | Relayed |
 
 ## Workers
 

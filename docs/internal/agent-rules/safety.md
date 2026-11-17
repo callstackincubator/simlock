@@ -13,6 +13,9 @@ never enforce them only inside an individual rule or driver.
    baselines it keeps in its sources set, by an id its source table holds.
    `doctor --purge-orphans` may also delete a simulator in the sources set
    that no table row names. Nothing outside the sources set is reached this way.
+   An iOS seed's throwaway simulator, which sits in the device set the copies
+   live in, may be deleted too, only by the UDID its source's `making` row
+   stores ([ADR 0076](../adr/0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) §1).
 
    A physical device is the one kind of registry device Simlock did not
    create. It is Simlock's to act on only through its enrollment record,
