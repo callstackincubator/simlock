@@ -6,6 +6,7 @@ import { SimlockError } from "../contract/index.js";
 import {
   FakeClock,
   FakeHttpJsonClient,
+  FakeHttpStreamClient,
   FakeParentWatch,
   FakeTcpListenerFactory,
   FakeTcpStreamConnector,
@@ -87,6 +88,7 @@ describe("CLI: simlock lease while it connects", () => {
       confirm: async () => true,
       webSocket: new FakeWebSocketClientConnector(),
       httpJson: new FakeHttpJsonClient(),
+      httpStream: new FakeHttpStreamClient(),
       tcpListeners: new FakeTcpListenerFactory(),
       tcpStreams: new FakeTcpStreamConnector(),
     };

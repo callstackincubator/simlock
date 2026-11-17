@@ -4,6 +4,7 @@ import type { LeaseGrant } from "../admin/index.js";
 import {
   FakeClock,
   FakeHttpJsonClient,
+  FakeHttpStreamClient,
   FakeParentWatch,
   FakeTcpListenerFactory,
   FakeTcpStreamConnector,
@@ -45,6 +46,7 @@ function run(argv: readonly string[], sent: unknown[]) {
     homeDirectory: "/home/operator",
     hostPlatform: "linux",
     httpJson: new FakeHttpJsonClient(),
+    httpStream: new FakeHttpStreamClient(),
     parentPid: 4321,
     parentWatch: new FakeParentWatch(),
     readAdminTokenFile: async () => undefined,

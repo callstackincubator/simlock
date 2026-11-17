@@ -11,6 +11,7 @@ import type {
   DaemonLauncher,
   Filesystem,
   HttpJsonClient,
+  HttpStreamClient,
   IpcConnector,
   ParentWatch,
   ProcessRunner,
@@ -110,6 +111,8 @@ export interface CliEnvironment {
   /** why: `simlock tunnel` reaches a worker or gateway over HTTP and WebSocket, not the daemon's socket; each port loads its adapter on first use. */
   readonly webSocket: WebSocketClientConnector;
   readonly httpJson: HttpJsonClient;
+  /** why: `simlock files` moves a file of any size over HTTP, which the capped GET of `httpJson` cannot. */
+  readonly httpStream: HttpStreamClient;
   readonly tcpStreams: TcpStreamConnector;
   /** why: a `forward` tunnel listens on the caller's loopback port; the adapter loads on first use. */
   readonly tcpListeners: TcpListenerFactory;
@@ -146,6 +149,7 @@ export interface CliEnvironmentPorts {
   readonly parentPid?: number;
   readonly webSocket?: WebSocketClientConnector;
   readonly httpJson?: HttpJsonClient;
+  readonly httpStream?: HttpStreamClient;
   readonly tcpStreams?: TcpStreamConnector;
   readonly tcpListeners?: TcpListenerFactory;
   readonly processRunner?: ProcessRunner;

@@ -58,6 +58,7 @@ const workerModule = () => import("./commands/worker.js");
 const componentModule = () => import("./commands/component.js");
 const baselineModule = () => import("./commands/baseline.js");
 const alertsModule = () => import("./commands/alerts.js");
+const filesModule = () => import("./commands/files.js");
 const warmModule = () => import("./commands/warm.js");
 
 export const COMMANDS: readonly CommandNode[] = [
@@ -144,6 +145,11 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "adb", load: () => import("./commands/passthrough.js") },
   { name: "rotate", load: () => import("./commands/rotate.js") },
   { name: "tunnel", load: () => import("./commands/tunnel.js") },
+  {
+    name: "files",
+    load: filesModule,
+    children: [{ name: "put", load: filesModule }],
+  },
   { name: "mcp", load: () => import("./commands/mcp.js") },
   { name: "instructions", load: () => import("./commands/instructions.js") },
   { name: "setup", load: () => import("./commands/setup.js") },

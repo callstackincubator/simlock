@@ -475,6 +475,12 @@ export function buildCliEnvironment(
         return new FetchHttpJsonClient().get(url, token);
       },
     },
+    httpStream: ports.httpStream ?? {
+      request: async (request) => {
+        const { NodeHttpStreamClient } = await import("../ports/index.js");
+        return new NodeHttpStreamClient().request(request);
+      },
+    },
     ...tcpPorts(ports),
     ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
