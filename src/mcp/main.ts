@@ -19,6 +19,7 @@ import {
   type Clock,
   type DaemonFlag,
   type ServiceManager,
+  type WebSocketClientConnector,
 } from "../ports/index.js";
 import { connectToRunningDaemon, connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
@@ -56,6 +57,8 @@ export interface McpStdioEnvironment {
   readonly env?: NodeJS.ProcessEnv;
   readonly daemonFlag?: DaemonFlag;
   readonly requesterId?: string;
+  readonly remote?: { readonly url: string; readonly token: string };
+  readonly webSocket?: WebSocketClientConnector;
   readonly serviceManager?: ServiceManager;
   readonly signals?: Signals;
   /** The stdio transport currently does not surface stdin EOF as onclose. */
