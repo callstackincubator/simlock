@@ -77,8 +77,7 @@ async function runRemotePassthrough(
         },
       },
     );
-    if (exitCode !== 0 && environment.remote !== undefined)
-      await hintAtLocalPath(args, environment);
+    await hintAtLocalPath(args, exitCode, environment);
     return exitCode;
   } catch (error: unknown) {
     throw await asUsageIfRefused(error);
@@ -88,8 +87,10 @@ async function runRemotePassthrough(
 // why: a command that failed after naming a path that exists here most likely meant a file on its worker's disk, which that path is not; one hint for the first such argument says so.
 async function hintAtLocalPath(
   args: readonly string[],
+  exitCode: number,
   environment: CommandContext["environment"],
 ): Promise<void> {
+  if (exitCode === 0 || environment.remote === undefined) return;
   for (const argument of args) {
     const kind = await environment.filesystem
       .stat(resolve(environment.workingDirectory, argument))
