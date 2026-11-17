@@ -2,7 +2,13 @@ import { afterEach, expect, it, describe } from "vitest";
 import { DriverCrashError, BootTimeoutError } from "../../core/index.js";
 import { ScriptedProcessRunner, FakeClock, MemoryFilesystem } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
-import { plantSource, memorySourceDatabase } from "./testing.js";
+import {
+  type PlantedSource,
+  plantBytes,
+  plantSource,
+  memorySourceDatabase,
+  readBytes,
+} from "./testing.js";
 import {
   deviceRoot,
   driverData,
@@ -20,10 +26,13 @@ import {
   listInvocation,
   plantLaunchServices,
   scopedRunners,
+  plantSeedClone,
   seedUdid,
   seededDatabase,
   sourcesSimctl,
   spec,
+  throwawaySeedSteps,
+  throwawayUdid,
 } from "./test-index.js";
 
 /**
@@ -120,6 +129,7 @@ describe("IosSimctlDriver", () => {
   it("provision deletes the clone and throws when the LaunchServices database cannot be dropped", async () => {
     const filesystem = new FaultyFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
     filesystem.failing = "rm";
     const runner = new ScriptedProcessRunner([
@@ -139,25 +149,46 @@ describe("IosSimctlDriver", () => {
   });
 
   it.each([
-    { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
+    {
+      name: "a named source is copied instead of the seed, with its lineage swapped for the copy's own UDID",
+      id: "planted-named",
+      cloned: true,
+    },
     { name: "an unknown source is refused", id: "nope", cloned: false },
     { name: "a stale source is refused", id: "planted-old", cloned: false },
+    { name: "a source with no lineage is refused", id: "planted-unlineaged", cloned: false },
   ])("provision with a source: $name", async ({ id, cloned }) => {
     const namedUdid = "00000000-0000-0000-0000-0000000000bb";
     const oldUdid = "00000000-0000-0000-0000-0000000000cc";
+    const unlineagedUdid = "00000000-0000-0000-0000-0000000000dd";
     const database = await seededDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
-    const planted = plantSource(database, { ...kind, kind: "baseline", udid: namedUdid });
+    const namedLineage = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
+    const planted = plantSource(database, {
+      ...kind,
+      files: [{ kind: "file", relativePath: "data/note.plist" }],
+      kind: "baseline",
+      lineage: [namedLineage],
+      udid: namedUdid,
+    });
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-named' WHERE udid = ?")
       .run(namedUdid);
+    database.prepare("UPDATE ios_source_files SET source_id = 'planted-named'").run();
     plantSource(planted, { ...kind, kind: "baseline", runtimeBuild: "23F77", udid: oldUdid });
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-old' WHERE udid = ?")
       .run(oldUdid);
+    plantSource(database, { ...kind, kind: "baseline", lineage: null, udid: unlineagedUdid });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-unlineaged' WHERE udid = ?")
+      .run(unlineagedUdid);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    const note = `${deviceRoot}/${driverData.udid}/data/note.plist`;
+    await plantBytes(filesystem, note, Buffer.from(`root /Devices/${namedLineage}/data`));
     const catalog = JSON.parse(listFixture) as {
       runtimes: { buildversion?: string; identifier: string }[];
     };
@@ -178,8 +209,15 @@ describe("IosSimctlDriver", () => {
     const provisioned = driver.provision(spec, { source: id });
 
     if (cloned) {
-      await expect(provisioned).resolves.toMatchObject({ deviceId: driverData.udid });
+      await expect(provisioned).resolves.toMatchObject({
+        deviceId: driverData.udid,
+        driverData: { lineage: [namedLineage] },
+      });
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list", "clone"]);
+      expect(
+        (await readBytes(filesystem, note)).toString(),
+        "the copy of a baseline names its own folder in place of the baseline's lineage",
+      ).toBe(`root /Devices/${driverData.udid.toUpperCase()}/data`);
       expect(
         await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
         "the copy of a source loses the LaunchServices database that names the source's folder",
@@ -197,11 +235,13 @@ describe("IosSimctlDriver", () => {
     "the next seed make of a kind destroys this process's own making row of that kind older than 300 s: a row $name",
     async ({ now, destroyed }) => {
       const stuckUdid = "00000000-0000-0000-0000-0000000000dd";
+      const stuckThrowaway = "00000000-0000-0000-0000-0000000000ee";
       const database = plantSource(await memorySourceDatabase(), {
         deviceTypeId: driverData.deviceTypeId,
         maker: "device-1",
         runtimeId: driverData.runtimeId,
         state: "making",
+        throwawayUdid: stuckThrowaway,
         udid: stuckUdid,
       });
       const copyUdid = "00000000-0000-0000-0000-000000000002";
@@ -212,33 +252,35 @@ describe("IosSimctlDriver", () => {
           ? [
               { match: sourcesSimctl("shutdown", stuckUdid) },
               { match: sourcesSimctl("delete", stuckUdid) },
+              { match: simctl("shutdown", stuckThrowaway) },
+              { match: simctl("delete", stuckThrowaway) },
             ]
           : []),
-        {
-          match: sourcesSimctl(
-            "create",
-            "simlock-seed-device-1",
-            driverData.deviceTypeId,
-            driverData.runtimeId,
-          ),
-          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-        },
-        { match: sourcesSimctl("boot", seedUdid) },
-        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-        { match: sourcesSimctl("listapps", seedUdid) },
-        { match: sourcesSimctl("shutdown", seedUdid) },
+        ...throwawaySeedSteps(),
         { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
       ]);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
       const driver = await createDriver(runner, new FakeClock(now), filesystem, database);
 
       await driver.provision(spec);
 
       expect(
-        runner.calls.filter((call) => call.args[4] === stuckUdid).map((call) => call.args[3]),
-      ).toEqual(destroyed ? ["shutdown", "delete"] : []);
+        runner.calls
+          .filter((call) => [stuckUdid, stuckThrowaway].includes(call.args[4] ?? ""))
+          .map((call) => `${call.args[3] ?? ""} ${call.args[4] ?? ""}`),
+      ).toEqual(
+        destroyed
+          ? [
+              `shutdown ${stuckUdid}`,
+              `delete ${stuckUdid}`,
+              `shutdown ${stuckThrowaway}`,
+              `delete ${stuckThrowaway}`,
+            ]
+          : [],
+      );
       expect(
         database.prepare("SELECT udid FROM ios_source_data WHERE state = 'making'").all(),
       ).toEqual(destroyed ? [] : [{ udid: stuckUdid }]);
@@ -254,7 +296,7 @@ describe("IosSimctlDriver", () => {
     },
     {
       name: "the seed's boot fails",
-      message: `seed ${seedUdid} did not boot: `,
+      message: `seed ${throwawayUdid} did not boot: `,
       script: [{ code: 1, op: "bootstatus" }],
       tail: ["shutdown", "delete"],
     },
@@ -271,16 +313,16 @@ describe("IosSimctlDriver", () => {
       const steps = ["create", "boot", "bootstatus", "listapps", "shutdown"];
       const upTo = steps.indexOf(failing.op);
       const results = new Map<string, { code: number; stderr: string; stdout: string }>([
-        ["create", { code: 0, stderr: "", stdout: `${seedUdid}\n` }],
+        ["create", { code: 0, stderr: "", stdout: `${throwawayUdid}\n` }],
       ]);
       const database = await memorySourceDatabase();
       const entries = steps.slice(0, upTo + 1).map((op) => {
-        const match = sourcesSimctl(
+        const match = simctl(
           ...(op === "create"
             ? ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId]
             : op === "bootstatus"
-              ? [op, seedUdid, "-b"]
-              : [op, seedUdid]),
+              ? [op, throwawayUdid, "-b"]
+              : [op, throwawayUdid]),
         );
         if (op !== failing.op)
           return { match, ...(results.has(op) ? { result: results.get(op)! } : {}) };
@@ -291,7 +333,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
         ...entries,
-        ...tail.map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+        ...tail.map((op) => ({ match: simctl(op, throwawayUdid) })),
       ]);
       const clock = new FakeClock();
       const driver = await createDriver(runner, clock, undefined, database);
@@ -314,7 +356,7 @@ describe("IosSimctlDriver", () => {
         ...tail,
       ]);
       expect(runner.calls.slice(1).map((call) => call.args[2])).toEqual(
-        runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
+        runner.calls.slice(1).map(() => deviceRoot),
       );
       expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
     },
@@ -332,21 +374,21 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
         {
-          match: sourcesSimctl(
+          match: simctl(
             "create",
             "simlock-seed-device-1",
             driverData.deviceTypeId,
             driverData.runtimeId,
           ),
-          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+          result: { code: 0, stderr: "", stdout: `${throwawayUdid}\n` },
         },
         ...ran.map((op) => {
-          const match = sourcesSimctl(
-            ...(op === "bootstatus" ? [op, seedUdid, "-b"] : [op, seedUdid]),
+          const match = simctl(
+            ...(op === "bootstatus" ? [op, throwawayUdid, "-b"] : [op, throwawayUdid]),
           );
           return op === hangs ? { hangs: true, match } : { match };
         }),
-        ...["shutdown", "shutdown", "delete"].map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+        ...["shutdown", "shutdown", "delete"].map((op) => ({ match: simctl(op, throwawayUdid) })),
       ]);
       const clock = new FakeClock();
       const driver = await createDriver(runner, clock, undefined, database, undefined, 2_000);
@@ -382,9 +424,29 @@ describe("IosSimctlDriver", () => {
       runtimeBuild: undefined,
       remade: false,
     },
-  ])(
+    {
+      name: "it has no lineage",
+      lineage: null,
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: true,
+    },
+    {
+      name: "its lineage is empty",
+      lineage: [],
+      seedBuild: "23F79",
+      runtimeBuild: "23F79",
+      remade: false,
+    },
+  ] as readonly {
+    name: string;
+    lineage?: readonly string[] | null;
+    seedBuild: string | undefined;
+    runtimeBuild: string | undefined;
+    remade: boolean;
+  }[])(
     "makes the seed again before copying it only when it is stale: $name -> remade $remade",
-    async ({ seedBuild, runtimeBuild, remade }) => {
+    async ({ lineage, seedBuild, runtimeBuild, remade }) => {
       const staleUdid = "00000000-0000-0000-0000-0000000000bb";
       const catalog = JSON.parse(listFixture) as {
         runtimes: { buildversion?: string; identifier: string }[];
@@ -395,6 +457,7 @@ describe("IosSimctlDriver", () => {
         }
       }
       const planted = staleUdid;
+      const throwaway = throwawaySeedSteps();
       const cloneOf = (udid: string) => sourcesSimctl("clone", udid, driverData.name, deviceRoot);
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: JSON.stringify(catalog) } },
@@ -402,19 +465,7 @@ describe("IosSimctlDriver", () => {
           ? [
               { match: sourcesSimctl("shutdown", staleUdid) },
               { match: sourcesSimctl("delete", staleUdid) },
-              {
-                match: sourcesSimctl(
-                  "create",
-                  "simlock-seed-device-1",
-                  driverData.deviceTypeId,
-                  driverData.runtimeId,
-                ),
-                result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-              },
-              { match: sourcesSimctl("boot", seedUdid) },
-              { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-              { match: sourcesSimctl("listapps", seedUdid) },
-              { match: sourcesSimctl("shutdown", seedUdid) },
+              ...throwaway,
             ]
           : []),
         {
@@ -424,12 +475,14 @@ describe("IosSimctlDriver", () => {
       ]);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       const driver = await createDriver(
         runner,
         new FakeClock(),
         filesystem,
         await seededDatabase({
           udid: planted,
+          ...(lineage === undefined ? {} : { lineage }),
           ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
         }),
       );
@@ -439,14 +492,58 @@ describe("IosSimctlDriver", () => {
 
       expect(runner.calls.map((call) => call.args[3]).filter((verb) => verb !== "list")).toEqual(
         remade
-          ? ["shutdown", "delete", "create", "boot", "bootstatus", "listapps", "shutdown", "clone"]
+          ? [
+              "shutdown",
+              "delete",
+              "create",
+              "boot",
+              "bootstatus",
+              "listapps",
+              "shutdown",
+              "clone",
+              "delete",
+              "clone",
+            ]
           : ["clone"],
       );
     },
   );
 
-  it.each([
+  it.each<{
+    name: string;
+    edit: (catalog: Catalog) => void;
+    planted?: Partial<PlantedSource>;
+    persists?: true;
+    reason: string | undefined;
+  }>([
     { name: "healthy", edit: () => undefined, reason: undefined },
+    {
+      name: "a seed has no lineage, which is remade and shows no reason",
+      edit: () => undefined,
+      planted: { lineage: null },
+      reason: undefined,
+    },
+    {
+      name: "a baseline was saved before lineages were kept",
+      edit: () => undefined,
+      planted: { kind: "baseline", lineage: null },
+      persists: true,
+      reason: "saved before simulators stopped sharing folders; save it again",
+    },
+    {
+      name: "a baseline was saved from a simulator made before lineages were kept",
+      edit: () => undefined,
+      planted: { kind: "baseline", lineage: null, savedWithoutLineage: true },
+      persists: true,
+      reason:
+        "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease",
+    },
+    {
+      name: "a baseline has a lineage",
+      edit: () => undefined,
+      planted: { kind: "baseline", lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
+      reason: undefined,
+    },
     {
       name: "its runtime is gone",
       edit: (catalog: Catalog) => {
@@ -475,8 +572,8 @@ describe("IosSimctlDriver", () => {
       reason: `device type ${driverData.deviceTypeId} is not available`,
     },
   ])(
-    "lists a ready seed as a source with its model, version and size, and its staleReason when $name, which clears once it is back",
-    async ({ edit, reason }) => {
+    "lists a ready source with its model, version and size, and its staleReason when $name, which clears once it is back",
+    async ({ edit, persists, planted, reason }) => {
       const catalogOf = (change: (catalog: Catalog) => void) => {
         const catalog = JSON.parse(listFixture) as Catalog;
         for (const entry of catalog.runtimes) {
@@ -498,19 +595,23 @@ describe("IosSimctlDriver", () => {
         runtimeId: driverData.runtimeId,
         sizeBytes: 1_073_741_824,
         udid: seedUdid,
+        ...planted,
       });
       const driver = await createDriver(runner, new FakeClock(), undefined, database);
 
       expect(await driver.listSources()).toMatchObject([
         {
-          kind: "seed",
+          kind: planted?.kind ?? "seed",
           model: "iPhone 16",
           osVersion: "26.5",
           sizeBytes: 1_073_741_824,
           ...(reason === undefined ? {} : { staleReason: reason }),
         },
       ]);
-      expect((await driver.listSources())[0]).not.toHaveProperty("staleReason");
+      // why: a lineage the source never had does not come back with the catalog, so its reason stays.
+      const again = (await driver.listSources())[0];
+      if (persists === true) expect(again).toHaveProperty("staleReason", reason);
+      else expect(again).not.toHaveProperty("staleReason");
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list"]);
     },
   );
@@ -562,6 +663,7 @@ describe("IosSimctlDriver", () => {
     const orphanUdid = "00000000-0000-0000-0000-0000000000ee";
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/sources/${seedUdid}`);
     await filesystem.mkdirp(`${deviceRoot}/sources/${orphanUdid}`);
     const database = await seededDatabase();
@@ -610,6 +712,7 @@ describe("IosSimctlDriver", () => {
   ])("destroySource $name", async ({ deleteCode, stderr, rows }) => {
     const database = plantSource(await memorySourceDatabase(), {
       deviceTypeId: driverData.deviceTypeId,
+      files: [{ kind: "file", relativePath: "data/a.plist" }],
       runtimeId: driverData.runtimeId,
       udid: seedUdid,
     });
@@ -630,6 +733,9 @@ describe("IosSimctlDriver", () => {
     else await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
     expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "shutdown", "delete"]);
     expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({
+      n: rows,
+    });
+    expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_files").get()).toEqual({
       n: rows,
     });
   });

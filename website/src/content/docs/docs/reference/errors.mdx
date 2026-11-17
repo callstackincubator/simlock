@@ -69,7 +69,7 @@ In a script, check `code`, not the message: the wording of a message can change,
 | `BASELINE_SAVE_FAILED` | 1 | 500 | `baseline save` ended the lease, but Simlock could not keep a copy of the device. The message gives the reason. No baseline was saved, and the device is set aside for cleanup. | Lease a fresh device, prepare it again and save again. |
 | `UNKNOWN_BASELINE` | 12 | 404 | `baseline remove`, or a lease request with `--baseline`, naming a baseline this worker does not have. Through a gateway: no worker holds the baseline, or the worker `--worker` names does not. | List the baselines with `simlock baseline list`. |
 | `BASELINE_MISMATCH` | 2 | 422 | A lease request names a baseline and also a platform, model, OS, mode or image tag that differs from it. The message names the first field that differs. | Drop the field, or change it to the baseline's own value. |
-| `BASELINE_STALE` | 12 | 422 | A lease request names a baseline whose runtime or image has been removed since it was saved. The message gives the reason. | Install the runtime or image again, or save the baseline again from a new device. |
+| `BASELINE_STALE` | 12 | 422 | A lease request names a baseline whose runtime or image has been removed since it was saved, or an iOS baseline saved before simulators stopped sharing folders, or from a lease made before that. The message gives the reason. | Install the runtime or image again, or save the baseline again from a new device. |
 | `BASELINE_IN_USE` | 12 | 409 | `baseline remove` of a baseline a lease still uses. The message names the lease. | End that lease, or remove the baseline after it. |
 | `COMPONENT_BUSY` | 11 | 409 | `component remove` while an install or removal runs or waits on that platform. | Try again once it ends. |
 

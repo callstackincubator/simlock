@@ -26,10 +26,13 @@ import {
   listFixture,
   listInvocation,
   scopedRunners,
+  plantSeedClone,
   seedUdid,
   seededDatabase,
   sourcesSimctl,
   spec,
+  throwawaySeedSteps,
+  throwawayUdid,
 } from "./test-index.js";
 
 /**
@@ -61,19 +64,7 @@ describe("IosSimctlDriver", () => {
       const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
-        {
-          match: sourcesSimctl(
-            "create",
-            "simlock-seed-device-1",
-            driverData.deviceTypeId,
-            driverData.runtimeId,
-          ),
-          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-        },
-        { match: sourcesSimctl("boot", seedUdid) },
-        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-        { match: sourcesSimctl("listapps", seedUdid) },
-        { match: sourcesSimctl("shutdown", seedUdid) },
+        ...throwawaySeedSteps(),
         { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
       ]);
       const filesystem = new MemoryFilesystem();
@@ -86,6 +77,7 @@ describe("IosSimctlDriver", () => {
         full,
       );
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
 
       await driver.provision(spec);
 
@@ -100,40 +92,39 @@ describe("IosSimctlDriver", () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
     const database = await memorySourceDatabase();
     const rowsWhenCreated: unknown[] = [];
-    const seedCreate = sourcesSimctl(
+    const seedCreate = simctl(
       "create",
       "simlock-seed-device-1",
       driverData.deviceTypeId,
       driverData.runtimeId,
     );
     const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+    const [create, ...afterCreate] = throwawaySeedSteps();
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
       {
+        ...create,
         match: seedCreate,
         onSpawn: () => {
           rowsWhenCreated.push(
             ...database.prepare("SELECT state, udid FROM ios_source_data").all(),
           );
         },
-        result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
       },
-      { match: sourcesSimctl("boot", seedUdid) },
-      { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-      { match: sourcesSimctl("listapps", seedUdid) },
-      { match: sourcesSimctl("shutdown", seedUdid) },
+      ...afterCreate,
       { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
       { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
     ]);
     const filesystem = new ModeRecordingFilesystem();
     const driver = await createDriver(runner, new FakeClock(), filesystem, database);
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
 
     await expect(driver.provision(spec)).resolves.toEqual({
       address: driverData.udid,
       deviceId: driverData.udid,
-      driverData,
+      driverData: { ...driverData, lineage: [throwawayUdid.toUpperCase()] },
     });
     expect(
       rowsWhenCreated,
@@ -146,15 +137,20 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 330_000 } },
-      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 300_000 } },
-      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
-      { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
-      { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...simctl("boot", throwawayUdid), options: { timeoutMs: 300_000 } },
+      { ...simctl("bootstatus", throwawayUdid, "-b"), options: { timeoutMs: 300_000 } },
+      { ...simctl("listapps", throwawayUdid), options: { timeoutMs: 30_000 } },
+      { ...simctl("shutdown", throwawayUdid), options: { timeoutMs: 30_000 } },
+      {
+        ...simctl("clone", throwawayUdid, "simlock-seed-device-1", `${deviceRoot}/sources`),
+        options: { timeoutMs: 330_000 },
+      },
+      { ...simctl("delete", throwawayUdid), options: { timeoutMs: 30_000 } },
       { ...cloneInvocation, options: { timeoutMs: 330_000 } },
     ]);
 
     await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: copyUdid });
-    expect(runner.calls.slice(7)).toEqual([
+    expect(runner.calls.slice(9)).toEqual([
       { ...cloneInvocation, options: { timeoutMs: 330_000 } },
     ]);
   });
@@ -170,6 +166,7 @@ describe("IosSimctlDriver", () => {
     ]);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     const driver = await createDriver(runner, new FakeClock(), filesystem, database);
 
     const error = await driver.provision(spec).catch((caught: unknown) => caught);
@@ -188,19 +185,7 @@ describe("IosSimctlDriver", () => {
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
-      {
-        match: sourcesSimctl(
-          "create",
-          "simlock-seed-device-1",
-          driverData.deviceTypeId,
-          driverData.runtimeId,
-        ),
-        result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
-      },
-      { match: sourcesSimctl("boot", seedUdid) },
-      { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
-      { match: sourcesSimctl("listapps", seedUdid) },
-      { match: sourcesSimctl("shutdown", seedUdid) },
+      ...throwawaySeedSteps(),
       { hangs: true, match: cloneInvocation },
       { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
     ]);
@@ -208,13 +193,15 @@ describe("IosSimctlDriver", () => {
     const clock = new FakeClock();
     const driver = await createDriver(runner, clock, filesystem);
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
-    const clones = (): number => runner.calls.filter((call) => call.args[3] === "clone").length;
+    const clones = (): number =>
+      runner.calls.filter((call) => call.args[3] === "clone" && call.args[4] === seedUdid).length;
 
     const first = driver.provision(spec);
     const second = driver.provision(spec);
     const firstSettled = first.catch((caught: unknown) => caught);
-    await waitForCalls(runner, 8);
+    await waitForCalls(runner, 10);
 
     expect(runner.calls.filter((call) => call.args[3] === "create")).toHaveLength(1);
     for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
@@ -243,7 +230,7 @@ describe("IosSimctlDriver", () => {
       steps: [
         {
           hangs: true,
-          match: sourcesSimctl(
+          match: simctl(
             "create",
             "simlock-seed-device-1",
             driverData.deviceTypeId,
@@ -284,6 +271,7 @@ describe("IosSimctlDriver", () => {
     scopedRunners.push(runner);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
     const clock = new FakeClock();
     const config = { simulator: { audio: true, createTimeoutMs: 120_000, headless: true } };
     const driver = await IosSimctlDriver.create({
@@ -338,13 +326,9 @@ describe("IosSimctlDriver", () => {
     {
       call: "a seed's create",
       act: (driver: IosSimctlDriver) => driver.provision(spec),
-      deleteArgs: (udid: string) => sourcesSimctl("delete", udid).args,
-      hung: sourcesSimctl(
-        "create",
-        "simlock-seed-device-1",
-        driverData.deviceTypeId,
-        driverData.runtimeId,
-      ).args,
+      deleteArgs: (udid: string) => simctl("delete", udid).args,
+      hung: simctl("create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId)
+        .args,
       isDefault: false,
       seeded: false,
       steps: [],
@@ -415,6 +399,7 @@ describe("IosSimctlDriver", () => {
       };
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
       const clock = new FakeClock();
       const driver = await IosSimctlDriver.create({
         database: seeded ? await seededDatabase() : await memorySourceDatabase(),
