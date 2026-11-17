@@ -4,6 +4,7 @@ import {
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
   startReconnect,
+  UNREACHABLE_GIVE_UP_MS,
   type LeaseRenewal,
   type Reconnect,
 } from "../../lease-policy/index.js";
@@ -14,7 +15,7 @@ import { connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
 import { writeError } from "../errors.js";
-import { reconnectToFarm, UNREACHABLE_GIVE_UP_MS } from "../remote-reconnect.js";
+import { reconnectToFarm } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
 
@@ -234,6 +235,34 @@ async function runLease(
   };
   // why: set while a held remote lease has no connection: a release then has to connect first.
   let disconnected = false;
+  // why: a connection made for one bounded job (a release, a cancel) is closed when the job ends, even when it opens after the bound passed, so none outlives the command.
+  const withFreshClient = (
+    job: (next: SimlockAdminClient) => Promise<void>,
+    timeoutMessage: string,
+  ): Promise<void> =>
+    awaitWithin(
+      environment.clock,
+      RELEASE_TIMEOUT_MS,
+      (async () => {
+        const next = await connectDaemonClient(environment, token);
+        try {
+          await job(next);
+        } finally {
+          await next.close();
+        }
+      })(),
+      timeoutMessage,
+    );
+  // why: a Ctrl-C while the farm is out of reach leaves the request waiting there; the farm drops nothing when a connection closes, so one bounded connection cancels it, as the client's abort does on a live connection.
+  const cancelWaitingRequest = async (): Promise<void> => {
+    try {
+      await withFreshClient(async (next) => {
+        await next.cancelLease({ platform, requesterId });
+      }, "Timed out cancelling the waiting lease request");
+    } catch (error: unknown) {
+      queueErrorWrite(error);
+    }
+  };
   const releaseHeldLease = async (): Promise<void> => {
     // why: A dead connection can neither carry the release nor needs it: the lease outlives this
     // process either way, and `client.releaseLease` would only reject `DAEMON_CONNECTION_LOST`
@@ -244,15 +273,19 @@ async function runLease(
     try {
       // why: Bounded like MCP's farewell release: a daemon that accepts the frame and never answers
       // must not leave `simlock lease` hanging after a Ctrl-C.
-      await awaitWithin(
-        environment.clock,
-        RELEASE_TIMEOUT_MS,
-        (async () => {
-          if (disconnected) await adoptClient(await connectDaemonClient(environment, token));
-          return client.releaseLease({ leaseId });
-        })(),
-        `Timed out releasing lease ${leaseId}`,
-      );
+      const timeoutMessage = `Timed out releasing lease ${leaseId}`;
+      if (disconnected) {
+        await withFreshClient(async (next) => {
+          await next.releaseLease({ leaseId });
+        }, timeoutMessage);
+      } else {
+        await awaitWithin(
+          environment.clock,
+          RELEASE_TIMEOUT_MS,
+          client.releaseLease({ leaseId }),
+          timeoutMessage,
+        );
+      }
     } catch (error: unknown) {
       if (disconnected) {
         endHoldingLease(
@@ -306,6 +339,10 @@ async function runLease(
       } catch (error: unknown) {
         if (cancelledWhileWaiting && (error as { code?: unknown }).code === "CANCELLED") return 0;
         if (farmOrigin === undefined || !isSimlockError(error)) throw error;
+        if (cancelledWhileWaiting && error.code === "DAEMON_CONNECTION_LOST") {
+          await cancelWaitingRequest();
+          return 0;
+        }
         // why: a worker that restarted stored the waiting request as failed `INTERNAL` and replays that failure to its key, so the request goes once more under a new key.
         if (error.code === "INTERNAL" && reattached && !restarted) {
           restarted = true;
@@ -334,7 +371,10 @@ async function runLease(
           );
           reattached = true;
         } catch (reconnectError: unknown) {
-          if (cancelledWhileWaiting) return 0;
+          if (cancelledWhileWaiting) {
+            await cancelWaitingRequest();
+            return 0;
+          }
           throw reconnectError;
         }
       }
@@ -403,11 +443,16 @@ async function runLease(
           },
           attempt: async () => {
             const next = await connectDaemonClient(environment, token);
-            const renewed = await next.renewLease({ leaseId: grantedLease.id });
-            await adoptClient(next);
-            return renewed;
+            try {
+              return { next, renewed: await next.renewLease({ leaseId: grantedLease.id }) };
+            } catch (error: unknown) {
+              await next.close();
+              throw error;
+            }
           },
-          onReconnected: (renewed) => {
+          onAbandoned: ({ next }) => void next.close().catch(() => undefined),
+          onReconnected: ({ next, renewed }) => {
+            void adoptClient(next).catch(() => undefined);
             disconnected = false;
             ourLeaseDeadline = renewed.ttlDeadline;
             environment.stderr.write(

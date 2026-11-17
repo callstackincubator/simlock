@@ -27,7 +27,7 @@ export class FakeFarm extends FakeWebSocketClientConnector {
     options: Parameters<FakeWebSocketClientConnector["connect"]>[1],
   ): Promise<WebSocketClient> {
     const peer = await super.connect(url, options);
-    const connection = this.connections.at(-1)?.peer;
+    const connection = this.connections.find((opened) => opened.peer === peer)?.peer;
     if (connection === undefined) return peer;
     const sendText = connection.sendText.bind(connection);
     connection.sendText = (text: string): void => {

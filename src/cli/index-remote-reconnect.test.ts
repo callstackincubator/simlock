@@ -10,6 +10,7 @@ const URL = "https://farm.example.com";
 const AGENT_A = { SIMLOCK_AGENT_ID: "agent-a", SIMLOCK_TOKEN: "slk_t", SIMLOCK_URL: URL };
 
 const farmAnswers: Record<string, FarmAnswer> = {
+  "lease.cancel": () => ({ result: "cancelled" }),
   "lease.release": (payload) => ({ leaseId: (payload as { leaseId: string }).leaseId }),
   "lease.renew": () => detachedGrant.lease,
   "lease.request": () => detachedGrant,
@@ -63,6 +64,9 @@ async function ends(held: Held): Promise<number> {
   return held.exitCode() as number;
 }
 
+const closedConnections = (held: Held) =>
+  held.farm.connections.every(({ peer }) => peer.closedWith !== undefined);
+
 const notice = (text: string) => `{"notice":"${text}"}`;
 
 const fault = (code: string, message: string) => Object.assign(new Error(message), { code });
@@ -112,6 +116,10 @@ async function reconnectAnswersDecideTheEnd(): Promise<void> {
   unreachableFor50s.signals.emit("SIGINT");
   expect(await ends(unreachableFor50s)).toBe(0);
   expect(unreachableFor50s.farm.requestTypes().at(-1)).toBe("lease.release");
+  expect(
+    closedConnections(unreachableFor50s),
+    "a try whose renew was refused closes its connection",
+  ).toBe(true);
 
   const refusals: [string, (held: Held) => void, Record<string, FarmAnswer>][] = [
     ["UNAUTHENTICATED", (held) => (held.farm.failure = new WebSocketRefusedError(401, "")), {}],
@@ -179,6 +187,9 @@ async function silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound(): Pr
   silentFarm.clock.advance(RELEASE_TIMEOUT_MS);
   expect(await ends(silentFarm)).toBe(0);
   expect(errorLine(silentFarm.stderr()).message).toContain("lease lse_env is still yours until");
+  silentFarm.farm.openUnanswered();
+  await settle();
+  expect(closedConnections(silentFarm), "a connection that opens late is closed").toBe(true);
 }
 
 const leaseRequestsOf = (held: Held) =>
@@ -212,6 +223,37 @@ async function dropWhileQueued(): Promise<void> {
   expect(again?.idempotencyKey).toBe(first?.idempotencyKey);
   queued.signals.emit("SIGINT");
   expect(await ends(queued)).toBe(0);
+}
+
+async function ctrlCWhileReconnectingBeforeTheGrantCancelsTheRequest(): Promise<void> {
+  const queued = holdRemoteLease(() => ({ "lease.request": () => NO_REPLY }));
+  await dropWhileRequest(queued);
+  queued.signals.emit("SIGINT");
+  expect(await ends(queued)).toBe(0);
+  const cancel = queued.farm.requests.find(({ type }) => type === "lease.cancel");
+  expect(cancel?.payload).toEqual({ platform: "ios", requesterId: "agent-a" });
+  queued.clock.advance(120_000);
+  await settle();
+  expect(queued.farm.connections, "no reconnect timer outlives the command").toHaveLength(2);
+  expect(closedConnections(queued)).toBe(true);
+
+  const hanging = holdRemoteLease(() => ({ "lease.request": () => NO_REPLY }));
+  await dropWhileRequest(hanging);
+  hanging.farm.unanswered = true;
+  hanging.clock.advance(1_000);
+  await vi.waitFor(() => expect(hanging.attempts.length).toBeGreaterThan(1));
+  hanging.signals.emit("SIGINT");
+  await settle();
+  hanging.clock.advance(RELEASE_TIMEOUT_MS);
+  expect(await ends(hanging)).toBe(0);
+  hanging.farm.openUnanswered();
+  await settle();
+  await vi.waitFor(() =>
+    expect(
+      closedConnections(hanging),
+      "connections that open after the wait ended are closed",
+    ).toBe(true),
+  );
 }
 
 async function queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway(): Promise<void> {
@@ -257,14 +299,17 @@ async function queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway(): Promi
   expect(await ends(timedOut)).toBe(10);
   expect(errorLine(timedOut.stderr()).code).toBe("QUEUE_TIMEOUT");
 
-  for (const [argv, giveUpAfter] of [
-    [[], 300_000],
+  // why: the drop comes 10 s into the wait, so a bound counted from the drop and one counted from the request end at different moments: 310 s and 40 s against 300 s and 30 s.
+  for (const [argv, giveUpAt] of [
+    [[], 310_000],
     [["--timeout", "30s"], 30_000],
   ] as const) {
     const gone = holdRemoteLease(answersFor(), argv);
+    await vi.waitFor(() => expect(leaseRequestsOf(gone)).toHaveLength(1));
+    gone.clock.advance(10_000);
     await dropWhileRequest(gone);
     gone.farm.failure = new Error("connect ECONNREFUSED");
-    gone.clock.advance(giveUpAfter - 1);
+    gone.clock.advance(giveUpAt - 1 - gone.clock.now());
     expect(gone.exitCode(), argv.join(" ")).toBeUndefined();
     gone.clock.advance(1);
     expect(await ends(gone), argv.join(" ")).toBe(1);
@@ -276,7 +321,9 @@ async function queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway(): Promi
 }
 
 async function rideOutADropBeforeTheDeadline(): Promise<void> {
-  const held = holdRemoteLease();
+  const held = holdRemoteLease((clock) => ({
+    "lease.renew": () => ({ ...detachedGrant.lease, ttlDeadline: clock.now() + 60_000 }),
+  }));
   await vi.waitFor(() => expect(held.farm.requestTypes()).toEqual(["lease.request"]));
 
   held.farm.connections[0]?.peer.dropped(1006, "");
@@ -294,9 +341,24 @@ async function rideOutADropBeforeTheDeadline(): Promise<void> {
   );
   expect(held.farm.requestTypes()).toEqual(["lease.request", "lease.renew"]);
 
+  held.clock.advance(20_000);
+  await vi.waitFor(() =>
+    expect(held.farm.requestTypes(), "renewing resumes on the new connection").toEqual([
+      "lease.request",
+      "lease.renew",
+      "lease.renew",
+    ]),
+  );
+
   held.signals.emit("SIGINT");
   expect(await ends(held)).toBe(0);
-  expect(held.farm.requestTypes()).toEqual(["lease.request", "lease.renew", "lease.release"]);
+  expect(held.farm.requestTypes()).toEqual([
+    "lease.request",
+    "lease.renew",
+    "lease.renew",
+    "lease.release",
+  ]);
+  expect(closedConnections(held), "every connection is closed at the end").toBe(true);
 }
 
 async function neverBackBeforeTheDeadline(): Promise<void> {
@@ -324,6 +386,7 @@ describe("CLI: a held remote lease across a network drop", () => {
     await reconnectAnswersDecideTheEnd();
     await silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound();
     await dropWhileQueued();
+    await ctrlCWhileReconnectingBeforeTheGrantCancelsTheRequest();
     await queuedRequestSurvivesRestartsAndEndsWhenTheFarmStaysAway();
   });
 });
