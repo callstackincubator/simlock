@@ -70,6 +70,11 @@ const proxyAuthSchema = z.object({
     .string({ error: "an http:// or https:// URL" })
     .refine(isWebUrl, "an http:// or https:// URL")
     .optional(),
+  signInUrl: z
+    .string({ error: "an http:// or https:// URL" })
+    .max(2048, "an http:// or https:// URL of at most 2048 characters")
+    .refine(isWebUrl, "an http:// or https:// URL")
+    .optional(),
 });
 
 function credentialIn(headers: Headers, header: string): string | undefined {
@@ -172,6 +177,7 @@ export const proxyStrategy: AuthStrategyDefinition = {
     };
 
     return {
+      ...(settings.signInUrl === undefined ? {} : { signInUrl: settings.signInUrl }),
       authenticate: async ({ headers }) => {
         const jwt = credentialIn(headers, header);
         if (jwt === undefined) return { kind: "not-mine", sawCredential: false };

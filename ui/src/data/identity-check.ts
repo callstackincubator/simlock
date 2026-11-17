@@ -2,9 +2,9 @@ import { type Fetch, hasSimlockErrorCode, RequestTimeoutError, send } from "./ap
 
 export type IdentityOutcome =
   | { readonly kind: "proxy"; readonly name: string; readonly signOutUrl?: string }
-  | { readonly kind: "refused"; readonly reason: string }
-  | { readonly kind: "none" }
-  | { readonly kind: "ended" }
+  | { readonly kind: "refused"; readonly reason: string; readonly signInUrl?: string }
+  | { readonly kind: "none"; readonly signInUrl?: string }
+  | { readonly kind: "ended"; readonly signInUrl?: string }
   | { readonly kind: "unreachable" };
 
 interface Answer {
@@ -35,11 +35,28 @@ export async function checkIdentity(fetch: Fetch, afterLoss = false): Promise<Id
   if ((status === 401 || status === 403) && !hasSimlockErrorCode(body)) return askHealthz(fetch);
   if (status >= 500) return unanswered;
   if (status === 200) return proxyIdentity(body) ?? { kind: "none" };
-  if (status === 401) {
-    const reason = (body as { error?: { reason?: unknown } }).error?.reason;
-    if (typeof reason === "string") return { kind: "refused", reason };
-  }
+  if (status === 401) return signInRefusal(body, afterLoss);
   return { kind: "none" };
+}
+
+function signInRefusal(body: unknown, afterLoss: boolean): IdentityOutcome {
+  const { reason, signInUrl } =
+    (body as { error?: { reason?: unknown; signInUrl?: unknown } }).error ?? {};
+  const loginUrl = webSignInUrl(signInUrl);
+  const login = loginUrl === undefined ? {} : { signInUrl: loginUrl };
+  if (typeof reason === "string") return { kind: "refused", reason, ...login };
+  if (afterLoss && loginUrl !== undefined) return { kind: "ended", signInUrl: loginUrl };
+  return { kind: "none", ...login };
+}
+
+function webSignInUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "https:" || protocol === "http:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readJson(response: Response): Promise<unknown> {

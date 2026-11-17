@@ -45,6 +45,7 @@ export type UplinkAnswer =
   | { readonly outcome: "accept"; readonly tokenId: string };
 
 export interface Auth {
+  readonly signInUrl?: string;
   authenticateRequest(headers: Headers): Promise<Identity>;
   resolveHelloRole(hello: {
     readonly principal?: string;
@@ -85,7 +86,9 @@ export function createAuthFrom(
       }),
     );
 
+  const signInUrl = strategies.find((strategy) => strategy.signInUrl !== undefined)?.signInUrl;
   return {
+    ...(signInUrl === undefined ? {} : { signInUrl }),
     authenticateRequest: async (headers) => {
       let sawCredential = false;
       for (const strategy of strategies) {

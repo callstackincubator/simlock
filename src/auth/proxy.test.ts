@@ -102,6 +102,17 @@ function person(identity: Partial<Identity> = {}): Outcome {
 }
 
 describe("authenticateRequest with the proxy strategy", () => {
+  it("offers a sign-in URL only when the proxy strategy configures one", async () => {
+    const signInUrl = "https://login.example.test/start";
+    const configured = await harness({ proxyAuth: { ...proxyAuthConfig, signInUrl } });
+    const unconfigured = await harness();
+    const tokensOnly = await harness({ proxyAuth: null });
+
+    expect(configured.auth.signInUrl).toBe(signInUrl);
+    expect(unconfigured.auth.signInUrl).toBeUndefined();
+    expect(tokensOnly.auth.signInUrl).toBeUndefined();
+  });
+
   it.each([
     { alg: "ES256", key: k1 },
     { alg: "RS256", key: k1Rsa },

@@ -56,6 +56,32 @@ function consoleNav(): HTMLElement {
 }
 
 describe("signing in with a token", () => {
+  it("offers the proxy sign-in link beside the operator token form when configured", async () => {
+    renderConsole({
+      routes: {
+        ...DAEMON,
+        "/v1/identity": {
+          status: 401,
+          body: {
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Sign in",
+              signInUrl: "https://login.example.test/start",
+            },
+          },
+        },
+      },
+      token: null,
+    });
+
+    await screen.findByLabelText("Operator token");
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      "https://login.example.test/start",
+    );
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).not.toHaveAttribute("target");
+  });
+
   it("an operator token signs in and shows the shell", async () => {
     const view = renderConsole({ routes: DAEMON, token: null });
 

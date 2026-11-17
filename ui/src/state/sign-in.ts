@@ -25,7 +25,12 @@ export function useSignIn() {
     state.kind === "none" && state.refusedReason !== undefined
       ? proxyRefusalLine(state.refusedReason)
       : undefined;
-  return { checking, refusal: refusal ?? proxyRefusal, submit };
+  return {
+    checking,
+    refusal: refusal ?? proxyRefusal,
+    submit,
+    signInUrl: state.kind === "none" || state.kind === "ended" ? state.signInUrl : undefined,
+  };
 }
 
 export function useReloadPage(): () => void {

@@ -19,6 +19,7 @@ export type StrategyAnswer =
 
 export interface AuthStrategy {
   authenticate(request: AuthRequest): Promise<StrategyAnswer>;
+  readonly signInUrl?: string;
 }
 
 export interface AuthDeps {

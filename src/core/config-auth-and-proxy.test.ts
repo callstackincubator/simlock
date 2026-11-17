@@ -128,6 +128,24 @@ describe("loadConfig over http.proxyAuth", () => {
     );
   });
 
+  it("accepts a proxy sign-in URL and refuses non-web URLs", async () => {
+    const signInUrl = "https://login.example.test/start";
+    expect(proxyAuthOf(await load({ ...complete, signInUrl }))).toEqual({ ...complete, signInUrl });
+    const longest = "https://login.example.test/".padEnd(2048, "a");
+    expect(proxyAuthOf(await load({ ...complete, signInUrl: longest }))).toEqual({
+      ...complete,
+      signInUrl: longest,
+    });
+    await expect(load({ ...complete, signInUrl: longest + "a" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.signInUrl": expected an http:// or https:// URL of at most 2048 characters',
+    );
+    for (const signInUrl of ["javascript:alert(1)", "//login.example.test/start", "not a url"]) {
+      await expect(load({ ...complete, signInUrl })).rejects.toThrow(
+        'Invalid config value for "http.proxyAuth.signInUrl"',
+      );
+    }
+  });
+
   it("refuses a sign-out URL that is not an http or https URL", async () => {
     for (const signOutUrl of ["not a url", "ftp://team.dev/out"]) {
       await expect(load({ ...complete, signOutUrl }), signOutUrl).rejects.toThrow(
