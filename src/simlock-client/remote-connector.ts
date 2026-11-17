@@ -21,7 +21,7 @@ const CLOSE_NORMAL = 1000;
 // why: the farm closes a session with this code when the token behind it was revoked.
 const CLOSE_TOKEN_REVOKED = 4003;
 
-export interface RemoteSessionOptions {
+interface RemoteSessionOptions {
   readonly token: string;
   readonly webSocket: WebSocketClientConnector;
   readonly clock: Clock;
@@ -75,7 +75,7 @@ export function remoteConnectOptions(input: RemoteConnectInput): ConnectOptions 
 }
 
 // why: ADR 0081 §1: the session path carries the socket protocol's lines as text messages, so a remote caller's `endpoint` is a farm's origin and the connector opens its `/v1/session`.
-export class RemoteSessionConnector implements IpcConnector {
+class RemoteSessionConnector implements IpcConnector {
   readonly #options: RemoteSessionOptions;
 
   constructor(options: RemoteSessionOptions) {
