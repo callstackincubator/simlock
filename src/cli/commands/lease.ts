@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
@@ -6,13 +7,14 @@ import {
   type LeaseRenewal,
   type Reconnect,
 } from "../../lease-policy/index.js";
-import { ERROR_TABLE, LEASE_LOST_EXIT_CODE } from "../../contract/index.js";
+import { ERROR_TABLE, isSimlockError, LEASE_LOST_EXIT_CODE } from "../../contract/index.js";
 import type { LeaseGrant, SimlockAdminClient } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
 import { writeError } from "../errors.js";
+import { reconnectToFarm, UNREACHABLE_GIVE_UP_MS } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
 
@@ -186,6 +188,8 @@ async function runLease(
       markLeaseLost(push);
     });
     const offConnectionLost = target.onConnectionLost((error) => {
+      // why: before the grant the request's own rejection starts the reconnect, which sends it again.
+      if (farmOrigin !== undefined && ourLeaseId === undefined) return;
       if (onDropped === undefined) {
         endHoldingLease("DAEMON_CONNECTION_LOST", "lost the daemon connection");
       } else if (error.code === "UNAUTHENTICATED") {
@@ -263,37 +267,65 @@ async function runLease(
   let renewal: LeaseRenewal | undefined;
   let reconnect: Reconnect | undefined;
   try {
+    const leaseInput = {
+      allowDownload: values["allow-download"] === true,
+      noWait: values["no-wait"] === true,
+      requesterId,
+      ...(typeof values.device === "string" ? { model: values.device } : {}),
+      ...(typeof values.class === "string" ? { class: values.class as DeviceClass } : {}),
+      ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
+      ...(values.physical === true ? { physical: true } : {}),
+      platform,
+      ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
+      ...(typeof values.except === "string" ? { except: values.except.split(",") } : {}),
+      ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
+      ...(baseline === undefined ? {} : { baseline }),
+      ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(ttlMs === undefined ? {} : { ttlMs }),
+    };
+    // why: a farm's request is sent under a key of this command's own, so a repeat after a drop attaches to the request already waiting there instead of queueing a second one.
+    const idempotencyKey = farmOrigin === undefined ? undefined : randomUUID();
     let grant: LeaseGrant;
-    try {
-      grant = await client.requestLease(
-        {
-          allowDownload: values["allow-download"] === true,
-          noWait: values["no-wait"] === true,
-          requesterId,
-          ...(typeof values.device === "string" ? { model: values.device } : {}),
-          ...(typeof values.class === "string" ? { class: values.class as DeviceClass } : {}),
-          ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
-          ...(values.physical === true ? { physical: true } : {}),
-          platform,
-          ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
-          ...(typeof values.except === "string" ? { except: values.except.split(",") } : {}),
-          ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
-          ...(baseline === undefined ? {} : { baseline }),
-          ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
-          ...(metadata === undefined ? {} : { metadata }),
-          ...(timeoutMs === undefined ? {} : { timeoutMs }),
-          ...(ttlMs === undefined ? {} : { ttlMs }),
-        },
-        {
-          signal: waitAbort.signal,
-          onProgress: (progress) => {
-            environment.stderr.write(`${JSON.stringify({ push: "progress", ...progress })}\n`);
+    for (;;) {
+      try {
+        grant = await client.requestLease(
+          idempotencyKey === undefined ? leaseInput : { ...leaseInput, idempotencyKey },
+          {
+            signal: waitAbort.signal,
+            onProgress: (progress) => {
+              environment.stderr.write(`${JSON.stringify({ push: "progress", ...progress })}\n`);
+            },
           },
-        },
-      );
-    } catch (error: unknown) {
-      if (cancelledWhileWaiting && (error as { code?: unknown }).code === "CANCELLED") return 0;
-      throw error;
+        );
+        break;
+      } catch (error: unknown) {
+        if (cancelledWhileWaiting && (error as { code?: unknown }).code === "CANCELLED") return 0;
+        if (
+          farmOrigin === undefined ||
+          !isSimlockError(error) ||
+          error.code !== "DAEMON_CONNECTION_LOST"
+        )
+          throw error;
+        environment.stderr.write(
+          `${JSON.stringify({ notice: `lost the connection to ${farmOrigin}; reconnecting to the waiting request` })}\n`,
+        );
+        try {
+          await adoptClient(
+            await reconnectToFarm({
+              deadline: environment.clock.now() + UNREACHABLE_GIVE_UP_MS,
+              environment,
+              origin: farmOrigin,
+              signal: waitAbort.signal,
+              token,
+            }),
+          );
+        } catch (reconnectError: unknown) {
+          if (cancelledWhileWaiting) return 0;
+          throw reconnectError;
+        }
+      }
     }
     ourLeaseId = grant.lease.id;
     ourLeaseDeadline = grant.lease.ttlDeadline;
