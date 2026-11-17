@@ -191,6 +191,22 @@ describe("scripts/slow-e2e.sh", () => {
     expect(result.stderr).toContain(`busy: a slow-lane run holds the lock (pid ${runner})`);
   });
 
+  it("check stops nothing and keeps the lane's home while a run holds the lock", async () => {
+    const { lane, lock, run } = machine();
+    mkdirSync(lane, { recursive: true });
+    const runner = idleNode(process.env);
+    mkdirSync(lock);
+    writeFileSync(join(lock, "pid"), String(runner));
+    const daemon = idleNode({ ...process.env, SIMLOCK_HOME: join(lane, "simlock-e2e-abc") });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const result = run("check");
+
+    expect(result.status).toBe(0);
+    expect(alive(daemon)).toBe(true);
+    expect(existsSync(lane)).toBe(true);
+  });
+
   it("stop ends the running lane's process group, writes exit 143 to its log and frees the lock", () => {
     const { dir, lock, run } = machine();
     const runner = idleNode(process.env, true);
