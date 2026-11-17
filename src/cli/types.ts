@@ -106,6 +106,8 @@ export interface CliEnvironment {
   readonly parentWatch?: ParentWatch;
   readonly stderr: Output;
   readonly stdout: Output;
+  /** why: `simlock files get` prints a binary file as it is, which a string sink would re-encode. */
+  readonly stdoutBytes: (bytes: Uint8Array) => unknown;
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
   /** why: `simlock tunnel` reaches a worker or gateway over HTTP and WebSocket, not the daemon's socket; each port loads its adapter on first use. */

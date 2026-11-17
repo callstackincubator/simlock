@@ -369,6 +369,7 @@ export function outputCapture(
           parentWatch: new FakeParentWatch(),
           stderr: stderrOut,
           stdout: stdoutOut,
+          stdoutBytes: (bytes) => (capture.stdout += Buffer.from(bytes).toString("utf8")),
           confirm: async () => true,
           webSocket: new FakeWebSocketClientConnector(),
           httpJson: new FakeHttpJsonClient(),

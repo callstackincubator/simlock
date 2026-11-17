@@ -25,9 +25,18 @@ interface Options {
   readonly leases?: readonly ReturnType<typeof lease>[];
 }
 
+async function workerRoutes(request: HttpStreamRequest): Promise<HttpStreamAnswer> {
+  if (request.method === "PUT") return stored(request);
+  if (request.method === "DELETE") return { body: new Response(null).body as never, status: 204 };
+  if (request.url.endsWith("/files")) {
+    return answer(200, { files: [{ name: "app-debug.apk", size: 9 }] });
+  }
+  return { body: new Response("apk-bytes").body as never, status: 200 };
+}
+
 async function files(
   argv: readonly string[],
-  reply: (request: HttpStreamRequest) => Promise<HttpStreamAnswer>,
+  reply: (request: HttpStreamRequest) => Promise<HttpStreamAnswer> = workerRoutes,
   options: Options = {},
 ) {
   const filesystem = new MemoryFilesystem();
@@ -39,7 +48,7 @@ async function files(
   stream.reply = reply;
   const output = outputCapture(realCliEnvironmentPorts(filesystem), options.env ?? AGENT_A);
   const code = await runCli(argv, output.environmentWith({ httpStream: stream, webSocket: farm }));
-  return { code, farm, output, stream };
+  return { code, farm, filesystem, output, stream };
 }
 
 const stored = async (request: HttpStreamRequest) => {
@@ -70,6 +79,33 @@ describe("CLI: simlock files", () => {
       `${URL}/v1/leases/lse_1/files/app.apk`,
     ]);
     expect(JSON.parse(named.output.stdout)).toMatchObject({ name: "app.apk" });
+
+    const get = await files(["files", "get", "app-debug.apk"]);
+    expect(get.code).toBe(0);
+    expect(get.stream.requests).toEqual([
+      { method: "GET", token: "slk_t", url: `${URL}/v1/leases/lse_1/files/app-debug.apk` },
+    ]);
+    expect(get.output.stdout).toBe("apk-bytes");
+    const saved = await files(["files", "get", "app-debug.apk", "-o", "copy.apk"]);
+    expect(saved.code).toBe(0);
+    expect(await saved.filesystem.readFile("/work/project/copy.apk")).toBe("apk-bytes");
+    expect(saved.output.stdout).toBe("");
+
+    const listed = await files(["files", "list"]);
+    expect(listed.code).toBe(0);
+    expect(listed.stream.requests).toEqual([
+      { method: "GET", token: "slk_t", url: `${URL}/v1/leases/lse_1/files` },
+    ]);
+    expect(JSON.parse(listed.output.stdout)).toEqual({
+      files: [{ name: "app-debug.apk", size: 9 }],
+    });
+
+    const removed = await files(["files", "rm", "app-debug.apk"]);
+    expect(removed.code).toBe(0);
+    expect(removed.stream.requests).toEqual([
+      { method: "DELETE", token: "slk_t", url: `${URL}/v1/leases/lse_1/files/app-debug.apk` },
+    ]);
+    expect(removed.output.stdout).toBe("");
 
     const refused: [string, readonly string[], string, Options?][] = [
       ["a missing local file", ["put", "nothing.apk"], "No file nothing.apk"],

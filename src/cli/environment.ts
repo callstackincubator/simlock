@@ -539,6 +539,10 @@ export function buildCliEnvironment(
     signals: ports.signals ?? process,
     stderr: ports.stderr ?? process.stderr,
     stdout: ports.stdout ?? process.stdout,
+    stdoutBytes: (bytes) =>
+      ports.stdout === undefined
+        ? process.stdout.write(bytes)
+        : ports.stdout.write(Buffer.from(bytes).toString("utf8")),
     confirm: ports.confirm ?? confirmTerminal,
   };
 }

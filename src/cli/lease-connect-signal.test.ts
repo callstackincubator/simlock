@@ -85,6 +85,7 @@ describe("CLI: simlock lease while it connects", () => {
       parentPid: 4321,
       stderr: { write: (value: string) => (stderr += value) },
       stdout: { write: (value: string) => (stdout += value) },
+      stdoutBytes: () => true,
       confirm: async () => true,
       webSocket: new FakeWebSocketClientConnector(),
       httpJson: new FakeHttpJsonClient(),

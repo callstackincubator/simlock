@@ -59,6 +59,7 @@ function run(argv: readonly string[], sent: unknown[]) {
     sleep: async () => {},
     stderr: { write: (value: string) => (stderr += value) },
     stdout: { write: () => true },
+    stdoutBytes: () => true,
     tcpListeners: new FakeTcpListenerFactory(),
     tcpStreams: new FakeTcpStreamConnector(),
     validateConfig: async () => {},
