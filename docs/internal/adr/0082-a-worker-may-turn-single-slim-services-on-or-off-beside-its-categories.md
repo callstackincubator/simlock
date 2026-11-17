@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-17
 - **Issue:** [#1644](https://github.com/callstackincubator/simlock/issues/1644) (requests [#1556](https://github.com/callstackincubator/simlock/issues/1556), [#1552](https://github.com/callstackincubator/simlock/issues/1552))
-- **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the managed labels gain the worker's named services, and a never-disable label may be written `true`) and §2 (a device is `slim` only when some label is written `true`); [ADR 0066](0066-a-slim-lease-may-keep-named-categories-running.md) §2 (a kept category also wins over a service the worker turns off by name).
+- **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the managed labels gain the worker's named services and the ones it recorded, a never-disable label may be written `true`, and a record file sits beside the overrides) and §2 (a device is `slim` only when some label is written `true`); [ADR 0066](0066-a-slim-lease-may-keep-named-categories-running.md) §2 (a kept category also wins over a service the worker turns off by name).
 
 ## Context
 
@@ -73,15 +73,26 @@ A device is `slim` only when at least one label is written `true`. So
 `categories: []` with an `exclude` is a slim worker, and a configuration
 or an `--except` that leaves nothing off grants `full`, as today.
 
+### 5. Simlock records the names it wrote
+
+The file also holds lines the runtime wrote, so Simlock cannot tell its
+own lines from them once a name leaves both lists. Beside each
+simulator's `disabled.plist`, Simlock keeps a record of the `include` and
+`exclude` names it last wrote. A recorded name in neither list is written
+`false` at the next `prepare`, and the record is rewritten. It is copied
+with the file and removed with its folder. Without it, an idle simulator
+that survives a restart, or a baseline's copy, keeps a reverted `exclude`
+off with no warning. The file's name and shape are in the feature.
+
 ## Consequences
 
 - #1552's setup is `categories: []`, `exclude: ["com.apple.diagnosticd"]`,
   with slim leases.
 - Simlock cannot tell a misspelt name: launchd reads back whatever the
   file says.
-- A name dropped from `exclude` is no longer managed. A baseline saved
-  while it was excluded keeps it off in its copies; putting it in
-  `include` turns it back on.
+- One more file per simulator (§5). A baseline saved before this ADR has
+  no record, so a name dropped from `exclude` stays off in its copies;
+  putting it in `include` turns it back on.
 - No protocol change; the catalog's `slimCategories` stays the categories.
 
 ## Alternatives considered
