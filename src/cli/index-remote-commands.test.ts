@@ -264,5 +264,12 @@ describe("CLI: commands in remote mode", () => {
     ]);
     const named3 = await remote(["lease", "--platform", "ios", "--detach"]);
     expect(named3.output.stderr).toBe("");
+    const here = outputCapture(realCliEnvironmentPorts(), {});
+    const hereCode = await runCli(
+      ["lease", "--platform", "ios", "--detach"],
+      here.environmentWith({ connectAdmin: vi.fn(async () => fakeClient()) }),
+    );
+    expect(hereCode).toBe(0);
+    expect(here.stderr).not.toContain("no SIMLOCK_AGENT_ID");
   });
 });

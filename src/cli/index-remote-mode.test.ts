@@ -85,10 +85,20 @@ describe("CLI: remote mode selection", () => {
       expect(launched()).toBe(0);
     }
 
-    const tokenless = session({ url: "https://farm.example.com" });
-    expect(await tokenless.run(["status"])).toBe(2);
-    expect(tokenless.output.stderr).toContain("No token: pass --token or set SIMLOCK_TOKEN");
-    expect(tokenless.farm.connections).toHaveLength(0);
+    const unusable: (string | undefined)[] = [undefined, "", "x".repeat(4097)];
+    for (const token of unusable) {
+      const tokenless = session({
+        url: "https://farm.example.com",
+        ...(token === undefined ? {} : { token }),
+      });
+      expect(await tokenless.run(["status"]), String(token?.length)).toBe(2);
+      expect(tokenless.output.stderr).toContain("No token: pass --token or set SIMLOCK_TOKEN");
+      expect(tokenless.farm.connections).toHaveLength(0);
+    }
+    const equalsForm = session({ token: "slk_t" });
+    expect(await equalsForm.run(["status", "--json", "--url=https://farm.example.com"])).toBe(0);
+    expect(equalsForm.farm.requestTypes()).toEqual(["status.get"]);
+    expect(equalsForm.launched()).toBe(0);
 
     const credentials = session({
       adminToken: "admin-secret",
