@@ -8,7 +8,7 @@ import {
   type WebSocketClientConnector,
 } from "../ports/index.js";
 import type { ConnectOptions } from "./client.js";
-import { farmOrigin } from "./farm-url.js";
+import { farmOrigin, farmTokenFits, farmUrlProblem } from "./farm-url.js";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 
@@ -19,21 +19,49 @@ export interface RemoteSessionOptions {
 }
 
 export interface RemoteConnectInput {
-  readonly url: string;
+  readonly url?: string;
   readonly token?: string;
   readonly webSocket?: WebSocketClientConnector;
   readonly clock?: Clock;
+  readonly principal?: string;
+  // why: the options of the local transport, which a URL replaces and so refuses to share a call with.
+  readonly connection?: unknown;
+  readonly endpoint?: string;
+  readonly ipc?: unknown;
+  readonly credential?: string;
 }
 
-// why: `connectSimlock` and `connectSimlockAdmin` choose remote by a URL alone (ADR 0081 §3) and share this one step from it to the client's connect options.
-export function remoteConnectOptions(input: RemoteConnectInput): ConnectOptions {
+// why: `connectSimlock` and `connectSimlockAdmin` choose remote by a URL alone (ADR 0081 §3) and share this one step from it to the client's connect options. It returns nothing when no URL is given, so the local transport goes on as before.
+export function remoteConnectOptions(input: RemoteConnectInput): ConnectOptions | undefined {
+  if (input.url === undefined) return undefined;
+  if (
+    input.connection !== undefined ||
+    input.endpoint !== undefined ||
+    input.ipc !== undefined ||
+    input.credential !== undefined
+  ) {
+    throw new Error(
+      "`url` cannot be combined with `connection`, `endpoint`, `ipc` or `credential`",
+    );
+  }
+  const problem = farmUrlProblem(input.url);
+  if (problem === "scheme") {
+    throw new Error("`url` must be https://, or http:// only for 127.0.0.1, [::1] or localhost");
+  }
+  if (problem === "origin") {
+    throw new Error("`url` must be the farm's origin only: no path, query or fragment");
+  }
+  if (input.token === undefined || !farmTokenFits(input.token)) {
+    throw new Error("`token` must be 1 to 4096 characters when `url` is given");
+  }
   return {
     connector: new RemoteSessionConnector({
       clock: input.clock ?? new SystemClock(),
-      token: input.token ?? "",
+      token: input.token,
       webSocket: input.webSocket ?? new NodeWebSocketClientConnector(),
     }),
     endpoint: farmOrigin(input.url),
+    ...(input.principal === undefined ? {} : { principal: input.principal }),
   };
 }
 

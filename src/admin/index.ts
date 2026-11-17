@@ -16,6 +16,7 @@ import {
   type ConnectOptions,
   type SimlockAdminClient,
 } from "../simlock-client/client.js";
+import { remoteConnectOptions } from "../simlock-client/remote-connector.js";
 
 export type {
   AlertsTestInput,
@@ -126,6 +127,8 @@ export interface ConnectSimlockAdminOptions {
 export async function connectSimlockAdmin(
   options: ConnectSimlockAdminOptions,
 ): Promise<SimlockAdminClient> {
+  const remote = remoteConnectOptions(options);
+  if (remote !== undefined) return connectSimlockClient(remote, true);
   const resolved: ConnectOptions = {
     ...(options.connection === undefined ? {} : { connection: options.connection }),
     ...(options.connection === undefined

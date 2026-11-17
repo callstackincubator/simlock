@@ -83,15 +83,8 @@ export interface ConnectSimlockOptions {
  * `DAEMON_CONNECTION_LOST` if the socket cannot be reached) without ever restarting the
  * daemon -- see `docs/internal/adr/0003-...md` §6. */
 export async function connectSimlock(options: ConnectSimlockOptions): Promise<SimlockClient> {
-  if (options.url !== undefined) {
-    return connectSimlockClient(
-      remoteConnectOptions({
-        url: options.url,
-        ...(options.token === undefined ? {} : { token: options.token }),
-      }),
-      false,
-    );
-  }
+  const remote = remoteConnectOptions(options);
+  if (remote !== undefined) return connectSimlockClient(remote, false);
   const resolved: ConnectOptions = {
     ...(options.connection === undefined ? {} : { connection: options.connection }),
     ...(options.connection === undefined
