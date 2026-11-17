@@ -3,6 +3,7 @@ import type { RawData, WebSocket as WsSocket } from "ws";
 export interface WebSocketClientOptions {
   readonly headers: Readonly<Record<string, string>>;
   readonly handshakeTimeoutMs: number;
+  readonly maxPayloadBytes?: number;
 }
 
 // why: `connect` rejects with this when the server answers the upgrade with a plain HTTP response, so a caller can read the refusal's status and JSON body, which Node's own WebSocket client hides.

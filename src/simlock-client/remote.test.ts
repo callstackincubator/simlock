@@ -121,4 +121,110 @@ describe("the typed client over a farm's session path", () => {
     expect(state.state).toBe("rejected");
     await expect(waiting).rejects.toMatchObject({ code: "REMOTE_UNREACHABLE" });
   });
+
+  describe("an open session", () => {
+    const url = "https://farm.example";
+
+    async function opened() {
+      const farm = new FakeWebSocketClientConnector();
+      const clock = new FakeClock();
+      const connecting = connectSimlock({ clock, token: "sk_tok", url, webSocket: farm });
+      await answerHello(farm, 0, "agent");
+      const client = await connecting;
+      const connection = farm.connections[0] as (typeof farm.connections)[number];
+      return { client, clock, options: connection.options, peer: connection.peer };
+    }
+
+    function call(peer: Peer, expected: string): number {
+      const sent = JSON.parse(peer.sentText.at(-1) as string) as { id: number; type: string };
+      expect(sent.type).toBe(expected);
+      return sent.id;
+    }
+
+    it("carries pushes and a 60 MiB reply as a socket does, and a farm of another protocol version gives a degraded client", async () => {
+      const { client, options: farmOptions, peer } = await opened();
+      const lost = vi.fn();
+      client.onLeaseLost(lost);
+      say(peer, {
+        payload: { deviceId: "device_1", leaseId: "lease_1", reason: "crashed" },
+        push: "lease-lost",
+      });
+      expect(lost).toHaveBeenCalledWith({
+        deviceId: "device_1",
+        leaseId: "lease_1",
+        reason: "crashed",
+      });
+
+      expect(farmOptions.maxPayloadBytes).toBeGreaterThanOrEqual(60 * 1024 * 1024);
+      const identity = client.identity();
+      await flushMicrotasks();
+      const name = "x".repeat(60 * 1024 * 1024);
+      say(peer, {
+        id: call(peer, "identity.get"),
+        ok: true,
+        payload: { name, principal: "tok_1", role: "agent", via: "token" },
+      });
+      await expect(identity).resolves.toMatchObject({ name });
+
+      const farm = new FakeWebSocketClientConnector();
+      const connecting = connectSimlock({
+        clock: new FakeClock(),
+        token: "sk_tok",
+        url,
+        webSocket: farm,
+      });
+      await vi.waitFor(() => expect(farm.connections[0]?.peer.sentText).toHaveLength(1));
+      const old = (farm.connections[0] as { peer: Peer }).peer;
+      say(old, {
+        error: {
+          code: "PROTOCOL_VERSION_UNSUPPORTED",
+          details: {
+            client: { max: 95, min: 89 },
+            daemon: { max: 3, min: 3 },
+            daemonVersion: "0.1.0",
+          },
+          message: "no overlap",
+        },
+        id: call(old, "hello"),
+        ok: false,
+      });
+      const degraded = await connecting;
+      await expect(degraded.identity()).rejects.toMatchObject({
+        code: "PROTOCOL_VERSION_UNSUPPORTED",
+      });
+    });
+
+    it("rejects the calls in flight when the connection drops, when the farm is silent for 45 s, and with UNAUTHENTICATED on close 4003", async () => {
+      const dropped = await opened();
+      const inFlight = dropped.client.identity();
+      await flushMicrotasks();
+      dropped.peer.dropped(1006, "");
+      await flushMicrotasks();
+      expect(promiseState(inFlight).state).toBe("rejected");
+      await expect(inFlight).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
+
+      const silent = await opened();
+      const waiting = silent.client.identity();
+      await flushMicrotasks();
+      silent.clock.advance(44_999);
+      silent.peer.ping();
+      silent.clock.advance(44_999);
+      await flushMicrotasks();
+      expect(silent.peer.terminated).toBe(false);
+      silent.clock.advance(1);
+      await flushMicrotasks();
+      expect(promiseState(waiting).state).toBe("rejected");
+      await expect(waiting).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
+      expect(silent.peer.terminated).toBe(true);
+
+      const revoked = await opened();
+      const pending = revoked.client.identity();
+      await flushMicrotasks();
+      revoked.peer.dropped(4003, "token revoked");
+      await flushMicrotasks();
+      expect(promiseState(pending).state).toBe("rejected");
+      await expect(pending).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+      await expect(revoked.client.identity()).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    });
+  });
 });
