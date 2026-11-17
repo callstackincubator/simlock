@@ -32,6 +32,7 @@ import {
   errorMessage,
   errorStack,
   respondError,
+  type SessionIdentity,
   writeFrame,
 } from "./server-connection.js";
 import { errorCode, Handshake, ProtocolError } from "./server-hello.js";
@@ -484,9 +485,15 @@ export class DaemonServer {
    * gave at the upgrade (`requireAuth`), so `hello` decides neither its role nor its principal.
    */
   acceptSession(socket: SessionConnection, session: DispatchSession): void {
-    this.#accept(socket, session.role, undefined, session, (code, reason) =>
-      socket.closeWith(code, reason),
-    );
+    this.#accept(socket, session.role, undefined, {
+      identity: {
+        close: (code, reason) => socket.closeWith(code, reason),
+        name: session.name ?? session.principal,
+        via: session.via === "proxy" ? "proxy" : "token",
+        ...(session.signOutUrl === undefined ? {} : { signOutUrl: session.signOutUrl }),
+      },
+      principal: session.principal,
+    });
   }
 
   /**
@@ -505,8 +512,7 @@ export class DaemonServer {
     socket: IpcConnection,
     forcedRole?: Role,
     link?: LinkConnection,
-    session?: DispatchSession,
-    closeSession?: (code: number, reason: string) => void,
+    session?: { readonly identity: SessionIdentity; readonly principal: string },
   ): void {
     // why: a stopping daemon still listens until `host.stop()`; a connection opened before the connections are closed gets `DAEMON_STOPPING` (or the `daemon.stop` reply) from the dispatch gates, and only one arriving after that would never be closed.
     if (this.#closingConnections) {
@@ -525,15 +531,7 @@ export class DaemonServer {
       // construction (`#dispatchLine` routes to `Handshake.handle` until then). A session has its
       // token's principal from the start, and `hello` keeps it.
       principal: session?.principal ?? "",
-      session:
-        session === undefined || closeSession === undefined
-          ? undefined
-          : {
-              close: closeSession,
-              name: session.name ?? session.principal,
-              via: session.via === "proxy" ? "proxy" : "token",
-              ...(session.signOutUrl === undefined ? {} : { signOutUrl: session.signOutUrl }),
-            },
+      session: session?.identity,
       role: "agent",
       progressDisposers: new Set(),
       protocolMismatch: undefined,
