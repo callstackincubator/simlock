@@ -191,11 +191,24 @@ export class FakeWebSocketClientConnector implements WebSocketClientConnector {
   failure: Error | undefined;
   // why: a test sets this to play a farm that never answers the upgrade, which a bound must then end.
   unanswered = false;
+  readonly #waiting: (() => void)[] = [];
+
+  // why: a test calls this to let every upgrade left unanswered open now, as a handshake that finishes after the caller stopped waiting does.
+  openUnanswered(): void {
+    for (const open of this.#waiting.splice(0)) open();
+  }
 
   async connect(url: string, options: WebSocketClientOptions): Promise<WebSocketClient> {
     if (this.failure !== undefined) throw this.failure;
-    if (this.unanswered) return new Promise<WebSocketClient>(() => undefined);
     const peer = new FakeWebSocketPeer();
+    if (this.unanswered) {
+      return new Promise<WebSocketClient>((resolve) => {
+        this.#waiting.push(() => {
+          this.connections.push({ options, peer, url });
+          resolve(peer);
+        });
+      });
+    }
     this.connections.push({ options, peer, url });
     return peer;
   }

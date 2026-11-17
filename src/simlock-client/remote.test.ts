@@ -124,6 +124,11 @@ describe("the typed client over a farm's session path", () => {
         { code: "FORBIDDEN", message: "A join token cannot connect" },
       ],
       [
+        "403 with a body that is not the farm's JSON",
+        new WebSocketRefusedError(403, "<html>Forbidden</html>"),
+        { code: "FORBIDDEN", message: `${url} does not allow this token` },
+      ],
+      [
         "404 at the path",
         new WebSocketRefusedError(404, ""),
         {
@@ -163,6 +168,9 @@ describe("the typed client over a farm's session path", () => {
       ...unreachable,
       message: `No answer from ${url}: it did not answer in 10 s`,
     });
+    silent.openUnanswered();
+    await flushMicrotasks();
+    expect(silent.connections[0]?.peer.closedWith).toEqual({ code: 1000, reason: "" });
   });
 
   it("stops connecting when the caller's signal aborts, and an abort after connecting ends nothing", async () => {
@@ -187,6 +195,9 @@ describe("the typed client over a farm's session path", () => {
     await flushMicrotasks();
     expect(state.state).toBe("rejected");
     await expect(waiting).rejects.toBe(reason);
+    farm.openUnanswered();
+    await flushMicrotasks();
+    expect(farm.connections[0]?.peer.closedWith).toEqual({ code: 1000, reason: "" });
 
     const early = AbortSignal.abort(reason);
     const fresh = new FakeWebSocketClientConnector();
