@@ -542,12 +542,13 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("sends the emulator's output to <avd folder>/emulator.log, mode 0600, truncated at each start", async () => {
+  it("sends the emulator's output to <avd folder>/emulator.log, mode 0600, emptied in place at each start", async () => {
     const harness = await provisionedHarness();
     const logPath = `${avdDirectory}/simlock_one/simlock.avd/emulator.log`;
     await harness.filesystem.writeFileAtomic(logPath, "left by an earlier start\n", {
       mode: 0o644,
     });
+    const earlier = await harness.filesystem.stat(logPath);
 
     await harness.driver.makeReady(harness.device);
 
@@ -557,6 +558,10 @@ describe("AndroidDriver", () => {
     expect(launch?.options.stdio).toEqual({ file: logPath });
     await expect(harness.filesystem.readFile(logPath)).resolves.toBe("");
     expect((await harness.filesystem.lstat(logPath)).mode & 0o777).toBe(0o600);
+    expect(
+      (await harness.filesystem.stat(logPath)).identity,
+      "emulator.log was replaced by another file, not emptied",
+    ).toBe(earlier.identity);
   });
 
   it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError", async () => {
