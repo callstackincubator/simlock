@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runMcpStdio } from "../mcp/main.js";
 import { FakeClock, WebSocketRefusedError } from "../ports/index.js";
 import { runCli } from "./index.js";
-import { detachedGrant, outputCapture, realCliEnvironmentPorts } from "./test-index.js";
+import { detachedGrant, outputCapture, realCliEnvironmentPorts, settle } from "./test-index.js";
 import { FakeFarm, type FarmAnswer } from "./test-remote.js";
 
 const URL = "https://farm.example.com";
@@ -45,13 +45,18 @@ interface Served {
   readonly mcp: Client;
   readonly stdin: FakeStdin;
   exitCode(): number | undefined;
+  levels(): string[];
   messages(): string[];
   tool(name: string, input: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
 async function serveRemoteMcp(env: NodeJS.ProcessEnv = ENV): Promise<Served> {
   const clock = new FakeClock(0);
-  const farm = new FakeFarm(farmAnswers);
+  // why: a renewal moves the deadline a TTL on from the clock, as the farm does.
+  const farm = new FakeFarm({
+    ...farmAnswers,
+    "lease.renew": () => ({ ...detachedGrant.lease, ttlDeadline: clock.now() + 60_000 }),
+  });
   const attempts: number[] = [];
   const connect = farm.connect.bind(farm);
   farm.connect = (...args) => {
@@ -77,8 +82,10 @@ async function serveRemoteMcp(env: NodeJS.ProcessEnv = ENV): Promise<Served> {
   void runCli(["mcp"], environment).then((code) => (exitCode = code));
   const mcp = new Client({ name: "test", version: "1.0.0" });
   const logs: unknown[] = [];
+  const levels: string[] = [];
   mcp.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
     logs.push(notification.params.data);
+    levels.push(notification.params.level);
   });
   await mcp.connect(clientTransport);
   return {
@@ -87,6 +94,7 @@ async function serveRemoteMcp(env: NodeJS.ProcessEnv = ENV): Promise<Served> {
     exitCode: () => exitCode,
     farm,
     mcp,
+    levels: () => levels,
     messages: () => logs.map((data) => (data as { message: string }).message),
     stdin,
     tool: async (name, input) => {
@@ -176,6 +184,13 @@ async function dropsAreRiddenOut(): Promise<void> {
     served.clock.advance(1_000);
     await vi.waitFor(() => expect(served.messages(), name).toHaveLength(2));
     expect(served.messages()[1], name).toBe(`reconnected to ${URL}; lease lse_env renewed`);
+    expect(served.levels(), name).toEqual(["warning", "info"]);
+    const renewals = () => served.farm.requestTypes().filter((type) => type === "lease.renew");
+    const renewedOnReconnect = renewals().length;
+    served.clock.advance(20_000);
+    await vi.waitFor(() =>
+      expect(renewals(), `${name}: renewing resumes`).toHaveLength(renewedOnReconnect + 1),
+    );
     expect(served.farm.requestTypes().at(-1), name).toBe("lease.renew");
     expect(served.farm.connections, name).toHaveLength(2);
     expect(await served.tool("lease_status", {}), name).toEqual(
@@ -207,6 +222,23 @@ async function endsWithoutALease(): Promise<void> {
   const triedRefused = refused.attempts.length;
   refused.clock.advance(120_000);
   expect(refused.attempts).toHaveLength(triedRefused);
+  refused.stdin.end();
+  await vi.waitFor(() => expect(refused.exitCode()).toBe(0));
+  expect(refused.attempts, "the refused lease is not released over a new connection").toHaveLength(
+    triedRefused,
+  );
+}
+
+async function endingTheSessionStopsTheReconnect(): Promise<void> {
+  const served = await held();
+  await dropped(served);
+  served.farm.failure = new Error("connect ECONNREFUSED");
+  served.stdin.end();
+  await vi.waitFor(() => expect(served.exitCode()).toBe(0));
+  const tried = served.attempts.length;
+  served.clock.advance(120_000);
+  await settle();
+  expect(served.attempts, "no reconnect timer outlives the session").toHaveLength(tried);
 }
 
 describe("CLI: simlock mcp against a farm", () => {
@@ -215,5 +247,6 @@ describe("CLI: simlock mcp against a farm", () => {
     await toolsUseTheFarm();
     await dropsAreRiddenOut();
     await endsWithoutALease();
+    await endingTheSessionStopsTheReconnect();
   });
 });

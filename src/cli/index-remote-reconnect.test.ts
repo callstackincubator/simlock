@@ -158,6 +158,9 @@ async function silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound(): Pr
   expect(reachable.farm.requestTypes()).toEqual(["lease.request", "lease.release"]);
   expect(reachable.farm.connections).toHaveLength(2);
   expect(reachable.stderr()).not.toContain("still yours");
+  reachable.clock.advance(120_000);
+  await settle();
+  expect(reachable.farm.connections, "no reconnect timer outlives the command").toHaveLength(2);
 
   const refused = holdRemoteLease();
   await dropped(refused);
