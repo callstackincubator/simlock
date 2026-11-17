@@ -98,7 +98,9 @@ func runInput(udid: String) async -> Never {
             await injector.sendTouch(type: type, x: x, y: y, screenWidth: size.width, screenHeight: size.height)
         case tagButton:
             guard let name = fields["button"] as? String else { continue }
-            await injector.sendButtonPlan(ButtonPlan.steps(for: name))
+            let steps = ButtonPlan.steps(for: name)
+            if steps.isEmpty { log("button \(name) not sent") }
+            await injector.sendButtonPlan(steps)
         case tagKey:
             guard let type = fields["type"] as? String, let usage = fields["usage"] as? Int, usage >= 0 else { continue }
             await injector.sendKey(type: type, usage: UInt32(usage))

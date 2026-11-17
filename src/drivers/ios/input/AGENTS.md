@@ -6,8 +6,8 @@ Flows: [iOS driver](../AGENTS.md), [input](../../../input/AGENTS.md).
 ## Rules
 
 - The helper's HID client stays here; core and the input module do not name it.
-- Home is `xcrun simctl` here and nowhere in the helper (one owner). Home launches `com.apple.springboard`; a failure is only logged. `app_switcher` and `lock` go to the helper (ADR 0085): Lock is one Indigo button press, the app switcher two Home presses 50 ms apart. Back is dropped.
-- Keys go to the helper on every runtime, and the config never says `keyboardUnavailable` (ADR 0085). A press the guest ignores is not detected.
+- Home is `xcrun simctl` here and nowhere in the helper (one owner). Home launches `com.apple.springboard`; a failure is only logged. `app_switcher` and `lock` go to the helper (ADR 0085). Back is dropped.
+- Keys go to the helper on every runtime, and the config never says `keyboardUnavailable`. A press the guest ignores is not detected.
 - The helper follows the driver's device-set rule: `SIMLOCK_IOS_DEVICE_SET` names the owned set under `simlock` and is absent under `default`. The daemon's own value never reaches it.
 - The open waits for the helper's first size frame (`READY_DEADLINE_MS` in `device-input.ts`), which it writes once its HID client is set up. A missing program, an early exit or no frame rejects the open, and the helper is stopped.
 - The config is always `portrait`, a rotation included: it is the size of the panel the taps land on. A foldable's helper sends the size again when the panel in use changes (ADR 0075 §4); a size equal to the held one is no change, and a frame that is not a size is warned about and kept out.
