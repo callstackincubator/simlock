@@ -170,14 +170,17 @@ export class SlimBoot {
     }
 
     const startedAt = this.#clock.now();
+    const folder = this.#overridesFolder(udid);
+    const recordFile = join(folder, RECORD_FILE_NAME);
+    const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
+    const recorded = await this.#readRecord(recordFile);
     const wanted = overridesFor(resolved.categories, kept, {
       exclude: slim.exclude ?? [],
       include: slim.include ?? [],
-      recorded: [],
+      recorded,
     });
     let writeError: string | undefined;
     try {
-      const folder = this.#overridesFolder(udid);
       const file = join(folder, OVERRIDES_FILE_NAME);
       const existing = await this.#readOverrides(file);
       const merged = new Map([...existing, ...wanted]);
@@ -185,20 +188,32 @@ export class SlimBoot {
         await this.#filesystem.mkdirp(folder, { mode: 0o700 });
         await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
       }
-      const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
-      if (names.length > 0) {
+      if (JSON.stringify(names) !== JSON.stringify(recorded)) {
         await this.#filesystem.mkdirp(folder, { mode: 0o700 });
-        await this.#filesystem.writeFileAtomic(
-          join(folder, RECORD_FILE_NAME),
-          JSON.stringify(names),
-          { mode: 0o644 },
-        );
+        await this.#filesystem.writeFileAtomic(recordFile, JSON.stringify(names), { mode: 0o644 });
       }
     } catch (error: unknown) {
       writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
     return { kept, kind: "written", resolved, startedAt, wanted, writeError };
+  }
+
+  // why: ADR 0083 S2: a record that is missing or cannot be read as a list of strings is an empty one, so an old simulator or a damaged file never fails a boot.
+  async #readRecord(file: string): Promise<readonly string[]> {
+    try {
+      if (!(await this.#filesystem.exists(file))) return [];
+      const parsed: unknown = JSON.parse(await this.#filesystem.readFile(file));
+      if (Array.isArray(parsed) && parsed.every((name) => typeof name === "string")) {
+        return parsed as string[];
+      }
+      throw new Error("it is not a list of strings");
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not read the record of named services ${file}: ${errorMessage(error)}`,
+      );
+      return [];
+    }
   }
 
   async #readOverrides(file: string): Promise<ReadonlyMap<string, boolean>> {
