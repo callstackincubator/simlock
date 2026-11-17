@@ -14,6 +14,7 @@ import {
   type ConnectOptions,
   type SimlockClient,
 } from "../simlock-client/client.js";
+import { remoteConnectOptions } from "../simlock-client/remote-connector.js";
 
 export type {
   AnySimlockError,
@@ -74,6 +75,15 @@ export interface ConnectSimlockOptions {
  * `DAEMON_CONNECTION_LOST` if the socket cannot be reached) without ever restarting the
  * daemon -- see `docs/internal/adr/0003-...md` §6. */
 export async function connectSimlock(options: ConnectSimlockOptions): Promise<SimlockClient> {
+  if (options.url !== undefined) {
+    return connectSimlockClient(
+      remoteConnectOptions({
+        url: options.url,
+        ...(options.token === undefined ? {} : { token: options.token }),
+      }),
+      false,
+    );
+  }
   const resolved: ConnectOptions = {
     ...(options.connection === undefined ? {} : { connection: options.connection }),
     ...(options.connection === undefined

@@ -18,6 +18,8 @@ export class WebSocketRefusedError extends Error {
 
 export interface WebSocketClient {
   send(bytes: Uint8Array): void;
+  // why: the session path carries one protocol line per text message, which `ws` sends as a text frame only when handed a string.
+  sendText(text: string): void;
   close(code: number, reason: string): void;
   // why: `close` waits for the server's close frame, and `ws` keeps a timer and the TCP socket alive for 30 s when none comes; a caller that gave up waiting tears the socket down so nothing holds the process open.
   terminate(): void;
@@ -61,6 +63,10 @@ class NodeWebSocketClient implements WebSocketClient {
 
   send(bytes: Uint8Array): void {
     this.#socket.send(bytes);
+  }
+
+  sendText(text: string): void {
+    this.#socket.send(text);
   }
 
   close(code: number, reason: string): void {
@@ -121,6 +127,7 @@ export class NodeWebSocketClientConnector implements WebSocketClientConnector {
 
 class FakeWebSocketPeer implements WebSocketClient {
   readonly sent: Uint8Array[] = [];
+  readonly sentText: string[] = [];
   closedWith: { readonly code: number; readonly reason: string } | undefined;
   terminated = false;
   // why: a real socket answers `close` with its own close event; a test sets this to play a server that never answers.
@@ -131,6 +138,10 @@ class FakeWebSocketPeer implements WebSocketClient {
 
   send(bytes: Uint8Array): void {
     this.sent.push(bytes);
+  }
+
+  sendText(text: string): void {
+    this.sentText.push(text);
   }
 
   close(code: number, reason: string): void {
