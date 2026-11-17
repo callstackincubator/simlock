@@ -12,6 +12,7 @@ import {
   MemoryIpcTransport,
   MemoryLogSink,
   NodeFilesystem,
+  type AccessEntry,
   type IpcConnection,
   type IpcConnector,
   type IpcListenerFactory,
@@ -23,26 +24,6 @@ import {
 } from "./connection-host.js";
 
 const endpoint = "/simlock/daemon.sock";
-
-// why: the shapes the fix adds; declared here so this test compiles before it lands.
-interface AccessEntry {
-  readonly sid: string;
-  readonly name: string;
-  readonly allow: boolean;
-  readonly rights: number;
-}
-interface DirectoryAccess {
-  readonly user: string;
-  readonly entries: readonly AccessEntry[];
-}
-type Prepare = (
-  filesystem: MemoryFilesystem,
-  path: string,
-  options: {
-    readonly platform: NodeJS.Platform;
-    readonly directoryAccess: { read(path: string): Promise<DirectoryAccess> };
-  },
-) => Promise<string | undefined>;
 
 const USER = "S-1-5-21-2160452881-2465010311-446649340-1001";
 const FULL = 0x1f01ff;
@@ -100,6 +81,33 @@ describe("prepareDataDirectory", () => {
         ]),
       },
       {
+        name: "generic-read",
+        platform: "win32",
+        mode: 0o666,
+        access: readable([
+          ...OWNER_ONLY,
+          { sid: "S-1-5-21-1-2-3-1003", name: "DESKTOP\\Reader", allow: true, rights: 0x80000000 },
+        ]),
+      },
+      {
+        name: "denied",
+        platform: "win32",
+        mode: 0o666,
+        access: readable([
+          ...OWNER_ONLY,
+          { sid: "S-1-5-32-545", name: "BUILTIN\\Users", allow: false, rights: FULL },
+        ]),
+      },
+      {
+        name: "creator-owner",
+        platform: "win32",
+        mode: 0o666,
+        access: readable([
+          ...OWNER_ONLY,
+          { sid: "S-1-3-0", name: "CREATOR OWNER", allow: true, rights: FULL },
+        ]),
+      },
+      {
         name: "unreadable",
         platform: "win32",
         mode: 0o666,
@@ -108,15 +116,14 @@ describe("prepareDataDirectory", () => {
       { name: "macos-open", platform: "darwin", mode: 0o755, access: readable(OWNER_ONLY) },
       { name: "linux-closed", platform: "linux", mode: 0o700, access: readable(OTHER_DRIVE) },
     ] as const;
-    const prepare: Prepare = prepareDataDirectory;
-    const warnings = [];
+    const warnings: [string, string | undefined][] = [];
     for (const testCase of cases) {
       const filesystem = new MemoryFilesystem();
       const path = `/home/${testCase.name}`;
       await filesystem.mkdirp(path);
       await filesystem.chmod(path, testCase.mode);
       const options = { platform: testCase.platform, directoryAccess: testCase.access };
-      warnings.push([testCase.name, await prepare(filesystem, path, options)]);
+      warnings.push([testCase.name, await prepareDataDirectory(filesystem, path, options)]);
     }
 
     expect(warnings).toEqual([
@@ -133,6 +140,12 @@ describe("prepareDataDirectory", () => {
         "change-only",
         `data directory /home/change-only is accessible to other users (DESKTOP\\Guest); run ${icaclsFix("/home/change-only")}`,
       ],
+      [
+        "generic-read",
+        `data directory /home/generic-read is accessible to other users (DESKTOP\\Reader); run ${icaclsFix("/home/generic-read")}`,
+      ],
+      ["denied", undefined],
+      ["creator-owner", undefined],
       ["unreadable", undefined],
       [
         "macos-open",
