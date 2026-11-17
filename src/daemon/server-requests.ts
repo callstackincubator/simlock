@@ -363,7 +363,15 @@ export class ConnectionRequests {
       principal: connection.principal,
       relays: connection.relays,
       role: connection.role,
-      via: connection.isGatewayUplink === true ? "uplink" : "socket",
+      ...(connection.session === undefined
+        ? { via: connection.isGatewayUplink === true ? ("uplink" as const) : ("socket" as const) }
+        : {
+            name: connection.session.name,
+            via: connection.session.via,
+            ...(connection.session.signOutUrl === undefined
+              ? {}
+              : { signOutUrl: connection.session.signOutUrl }),
+          }),
     };
   }
 

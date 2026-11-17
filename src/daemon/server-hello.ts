@@ -87,7 +87,11 @@ export class Handshake {
       await connection.socket.close();
       return;
     }
-    connection.principal = payload.principal ?? this.options.defaultRequesterId;
+    // why: ADR 0081 §2: a session's principal is its token's, so the one a `hello` names is not believed.
+    connection.principal =
+      connection.session === undefined
+        ? (payload.principal ?? this.options.defaultRequesterId)
+        : connection.principal;
     connection.role = role;
     if (negotiated === undefined) {
       const details = {

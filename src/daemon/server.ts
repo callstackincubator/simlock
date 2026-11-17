@@ -473,7 +473,20 @@ export class DaemonServer {
     this.#accept(connection, "admin", connection);
   }
 
-  #accept(socket: IpcConnection, forcedRole?: Role, link?: LinkConnection): void {
+  /**
+   * why: ADR 0081 §2: a remote caller's WebSocket session is accepted with the identity its token
+   * gave at the upgrade (`requireAuth`), so `hello` decides neither its role nor its principal.
+   */
+  acceptSession(socket: IpcConnection, session: DispatchSession): void {
+    this.#accept(socket, session.role, undefined, session);
+  }
+
+  #accept(
+    socket: IpcConnection,
+    forcedRole?: Role,
+    link?: LinkConnection,
+    session?: DispatchSession,
+  ): void {
     // why: a stopping daemon still listens until `host.stop()`; a connection opened before the connections are closed gets `DAEMON_STOPPING` (or the `daemon.stop` reply) from the dispatch gates, and only one arriving after that would never be closed.
     if (this.#closingConnections) {
       void socket.close();
@@ -488,8 +501,17 @@ export class DaemonServer {
       link,
       // why: Overwritten by `Handshake.handle` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
-      // construction (`#dispatchLine` routes to `Handshake.handle` until then).
-      principal: "",
+      // construction (`#dispatchLine` routes to `Handshake.handle` until then). A session has its
+      // token's principal from the start, and `hello` keeps it.
+      principal: session?.principal ?? "",
+      session:
+        session === undefined
+          ? undefined
+          : {
+              name: session.name ?? session.principal,
+              via: session.via === "proxy" ? "proxy" : "token",
+              ...(session.signOutUrl === undefined ? {} : { signOutUrl: session.signOutUrl }),
+            },
       role: "agent",
       progressDisposers: new Set(),
       protocolMismatch: undefined,

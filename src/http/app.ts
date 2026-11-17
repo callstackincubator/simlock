@@ -2,6 +2,8 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { etag } from "hono/etag";
 
+import type { SessionOutcome } from "../ports/index.js";
+
 import type { Identity } from "../auth/index.js";
 import { eventsPageQuery, OPERATIONS, usageWindow } from "../contract/index.js";
 import { registerLeaseRequestRoutes } from "./app-lease-request-routes.js";
@@ -13,6 +15,7 @@ import {
   optionalQuery,
   parseDuration,
   statsRefusal,
+  upgradeRequired,
 } from "./app-helpers.js";
 import type {
   Env,
@@ -58,6 +61,7 @@ import {
   healthzRoute,
   identityRoute,
   statsRoute,
+  sessionRoute,
   statusRoute,
 } from "./route-declarations.js";
 import { validationHook } from "./routes.js";
@@ -123,6 +127,20 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   });
 
   app.openapi(healthzRoute, (c) => c.json({ ok: true as const }, 200));
+
+  app.openapi({ ...sessionRoute, middleware: [agentAuth] }, (c) => {
+    const capture = (c.env as { leaseSocket?: LeaseSocketCapture } | undefined)?.leaseSocket;
+    if (capture === undefined) return upgradeRequired() as never;
+    const identity = c.get("identity");
+    const { acceptSession } = deps;
+    if (acceptSession === undefined) return c.notFound() as never;
+    const session = buildHttpSession(identity);
+    capture.session = {
+      accept: (connection) => acceptSession(connection, session),
+      ...(identity.expiresAt === undefined ? {} : { expiresAt: identity.expiresAt }),
+    };
+    return new Response(null, { status: 204 }) as never;
+  });
 
   app.openapi({ ...statusRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("status.get", {}, buildHttpSession(c.get("identity"))), 200),
@@ -424,6 +442,11 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   return Object.assign(app, {
     dispose: () => {
       notices.dispose();
+    },
+    session: async (request: Request): Promise<SessionOutcome> => {
+      const capture: LeaseSocketCapture = {};
+      const response = await app.fetch(request, { leaseSocket: capture });
+      return capture.session === undefined ? { response } : capture.session;
     },
     leaseSocket: async (request: Request): Promise<HttpLeaseSocketOutcome> => {
       const capture: LeaseSocketCapture = {};

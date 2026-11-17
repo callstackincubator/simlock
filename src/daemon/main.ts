@@ -651,6 +651,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     const dispatch: HttpDispatch = (operation, input, session) =>
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
+      acceptSession: (connection, session) => daemon.acceptSession(connection, session),
       clock,
       dispatch,
       eventBus,
@@ -682,6 +683,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
         createUpgradeRouter({
           clock,
           leaseSocket: (request) => app.leaseSocket(request),
+          session: (request) => app.session(request),
           uplinks,
         }).attach(server),
       port: config.http.port,
