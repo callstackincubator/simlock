@@ -10,6 +10,7 @@ copies "Tests agents run"; change both together (a repo test compares them).
 | ---------------------------------------------- | -------------------------------------------- |
 | Unit tests that import what the branch changed | `pnpm test:changed`                          |
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
+| Types across the project, before a commit      | `pnpm typecheck`                             |
 | One console DOM test file (`*.dom.test.tsx`)   | `pnpm exec vitest run --project ui-dom <file>` |
 | One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
@@ -37,7 +38,7 @@ pages; it compares nothing. Open the pictures the change touched.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
+`pnpm test:timing`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine and a
 refactor's `--touched-by` run, below), the whole
@@ -199,6 +200,9 @@ Tests that start real simulators or emulators. Run them only through
 - It first stops what earlier runs left behind. By hand: `scripts/slow-e2e.sh
   clean` (refused while a run holds the lock). Never stop a simulator,
   emulator or daemon any other way.
+- `scripts/slow-e2e.sh check`: the checks a run starts with, without a
+  run. Exit 69 with why when the machine is unfit. While a lane runs it
+  stops nothing and checks only free disk and the other tools.
 - `scripts/slow-e2e.sh status`: the running test, the counts so far, how
   long the log has been quiet, and each failure. `scripts/slow-e2e.sh stop`
   ends the running lane and what it started.
