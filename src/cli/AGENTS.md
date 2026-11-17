@@ -27,6 +27,7 @@ Holding a lease:
 
 - The connection holds nothing: a lease ends by release or TTL. A lost connection is `DAEMON_CONNECTION_LOST`, and the lease runs to its deadline.
 - Renewal stops before the release; no timer outlives a command.
+- With `--url`, a dropped connection is ridden out (ADR 0081 §4): before the grant the request goes again under its idempotency key, after it the command connects and renews on `startReconnect`'s schedule until the lease's deadline. The typed client still never reconnects. A refused reconnect ends the command with that code; Ctrl-C while disconnected connects once to release, within `RELEASE_TIMEOUT_MS`.
 - A signal or a parent exit while the command connects sends no request; during the request it aborts it (the client cancels the queued request). Either way it exits 0.
 
 Passthrough and tunnel:

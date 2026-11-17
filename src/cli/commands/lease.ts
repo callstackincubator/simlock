@@ -286,7 +286,10 @@ async function runLease(
       ...(ttlMs === undefined ? {} : { ttlMs }),
     };
     // why: a farm's request is sent under a key of this command's own, so a repeat after a drop attaches to the request already waiting there instead of queueing a second one.
-    const idempotencyKey = farmOrigin === undefined ? undefined : randomUUID();
+    let idempotencyKey = farmOrigin === undefined ? undefined : randomUUID();
+    const requestedAt = environment.clock.now();
+    let reattached = false;
+    let restarted = false;
     let grant: LeaseGrant;
     for (;;) {
       try {
@@ -302,25 +305,34 @@ async function runLease(
         break;
       } catch (error: unknown) {
         if (cancelledWhileWaiting && (error as { code?: unknown }).code === "CANCELLED") return 0;
-        if (
-          farmOrigin === undefined ||
-          !isSimlockError(error) ||
-          error.code !== "DAEMON_CONNECTION_LOST"
-        )
-          throw error;
+        if (farmOrigin === undefined || !isSimlockError(error)) throw error;
+        // why: a worker that restarted stored the waiting request as failed `INTERNAL` and replays that failure to its key, so the request goes once more under a new key.
+        if (error.code === "INTERNAL" && reattached && !restarted) {
+          restarted = true;
+          idempotencyKey = randomUUID();
+          environment.stderr.write(
+            `${JSON.stringify({ notice: `${farmOrigin} restarted and dropped the waiting request; asking again` })}\n`,
+          );
+          continue;
+        }
+        if (error.code !== "DAEMON_CONNECTION_LOST") throw error;
         environment.stderr.write(
           `${JSON.stringify({ notice: `lost the connection to ${farmOrigin}; reconnecting to the waiting request` })}\n`,
         );
         try {
           await adoptClient(
             await reconnectToFarm({
-              deadline: environment.clock.now() + UNREACHABLE_GIVE_UP_MS,
+              deadline: Math.min(
+                environment.clock.now() + UNREACHABLE_GIVE_UP_MS,
+                requestedAt + (timeoutMs ?? Infinity),
+              ),
               environment,
               origin: farmOrigin,
               signal: waitAbort.signal,
               token,
             }),
           );
+          reattached = true;
         } catch (reconnectError: unknown) {
           if (cancelledWhileWaiting) return 0;
           throw reconnectError;
