@@ -1,5 +1,5 @@
-import { NodeSqliteOpener, type SqliteDatabase } from "../../ports/index.js";
-import { iosSourceDataOwner, IosSourceTable } from "./source-data.js";
+import { NodeSqliteOpener, type MemoryFilesystem, type SqliteDatabase } from "../../ports/index.js";
+import { iosSourceDataOwner, IosSourceTable, type SourceFile } from "./source-data.js";
 
 export async function memorySourceDatabase(): Promise<SqliteDatabase> {
   const database = await new NodeSqliteOpener().open(":memory:", { readOnly: false });
@@ -9,6 +9,11 @@ export async function memorySourceDatabase(): Promise<SqliteDatabase> {
 
 export interface PlantedSource {
   readonly deviceTypeId: string;
+  /** why: the files that name the lineage, as a source's make recorded them. */
+  readonly files?: readonly SourceFile[];
+  /** why: `null` is a source made before lineages were kept; absent is a lineage of no simulator. */
+  readonly lineage?: readonly string[] | null;
+  readonly savedWithoutLineage?: boolean;
   readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
@@ -17,6 +22,7 @@ export interface PlantedSource {
   readonly runtimeId: string;
   readonly sizeBytes?: number;
   readonly state?: "making" | "ready";
+  readonly throwawayUdid?: string;
   readonly udid?: string;
 }
 
@@ -38,7 +44,14 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
   });
   if (source.udid !== undefined) table.setUdid(sourceId, source.udid);
-  if (source.state !== "making") table.markReady(sourceId, source.sizeBytes);
+  if (source.throwawayUdid !== undefined) table.setThrowaway(sourceId, source.throwawayUdid);
+  if (source.state !== "making") {
+    table.markReady(sourceId, source.sizeBytes, {
+      files: source.files ?? [],
+      lineage: source.lineage === null ? undefined : (source.lineage ?? []),
+      savedWithoutLineage: source.savedWithoutLineage ?? false,
+    });
+  }
   return database;
 }
 
@@ -47,4 +60,35 @@ export function plantReadySeed(
   seed: Omit<PlantedSource, "state"> & { readonly udid: string },
 ): SqliteDatabase {
   return plantSource(database, seed);
+}
+
+/** why: a file with the exact bytes a test names, which `writeFileAtomic` cannot hold for a UTF-16 or binary one. */
+export async function plantBytes(
+  filesystem: MemoryFilesystem,
+  path: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")));
+  await filesystem.writeFileStream(
+    path,
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+  );
+}
+
+export async function readBytes(filesystem: MemoryFilesystem, path: string): Promise<Buffer> {
+  const file = await filesystem.openFile(path);
+  const chunks: Uint8Array[] = [];
+  const reader = file.read().getReader();
+  for (;;) {
+    const piece = await reader.read();
+    if (piece.done) break;
+    chunks.push(piece.value);
+  }
+  await file.close();
+  return Buffer.concat(chunks);
 }
