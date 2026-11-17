@@ -1,6 +1,6 @@
 # 0085. An iOS simulator takes keys on every runtime, and the app switcher and Lock
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-17
 - **Issue:** [#1024](https://github.com/callstackincubator/simlock/issues/1024)
 - **Narrows:** [ADR 0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md)
