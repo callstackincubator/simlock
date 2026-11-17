@@ -8,7 +8,13 @@
  * (`DeviceRecord`/`LeaseRecord`/`LeaseGrant`-the-core-type stay inside the daemon) -- see
  * `no-core-leak.test.ts`.
  */
-import { NodeIpcTransport, type IpcConnection, type IpcConnector } from "../ports/index.js";
+import {
+  NodeIpcTransport,
+  type Clock,
+  type IpcConnection,
+  type IpcConnector,
+  type WebSocketClientConnector,
+} from "../ports/index.js";
 import {
   connectSimlockClient,
   type ConnectOptions,
@@ -67,6 +73,8 @@ export interface ConnectSimlockOptions {
   readonly principal?: string;
   readonly url?: string;
   readonly token?: string;
+  readonly webSocket?: WebSocketClientConnector;
+  readonly clock?: Clock;
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake as an agent-role

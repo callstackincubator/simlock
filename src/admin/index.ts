@@ -4,7 +4,13 @@
  * the daemon's own role check is what actually stops an agent-role session from calling one of
  * these; nothing here enforces roles client-side beyond simply not exposing the methods.
  */
-import { NodeIpcTransport, type IpcConnection, type IpcConnector } from "../ports/index.js";
+import {
+  NodeIpcTransport,
+  type Clock,
+  type IpcConnection,
+  type IpcConnector,
+  type WebSocketClientConnector,
+} from "../ports/index.js";
 import {
   connectSimlockClient,
   type ConnectOptions,
@@ -109,6 +115,10 @@ export interface ConnectSimlockAdminOptions {
   readonly ipc?: IpcConnector;
   readonly principal?: string;
   readonly credential?: string;
+  readonly url?: string;
+  readonly token?: string;
+  readonly webSocket?: WebSocketClientConnector;
+  readonly clock?: Clock;
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake, requesting the
