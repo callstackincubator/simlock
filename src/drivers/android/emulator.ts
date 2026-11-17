@@ -248,7 +248,7 @@ export class Emulator {
   ): Promise<ProcessHandle> {
     const startedAt = this.#options.clock.now();
     const logPath = this.#logPath(data);
-    await this.#options.filesystem.writeFileAtomic(logPath, "", { mode: 0o600 });
+    await this.#options.filesystem.writeFileInPlace(logPath, "", { mode: 0o600 });
     // why: the output goes to a file so a launch that dies at once leaves its own error line to quote (#1199); `unref()` because an emulator outlives the daemon by design
     // (`AndroidDriver` adopts it after a restart) and is reaped through adb and
     // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
