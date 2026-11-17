@@ -12,7 +12,7 @@ Does: one interface per external API, each with a Node adapter and a fake.
   CLI and MCP environment builders), and injected.
 - A port is as small as its callers need. What the bytes mean is the caller's business
   (`TcpProbe.send` knows nothing of adb).
-- Every wait an adapter makes is bounded (architecture rule 11). `HttpStreamClient` bounds the connection and takes the caller's `AbortSignal` for the silence after it, so a caller sets the limit that suits its transfer. One is not: `copyTree`'s
+- Every wait an adapter makes is bounded (architecture rule 11). One is not: `copyTree`'s
   fallback that runs no child process, where `timeoutMs` bounds nothing.
 
 Lazy loading:
