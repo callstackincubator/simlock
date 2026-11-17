@@ -55,7 +55,14 @@ export interface CliServiceAccess {
   readonly definition: () => Promise<ServiceDefinition>;
 }
 
+/** why: set by the router when a command runs against a farm (`--url` or `SIMLOCK_URL`); `token` is `--token` else `SIMLOCK_TOKEN`, and may be missing. */
+export interface RemoteFarm {
+  readonly url: string;
+  readonly token: string | undefined;
+}
+
 export interface CliEnvironment {
+  readonly remote?: RemoteFarm | undefined;
   readonly clock: Clock;
   readonly configPath: string;
   readonly daemonHome: DaemonHome;

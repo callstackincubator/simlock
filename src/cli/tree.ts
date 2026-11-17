@@ -9,6 +9,8 @@ export interface CommandContext {
   readonly path: readonly string[];
   readonly environment: CliEnvironment;
   readonly token: string | undefined;
+  /** why: `--url`, else `SIMLOCK_URL`; `simlock tunnel` reads it even with `--local`, as it always has. */
+  readonly url: string | undefined;
   readonly daemonFlag: DaemonFlag;
 }
 

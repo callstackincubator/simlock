@@ -68,11 +68,13 @@ function daemonFlagNamed(arg: string): "gateway" | "local" | undefined {
 
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
+  readonly url: string | undefined;
   readonly daemonFlag: DaemonFlag;
   readonly rest: string[];
 } {
   const rest: string[] = [];
   let token: string | undefined;
+  let url: string | undefined;
   let daemonFlag: DaemonFlag;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index] as string;
@@ -87,6 +89,17 @@ function extractGlobalFlags(argv: readonly string[]): {
       token = arg.slice("--token=".length);
       continue;
     }
+    if (arg === "--url") {
+      const value = argv[index + 1];
+      if (value === undefined) throw new UsageError("--url requires a value");
+      url = value;
+      index++;
+      continue;
+    }
+    if (arg.startsWith("--url=")) {
+      url = arg.slice("--url=".length);
+      continue;
+    }
     const named = daemonFlagNamed(arg);
     if (named !== undefined) {
       if (daemonFlag !== undefined && daemonFlag !== named) {
@@ -97,7 +110,7 @@ function extractGlobalFlags(argv: readonly string[]): {
     }
     rest.push(arg);
   }
-  return { token, daemonFlag, rest };
+  return { token, url, daemonFlag, rest };
 }
 
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
@@ -177,6 +190,10 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
   );
 }
 
+function nonEmpty(value: string | undefined): string | undefined {
+  return value === "" ? undefined : value;
+}
+
 function isHelp(value: string | undefined): boolean {
   return value === "--help" || value === "-h";
 }
@@ -230,8 +247,11 @@ export async function runCli(
   let resolved = environment;
   let flag: DaemonFlag;
   try {
-    const { token, daemonFlag, rest } = extractGlobalFlags(argv);
+    const { token, url: urlFlag, daemonFlag, rest } = extractGlobalFlags(argv);
     flag = daemonFlag;
+    if (urlFlag !== undefined && daemonFlag !== undefined) {
+      throw new UsageError("--url cannot be used with --local or --gateway");
+    }
     if (rest[0] === "--version" || rest[0] === "-v") {
       // why: loaded here, not statically, so only this request pays for the ports barrel, as a real command does.
       const { readPackageVersion } = await import("../ports/index.js");
@@ -247,10 +267,17 @@ export async function runCli(
       throw new UsageError(withHelpHint(`Unknown command: ${String(rest[0])}`));
     resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
     if (daemonFlag === "gateway") await refuseWhenNoGateway(resolved, command.path, command.rest);
+    const url = urlFlag ?? nonEmpty(resolved.tunnelUrl);
+    // why: remote mode is the URL without an explicit `--local` or `--gateway`, which beats a `SIMLOCK_URL` left over in the shell.
+    const remote =
+      url !== undefined && daemonFlag === undefined
+        ? { url, token: token ?? resolved.tunnelToken }
+        : undefined;
     return await command.module.run(command.rest, {
       path: command.path,
-      environment: resolved,
+      environment: remote === undefined ? resolved : { ...resolved, remote },
       token,
+      url,
       daemonFlag,
     });
   } catch (error: unknown) {
