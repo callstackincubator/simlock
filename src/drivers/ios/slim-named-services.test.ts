@@ -124,5 +124,62 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
     const unmanaged = await boot({ slim: {}, plist: { "com.example.unmanaged": true } });
     expect(unmanaged.written?.["com.example.unmanaged"]).toBe(true);
     expect(unmanaged.written?.[passd]).toBe(true);
+
+    const dropped = await boot({
+      slim: { exclude: [gamed] },
+      plist: { [diagnosticd]: true },
+      record: JSON.stringify([diagnosticd, gamed]),
+    });
+    expect(dropped.written?.[diagnosticd]).toBe(false);
+    expect(dropped.written?.[gamed]).toBe(true);
+    expect(dropped.record).toEqual([gamed]);
+
+    const none = await boot({ slim: { exclude: [gamed] } });
+    expect(none.warn).not.toHaveBeenCalled();
+    expect(none.record).toEqual([gamed]);
+
+    const unreadable = await boot({
+      slim: { exclude: [gamed] },
+      plist: { [diagnosticd]: true },
+      record: "{not a list",
+    });
+    expect(unreadable.warn).toHaveBeenCalledWith(
+      expect.stringContaining("could not read the record of named services"),
+    );
+    expect(unreadable.written?.[diagnosticd]).toBe(true);
+    expect(unreadable.record).toEqual([gamed]);
+
+    const wrongShape = await boot({
+      slim: { exclude: [gamed] },
+      record: JSON.stringify([1, 2]),
+    });
+    expect(wrongShape.warn).toHaveBeenCalledTimes(1);
+
+    const unchanged = await boot({
+      slim: { exclude: [gamed] },
+      plist: { [gamed]: true },
+      record: JSON.stringify([gamed]),
+    });
+    expect(unchanged.filesystem.writes).toEqual([]);
+
+    const emptyNeverWritten = await boot({ slim: {} });
+    expect(emptyNeverWritten.record).toBeUndefined();
+    expect(emptyNeverWritten.warn).not.toHaveBeenCalled();
+  });
+
+  it("counts a failed record write as a failed overrides write", async () => {
+    const failed = await boot({
+      slim: { categories: [], exclude: [diagnosticd] },
+      readback: { [diagnosticd]: "disabled" },
+      failing: "writeRecord",
+    });
+    expect(failed.outcome).toEqual({ result: expect.objectContaining({ mode: "slim" }) });
+    expect(failed.onSlimSkipped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: "could not write the launchd overrides file: disk full",
+        reason: "apply-failed",
+      }),
+    );
+    expect(failed.onSlimmed).not.toHaveBeenCalled();
   });
 });
