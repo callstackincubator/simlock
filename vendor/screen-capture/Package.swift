@@ -21,7 +21,7 @@
 //     other tool it runs.
 //
 // Its input mode (`simlock-screen-capture <UDID> --input`) also carries serve-sim's `HIDInjector.swift`,
-// without the Duo, Device Hub, pose, Home, app switcher and Lock paths (NOTICE.md, deviations 3 and 4).
+// without the Duo, Device Hub, pose and Home paths; its app switcher and Lock are `ButtonPlan`'s (NOTICE.md, deviations 3 and 4).
 //
 // The encoders are serve-sim's files rewritten here: `H264Encoder.swift`, `VideoEncoder.swift`,
 // `PixelBufferUtils.swift` and `Xcode.swift` now use public VideoToolbox, CoreVideo, CoreMedia and

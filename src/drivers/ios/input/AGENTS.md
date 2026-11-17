@@ -1,13 +1,13 @@
 # iOS device input
 
-Does: taps, scrolls, Home, keys and rotations on an iOS simulator, through `simlock-screen-capture <udid> --input`; a physical iPhone answers unavailable.
+Does: taps, scrolls, Home, the app switcher, Lock, keys and rotations on an iOS simulator, through `simlock-screen-capture <udid> --input`; a physical iPhone answers unavailable.
 Flows: [iOS driver](../AGENTS.md), [input](../../../input/AGENTS.md).
 
 ## Rules
 
-- The helper's HID client and the runtime rule for keys stay here; core and the input module name neither.
-- Home is `xcrun simctl` here and nowhere in the helper (one owner). Xcode 26 and later silently drop the HID home-button press, so Home launches `com.apple.springboard`; a failure is only logged. The app switcher, Lock and Back are dropped.
-- Keys are dropped, and the config says `keyboardUnavailable: true`, when the runtime is iOS 27 or later or cannot be read: the iOS 27 guest ignores injected keys.
+- The helper's HID client stays here; core and the input module do not name it.
+- Home is `xcrun simctl` here and nowhere in the helper (one owner). Home launches `com.apple.springboard`; a failure is only logged. `app_switcher` and `lock` go to the helper (ADR 0085). Back is dropped.
+- Keys go to the helper on every runtime, and the config never says `keyboardUnavailable`. A press the guest ignores is not detected.
 - The helper follows the driver's device-set rule: `SIMLOCK_IOS_DEVICE_SET` names the owned set under `simlock` and is absent under `default`. The daemon's own value never reaches it.
 - The open waits for the helper's first size frame (`READY_DEADLINE_MS` in `device-input.ts`), which it writes once its HID client is set up. A missing program, an early exit or no frame rejects the open, and the helper is stopped.
 - The config is always `portrait`, a rotation included: it is the size of the panel the taps land on. A foldable's helper sends the size again when the panel in use changes (ADR 0075 §4); a size equal to the held one is no change, and a frame that is not a size is warned about and kept out.
@@ -17,7 +17,7 @@ Flows: [iOS driver](../AGENTS.md), [input](../../../input/AGENTS.md).
 
 ## Known gaps
 
-- **No app switcher or Lock, and no keys on iOS 27 runtimes (#1024).**
+- **A CoreSimulator older than 1174.21 was not measured** for the Home and Lock presses (ADR 0085); a worker on one may ignore them silently.
 - **A screen that does not rotate ignores a rotation, and nothing tells the client** (the iPhone home screen, upside down on a Face ID iPhone). Rotation was checked on Xcode 26.4 (iOS 26.4 runtime) and Xcode 27.0 (iOS 26.4 and 27.0 runtimes) (#1080).
 - **A one-panel device's input follows its native frame**, so after a rotation taps and picture stay in the same frame; a foldable's follow the upright picture.
 - **Taps may vanish after a reboot under the lease.** After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, until the lease's input reopens.
