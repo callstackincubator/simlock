@@ -280,4 +280,41 @@ describe("the session path", () => {
       await vi.waitFor(() => expect(early.closed).toBeDefined());
     }
   });
+
+  it("closes every open session of a revoked token at once with 4003, and leaves other tokens' sessions and the token's lease", async () => {
+    for (const role of ["worker", "gateway"] as const) {
+      const { agent, daemon, make, port } = await farm(role);
+      const other = await make("other", "agent");
+      const sessions = await Promise.all(
+        [agent, agent, other].map(async (token) => {
+          const { session } = await openSession(port, token.secret);
+          await (session as Session).request("hello", hello);
+          return session as Session;
+        }),
+      );
+      const [first, second, bystander] = sessions as [Session, Session, Session];
+      if (role === "worker") {
+        const granted = await first.request("lease.request", {
+          model: "Pixel-A",
+          platform: "android",
+        });
+        expect(granted.ok).toBe(true);
+      }
+
+      await daemon.dispatch("token.revoke", { id: agent.token.id }, admin);
+
+      for (const revoked of [first, second]) {
+        await vi.waitFor(() =>
+          expect(revoked.closed).toEqual({ code: 4003, reason: "token revoked" }),
+        );
+      }
+      expect(bystander.closed).toBeUndefined();
+      expect((await bystander.request("identity.get")).ok).toBe(true);
+      expect((await openSession(port, agent.secret)).status).toBe(401);
+      if (role === "worker") {
+        const { leases } = await daemon.dispatch("lease.list", {}, admin);
+        expect(leases.map((lease) => lease.ownerId)).toEqual([agent.token.id]);
+      }
+    }
+  });
 });
