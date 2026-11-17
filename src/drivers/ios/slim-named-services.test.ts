@@ -160,7 +160,8 @@ describe("IosSimctlDriver makeReady writes the managed labels of a slim device",
       plist: { [gamed]: true },
       record: JSON.stringify([gamed]),
     });
-    expect(unchanged.filesystem.writes).toEqual([]);
+    expect(unchanged.filesystem.writes).toContain(overridesPath(slim18_5.udid));
+    expect(unchanged.filesystem.writes).not.toContain(recordPath(slim18_5.udid));
 
     const emptyNeverWritten = await boot({ slim: {} });
     expect(emptyNeverWritten.record).toBeUndefined();
