@@ -78,7 +78,7 @@ export interface ConnectSimlockOptions {
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake as an agent-role
- * session. Rejects with a `SimlockError` (`PROTOCOL_VERSION_UNSUPPORTED`,
+ * session (with `url` and `token`, as the token's role). Rejects with a `SimlockError` (`PROTOCOL_VERSION_UNSUPPORTED`,
  * `ADMIN_AUTHENTICATION_FAILED` never applies here since no credential is sent,
  * `DAEMON_CONNECTION_LOST` if the socket cannot be reached) without ever restarting the
  * daemon -- see `docs/internal/adr/0003-...md` §6. */

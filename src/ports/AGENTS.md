@@ -20,7 +20,7 @@ Lazy loading:
 - Only `uplink-websocket.ts`, `upgrade-router.ts` and `websocket-client.ts` name `ws`. The router also holds the session path's adapter (`SessionConnection`, `session-socket.ts`): one text message is one line, a binary one closes the socket, and it has its own `WebSocketServer` with a larger payload bound than the lease sockets'. The first two
   load it statically, so they stay out of the barrel (`index.ts`); tests get the uplink adapters
   from `testing.ts`. The last loads it with `import()` on its first `connect`, so in the CLI and
-  the MCP server only `simlock tunnel` ever loads it.
+  the MCP server only `simlock tunnel` and a remote typed client (`url` and `token`) load it.
 - `sqlite.ts` is the only file that names `node:sqlite`, loaded with a dynamic `import()` on first
   open. On a Node without it `open` throws `SqliteUnavailableError`.
 - `filterSqliteExperimentalWarning` drops Node's one SQLite `ExperimentalWarning` and no other. A
