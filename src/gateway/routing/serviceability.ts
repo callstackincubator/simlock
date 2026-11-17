@@ -221,6 +221,7 @@ function assessLeading(
       reason: "unresolvable-spec",
     };
   }
+  if (phonesOnlyEverywhere(known, request)) return phonesOnly(request);
   if (!known.some((worker) => listsModel(worker, request))) return unknownModel(request);
   if (!known.some((worker) => matchRequest(worker, request) !== undefined)) {
     const osVersion = request.osVersion ?? "default";
@@ -273,6 +274,25 @@ function unknownModel(request: RoutableRequest): Rejection {
     kind: "reject",
     message: `Unknown ${platform} model: ${request.model}`,
     reason: "unresolvable-spec",
+  };
+}
+
+// why: ADR 0084 §3: a plain request is refused with the phones-only message only when every known worker that has the platform says `virtualDevices: false`.
+function phonesOnlyEverywhere(known: readonly WorkerView[], request: RoutableRequest): boolean {
+  return known
+    .filter((worker) => hasPlatform(worker, request))
+    .every((worker) => catalogOf(worker, request)?.virtualDevices === false);
+}
+
+// why: ADR 0084 §3 and the issue's I3 word the gateway's refusal for the fleet ("Every worker with <platform> …"), unlike the single worker's "This worker serves only…" in `VirtualDevicesOffError`.
+function phonesOnly(request: RoutableRequest): Rejection {
+  const { platform } = request;
+  return {
+    ...unknownModel(request),
+    message:
+      `Every worker with ${platform} serves only enrolled physical ${platform} devices ` +
+      `(${platform}.virtualDevices is false); ask for a physical device ` +
+      "(--physical, or physical: true)",
   };
 }
 

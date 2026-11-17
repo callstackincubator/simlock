@@ -221,6 +221,8 @@ interface CatalogBucket {
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly slimCategories: Set<string>;
+  /** why: ADR 0084 §3: stays true only while every worker reporting the platform says `virtualDevices: false`. */
+  phonesOnly: boolean;
   readonly defaults: Set<string | undefined>;
   /** why: absent ones count as `undefined`, so one worker without a default image tag is a disagreement (ADR 0078 §3). */
   readonly imageTagDefaults: Set<string | undefined>;
@@ -252,7 +254,28 @@ function addCatalogEntry(
   entry: PlatformCatalog,
   workerId: string,
 ): void {
-  const bucket = byPlatform.get(entry.platform) ?? {
+  const bucket = byPlatform.get(entry.platform) ?? emptyBucket();
+  byPlatform.set(entry.platform, bucket);
+  addNames(bucket, entry, workerId);
+  addModelClasses(bucket.modelClasses, entry);
+  addCustomModels(bucket.customModels, entry);
+  bucket.phonesOnly &&= entry.virtualDevices === false;
+  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
+  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
+  bucket.defaults.add(entry.defaultRuntime);
+  bucket.imageTagDefaults.add(entry.defaultImageTag);
+  bucket.classDefaults.push(listedClassDefaults(entry));
+}
+
+function addNames(bucket: CatalogBucket, entry: PlatformCatalog, workerId: string): void {
+  for (const model of entry.models) annotate(bucket.models, model, workerId);
+  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
+  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
+  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
+}
+
+function emptyBucket(): CatalogBucket {
+  return {
     classDefaults: [],
     customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
@@ -263,20 +286,9 @@ function addCatalogEntry(
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
+    phonesOnly: true,
     slimCategories: new Set<string>(),
   };
-  byPlatform.set(entry.platform, bucket);
-  for (const model of entry.models) annotate(bucket.models, model, workerId);
-  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
-  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
-  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
-  addModelClasses(bucket.modelClasses, entry);
-  addCustomModels(bucket.customModels, entry);
-  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
-  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
-  bucket.defaults.add(entry.defaultRuntime);
-  bucket.imageTagDefaults.add(entry.defaultImageTag);
-  bucket.classDefaults.push(listedClassDefaults(entry));
 }
 
 /**
@@ -416,6 +428,7 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
             .sort()
             .slice(0, CATALOG_LIST_LIMITS.slimCategories),
         }),
+    ...(bucket.phonesOnly ? { virtualDevices: false as const } : {}),
     ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
     ...(agreedImageTag === undefined ? {} : { defaultImageTag: agreedImageTag }),
   };
