@@ -149,7 +149,6 @@ export {
 } from "./process-runner.js";
 export {
   type AccessEntry,
-  type DirectoryAccess,
   type DirectoryAccessReader,
   FakeDirectoryAccessReader,
   PowerShellDirectoryAccessReader,
