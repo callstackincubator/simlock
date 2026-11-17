@@ -238,6 +238,24 @@ describe("AndroidDriver", () => {
     },
   );
 
+  // why: On Windows a kill ends the child alone, and `emulator.exe`'s qemu child would keep its
+  // RAM; but an `adb` client can start the adb server as its child, and for a phone that is the
+  // shared 5037 server.
+  it("asks for its children to be killed with the emulator, and for no adb command", async () => {
+    const harness = await provisionedHarness();
+
+    await harness.driver.makeReady(harness.device);
+
+    const emulatorCalls = harness.runner.calls.filter(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const adbCalls = harness.runner.calls.filter((call) => call.command === binaries.adb);
+    expect(emulatorCalls.length).toBeGreaterThan(0);
+    expect(emulatorCalls.filter((call) => call.options.killChildren !== true)).toEqual([]);
+    expect(adbCalls.length).toBeGreaterThan(0);
+    expect(adbCalls.filter((call) => call.options.killChildren !== undefined)).toEqual([]);
+  });
+
   // why: The gRPC port follows the reserved console port, so two parallel leases never share one.
   it("puts the gRPC endpoint at the reserved console port plus 3000", async () => {
     const filesystem = await androidFilesystem();
@@ -542,12 +560,13 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("sends the emulator's output to <avd folder>/emulator.log, mode 0600, truncated at each start", async () => {
+  it("sends the emulator's output to <avd folder>/emulator.log, mode 0600, emptied in place at each start", async () => {
     const harness = await provisionedHarness();
     const logPath = `${avdDirectory}/simlock_one/simlock.avd/emulator.log`;
     await harness.filesystem.writeFileAtomic(logPath, "left by an earlier start\n", {
       mode: 0o644,
     });
+    const earlier = await harness.filesystem.stat(logPath);
 
     await harness.driver.makeReady(harness.device);
 
@@ -557,6 +576,10 @@ describe("AndroidDriver", () => {
     expect(launch?.options.stdio).toEqual({ file: logPath });
     await expect(harness.filesystem.readFile(logPath)).resolves.toBe("");
     expect((await harness.filesystem.lstat(logPath)).mode & 0o777).toBe(0o600);
+    expect(
+      (await harness.filesystem.stat(logPath)).identity,
+      "emulator.log was replaced by another file, not emptied",
+    ).toBe(earlier.identity);
   });
 
   it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError", async () => {

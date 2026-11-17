@@ -22,6 +22,7 @@ you run are copied below, so you need not open it for them.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Unit tests that import what the branch changed      | `pnpm test:changed`                                                                                |
 | One unit test file                                  | `pnpm exec vitest run --project unit <file>`                                                       |
+| Types across the project, before a commit           | `pnpm typecheck`                                                                                   |
 | One console DOM test file (`*.dom.test.tsx`)        | `pnpm exec vitest run --project ui-dom <file>`                                                     |
 | One timing file (`*.timing.test.ts`)                | `pnpm exec vitest run --project timing <file>`                                                     |
 | Fast e2e files (builds first)                       | `pnpm test:e2e <files>`                                                                            |
@@ -75,6 +76,9 @@ pages; it compares nothing. Open the pictures the change touched.
    artifact's notice and rows (`always-in-scope.md`).
 6. Never `git stash`, never the slow lane, never a check listed under
    "Checks agents never run"; the hooks and CI run them (toolchain).
+   Never `sed -i`: its flag differs between macOS and Linux, and a
+   pattern that misses changes nothing without an error. Change a file
+   with the Edit tool, or a script that fails when its match is missing.
 
 The issue body is the spec. Build exactly what it says, plus what
 `always-in-scope.md` lists. Do not claim, review, mark ready or merge.

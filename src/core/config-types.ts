@@ -166,11 +166,15 @@ export interface Config {
   readonly ios: {
     readonly defaultMode: DeviceMode;
     readonly defaultModels: DefaultModels;
+    /** why: false makes this worker serve only enrolled physical iOS devices (ADR 0084 §1). */
+    readonly virtualDevices: boolean;
   } & DriverConfigSection;
   readonly android: {
     /** why: the image tag an Android lease that names none gets where an image of it fits (ADR 0078 §1). */
     readonly defaultImageTag?: string;
     readonly defaultModels: DefaultModels;
+    /** why: false makes this worker serve only enrolled physical Android devices (ADR 0084 §1). */
+    readonly virtualDevices: boolean;
   } & DriverConfigSection;
   /**
    * why: ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
@@ -272,6 +276,8 @@ export interface DriverConfigEntry<Section = unknown> {
     simlockHome: string,
     settings: Readonly<Record<string, string | number | boolean>>,
   ) => Readonly<Record<string, string | number | boolean>>;
+  // why: ADR 0083 I4: runs on the merged config, after both layers, where a rule that spans keys of one section can be judged; it throws a `ConfigError`.
+  readonly check?: (section: never, config: Config) => void;
 }
 
 export interface ModuleConfigEntry {

@@ -83,6 +83,16 @@ export interface Filesystem {
   readFileFrom(path: string, offset: number): Promise<string>;
   writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
   /**
+   * why: replaces a file's contents in the same file (same identity), then sets its mode, so an
+   * existing 0644 file ends at `mode`. `writeFileAtomic` renames over the path, which Windows
+   * refuses with `EPERM` while another process holds the file open (#1662).
+   */
+  writeFileInPlace(
+    path: string,
+    contents: string,
+    options: { readonly mode: number },
+  ): Promise<void>;
+  /**
    * why: Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
    * decides who wins, which is the only way two processes racing to write one file both
    * end up agreeing about what it says. The file appears with its full contents, never
@@ -281,6 +291,15 @@ export class NodeFilesystem implements Filesystem {
       await rm(temporaryPath, { force: true });
       throw error;
     }
+  }
+
+  async writeFileInPlace(
+    path: string,
+    contents: string,
+    options: { readonly mode: number },
+  ): Promise<void> {
+    await writeFile(path, contents, { encoding: "utf8", mode: options.mode });
+    await chmod(path, options.mode);
   }
 
   async writeFileExclusive(
@@ -590,6 +609,25 @@ export class MemoryFilesystem implements Filesystem {
       ...this.#newEntry({ kind: "file", contents }),
       mode: options?.mode ?? DEFAULT_FILE_MODE,
     });
+  }
+
+  async writeFileInPlace(
+    path: string,
+    contents: string,
+    options: { readonly mode: number },
+  ): Promise<void> {
+    this.#failIfDefined(path);
+    path = this.#underResolvedParent(path);
+    const existing = this.#entries.get(path);
+
+    if (existing?.kind === "file") {
+      existing.contents = contents;
+      delete existing.bytes;
+      existing.mode = options.mode & 0o777;
+      return;
+    }
+
+    await this.writeFileAtomic(path, contents, options);
   }
 
   async writeFileExclusive(

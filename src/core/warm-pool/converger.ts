@@ -32,6 +32,7 @@ import {
   evaluate,
   type ResolvedTarget,
   readyCount,
+  reserveOnVirtualPlatforms,
   targetedDevices,
   type TargetKind,
   type TargetReport,
@@ -79,7 +80,7 @@ export interface WarmPoolOptions {
   readonly hasDriver: (platform: Platform) => boolean;
   readonly idle: { readonly shutdownAfterMs: number };
   /** why: the pool reads the catalog of a platform with a learned kind, to forget a kind whose model or runtime is gone. */
-  readonly catalog: Pick<DriverCatalog, "listCatalog">;
+  readonly catalog: Pick<DriverCatalog, "listCatalog" | "virtualDevices">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
   /** why: ADR 0068 §3: the pool starts nothing at `warming-paused` and sheds one idle device per reading. */
@@ -662,7 +663,9 @@ export class WarmPool {
       config: {
         enabled: this.options.config.enabled,
         maxConcurrentBoots: this.options.config.maxConcurrentBoots,
-        reserveRunning: this.options.config.reserveRunning,
+        reserveRunning: reserveOnVirtualPlatforms(this.options.config.reserveRunning, (platform) =>
+          this.options.catalog.virtualDevices(platform),
+        ),
         shutdownAfterMs: this.options.idle.shutdownAfterMs,
       },
       devices,

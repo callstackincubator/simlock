@@ -59,7 +59,7 @@ export type AcquisitionQueue = Pick<
 
 export interface LeaseAcquisitionCoordinatorOptions {
   readonly baselines: Pick<BaselineService, "current">;
-  readonly catalog: Pick<CatalogReader, "listCatalog">;
+  readonly catalog: Pick<CatalogReader, "listCatalog"> & Pick<DriverCatalog, "virtualDevices">;
   readonly claims: AcquisitionClaims;
   readonly components: Pick<ComponentInstaller, "install">;
   readonly decisions: AcquisitionDecision;

@@ -157,10 +157,23 @@ function isRange(osVersion: string): boolean {
 export function unreachableTarget(
   target: WarmTargetFigures,
   catalog: DriverCatalogEntry | undefined,
+  virtualDevices: boolean,
 ): DoctorFinding[] {
   const { model, osVersion, platform, short } = target;
   const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
   const name = PLATFORM_NAMES[platform];
+  if (!virtualDevices) {
+    return [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${named} cannot be met: ${platform}.virtualDevices is false`,
+        platform,
+        reason: "unknown-model",
+        remedy: `remove the target from warmPool.targets, or set ${platform}.virtualDevices true`,
+        target: named,
+      },
+    ];
+  }
   if (short === "runtime-missing") {
     if (osVersion !== undefined && isRange(osVersion)) {
       return [

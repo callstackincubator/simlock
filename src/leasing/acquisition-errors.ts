@@ -1,4 +1,9 @@
-import { noPhysicalMatch, type PhysicalRequest, UnknownModelError } from "../core/index.js";
+import {
+  type DeviceRequest,
+  noPhysicalMatch,
+  type PhysicalRequest,
+  UnknownModelError,
+} from "../core/index.js";
 import { type WaitingReason } from "./acquisition-planner.js";
 
 export class NoCapacityError extends Error {
@@ -34,6 +39,18 @@ export class PhysicalUnknownModelError extends UnknownModelError {
   constructor(request: PhysicalRequest) {
     super(request.platform, request.model, request.model === undefined ? request.class : undefined);
     this.message = noPhysicalMatch(request).message;
+  }
+}
+
+/** why: a plain lease on a platform whose `<platform>.virtualDevices` is false; the message names the key and both ways to ask for a physical device (ADR 0084 §2). */
+export class VirtualDevicesOffError extends UnknownModelError {
+  constructor(request: Pick<DeviceRequest, "class" | "model" | "platform">) {
+    super(request.platform, request.model, request.model === undefined ? request.class : undefined);
+    this.name = "VirtualDevicesOffError";
+    this.message =
+      `This worker serves only enrolled physical ${request.platform} devices ` +
+      `(${request.platform}.virtualDevices is false); ask for a physical device ` +
+      "(--physical, or physical: true)";
   }
 }
 

@@ -24,7 +24,8 @@
 //              `protocol:` and REVIEW.md's text; a stage agent with a `model`; a `code-reviewer`
 //              off Opus on a diff that touches a strict area (REVIEW.md, "Routing"), outside a
 //              replay; or a sub-agent starts a helper that is not `run_in_background: false`.
-//   git        a sub-agent runs `git stash`, `git rebase` (or `pull --rebase`), or a push that
+//   git        a sub-agent runs `git stash` (but `list` or `show`), `git rebase` (or `pull
+//              --rebase`), or a push that
 //              rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force`, `--delete`).
 //   gh         a sub-agent opens a PR without `--draft` (or a REST create without
 //              `draft=true`), opens one from a `-repro` branch, runs `gh pr ready`, or adds
@@ -34,7 +35,8 @@
 //              session assigns an issue by hand instead of through `claim.mjs`.
 //   body       any session posts a body or comment (`gh issue|pr comment|create|edit|close`,
 //              `gh api ... body=`) that `body-rules.mjs` rejects, or one the guard cannot read
-//              (built by `$(...)`, a backtick or a variable: use `--body-file`).
+//              (built by `$(...)`, a backtick or a variable the call does not set once to a
+//              literal: use `--body-file`).
 //   slow lane  any session runs vitest on an `e2e/slow-*` file, or the e2e project without a
 //              `!slow` tags filter; a sub-agent runs `pnpm test:e2e:slow` (or a physical lane);
 //              an agent other than `hardware-verifier` and `implementer` runs `slow-e2e.sh`
@@ -55,7 +57,6 @@ const SCRIPTS = new Set([
   "check",
   "test",
   "test:timing",
-  "typecheck",
   "typecheck:e2e",
   "typecheck:e2e:types",
   "lint",
@@ -284,12 +285,14 @@ function trackWrites(state, cmd) {
   }
 }
 
+const STASH_READS = new Set(["list", "show"]);
 const GIT_RULES = [
   {
-    when: (g) => g.sub === "stash",
+    when: (g) => g.sub === "stash" && !STASH_READS.has(g.rest.find((w) => !w.startsWith("-"))),
     reason:
       "Refused: never `git stash` in a delivery stage: every worktree shares one stash list, so " +
-      "a pop can take another agent's changes. Commit the work instead.",
+      "a pop can take another agent's changes. Commit the work instead. `git stash list` and " +
+      "`git stash show` only read, and pass.",
   },
   {
     when: (g) =>
@@ -479,7 +482,8 @@ function unreadable() {
   refuse(
     "Refused: the guard cannot read a body built by `$(...)`, a backtick or a variable, so it " +
       "cannot check its shape (delivery rule 12). Write the body to a file and pass " +
-      "`--body-file <file>` (`-F body=@<file>` for `gh api`).",
+      "`--body-file <file>` (`-F body=@<file>` for `gh api`). A variable reads fine when this " +
+      "call sets it once, to a literal path, in a command of its own before the use.",
   );
 }
 
@@ -752,7 +756,7 @@ if (tool === "Bash" && subAgent) {
       `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
         "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
         "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
-        'the commands under "Tests agents run".',
+        'the commands under "Tests agents run"; for types that is `pnpm typecheck`.',
     );
   }
 }

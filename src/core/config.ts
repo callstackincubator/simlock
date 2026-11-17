@@ -12,6 +12,7 @@ import {
   normalizeLayer,
   requireGatewayHttp,
   resolveStrategyName,
+  runDriverChecks,
   runModuleChecks,
   validateDeletedRetention,
   validateEventLogBounds,
@@ -204,6 +205,7 @@ export function configFromLayers(
   validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
   runModuleChecks(merged, modules);
+  runDriverChecks(merged, driverSections);
   if (role === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);

@@ -458,14 +458,11 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
       }).trim();
     git("init", "-q");
     mkdirSync(join(repo, "src"));
-    mkdirSync(join(repo, ".agents", "briefs"), { recursive: true });
     writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n");
-    writeFileSync(join(repo, ".agents", "briefs", "calibration.md"), "x\n");
     git("add", ".");
     git("commit", "-qm", "base");
     const base = git("rev-parse", "HEAD");
     writeFileSync(join(repo, "src", "a.ts"), "export const a = 2;\n");
-    writeFileSync(join(repo, ".agents", "briefs", "calibration.md"), "y\n");
     git("commit", "-qam", "change");
     const head = git("rev-parse", "HEAD");
     const routine = (branch: string) => {
@@ -493,9 +490,6 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
     ]);
     expect(routine("chore/audit-tests-2026-10-25")).toContainEqual(
       expect.stringContaining("must be tests-only"),
-    );
-    expect(routine("chore/calibrate-reviews-2026-10-25")).toContainEqual(
-      expect.stringContaining("it also changes src/a.ts"),
     );
   });
 

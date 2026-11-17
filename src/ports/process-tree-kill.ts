@@ -14,6 +14,8 @@ export function runLimits({
   };
 }
 
+export type WindowsKill = "child" | "children" | "tree";
+
 /**
  * why: Windows has no process groups, and a batch file runs under a `cmd.exe` wrapper
  * (`windows-command.ts`): signalling the wrapper alone would leave the script's own processes,
@@ -25,24 +27,60 @@ export function runLimits({
  * wrapper alone is killed as before.
  */
 function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
+  runWindowsKill(child, signal, "taskkill", ["/pid", String(pid), "/T", "/F"]);
+}
+
+/**
+ * why: `killChildren` (`ProcessRunOptions`): the child and the processes it started, never
+ * theirs, so `taskkill /T` does not fit. Windows keeps a dead parent's pid in its children's
+ * `ParentProcessId`, and pids are reused, so a listed process counts as a child only when it
+ * started after the child did. Should PowerShell fail, the child alone is killed.
+ */
+function killWindowsProcessAndChildren(
+  child: ChildProcess,
+  pid: number,
+  signal: NodeJS.Signals,
+): void {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$parent = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'`,
+    "if ($null -eq $parent) { exit 1 }",
+    `$children = @(Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${pid}' | Where-Object { $_.CreationDate -ge $parent.CreationDate })`,
+    `Stop-Process -Id ${pid} -Force`,
+    "foreach ($c in $children) { Stop-Process -Id $c.ProcessId -Force -ErrorAction SilentlyContinue }",
+  ].join("\n");
+  runWindowsKill(child, signal, "powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    Buffer.from(script, "utf16le").toString("base64"),
+  ]);
+}
+
+function runWindowsKill(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  command: string,
+  args: readonly string[],
+): void {
   const fallback = () => {
     if (isRunning(child)) child.kill(signal);
   };
-  const taskkill = spawnChildProcess("taskkill", ["/pid", String(pid), "/T", "/F"], {
+  const killer = spawnChildProcess(command, args, {
     stdio: "ignore",
     timeout: TASKKILL_TIMEOUT_MS,
     windowsHide: true,
   });
-  taskkill.once("error", fallback);
-  taskkill.once("exit", (code) => {
+  killer.once("error", fallback);
+  killer.once("exit", (code) => {
     if (code !== 0) fallback();
   });
 }
 
 /**
  * why: Signals the child's whole process group (children are spawned `detached`, so the group is
- * the unit that actually dies), or on Windows a batch file's whole tree and any other child
- * alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
+ * the unit that actually dies), or on Windows a batch file's whole tree, a `killChildren` child
+ * with its own children, and any other child alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
  * kill identically -- a timeout that only reached the direct child would leave a tool's own
  * subprocesses running.
  *
@@ -59,12 +97,13 @@ export function killProcessTree(
   child: ChildProcess,
   pid: number,
   signal: NodeJS.Signals,
-  wrapped: boolean,
+  windowsKill: WindowsKill,
 ): void {
   if (!isRunning(child)) return;
 
   if (process.platform === "win32") {
-    if (wrapped) killWindowsProcessTree(child, pid, signal);
+    if (windowsKill === "tree") killWindowsProcessTree(child, pid, signal);
+    else if (windowsKill === "children") killWindowsProcessAndChildren(child, pid, signal);
     else child.kill(signal);
     return;
   }

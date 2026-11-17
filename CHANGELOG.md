@@ -414,6 +414,58 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.8.0](https://github.com/callstackincubator/simlock/compare/v0.7.0...v0.8.0) (2026-11-17)
+
+### What's Changed
+
+- fix(daemon): the test dispatcher stores failures as production does by @V3RON in https://github.com/callstackincubator/simlock/pull/1504
+- fix(lint): in a merge the commit hook judges only the lines the merge adds by @V3RON in https://github.com/callstackincubator/simlock/pull/1506
+- fix(core): nuke --delete-devices destroys an unclaimed provisioning device by @V3RON in https://github.com/callstackincubator/simlock/pull/1518
+- feat(config): the worker sends gateway.headers on its uplink dial by @V3RON in https://github.com/callstackincubator/simlock/pull/1515
+- docs(adr): 0073 a worker may enrol the phones plugged into it by @V3RON in https://github.com/callstackincubator/simlock/pull/1505
+- feat(drivers): drivers list the phones on USB, enrolled or not by @V3RON in https://github.com/callstackincubator/simlock/pull/1511
+- feat(core): a worker enrols the phones plugged into it under devices.autoEnroll by @V3RON in https://github.com/callstackincubator/simlock/pull/1514
+- chore(agents): a spec session writes the design once, checks it against the code, then writes thin tasks by @V3RON in https://github.com/callstackincubator/simlock/pull/1521
+- fix(gateway): a generated lease id answers WORKER_UNREACHABLE until its worker reports after a restart by @V3RON in https://github.com/callstackincubator/simlock/pull/1530
+- fix(daemon): a relay lets go of its target Request once it answers by @V3RON in https://github.com/callstackincubator/simlock/pull/1533
+- docs(adr): propose 0074, an admission command ranks or refuses a gateway request (#1516) by @V3RON in https://github.com/callstackincubator/simlock/pull/1519
+- feat(leasing): a chosen lease id is refused with LEASE_ENDED after its lease ended by @V3RON in https://github.com/callstackincubator/simlock/pull/1526
+- feat(gateway): an admission command ranks or refuses each new request by @V3RON in https://github.com/callstackincubator/simlock/pull/1528
+- feat(gateway): a lease request's metadata reaches the admission command by @V3RON in https://github.com/callstackincubator/simlock/pull/1529
+- fix(core): nuke --delete-devices deletes quarantined virtual devices by @V3RON in https://github.com/callstackincubator/simlock/pull/1520
+- chore(deps): bump the npm-minor-and-patch group across 1 directory with 16 updates by @dependabot[bot] in https://github.com/callstackincubator/simlock/pull/1460
+- docs(adr): propose 0075, a foldable simulator streams the panel in use (#1531) by @V3RON in https://github.com/callstackincubator/simlock/pull/1532
+- feat(capture): a foldable simulator's stream shows the panel in use and switches on a fold by @V3RON in https://github.com/callstackincubator/simlock/pull/1536
+- feat(ios): taps land on the panel of a foldable that is in use by @V3RON in https://github.com/callstackincubator/simlock/pull/1559
+- chore(deps): bump the npm-minor-and-patch group with 10 updates by @dependabot[bot] in https://github.com/callstackincubator/simlock/pull/1543
+- chore(deps): bump pixelmatch from 7.1.0 to 8.0.0 by @dependabot[bot] in https://github.com/callstackincubator/simlock/pull/1544
+- fix(ios): a simulator's clone or create waits ios.simulator.createTimeoutMs and a late copy is deleted by @V3RON in https://github.com/callstackincubator/simlock/pull/1563
+- fix(ios): ios.*.bootTimeoutMs is one deadline taken before simctl boot by @V3RON in https://github.com/callstackincubator/simlock/pull/1575
+- chore(delivery): an upstream label and a weekly check-upstream routine by @V3RON in https://github.com/callstackincubator/simlock/pull/1576
+- docs(adr): propose 0077, the repository is a workspace and its packages release together (#1562) by @V3RON in https://github.com/callstackincubator/simlock/pull/1565
+- feat(e2e): the repository builds, checks and releases @simlock/e2e with option checking by @V3RON in https://github.com/callstackincubator/simlock/pull/1568
+- feat(e2e): the device provider leases, installs, renews and releases, with a Run tests from CI page by @V3RON in https://github.com/callstackincubator/simlock/pull/1572
+- refactor: split every file over 1,000 lines into topic files by @V3RON in https://github.com/callstackincubator/simlock/pull/1582
+- fix(delivery): review-inputs.sh resolves feature/<N>-adr to the feature by @V3RON in https://github.com/callstackincubator/simlock/pull/1611
+- docs(adr): propose 0078, an Android worker tries its default image tag first and falls back to none (#1590) by @V3RON in https://github.com/callstackincubator/simlock/pull/1591
+- feat(leasing): an Android worker tries its default image tag first (#1595) by @V3RON in https://github.com/callstackincubator/simlock/pull/1609
+- feat(android): doctor warns when no installed image has the default image tag by @V3RON in https://github.com/callstackincubator/simlock/pull/1616
+- feat(catalog): a worker's catalog names its default image tag and a gateway ranks by it by @V3RON in https://github.com/callstackincubator/simlock/pull/1615
+- docs(adr): propose 0079, one capture per device is shared and every capture sends a key frame every 5 s (#602) by @V3RON in https://github.com/callstackincubator/simlock/pull/1593
+- feat(screen-capture): iOS screen streams send a key frame at least every 5 s by @V3RON in https://github.com/callstackincubator/simlock/pull/1606
+- feat(android-screen): Android streams send a key frame at least every 5 s through scrcpy's reset video by @V3RON in https://github.com/callstackincubator/simlock/pull/1610
+- feat(stream): viewers of one device on a worker share one capture by @V3RON in https://github.com/callstackincubator/simlock/pull/1614
+- feat(stream): viewers through a gateway share one relay by @V3RON in https://github.com/callstackincubator/simlock/pull/1617
+- docs(adr): 0076 an iOS clone names only its own folders before its first boot by @V3RON in https://github.com/callstackincubator/simlock/pull/1564
+- feat(ios): a seed is copied unbooted from a throwaway simulator that is then deleted by @V3RON in https://github.com/callstackincubator/simlock/pull/1620
+- feat(ios): a leased simulator swaps its lineage's UDIDs for its own before its first boot by @V3RON in https://github.com/callstackincubator/simlock/pull/1626
+- fix(test): the drain-and-restart wait covers the restarted worker's catalog by @V3RON in https://github.com/callstackincubator/simlock/pull/1630
+- docs(adr): propose 0079, an Android worker may enrol phones reached over the network (#1589) by @V3RON in https://github.com/callstackincubator/simlock/pull/1594
+- feat(core): a phone's hardware serial is kept on its record, and one phone keeps one record by @V3RON in https://github.com/callstackincubator/simlock/pull/1622
+- feat(android): network phones under android.networkDevices by @V3RON in https://github.com/callstackincubator/simlock/pull/1627
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.7.0...v0.8.0
+
 ## [0.7.0](https://github.com/callstackincubator/simlock/compare/v0.6.0...v0.7.0) (2026-11-10)
 
 ### What's Changed

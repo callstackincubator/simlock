@@ -256,11 +256,13 @@ export function configValidators(
       ...driverValidators(driverSections, "ios"),
       defaultMode: stringUnion(["slim", "full"]),
       defaultModels: defaultModelsValidator,
+      virtualDevices: booleanValue,
     }),
     android: objectValidator({
       ...driverValidators(driverSections, "android"),
       defaultImageTag: imageTagValidator,
       defaultModels: defaultModelsValidator,
+      virtualDevices: booleanValue,
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),
