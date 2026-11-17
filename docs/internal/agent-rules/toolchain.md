@@ -55,8 +55,12 @@ list and this one the same.
   (`.agents/scripts/commit-msg-check.mjs`) refuses a subject on
   `<kind>/<n>` that is not `<type>(<scope>): <what> (#<n>)`, and on
   `bug/<n>-repro` one that is not `test: reproduce #<n> — <claim>`.
-- **Push hook:** Fallow's audit (the findings the branch adds against
-  `origin/main`), then the e2e typecheck.
+- **Push hook:** CI's Fallow command on the whole tree, the
+  `*.repo.test.ts` files, the protocol and docs-surface checks, then the
+  e2e typecheck. A test that reads the repository's files instead of
+  importing code is named `*.repo.test.ts` and runs in about a second:
+  `pnpm test:changed` selects it only when the branch edits the test
+  itself, so the hook runs every one.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. CI's Fallow
   (`fallow --ci`) checks the whole tree and fails on any dead-code finding
   or clone group, `warn` rules included; complexity fails above the

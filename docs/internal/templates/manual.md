@@ -7,7 +7,7 @@ rule in the root `AGENTS.md`. It says what a change must not break and the
 code does not show (documentation rule 7). Rationale lives in ADRs; history
 in git. Budget: `MANUAL_CHARACTERS` for one manual and
 `MANUALS_TOTAL_CHARACTERS` for all of them together, both in
-`src/docs-manuals.test.ts`. A new line fits in what is left or replaces
+`src/docs-manuals.repo.test.ts`. A new line fits in what is left or replaces
 one; raising either number is a change the review sees.
 
 Before you write a line, ask: would an agent that read the module's index
