@@ -38,7 +38,9 @@ describe("PowerShellDirectoryAccessReader", () => {
     const [call] = processRunner.calls;
     expect(call?.options.timeoutMs).toBe(10_000);
     expect(call?.options.env?.SIMLOCK_ACL_PATH).toBe("C:\\a'b\\data");
-    expect(call?.args.at(-1)).not.toContain("a'b");
+    const script = call?.args.at(-1) ?? "";
+    expect(script).toContain("-LiteralPath $env:SIMLOCK_ACL_PATH");
+    expect(script).not.toMatch(/a'{1,2}b/);
   });
 
   it.each([
