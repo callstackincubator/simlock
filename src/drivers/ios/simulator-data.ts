@@ -6,6 +6,7 @@ export interface IosDriverData {
   readonly name: string;
   readonly runtimeId: string;
   readonly udid: string;
+  readonly lineage?: readonly string[];
 }
 
 export function iosDriverData(device: DriverDevice): IosDriverData {
@@ -29,6 +30,7 @@ export function iosDriverData(device: DriverDevice): IosDriverData {
     // an older daemon stamped here is not read: the spec's mode is the only record of it (ADR 0007 §7).
     ...(typeof value.slimSignature === "string" ? { slimSignature: value.slimSignature } : {}),
     ...(typeof value.slimMarkToken === "string" ? { slimMarkToken: value.slimMarkToken } : {}),
+    ...(isUdidList(value.lineage) ? { lineage: value.lineage } : {}),
   };
 }
 
@@ -36,4 +38,8 @@ export function requireIosPlatform(platform: string): void {
   if (platform !== "ios") {
     throw new DriverCrashError(`iOS simctl driver cannot handle ${platform} device requests`);
   }
+}
+
+function isUdidList(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }

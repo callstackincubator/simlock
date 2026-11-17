@@ -13,6 +13,7 @@ import {
   type ProcessStreamOptions,
   type StreamingProcessHandle,
 } from "../../ports/index.js";
+import type { AndroidDriverConfig } from "./definition.js";
 import { AndroidDriver } from "./index.js";
 import { memoryAndroidSourceDatabase } from "./testing.js";
 
@@ -60,7 +61,9 @@ export interface Call {
   readonly options: ProcessRunOptions;
 }
 
-export type Override = (rest: readonly string[]) => ProcessResult | "hang" | undefined;
+export type Override = (
+  rest: readonly string[],
+) => ProcessResult | Promise<ProcessResult> | "hang" | undefined;
 
 export const OK = (stdout = ""): ProcessResult => ({ code: 0, stderr: "", stdout });
 
@@ -80,6 +83,9 @@ export class PhoneAdb implements ProcessRunner {
   packagesOutput: string | undefined;
   model = "SM-G991B";
   sdkLevel = "34";
+  hardwareSerial = "R58Y61A60HN";
+  qemuBoot = "";
+  qemuKernel = "0";
   onCall: ((rest: readonly string[]) => void) | undefined;
   readonly #overrides: Override[] = [];
 
@@ -132,6 +138,9 @@ export class PhoneAdb implements ProcessRunner {
       ["shell am get-current-user", this.userOutput],
       ["shell getprop ro.build.version.sdk", `${this.sdkLevel}\n`],
       ["shell getprop ro.product.model", `${this.model}\n`],
+      ["shell getprop ro.serialno", `${this.hardwareSerial}\n`],
+      ["shell getprop ro.boot.qemu", `${this.qemuBoot}\n`],
+      ["shell getprop ro.kernel.qemu", `${this.qemuKernel}\n`],
     ]);
     const answered = fixed.get(body);
     if (answered !== undefined) return OK(answered);
@@ -204,6 +213,7 @@ export async function world(
     readonly processRunner?: (phone: PhoneAdb) => ProcessRunner;
     readonly serverReply?: string;
     readonly listeners?: FakeTcpListenerFactory;
+    readonly config?: Partial<AndroidDriverConfig>;
   } = {},
 ): Promise<World> {
   const log: string[] = [];
@@ -220,6 +230,7 @@ export async function world(
     clock: new FakeClock(),
     database: await memoryAndroidSourceDatabase(),
     driverConfig: {},
+    ...(options.config === undefined ? {} : { config: options.config }),
     env: { ANDROID_HOME: sdk, ...options.env },
     filesystem,
     homeDirectory: home,

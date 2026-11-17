@@ -32,6 +32,19 @@ describe("Registry: physical devices (ADR 0022 §1)", () => {
     ]);
   });
 
+  it("keeps a physical record's hardware serial through a reload, and none for a record enrolled without", async () => {
+    const { enroll, reload } = await seededWorld();
+    await enroll("network", { driverDeviceId: "192.168.1.5:5555", hardwareSerial: "R58Y61A60HN" });
+    await enroll("usb");
+
+    const devices = (await reload()).snapshot.devices;
+
+    expect(devices.map((device) => [device.id, device.physical && device.hardwareSerial])).toEqual([
+      ["dev_network", "R58Y61A60HN"],
+      ["dev_usb", undefined],
+    ]);
+  });
+
   it.each(["ready", "leased", "reclaiming", "quarantined", "deleted"] as const)(
     "reloads a physical record in the %s state",
     async (target) => {

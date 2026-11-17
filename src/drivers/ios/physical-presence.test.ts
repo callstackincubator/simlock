@@ -121,7 +121,7 @@ describe("IosSimctlDriver physical handler: presence", () => {
   it("listPresentPhysical answers a paired, wired, unlocked given iPhone present, with its OS version", async () => {
     const lab = new Lab().list([listed(UDID_A)]).lock(UDID_A);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A]);
+    const result = await (await lab.driver()).listPresentPhysical([{ driverDeviceId: UDID_A }]);
 
     expect(result).toEqual([{ driverDeviceId: UDID_A, osVersion: "18.4", present: true }]);
   });
@@ -129,7 +129,7 @@ describe("IosSimctlDriver physical handler: presence", () => {
   it("listPresentPhysical answers a paired, wired, unlocked given iPhone with no reality present", async () => {
     const lab = new Lab().list([listed(UDID_A, { reality: undefined })]).lock(UDID_A);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A]);
+    const result = await (await lab.driver()).listPresentPhysical([{ driverDeviceId: UDID_A }]);
 
     expect(result).toEqual([{ driverDeviceId: UDID_A, osVersion: "18.4", present: true }]);
   });
@@ -137,7 +137,7 @@ describe("IosSimctlDriver physical handler: presence", () => {
   it("listPresentPhysical answers a wired, paired, simulated entry not present not-present, with no lock read", async () => {
     const lab = new Lab().list([listed(UDID_A, { reality: "simulated" })]);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A]);
+    const result = await (await lab.driver()).listPresentPhysical([{ driverDeviceId: UDID_A }]);
 
     expect(result).toEqual([{ driverDeviceId: UDID_A, present: false, reason: "not-present" }]);
     expect(lab.calls()).toEqual([LIST_ARGV]);
@@ -152,7 +152,14 @@ describe("IosSimctlDriver physical handler: presence", () => {
       ])
       .lock(UDID_A, { file: LOCKED });
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A, UDID_B, UDID_C, UDID_D]);
+    const result = await (
+      await lab.driver()
+    ).listPresentPhysical([
+      { driverDeviceId: UDID_A },
+      { driverDeviceId: UDID_B },
+      { driverDeviceId: UDID_C },
+      { driverDeviceId: UDID_D },
+    ]);
 
     expect(result).toMatchObject([
       { driverDeviceId: UDID_A, present: false, reason: "locked" },
@@ -166,7 +173,7 @@ describe("IosSimctlDriver physical handler: presence", () => {
   it("listPresentPhysical gives no entry for, and never runs a lock read for, a physical device not among the UDIDs it was given", async () => {
     const lab = new Lab().list([listed(UDID_A), listed(UDID_B)]).lock(UDID_A);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A]);
+    const result = await (await lab.driver()).listPresentPhysical([{ driverDeviceId: UDID_A }]);
 
     expect(result).toMatchObject([{ driverDeviceId: UDID_A, present: true }]);
     expect(result).toHaveLength(1);
@@ -182,7 +189,9 @@ describe("IosSimctlDriver physical handler: presence", () => {
       ])
       .lock(UDID_A);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A, UDID_B]);
+    const result = await (
+      await lab.driver()
+    ).listPresentPhysical([{ driverDeviceId: UDID_A }, { driverDeviceId: UDID_B }]);
 
     expect(result).toMatchObject([
       { driverDeviceId: UDID_A, present: true },
@@ -201,7 +210,9 @@ describe("IosSimctlDriver physical handler: presence", () => {
       ])
       .lock(UDID_A);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A, UDID_B]);
+    const result = await (
+      await lab.driver()
+    ).listPresentPhysical([{ driverDeviceId: UDID_A }, { driverDeviceId: UDID_B }]);
 
     expect(result).toMatchObject([
       { driverDeviceId: UDID_A, osVersion: "18.4", present: true },
@@ -217,7 +228,10 @@ describe("IosSimctlDriver physical handler: presence", () => {
         ...failure.script(listDocument([listed(UDID_A), listed(UDID_B)])),
       });
       const driver = await lab.driver();
-      const pending = driver.listPresentPhysical([UDID_A, UDID_B]);
+      const pending = driver.listPresentPhysical([
+        { driverDeviceId: UDID_A },
+        { driverDeviceId: UDID_B },
+      ]);
 
       const result = await expireAfter(
         lab,
@@ -243,7 +257,7 @@ describe("IosSimctlDriver physical handler: presence", () => {
 
     const result = await expireAfter(
       lab,
-      driver.listPresentPhysical([UDID_A, UDID_B]),
+      driver.listPresentPhysical([{ driverDeviceId: UDID_A }, { driverDeviceId: UDID_B }]),
       3,
       READ_LIMIT_MS,
     );
@@ -270,7 +284,9 @@ describe("IosSimctlDriver physical handler: presence", () => {
       .lock(UDID_A, script)
       .lock(UDID_B);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_A, UDID_B]);
+    const result = await (
+      await lab.driver()
+    ).listPresentPhysical([{ driverDeviceId: UDID_A }, { driverDeviceId: UDID_B }]);
 
     expect(result).toMatchObject([
       { driverDeviceId: UDID_A, present: false, reason: "not-present" },
@@ -284,7 +300,10 @@ describe("IosSimctlDriver physical handler: presence", () => {
       .lock(UDID_A)
       .lock(UDID_B);
     const driver = await lab.driver(new LockReadsTakeTime(lab.runner, lab.clock, 25_000));
-    const pending = driver.listPresentPhysical([UDID_A, UDID_B]);
+    const pending = driver.listPresentPhysical([
+      { driverDeviceId: UDID_A },
+      { driverDeviceId: UDID_B },
+    ]);
     const state = promiseState(pending);
     void pending.catch(() => undefined);
 
@@ -305,7 +324,9 @@ describe("IosSimctlDriver physical handler: presence", () => {
       .lock(UDID_B)
       .lock(UDID_A);
 
-    const result = await (await lab.driver()).listPresentPhysical([UDID_B, UDID_A]);
+    const result = await (
+      await lab.driver()
+    ).listPresentPhysical([{ driverDeviceId: UDID_B }, { driverDeviceId: UDID_A }]);
 
     expect(result).toMatchObject([
       { driverDeviceId: UDID_B, osVersion: "18.4", present: true },

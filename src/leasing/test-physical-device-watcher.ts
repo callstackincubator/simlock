@@ -258,10 +258,18 @@ export function eventsOf(harness: Harness, name: string) {
   return harness.bus.replay().filter((event) => String(event.event) === name);
 }
 
-export function readsOf(driver: FakeDriver): unknown[] {
+export function readEntriesOf(driver: FakeDriver): unknown[] {
   return driver.calls
     .filter((call) => call.operation === "listPresentPhysical")
     .map((call) => call.arguments[0]);
+}
+
+export function readsOf(driver: FakeDriver): unknown[] {
+  return readEntriesOf(driver).map((entries) =>
+    (entries as readonly { readonly driverDeviceId: string }[]).map(
+      (entry) => entry.driverDeviceId,
+    ),
+  );
 }
 
 const heldReclaims = new WeakMap<FakeDriver, number>();

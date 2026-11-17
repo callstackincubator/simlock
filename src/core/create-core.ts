@@ -259,6 +259,7 @@ export function createCore(options: CoreOptions): Core {
     eventBus: options.eventBus,
     leaseSave: () => port("leaseSave"),
     lifecycle: deviceLifecycle,
+    logger: options.logger,
     reclaim,
     registry,
     state: options.state,
@@ -444,6 +445,13 @@ export function createCore(options: CoreOptions): Core {
       await startup.converge(read);
       await dropReplacedBaselines();
       await listStartupSources(options.drivers, options.logger);
+      try {
+        await baselines.checkStale();
+      } catch (error: unknown) {
+        options.logger?.warn(
+          `could not check baselines at startup: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       warmPool.start();
       capacityObserver.start();
     },

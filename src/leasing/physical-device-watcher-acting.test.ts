@@ -105,10 +105,14 @@ describe("PhysicalDeviceWatcher acting on a device", () => {
 
     back(harness, "UDID-A");
     const gate = deferred();
-    vi.spyOn(harness.driver, "listPresentPhysical").mockImplementationOnce(async (ids) => {
+    vi.spyOn(harness.driver, "listPresentPhysical").mockImplementationOnce(async (enrolled) => {
       await gate.promise;
       return answer(
-        ids.map((driverDeviceId) => ({ driverDeviceId, present: false, reason: "not-present" })),
+        enrolled.map(({ driverDeviceId }) => ({
+          driverDeviceId,
+          present: false,
+          reason: "not-present",
+        })),
       );
     });
     harness.clock.advance(PROBE_MS);

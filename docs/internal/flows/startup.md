@@ -68,7 +68,8 @@ Before step 16, a driver with `deviceTcp` sweeps the reverse rules into 47000-47
        `device.shutdown` (initiator `startup-interrupted-reclaim`).
     3. Spent deletes: `shutdown` devices that may not be granted again are deleted
        inline. A failed delete is logged; the device stays `shutdown`.
-    4. Warm pool and capacity observer start. The pool closes the lease rows of its learned-kind
+    4. Baselines `checkStale` (a failure is logged), so a baseline the driver calls stale is known before the first lease.
+    5. Warm pool and capacity observer start. The pool closes the lease rows of its learned-kind
        record whose lease the registry no longer holds, and its first pass boots the recorded kinds.
 22. `queue.changed` with the first depth. Converge done → health `running`.
 

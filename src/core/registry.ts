@@ -575,6 +575,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       driverData: {},
       driverDeviceId: input.driverDeviceId,
       enrolledApps: [...input.apps],
+      ...(input.hardwareSerial === undefined ? {} : { hardwareSerial: input.hardwareSerial }),
       id: `dev_${this.options.idGenerator.generate()}`,
       physical: true,
       readyAt: now,
@@ -616,9 +617,11 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         throw error;
       }
     }
+    const { hardwareSerial: _previousSerial, ...unserialed } = settled;
     const updated: PhysicalDevice = {
-      ...settled,
+      ...unserialed,
       enrolledApps: [...input.apps],
+      ...(input.hardwareSerial === undefined ? {} : { hardwareSerial: input.hardwareSerial }),
       readyAt: this.options.clock.now(),
       spec: {
         class: input.class,
