@@ -148,7 +148,12 @@ export const COMMANDS: readonly CommandNode[] = [
   {
     name: "files",
     load: filesModule,
-    children: [{ name: "put", load: filesModule }],
+    children: [
+      { name: "put", load: filesModule },
+      { name: "get", load: filesModule },
+      { name: "list", load: filesModule },
+      { name: "rm", load: filesModule },
+    ],
   },
   { name: "mcp", load: () => import("./commands/mcp.js") },
   { name: "instructions", load: () => import("./commands/instructions.js") },
