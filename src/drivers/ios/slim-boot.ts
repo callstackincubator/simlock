@@ -23,6 +23,8 @@ import { type IosDriverData } from "./simulator-data.js";
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;
 const OVERRIDES_FILE_NAME = "disabled.plist";
+// why: ADR 0083 S2: the names the worker's `include` and `exclude` held at the last write.
+const RECORD_FILE_NAME = "simlock-managed.json";
 export const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
 const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
 
@@ -182,6 +184,15 @@ export class SlimBoot {
       if (!sameEntries(existing, merged)) {
         await this.#filesystem.mkdirp(folder, { mode: 0o700 });
         await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
+      }
+      const names = [...new Set([...(slim.include ?? []), ...(slim.exclude ?? [])])].sort();
+      if (names.length > 0) {
+        await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+        await this.#filesystem.writeFileAtomic(
+          join(folder, RECORD_FILE_NAME),
+          JSON.stringify(names),
+          { mode: 0o644 },
+        );
       }
     } catch (error: unknown) {
       writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
