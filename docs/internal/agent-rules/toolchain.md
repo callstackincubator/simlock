@@ -176,6 +176,41 @@ hand on a machine with a simulator, where
 bytes it wrote into Annex-B and counts each tag, and `ffprobe out.264` says
 whether they decode.
 
+## The simulator jail
+
+The same script builds `src/drivers/ios/jail/` (Swift, ours, no upstream) into
+`dist/jail/`: `libsimlock-jail.dylib` for the iOS Simulator and `simlock-jail`
+for the Mac, with `profile.sb` copied beside them. Each binary is compiled by
+`swiftc` once per CPU (arm64 and x86_64) and joined by `lipo`; one that did not
+build, or lost a slice, is left out with a warning, and the profile ships only
+beside both. Nothing in the driver uses them yet: the three files are the
+whole sandbox, and booting a simulator under it is done by hand.
+
+All of it rests on private Apple interfaces (`src/drivers/ios/jail/private.h`,
+the profile language, the `SIMCTL_CHILD_` environment of `simctl boot`), so a
+new macOS, Xcode or iOS runtime needs a check by hand:
+
+1. `simlock-jail compile profile.sb <out> NAME=VALUE ...` with the values
+   `profile.sb` lists at its top, every path a real path.
+2. `simctl boot` (never `bootstatus -b`, which drops the environment) with
+   `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` naming the library,
+   `SIMCTL_CHILD_SIMLOCK_JAIL_PROFILE` the compiled profile and
+   `SIMCTL_CHILD_SIMLOCK_JAIL_TOKEN` the same token the profile was given.
+3. `simlock-jail check` with the pid of that simulator's `launchd_sim` and of
+   its children exits 0, Settings opens, and an app installed from a folder
+   inside the simulator's own folder cannot list the worker's home.
+
+That was done on macOS 26.6 with Xcode 27.2 and the iOS 27.2 runtime, on Apple
+silicon, with an XCTest run and an agent-device session inside the jail. The
+x86_64 library slice has not run in a simulator. The unit lane covers only
+what the script does with the tools' results (`src/build-capture.test.ts`).
+
+What the jail changes for whoever boots under it: `simctl install`,
+`addmedia` and Xcode's test-runner install read their source inside the
+simulator, so it must be in a folder the profile allows; `simctl spawn` of a
+program of the Mac's is refused; a loopback port is reachable only when it
+was named at compile time.
+
 ## Slow lane
 
 Tests that start real simulators or emulators. Run them only through

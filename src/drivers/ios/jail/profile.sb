@@ -1,0 +1,136 @@
+;; why: the rules one jailed iOS simulator runs under. Everything is refused unless a rule below
+;; allows it, so a simulator reaches its own folders, the iOS runtime and the internet, and neither
+;; the worker's files nor another simulator. `simlock-jail compile` turns this file into the bytes
+;; the jail library applies, and takes the values as NAME=VALUE:
+;;
+;;   UDID      the simulator's UDID
+;;   TOKEN     the six characters the library puts in this simulator's socket folders
+;;   DEVICE    the simulator's own folder in its device set
+;;   RUNTIME   the runtime root of its iOS runtime
+;;   LIBRARY   the jail library itself, which every process of the simulator loads
+;;   HOME      the home folder of the user the worker runs as
+;;   XCODE     the selected Xcode's Contents folder
+;;   PORT      optional: one port on the worker's loopback the simulator may connect to
+;;
+;; why: every path is the real one (/private/var, never /var): the kernel compares what a symlink
+;; points at. A value that is missing stops the compile, so a simulator never boots under a
+;; profile with a hole where a path should be.
+(version 1)
+(deny default)
+
+(define (value name) (or (param name) (error (string-append name " is not set"))))
+(define (in name suffix) (string-append (value name) suffix))
+(define logs (in "HOME" (string-append "/Library/Logs/CoreSimulator/" (value "UDID"))))
+(define launchd-state (string-append "/private/var/tmp/com.apple.CoreSimulator.SimDevice." (value "UDID")))
+;; why: `launchd_sim` makes its socket folders in a folder all simulators share; the library
+;; starts their names with TOKEN, which is what lets one simulator's be told from another's.
+(define (socket-folders tail)
+  (regex (string-append "^/private/var/tmp/com\\.apple\\.launchd\\." (regex-quote (value "TOKEN")) "[^/]+" tail)))
+
+;; ---------- processes: only this simulator's own tree
+(allow process-fork)
+(allow process-exec*
+  (subpath (value "RUNTIME"))
+  (subpath (value "DEVICE"))
+  (subpath "/Library/Developer/PrivateFrameworks/CoreSimulator.framework")
+  ;; why: agent-device starts this helper of the worker's inside the simulator.
+  (subpath (in "HOME" "/.agent-device/snapshot-source")))
+(allow signal (target same-sandbox))
+(allow process-info* (target self))
+(allow process-info* (target same-sandbox))
+(allow system-sched (target same-sandbox))
+(allow process-codesigning process-iopolicy* mach-task-name mach-task-exception-port-set
+  system-suspend-resume system-memorystatus-control)
+
+;; ---------- host services: none
+;; why: there is no mach-lookup rule on purpose. CoreSimulator hands every simulator the host's
+;; bootstrap port, and with no rule the host's launchd refuses each lookup made through it.
+;; Lookups inside the simulator go to `launchd_sim`, which does not ask the sandbox.
+
+;; ---------- what the runtime needs from the kernel (seen in a census of a booting simulator)
+(allow sysctl-read)
+(allow syscall-unix syscall-mach syscall-mig system-fcntl system-mac-syscall sandbox-check)
+(allow ipc-posix-shm* ipc-posix-sem*)
+(allow iokit-open-user-client (iokit-user-client-class "RootDomainUserClient"))
+(allow iokit-get-properties)
+(allow system-socket system-fsctl socket-ioctl)
+;; why: iOS daemons hand sandbox extensions to each other, and no rule here can be widened by one.
+(allow file-issue-extension mach-issue-extension generic-issue-extension iokit-issue-extension
+  consume-extension)
+
+;; ---------- network: the internet, the leased loopback port, and unix sockets by list
+(allow network-outbound)
+(deny network-outbound (subpath "/"))
+(allow network-outbound
+  (literal "/private/var/run/mDNSResponder")
+  (literal "/private/var/run/syslog")
+  (literal "/private/var/run/.sim_diagnosticd_socket")
+  (subpath (value "DEVICE"))
+  (subpath launchd-state))
+;; why: the loopback rules stay last among the outbound rules: a path rule written after them
+;; cancels the port's exception. The sandbox counts the worker's own LAN address as loopback too.
+(deny network-outbound (remote ip "localhost:*"))
+(if (param "PORT")
+  (allow network-outbound (remote tcp (string-append "localhost:" (param "PORT")))))
+(allow network-bind network-inbound (local ip "*:*"))
+(allow network-bind network-inbound
+  (subpath (value "DEVICE"))
+  (subpath launchd-state)
+  (socket-folders "/"))
+
+;; ---------- files, read-only: the iOS runtime and the parts of the host it is built on
+(allow file-read* file-map-executable file-test-existence file-lock
+  (subpath (value "RUNTIME"))
+  (subpath "/System/Library")
+  (subpath "/System/iOSSupport")
+  (subpath "/System/Cryptexes")
+  (subpath "/System/Volumes/Preboot/Cryptexes")
+  (subpath "/usr/lib")
+  (subpath "/usr/share")
+  (subpath "/Library/Developer/CoreSimulator")
+  (subpath "/Library/Developer/PrivateFrameworks/CoreSimulator.framework")
+  (subpath "/private/var/db/timezone")
+  (literal "/private/etc/passwd")
+  (literal "/private/etc/group")
+  (literal "/private/etc/localtime")
+  (literal "/Library/Preferences/com.apple.networkd.plist")
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
+  (literal "/dev/dtracehelper")
+  (literal (value "LIBRARY")))
+;; why: what the worker shares with every lease and holds no lease's data: agent-device's test
+;; runner and helper, and the parts of Xcode a test run loads into the simulator.
+(allow file-read* file-map-executable file-test-existence file-lock
+  (subpath (in "HOME" "/.agent-device/apple-runner/derived"))
+  (subpath (in "HOME" "/.agent-device/snapshot-source"))
+  (subpath (in "XCODE" "/Developer/Platforms/iPhoneSimulator.platform"))
+  (subpath (in "XCODE" "/Developer/Platforms/iPhoneOS.platform"))
+  (subpath (in "XCODE" "/SharedFrameworks")))
+(allow file-read-data (literal "/"))
+;; why: a path is walked name by name, so the names on the way to an allowed folder can be seen;
+;; nothing beside or below them can.
+(allow file-read-metadata file-test-existence
+  (literal "/") (literal "/private") (literal "/private/var") (literal "/private/var/run")
+  (literal "/private/var/db") (literal "/private/var/tmp") (literal "/private/etc")
+  (literal "/private/tmp") (literal "/etc") (literal "/var") (literal "/tmp") (literal "/dev")
+  (literal "/usr") (literal "/System") (literal "/System/Volumes") (literal "/System/Volumes/Data")
+  (literal "/System/Volumes/Preboot") (literal "/Library") (literal "/Library/Preferences")
+  (literal "/Library/Developer") (literal "/Library/Developer/PrivateFrameworks")
+  (path-ancestors (value "RUNTIME"))
+  (path-ancestors (value "DEVICE"))
+  (path-ancestors (value "LIBRARY"))
+  (path-ancestors logs)
+  (path-ancestors (in "HOME" "/.agent-device/apple-runner/derived"))
+  (path-ancestors (in "XCODE" "/Developer/Platforms/iPhoneSimulator.platform")))
+
+;; ---------- files, read-write: this simulator only
+(allow file-read* file-write* file-map-executable file-ioctl file-test-existence file-lock
+  file-clone file-link
+  (subpath (value "DEVICE"))
+  (subpath logs)
+  (subpath launchd-state)
+  (socket-folders "(/|$)"))
+(allow file-write-data file-ioctl
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper"))
+;; why: Xcode and `simctl launch --console-pty` attach an app to a pseudo-terminal whose name is
+;; not known before the boot, so every one of the worker's user can be opened.
+(allow file-read* file-write-data file-ioctl (regex #"^/dev/ttys[0-9]+$"))

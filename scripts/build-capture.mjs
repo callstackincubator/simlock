@@ -5,13 +5,15 @@
 // program of vendor/screen-capture/ is built with its own `swift build --product` and copied to
 // dist/bin/ — one failing does not skip the other, and the daemon reports the streams it lost.
 // Anywhere else the Swift build is skipped with a note, and the daemon reports iOS streams as
-// unavailable.
+// unavailable. On the same Mac the simulator jail of src/drivers/ios/jail/ is built too: its
+// library for the iOS Simulator and its `simlock-jail` program for the Mac, into dist/jail/ beside
+// the profile the program compiles.
 // Each artifact ships with its upstream's NOTICE.md and LICENSES/ in dist/vendor/<dir>/, because the
 // package publishes dist/ and Apache-2.0 §4(a) asks that whoever gets a binary gets its license too.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -106,5 +108,76 @@ function buildIosCapture() {
   if (copied.length > 0) copyNotices("screen-capture");
 }
 
+// why: SwiftPM builds for the Mac only, and the jail library is loaded inside simulator processes,
+// so each artifact is compiled by `swiftc` against the SDK it runs on, one slice per CPU, and
+// `lipo` joins the slices. Both CPUs, because an Intel Mac is a worker too and its simulators
+// run x86_64 code.
+function buildUniversalSwift({ output, what, sdk, triple, source, flags }) {
+  const jail = join(root, "src/drivers/ios/jail");
+  const scratch = join(root, "node_modules/.cache/simlock-jail");
+  const slices = [];
+  for (const arch of ["arm64", "x86_64"]) {
+    const slice = join(scratch, arch, basename(output));
+    mkdirSync(dirname(slice), { recursive: true });
+    const args = [
+      "--sdk",
+      sdk,
+      "swiftc",
+      "-O",
+      "-module-name",
+      "SimlockJail",
+      "-target",
+      triple(arch),
+    ];
+    args.push("-import-objc-header", join(jail, "private.h"), ...flags, join(jail, source));
+    const compiled = spawnSync("xcrun", [...args, "-o", slice], { stdio: "inherit" });
+    if (compiled.status === 0) slices.push(slice);
+  }
+  mkdirSync(dirname(output), { recursive: true });
+  const joined =
+    slices.length === 2 &&
+    spawnSync("xcrun", ["lipo", "-create", ...slices, "-output", output], { stdio: "inherit" })
+      .status === 0;
+  if (!joined) {
+    console.warn(
+      `build-capture: could not build ${basename(output)} (is Xcode installed and selected?); ${what} will be unavailable`,
+    );
+    return false;
+  }
+  chmodSync(output, 0o755);
+  return true;
+}
+
+function buildSimulatorJail() {
+  if (process.platform !== "darwin") {
+    console.log("build-capture: not macOS, skipping the simulator jail");
+    return;
+  }
+  // why: iOS 16 is the oldest runtime the iOS driver leases, and macOS 14 the oldest Mac the
+  // capture programs run on.
+  const library = buildUniversalSwift({
+    output: join(dist, "jail/libsimlock-jail.dylib"),
+    what: "the simulator jail",
+    sdk: "iphonesimulator",
+    triple: (arch) => `${arch}-apple-ios16.0-simulator`,
+    source: "Jail.swift",
+    flags: ["-parse-as-library", "-emit-library"],
+  });
+  const program = buildUniversalSwift({
+    output: join(dist, "jail/simlock-jail"),
+    what: "the simulator jail's profile compiler",
+    sdk: "macosx",
+    triple: (arch) => `${arch}-apple-macos14.0`,
+    source: "main.swift",
+    flags: ["-lsandbox"],
+  });
+  // why: the profile is compiled per simulator on the worker, so it ships as text; it is of no
+  // use without both of the others.
+  if (library && program) {
+    copyFileSync(join(root, "src/drivers/ios/jail/profile.sb"), join(dist, "jail/profile.sb"));
+  }
+}
+
 copyScrcpyServer();
 buildIosCapture();
+buildSimulatorJail();
