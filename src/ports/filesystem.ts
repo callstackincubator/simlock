@@ -1002,7 +1002,8 @@ function fileBytes(entry: { readonly contents: string; readonly bytes?: Uint8Arr
  * path style passes on every host; production code keeps `node:path`.
  */
 function memoryPath(path: string): string {
-  return path.replace(/^[A-Za-z]:(?=[\\/]|$)/, "").replaceAll("\\", "/");
+  const absolute = path.replace(/^[A-Za-z]:(?=[\\/]|$)/, "");
+  return /^[\\/]/.test(absolute) ? absolute.replaceAll("\\", "/") : path;
 }
 
 function joinMemoryPath(parent: string, child: string): string {
