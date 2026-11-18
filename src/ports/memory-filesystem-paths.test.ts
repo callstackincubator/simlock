@@ -37,6 +37,15 @@ describe("MemoryFilesystem path styles", () => {
     expect(await linked.realpath("/link")).toBe("/a");
     expect(await linked.readFile("/link/f")).toBe("y");
 
+    const injected = await withTree();
+    injected.defineFailure("D:\\a\\f", "EIO");
+    await expect(injected.readFile("/a/f")).rejects.toMatchObject({ code: "EIO" });
+
+    const replaced = await withTree();
+    replaced.defineSymlink("/link", "/a");
+    await replaced.replaceSymlink("/link", "D:\\a\\other");
+    expect(await replaced.readlink("/link")).toBe("/a/other");
+
     const relative = new MemoryFilesystem();
     await expect(relative.readFile("rel\\file")).rejects.toMatchObject({ code: "ENOENT" });
 

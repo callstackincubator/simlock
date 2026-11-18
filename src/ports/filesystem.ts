@@ -460,7 +460,6 @@ export class NodeFilesystem implements Filesystem {
   }
 
   async directorySize(path: string): Promise<number> {
-    path = memoryPath(path);
     let total = 0;
     for (const entry of await readdir(path, { withFileTypes: true })) {
       const child = join(path, entry.name);
