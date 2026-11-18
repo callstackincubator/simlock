@@ -27,6 +27,7 @@ import {
   gibibyte,
   outputCapture,
   runningDaemons,
+  settle,
   startInMemoryDaemon,
   temporaryDirectories,
 } from "./test-index.js";
@@ -637,9 +638,6 @@ describe("CLI: a start goes through the service (#830)", () => {
   });
 });
 
-// why: `setTimeout(0)` waits one clock tick on Windows (about 15 ms), and 1,000 of them per case outlast the test's timeout.
-const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
-
 describe("CLI: a start through a service that fails (#830)", () => {
   it("fails at the 20 s deadline with DAEMON_STARTUP_FAILED and the daemon.log lines written since the start", async () => {
     const startError =
@@ -696,10 +694,11 @@ describe("CLI: a start through a service that fails (#830)", () => {
             return code;
           },
         );
-        for (let tick = 0; tick < 500 && !settled; tick += 1) {
-          clock.advance(50);
-          await turn();
-          await turn();
+        // why: `settle` waits one timer tick, about 15 ms on Windows, so the clock moves in whole seconds to keep the 20 s deadline within a few hundred ticks.
+        for (let tick = 0; tick < 40 && !settled; tick += 1) {
+          clock.advance(1_000);
+          await settle();
+          await settle();
         }
         expect(settled, `${testCase.label}: not settled at ${String(clock.now())}ms`).toBe(true);
         expect(await exitCode, testCase.label).toBe(1);
