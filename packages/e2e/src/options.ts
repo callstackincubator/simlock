@@ -11,6 +11,7 @@ export interface SimlockDevicesOptions {
   ttlMs?: number | undefined;
   queueMs?: number | undefined;
   installConcurrency?: number | undefined;
+  runId?: string | undefined;
 }
 
 export interface ProviderOptions {
@@ -26,6 +27,7 @@ export interface ProviderOptions {
   ttlMs: number;
   queueMs: number;
   installConcurrency: number;
+  runId?: string;
 }
 
 const KNOWN = new Set([
@@ -41,6 +43,7 @@ const KNOWN = new Set([
   "ttlMs",
   "queueMs",
   "installConcurrency",
+  "runId",
 ]);
 
 const DEFAULT_TTL_MS = 180_000;

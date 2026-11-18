@@ -693,6 +693,33 @@ describe("createProvider renewals", () => {
 });
 
 // why: createProvider is the seam the spec names (I7); see the first describe.
+describe("createProvider run id", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("allocate, heartbeat and release all send the `runId` option when there is one, and the runner's run id when there is none", async () => {
+    for (const [patch, sent] of [
+      [{ runId: "nightly-7" }, "nightly-7"],
+      [{}, "0123456789abcdef-run"],
+    ] as const) {
+      const steady = farm();
+      const held = provider(steady.load, patch);
+      const lease = await held.acquire(request().request);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await held.release(lease, ending());
+
+      const calls = [...steady.of("allocate"), ...steady.of("heartbeat"), ...steady.of("release")];
+      expect(calls.map((call) => call.method)).toEqual(["allocate", "heartbeat", "release"]);
+      expect(calls.map((call) => call.options["runId"])).toEqual([sent, sent, sent]);
+    }
+  });
+});
+
+// why: createProvider is the seam the spec names (I7); see the first describe.
 describe("createProvider release", () => {
   it("releases a held lease at the farm, logs and resolves when that fails, and does nothing for a lease it does not hold", async () => {
     const held = farm();
