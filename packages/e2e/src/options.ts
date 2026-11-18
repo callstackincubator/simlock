@@ -146,6 +146,7 @@ export function checkOptions(options: SimlockDevicesOptions): ProviderOptions {
   const osVersion = checkOptionalString("osVersion", given["osVersion"]);
   const imageTag = checkOptionalString("imageTag", given["imageTag"]);
   const deviceBaseline = checkOptionalString("deviceBaseline", given["deviceBaseline"]);
+  const runId = checkOptionalString("runId", given["runId"]);
   return {
     url,
     token,
@@ -155,6 +156,7 @@ export function checkOptions(options: SimlockDevicesOptions): ProviderOptions {
     ...(imageTag === undefined ? {} : { imageTag }),
     ...(deviceMode === undefined ? {} : { deviceMode }),
     ...(deviceBaseline === undefined ? {} : { deviceBaseline }),
+    ...(runId === undefined ? {} : { runId }),
     extraApps,
     ttlMs: checkNumber(
       "ttlMs",
