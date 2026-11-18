@@ -556,21 +556,23 @@ describe("Dispatcher: lease.release-all", () => {
   });
 });
 
-const roomForFour: Config["capacity"] = {
-  config: {
-    limits: {
-      android: { maxDevices: 1, maxRunning: 1 },
-      ios: { maxDevices: 4, maxRunning: 4 },
-      maxRunning: 5,
+function roomFor(devices: number): Config["capacity"] {
+  return {
+    config: {
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: devices, maxRunning: devices },
+        maxRunning: devices + 1,
+      },
+      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     },
-    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
-  },
-  strategy: "resource",
-};
+    strategy: "resource",
+  };
+}
 
 describe("Dispatcher: lease.release-run", () => {
   it("ends the leases of the run the caller holds, with reason explicit, and answers their ids", async () => {
-    const { dispatcher, eventBus, registry } = await buildDispatcher({ capacity: roomForFour });
+    const { dispatcher, eventBus, registry } = await buildDispatcher({ capacity: roomFor(4) });
     const lease = async (principal: string, requesterId: string, runId: string) =>
       (
         await dispatcher.dispatch(
@@ -598,5 +600,72 @@ describe("Dispatcher: lease.release-run", () => {
         .filter((event) => event.event === "lease.released")
         .map((event) => (event.payload as { reason: string }).reason),
     ).toEqual(["explicit", "explicit"]);
+  });
+
+  it("cancels the queued requests of the run the caller holds, rejects them cancelled and lists their ids", async () => {
+    const { dispatcher, eventBus, engine, registry } = await buildDispatcher({
+      capacity: roomFor(1),
+    });
+    const held = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", runId: "nightly-8" },
+      session({ principal: "tok_ci" }),
+    );
+    const queue = (principal: string, runId: string) =>
+      dispatcher
+        .dispatch(
+          "lease.request",
+          {
+            model: "iPhone 17 Pro",
+            osVersion: "26.5",
+            platform: "ios",
+            requesterId: `${principal}-${runId}`,
+            runId,
+          },
+          session({ principal }),
+        )
+        .then(
+          () => undefined,
+          (rejected: unknown) => rejected,
+        );
+    const mine = queue("tok_ci", "nightly-7");
+    await expect.poll(() => engine.queueDepth).toBe(1);
+    const otherRun = queue("tok_ci", "nightly-9");
+    await expect.poll(() => engine.queueDepth).toBe(2);
+    const otherOwner = queue("tok_other", "nightly-7");
+    await expect.poll(() => engine.queueDepth).toBe(3);
+    const myRequestId = engine
+      .waitingRequests()
+      .find((request) => request.requesterId === "tok_ci-nightly-7")?.id;
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+
+    expect(result).toEqual({ leaseIds: [], requestIds: [myRequestId] });
+    expect(await mine).toBeInstanceOf(RequestCancelledError);
+    expect(engine.queueDepth).toBe(2);
+    expect(registry.snapshot.leases.map((lease) => lease.id)).toEqual([held.lease.id]);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload),
+    ).toMatchObject([{ requestId: myRequestId, reason: "cancelled" }]);
+
+    await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-9" },
+      session({ principal: "tok_ci" }),
+    );
+    await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_other" }),
+    );
+    expect(await otherRun).toBeInstanceOf(RequestCancelledError);
+    expect(await otherOwner).toBeInstanceOf(RequestCancelledError);
   });
 });
