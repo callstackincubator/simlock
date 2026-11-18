@@ -18,6 +18,7 @@ import {
   modelClass,
   type Platform,
   RuntimeMissingError,
+  specMode,
   type TargetResolution,
   UnknownBaselineError,
   UnknownModelError,
@@ -167,6 +168,19 @@ export class AcquisitionSpecResolver {
     );
   }
 
+  /** why: a baseline's own mode is checked as soon as its spec is known, before anything is copied (ADR 0082 §2). */
+  #requireBaselineServed(name: string, spec: VirtualSpec): void {
+    const served = this.servedModes(spec.platform);
+    const mode = specMode(spec);
+    if (served.includes(mode)) return;
+    throw new ModeUnavailableError(
+      mode,
+      served,
+      `Baseline "${name}" is ${mode}, and this worker does not serve ${mode} iOS simulators ` +
+        `(ios.modes is ${JSON.stringify(served)})`,
+    );
+  }
+
   /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
   async #resolveBaseline(
     driver: Driver,
@@ -186,6 +200,7 @@ export class AcquisitionSpecResolver {
     }
     if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
     const spec = baselineSpec(current);
+    this.#requireBaselineServed(name, spec);
     if (request.except !== undefined && spec.mode !== "slim") {
       throw new BadDeviceRequestError(`except needs a slim lease (baseline "${name}" is full)`);
     }
