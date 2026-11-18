@@ -16,6 +16,7 @@ This page lists what each command accepts. For when and why to use a command, fo
 | [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | — |
+| [`simlock files`](#simlock-files) | Move files to and from your lease's folder on its worker, from another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#lease-files) |
 | [`simlock tunnel`](#simlock-tunnel) | Connect ports between your machine and a leased Android device or iOS simulator on another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#tunnels) |
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
@@ -80,7 +81,7 @@ These commands act on this machine and exit 2 in remote mode, with `` `simlock <
 
 A few commands differ in remote mode:
 
-- `simlock simctl` and `simlock adb` always run on the lease's worker, as `device.exec`, also when the farm is a standalone worker. A path in their arguments names a file on the worker.
+- `simlock simctl` and `simlock adb` always run on the lease's worker, as `device.exec`, also when the farm is a standalone worker. A path in their arguments names a file on the worker; [`simlock files put`](#simlock-files) uploads one.
 - Without `--lease`, `simctl`, `adb` and `rotate` use the one lease whose requester is this command's requester: `SIMLOCK_AGENT_ID`, else the agent session's id, else this process. Another requester's lease on the same token is never picked. With no such lease, or with several, the command is a usage error.
 - `simlock lease` whose requester is this process prints one notice saying that later commands need `SIMLOCK_AGENT_ID` or `--lease`.
 - `events --since` replays the farm's history; it never reads this machine's `history.db`.
@@ -227,6 +228,25 @@ simlock rotate <orientation> [--lease <lease-id>]
 | `--lease <lease-id>` | The lease to turn, before or after the orientation. | Your only lease |
 
 It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An orientation Simlock does not know, or several leases without `--lease`, is a usage error (exit 2). A lease on an Android emulator, a physical device or an Apple TV fails with `ROTATION_UNSUPPORTED` (exit 12). A simulator that cannot take input right now fails with `INPUT_UNAVAILABLE` (exit 1); run the command again.
+
+## simlock files
+
+Move files to and from your lease's folder on its worker, so a build made on this machine can be installed by `simlock adb` or `simlock simctl`. It needs `--url` or `SIMLOCK_URL`: on the daemon's own machine the folder is a local folder, and the command exits 2.
+
+```text
+simlock files put <file> [--name <name>] [--lease <lease-id>]
+simlock files get <name> [-o <file>] [--lease <lease-id>]
+simlock files list [--lease <lease-id>]
+simlock files rm <name> [--lease <lease-id>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--name <name>` | The name the file gets in the folder: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit | The file's own name |
+| `-o <file>` | Write the downloaded file here, whole or not at all | The file's bytes go to stdout |
+| `--lease <lease-id>` | The lease whose folder to use | The only lease held by your requester id |
+
+`put` prints `{"lease","name","size"}` as one JSON line; `list` prints the route's JSON, `{"files":[{"name","size"}]}`; `rm` prints nothing. A transfer has no size limit and no total time limit: it ends only when no byte has moved for 60 seconds, with `REMOTE_UNREACHABLE` (exit 1). The worker's limits and refusals keep their codes: `FILE_TOO_LARGE`, `LEASE_FILES_FULL`, `FILE_BUSY`, `UPLOAD_STALLED`, `UNKNOWN_LEASE` and `UNKNOWN_FILE` exit 1, `INSUFFICIENT_DISK_SPACE` exits 12. A missing file or a folder is a usage error (exit 2): a folder cannot be uploaded yet. After `simlock files put app-debug.apk`, `simlock adb install app-debug.apk` finds the file, because every command runs with the lease's folder as its working folder. A `simlock simctl` or `simlock adb` that fails after naming a path that exists on this machine prints one `notice` line on stderr saying the command ran on the worker; for a file it names the `simlock files put` command that uploads it, for a folder it says a folder cannot be uploaded yet.
 
 ## simlock tunnel
 

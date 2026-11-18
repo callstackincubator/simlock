@@ -43,6 +43,13 @@ Commands:
                               landscape-left or landscape-right
   tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <id>] [--url <url>]
                               Reach this machine's ports from a leased Android device
+  files put <file> [--name <name>] [--lease <id>]
+                              Upload a file to the lease's folder on its worker (needs --url)
+  files get <name> [-o <file>] [--lease <id>]
+                              Download a file from the lease's folder; stdout without -o
+  files list [--lease <id>]   List the files in the lease's folder
+  files rm <name> [--lease <id>]
+                              Delete a file from the lease's folder
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server

@@ -37,7 +37,7 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
   environment.stderr.write(`${JSON.stringify({ notice })}\n`);
 }
 
-// why: remote mode needs a valid URL and a token before anything connects, for a command that connects (`connectFarm`) and for `simlock mcp`, which connects only on a tool call.
+// why: remote mode needs a valid URL and a token before anything connects, for a command that connects (`connectFarm`), for `simlock mcp`, which connects only on a tool call, and for the HTTP commands (`simlock files`), so all refuse the same input with the same words.
 export async function checkedFarm(farm: RemoteFarm): Promise<{ url: string; token: string }> {
   const { checkedFarmUrl, FarmUrlError, farmTokenFits } =
     await import("../simlock-client/farm-url.js");
