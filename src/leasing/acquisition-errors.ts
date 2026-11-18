@@ -1,4 +1,5 @@
 import {
+  type DeviceMode,
   type DeviceRequest,
   noPhysicalMatch,
   type PhysicalRequest,
@@ -51,6 +52,18 @@ export class VirtualDevicesOffError extends UnknownModelError {
       `This worker serves only enrolled physical ${request.platform} devices ` +
       `(${request.platform}.virtualDevices is false); ask for a physical device ` +
       "(--physical, or physical: true)";
+  }
+}
+
+/** why: an iOS lease or target whose resolved mode `ios.modes` does not list (ADR 0082 §3); mapped to `MODE_UNAVAILABLE`, and the warm pool reads it as `mode-unavailable`. */
+export class ModeUnavailableError extends Error {
+  constructor(
+    readonly mode: DeviceMode,
+    readonly served: readonly DeviceMode[],
+    message: string,
+  ) {
+    super(message);
+    this.name = "ModeUnavailableError";
   }
 }
 

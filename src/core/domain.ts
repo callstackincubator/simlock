@@ -76,11 +76,16 @@ export interface PhysicalSpec {
 export type DeviceSpec = VirtualSpec | PhysicalSpec;
 
 /**
- * Why a warm target did not resolve to a spec: the platform has no driver on this machine, its
- * runtime is not installed (and a target never downloads), its model is not listed, or the driver
- * refused it some other way.
+ * why: Why a warm target did not resolve to a spec: the platform has no driver on this machine, its
+ * runtime is not installed (and a target never downloads), its model is not listed, its mode is
+ * not one the worker serves (ADR 0082), or the driver refused it some other way.
  */
-export type TargetRefusal = "no-driver" | "runtime-missing" | "unknown-model" | "unresolvable";
+export type TargetRefusal =
+  | "no-driver"
+  | "runtime-missing"
+  | "unknown-model"
+  | "mode-unavailable"
+  | "unresolvable";
 
 /** What the request resolver answers for a request that is not going to be granted a lease. */
 export type TargetResolution =

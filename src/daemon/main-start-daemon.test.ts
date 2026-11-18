@@ -478,6 +478,29 @@ describe("startDaemon", () => {
       .toEqual([{ failure_code: "RUNTIME_MISSING", requester_id: "second" }]);
   });
 
+  it("a started worker refuses an iOS lease in a mode its ios.modes leaves out", async () => {
+    const clock = new FakeClock(1_000);
+    const { daemon } = await start({
+      clock,
+      configOverrides: { ios: { modes: ["slim"] } },
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+    });
+    const session = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "agent",
+      role: "agent",
+    } as const;
+
+    await expect(
+      daemon.dispatch(
+        "lease.request",
+        { mode: "full", model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        session,
+      ),
+    ).rejects.toMatchObject({ code: "MODE_UNAVAILABLE" });
+  });
+
   it("establishes the instance identity once, and reuses it on the next start", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-identity-"));
     temporaryDirectories.push(directory);

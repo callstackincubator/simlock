@@ -41,6 +41,12 @@ function phonesOnlyLine(entry: CatalogGetOutput["platforms"][number]): string[] 
   ];
 }
 
+// why: the daemon sends `modes` only when one mode is served, so a missing field means both.
+function modesLine(entry: CatalogGetOutput["platforms"][number]): string[] {
+  if (entry.platform !== "ios") return [];
+  return [`  Modes served: ${(entry.modes ?? ["slim", "full"]).join(", ")}`];
+}
+
 function formatCatalog(response: CatalogGetOutput): string {
   if (response.platforms.length === 0) return "No platforms available.";
   return response.platforms
@@ -78,6 +84,7 @@ function formatCatalog(response: CatalogGetOutput): string {
         `Platform: ${entry.platform}`,
         ...phonesOnlyLine(entry),
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
+        ...modesLine(entry),
         ...(entry.defaultImageTag === undefined
           ? []
           : [`  Default image tag: ${esc(entry.defaultImageTag)}`]),

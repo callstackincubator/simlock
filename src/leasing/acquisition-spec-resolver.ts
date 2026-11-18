@@ -18,12 +18,13 @@ import {
   modelClass,
   type Platform,
   RuntimeMissingError,
+  specMode,
   type TargetResolution,
   UnknownBaselineError,
   UnknownModelError,
   type VirtualSpec,
 } from "../core/index.js";
-import { asError, VirtualDevicesOffError } from "./acquisition-errors.js";
+import { asError, ModeUnavailableError, VirtualDevicesOffError } from "./acquisition-errors.js";
 import { type LeaseAcquisitionCoordinatorOptions } from "./acquisition-ports.js";
 import {
   downloadingProgress,
@@ -46,6 +47,7 @@ export type AcquisitionSpecResolverOptions = Pick<
   | "defaultModes"
   | "drivers"
   | "modelPreferences"
+  | "servedModes"
 >;
 
 /** why: turns a request into the exact spec a driver resolves, and a baseline request into that baseline's spec, so the root and the workflow never resolve a spec themselves. */
@@ -54,6 +56,11 @@ export class AcquisitionSpecResolver {
 
   defaultMode(platform: Platform): DeviceMode {
     return this.options.defaultModes[platform] ?? "full";
+  }
+
+  /** why: the modes this worker serves on a platform; a platform with no `ios.modes` of its own serves both (ADR 0082 §1). */
+  servedModes(platform: Platform): readonly DeviceMode[] {
+    return this.options.servedModes[platform] ?? ["slim", "full"];
   }
 
   async resolveSpec(
@@ -115,6 +122,7 @@ export class AcquisitionSpecResolver {
         "except needs a slim lease (this worker's default mode is full)",
       );
     }
+    this.#requireServed(request.platform, mode);
     const range = requestedRange(request);
     const target =
       range === undefined
@@ -127,11 +135,50 @@ export class AcquisitionSpecResolver {
       allowDownload: options.allowDownload === true && range === undefined,
     });
     const spec = checkedSpec(resolved, request, mode);
+    this.#requireNotFallenBack(spec, mode);
     return {
       classOf: target.classOf,
       requirement: target.requirement ?? exactRequirement(spec),
       spec,
     };
+  }
+
+  /** why: the asked or default mode is checked before the spec is resolved, so a refused mode downloads nothing (ADR 0082 §2). */
+  #requireServed(platform: Platform, mode: DeviceMode): void {
+    const served = this.servedModes(platform);
+    if (served.includes(mode)) return;
+    const other = mode === "full" ? "slim" : "full";
+    throw new ModeUnavailableError(
+      mode,
+      served,
+      `This worker does not serve ${mode} iOS simulators (ios.modes is ${JSON.stringify(served)}); ` +
+        `ask for a ${other} one (--mode ${other}, or mode: "${other}")`,
+    );
+  }
+
+  /** why: a slim request the driver could only answer with a full spec (iOS below 18.5, ADR 0007 §4) is refused on a worker without full, not granted the device the operator turned off (ADR 0082 §2). */
+  #requireNotFallenBack(spec: VirtualSpec, asked: DeviceMode): void {
+    const served = this.servedModes(spec.platform);
+    if (asked !== "slim" || spec.mode === "slim" || served.includes("full")) return;
+    throw new ModeUnavailableError(
+      "full",
+      served,
+      `iOS ${spec.osVersion} cannot be slimmed, and this worker does not serve full iOS simulators ` +
+        `(ios.modes is ${JSON.stringify(served)}); ask for iOS 18.5 or newer`,
+    );
+  }
+
+  /** why: a baseline's own mode is checked as soon as its spec is known, before anything is copied (ADR 0082 §2). */
+  #requireBaselineServed(name: string, spec: VirtualSpec): void {
+    const served = this.servedModes(spec.platform);
+    const mode = specMode(spec);
+    if (served.includes(mode)) return;
+    throw new ModeUnavailableError(
+      mode,
+      served,
+      `Baseline "${name}" is ${mode}, and this worker does not serve ${mode} iOS simulators ` +
+        `(ios.modes is ${JSON.stringify(served)})`,
+    );
   }
 
   /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
@@ -153,6 +200,7 @@ export class AcquisitionSpecResolver {
     }
     if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
     const spec = baselineSpec(current);
+    this.#requireBaselineServed(name, spec);
     if (request.except !== undefined && spec.mode !== "slim") {
       throw new BadDeviceRequestError(`except needs a slim lease (baseline "${name}" is full)`);
     }
@@ -385,6 +433,7 @@ function checkedSpec(resolved: VirtualSpec, request: DeviceRequest, mode: Device
 function refusalOf(error: unknown): Exclude<TargetResolution, { spec: VirtualSpec }>["refusal"] {
   if (error instanceof RuntimeMissingError) return "runtime-missing";
   if (error instanceof UnknownModelError) return "unknown-model";
+  if (error instanceof ModeUnavailableError) return "mode-unavailable";
   return "unresolvable";
 }
 

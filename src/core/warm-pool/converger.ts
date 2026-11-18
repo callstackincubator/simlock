@@ -44,6 +44,8 @@ import { type LearnedKind, type LearnedKindMatch, LearnedKinds } from "./learned
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
+  /** why: the iOS modes the worker serves (ADR 0082); absent means both. */
+  readonly servedModes?: readonly DeviceMode[] | undefined;
   /** why: a learned baseline kind is warmed from the baseline's newest version, and goes when the baseline is removed or stale. */
   readonly baselines: {
     current(
@@ -180,6 +182,7 @@ export class WarmPool {
       clock: options.clock,
       hasDriver: options.hasDriver,
       logger: this.#logger,
+      servedModes: options.servedModes,
       onAnswer: () => this.#trigger(),
     });
   }
@@ -494,7 +497,10 @@ export class WarmPool {
     const kinds = this.#learnedKinds();
     for (const kind of this.#catalogCheck.gone(kinds)) {
       this.#recording("forget a kind", () => this.#learned.forget(kind.spec));
-      this.#logger.info("a warm pool learned kind was forgotten: its model or runtime is gone", {
+      const why = this.#catalogCheck.modeNotServed(kind)
+        ? "its mode is not served"
+        : "its model or runtime is gone";
+      this.#logger.info(`a warm pool learned kind was forgotten: ${why}`, {
         model: kind.spec.model,
         osVersion: kind.spec.osVersion,
         platform: kind.spec.platform,

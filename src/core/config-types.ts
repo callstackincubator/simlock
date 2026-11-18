@@ -166,6 +166,8 @@ export interface Config {
   readonly ios: {
     readonly defaultMode: DeviceMode;
     readonly defaultModels: DefaultModels;
+    /** why: the iOS device modes this worker serves (ADR 0082 §1); a request or target of another mode is refused. */
+    readonly modes: readonly DeviceMode[];
     /** why: false makes this worker serve only enrolled physical iOS devices (ADR 0084 §1). */
     readonly virtualDevices: boolean;
   } & DriverConfigSection;
