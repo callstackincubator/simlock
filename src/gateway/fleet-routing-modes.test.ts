@@ -150,7 +150,7 @@ describe("FleetLeaseCoordinator routes an iOS lease by the modes each worker ser
     expect(
       createRoutingPolicy("warm-then-free").explain({ ...REQUEST, mode: "full" }, workers.views()),
     ).toMatchObject([
-      { reason: { reason: "mode-unavailable" }, workerId: "wrk_a" },
+      { filter: { reason: "mode-unavailable" }, workerId: "wrk_a" },
       { workerId: "wrk_b" },
     ]);
   });

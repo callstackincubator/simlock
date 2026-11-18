@@ -15,6 +15,7 @@ import {
   listsModel,
   matchRequest,
   physicalMatch,
+  servesMode,
   wantedClass,
   withBaseline,
 } from "./request-match.js";
@@ -25,6 +26,7 @@ import { takesRequests } from "./stages/takes-requests.js";
 export type RejectionCode =
   | "NO_CAPACITY"
   | "NO_DRIVER"
+  | "MODE_UNAVAILABLE"
   | "UNKNOWN_MODEL"
   | "RUNTIME_MISSING"
   | "CAPABILITY_MISSING"
@@ -50,7 +52,8 @@ export interface Rejection {
     | { readonly capabilities: readonly string[] }
     | { readonly name: string }
     | { readonly baseline: string; readonly field: string }
-    | { readonly baseline: string; readonly reason: string };
+    | { readonly baseline: string; readonly reason: string }
+    | { readonly platform: "ios"; readonly mode: "slim" | "full"; readonly served: readonly [] };
   readonly reason: "no-worker" | "unresolvable-spec";
 }
 
@@ -212,6 +215,10 @@ function assessLeading(
       reason: "unresolvable-spec",
     };
   }
+  const withPlatform = known.filter((worker) => hasPlatform(worker, request));
+  if (!withPlatform.some((worker) => servesMode(worker, request))) {
+    return modeUnavailable(request, withPlatform);
+  }
   if (request.physical === true) {
     if (known.some((worker) => physicalMatch(worker, request, "enrolled"))) return undefined;
     return {
@@ -246,7 +253,9 @@ function assessServing(
   const fits =
     request.physical === true
       ? takers.some((worker) => physicalMatch(worker, request, "enrolled"))
-      : takers.some((worker) => matchRequest(worker, request) !== undefined);
+      : takers.some(
+          (worker) => servesMode(worker, request) && matchRequest(worker, request) !== undefined,
+        );
   return fits ? undefined : noWorker();
 }
 
@@ -293,6 +302,25 @@ function phonesOnly(request: RoutableRequest): Rejection {
       `Every worker with ${platform} serves only enrolled physical ${platform} devices ` +
       `(${platform}.virtualDevices is false); ask for a physical device ` +
       "(--physical, or physical: true)",
+  };
+}
+
+// why: ADR 0082 §4, I6: the mode is the request's own or, for a baseline, the first holder's; the message names the other mode as the way out.
+function modeUnavailable(request: RoutableRequest, withPlatform: readonly WorkerView[]): Rejection {
+  const [first] = withPlatform;
+  const mode = first === undefined ? undefined : withBaseline(first, request).mode;
+  if (mode === undefined) return noWorker();
+  const other = mode === "full" ? "slim" : "full";
+  const message =
+    request.baseline === undefined
+      ? `No worker serves ${mode} iOS simulators; ask for a ${other} one (--mode ${other}, or mode: "${other}")`
+      : `Baseline "${request.baseline}" is ${mode}, and no worker that holds it serves ${mode} iOS simulators`;
+  return {
+    code: "MODE_UNAVAILABLE",
+    details: { mode, platform: "ios", served: [] },
+    kind: "reject",
+    message,
+    reason: "unresolvable-spec",
   };
 }
 

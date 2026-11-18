@@ -73,6 +73,7 @@ const GATEWAY_REASON_TEXT: Readonly<
   "baseline-mismatch": () => "Baseline is for another device",
   "baseline-stale": () => "Baseline is stale",
   "no-baseline": () => "Does not hold the baseline",
+  "mode-unavailable": () => "Mode not served",
   "no-driver": (platform) => `No ${platform === "ios" ? "iOS" : "Android"} support`,
   "no-free-physical": () => WAITING_REASON_TEXT["no-free-physical"](""),
   "not-chosen": () => "Not chosen this time",
