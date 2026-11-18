@@ -185,6 +185,7 @@ const LEASE_COLUMNS = [
   "ttl_deadline",
   "last_renewed_at",
   "id_chosen_by_requester",
+  "run_id",
 ] as const;
 
 const REQUEST_COLUMNS = [
@@ -221,6 +222,7 @@ const GRANT_COLUMNS = [
   "ttl_deadline",
   "last_renewed_at",
   "id_chosen_by_requester",
+  "run_id",
   "estimated_provision_ms",
   "estimated_boot_ms",
   "estimated_reclaim_ms",
@@ -321,6 +323,7 @@ function leaseValues(lease: LeaseRecord): SqliteValue[] {
     lease.ttlDeadline,
     lease.lastRenewedAt,
     flagValue(lease.idChosenByRequester),
+    lease.runId ?? null,
   ];
 }
 
@@ -402,6 +405,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       lease.ttlDeadline,
       lease.lastRenewedAt,
       flagValue(lease.idChosenByRequester),
+      lease.runId ?? null,
       grant.timing.estimatedProvisionMs,
       grant.timing.estimatedBootMs,
       grant.timing.estimatedReclaimMs,
@@ -598,6 +602,7 @@ function leaseFromRow(table: string, key: string, row: Row, idColumn: string): L
     lastRenewedAt: reader.int("last_renewed_at"),
     ownerId: reader.text("owner_id"),
     requesterId: reader.text("requester_id"),
+    ...present("runId", reader.optText("run_id")),
     ttlDeadline: reader.int("ttl_deadline"),
     ttlMs: reader.int("ttl_ms"),
   };
