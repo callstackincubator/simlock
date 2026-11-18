@@ -270,7 +270,8 @@ export class Emulator {
         ...launchArgs,
       ],
       // why: on Windows a kill otherwise ends `emulator.exe` alone, and its qemu child keeps
-      // running with the guest's RAM. Not a tree kill: qemu's `netsimd.exe` serves every emulator.
+      // running with the guest's RAM. Not a tree or process-group kill: qemu's `netsimd` serves
+      // every emulator.
       { env: this.#env(data), killChildren: true, stdio: { file: logPath } },
     );
     handle.unref();

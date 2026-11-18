@@ -10,7 +10,7 @@ This page follows one request from start to finish and names each idea on the wa
 A device is something your agent can run an app on. Simlock works with three kinds:
 
 - **iOS simulators**, on macOS.
-- **Android emulators**, on macOS or Linux.
+- **Android emulators**, on macOS, Linux or Windows.
 - **Physical devices**: an iPhone, iPad or Android phone that an operator plugged in and enrolled with `simlock device add`.
 
 Simlock creates, boots and deletes its own simulators and emulators, and keeps them apart from yours. By default Xcode's device list and your usual `adb devices` do not show them, which is why you reach them through `simlock simctl` and `simlock adb`. An operator can set `drivers.ios.deviceSet` to `default` to put Simlock's iOS simulators in Xcode's own list, so build tools find them by UDID. Either way, Simlock never changes a simulator or emulator it did not create.

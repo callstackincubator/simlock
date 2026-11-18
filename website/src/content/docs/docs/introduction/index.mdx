@@ -27,7 +27,7 @@ Simlock does not hide other devices or block `xcrun simctl`. It works because yo
 
 ## One machine or a fleet
 
-**One machine.** Install Simlock on the Mac or Linux machine where your agents run. Simlock runs a background process, the daemon, which starts by itself the first time you run a command. This machine is a **worker**: it owns its devices.
+**One machine.** Install Simlock on the Mac, Linux or Windows machine where your agents run. Simlock runs a background process, the daemon, which starts by itself the first time you run a command. This machine is a **worker**: it owns its devices.
 
 **A fleet.** When one machine is not enough, run a **gateway** and join several workers to it. Agents talk to the gateway's single address, and the gateway sends each request to a worker that can serve it. Workers connect out to the gateway, so they need no open inbound port. See [When you need a gateway](/simlock/docs/gateway).
 
