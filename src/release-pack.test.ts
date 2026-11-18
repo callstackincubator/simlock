@@ -81,7 +81,7 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
     const shims = join(root, "shims");
     mkdirSync(shims);
     if (process.platform === "win32") {
-      writeFakeCommand(shims, "shasum", '#!/bin/sh\nshift 2\nexec sha256sum "$@"\n');
+      writeFakeCommand(shims, "shasum", '#!/bin/sh\nshift 2\nexec sha256sum --text "$@"\n');
     }
     const result = spawnSync(
       BASH,
@@ -102,24 +102,29 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
     return join(root, "package");
   }
 
-  it("keeps both iOS capture programs executable in the tarball, as it keeps the CLI entry", () => {
-    const modes = Object.fromEntries(
-      listing(join(pack(), `simlock-${VERSION}.tgz`))
-        .split("\n")
-        .map((line) => line.trim().split(/\s+/))
-        .filter((fields) => fields.length > 1)
-        .map((fields) => [fields.at(-1), fields[0]]),
-    );
-    expect({
-      cli: modes["package/dist/cli/main.js"],
-      deviceCapture: modes["package/dist/bin/simlock-device-capture"],
-      screenCapture: modes["package/dist/bin/simlock-screen-capture"],
-    }).toEqual({
-      cli: "-rwxr-xr-x",
-      deviceCapture: "-rwxr-xr-x",
-      screenCapture: "-rwxr-xr-x",
-    });
-  });
+  // why: NTFS has no executable bit, so a Windows host cannot make the tarball's modes; the
+  // Release workflow packs on Linux.
+  it.skipIf(process.platform === "win32")(
+    "keeps both iOS capture programs executable in the tarball, as it keeps the CLI entry",
+    () => {
+      const modes = Object.fromEntries(
+        listing(join(pack(), `simlock-${VERSION}.tgz`))
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/))
+          .filter((fields) => fields.length > 1)
+          .map((fields) => [fields.at(-1), fields[0]]),
+      );
+      expect({
+        cli: modes["package/dist/cli/main.js"],
+        deviceCapture: modes["package/dist/bin/simlock-device-capture"],
+        screenCapture: modes["package/dist/bin/simlock-screen-capture"],
+      }).toEqual({
+        cli: "-rwxr-xr-x",
+        deviceCapture: "-rwxr-xr-x",
+        screenCapture: "-rwxr-xr-x",
+      });
+    },
+  );
 
   it("packs simlock and @simlock/e2e at one version, the second with its built files and no test file, and lists both in SHA256SUMS.txt", () => {
     const folder = pack();
