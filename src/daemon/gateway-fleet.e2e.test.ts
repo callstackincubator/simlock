@@ -23,7 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -421,7 +421,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       token: tokenA,
       stdout: "hello-from-a",
     });
-    await startWorker({
+    const workerB = await startWorker({
       label: "worker-b",
       model: "Pixel-B",
       token: tokenB,
@@ -470,6 +470,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     expect(chunks.join("")).toBe("hello-from-b");
 
     await gateway.dispatch("lease.release", { leaseId: grant.lease.id }, agentSession());
+
+    // why: the lease's folder is removed after `lease.release` answers, and Windows refuses to remove the
+    // worker's directory while that removal is still running, so the test waits for it.
+    await vi.waitFor(async () => {
+      expect(await readdir(join(workerB.directory, "lease-files"))).toEqual([]);
+    });
   }, 30_000);
 
   /**

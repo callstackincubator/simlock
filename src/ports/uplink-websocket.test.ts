@@ -387,10 +387,11 @@ describe("WebSocketUplinkConnector liveness", () => {
     ]);
     expect(firstOutcome).toBe("closed");
 
-    // why: the redial's backoff timer is armed when the worker's end sees the close, which can come after the gateway's end on Windows.
-    await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
-    clock.advance(1_000);
-    await vi.waitFor(() => expect(accepted).toBe(2));
+    // why: the redial's backoff timer is armed when the worker's end sees the close, which can come after the gateway's end on Windows, and an earlier timer (the stable-connection one) is already pending; advancing again on each try reaches the backoff timer whenever it is armed.
+    await vi.waitFor(() => {
+      clock.advance(1_000);
+      expect(accepted).toBe(2);
+    });
     expect(gateway.peers).toHaveLength(2);
     await uplink.stop();
   });
