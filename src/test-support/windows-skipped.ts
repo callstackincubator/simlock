@@ -3,10 +3,6 @@
  * task fixes them. Sorted, repo-relative; a task takes entries off and none is ever added.
  */
 const WINDOWS_SKIPPED: readonly string[] = [
-  "src/budget-guard.test.ts",
-  "src/ci-failures.test.ts",
-  "src/claim.test.ts",
-  "src/clock-hook.test.ts",
   "src/daemon/connection-host.test.ts",
   "src/daemon/device-data-tables.test.ts",
   "src/daemon/dispatcher-events.test.ts",
@@ -45,8 +41,6 @@ const WINDOWS_SKIPPED: readonly string[] = [
   "src/daemon/server-update.test.ts",
   "src/daemon/server.test.ts",
   "src/daemon/session-path.e2e.test.ts",
-  "src/delivery-stats.test.ts",
-  "src/docs-surface-check.test.ts",
   "src/drivers/android/device-table.test.ts",
   "src/drivers/android/index-boot.test.ts",
   "src/drivers/android/index-copies-recovery.test.ts",
@@ -64,15 +58,10 @@ const WINDOWS_SKIPPED: readonly string[] = [
   "src/drivers/android/seeds-copies.test.ts",
   "src/drivers/android/seeds-library-and-fit.test.ts",
   "src/drivers/android/two-instances.test.ts",
-  "src/fast-track.test.ts",
   "src/gateway/boundary.test.ts",
   "src/gateway/dispatcher-reads.test.ts",
   "src/history/history.test.ts",
-  "src/lint-rules.test.ts",
-  "src/manual-hook.test.ts",
   "src/mcp/main.test.ts",
-  "src/merge-pr.test.ts",
-  "src/mutate.test.ts",
   "src/ports/daemon-launcher.test.ts",
   "src/ports/filesystem.test.ts",
   "src/ports/host-load.test.ts",
@@ -86,16 +75,8 @@ const WINDOWS_SKIPPED: readonly string[] = [
   "src/ports/updater-launcher.test.ts",
   "src/ports/uplink-websocket.test.ts",
   "src/ports/worker-lock.test.ts",
-  "src/pr-body-check.test.ts",
-  "src/recurring-findings.test.ts",
-  "src/refactor-check.test.ts",
-  "src/release-pack.test.ts",
-  "src/review-inputs.test.ts",
-  "src/slow-e2e.test.ts",
   "src/state/state.test.ts",
   "src/test-support/imports.test.ts",
-  "src/tool-guard.test.ts",
-  "src/worktree-script.test.ts",
 ];
 
 export function windowsSkipped(platform: string): readonly string[] {
