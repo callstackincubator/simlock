@@ -21,9 +21,12 @@ export function modelFamily(model: string): ModelFamily {
   return MODEL_FAMILY_PREFIXES.find(([prefix]) => model.startsWith(prefix))?.[1] ?? "unknown";
 }
 
+// why: a foldable's guest ignores the input helper's rotation; agent-device turns it through its own fold helper (ADR 0053 §4).
+export const FOLDABLE_MODELS: ReadonlySet<string> = new Set(["iPhone Duo"]);
+
 export function isRotatableModel(model: string): boolean {
   const family = modelFamily(model);
-  return family === "phone" || family === "tablet";
+  return (family === "phone" || family === "tablet") && !FOLDABLE_MODELS.has(model);
 }
 
 export type Orientation = (typeof INPUT_ORIENTATIONS)[number];

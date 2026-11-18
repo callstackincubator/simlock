@@ -129,6 +129,7 @@ export function configFromLayers(
   {
     authStrategies = registeredAuthStrategies,
     driverSections = [],
+    hostPlatform,
     modules = [],
     overrides,
     role = "worker",
@@ -168,8 +169,10 @@ export function configFromLayers(
     modules
       .filter(
         (entry) =>
-          entry.enabledByDefault === "standalone-worker" &&
-          standalone &&
+          ((entry.enabledByDefault === "standalone-worker" && standalone) ||
+            (entry.enabledByDefault === "macos-worker" &&
+              role === "worker" &&
+              hostPlatform === "darwin")) &&
           !layers.some(
             (layer) =>
               asObject(asObject(layer["capabilities"])[entry.name])["enabled"] !== undefined,

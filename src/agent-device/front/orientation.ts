@@ -49,7 +49,7 @@ function unconfirmed(name: string) {
 }
 
 /**
- * why: agent-device's own rotation goes through its XCTest runner, which leaves taps missing; on an iOS phone or tablet simulator Simlock's input helper turns it instead. Undefined means the command is agent-device's to answer.
+ * why: agent-device's own rotation goes through its XCTest runner, which leaves taps missing; on an iOS phone or tablet simulator (not a foldable) Simlock's input helper turns it instead. Undefined means the command is agent-device's to answer.
  */
 export async function answerOrientation(
   context: FrontContext,

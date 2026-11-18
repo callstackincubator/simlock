@@ -361,7 +361,7 @@ export function createMcpServer(
     {
       title: "Rotate device",
       description:
-        "Turn this session's leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right. Only an iOS phone or tablet simulator rotates: an Android emulator, a physical device or an Apple TV is refused with ROTATION_UNSUPPORTED.",
+        "Turn this session's leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right. Only an iOS phone or tablet simulator rotates: an Android emulator, a physical device, an Apple TV or a foldable iPhone Duo (use `agent-device orientation`) is refused with ROTATION_UNSUPPORTED.",
       inputSchema: rotateDeviceInputSchema,
       outputSchema: rotateDeviceOutputSchema,
     },
