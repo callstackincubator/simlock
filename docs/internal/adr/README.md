@@ -118,3 +118,4 @@ the status is stale.
 | [0083](0083-a-worker-may-turn-single-slim-services-on-or-off-beside-its-categories.md) | A worker may turn single slim services on or off beside its categories | Accepted; narrows 0060 §1, §2 and 0066 §2 |
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
+| [0086](0086-on-windows-the-daemon-service-is-a-logon-task-that-runs-a-simlock-supervisor.md) | On Windows the daemon service is a logon task that runs a Simlock supervisor | Proposed; narrows 0041 §1, §3, §4, §5 and §8 |
