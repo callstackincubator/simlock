@@ -647,9 +647,11 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     harness.daemon.acceptUplink(pair.worker);
     const gateway = driveConnection(pair.gateway);
 
+    // why: one above the daemon's own, so no bump of the protocol makes the range overlap.
+    const ahead = { min: PROTOCOL_VERSION_RANGE.max + 1, max: PROTOCOL_VERSION_RANGE.max + 1 };
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",
-      protocolRange: { min: 99, max: 99 },
+      protocolRange: ahead,
     });
 
     expect(reply).toMatchObject({
@@ -657,7 +659,7 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
     });
     expect(reply.error).toMatchObject({
-      details: { client: { min: 99, max: 99 }, daemon: PROTOCOL_VERSION_RANGE },
+      details: { client: ahead, daemon: PROTOCOL_VERSION_RANGE },
     });
   });
   it("refuses a gateway on the current protocol when this worker advertises the previous one (ADR 0007 §12)", async () => {
