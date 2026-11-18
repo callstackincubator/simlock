@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { expect } from "vitest";
 import type { PhysicalInspection } from "../../core/index.js";
@@ -25,7 +26,8 @@ const appsFixture = JSON.parse(
 
 export const SIMLOCK_HOME = "/home/.simlock";
 
-export const DEVICE_ROOT = "/Devices";
+// why: the driver passes `resolve(root)` to simctl, which puts a drive letter on a Windows host.
+export const DEVICE_ROOT = resolve("/Devices");
 
 export const READ_LIMIT_MS = 30_000;
 
