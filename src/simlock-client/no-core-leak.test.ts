@@ -52,8 +52,13 @@ describe("public package surface (simlock/client, simlock/admin)", () => {
         include: [],
       }),
     );
-    const tscBin = join(repoRoot, "node_modules", ".bin", "tsc");
-    execFileSync(tscBin, ["-p", tmpTsconfigPath], { cwd: repoRoot, stdio: "pipe" });
+    // why: `.bin/tsc` is a shell script on POSIX and a `.cmd` shim on Windows, which `execFileSync`
+    // cannot start; node running the compiler's own entry file starts the same everywhere.
+    const tscEntry = join(repoRoot, "node_modules", "typescript", "bin", "tsc");
+    execFileSync(process.execPath, [tscEntry, "-p", tmpTsconfigPath], {
+      cwd: repoRoot,
+      stdio: "pipe",
+    });
     dtsFiles = sourceFilesRecursive(outDir).filter((path) => path.endsWith(".d.ts"));
   }, 60_000);
 

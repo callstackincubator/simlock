@@ -24,7 +24,8 @@ import {
 } from "./index.js";
 
 const PACKAGE_ROOT = "/global/node_modules/simlock";
-const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
+// why: the updater joins the package root with the host's `join`, so a Windows host has backslashes.
+const CLI = join(PACKAGE_ROOT, "dist", "cli", "main.js");
 const PID = 4242;
 const EPOCH = 1_700_000_000_000;
 
