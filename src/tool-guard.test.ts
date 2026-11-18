@@ -401,21 +401,48 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("first line is the ledger tag");
   });
 
-  it("requires an implementer's brief and a reviewer's protocol in the prompt, from this checkout", () => {
+  it("adds an implementer's brief, a reviewer's protocol and a lens's pinned briefs to the prompt the agent receives", () => {
     const build = readFileSync(join(ROOT, ".agents", "briefs", "implement-build.md"), "utf8");
-    const fix = readFileSync(join(ROOT, ".agents", "briefs", "implement-fix.md"), "utf8");
     const protocol = readFileSync(join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
-    const implementer = (prompt: string) => agent({ subagent_type: "implementer", prompt });
-    const reviewer = (prompt: string) => agent({ subagent_type: "reviewer", prompt });
+    const inputs = mkdtempSync(join(tmpdir(), "tool-guard-briefs-"));
+    mkdirSync(join(inputs, "briefs"));
+    writeFileSync(join(inputs, "briefs", "review-later-round.md"), "LATER pinned\n");
+    writeFileSync(join(inputs, "briefs", "review-claims.md"), "CLAIMS pinned\n");
+    const sent = (type: string, prompt: string, agentId?: string) => {
+      const result = spawnSync("node", [SCRIPT], {
+        input: JSON.stringify({
+          tool_name: "Agent",
+          tool_input: { subagent_type: type, prompt, run_in_background: false },
+          ...(agentId !== undefined && { agent_id: agentId }),
+        }),
+        encoding: "utf8",
+      });
+      if (result.stdout === "") return { status: result.status, stderr: result.stderr };
+      return JSON.parse(result.stdout).hookSpecificOutput.updatedInput.prompt as string;
+    };
+    const lensTag = "ledger: pr=975 issue=966 stage=review round=2 role=claims lens=-";
 
-    expect(implementer(`${LEDGER}\nissue: 966\nmode: build\nbrief:\n${build}`)).toEqual(OK);
-    expect(implementer(`${LEDGER}\nissue: 966\nmode: build`).stderr).toContain(
-      "`.agents/briefs/implement-build.md`",
+    expect(sent("implementer", `${LEDGER}\nissue: 966\nmode: build`)).toBe(
+      `${LEDGER}\nissue: 966\nmode: build\nbrief:\n${build}`,
     );
-    expect(implementer(`${LEDGER}\nissue: 966\nmode: build\nbrief:\n${fix}`).status).toBe(2);
-    expect(implementer(`${LEDGER}\nissue: 966\nbrief:\n${build}`).stderr).toContain("`mode:` line");
-    expect(reviewer(`${LEDGER}\npr: 975\nprotocol:\n${protocol}`)).toEqual(OK);
-    expect(reviewer(`${LEDGER}\npr: 975`).stderr).toContain("carries `protocol:`");
+    expect(sent("implementer", `${LEDGER}\nissue: 966\nmode: build\nbrief:\n${build}`)).toEqual(OK);
+    expect(sent("implementer", `${LEDGER}\nissue: 966`)).toMatchObject({
+      status: 2,
+      stderr: expect.stringContaining("`mode:` line"),
+    });
+    expect(sent("reviewer", `${LEDGER}\npr: 975`)).toBe(
+      `${LEDGER}\npr: 975\nprotocol:\n${protocol}`,
+    );
+    expect(sent("reviewer", `${LEDGER}\npr: 975\nprotocol:\n${protocol}`)).toEqual(OK);
+    expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}\nround: 2`, "a1")).toBe(
+      `${lensTag}\ninputs: ${inputs}\nround: 2\n=== briefs/review-later-round.md ===\nLATER pinned\n\n=== briefs/review-claims.md ===\nCLAIMS pinned\n\n`,
+    );
+    expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}\nround: 1`, "a1")).toBe(
+      `${lensTag}\ninputs: ${inputs}\nround: 1\n=== briefs/review-claims.md ===\nCLAIMS pinned\n\n`,
+    );
+    expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}/gone\nround: 1`, "a1")).toEqual(
+      OK,
+    );
   });
 
   it("refuses a code review off Opus on a diff that touches a strict area, outside a replay", () => {

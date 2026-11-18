@@ -19,14 +19,11 @@ copies "Tests agents run"; change both together (a repo test compares them).
 | Website build and its HTTP API check (2)       | `pnpm --dir website install && pnpm --dir website build && node website/scripts/check-openapi.mjs` |
 
 (1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
-`src/contract/`, and only the spec files the diff changed or whose page
-it changes: the whole lane is CI's, on every push. The lane holds only
-what needs a real daemon or a real browser engine; a page's behaviour is a
-DOM test, which `pnpm test:changed` runs. A stage agent never
-runs it without a spec file (the tool guard refuses), never in the
-background, and sets `timeout: 600000` on the Bash call: the default
-120 s moves the run to the background, where it holds the agent's
-report until it ends.
+`src/contract/`, and only the spec files it changed or whose page it
+changes; CI runs the whole lane. A page's behaviour is a DOM test, which
+`pnpm test:changed` runs; this lane holds what needs a real daemon or
+browser engine. Always with a spec file, in the foreground, with
+`timeout: 600000` on the Bash call (the tool guard refuses otherwise).
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.

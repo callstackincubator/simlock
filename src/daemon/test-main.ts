@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeDirectoryAccessReader,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DaemonServer } from "./server.js";
@@ -38,6 +44,8 @@ export async function start(
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       deviceDataTables: fakeDeviceDataTables,
+      // why: on Windows the real reader would start PowerShell for every test daemon.
+      directoryAccess: new FakeDirectoryAccessReader({ user: "S-1-5-21-1-2-3-1001", entries: [] }),
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: null,
       logger,
