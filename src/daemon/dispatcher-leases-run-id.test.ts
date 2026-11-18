@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { classifyError } from "./error-code.js";
 import { buildDispatcher, session } from "./test-dispatcher.js";
 
 describe("Dispatcher: lease.request with a run id", () => {
@@ -8,11 +9,8 @@ describe("Dispatcher: lease.request with a run id", () => {
     const ask = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
     const agent = session({ principal: "tok_owner" });
 
-    const tagged = await dispatcher.dispatch(
-      "lease.request",
-      { ...ask, requesterId: "tagged", runId: "123-1" },
-      agent,
-    );
+    const taggedAsk = { ...ask, idempotencyKey: "key-1", requesterId: "tagged", runId: "123-1" };
+    const tagged = await dispatcher.dispatch("lease.request", taggedAsk, agent);
     const plain = await dispatcher.dispatch(
       "lease.request",
       { ...ask, requesterId: "plain" },
@@ -28,6 +26,13 @@ describe("Dispatcher: lease.request with a run id", () => {
     expect(status?.find((lease) => lease.id === tagged.lease.id)?.runId).toBe("123-1");
     expect(plain.lease).not.toHaveProperty("runId");
     expect(listed.find((lease) => lease.id === plain.lease.id)).not.toHaveProperty("runId");
+
+    const replay = await dispatcher.dispatch("lease.request", taggedAsk, agent);
+    expect(replay.lease).toEqual(tagged.lease);
+    const conflict = await dispatcher
+      .dispatch("lease.request", { ...taggedAsk, runId: "123-2" }, agent)
+      .catch((error: unknown) => error);
+    expect(classifyError(conflict)).toBe("IDEMPOTENCY_CONFLICT");
 
     const restarted = (await buildDispatcher({ state })).dispatcher;
     const afterRestart = (await restarted.dispatch("lease.list", {}, agent)).leases;
