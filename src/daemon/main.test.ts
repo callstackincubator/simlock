@@ -170,17 +170,21 @@ describe("interrupted root assembly", () => {
     expect(await filesystem.exists(theirs)).toBe(true);
   });
 
-  it("startup leaves a dead writer's leftover that another user owns", async () => {
-    const filesystem = new MemoryFilesystem();
-    const devices = join(SIMLOCK_HOME, "devices");
-    await filesystem.mkdirp(devices);
-    const foreign = await stage(filesystem, devices, ".ios.41005.root-id.staging");
-    filesystem.defineAttributes(foreign, { uid: (process.getuid?.() ?? 0) + 1 });
+  // why: Windows has no `getuid`, so no file there belongs to another user by id.
+  it.skipIf(process.platform === "win32")(
+    "startup leaves a dead writer's leftover that another user owns",
+    async () => {
+      const filesystem = new MemoryFilesystem();
+      const devices = join(SIMLOCK_HOME, "devices");
+      await filesystem.mkdirp(devices);
+      const foreign = await stage(filesystem, devices, ".ios.41005.root-id.staging");
+      filesystem.defineAttributes(foreign, { uid: (process.getuid?.() ?? 0) + 1 });
 
-    await startWithRoot(filesystem, new FakeProcessSupervisor());
+      await startWithRoot(filesystem, new FakeProcessSupervisor());
 
-    expect(await filesystem.exists(foreign)).toBe(true);
-  });
+      expect(await filesystem.exists(foreign)).toBe(true);
+    },
+  );
 });
 
 describe("the data directory", () => {

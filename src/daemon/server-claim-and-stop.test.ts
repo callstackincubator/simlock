@@ -25,33 +25,37 @@ import {
 afterEach(stopTestDaemons);
 
 describe("DaemonServer", () => {
-  it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
-    temporaryDirectories.push(directory);
-    const socketPath = resolveDaemonSocketPath(directory);
-    await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
-    const first = await createHarness({ socketPath });
-    let convergeCalls = 0;
-    const second = await createHarness({
-      converge: () => {
-        convergeCalls += 1;
-        return Promise.resolve();
-      },
-      socketPath,
-      start: false,
-    });
+  // why: a stale socket file is a POSIX fact; a Windows pipe leaves nothing behind.
+  it.skipIf(process.platform === "win32")(
+    "recovers a stale socket file and refuses a second live daemon before running any device work",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
+      temporaryDirectories.push(directory);
+      const socketPath = resolveDaemonSocketPath(directory);
+      await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
+      const first = await createHarness({ socketPath });
+      let convergeCalls = 0;
+      const second = await createHarness({
+        converge: () => {
+          convergeCalls += 1;
+          return Promise.resolve();
+        },
+        socketPath,
+        start: false,
+      });
 
-    await expect(second.daemon.start()).rejects.toMatchObject({
-      name: "DaemonAlreadyRunningError",
-    });
-    expect(convergeCalls).toBe(0);
-    await second.daemon.stop("failed-start");
-    const client = await createClient(socketPath);
-    await hello(client);
-    await client.close();
-    const firstDaemon: DaemonServer = first.daemon;
-    expect(firstDaemon.socketPath).toBe(socketPath);
-  });
+      await expect(second.daemon.start()).rejects.toMatchObject({
+        name: "DaemonAlreadyRunningError",
+      });
+      expect(convergeCalls).toBe(0);
+      await second.daemon.stop("failed-start");
+      const client = await createClient(socketPath);
+      await hello(client);
+      await client.close();
+      const firstDaemon: DaemonServer = first.daemon;
+      expect(firstDaemon.socketPath).toBe(socketPath);
+    },
+  );
 
   // why: review finding S1: `AdminSecretManager`'s own doc (`src/auth`) asserts "a daemon
   // that loses the start race never calls `persist()` at all ... so the file an
@@ -67,7 +71,9 @@ describe("DaemonServer", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-stale-admin-"));
     temporaryDirectories.push(directory);
     const socketPath = resolveDaemonSocketPath(directory);
-    await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
+    // why: a stale socket file is a POSIX fact; a Windows pipe leaves nothing behind.
+    if (process.platform !== "win32")
+      await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
 
     const secrets = new CryptoTokenSecrets();
     const winnerFilesystem = new MemoryFilesystem();
@@ -172,7 +178,10 @@ describe("DaemonServer", () => {
     expect(harness.state.database.prepare("SELECT id FROM leases").all()).toEqual([
       { id: leaseId },
     ]);
-    expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");
+    // why: the server answers `daemon.stop` before it starts stopping, so the fact follows the reply.
+    await vi.waitFor(() =>
+      expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping"),
+    );
     expect(harness.eventBus.replay().map((event) => event.event)).not.toContain("lease.released");
   });
 });

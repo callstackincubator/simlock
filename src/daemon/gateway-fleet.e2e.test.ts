@@ -23,7 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +35,7 @@ import type { AlertDestination, PassthroughCommand } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { Filesystem, IpcConnector, IpcListenerFactory, NpmCli } from "../ports/index.js";
 import {
+  FakeDirectoryAccessReader,
   FakeHostInfo,
   FakeNpmCli,
   FakeUpdaterLauncher,
@@ -51,6 +52,7 @@ import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 function passthroughOptions(command: PassthroughCommand): object {
   return { passthrough: () => command, passthroughTools: ["adb"] };
@@ -123,9 +125,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
-    await Promise.all(
-      directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
-    );
+    await Promise.all(directories.splice(0).map((directory) => removeDirectory(directory)));
   });
 
   async function startGateway(
@@ -157,6 +157,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         },
         role: "gateway",
         dataDirectory: directory,
+        // why: on Windows the daemon reads the data directory's ACL through the process runner, which a scripted one refuses.
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         filesystem: new MemoryFilesystem(),
         hostInfo: new FakeHostInfo(GATEWAY_HOST),
         logger: new NoopLogger(),

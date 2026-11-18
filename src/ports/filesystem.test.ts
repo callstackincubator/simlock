@@ -44,7 +44,13 @@ afterEach(async () => {
   await new NodeFilesystem().rm(temporaryDirectory);
 });
 
-describe.each(implementations)("Filesystem contract: $name", ({ create, link }) => {
+// why: the real filesystem on Windows has no mode bits, no owner ids and a different errno for some failures, so a test of those facts runs on the memory filesystem only there.
+const posixOnly = (name: string) => name === "node filesystem" && process.platform === "win32";
+
+// why: the memory filesystem keeps a link target as a `/` path without a drive, and the real one as the host spells it.
+const targetOf = (path: string) => path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/");
+
+describe.each(implementations)("Filesystem contract: $name", ({ name, create, link }) => {
   it("atomically writes and overwrites a complete file", async () => {
     const filesystem = create();
     const file = `${temporaryDirectory}/devices/registry.json`;
@@ -70,7 +76,7 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
 
     await expect(filesystem.readFile(file)).resolves.toBe("");
     expect((await filesystem.stat(file)).identity).toBe(before);
-    expect((await filesystem.stat(file)).mode).toBe(0o600);
+    if (!posixOnly(name)) expect((await filesystem.stat(file)).mode).toBe(0o600);
 
     await filesystem.writeFileInPlace(`${temporaryDirectory}/new.log`, "text", { mode: 0o600 });
     await expect(filesystem.readFile(`${temporaryDirectory}/new.log`)).resolves.toBe("text");
@@ -125,28 +131,31 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.stat(directory)).resolves.toMatchObject({ kind: "directory" });
   });
 
-  it("gives every directory it creates, parents included, the mode it asks for, past the umask, and leaves an existing directory alone", async () => {
-    // why: under umask 0o077 Node's own default for a new directory is 0o700, so a mode of 0o750
-    // the umask would strip to 0o700 shows the adapter set the bits after mkdir, on the parent too.
-    const previousUmask = process.umask(0o077);
-    try {
-      const filesystem = create();
-      const directory = `${temporaryDirectory}/home/gateway`;
-      const existing = `${temporaryDirectory}/existing`;
-      await filesystem.mkdirp(existing);
-      await filesystem.chmod(existing, 0o755);
+  it.skipIf(process.platform === "win32" && name === "node filesystem")(
+    "gives every directory it creates, parents included, the mode it asks for, past the umask, and leaves an existing directory alone",
+    async () => {
+      // why: under umask 0o077 Node's own default for a new directory is 0o700, so a mode of 0o750
+      // the umask would strip to 0o700 shows the adapter set the bits after mkdir, on the parent too.
+      const previousUmask = process.umask(0o077);
+      try {
+        const filesystem = create();
+        const directory = `${temporaryDirectory}/home/gateway`;
+        const existing = `${temporaryDirectory}/existing`;
+        await filesystem.mkdirp(existing);
+        await filesystem.chmod(existing, 0o755);
 
-      await filesystem.mkdirp(directory, { mode: 0o750 });
-      await filesystem.mkdirp(directory, { mode: 0o750 });
-      await filesystem.mkdirp(existing, { mode: 0o750 });
+        await filesystem.mkdirp(directory, { mode: 0o750 });
+        await filesystem.mkdirp(directory, { mode: 0o750 });
+        await filesystem.mkdirp(existing, { mode: 0o750 });
 
-      expect((await filesystem.stat(directory)).mode).toBe(0o750);
-      expect((await filesystem.stat(`${temporaryDirectory}/home`)).mode).toBe(0o750);
-      expect((await filesystem.stat(existing)).mode).toBe(0o755);
-    } finally {
-      process.umask(previousUmask);
-    }
-  });
+        expect((await filesystem.stat(directory)).mode).toBe(0o750);
+        expect((await filesystem.stat(`${temporaryDirectory}/home`)).mode).toBe(0o750);
+        expect((await filesystem.stat(existing)).mode).toBe(0o755);
+      } finally {
+        process.umask(previousUmask);
+      }
+    },
+  );
 
   it("writes a file exclusively, refusing the second writer rather than replacing", async () => {
     const filesystem = create();
@@ -161,27 +170,30 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.readFile(file)).resolves.toBe("first writer");
   });
 
-  it("creates an exclusively written file with the mode it is given, and Node's default without one", async () => {
-    // why: #685: the exclusive create publishes by hard-linking a temp file, so a mode that
-    // did not ride on that file's create would leave the winner's file world-readable. A
-    // restrictive umask here would mask what the code asks for, so pin the one a host starts
-    // from and pin both halves: the mode a caller asks for, and the default it gets for free.
-    const previousUmask = process.umask(0o022);
-    try {
-      const filesystem = create();
-      const asked = `${temporaryDirectory}/asked.json`;
-      const unasked = `${temporaryDirectory}/unasked.json`;
+  it.skipIf(process.platform === "win32" && name === "node filesystem")(
+    "creates an exclusively written file with the mode it is given, and Node's default without one",
+    async () => {
+      // why: #685: the exclusive create publishes by hard-linking a temp file, so a mode that
+      // did not ride on that file's create would leave the winner's file world-readable. A
+      // restrictive umask here would mask what the code asks for, so pin the one a host starts
+      // from and pin both halves: the mode a caller asks for, and the default it gets for free.
+      const previousUmask = process.umask(0o022);
+      try {
+        const filesystem = create();
+        const asked = `${temporaryDirectory}/asked.json`;
+        const unasked = `${temporaryDirectory}/unasked.json`;
 
-      await filesystem.mkdirp(temporaryDirectory);
-      await filesystem.writeFileExclusive(asked, "{}", { mode: 0o600 });
-      await filesystem.writeFileExclusive(unasked, "{}");
+        await filesystem.mkdirp(temporaryDirectory);
+        await filesystem.writeFileExclusive(asked, "{}", { mode: 0o600 });
+        await filesystem.writeFileExclusive(unasked, "{}");
 
-      expect((await filesystem.stat(asked)).mode).toBe(0o600);
-      expect((await filesystem.stat(unasked)).mode).toBe(0o644);
-    } finally {
-      process.umask(previousUmask);
-    }
-  });
+        expect((await filesystem.stat(asked)).mode).toBe(0o600);
+        expect((await filesystem.stat(unasked)).mode).toBe(0o644);
+      } finally {
+        process.umask(previousUmask);
+      }
+    },
+  );
 
   it("moves a directory and everything under it in one step", async () => {
     const filesystem = create();
@@ -197,19 +209,22 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.exists(staging)).resolves.toBe(false);
   });
 
-  it("refuses to move a directory onto one that holds something", async () => {
-    const filesystem = create();
-    const staging = `${temporaryDirectory}/.ios.staging`;
-    const occupied = `${temporaryDirectory}/ios`;
+  it.skipIf(process.platform === "win32" && name === "node filesystem")(
+    "refuses to move a directory onto one that holds something",
+    async () => {
+      const filesystem = create();
+      const staging = `${temporaryDirectory}/.ios.staging`;
+      const occupied = `${temporaryDirectory}/ios`;
 
-    await filesystem.mkdirp(staging);
-    await filesystem.mkdirp(occupied);
-    await filesystem.writeFileAtomic(`${occupied}/someone-elses-work.txt`, "");
+      await filesystem.mkdirp(staging);
+      await filesystem.mkdirp(occupied);
+      await filesystem.writeFileAtomic(`${occupied}/someone-elses-work.txt`, "");
 
-    await expect(filesystem.rename(staging, occupied)).rejects.toMatchObject({
-      code: "ENOTEMPTY",
-    });
-  });
+      await expect(filesystem.rename(staging, occupied)).rejects.toMatchObject({
+        code: "ENOTEMPTY",
+      });
+    },
+  );
 
   it("reports whether a path is there", async () => {
     const filesystem = create();
@@ -262,9 +277,9 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     const modifiedBefore = (await filesystem.stat(`${dir}/file`)).modifiedAtMs;
     await link(filesystem, `${dir}/link`, `${dir}/old`);
 
-    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/old`);
+    expect(targetOf(await filesystem.readlink(`${dir}/link`))).toBe(targetOf(`${dir}/old`));
     await filesystem.replaceSymlink(`${dir}/link`, `${dir}/new`);
-    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/new`);
+    expect(targetOf(await filesystem.readlink(`${dir}/link`))).toBe(targetOf(`${dir}/new`));
     await filesystem.writeAt(`${dir}/file`, 2, new TextEncoder().encode("XY"));
     await expect(filesystem.readFile(`${dir}/file`)).resolves.toBe("abXYef");
     expect((await filesystem.stat(`${dir}/file`)).modifiedAtMs).toBe(modifiedBefore);
@@ -273,18 +288,21 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.writeAt(`${dir}/missing`, 0, new Uint8Array(1))).rejects.toThrow();
   });
 
-  it("refuses to answer for a path that runs through a file", async () => {
-    // why: A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
-    // that is simply not there yet, and callers can only tell them apart by the errno.
-    const filesystem = create();
+  it.skipIf(process.platform === "win32" && name === "node filesystem")(
+    "refuses to answer for a path that runs through a file",
+    async () => {
+      // why: A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
+      // that is simply not there yet, and callers can only tell them apart by the errno.
+      const filesystem = create();
 
-    await filesystem.mkdirp(temporaryDirectory);
-    await filesystem.writeFileAtomic(`${temporaryDirectory}/notes.txt`, "");
+      await filesystem.mkdirp(temporaryDirectory);
+      await filesystem.writeFileAtomic(`${temporaryDirectory}/notes.txt`, "");
 
-    await expect(filesystem.exists(`${temporaryDirectory}/notes.txt/ios`)).rejects.toMatchObject({
-      code: "ENOTDIR",
-    });
-  });
+      await expect(filesystem.exists(`${temporaryDirectory}/notes.txt/ios`)).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+    },
+  );
 
   it("sizes a directory as the bytes of the files under it, subdirectories included, without following a symlink", async () => {
     const filesystem = create();
@@ -308,31 +326,37 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
   });
 });
 
-describe.each(implementations)("Filesystem ownership contract: $name", ({ create }) => {
-  it("reports what a path is, who owns it, and how exposed it is", async () => {
-    const filesystem = create();
-    const root = `${temporaryDirectory}/devices/ios`;
+describe.each(implementations)("Filesystem ownership contract: $name", ({ name, create }) => {
+  it.skipIf(process.platform === "win32" && name === "node filesystem")(
+    "reports what a path is, who owns it, and how exposed it is",
+    async () => {
+      const filesystem = create();
+      const root = `${temporaryDirectory}/devices/ios`;
 
-    await filesystem.mkdirp(root);
-    await filesystem.chmod(root, 0o700);
+      await filesystem.mkdirp(root);
+      await filesystem.chmod(root, 0o700);
 
-    await expect(filesystem.lstat(root)).resolves.toEqual({
-      kind: "directory",
-      mode: 0o700,
-      uid: process.getuid?.() ?? 0,
-    });
-  });
+      await expect(filesystem.lstat(root)).resolves.toEqual({
+        kind: "directory",
+        mode: 0o700,
+        uid: process.getuid?.() ?? 0,
+      });
+    },
+  );
 
-  it("reports the permission bits a path was last given, not the ones it was created with", async () => {
-    const filesystem = create();
-    const root = `${temporaryDirectory}/devices/ios`;
+  it.skipIf(process.platform === "win32" && name === "node filesystem")(
+    "reports the permission bits a path was last given, not the ones it was created with",
+    async () => {
+      const filesystem = create();
+      const root = `${temporaryDirectory}/devices/ios`;
 
-    await filesystem.mkdirp(`${temporaryDirectory}/devices`);
-    await filesystem.mkdir(root, { mode: 0o777 });
-    await filesystem.chmod(root, 0o700);
+      await filesystem.mkdirp(`${temporaryDirectory}/devices`);
+      await filesystem.mkdir(root, { mode: 0o777 });
+      await filesystem.chmod(root, 0o700);
 
-    await expect(filesystem.lstat(root)).resolves.toMatchObject({ mode: 0o700 });
-  });
+      await expect(filesystem.lstat(root)).resolves.toMatchObject({ mode: 0o700 });
+    },
+  );
 
   it("refuses to create a directory that already exists", async () => {
     const filesystem = create();
@@ -358,7 +382,7 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
     await filesystem.mkdirp(root);
     const resolved = await filesystem.realpath(root);
 
-    expect(resolved.endsWith("/devices/ios")).toBe(true);
+    expect(targetOf(resolved).endsWith("/devices/ios")).toBe(true);
     await expect(filesystem.realpath(resolved)).resolves.toBe(resolved);
   });
 });
@@ -475,7 +499,7 @@ describe("Filesystem.copyTree", () => {
     await real.mkdirp(source);
     await writeFile(`${source}/disk.img`, "image");
     await utimes(`${source}/disk.img`, modifiedAt, modifiedAt);
-    for (const platform of ["win32", process.platform] as const) {
+    for (const platform of new Set(["win32", process.platform] as const)) {
       const target = `${temporaryDirectory}/copy-tree/${platform}`;
       await new NodeFilesystem({ platform }).copyTree(source, target, { timeoutMs: 600_000 });
       await expect(real.readFile(`${target}/disk.img`)).resolves.toBe("image");
