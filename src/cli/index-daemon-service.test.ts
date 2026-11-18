@@ -772,6 +772,72 @@ describe("CLI: daemon service on Windows (#1698)", () => {
   const sid = "S-1-5-21-1-2-3-1001";
   const done = { code: 0, stdout: "", stderr: "" };
 
+  async function runWindowsCli(options: {
+    readonly argv: readonly string[];
+    readonly role: "worker" | "gateway";
+    readonly runner: ScriptedProcessRunner;
+    readonly filesystem: MemoryFilesystem;
+    readonly startAfterInstall?: boolean;
+    readonly daemonRunning?: boolean;
+    readonly state?: ServiceState;
+  }): Promise<{ readonly exitCode: number; readonly output: ReturnType<typeof outputCapture> }> {
+    const { role, runner, filesystem } = options;
+    const dataDirectory = role === "gateway" ? join(root, "gateway") : root;
+    const ipcTransport = new MemoryIpcTransport();
+    const startDaemon = async (): Promise<void> => {
+      await startInMemoryDaemon({
+        adminTokenPath: join(dataDirectory, "admin.token"),
+        filesystem,
+        ipcTransport,
+        socketPath: join(dataDirectory, "daemon.sock"),
+      });
+    };
+    if (options.daemonRunning === true) await startDaemon();
+    const tasks = new TaskSchedulerServiceManager({
+      runner,
+      filesystem,
+      systemRoot: "C:\\Windows",
+    });
+    const { state } = options;
+    const serviceManager: ServiceManager = {
+      manager: "task-scheduler",
+      state: (definition) =>
+        state === undefined ? tasks.state(definition) : Promise.resolve(state),
+      uninstall: (definition) => tasks.uninstall(definition),
+      start: (definition) => tasks.start(definition),
+      install: async (definition) => {
+        await tasks.install(definition);
+        if (options.startAfterInstall === true) await startDaemon();
+      },
+    };
+    const output = outputCapture(
+      {
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: new FakeDaemonLauncher(),
+        daemonHome: { role, dataDirectory, gatewayPresent: false },
+        homeDirectory: "/Users/me",
+        workingDirectory: "C:\\work",
+        hostPlatform: "linux",
+        runTool: async () => ({ outcome: "not-found" }),
+        service: {
+          manager: serviceManager,
+          platform: "win32",
+          home: "/Users/me",
+          user: () => "me",
+          root,
+          nodePath,
+          mainPath,
+        },
+      },
+      { PATH: "C:\\bin" },
+    );
+    const exitCode = await runCli(options.argv, output.environmentWith());
+    return { exitCode, output };
+  }
+
   async function installOnWindows(options: {
     readonly argv: readonly string[];
     readonly role?: "worker" | "gateway";
@@ -791,7 +857,6 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     const name = `com.callstack.simlock.${role}`;
     const xmlPath = join(dataDirectory, "service-task.xml");
     const filesystem = new MemoryFilesystem();
-    const ipcTransport = new MemoryIpcTransport();
     let written: { readonly text: string; readonly encoding: string } | undefined;
     const runner = new ScriptedProcessRunner([
       {
@@ -820,51 +885,13 @@ describe("CLI: daemon service on Windows (#1698)", () => {
           ]
         : []),
     ]);
-    const tasks = new TaskSchedulerServiceManager({
+    const { exitCode, output } = await runWindowsCli({
+      argv: options.argv,
+      role,
       runner,
       filesystem,
-      systemRoot: "C:\\Windows",
+      startAfterInstall: true,
     });
-    const serviceManager: ServiceManager = {
-      manager: "task-scheduler",
-      state: (definition) => tasks.state(definition),
-      uninstall: (definition) => tasks.uninstall(definition),
-      start: (definition) => tasks.start(definition),
-      install: async (definition) => {
-        await tasks.install(definition);
-        await startInMemoryDaemon({
-          adminTokenPath: join(dataDirectory, "admin.token"),
-          filesystem,
-          ipcTransport,
-          socketPath: join(dataDirectory, "daemon.sock"),
-        });
-      },
-    };
-    const output = outputCapture(
-      {
-        filesystem,
-        clock: new FakeClock(0),
-        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
-        ipc: ipcTransport,
-        launcher: new FakeDaemonLauncher(),
-        daemonHome: { role, dataDirectory, gatewayPresent: false },
-        homeDirectory: "/Users/me",
-        workingDirectory: "C:\\work",
-        hostPlatform: "linux",
-        runTool: async () => ({ outcome: "not-found" }),
-        service: {
-          manager: serviceManager,
-          platform: "win32",
-          home: "/Users/me",
-          user: () => "me",
-          root,
-          nodePath,
-          mainPath,
-        },
-      },
-      { PATH: "C:\\bin" },
-    );
-    const exitCode = await runCli(options.argv, output.environmentWith());
     return { exitCode, output, runner, filesystem, name, xmlPath, written };
   }
 
@@ -982,5 +1009,68 @@ describe("CLI: daemon service on Windows (#1698)", () => {
         label,
       ).toBe(true);
     }
+  });
+
+  it("an operator runs daemon uninstall on Windows: the daemon is stopped, the task is deleted, and no task or a failed delete is reported", async () => {
+    const name = "com.callstack.simlock.worker";
+    const taskState: ServiceState = { state: "installed", path: `\\${name}` };
+    const deleteArgs = ["/delete", "/tn", name, "/f"];
+    const cases = [
+      {
+        label: "task installed and daemon running",
+        argv: ["daemon", "uninstall"],
+        state: taskState,
+        daemonRunning: true,
+        script: [{ match: { command: "schtasks", args: deleteArgs }, result: done }],
+        stdout: `Daemon stopping\nService removed: ${name} (task-scheduler)\n`,
+      },
+      {
+        label: "task installed, no daemon",
+        argv: ["daemon", "uninstall"],
+        state: taskState,
+        script: [{ match: { command: "schtasks", args: deleteArgs }, result: done }],
+        stdout: `Service removed: ${name} (task-scheduler)\n`,
+      },
+      {
+        label: "no task: schtasks /delete is not run",
+        argv: ["daemon", "uninstall"],
+        state: { state: "not-installed" } as ServiceState,
+        script: [],
+        stdout: `Service not installed: ${name}\n`,
+      },
+    ];
+    for (const { label, script, stdout, ...rest } of cases) {
+      const runner = new ScriptedProcessRunner(script);
+      const { exitCode, output } = await runWindowsCli({
+        ...rest,
+        role: "worker",
+        runner,
+        filesystem: new MemoryFilesystem(),
+      });
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(output.stdout, label).toBe(stdout);
+      expect(runner.calls.length, label).toBe(script.length);
+    }
+
+    const failed = await runWindowsCli({
+      argv: ["daemon", "uninstall"],
+      role: "worker",
+      runner: new ScriptedProcessRunner([
+        {
+          match: { command: "schtasks", args: deleteArgs },
+          result: { code: 1, stdout: "", stderr: "ERROR: The system cannot find the file." },
+        },
+      ]),
+      filesystem: new MemoryFilesystem(),
+      state: taskState,
+    });
+    expect(failed.exitCode).toBe(1);
+    expect(JSON.parse(failed.output.stderr.trim())).toEqual({
+      error: {
+        code: "SERVICE_FAILED",
+        message: `schtasks /delete /tn ${name} /f failed: ERROR: The system cannot find the file.`,
+      },
+    });
   });
 });
