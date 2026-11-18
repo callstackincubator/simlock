@@ -61,6 +61,7 @@ export class LeaseHandlers {
           onAdmitted: admittedHook(session.onRequestAdmitted),
           ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
           ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+          ...(input.runId === undefined ? {} : { runId: input.runId }),
           ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
           ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),

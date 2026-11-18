@@ -62,6 +62,7 @@ export class FleetGrants {
       idChosenByRequester: forwardedLeaseId !== undefined,
       ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
+      ...(waiter.options.runId === undefined ? {} : { runId: waiter.options.runId }),
       workerId,
       workerLeaseId: grant.lease.id,
     };

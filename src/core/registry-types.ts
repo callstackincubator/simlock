@@ -90,6 +90,7 @@ export interface CreateLeaseInput {
   readonly ttlDeadline: number;
   /** why: the caller has already refused an ID that is in use: one place enforces that rule. */
   readonly leaseId?: string;
+  readonly runId?: string;
   /** why: the categories the lease keeps running, written to the device in the commit that leases it (ADR 0066 §4). */
   readonly except?: readonly string[];
   /**

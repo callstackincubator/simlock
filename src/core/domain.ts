@@ -440,6 +440,8 @@ export interface LeaseRecord {
    * `false`: every ID then was generated.
    */
   readonly idChosenByRequester: boolean;
+  // why: `| undefined` because a lease read from a worker (the contract's type) is projected as this type by a gateway.
+  readonly runId?: string | undefined;
 }
 
 export interface LeaseTiming {
@@ -497,6 +499,7 @@ export interface LeaseRequestRecord<Grant = LeaseGrant> {
    * is granted it.
    */
   readonly leaseId?: string;
+  readonly runId?: string;
   /**
    * The gateway's request id (ADR 0021) when this request is a gateway dispatch, a probe. Kept so
    * a probe settled at the next start still names it.

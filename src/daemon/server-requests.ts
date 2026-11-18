@@ -13,7 +13,11 @@ interface ConnectionRequestsOptions {
   readonly pushes: ConnectionPushes;
   readonly logger: Logger;
   readonly driverRejections: readonly DriverRejection[];
-  readonly leaseSnapshot: () => readonly { readonly id: string; readonly ownerId: string }[];
+  readonly leaseSnapshot: () => readonly {
+    readonly id: string;
+    readonly ownerId: string;
+    readonly runId?: string | undefined;
+  }[];
 }
 
 export class ConnectionRequests {

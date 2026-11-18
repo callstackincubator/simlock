@@ -185,6 +185,7 @@ const LEASE_COLUMNS = [
   "ttl_deadline",
   "last_renewed_at",
   "id_chosen_by_requester",
+  "run_id",
 ] as const;
 
 const REQUEST_COLUMNS = [
@@ -194,6 +195,7 @@ const REQUEST_COLUMNS = [
   "idempotency_key",
   "lease_id",
   "fleet_request_id",
+  "run_id",
   "platform",
   "model",
   "os_version",
@@ -221,6 +223,7 @@ const GRANT_COLUMNS = [
   "ttl_deadline",
   "last_renewed_at",
   "id_chosen_by_requester",
+  "run_id",
   "estimated_provision_ms",
   "estimated_boot_ms",
   "estimated_reclaim_ms",
@@ -234,6 +237,10 @@ function upsertSql(table: string, columns: readonly string[], key: string): stri
     .join(", ");
   return `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})
     ON CONFLICT (${key}) DO UPDATE SET ${updates}`;
+}
+
+function nullable(value: string | undefined): string | null {
+  return value ?? null;
 }
 
 function flagValue(value: boolean | undefined): number | null {
@@ -321,6 +328,7 @@ function leaseValues(lease: LeaseRecord): SqliteValue[] {
     lease.ttlDeadline,
     lease.lastRenewedAt,
     flagValue(lease.idChosenByRequester),
+    lease.runId ?? null,
   ];
 }
 
@@ -371,6 +379,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       record.idempotencyKey ?? null,
       record.leaseId ?? null,
       record.fleetRequestId ?? null,
+      nullable(record.runId),
       request.platform,
       request.model ?? null,
       request.osVersion ?? null,
@@ -402,6 +411,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       lease.ttlDeadline,
       lease.lastRenewedAt,
       flagValue(lease.idChosenByRequester),
+      nullable(lease.runId),
       grant.timing.estimatedProvisionMs,
       grant.timing.estimatedBootMs,
       grant.timing.estimatedReclaimMs,
@@ -598,6 +608,7 @@ function leaseFromRow(table: string, key: string, row: Row, idColumn: string): L
     lastRenewedAt: reader.int("last_renewed_at"),
     ownerId: reader.text("owner_id"),
     requesterId: reader.text("requester_id"),
+    ...present("runId", reader.optText("run_id")),
     ttlDeadline: reader.int("ttl_deadline"),
     ttlMs: reader.int("ttl_ms"),
   };
@@ -638,6 +649,7 @@ function loadLeaseRequests(
         ...present("idempotencyKey", reader.optText("idempotency_key")),
         ...present("leaseId", reader.optText("lease_id")),
         ...present("fleetRequestId", reader.optText("fleet_request_id")),
+        ...present("runId", reader.optText("run_id")),
         ownerId: reader.text("owner_id"),
         request: requestFromRow(reader),
         requesterId: reader.text("requester_id"),

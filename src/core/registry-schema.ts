@@ -144,6 +144,12 @@ const REGISTRY_V7 = `
 ALTER TABLE devices ADD COLUMN hardware_serial TEXT;
 `;
 
+const REGISTRY_V8 = `
+ALTER TABLE leases ADD COLUMN run_id TEXT;
+ALTER TABLE lease_requests ADD COLUMN run_id TEXT;
+ALTER TABLE lease_grants ADD COLUMN run_id TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
   migrations: [
     REGISTRY_V1,
@@ -153,7 +159,8 @@ export const registryOwner: SqliteSchemaOwner = {
     REGISTRY_V5,
     REGISTRY_V6,
     REGISTRY_V7,
+    REGISTRY_V8,
   ],
   name: "registry",
-  version: 7,
+  version: 8,
 };

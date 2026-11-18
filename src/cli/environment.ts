@@ -499,6 +499,7 @@ export function buildCliEnvironment(
     ...tcpPorts(ports),
     ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
+    ...runFieldsFromEnv(env),
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
     writeConfigFile: async (contents) => {
@@ -568,4 +569,17 @@ async function confirmTerminal(question: string): Promise<boolean> {
   } finally {
     prompt.close();
   }
+}
+
+function runFieldsFromEnv(env: NodeJS.ProcessEnv): {
+  readonly runFromEnv?: string;
+  readonly githubRunFromEnv?: string;
+} {
+  const runId = env.GITHUB_RUN_ID;
+  // why: GitHub Actions sets the same run id and attempt for every job of a workflow run; an unset or empty attempt is the first.
+  const github =
+    env.GITHUB_ACTIONS === "true" && runId !== undefined && runId !== ""
+      ? { githubRunFromEnv: `${runId}-${env.GITHUB_RUN_ATTEMPT || "1"}` }
+      : {};
+  return { ...(env.SIMLOCK_RUN === undefined ? {} : { runFromEnv: env.SIMLOCK_RUN }), ...github };
 }

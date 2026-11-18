@@ -75,6 +75,8 @@ export {
   LEASE_ID_PATTERN,
   leaseIdSchema,
   refuseModelWithClass,
+  refuseBadRunId,
+  RUN_ID_PATTERN,
   leaseRequestFields,
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
   leaseRequest,

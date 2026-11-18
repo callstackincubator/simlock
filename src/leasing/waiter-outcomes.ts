@@ -42,6 +42,7 @@ export class WaiterOutcomes {
       ...(device.mode === "slim" ? exceptOption(waiter) : {}),
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
       ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
+      ...(waiter.options.runId === undefined ? {} : { runId: waiter.options.runId }),
       ...(waiter.options.fleetRequestId === undefined
         ? {}
         : { fleetRequestId: waiter.options.fleetRequestId }),
