@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type Config } from "../core/index.js";
+import { FakeDriver } from "../core/testing.js";
+import { FakeClock } from "../ports/index.js";
 import { classifyError } from "./error-code.js";
 import { HOST_SYSTEM, buildDispatcher, flush, gibibyte, session } from "./test-dispatcher.js";
 
@@ -47,7 +49,11 @@ describe("Dispatcher: a noWait lease.request refused for capacity names the chec
       holds: true,
     },
   ] as const)("rejects NO_CAPACITY with details.capacityReason $reason at $name", async (row) => {
-    const { dispatcher } = await buildDispatcher({ capacity: row.capacity });
+    // why: a host serves a platform only with a driver for it (#1689), so the global limit above the iOS one needs an Android driver.
+    const { dispatcher } = await buildDispatcher({
+      capacity: row.capacity,
+      extraDrivers: [new FakeDriver({ clock: new FakeClock(1_000), platform: "android" })],
+    });
     if (row.holds) await dispatcher.dispatch("lease.request", ios, holder());
 
     await expect(
