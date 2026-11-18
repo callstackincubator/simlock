@@ -1,6 +1,6 @@
 # 0086. On Windows the daemon service is a logon task that runs a Simlock supervisor
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-18
 - **Issue:** [#1691](https://github.com/callstackincubator/simlock/issues/1691) (request [#1069](https://github.com/callstackincubator/simlock/issues/1069))
 - **Narrows:** [ADR 0041](0041-the-daemon-can-run-under-the-users-service-manager.md)
