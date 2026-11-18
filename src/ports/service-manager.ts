@@ -500,7 +500,9 @@ export class TaskSchedulerServiceManager implements ServiceManager {
     }
   }
 
-  async uninstall(_definition: ServiceDefinition): Promise<void> {}
+  async uninstall(definition: ServiceDefinition): Promise<void> {
+    await this.checked("schtasks", ["/delete", "/tn", definition.name, "/f"]);
+  }
 
   async start(_definition: ServiceDefinition): Promise<void> {}
 }
