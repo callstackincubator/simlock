@@ -82,6 +82,7 @@ export const marquee = [
   "Physical Android phones",
   "macOS workers",
   "Linux workers",
+  "Windows workers",
   "CLI",
   "MCP",
   "HTTP API",
@@ -106,6 +107,10 @@ export const faq = [
   {
     q: "Does a worker need an open port to join a fleet?",
     a: "No. A worker dials out to the gateway over one WebSocket, with the gateway URL and a join token from `simlock --gateway token create --role worker`, so a Mac behind NAT joins without an inbound port.",
+  },
+  {
+    q: "Can a Windows machine be a worker?",
+    a: "Yes, for Android. A Windows 11 PC runs Android emulators with the Windows Hypervisor Platform, alone or behind a gateway. iOS simulators need a Mac with Xcode. See the setup page in the docs.",
   },
   {
     q: "Can a Linux machine be a worker?",
@@ -149,7 +154,7 @@ simlock release <lease.id>`,
     "simlock --gateway daemon start",
     "simlock --gateway token create --role worker",
     "",
-    "# on each worker, Mac or Linux",
+    "# on each worker, Mac, Linux or Windows",
     `simlock config set gateway '{"url":"wss://gw.example","token":"slk_..."}'`,
     "simlock daemon stop",
     "simlock daemon start",
@@ -173,7 +178,7 @@ export const home = {
       },
       {
         title: "Add machines",
-        body: "Run one daemon as a gateway, mint a join token, and point each Mac or Linux worker at it.",
+        body: "Run one daemon as a gateway, mint a join token, and point each Mac, Linux or Windows worker at it.",
         cmd: "simlock --gateway token create --role worker",
       },
     ],
