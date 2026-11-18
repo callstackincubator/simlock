@@ -6,6 +6,14 @@ import type { LinkConnection } from "../link/index.js";
 import type { IpcConnection, Logger } from "../ports/index.js";
 import type { RelayConnection } from "./relay.js";
 
+// why: what a session connection (ADR 0081) takes from its token's identity beyond the role and principal the connection holds: `identity.get` says them.
+export interface SessionIdentity {
+  readonly name: string;
+  readonly via: "token" | "proxy";
+  readonly signOutUrl?: string;
+  readonly close: (code: number, reason: string) => void;
+}
+
 export interface Connection {
   readonly socket: IpcConnection;
   /**
@@ -44,6 +52,8 @@ export interface Connection {
   readonly isGatewayUplink: boolean;
   // why: set with `isGatewayUplink`; the link accepts the byte channels a relay names (ADR 0028).
   readonly link: LinkConnection | undefined;
+  // why: set only by `acceptSession`: the identity the upgrade's token gave this connection, which `hello` keeps.
+  readonly session: SessionIdentity | undefined;
   /**
    * why: Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by

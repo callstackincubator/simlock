@@ -193,6 +193,7 @@ export function buildDispatcher(
   hooks: {
     readonly awaitReady: () => Promise<void>;
     readonly health: () => DaemonHealth;
+    readonly closeSessionsForToken: (tokenId: string) => void;
   },
 ): Dispatcher {
   return new Dispatcher({
@@ -236,6 +237,7 @@ export function buildDispatcher(
     registry: options.registry,
     ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    closeSessionsForToken: hooks.closeSessionsForToken,
     ...(options.update === undefined ? {} : { update: options.update }),
     version: options.version,
   });

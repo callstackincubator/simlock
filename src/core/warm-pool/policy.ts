@@ -224,6 +224,16 @@ function reservedOf(view: WarmPolicyView): Slots {
   return { android: reserve.android, global: reserve.ios + reserve.android, ios: reserve.ios };
 }
 
+/** why: a platform with virtual devices off holds no running slot for idle devices, so its reserve counts as 0 (ADR 0084 §2). */
+export function reserveOnVirtualPlatforms(
+  reserve: { readonly ios: number; readonly android: number },
+  virtualDevices: (platform: "ios" | "android") => boolean,
+): { readonly ios: number; readonly android: number } {
+  const kept = (platform: "ios" | "android"): number =>
+    virtualDevices(platform) ? reserve[platform] : 0;
+  return { android: kept("android"), ios: kept("ios") };
+}
+
 /**
  * The running slots the operator's reserve holds back on each platform: `reserveRunning`, never
  * more than that platform's own running limit. The one place the cap is decided; `doctor` reads it

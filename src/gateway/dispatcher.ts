@@ -126,6 +126,8 @@ export interface GatewayDispatcherOptions {
   readonly directory: WorkerDirectory;
   readonly tokens?: TokenOperations;
   readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
+  // why: ADR 0081 §2: a revoked token's open sessions close at once, as its uplinks do.
+  readonly closeSessionsForToken?: (tokenId: string) => void;
   readonly clock: Clock;
   readonly logger?: Logger;
   /** why: Classifies a thrown error for the `operation` log line (`classifyError` in production),
@@ -430,7 +432,10 @@ export class GatewayDispatcher {
 
   #tokenRevoke: Handler<"token.revoke"> = async (input) => {
     const revoked = await this.#requireTokens().revoke(input.id);
-    if (revoked) await this.options.closeUplinksForToken?.(input.id);
+    if (revoked) {
+      this.options.closeSessionsForToken?.(input.id);
+      await this.options.closeUplinksForToken?.(input.id);
+    }
     return { revoked };
   };
 

@@ -4,7 +4,13 @@ import {
   isCapacityStrategyName,
   type CapacityStrategyName,
 } from "./capacity/index.js";
-import type { Config, DownloadPolicy, Layer, ModuleConfigEntry } from "./config-types.js";
+import type {
+  Config,
+  DownloadPolicy,
+  DriverConfigEntry,
+  Layer,
+  ModuleConfigEntry,
+} from "./config-types.js";
 import { MIN_EVENT_LOG_MAX_BYTES } from "./config-defaults.js";
 import { asObject, mergeConfig, omit, pick } from "./config-helpers.js";
 import { invalidValue, requireObject, type Warn } from "./validation.js";
@@ -133,6 +139,15 @@ function warnWorkerOnlyModuleKeys(
 export function runModuleChecks(config: Config, modules: readonly ModuleConfigEntry[]): void {
   for (const entry of modules) {
     entry.check?.(config.capabilities[entry.name] as never, config);
+  }
+}
+
+export function runDriverChecks(
+  config: Config,
+  driverSections: readonly DriverConfigEntry[],
+): void {
+  for (const entry of driverSections) {
+    entry.check?.(config[entry.platform] as never, config);
   }
 }
 

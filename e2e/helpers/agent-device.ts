@@ -145,6 +145,8 @@ export async function makeAgent(
     AGENT_DEVICE_STATE_DIR: home,
     AGENT_DEVICE_DAEMON_AUTH_TOKEN: token.secret,
     AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1",
+    // why: the pinned agent-device refuses a leased remote connection without a named session (REMOTE_SESSION_REQUIRED).
+    AGENT_DEVICE_SESSION: name,
     ...(options.direct ? { AGENT_DEVICE_DAEMON_BASE_URL: proxyUrl(env) } : {}),
   };
   const background = new Set<CliBackgroundHandle>();

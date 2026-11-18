@@ -4,12 +4,19 @@
  * the daemon's own role check is what actually stops an agent-role session from calling one of
  * these; nothing here enforces roles client-side beyond simply not exposing the methods.
  */
-import { NodeIpcTransport, type IpcConnection, type IpcConnector } from "../ports/index.js";
+import {
+  NodeIpcTransport,
+  type Clock,
+  type IpcConnection,
+  type IpcConnector,
+  type WebSocketClientConnector,
+} from "../ports/index.js";
 import {
   connectSimlockClient,
   type ConnectOptions,
   type SimlockAdminClient,
 } from "../simlock-client/client.js";
+import { remoteConnectOptions } from "../simlock-client/remote-connector.js";
 
 export type {
   AlertsTestInput,
@@ -109,6 +116,11 @@ export interface ConnectSimlockAdminOptions {
   readonly ipc?: IpcConnector;
   readonly principal?: string;
   readonly credential?: string;
+  readonly url?: string;
+  readonly token?: string;
+  readonly webSocket?: WebSocketClientConnector;
+  readonly clock?: Clock;
+  readonly signal?: AbortSignal;
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake, requesting the
@@ -116,6 +128,8 @@ export interface ConnectSimlockAdminOptions {
 export async function connectSimlockAdmin(
   options: ConnectSimlockAdminOptions,
 ): Promise<SimlockAdminClient> {
+  const remote = remoteConnectOptions(options);
+  if (remote !== undefined) return connectSimlockClient(remote, true);
   const resolved: ConnectOptions = {
     ...(options.connection === undefined ? {} : { connection: options.connection }),
     ...(options.connection === undefined

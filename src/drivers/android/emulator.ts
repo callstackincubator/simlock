@@ -248,7 +248,7 @@ export class Emulator {
   ): Promise<ProcessHandle> {
     const startedAt = this.#options.clock.now();
     const logPath = this.#logPath(data);
-    await this.#options.filesystem.writeFileAtomic(logPath, "", { mode: 0o600 });
+    await this.#options.filesystem.writeFileInPlace(logPath, "", { mode: 0o600 });
     // why: the output goes to a file so a launch that dies at once leaves its own error line to quote (#1199); `unref()` because an emulator outlives the daemon by design
     // (`AndroidDriver` adopts it after a restart) and is reaped through adb and
     // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
@@ -269,7 +269,9 @@ export class Emulator {
         ...this.#flags,
         ...launchArgs,
       ],
-      { env: this.#env(data), stdio: { file: logPath } },
+      // why: on Windows a kill otherwise ends `emulator.exe` alone, and its qemu child keeps
+      // running with the guest's RAM. Not a tree kill: qemu's `netsimd.exe` serves every emulator.
+      { env: this.#env(data), killChildren: true, stdio: { file: logPath } },
     );
     handle.unref();
     // why: No announcement here, deliberately. adb answers `host:emulator:<port>` by connecting

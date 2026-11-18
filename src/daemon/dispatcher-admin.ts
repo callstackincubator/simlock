@@ -63,9 +63,11 @@ export class AdminHandlers {
     tokens: await requireTokens(this.options).list(),
   });
 
-  readonly tokenRevoke: Handler<"token.revoke"> = async (input) => ({
-    revoked: await requireTokens(this.options).revoke(input.id),
-  });
+  readonly tokenRevoke: Handler<"token.revoke"> = async (input) => {
+    const revoked = await requireTokens(this.options).revoke(input.id);
+    if (revoked) this.options.closeSessionsForToken?.(input.id);
+    return { revoked };
+  };
 }
 
 export function requireTokens(options: DispatcherOptions): TokenOperations {

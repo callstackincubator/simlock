@@ -47,7 +47,10 @@ async function connectForEvents(
   token: string | undefined,
   historySinceTs: number | undefined,
 ): Promise<SimlockAdminClient | undefined> {
-  if (historySinceTs === undefined) return connectDaemonClient(environment, token);
+  // why: a farm keeps its own history, so in remote mode `--since` replays from it and never reads this machine's `history.db`.
+  if (historySinceTs === undefined || environment.remote !== undefined) {
+    return connectDaemonClient(environment, token);
+  }
   try {
     return await connectDaemonClient(environment, token, { launch: false });
   } catch (error: unknown) {

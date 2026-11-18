@@ -16,6 +16,7 @@ This page lists what each command accepts. For when and why to use a command, fo
 | [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | — |
+| [`simlock files`](#simlock-files) | Move files to and from your lease's folder on its worker, from another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#lease-files) |
 | [`simlock tunnel`](#simlock-tunnel) | Connect ports between your machine and a leased Android device or iOS simulator on another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#tunnels) |
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
@@ -50,12 +51,13 @@ These flags work anywhere on the command line, before or after the command.
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token `simlock tunnel` sends to a worker or gateway. `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
+| `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token for a farm (see [Remote mode](#remote-mode)). `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
+| `--url <url>` | The farm to run the command on: a standalone worker or a gateway, `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. `--url=<url>` also works. A `--url` that is not valid is a usage error. | `SIMLOCK_URL`. See [Remote mode](#remote-mode) |
 | `--gateway` | Send the command to this machine's gateway, the daemon in `~/.simlock/gateway`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--local` | Send the command to this machine's worker, the daemon in `~/.simlock`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--help`, `-h` | As the first word, or with no command: print the list of commands. | — |
 
-`--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`.
+`--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`. So is `--url` with either of them.
 
 <Aside type="caution">
 The CLI takes these flags out of the whole command line, including the arguments after `simctl` and `adb`. `simlock adb shell echo --local` runs `adb shell echo` against the worker. Quote or rename an argument that collides with one of them.
@@ -68,6 +70,24 @@ With `--gateway`, the command goes to the gateway. With `--local`, it goes to th
 `simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`. When the command goes to the gateway (`--gateway`, or a machine that has only a gateway), `setup` installs the skill, never connects to it and prints `machine      not checked: setup does not check a gateway`; otherwise it checks the worker.
 
 When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
+
+### Remote mode
+
+With a farm URL (`--url`, else `SIMLOCK_URL`; an empty `SIMLOCK_URL` counts as unset) and a token (`--token`, else `SIMLOCK_TOKEN`), every command whose work is the daemon's runs on that farm instead of this machine's daemon. The token's role is the command's role: an agent token gets the agent commands, an operator token gets every command. Nothing starts a daemon on this machine, falls back to an agent session or reads `SIMLOCK_ADMIN_TOKEN` or the `admin.token` file. A URL with no token is a usage error (`No token: pass --token or set SIMLOCK_TOKEN`). A token the farm refuses fails with `UNAUTHENTICATED` (exit 1), and a farm that does not answer with `REMOTE_UNREACHABLE` (exit 1).
+
+`--local` or `--gateway` beats `SIMLOCK_URL`, so a variable left in a shell does not stop you from reaching this machine's daemon.
+
+These commands act on this machine and exit 2 in remote mode, with `` `simlock <command>` acts on this machine; it does not run with --url or SIMLOCK_URL. Run it on the daemon's machine, or unset SIMLOCK_URL. ``: `daemon start`, `daemon stop`, `daemon status`, `daemon logs`, `daemon install`, `daemon uninstall`, `config set` and `setup`.
+
+A few commands differ in remote mode:
+
+- `simlock simctl` and `simlock adb` always run on the lease's worker, as `device.exec`, also when the farm is a standalone worker. A path in their arguments names a file on the worker; [`simlock files put`](#simlock-files) uploads one.
+- Without `--lease`, `simctl`, `adb` and `rotate` use the one lease whose requester is this command's requester: `SIMLOCK_AGENT_ID`, else the agent session's id, else this process. Another requester's lease on the same token is never picked. With no such lease, or with several, the command is a usage error.
+- `simlock lease` whose requester is this process prints one notice saying that later commands need `SIMLOCK_AGENT_ID` or `--lease`.
+- `events --since` replays the farm's history; it never reads this machine's `history.db`.
+- `baseline list` and `baseline remove` follow the farm's mode, a worker or a gateway, not this machine's folder.
+
+A held `simlock lease` and `simlock mcp` ride out a dropped connection, and 45 seconds with no ping from the farm counts as one. Each prints a `lost the connection to <url>` notice, then connects again after 1, 2, 4 and 8 seconds and every 15 seconds after that, and prints `reconnected to <url>; lease <id> renewed` once it renews. While the request still waits in the queue, the command sends it again under the same idempotency key, so the farm holds one request; if the worker restarted and dropped it, `simlock lease` asks once more and says so, while the `lease_simulator` call of `simlock mcp` fails with the farm's answer. The tries stop at the lease's deadline, which ends the command as a lost lease (exit 14); a request that has no `--timeout` and cannot reach the farm for 5 minutes fails with `REMOTE_UNREACHABLE` (exit 1). A reconnect the farm refuses (`UNAUTHENTICATED`, `PROTOCOL_VERSION_UNSUPPORTED`) ends the command at once with that code, and the stderr line says the lease is still yours until its deadline. Ctrl-C while disconnected connects once to release the lease, or to cancel the request that still waits. On this machine's own daemon a dropped connection still ends the command.
 
 ### Admin credential
 
@@ -128,7 +148,7 @@ Without `--detach`, the command renews the lease every third of its TTL and rele
 
 - 0 after it released the lease on request. The same signal or exit while the request still waits in the queue cancels the request and exits 0, with nothing printed on stdout.
 - 14 when the daemon ended the lease first (TTL expiry, an operator's `release`, or a device that could not be recovered). A `lease-lost` line on stderr says why.
-- 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon dropped. The lease is not released and stays yours until its deadline; the stderr line names it.
+- 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon on this machine dropped. The lease is not released and stays yours until its deadline; the stderr line names it. With `--url` the command reconnects instead, as [Remote mode](#remote-mode) says.
 
 ### simlock lease renew
 
@@ -209,6 +229,25 @@ simlock rotate <orientation> [--lease <lease-id>]
 
 It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An orientation Simlock does not know, or several leases without `--lease`, is a usage error (exit 2). A lease on an Android emulator, a physical device or an Apple TV fails with `ROTATION_UNSUPPORTED` (exit 12). A simulator that cannot take input right now fails with `INPUT_UNAVAILABLE` (exit 1); run the command again.
 
+## simlock files
+
+Move files to and from your lease's folder on its worker, so a build made on this machine can be installed by `simlock adb` or `simlock simctl`. It needs `--url` or `SIMLOCK_URL`: on the daemon's own machine the folder is a local folder, and the command exits 2.
+
+```text
+simlock files put <file> [--name <name>] [--lease <lease-id>]
+simlock files get <name> [-o <file>] [--lease <lease-id>]
+simlock files list [--lease <lease-id>]
+simlock files rm <name> [--lease <lease-id>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--name <name>` | The name the file gets in the folder: 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit | The file's own name |
+| `-o <file>` | Write the downloaded file here, whole or not at all | The file's bytes go to stdout |
+| `--lease <lease-id>` | The lease whose folder to use | The only lease held by your requester id |
+
+`put` prints `{"lease","name","size"}` as one JSON line; `list` prints the route's JSON, `{"files":[{"name","size"}]}`; `rm` prints nothing. A transfer has no size limit and no total time limit: it ends only when no byte has moved for 60 seconds, with `REMOTE_UNREACHABLE` (exit 1). The worker's limits and refusals keep their codes: `FILE_TOO_LARGE`, `LEASE_FILES_FULL`, `FILE_BUSY`, `UPLOAD_STALLED`, `UNKNOWN_LEASE` and `UNKNOWN_FILE` exit 1, `INSUFFICIENT_DISK_SPACE` exits 12. A missing file or a folder is a usage error (exit 2): a folder cannot be uploaded yet. After `simlock files put app-debug.apk`, `simlock adb install app-debug.apk` finds the file, because every command runs with the lease's folder as its working folder. A `simlock simctl` or `simlock adb` that fails after naming a path that exists on this machine prints one `notice` line on stderr saying the command ran on the worker; for a file it names the `simlock files put` command that uploads it, for a folder it says a folder cannot be uploaded yet.
+
 ## simlock tunnel
 
 While the command runs, connect ports between your machine and a leased Android device that sits on another machine: `reverse` lets the device reach a server on your machine (such as Metro), `forward` lets your machine reach a port on the device. It talks to the worker or gateway over HTTP, so it needs no daemon on your machine.
@@ -249,7 +288,7 @@ Start Simlock's MCP server on stdin and stdout, for an agent to call. It offers 
 simlock mcp
 ```
 
-Takes no flags other than the [global flags](#global-flags). Stdout carries only MCP messages; diagnostics go to stderr. The server starts the daemon on the first tool call that needs it, and releases its lease when it exits.
+Takes no flags other than the [global flags](#global-flags). Stdout carries only MCP messages; diagnostics go to stderr. The server starts the daemon on the first tool call that needs it, and releases its lease when it exits. With `--url` (or `SIMLOCK_URL`) and a token, it serves its tools from that farm, starts no daemon, and sends the lease request with the agent's requester id; without a token it exits 2. A dropped connection is ridden out as in [Remote mode](#remote-mode), and its notices reach the agent as MCP logging messages.
 
 ## simlock instructions
 
@@ -803,8 +842,8 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_HOME` | The folder Simlock keeps everything in. The worker uses it directly; a gateway uses its `gateway` subfolder. A path so long that the daemon's socket path would pass the system limit fails with `USAGE` (exit 2). | `~/.simlock` |
 | `SIMLOCK_ADMIN_TOKEN` | An admin credential: an operator token or the daemon's `admin.token` secret. Used when `--token` is not given. | Unset: the CLI reads `admin.token` |
 | `SIMLOCK_AGENT_ID` | The requester identity: printable, no control characters, at most 256 characters. When set, it wins over the session variables below. | Unset |
-| `SIMLOCK_URL` | The worker or gateway `simlock tunnel` calls, when `--url` is not given; the same rules as `--url`. | Unset |
-| `SIMLOCK_TOKEN` | The bearer token `simlock tunnel` sends, when `--token` is not given. | Unset |
+| `SIMLOCK_URL` | The farm every command runs on, when `--url` is not given; the same rules as `--url`. See [Remote mode](#remote-mode). | Unset |
+| `SIMLOCK_TOKEN` | The bearer token sent to the farm, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
 | `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |
 | `PI_SESSION_ID` | Set by [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#shell-tool-session-environment) for the commands its `bash` and `powershell` tools run. Gives the identity `pi:<id>`. | — |
@@ -828,7 +867,7 @@ A daemon started on demand inherits the environment of the command that started 
 
 | Variable | Meaning |
 | --- | --- |
-| `ANDROID_HOME`, `ANDROID_SDK_ROOT` | Where the Android SDK is, tried in this order, then `~/Library/Android/sdk`. |
+| `ANDROID_HOME`, `ANDROID_SDK_ROOT` | Where the Android SDK is, tried in this order, then `~/Library/Android/sdk` (on Windows `%LOCALAPPDATA%\Android\Sdk`). |
 | `JAVA_HOME` | The JDK the Android SDK tools run on. |
 
 ### Set in a lease's environment

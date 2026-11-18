@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 An agent on another machine leases and uses devices through Simlock's HTTP API, with an agent token. The same calls work against a single worker and against a gateway.
 
-Most `simlock` commands only talk to the daemon on their own machine, so they can't do this for you. The exception is [`simlock tunnel`](#tunnels).
+With `SIMLOCK_URL` and `SIMLOCK_TOKEN` set, the `simlock` commands run against the farm too, so an agent needs no `curl` (see [Use the CLI](#use-the-cli)). `simlock tunnel` always reaches a farm this way.
 
 ## Before you start
 
@@ -39,6 +39,21 @@ The secret is shown only once. Every request sends it as `Authorization: Bearer 
 <Aside type="danger">
 An agent token reaches the whole worker, not only one device. A command run through `exec` runs on the worker as the daemon's user, and can read and write files anywhere that user can. For example, `adb pull` writes a file to any path you choose on the worker. Through a gateway, the command runs on whichever worker holds the device. Give agent tokens only to agents you would let run commands on those machines.
 </Aside>
+
+## Use the CLI
+
+Set the farm and the token, and name who the leases are for:
+
+```sh
+export SIMLOCK_URL=https://simlock.example.com
+export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
+export SIMLOCK_AGENT_ID=ci-job-42
+simlock lease --platform android --detach
+simlock adb shell getprop ro.build.version.release
+simlock release <lease-id>
+```
+
+Every command runs on the farm with the token's role, and starts no daemon on this machine. `simlock adb` and `simlock simctl` run on the lease's worker, in the lease that `SIMLOCK_AGENT_ID` took, so two agents that share a token each reach their own device. Without `SIMLOCK_AGENT_ID` each process is its own requester: `simlock lease` prints a notice, and later commands need `--lease <id>`. Commands that act on the daemon's own machine, such as `daemon start` and `setup`, exit 2. The [CLI reference](/simlock/docs/reference/cli#remote-mode) lists the rest.
 
 ## Lease a device
 
@@ -174,6 +189,16 @@ curl -X DELETE "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Authorizati
 # 204
 ```
 
+From a machine with `SIMLOCK_URL` and `SIMLOCK_TOKEN` set, [`simlock files`](/simlock/docs/reference/cli#simlock-files) makes the same calls and finds your lease by `SIMLOCK_AGENT_ID`:
+
+```sh
+simlock files put app-debug.apk
+simlock adb install app-debug.apk
+simlock files list
+simlock files get result.png -o result.png
+simlock files rm app-debug.apk
+```
+
 - **Names.** 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit, so `.hidden`, `-rf` and `my file.tar` are refused with `400 BAD_REQUEST`. Names match ignoring case: `A.tar` and `a.tar` are one file, and a `PUT` replaces it.
 - **Limits.** 2 GiB a file and 4 GiB a lease folder (files a command wrote there count). A larger file is refused with `413 FILE_TOO_LARGE`, a full folder with `413 LEASE_FILES_FULL`, and nothing is stored when the worker's free disk is under its `diskPressure.freeBytesThreshold` (`422 INSUFFICIENT_DISK_SPACE`).
 - **One upload per name.** A second `PUT` to a name being uploaded gets `409 FILE_BUSY`. A `PUT` that is cut leaves the previous file untouched.
@@ -192,6 +217,7 @@ curl -X DELETE "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Authorizati
 | `GET /v1/status` | The devices, capacity and queue. With an agent token, `leases` and `waiting` show only your own. To find enrolled phones, see [Physical devices](/simlock/docs/using-devices/physical-devices#see-which-devices-are-enrolled). |
 | `GET /v1/catalog?platform=ios` | The models and OS versions you can ask for, as `simlock catalog --json` prints them. |
 | `GET /v1/identity` | Who the token is. |
+| `GET /v1/session` | A WebSocket upgrade that carries Simlock's daemon protocol, on a standalone worker or a gateway. Each text message is one protocol line, and `hello` works as on the local socket, except that the token sets the role and the principal: a `principal` in `hello` is ignored and a `credential` is refused. A message over 32 MiB or a binary one closes the socket (`1009`, `1003`), a peer that stops answering pings is closed, a signed-in proxy identity's session ends when its sign-in expires (`4001`), and `simlock token revoke` closes the token's sessions (`4003`). A plain `GET` answers `426`. |
 
 ### Send a lease request safely twice
 

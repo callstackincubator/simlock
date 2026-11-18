@@ -9,7 +9,7 @@ import { blankSource } from "./test-support/source-text.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Every tracked path, from the git index, so no doc escapes by sitting in a directory the test did not name. */
+/** why: every tracked path comes from the git index, so no doc escapes by sitting in a directory the test did not name. */
 const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
   cwd: REPO_ROOT,
   encoding: "utf8",
@@ -17,7 +17,7 @@ const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
 })
   .split("\0")
   .filter((name) => name.length > 0)
-  // A path deleted from the working tree is still listed by `git ls-files`; only regular files
+  // why: a path deleted from the working tree is still listed by `git ls-files`; only regular files
   // can be read.
   .filter((name) => {
     try {
@@ -27,7 +27,6 @@ const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
     }
   });
 
-/** A markdown file by extension, in any case: `.md` or `.markdown`. */
 const isMarkdown = (name: string) => /\.(?:md|markdown)$/i.test(name);
 
 const WEBSITE_DOCS = "website/src/content/docs/";
@@ -53,7 +52,6 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const internalName = (name: string) => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`, "i");
 
-/** What documentation rule 2 forbids an end-user doc from naming. */
 const FORBIDDEN: RegExp[] = [
   /docs\/internal\b/,
   // why: `internal/` starting a path: a link or a path in backticks or prose.
@@ -64,13 +62,13 @@ const FORBIDDEN: RegExp[] = [
 ];
 
 /**
- * Documentation rule 2 (`docs/internal/agent-rules/documentation.md`): an end-user doc never
+ * why: documentation rule 2 (`docs/internal/agent-rules/documentation.md`): an end-user doc never
  * cites an ADR and never points into `docs/internal/` -- by link, by path, or by an internal
  * doc's bare file name, in any case ("see ARCHITECTURE.md").
  */
 describe("end-user docs", () => {
   it("include the known end-user docs, beside a list of internal-only names", () => {
-    // Without this, an empty enumeration would leave the scan below with nothing to read and
+    // why: without this, an empty enumeration would leave the scan below with nothing to read and
     // the suite would pass while checking no doc at all.
     expect(endUserDocs).toEqual(
       expect.arrayContaining([

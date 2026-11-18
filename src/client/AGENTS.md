@@ -5,6 +5,6 @@ Surface: [programmatic-client.mdx](../../website/src/content/docs/docs/using-dev
 
 ## Rules
 
-- Sends no credential, so the session is always `agent`.
+- Sends no credential. On the daemon's socket the session is `agent`; with `url` and `token` it is the token's role, and the farm decides it.
 - No reconnect, retry or renew here.
 - Never imports core, daemon or drivers: every exported type comes from `src/simlock-client/`, and `src/simlock-client/no-core-leak.test.ts` checks the emitted declarations.

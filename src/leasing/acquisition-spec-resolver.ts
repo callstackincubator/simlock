@@ -23,7 +23,7 @@ import {
   UnknownModelError,
   type VirtualSpec,
 } from "../core/index.js";
-import { asError } from "./acquisition-errors.js";
+import { asError, VirtualDevicesOffError } from "./acquisition-errors.js";
 import { type LeaseAcquisitionCoordinatorOptions } from "./acquisition-ports.js";
 import {
   downloadingProgress,
@@ -66,6 +66,10 @@ export class AcquisitionSpecResolver {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
+    // why: before the baseline branch, any catalog read, download or wait: a phones-only platform makes no virtual device (ADR 0084 §2).
+    if (!this.options.catalog.virtualDevices(request.platform)) {
+      throw new VirtualDevicesOffError(request);
+    }
     if (request.baseline !== undefined) {
       return this.#resolveBaseline(driver, request.baseline, request);
     }

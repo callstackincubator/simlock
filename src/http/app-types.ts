@@ -3,8 +3,16 @@ import type { MiddlewareHandler } from "hono";
 import type { Auth, Identity } from "../auth/index.js";
 import type { EventBus } from "../bus/index.js";
 import type { DeviceRecord } from "../core/index.js";
+import type { DispatchSession } from "../daemon/dispatch.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
-import type { Clock, IdGenerator, LeaseSocketAccept, Logger } from "../ports/index.js";
+import type {
+  Clock,
+  IdGenerator,
+  LeaseSocketAccept,
+  Logger,
+  SessionConnection,
+  SessionOutcome,
+} from "../ports/index.js";
 import type { AuthEnv } from "./auth.js";
 import type { HttpDispatch } from "./dispatcher-session.js";
 import type { LeaseNoticeBuffer } from "./notices.js";
@@ -42,6 +50,8 @@ export interface HttpGatewayDeps {
   readonly mounts?: readonly HttpMount[];
   readonly leaseRoutes?: readonly HttpLeaseRoute[];
   readonly leaseFiles: HttpLeaseFiles;
+  // why: the daemon takes a session's connection with the identity the upgrade's token gave it; a host with none answers the session path 404.
+  readonly acceptSession?: (connection: SessionConnection, session: DispatchSession) => void;
 }
 
 export interface HttpLeaseFiles {
@@ -85,6 +95,10 @@ export type HttpLeaseSocketOutcome =
 
 export interface LeaseSocketCapture {
   accept?: HttpLeaseSocketAccept;
+  session?: {
+    readonly accept: (connection: SessionConnection) => void;
+    readonly expiresAt?: number;
+  };
 }
 
 export interface HttpMount {
@@ -99,6 +113,8 @@ export interface HttpAppDisposable {
   // why: a WebSocket upgrade of a lease route goes through the app's own auth and lease resolution,
   // so a refusal is the answer any request to the path would get; only the accept is new.
   readonly leaseSocket: (request: Request) => Promise<HttpLeaseSocketOutcome>;
+  // why: the session path's upgrade goes through the app's own auth, so a refusal is the answer any request to the path would get; only the accept is new.
+  readonly session: (request: Request) => Promise<SessionOutcome>;
 }
 
 // why: what the lease route blocks close over: the app's dependencies, its request tracker and

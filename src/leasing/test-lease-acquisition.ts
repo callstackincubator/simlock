@@ -201,7 +201,13 @@ export async function createHarness(
     });
   coordinator = new LeaseAcquisitionCoordinator({
     baselines: options.baselines ?? { current: () => undefined },
-    catalog: options.catalogReader ?? catalog,
+    catalog:
+      options.catalogReader === undefined
+        ? catalog
+        : {
+            listCatalog: (platform) => options.catalogReader!.listCatalog(platform),
+            virtualDevices: (platform) => catalog.virtualDevices(platform),
+          },
     claims,
     components,
     decisions,

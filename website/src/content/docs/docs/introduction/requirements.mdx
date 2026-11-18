@@ -42,7 +42,7 @@ To watch a simulator's screen in the console, you need macOS 14 or later.
 
 ## Set up Android emulators
 
-1. Install the Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and uses the first one that has every tool it needs. Linux has no default location, so set `ANDROID_HOME` there.
+1. Install the Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk` (on Windows `%LOCALAPPDATA%\Android\Sdk`), and uses the first one that has every tool it needs. Linux has no default location, so set `ANDROID_HOME` there.
 2. Install the SDK command-line tools (`sdkmanager` and `avdmanager`), from Android Studio or the [command-line tools download](https://developer.android.com/studio#command-line-tools-only). Unpack them to `$ANDROID_HOME/cmdline-tools/latest`.
 3. Install the `emulator` and `platform-tools` packages:
 

@@ -37,8 +37,7 @@
 //     `Tests: <n> before, <m> after.` with m at least n, or a `Mutation:` line ending
 //     `0 alive.`;
 //   - a routine's branch changed what its routine may not: `chore/garden-comments-*` is
-//     `comments-only`, `chore/audit-tests-*` and `chore/harden-tests-*` are `tests-only`, and
-//     `chore/calibrate-reviews-*` changes `.agents/briefs/calibration.md` alone.
+//     `comments-only`, `chore/audit-tests-*` and `chore/harden-tests-*` are `tests-only`.
 //
 // The diff is read from this clone: a PR's base and head SHAs, or `--base <sha> --head <sha>`;
 // `--kind <kind>` gives the kind instead. A PR whose SHAs this clone lacks gets a warning in
@@ -71,7 +70,6 @@ const ROUTINES = [
   [/^chore\/garden-comments-/, "comments-only"],
   [/^chore\/(?:audit|harden)-tests-/, "tests-only"],
 ];
-const CALIBRATION = ".agents/briefs/calibration.md";
 
 const args = process.argv.slice(2);
 const draftOk = args.includes("--draft-ok");
@@ -365,19 +363,9 @@ function kindFromGit() {
     return null;
   }
   const mergeBase = git(["merge-base", diffBase, diffHead]).trim();
-  if (branch.startsWith("chore/calibrate-reviews-")) checkCalibration(mergeBase);
   return execFileSync(process.execPath, [join(HERE, "diff-kind.mjs"), mergeBase, diffHead], {
     encoding: "utf8",
   }).trim();
-}
-
-function checkCalibration(mergeBase) {
-  const other = git(["diff", "--name-only", mergeBase, diffHead])
-    .split("\n")
-    .find((n) => n !== "" && n !== CALIBRATION);
-  if (other !== undefined) {
-    failures.push(`a calibrate-reviews PR changes ${CALIBRATION} alone; it also changes ${other}`);
-  }
 }
 
 function checkKind(kind, counts) {

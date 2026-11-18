@@ -21,6 +21,7 @@ import {
 import { commandArgs, UsageError } from "../args.js";
 import { escapeControl } from "../escape.js";
 import { selectOnlyLease } from "../remote-lease.js";
+import { checkedFarmUrl, FarmUrlError, farmTokenFits } from "../../simlock-client/farm-url.js";
 import type { CommandContext } from "../tree.js";
 import type { CliEnvironment } from "../types.js";
 
@@ -31,8 +32,6 @@ const CLOSE_NORMAL = 1000;
 const WARN_EVERY_MS = 10_000;
 const ADB_CONNECT_TIMEOUT_MS = 10_000;
 const ADB_DISCONNECT_TIMEOUT_MS = 2_000;
-const MAX_URL_CHARS = 2048;
-const MAX_TOKEN_CHARS = 4096;
 const MAX_LEASE_CHARS = 256;
 
 interface TunnelSpec {
@@ -108,41 +107,20 @@ function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
   return specs;
 }
 
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]", "localhost"]);
-
-function parsedUrl(text: string): URL {
-  const refusal = new UsageError(
-    "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
-  );
-  let parsed: URL;
-  try {
-    parsed = new URL(text);
-  } catch {
-    throw refusal;
-  }
-  const allowed =
-    parsed.protocol === "https:" ||
-    (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname));
-  if (!allowed || text.length > MAX_URL_CHARS) throw refusal;
-  return parsed;
-}
-
-function checkedOrigin(parsed: URL, text: string): void {
-  if (parsed.pathname !== "/" || /[?#]/.test(text)) {
-    throw new UsageError("--url must be the worker's origin only: no path, query or fragment");
-  }
-}
-
 function checkedUrl(text: string | undefined): string {
   if (text === undefined || text === "") {
-    throw new UsageError("No worker URL: pass --url or set SIMLOCK_URL");
+    throw new UsageError("No farm URL: pass --url or set SIMLOCK_URL");
   }
-  checkedOrigin(parsedUrl(text), text);
-  return text.replace(/\/$/, "");
+  try {
+    return checkedFarmUrl(text, "--url");
+  } catch (error: unknown) {
+    if (error instanceof FarmUrlError) throw new UsageError(error.message);
+    throw error;
+  }
 }
 
 function checkedToken(text: string | undefined): string {
-  if (text === undefined || text === "" || text.length > MAX_TOKEN_CHARS) {
+  if (text === undefined || !farmTokenFits(text)) {
     throw new UsageError("No token: pass --token or set SIMLOCK_TOKEN");
   }
   return text;
@@ -318,7 +296,7 @@ const SILENCE_TIMEOUT_MS = 45_000;
 const CLOSE_WAIT_MS = 2_000;
 const CLOSE_LEASE_ENDED = 4001;
 
-// why: a failure here carries the worker's own code, which can be one the contract's table does not hold (an HTTP 401 answers `UNAUTHENTICATED`), so the command prints its one JSON line itself.
+// why: a failure here carries the worker's own code, which can be one the contract's table does not hold, so the command prints its one JSON line itself.
 class TunnelFailure extends Error {
   constructor(
     readonly code: string,
@@ -672,12 +650,11 @@ function serve(
 
 async function run(
   argv: readonly string[],
-  { environment, token }: CommandContext,
+  { environment, token, url }: CommandContext,
 ): Promise<number> {
-  const { help, lease, positionals, url } = commandArgs(argv, {
+  const { help, lease, positionals } = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
     lease: { type: "string" },
-    url: { type: "string" },
   });
   if (help) {
     environment.stdout.write(
@@ -686,7 +663,7 @@ async function run(
     return 0;
   }
   const parsed = parseTunnels(positionals);
-  const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
+  const base = checkedUrl(url);
   const secret = checkedToken(token ?? environment.tunnelToken);
   const named = checkedLease(typeof lease === "string" ? lease : undefined);
   const listeners: TcpListener[] = [];

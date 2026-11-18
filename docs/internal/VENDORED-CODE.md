@@ -72,7 +72,7 @@ vendored while the Xcode that compiles it is not.
    [agent-rules/vendor-and-third-party-code.md](agent-rules/vendor-and-third-party-code.md).
    A binary also gets `SHA256SUMS.txt` in `shasum -c` format.
 3. Add the row here and the directory to `vendor/README.md`'s index.
-4. `pnpm exec vitest run --project unit src/source-hygiene.test.ts` checks the
+4. `pnpm exec vitest run --project unit src/source-hygiene.repo.test.ts` checks the
    shape (license text, `NOTICE.md`, the digest, and that a vendored binary is
    excluded from the text scan for a reason it can prove).
 

@@ -149,8 +149,17 @@ export function defaultConfig(
       recoveryBackoffMs: 5_000,
       maxConcurrentRecoveries: 1,
     },
-    ios: { ...driverDefaults(driverSections, "ios"), defaultMode: "full", defaultModels: {} },
-    android: { ...driverDefaults(driverSections, "android"), defaultModels: {} },
+    ios: {
+      ...driverDefaults(driverSections, "ios"),
+      defaultMode: "full",
+      defaultModels: {},
+      virtualDevices: true,
+    },
+    android: {
+      ...driverDefaults(driverSections, "android"),
+      defaultModels: {},
+      virtualDevices: true,
+    },
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,

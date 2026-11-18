@@ -30,6 +30,15 @@ export interface ProcessRunOptions {
    * newline. The captured `ProcessResult` text is the same either way.
    */
   readonly lineEnd?: LineEnd;
+  /**
+   * why: on Windows `kill` ends the child alone, and a program that runs its real work as a child
+   * (`emulator.exe` runs qemu) leaves that child running. With this, `kill` also ends the child's
+   * own children, never theirs: a grandchild can be a process others use (the first emulator's
+   * qemu starts the host's one `netsimd.exe`, and every emulator's network goes through it), and
+   * an `adb` client can start the shared adb server, so no adb command sets this. Elsewhere `kill`
+   * already ends the child's process group, and this changes nothing.
+   */
+  readonly killChildren?: boolean;
 }
 
 export type LineEnd = "newline" | "carriage-return-too";

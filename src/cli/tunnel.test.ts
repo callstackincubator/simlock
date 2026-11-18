@@ -124,17 +124,17 @@ describe("simlock tunnel that cannot run", () => {
         "http://127.0.0.1:7300/?",
       ].map((url) => ({
         argv: ["--url", url, "reverse", "5173"],
-        message: "--url must be the worker's origin only: no path, query or fragment",
+        message: "--url must be the farm's origin only: no path, query or fragment",
       })),
       {
         argv: ["reverse", "5173"],
         env: { ...ENV, SIMLOCK_URL: "https://worker.example/v1" },
-        message: "--url must be the worker's origin only: no path, query or fragment",
+        message: "--url must be the farm's origin only: no path, query or fragment",
       },
       {
         argv: ["reverse", "5173"],
         env: { SIMLOCK_TOKEN: "sk_agent_x" },
-        message: "No worker URL: pass --url or set SIMLOCK_URL",
+        message: "No farm URL: pass --url or set SIMLOCK_URL",
       },
       {
         argv: ["reverse", "5173"],

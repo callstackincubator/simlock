@@ -15,7 +15,7 @@ Routing:
 
 Connect and auto-launch:
 
-- A missing or rejected credential is not an error: the command gets an `agent` session and one stderr `notice` line.
+- Against the local daemon, a missing or rejected credential is not an error: the command gets an `agent` session and one stderr `notice` line. With `--url`, a missing token is a usage error and a rejected one fails (`connectFarm` in `connect.ts`).
 - Auto-launch loads the config first, so a bad one fails on this command's stderr.
 - A launched daemon that exits fails the command at once, unless another daemon answers a last connect. A start through the service never reports an exit, so a daemon it refuses fails at the deadline with the `daemon.log` lines since the start.
 - An answered probe ends the startup window, a `starting` status included: later command failures keep their own codes even while a lease queues or boots.
@@ -27,12 +27,14 @@ Holding a lease:
 
 - The connection holds nothing: a lease ends by release or TTL. A lost connection is `DAEMON_CONNECTION_LOST`, and the lease runs to its deadline.
 - Renewal stops before the release; no timer outlives a command.
+- With `--url`, a dropped connection is ridden out (ADR 0081 §4): before the grant the request goes again under its idempotency key, after it the command connects and renews on `startReconnect`'s schedule until the lease's deadline. The typed client still never reconnects. A refused reconnect ends the command with that code; Ctrl-C while disconnected connects once, within `RELEASE_TIMEOUT_MS`, to release the lease or to cancel the request still waiting.
 - A signal or a parent exit while the command connects sends no request; during the request it aborts it (the client cancels the queued request). Either way it exits 0.
 
 Passthrough and tunnel:
 
 - `simctl` and `adb`: on a worker the scoped command runs here (`spawnPassthrough`). Through a gateway it is `device.exec`: the worker's driver fills the lease's device in and refuses another (ADR 0047).
 - Without `--stdin`, stdin is never read and `stdin: ""` is sent (ADR 0058). A worker ignores `--stdin`.
+- `files`: a failure of this machine's disk (`LOCAL_FILE_ERRORS` in `commands/files.ts`) surfaces as it is, never as `REMOTE_UNREACHABLE`.
 - `tunnel` talks to a worker or gateway over HTTP and a WebSocket, never the local daemon. `ws` loads on the first connect, for this command only.
 - A forward tunnel binds its caller port before anything else, and holds accepted connections until `READY`.
 - `tunnel emulator adb`: a failed `adb connect` is a warning and the tunnel stays. Leaving always runs `adb disconnect`, and the exit code is the command's own.
