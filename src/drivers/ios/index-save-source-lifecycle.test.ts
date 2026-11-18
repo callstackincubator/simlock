@@ -6,6 +6,7 @@ import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 import {
   deviceRoot,
+  sourcesSetPath,
   driverData,
   simctl,
   plantManagedDevice,
@@ -55,7 +56,7 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesSetPath]).toContain(call.args[2]);
   }
 });
 
@@ -63,14 +64,13 @@ describe("IosSimctlDriver", () => {
   describe("saveSource", () => {
     const cloneUdid = "00000000-0000-0000-0000-0000000000bb";
     const baselineName = "simlock-baseline-device-1";
-    const sourcesSet = `${deviceRoot}/sources`;
     const device = {
       address: driverData.udid,
       deviceId: driverData.udid,
       driverData: { ...driverData, lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
       physical: false,
     } as const;
-    const cloneInvocation = simctl("clone", driverData.udid, baselineName, sourcesSet);
+    const cloneInvocation = simctl("clone", driverData.udid, baselineName, sourcesSetPath);
 
     it("keeps a shut-down copy of the device in the sources set as a ready baseline source with its disabled.plist, and a failing clone keeps no row", async () => {
       const database = await memorySourceDatabase();
@@ -82,9 +82,9 @@ describe("IosSimctlDriver", () => {
         overridesPath(driverData.udid),
         overridesPlist({ "a.b": true }),
       );
-      await filesystem.mkdirp(`${sourcesSet}/${cloneUdid}/data`);
-      await filesystem.writeFileAtomic(`${sourcesSet}/${cloneUdid}/data/state`, "12345");
-      await plantLaunchServices(filesystem, `${sourcesSet}/${cloneUdid}`);
+      await filesystem.mkdirp(`${sourcesSetPath}/${cloneUdid}/data`);
+      await filesystem.writeFileAtomic(`${sourcesSetPath}/${cloneUdid}/data/state`, "12345");
+      await plantLaunchServices(filesystem, `${sourcesSetPath}/${cloneUdid}`);
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
         {
@@ -116,7 +116,7 @@ describe("IosSimctlDriver", () => {
       expect(await filesystem.readFile(overridesPath(cloneUdid))).toBe(
         overridesPlist({ "a.b": true }),
       );
-      expect(await launchServicesFiles(filesystem, `${sourcesSet}/${cloneUdid}`)).toEqual([
+      expect(await launchServicesFiles(filesystem, `${sourcesSetPath}/${cloneUdid}`)).toEqual([
         "com.apple.LaunchServices.unregisteredtypes-501.db",
       ]);
       await expect(driver.listSources()).resolves.toEqual([

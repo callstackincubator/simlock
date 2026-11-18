@@ -7,7 +7,7 @@ import {
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { memorySourceDatabase, plantBytes } from "./testing.js";
-import { deviceRoot, driverData, plantManagedDevice, simctl } from "./test-slim.js";
+import { deviceRoot, driverData, sourcesSetPath, plantManagedDevice, simctl } from "./test-slim.js";
 import {
   RecordingLogger,
   createDriver,
@@ -28,8 +28,7 @@ afterEach(() => {
 
 const copyUdid = "CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD";
 const lineageUdid = throwawayUdid.toUpperCase();
-const sourcesSet = `${deviceRoot}/sources`;
-const seedFolder = `${sourcesSet}/${seedUdid}`;
+const seedFolder = `${sourcesSetPath}/${seedUdid}`;
 const SQLITE_HEADER = Buffer.from("SQLite format 3\u0000");
 const MEBIBYTE = 1_048_576;
 
@@ -128,7 +127,7 @@ async function saveBaseline(options: {
     { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
     { match: simctl("shutdown", driverData.udid) },
     {
-      match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSet),
+      match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSetPath),
       result: { code: 0, stderr: "", stdout: `${baselineUdid}\n` },
     },
   ]);
@@ -266,14 +265,14 @@ describe("IosSimctlDriver source records", () => {
     expect(walkFails.error).toMatchObject({ code: "EACCES" });
     expect(
       walkFails.runner.calls.some(
-        (call) => call.args.join(" ") === `simctl --set ${sourcesSet} delete ${seedUdid}`,
+        (call) => call.args.join(" ") === `simctl --set ${sourcesSetPath} delete ${seedUdid}`,
       ),
       "the seed's clone is deleted",
     ).toBe(true);
     expect(walkFails.database.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     expect(recorded(walkFails.database)).toEqual([]);
 
-    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const baselineFolder = `${sourcesSetPath}/${baselineUdid}`;
     const lease = driverData.udid.toUpperCase();
     const fromUsedLease = await saveBaseline({
       lineage: [lineageUdid],

@@ -23,6 +23,8 @@ import { memorySourceDatabase } from "./testing.js";
 // why: the driver passes `resolve(root)` to simctl, which puts a drive letter on a Windows host.
 export const deviceRoot = resolve("/Devices");
 
+export const sourcesSetPath = join(deviceRoot, "sources");
+
 export const instanceId = "instance-1";
 
 export const driverData = {
@@ -122,7 +124,7 @@ export function overridesFolder(udid: string): string {
 }
 
 export function overridesPath(udid: string): string {
-  return `${overridesFolder(udid)}/disabled.plist`;
+  return join(overridesFolder(udid), "disabled.plist");
 }
 
 /** why: ADR 0083 S2: the record of named services sits beside the overrides file. */

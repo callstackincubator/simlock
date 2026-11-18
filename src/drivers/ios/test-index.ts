@@ -13,6 +13,7 @@ import { plantReadySeed, memorySourceDatabase, type PlantedSource } from "./test
 import {
   simctl,
   deviceRoot,
+  sourcesSetPath,
   driverData,
   dataPath,
   instanceId,
@@ -89,7 +90,7 @@ export function sourcesSimctl(...args: readonly string[]): {
   readonly command: string;
   readonly args: string[];
 } {
-  return { args: ["simctl", "--set", `${deviceRoot}/sources`, ...args], command: "xcrun" };
+  return { args: ["simctl", "--set", sourcesSetPath, ...args], command: "xcrun" };
 }
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
@@ -394,7 +395,7 @@ export function throwawaySeedSteps(
     { match: simctl("listapps", throwawayUdid) },
     { match: simctl("shutdown", throwawayUdid) },
     {
-      match: simctl("clone", throwawayUdid, name, `${deviceRoot}/sources`),
+      match: simctl("clone", throwawayUdid, name, sourcesSetPath),
       result: { code: 0, stderr: "", stdout: `${seed}\n` },
     },
     { match: simctl("delete", throwawayUdid) },
@@ -404,7 +405,7 @@ export function throwawaySeedSteps(
 /** why: `simctl clone` made the seed's folder in the sources set, which the scripted runner cannot do, and a make walks it before the seed turns ready. */
 export async function plantSeedClone(
   filesystem: Filesystem,
-  sourcesSet: string = `${deviceRoot}/sources`,
+  sourcesSet: string = sourcesSetPath,
   udid: string = seedUdid,
 ): Promise<void> {
   await filesystem.mkdirp(`${sourcesSet}/${udid}`);

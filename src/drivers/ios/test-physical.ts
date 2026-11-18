@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { expect } from "vitest";
 import type { PhysicalInspection } from "../../core/index.js";
@@ -25,6 +25,11 @@ const appsFixture = JSON.parse(
 ) as { readonly result: { readonly apps: readonly Fields[] } };
 
 export const SIMLOCK_HOME = "/home/.simlock";
+
+// why: the driver builds the json path with `join`, which uses backslashes on a Windows host.
+const JSON_OUTPUT_PATH = new RegExp(
+  `^${join(SIMLOCK_HOME, "devicectl").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\\\/][^\\\\/]+$`,
+);
 
 // why: the driver passes `resolve(root)` to simctl, which puts a drive letter on a Windows host.
 export const DEVICE_ROOT = resolve("/Devices");
@@ -261,7 +266,7 @@ export class Lab {
   #read(argv: readonly string[], script: ReadScript): this {
     return this.add({
       match: {
-        args: ["devicectl", ...argv, "--json-output", /^\/home\/\.simlock\/devicectl\/[^/]+$/],
+        args: ["devicectl", ...argv, "--json-output", JSON_OUTPUT_PATH],
         command: "xcrun",
       },
       onSpawn: async (args) => {
