@@ -25,7 +25,6 @@ Leases:
 - In the first minute after a start, a generated lease id the index lacks answers `WORKER_UNREACHABLE` until its worker reports.
 - The lease index is rebuilt from each view's leases. An entry goes only when consecutive snapshots lack it; it is kept across a disconnect and forgotten with the view.
 - A lease the worker answered released or `UNKNOWN_LEASE` is not added back by a later snapshot that still lists it. A worker's `UNKNOWN_LEASE` drops the entry.
-- A worker's relayed `MODE_UNAVAILABLE` before a progress push is "cannot serve" like `UNKNOWN_MODEL`: that worker is left out for that request and its catalog is read again.
 - A refusal is remembered against the worker's `viewLoadKey`; the worker is asked again once its view changes. `DAEMON_UPDATING` is handled as `NO_CAPACITY`.
 - A worker's failure before its first progress push sends the request on to another worker or back to the queue. After a progress push it is the request's own end (`worker-failed`): device work had started.
 - A granted lease id unlike the forwarded `leaseId` is not believed: it is released on the worker and the request tries again.
