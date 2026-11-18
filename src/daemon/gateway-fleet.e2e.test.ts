@@ -125,7 +125,14 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
-    await Promise.all(directories.splice(0).map((directory) => removeDirectory(directory)));
+    await Promise.all(
+      directories.splice(0).map((directory) =>
+        removeDirectory(directory).catch(async (error: unknown) => {
+          const left = await readdir(directory, { recursive: true }).catch(() => ["<gone>"]);
+          throw new Error(`DIAG left: ${JSON.stringify(left)} ${String(error)}`);
+        }),
+      ),
+    );
   });
 
   async function startGateway(
