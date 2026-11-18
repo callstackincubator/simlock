@@ -202,7 +202,7 @@ describe("CLI: daemon install (#830)", () => {
       const { exitCode, output, serviceManager } = await install({
         argv: ["daemon", "install"],
         role: "worker",
-        root: "/home/me/.simlock",
+        root: join("/home/me", ".simlock"),
         env,
         linux: true,
       });
@@ -226,7 +226,7 @@ describe("CLI: daemon install (#830)", () => {
     const lookupFails = await install({
       argv: ["daemon", "install"],
       role: "worker",
-      root: "/home/me/.simlock",
+      root: join("/home/me", ".simlock"),
       linux: true,
       user: unknownUser,
     });
