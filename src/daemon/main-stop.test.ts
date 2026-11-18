@@ -22,6 +22,7 @@ import {
   MemoryLogSink,
   NodeSqliteOpener,
   NoopLogger,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import {
@@ -47,7 +48,7 @@ describe("startDaemon stopped while starting", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-"));
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     const filesystem = new MemoryFilesystem();
     const startPromise = startDaemon({
       clock,
@@ -542,7 +543,7 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
       const sink = new MemoryLogSink();
       const logger = new JsonLinesLogger({ clock, level: "debug", sink });
       const filesystem = new MemoryFilesystem();
-      const socketPath = join(directory, "daemon.sock");
+      const socketPath = resolveDaemonSocketPath(directory);
 
       const restoreListen = delayTcpListen(200);
       try {

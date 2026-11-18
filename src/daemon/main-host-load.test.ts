@@ -14,6 +14,7 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -91,7 +92,7 @@ describe("startDaemon host load", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-load-slow-"));
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     const startPromise = startDaemon({
       clock,
       configOverrides: STANDALONE_OFF,
@@ -210,7 +211,7 @@ describe("startDaemon host load", () => {
   it("starts the sampler only after the daemon holds its socket", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-load-socket-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     const socketAtRead: boolean[] = [];
     class WatchingProbe extends FakeHostLoadProbe {
       override read(): Promise<HostLoadCounters> {
@@ -250,7 +251,7 @@ describe("startDaemon host load", () => {
           deviceDataTables: fakeDeviceDataTables,
           filesystem: new SecretRefusingFilesystem(),
           hostLoadProbe,
-          socketPath: join(directory, "daemon.sock"),
+          socketPath: resolveDaemonSocketPath(directory),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow("disk is read-only");

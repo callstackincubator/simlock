@@ -7,6 +7,7 @@ import {
   MemoryFilesystem,
   NodeFilesystem,
   NodeIpcTransport,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import type { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -27,7 +28,7 @@ describe("DaemonServer", () => {
   it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
     const first = await createHarness({ socketPath });
     let convergeCalls = 0;
@@ -65,7 +66,7 @@ describe("DaemonServer", () => {
   it("never touches admin.token on the daemon instance that loses the start race", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-stale-admin-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
 
     const secrets = new CryptoTokenSecrets();
@@ -98,7 +99,7 @@ describe("DaemonServer", () => {
     async (removalFails) => {
       const directory = await mkdtemp(join(tmpdir(), "simlock-admin-restart-"));
       temporaryDirectories.push(directory);
-      const socketPath = join(directory, "daemon.sock");
+      const socketPath = resolveDaemonSocketPath(directory);
       const filesystem = new MemoryFilesystem();
       const secrets = new CryptoTokenSecrets();
       const oldSecret = await adminAuth(filesystem, secrets);

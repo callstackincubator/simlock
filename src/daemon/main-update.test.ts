@@ -17,6 +17,7 @@ import {
   MemoryIpcTransport,
   MemoryLogSink,
   NoopLogger,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -104,7 +105,7 @@ describe("startDaemon version check", () => {
           logger: new NoopLogger(),
           npm,
           role,
-          socketPath: join(directory, "daemon.sock"),
+          socketPath: resolveDaemonSocketPath(directory),
           version: "0.3.0",
         } as StartDaemonOptions),
       ).rejects.toThrow(refused === "listen" ? "listen EACCES" : "disk is read-only");
@@ -163,7 +164,7 @@ describe("startDaemon version check", () => {
         ipc: new ListenFailingTransport(code),
         logger: new NoopLogger(),
         npm: new FakeNpmCli({ view: [{ ok: true, output: "0.3.0\n" }] }),
-        socketPath: join(directory, "daemon.sock"),
+        socketPath: resolveDaemonSocketPath(directory),
         version: "0.3.0",
       } as StartDaemonOptions).then(
         () => undefined,
@@ -204,7 +205,7 @@ describe("startDaemon version check", () => {
       const clock = new FakeClock(1_000);
       const sink = new MemoryLogSink();
       const ipc = new MemoryIpcTransport();
-      const socketPath = join(directory, "daemon.sock");
+      const socketPath = resolveDaemonSocketPath(directory);
       const disposed: string[] = [];
       const driver = Object.assign(
         new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
