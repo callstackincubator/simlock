@@ -60,6 +60,9 @@ describe("fseventsd module", () => {
       expect(processRunner.calls).toEqual([]);
       const messages = await messagesOf(worker);
       expect(messages.map((message) => /\d+\.\d GB/.exec(message)?.[0])).toEqual(expected);
+      expect(processRunner.calls.map((call) => call.options.timeoutMs)).toEqual(
+        script.map(() => 5_000),
+      );
     }
 
     const { worker: texts } = await macWorker([pgrepFound, topPrints("3221225472B")]);

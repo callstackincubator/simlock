@@ -5,8 +5,6 @@ import { FakeSystemStats, MemoryFilesystem, NoopLogger, type Logger } from "../p
 import { createModuleHost, type ModuleFinding } from "./index.js";
 import { fakeModule, fakeModuleTokens, fakeWorkerContext } from "./testing.js";
 
-const FINDINGS_DEADLINE_MS = 15_000;
-
 const finding = (message: string): ModuleFinding => ({ message, remedy: "fix it" });
 
 async function hostOf(
@@ -86,7 +84,10 @@ describe("the module host's findings", () => {
         found = all;
       });
       await new Promise((resolve) => setImmediate(resolve));
-      clock.advance(FINDINGS_DEADLINE_MS);
+      clock.advance(14_999);
+      await new Promise((resolve) => setImmediate(resolve));
+      if (label === "one async past the deadline beside a sync one") expect(found).toBeUndefined();
+      clock.advance(1);
       await new Promise((resolve) => setImmediate(resolve));
       expect(
         (found ?? []).map(
