@@ -697,11 +697,11 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
 
   it("a failed or stuck launchctl call is SERVICE_FAILED, a failed load removes the plist, and a platform without a service manager is a usage error", async () => {
     for (const command of ["install", "uninstall"]) {
-      const result = await run({ argv: ["daemon", command], platform: "win32" });
-      expect(result.exitCode, `win32 ${command}`).toBe(2);
-      expect(errorOf(result.stderr), `win32 ${command}`).toEqual({
+      const result = await run({ argv: ["daemon", command], platform: "freebsd" });
+      expect(result.exitCode, `freebsd ${command}`).toBe(2);
+      expect(errorOf(result.stderr), `freebsd ${command}`).toEqual({
         code: "USAGE",
-        message: `daemon ${command} is supported on macOS and Linux only`,
+        message: `daemon ${command} is supported on macOS, Linux and Windows only`,
       });
     }
 
