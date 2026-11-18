@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -29,8 +29,12 @@ function write(path: string, content: string, mode: number): void {
   chmodSync(path, mode);
 }
 
+// why: a tar that reads "C:" as a host name cannot open a Windows path, so it runs in the folder.
 function listing(tarball: string): string {
-  return spawnSync("tar", ["tvzf", tarball], { encoding: "utf8" }).stdout;
+  return spawnSync("tar", ["tvzf", basename(tarball)], {
+    cwd: dirname(tarball),
+    encoding: "utf8",
+  }).stdout;
 }
 
 // why: the bits that matter are the ones in the tarballs users install, so the claims are checked

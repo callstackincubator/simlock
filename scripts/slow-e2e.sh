@@ -136,8 +136,8 @@ def delete_marked_simulators():
             print(f"deleted simulator {udid}")
 
 def free_gib(path):
-    stats = os.statvfs(path)
-    return stats.f_bavail * stats.f_frsize / 2**30
+    # why: os.statvfs does not exist on Windows; disk_usage reports the same free bytes.
+    return shutil.disk_usage(path).free / 2**30
 
 if command == "clean":
     if holder():

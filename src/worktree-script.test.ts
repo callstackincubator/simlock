@@ -119,6 +119,10 @@ describe("worktree.sh", () => {
 
     expect(git(after, "rev-parse", "HEAD")).toBe(head);
     expect(git(before, "rev-parse", "HEAD")).toBe(head);
-    expect(readFileSync(installs, "utf8").trim().split("\n")).toEqual([after, before]);
+    // why: the fake pnpm prints the long spelling of the user's folder, the script the short one.
+    const real = (path: string) => realpathSync.native(path).replaceAll("\\", "/");
+    expect(readFileSync(installs, "utf8").trim().split("\n").map(real)).toEqual(
+      [after, before].map(real),
+    );
   });
 });
