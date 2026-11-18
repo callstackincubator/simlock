@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -234,7 +236,7 @@ function fleetFile(fleet: Fleet) {
 
 function runScript(target: number, env: NodeJS.ProcessEnv, cwd: string | undefined) {
   try {
-    const output = execFileSync("sh", [SCRIPT, String(target)], {
+    const output = execFileSync(BASH, [SCRIPT, String(target)], {
       cwd,
       env,
       encoding: "utf8",
@@ -250,11 +252,10 @@ function runScript(target: number, env: NodeJS.ProcessEnv, cwd: string | undefin
 function gate(fleet: Fleet = {}) {
   const dir = mkdtempSync(join(tmpdir(), "merge-pr-"));
   writeFileSync(join(dir, "fleet.json"), JSON.stringify(fleetFile(fleet)));
-  writeFileSync(join(dir, "gh"), FAKE_GH);
-  chmodSync(join(dir, "gh"), 0o755);
+  writeFakeCommand(dir, "gh", FAKE_GH);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PATH: `${dir}:${process.env.PATH}`,
+    ...fakeCommandEnv(dir),
     FAKE_GH_DIR: dir,
     MERGE_PR_POLL_SECONDS: "0",
     GH_REPO: "o/r",

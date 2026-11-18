@@ -1,12 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,9 +7,13 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defaultWorkerLockPath } from "./ports/index.js";
+import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "slow-e2e.sh");
 const PINNED = "0.21.28";
+
+// why: idleNode makes its process with os.fork(), which Windows does not have.
+const forks = it.skipIf(process.platform === "win32");
 
 const started: number[] = [];
 afterEach(() => {
@@ -47,7 +44,7 @@ function machine() {
     SIMLOCK_E2E_AGENT_DEVICE: "",
   };
   const run = (...args: string[]) =>
-    spawnSync("sh", [SCRIPT, ...args], { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
+    spawnSync(BASH, [SCRIPT, ...args], { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
   return { dir, repo, env, run, lock: env.SIMLOCK_SLOW_LOCK, lane: env.SIMLOCK_SLOW_TMP };
 }
 
@@ -114,20 +111,23 @@ describe("scripts/slow-e2e.sh", () => {
     );
   });
 
-  it("clean stops a process whose environment names the lane's home, removes the home, and leaves other processes alone", async () => {
-    const { lane, run } = machine();
-    mkdirSync(lane, { recursive: true });
-    const leftover = idleNode({ ...process.env, SIMLOCK_HOME: join(lane, "simlock-e2e-abc") });
-    const other = idleNode({ ...process.env, SIMLOCK_HOME: join(tmpdir(), "simlock-e2e-other") });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+  forks(
+    "clean stops a process whose environment names the lane's home, removes the home, and leaves other processes alone",
+    async () => {
+      const { lane, run } = machine();
+      mkdirSync(lane, { recursive: true });
+      const leftover = idleNode({ ...process.env, SIMLOCK_HOME: join(lane, "simlock-e2e-abc") });
+      const other = idleNode({ ...process.env, SIMLOCK_HOME: join(tmpdir(), "simlock-e2e-other") });
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const result = run("clean");
+      const result = run("clean");
 
-    expect(result.stdout).toMatch(new RegExp(`^stopped ${leftover} \\S*node$`, "m"));
-    expect(alive(leftover)).toBe(false);
-    expect(alive(other)).toBe(true);
-    expect(existsSync(lane)).toBe(false);
-  });
+      expect(result.stdout).toMatch(new RegExp(`^stopped ${leftover} \\S*node$`, "m"));
+      expect(alive(leftover)).toBe(false);
+      expect(alive(other)).toBe(true);
+      expect(existsSync(lane)).toBe(false);
+    },
+  );
 
   it("clean and stop delete, before removing the lane, the simulators whose durable mark names a lane instance, and no other", () => {
     const { dir, env, lane } = machine();
@@ -135,8 +135,7 @@ describe("scripts/slow-e2e.sh", () => {
     const bin = join(dir, "bin");
     const calls = join(dir, "xcrun-calls.txt");
     mkdirSync(bin);
-    writeFileSync(join(bin, "xcrun"), `#!/bin/sh\necho "$@" >> "${calls}"\n`);
-    chmodSync(join(bin, "xcrun"), 0o755);
+    writeFakeCommand(bin, "xcrun", `#!/bin/sh\necho "$@" >> "${calls}"\n`);
     const mark = (udid: string, body: string | undefined) => {
       mkdirSync(join(devices, udid), { recursive: true });
       if (body !== undefined) writeFileSync(join(devices, udid, "simlock-mark.json"), body);
@@ -163,9 +162,9 @@ describe("scripts/slow-e2e.sh", () => {
     for (const command of ["clean", "stop"]) {
       seedLane();
       writeFileSync(calls, "");
-      const result = spawnSync("sh", [SCRIPT, command], {
+      const result = spawnSync(BASH, [SCRIPT, command], {
         cwd: join(dir, "repo"),
-        env: { ...env, PATH: `${bin}:${process.env.PATH ?? ""}`, SIMLOCK_SLOW_DEVICES: devices },
+        env: { ...env, ...fakeCommandEnv(bin), SIMLOCK_SLOW_DEVICES: devices },
         encoding: "utf8",
         timeout: 60_000,
       });
@@ -179,7 +178,7 @@ describe("scripts/slow-e2e.sh", () => {
     }
   });
 
-  it("clean is refused while a run holds the lock", () => {
+  forks("clean is refused while a run holds the lock", () => {
     const { lock, run } = machine();
     const runner = idleNode(process.env);
     mkdirSync(lock);
@@ -191,44 +190,50 @@ describe("scripts/slow-e2e.sh", () => {
     expect(result.stderr).toContain(`busy: a slow-lane run holds the lock (pid ${runner})`);
   });
 
-  it("check stops nothing, keeps the lane's home and passes the lane's own worker while a run holds the lock", async () => {
-    const { dir, lane, lock, run } = machine();
-    mkdirSync(lane, { recursive: true });
-    const runner = idleNode(process.env);
-    mkdirSync(lock);
-    writeFileSync(join(lock, "pid"), String(runner));
-    const home = join(lane, "simlock-e2e-abc");
-    const daemon = idleNode({ ...process.env, SIMLOCK_HOME: home });
-    mkdirSync(join(dir, "worker.lock"));
-    writeFileSync(
-      join(dir, "worker.lock", "owner.json"),
-      JSON.stringify({ folder: home, pid: daemon, startedAt: "t0" }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 300));
+  forks(
+    "check stops nothing, keeps the lane's home and passes the lane's own worker while a run holds the lock",
+    async () => {
+      const { dir, lane, lock, run } = machine();
+      mkdirSync(lane, { recursive: true });
+      const runner = idleNode(process.env);
+      mkdirSync(lock);
+      writeFileSync(join(lock, "pid"), String(runner));
+      const home = join(lane, "simlock-e2e-abc");
+      const daemon = idleNode({ ...process.env, SIMLOCK_HOME: home });
+      mkdirSync(join(dir, "worker.lock"));
+      writeFileSync(
+        join(dir, "worker.lock", "owner.json"),
+        JSON.stringify({ folder: home, pid: daemon, startedAt: "t0" }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const result = run("check");
+      const result = run("check");
 
-    expect([result.status, result.stderr]).toEqual([0, ""]);
-    expect(alive(daemon)).toBe(true);
-    expect(existsSync(lane)).toBe(true);
-  });
+      expect([result.status, result.stderr]).toEqual([0, ""]);
+      expect(alive(daemon)).toBe(true);
+      expect(existsSync(lane)).toBe(true);
+    },
+  );
 
-  it("stop ends the running lane's process group, writes exit 143 to its log and frees the lock", () => {
-    const { dir, lock, run } = machine();
-    const runner = idleNode(process.env, true);
-    const log = join(dir, "run.log");
-    writeFileSync(log, "");
-    mkdirSync(lock);
-    writeFileSync(join(lock, "pid"), String(runner));
-    writeFileSync(join(lock, "log"), log);
+  forks(
+    "stop ends the running lane's process group, writes exit 143 to its log and frees the lock",
+    () => {
+      const { dir, lock, run } = machine();
+      const runner = idleNode(process.env, true);
+      const log = join(dir, "run.log");
+      writeFileSync(log, "");
+      mkdirSync(lock);
+      writeFileSync(join(lock, "pid"), String(runner));
+      writeFileSync(join(lock, "log"), log);
 
-    const result = run("stop");
+      const result = run("stop");
 
-    expect(result.stdout).toContain(`stopped run ${runner}, log ${log}`);
-    expect(alive(runner)).toBe(false);
-    expect(readFileSync(`${log}.exit`, "utf8")).toBe("143\n");
-    expect(existsSync(lock)).toBe(false);
-  });
+      expect(result.stdout).toContain(`stopped run ${runner}, log ${log}`);
+      expect(alive(runner)).toBe(false);
+      expect(readFileSync(`${log}.exit`, "utf8")).toBe("143\n");
+      expect(existsSync(lock)).toBe(false);
+    },
+  );
 
   function agentDeviceInstall(dir: string, version: string): string {
     const install = join(dir, "agent-device");
@@ -241,7 +246,7 @@ describe("scripts/slow-e2e.sh", () => {
   it("check refuses an agent-device install of another version than package.json pins for @agent-device/proxy", () => {
     const { dir, env, repo } = machine();
 
-    const result = spawnSync("sh", [SCRIPT, "check"], {
+    const result = spawnSync(BASH, [SCRIPT, "check"], {
       cwd: repo,
       env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, "0.21.27") },
       encoding: "utf8",
@@ -256,7 +261,7 @@ describe("scripts/slow-e2e.sh", () => {
   it("check passes an agent-device install of the version package.json pins", () => {
     const { dir, env, repo } = machine();
 
-    const result = spawnSync("sh", [SCRIPT, "check"], {
+    const result = spawnSync(BASH, [SCRIPT, "check"], {
       cwd: repo,
       env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, PINNED) },
       encoding: "utf8",
@@ -277,28 +282,31 @@ describe("scripts/slow-e2e.sh", () => {
     );
   });
 
-  it("check and a run exit 69 with the not fit message, freeing the lane lock, while a live pid holds the worker lock; a stale holder lets them go on", () => {
-    const { dir, env, run } = machine();
-    const holderFolder = "/home/other/.simlock";
-    const lockFolder = join(dir, "worker.lock");
-    mkdirSync(lockFolder);
-    const owner = (pid: number) =>
-      writeFileSync(
-        join(lockFolder, "owner.json"),
-        JSON.stringify({ folder: holderFolder, pid, startedAt: "t0" }),
-      );
-    const pid = idleNode(env);
-    owner(pid);
-    const refusal = `not fit: a Simlock worker holds this machine (pid ${pid}, folder ${holderFolder}); stop it first: SIMLOCK_HOME=${holderFolder} simlock daemon stop\n`;
+  forks(
+    "check and a run exit 69 with the not fit message, freeing the lane lock, while a live pid holds the worker lock; a stale holder lets them go on",
+    () => {
+      const { dir, env, run } = machine();
+      const holderFolder = "/home/other/.simlock";
+      const lockFolder = join(dir, "worker.lock");
+      mkdirSync(lockFolder);
+      const owner = (pid: number) =>
+        writeFileSync(
+          join(lockFolder, "owner.json"),
+          JSON.stringify({ folder: holderFolder, pid, startedAt: "t0" }),
+        );
+      const pid = idleNode(env);
+      owner(pid);
+      const refusal = `not fit: a Simlock worker holds this machine (pid ${pid}, folder ${holderFolder}); stop it first: SIMLOCK_HOME=${holderFolder} simlock daemon stop\n`;
 
-    const check = run("check");
-    const started = run();
-    owner(2_147_483_646);
-    const stale = run("check");
+      const check = run("check");
+      const started = run();
+      owner(2_147_483_646);
+      const stale = run("check");
 
-    expect([check.status, check.stderr]).toEqual([69, refusal]);
-    expect([started.status, started.stderr]).toEqual([69, refusal]);
-    expect(existsSync(env.SIMLOCK_SLOW_LOCK)).toBe(false);
-    expect([stale.status, stale.stderr]).toEqual([0, ""]);
-  });
+      expect([check.status, check.stderr]).toEqual([69, refusal]);
+      expect([started.status, started.stderr]).toEqual([69, refusal]);
+      expect(existsSync(env.SIMLOCK_SLOW_LOCK)).toBe(false);
+      expect([stale.status, stale.stderr]).toEqual([0, ""]);
+    },
+  );
 });

@@ -68,7 +68,9 @@ const edit = (file: string, from: string, to: string) => ({
   [file]: BASE[file]!.replace(from, to),
 });
 
-describe("docs-surface-check.mjs", () => {
+// why: each case builds a git repository from several git commands, and a Windows runner starts a
+// process in about half a second, so a case there takes 4 s idle and more than 20 s under load.
+describe("docs-surface-check.mjs", { timeout: 90_000 }, () => {
   it.each([
     ["cli", edit("src/cli/tree.ts", '"lease" }', '"lease", nuke: "nuke" }')],
     ["config", edit("src/core/config.ts", "ttl: 1", "ttl: 2")],

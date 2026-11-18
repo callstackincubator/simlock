@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { BASH } from "./test-support/fake-command.js";
+
 const REPO_ROOT = join(import.meta.dirname, "..");
 const VERSION = "0.0.0-pack";
 let root: string | undefined;
@@ -72,7 +74,7 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
     write(join(project, "packages/e2e/dist/config.sample.js"), "export {};\n", 0o644);
 
     const result = spawnSync(
-      "bash",
+      BASH,
       ["--noprofile", "--norc", "-eo", "pipefail", "-c", packStepScript()],
       {
         cwd: project,
@@ -81,7 +83,7 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
       },
     );
     expect(result.stderr).not.toContain("::error::");
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     return join(root, "package");
   }
 

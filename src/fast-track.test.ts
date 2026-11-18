@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -94,11 +96,10 @@ function fastTrack(world: World, ...args: string[]) {
     ...world,
   };
   writeFileSync(join(dir, "world.json"), JSON.stringify(filled));
-  writeFileSync(join(dir, "gh"), FAKE_GH);
-  chmodSync(join(dir, "gh"), 0o755);
+  writeFakeCommand(dir, "gh", FAKE_GH);
   const result = spawnSync(process.execPath, [SCRIPT, "5", ...args], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_GH_DIR: dir, GH_REPO: "o/r" },
+    env: { ...process.env, ...fakeCommandEnv(dir), FAKE_GH_DIR: dir, GH_REPO: "o/r" },
   });
   const calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8") : "";
   return { status: result.status, out: result.stdout + result.stderr, calls };

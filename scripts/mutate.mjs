@@ -182,6 +182,8 @@ function stryker(mutate, testFiles, incrementalFile) {
   const argv = ["exec", "stryker", "run", "--mutate", mutate, ...only];
   argv.push("--incremental", "--incrementalFile", incrementalFile);
   const run = spawnSync("pnpm", argv, {
+    // why: pnpm is a .cmd shim on Windows, which spawn starts only through a shell.
+    shell: process.platform === "win32",
     stdio: ["ignore", "inherit", "pipe"],
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
