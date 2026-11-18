@@ -73,9 +73,12 @@ the fact it checks does not exist there. Every other test runs on both.
 Until every file passes, the Windows job leaves out the files on one list,
 read only on a Windows host. The first task adds the job with every file
 that fails in any of three runs of it; each later task fixes a group of files and takes
-them off. A file is never added once the job exists: a change that breaks a
-file on Windows is fixed before it merges. The last task deletes the list
-and this exception.
+them off. A file is never added once the job exists: a change in the
+feature's stack that breaks a file on Windows is fixed before the stack
+merges. The feature merges as one stack, as every feature does, so `main`
+gets the job with the last task. That task also fixes every file that
+another change, merged to `main` in the meantime, broke on Windows; then it
+deletes the list and this exception.
 
 ### 5. A product defect a Windows test finds is fixed in the same task
 
@@ -99,7 +102,12 @@ PowerShell or `cmd.exe` is not supported.
   and the fake still has to read `\`; more conflicts with open work.
 - **Add the job only once every file passes.** About twenty open PRs edit
   these tests; each that merges in the meantime can break a file already
-  fixed, and the last task would chase them.
+  fixed, and the last task would chase them all. With the job first in the
+  stack, each task's own changes are checked on Windows, and the last task
+  chases only what other features merged meanwhile.
+- **Merge the job to `main` ahead of the rest of the feature.** It would
+  guard `main` sooner, but `main` would hold part of a feature; the
+  maintainer kept the one-stack rule.
 - **Only the tests that touch the OS.** A logic test that breaks only on
   Windows, as most of the 1,664 do, would stay unseen.
 - **The e2e lane in this feature.** Its harness needs a Windows way to find
@@ -107,7 +115,9 @@ PowerShell or `cmd.exe` is not supported.
 
 ## Consequences
 
-- Every pull request waits for a Windows runner as well.
+- Every pull request waits for a Windows runner as well, once the feature
+  has merged. Until then, other features' changes reach `main` with no
+  Windows check, and the last task fixes what they break.
 - While the list exists, a file on it is not run on Windows, and a defect
   only it would show stays unseen until its task.
 - Windows contributors can run the whole unit suite, from Git Bash.
