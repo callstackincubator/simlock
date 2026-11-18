@@ -236,6 +236,21 @@ function refuseBadMetadata(): <
   };
 }
 
+/** why: the CLI checks a run id against it before connecting, so a bad `SIMLOCK_RUN` fails before a lease waits. */
+export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+
+export const RUN_ID_REFUSAL = "a run id is 1 to 128 letters, digits, `.`, `_` or `-`";
+
+function refuseBadRunId(): <T extends { readonly runId?: string | undefined }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.runId === undefined || RUN_ID_PATTERN.test(input.runId)) return;
+    context.addIssue({ code: "custom", message: RUN_ID_REFUSAL });
+  };
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -272,6 +287,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseBadOsVersion())
   .superRefine(refuseBadExcept())
   .superRefine(refuseBadMetadata())
+  .superRefine(refuseBadRunId())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 
