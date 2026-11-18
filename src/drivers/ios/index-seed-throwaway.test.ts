@@ -221,7 +221,7 @@ describe("IosSimctlDriver seed throwaway", () => {
         filesystem: new BrokenLogRemoval(),
         rows: [{ state: "ready", throwaway_udid: throwawayUdid, udid: seedUdid }],
         logFolder: true,
-        warnings: [`could not delete log folder ${logsRoot}/${throwawayUdid}: denied`],
+        warnings: [`could not delete log folder ${join(logsRoot, throwawayUdid)}: denied`],
       },
       {
         label: "log folder absent",
