@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 At the end of this page Simlock is installed and you know which platforms your machine can run.
 
-You need Node.js 22.13 or later, plus Xcode for iOS or the Android SDK for Android. The full list is in [Requirements](/simlock/docs/introduction/requirements).
+You need Node.js 22.13 or later, plus Xcode for iOS or the Android SDK for Android. The full list is in [Requirements](/simlock/docs/introduction/requirements). On Windows, follow [Set up a Windows worker](/simlock/docs/worker/windows).
 
 ## For agents
 
@@ -40,7 +40,7 @@ simlock release <lease-id>
 
 </Steps>
 
-You do not need to start anything else. Simlock's background process, the daemon, starts by itself the first time a command needs it, and keeps running afterwards. Simlock keeps its data, devices and configuration in `~/.simlock`.
+You do not need to start anything else. Simlock's background process, the daemon, starts by itself the first time a command needs it, and keeps running afterwards. Simlock keeps its data, devices and configuration in `~/.simlock` (`%USERPROFILE%\.simlock` on Windows).
 
 The daemon does not start at login unless you set that up. See [Run the daemon](/simlock/docs/worker/running-the-daemon).
 
