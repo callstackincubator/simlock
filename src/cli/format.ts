@@ -281,10 +281,12 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
     ].join("\n");
   }
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
-  const capacityLines = (["ios", "android"] as const).map((platform) => {
-    const usage = capacity[platform];
-    return `Capacity ${platform}: managed ${usage.used}/${usage.limit}, running ${usage.running} + ${usage.reserved} reserved/${usage.maxRunning}, warm ${usage.warm}${usage.overLimit ? " (over limit)" : ""}${usage.atRamBudget ? " (at RAM budget)" : ""}`;
-  });
+  const capacityLines = PLATFORMS.filter((platform) => !absentPlatform(capacity[platform])).map(
+    (platform) => {
+      const usage = capacity[platform];
+      return `Capacity ${platform}: managed ${usage.used}/${usage.limit}, running ${usage.running} + ${usage.reserved} reserved/${usage.maxRunning}, warm ${usage.warm}${usage.overLimit ? " (over limit)" : ""}${usage.atRamBudget ? " (at RAM budget)" : ""}`;
+    },
+  );
   const ramBudget = capacity.ramBudget;
   const ramLines =
     ramBudget === undefined
@@ -299,7 +301,7 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
   const warmPoolLines =
     status.warmPool === undefined || daemon.mode === "gateway"
       ? []
-      : formatWarmPool(status.warmPool);
+      : formatWarmPool(status.warmPool, capacity);
   const deviceLines = devices.map((device) => {
     const markers = [
       device.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
@@ -351,10 +353,23 @@ function deviceKind(device: NonNullable<StatusGetOutput["devices"]>[number]): st
   return `mode ${esc(String(device.mode))}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}${baseline}`;
 }
 
-function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): string[] {
+const PLATFORMS = ["ios", "android"] as const;
+
+/** why: a worker with no driver for a platform reports 0 devices and 0 running slots for it (#1689); it has no line. */
+function absentPlatform(usage: { readonly limit: number; readonly maxRunning: number }): boolean {
+  return usage.limit === 0 && usage.maxRunning === 0;
+}
+
+function formatWarmPool(
+  warmPool: NonNullable<StatusGetOutput["warmPool"]>,
+  capacity: NonNullable<StatusGetOutput["capacity"]>,
+): string[] {
   const { enabled, reserveRunning, targets } = warmPool;
+  const reserve = PLATFORMS.filter((platform) => !absentPlatform(capacity[platform]))
+    .map((platform) => `${platform} ${reserveRunning[platform]}`)
+    .join(" ");
   return [
-    `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
+    `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ${reserve}`,
     ...targets.map((target) => {
       const name = esc(
         [
