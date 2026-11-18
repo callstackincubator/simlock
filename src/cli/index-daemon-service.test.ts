@@ -832,7 +832,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
         service: {
           manager: serviceManager,
           platform: "win32",
-          home: "C:\\Users\\me",
+          home: "/Users/me",
           user: () => "me",
           root,
           nodePath,

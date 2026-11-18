@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
@@ -55,6 +55,16 @@ function unitDirectory(input: ServiceDefinitionInput): string {
   return join(config, "systemd", "user");
 }
 
+function servicePath(
+  manager: ServiceManagerName,
+  input: ServiceDefinitionInput,
+  name: string,
+): string {
+  if (manager === "task-scheduler") return `\\${name}`;
+  if (manager === "systemd") return join(unitDirectory(input), `${name}.service`);
+  return join(input.home, "Library", "LaunchAgents", `${name}.plist`);
+}
+
 export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinition {
   const environment: Record<string, string> = { SIMLOCK_HOME: input.root };
   for (const variable of SAVED_VARIABLES) {
@@ -68,12 +78,14 @@ export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinit
   return {
     role: input.role,
     name,
-    path:
-      manager === "systemd"
-        ? join(unitDirectory(input), `${name}.service`)
-        : join(input.home, "Library", "LaunchAgents", `${name}.plist`),
+    path: servicePath(manager, input, name),
     command: input.nodePath,
-    args: [input.mainPath, ...(input.role === "gateway" ? ["--gateway"] : [])],
+    args: [
+      manager === "task-scheduler"
+        ? join(dirname(input.mainPath), "service-main.js")
+        : input.mainPath,
+      ...(input.role === "gateway" ? ["--gateway"] : []),
+    ],
     environment,
     logPath: join(input.dataDirectory, "daemon.log"),
   };
@@ -389,6 +401,110 @@ export class SystemdServiceManager implements ServiceManager {
   }
 }
 
+export interface TaskSchedulerServiceManagerOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+  readonly systemRoot?: string;
+}
+
+const TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+function quoted(value: string): string {
+  return `"${value}"`;
+}
+
+function taskXml(input: {
+  readonly definition: ServiceDefinition;
+  readonly sid: string;
+  readonly installId: string;
+  readonly systemRoot: string;
+}): string {
+  const { definition, sid, installId, systemRoot } = input;
+  const [supervisor = "", ...flags] = definition.args;
+  const environment = Buffer.from(JSON.stringify(definition.environment)).toString("base64url");
+  const args = [
+    "--headless",
+    quoted(definition.command),
+    quoted(supervisor),
+    ...flags,
+    "--task",
+    definition.name,
+    "--install-id",
+    installId,
+    "--environment",
+    environment,
+  ].join(" ");
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="${TASK_NAMESPACE}">
+  <RegistrationInfo><Description>simlock ${definition.role} daemon</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xmlText(sid)}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${xmlText(sid)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>5</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>${xmlText(`${systemRoot}\\System32\\conhost.exe`)}</Command><Arguments>${xmlText(args)}</Arguments></Exec></Actions>
+</Task>
+`;
+}
+
+export class TaskSchedulerServiceManager implements ServiceManager {
+  readonly manager = "task-scheduler";
+
+  constructor(private readonly options: TaskSchedulerServiceManagerOptions) {}
+
+  private async run(command: string, args: readonly string[]): Promise<ProcessResult> {
+    const result = await this.options.runner.run(command, args, {
+      timeoutMs: LAUNCHCTL_TIMEOUT_MS,
+    });
+    if (result.code === null) {
+      throw new ServiceFailedError(`${[command, ...args].join(" ")} did not finish within 10 s`);
+    }
+    return result;
+  }
+
+  private async checked(command: string, args: readonly string[]): Promise<ProcessResult> {
+    const result = await this.run(command, args);
+    if (result.code !== 0) failure(command, args, result);
+    return result;
+  }
+
+  async state(_definition: ServiceDefinition): Promise<ServiceState> {
+    return { state: "not-installed" };
+  }
+
+  async install(definition: ServiceDefinition): Promise<void> {
+    const { filesystem } = this.options;
+    await ensureLog(filesystem, definition.logPath);
+    const whoamiArgs = ["/user", "/fo", "csv", "/nh"];
+    const user = await this.checked("whoami", whoamiArgs);
+    const sid = /^"[^"]*","([^"]*)"/.exec(user.stdout.trim())?.[1];
+    if (sid === undefined) throw new ServiceFailedError("whoami /user printed no SID");
+    const xmlPath = join(dirname(definition.logPath), "service-task.xml");
+    const xml = taskXml({
+      definition,
+      sid,
+      installId: randomUUID(),
+      systemRoot: this.options.systemRoot ?? process.env.SystemRoot ?? "C:\\Windows",
+    });
+    await filesystem.writeFileAtomic(xmlPath, `\uFEFF${xml}`, { encoding: "utf16le" });
+    try {
+      await this.run("schtasks", ["/end", "/tn", definition.name]);
+      await this.checked("schtasks", ["/create", "/tn", definition.name, "/xml", xmlPath, "/f"]);
+    } finally {
+      await filesystem.rm(xmlPath);
+    }
+  }
+
+  async uninstall(_definition: ServiceDefinition): Promise<void> {}
+
+  async start(_definition: ServiceDefinition): Promise<void> {}
+}
+
 export function productionServiceManager(
   platform: NodeJS.Platform,
   dependencies: {
@@ -398,27 +514,6 @@ export function productionServiceManager(
   },
 ): ServiceManager | undefined {
   if (platform === "linux") return new SystemdServiceManager(dependencies);
+  if (platform === "win32") return new TaskSchedulerServiceManager(dependencies);
   return platform === "darwin" ? new LaunchdServiceManager(dependencies) : undefined;
-}
-
-export interface TaskSchedulerServiceManagerOptions {
-  readonly runner: ProcessRunner;
-  readonly filesystem: Filesystem;
-  readonly systemRoot?: string;
-}
-
-export class TaskSchedulerServiceManager implements ServiceManager {
-  readonly manager = "task-scheduler";
-
-  constructor(private readonly options: TaskSchedulerServiceManagerOptions) {}
-
-  async state(_definition: ServiceDefinition): Promise<ServiceState> {
-    return { state: "not-installed" };
-  }
-
-  async install(_definition: ServiceDefinition): Promise<void> {}
-
-  async uninstall(_definition: ServiceDefinition): Promise<void> {}
-
-  async start(_definition: ServiceDefinition): Promise<void> {}
 }
