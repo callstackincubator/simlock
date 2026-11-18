@@ -102,6 +102,10 @@ Android `provision`:
 
 iOS `provision`: `simctl create` with the cached device type and runtime.
 
+## Through a gateway
+
+The gateway reads no catalog entry but the worker's own: a request whose mode is named, or a baseline's, goes only to a worker whose iOS entry does not list `modes` without it, and fails `MODE_UNAVAILABLE` when none does (`routing/serviceability.ts`, `stages/can-serve.ts`, ADR 0082 §4).
+
 ## Physical branch
 
 1. The coordinator: no enrolled, non-deleted device fits (`fitsPhysical`: platform, model
