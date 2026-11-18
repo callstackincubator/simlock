@@ -47,7 +47,7 @@ case $(python3 --version 2>&1) in "Python 3"*) ;; *) py=python ;; esac
 
 helper() {
   $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
-import json, os, re, shutil, signal, subprocess, sys, time
+import json, os, re, shutil, signal, subprocess, sys, tempfile, time
 lock, lane_tmp, root, min_free, worker_lock, command = sys.argv[1:7]
 
 def read(path, default=""):
@@ -159,7 +159,8 @@ elif command == "check":
             sys.exit(69)
     except (ValueError, KeyError, TypeError):
         pass
-    for path in ("/tmp", os.path.expanduser("~")):
+    # why: /tmp is not a folder for a Windows Python, which uses its own temp folder.
+    for path in ("/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir(), os.path.expanduser("~")):
         if free_gib(path) < float(min_free):
             problems.append(f"{free_gib(path):.1f} GiB free on the volume of {path}; the lane needs {min_free}")
     agent_device = os.environ.get("SIMLOCK_E2E_AGENT_DEVICE")
