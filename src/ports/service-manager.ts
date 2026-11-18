@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import type { Filesystem } from "./filesystem.js";
 import { DATA_DIRECTORY_MODE, type DaemonRole } from "./paths.js";
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
-export type ServiceManagerName = "launchd" | "systemd";
+export type ServiceManagerName = "launchd" | "systemd" | "task-scheduler";
 
 export type ServiceState =
   | { readonly state: "not-installed" }
@@ -399,4 +399,26 @@ export function productionServiceManager(
 ): ServiceManager | undefined {
   if (platform === "linux") return new SystemdServiceManager(dependencies);
   return platform === "darwin" ? new LaunchdServiceManager(dependencies) : undefined;
+}
+
+export interface TaskSchedulerServiceManagerOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+  readonly systemRoot?: string;
+}
+
+export class TaskSchedulerServiceManager implements ServiceManager {
+  readonly manager = "task-scheduler";
+
+  constructor(private readonly options: TaskSchedulerServiceManagerOptions) {}
+
+  async state(_definition: ServiceDefinition): Promise<ServiceState> {
+    return { state: "not-installed" };
+  }
+
+  async install(_definition: ServiceDefinition): Promise<void> {}
+
+  async uninstall(_definition: ServiceDefinition): Promise<void> {}
+
+  async start(_definition: ServiceDefinition): Promise<void> {}
 }

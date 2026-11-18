@@ -82,7 +82,7 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("service-broken"),
-    manager: z.enum(["launchd", "systemd"]),
+    manager: z.enum(["launchd", "systemd", "task-scheduler"]),
     name: z.string(),
     missing: z.array(z.string()).min(1),
     remedy: z.string(),

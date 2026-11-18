@@ -38,6 +38,8 @@ export interface WriteFileAtomicOptions {
    * which would leave a window where the file exists world-readable. Omitted keeps Node's
    * default (governed by the process umask), unchanged from before this option existed. */
   readonly mode?: number;
+  /** why: Task Scheduler refuses a task file that is not UTF-16. Omitted writes UTF-8. */
+  readonly encoding?: "utf8" | "utf16le";
 }
 
 /** why: Same shape as {@link WriteFileAtomicOptions}: `writeFileExclusive` publishes through a
@@ -507,6 +509,11 @@ export class MemoryFilesystem implements Filesystem {
     private readonly uid = process.getuid?.() ?? 0,
   ) {
     this.#entries.set("/", this.#newEntry({ kind: "directory" }));
+  }
+
+  /** why: lets a test read which encoding `writeFileAtomic` was asked to write. */
+  encodingOf(_path: string): "utf8" | "utf16le" {
+    return "utf8";
   }
 
   async readFile(path: string): Promise<string> {

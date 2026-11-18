@@ -79,7 +79,7 @@ export type DoctorFinding =
        * `driver-advisory` it is not drift: `--fix` never acts on it, and `doctor.reconciled` does not carry it.
        */
       readonly kind: "service-broken";
-      readonly manager: "launchd" | "systemd";
+      readonly manager: "launchd" | "systemd" | "task-scheduler";
       readonly name: string;
       readonly missing: readonly string[];
       readonly remedy: string;
@@ -104,7 +104,7 @@ export type DoctorFinding =
  * itself; `check` returns the paths the service names that are gone, none when whole or absent.
  */
 export interface ServiceCheck {
-  readonly manager: "launchd" | "systemd";
+  readonly manager: "launchd" | "systemd" | "task-scheduler";
   readonly name: string;
   readonly check: () => Promise<readonly string[]>;
 }

@@ -13,7 +13,9 @@ import {
   MemoryFilesystem,
   MemoryIpcTransport,
   serviceDefinition,
+  type ServiceManager,
   type ServiceState,
+  TaskSchedulerServiceManager,
   FakeSystemStats,
 } from "../ports/index.js";
 import { SimlockError } from "../contract/index.js";
@@ -759,5 +761,134 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
       code: "SERVICE_FAILED",
       message: `launchctl kickstart gui/501/${name} failed: Could not find service`,
     });
+  });
+});
+
+describe("CLI: daemon service on Windows (#1698)", () => {
+  const root = "/Users/me/.simlock";
+  const name = "com.callstack.simlock.worker";
+  const nodePath = "/opt/node/node.exe";
+  const mainPath = "/opt/simlock/dist/daemon/main.js";
+  const sid = "S-1-5-21-1-2-3-1001";
+  const xmlPath = join(root, "service-task.xml");
+  const done = { code: 0, stdout: "", stderr: "" };
+
+  it("an operator runs daemon install on Windows: the user's SID goes into a UTF-16 logon task that runs the supervisor hidden with the saved variables, the daemon answers, and install prints the name, Daemon running and the login hint", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    let written: { readonly text: string; readonly encoding: string } | undefined;
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { command: "whoami", args: ["/user", "/fo", "csv", "/nh"] },
+        result: { ...done, stdout: `"desktop\\me","${sid}"\r\n` },
+      },
+      {
+        match: { command: "schtasks", args: ["/end", "/tn", name] },
+        result: { code: 1, stdout: "", stderr: "ERROR: There are no running instances." },
+      },
+      {
+        match: { command: "schtasks", args: ["/create", "/tn", name, "/xml", xmlPath, "/f"] },
+        result: done,
+        onSpawn: () => {
+          const encoding = filesystem.encodingOf(xmlPath);
+          void filesystem.readFile(xmlPath).then((text) => {
+            written = { text, encoding };
+          });
+        },
+      },
+    ]);
+    const tasks = new TaskSchedulerServiceManager({
+      runner,
+      filesystem,
+      systemRoot: "C:\\Windows",
+    });
+    const serviceManager: ServiceManager = {
+      manager: "task-scheduler",
+      state: (definition) => tasks.state(definition),
+      uninstall: (definition) => tasks.uninstall(definition),
+      start: (definition) => tasks.start(definition),
+      install: async (definition) => {
+        await tasks.install(definition);
+        await startInMemoryDaemon({
+          adminTokenPath: join(root, "admin.token"),
+          filesystem,
+          ipcTransport,
+          socketPath: join(root, "daemon.sock"),
+        });
+      },
+    };
+    const output = outputCapture(
+      {
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: new FakeDaemonLauncher(),
+        daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+        homeDirectory: "C:\\Users\\me",
+        workingDirectory: "C:\\work",
+        hostPlatform: "linux",
+        runTool: async () => ({ outcome: "not-found" }),
+        service: {
+          manager: serviceManager,
+          platform: "win32",
+          home: "C:\\Users\\me",
+          user: () => "me",
+          root,
+          nodePath,
+          mainPath,
+        },
+      },
+      { PATH: "C:\\bin" },
+    );
+
+    const exitCode = await runCli(["daemon", "install"], output.environmentWith());
+
+    expect(output.stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(runner.calls.map((call) => [call.command, call.args[0]])).toEqual([
+      ["whoami", "/user"],
+      ["schtasks", "/end"],
+      ["schtasks", "/create"],
+    ]);
+    expect(output.stdout.split("\n").slice(0, 2)).toEqual([
+      `Service installed: ${name} (task-scheduler)`,
+      "Daemon running",
+    ]);
+    expect(output.stdout.trimEnd().split("\n").at(-1)).toBe(
+      "To start after a reboot, turn on automatic login for this user.",
+    );
+    expect(written?.encoding).toBe("utf16le");
+    const xml = written?.text ?? "";
+    expect(xml.startsWith('\uFEFF<?xml version="1.0" encoding="UTF-16"?>')).toBe(true);
+    for (const element of [
+      `<LogonTrigger><Enabled>true</Enabled><UserId>${sid}</UserId></LogonTrigger>`,
+      `<UserId>${sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel>`,
+      "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+      "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+      "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+      "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+      "<Priority>5</Priority>",
+      "<Enabled>true</Enabled>",
+      "<Description>simlock worker daemon</Description>",
+      "<Command>C:\\Windows\\System32\\conhost.exe</Command>",
+    ]) {
+      expect(xml, element).toContain(element);
+    }
+    const args = /<Arguments>(.*)<\/Arguments>/.exec(xml)?.[1] ?? "";
+    const parts =
+      /^--headless "([^"]*)" "([^"]*)" --task (\S+) --install-id ([0-9a-f-]{36}) --environment (\S+)$/.exec(
+        args,
+      );
+    expect(parts?.slice(1, 4)).toEqual([
+      nodePath,
+      "/opt/simlock/dist/daemon/service-main.js",
+      name,
+    ]);
+    expect(JSON.parse(Buffer.from(parts?.[5] ?? "", "base64url").toString("utf8"))).toEqual({
+      SIMLOCK_HOME: root,
+      PATH: "C:\\bin",
+    });
+    expect(await filesystem.exists(xmlPath), "the XML file is deleted after create").toBe(false);
   });
 });
