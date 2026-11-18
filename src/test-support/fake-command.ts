@@ -24,15 +24,17 @@ const NODE_COPY = join(SHIM_DIR, "node-copy.exe");
 // why: the shim runs inside the copied binary, so it reads the script that sits beside it (the
 // binary's path without `.exe`) and runs it with the interpreter its first line names.
 const SHIM = `
-const { basename } = require("node:path");
+const { basename, relative } = require("node:path");
 const { readFileSync } = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const exe = process.execPath;
 if (/\\.exe$/i.test(exe) && basename(exe).toLowerCase() !== "node.exe") {
   const script = exe.slice(0, -4);
   const first = readFileSync(script, "utf8").split("\\n", 1)[0];
+  // why: node has already turned the first argument into a path under the working directory.
+  const args = process.argv[1] === undefined ? [] : [relative(process.cwd(), process.argv[1]), ...process.argv.slice(2)];
   const interpreter = /node/.test(first) ? process.env.SIMLOCK_FAKE_NODE : process.env.SIMLOCK_FAKE_BASH;
-  const result = spawnSync(interpreter, [script, ...process.argv.slice(1)], { stdio: "inherit" });
+  const result = spawnSync(interpreter, [script, ...args], { stdio: "inherit" });
   process.exit(result.status ?? 1);
 }
 `;

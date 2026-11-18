@@ -98,7 +98,7 @@ describe("worktree.sh", () => {
     writeFakeCommand(
       bin,
       "pnpm",
-      `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\npwd >> "${installs}"\n`,
+      `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\n{ pwd -W 2>/dev/null || pwd; } >> "${installs}"\n`,
     );
     writeFileSync(
       join(main, "package.json"),
