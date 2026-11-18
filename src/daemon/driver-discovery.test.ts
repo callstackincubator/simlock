@@ -640,7 +640,7 @@ async function discoverIos(
 
 describe("deviceModeWiring", () => {
   it.each(["slim", "full"] as const)(
-    "maps ios.defaultMode %s to the default-mode map and to whether the iOS default is slim",
+    "maps ios.defaultMode %s to the default-mode map and to whether the iOS default is slim, and ios.modes to the served-mode map",
     (defaultMode) => {
       expect(
         deviceModeWiring({
@@ -654,6 +654,7 @@ describe("deviceModeWiring", () => {
         }),
       ).toMatchObject({
         defaultModes: { ios: defaultMode },
+        servedModes: { ios: ["slim", "full"] },
         slimByDefault: defaultMode === "slim",
       });
     },

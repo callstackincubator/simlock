@@ -40,7 +40,7 @@ export function config(
   return {
     android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
-    ios: { virtualDevices: true },
+    ios: { modes: ["slim", "full"], virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -143,6 +143,8 @@ export async function createHarness(
     readonly idleShutdownAfterMs?: number;
     /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0084). */
     readonly virtualDevices?: Readonly<Partial<Record<"android" | "ios", boolean>>>;
+    /** why: the iOS modes the worker serves; the default mode follows a one-mode list as the config loader makes it (ADR 0082 §1). */
+    readonly iosModes?: readonly DeviceMode[];
     /** why: starts the warm pool as the daemon's startup does, so it learns from the leases and reacts to events. */
     readonly startPool?: boolean;
   } = {},
@@ -173,7 +175,10 @@ export async function createHarness(
     ...baseConfig,
     android: { virtualDevices: options.virtualDevices?.android ?? true },
     capacity: capacityConfig(baseConfig, options),
-    ios: { virtualDevices: options.virtualDevices?.ios ?? true },
+    ios: {
+      modes: options.iosModes ?? ["slim", "full"],
+      virtualDevices: options.virtualDevices?.ios ?? true,
+    },
   };
   const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
   const drivers = options.drivers ?? [driver];
@@ -193,6 +198,14 @@ export async function createHarness(
       ? {}
       : { defaultImageTags: options.defaultImageTags }),
     ...(options.defaultModes === undefined ? {} : { defaultModes: options.defaultModes }),
+    ...(options.iosModes === undefined
+      ? {}
+      : {
+          defaultModes: options.defaultModes ?? {
+            ios: options.iosModes.length === 1 ? options.iosModes[0]! : "full",
+          },
+          servedModes: { ios: options.iosModes },
+        }),
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.leaseEndParticipants === undefined

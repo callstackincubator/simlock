@@ -33,7 +33,7 @@ function config(leaseOverrides: object = {}): TestEngineConfig {
   return {
     android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
-    ios: { virtualDevices: true },
+    ios: { modes: ["slim", "full"], virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
