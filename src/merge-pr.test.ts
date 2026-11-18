@@ -289,7 +289,11 @@ const FLAKY_ISSUE = {
   body: "Fails under load on main.\nTest: `e2e/gateway-fast-fail.test.ts` > a gateway fails fast\n",
 };
 
-describe("merge-pr.sh gates on the PR", { timeout: 20_000 }, () => {
+// why: a gate starts the script, its fake gh and git many times, 3 to 12 s on a Windows runner and
+// more under load, where it is 1 s elsewhere.
+const TIMEOUT = 90_000;
+
+describe("merge-pr.sh gates on the PR", { timeout: TIMEOUT }, () => {
   it("merges an open, ready PR with a valid body, green CI and no conflict, through the REST merge", () => {
     const result = gate();
     expect(result.output).toContain("merged #7");
@@ -370,7 +374,7 @@ describe("merge-pr.sh gates on the PR", { timeout: 20_000 }, () => {
   });
 });
 
-describe("merge-pr.sh reading CI", { timeout: 20_000 }, () => {
+describe("merge-pr.sh reading CI", { timeout: TIMEOUT }, () => {
   it("does not merge a PR whose head has no check runs and no statuses", () => {
     const result = gate({ runs: [] });
     expect(result.merged).toBe(false);
@@ -419,7 +423,7 @@ describe("merge-pr.sh reading CI", { timeout: 20_000 }, () => {
   });
 });
 
-describe("merge-pr.sh re-run of red CI", { timeout: 20_000 }, () => {
+describe("merge-pr.sh re-run of red CI", { timeout: TIMEOUT }, () => {
   it("re-runs a job that failed only in a test an open flaky-test issue names, once, and merges when the re-run passes", () => {
     const result = gate({
       runs: [run("failure")],
@@ -512,7 +516,7 @@ describe("merge-pr.sh re-run of red CI", { timeout: 20_000 }, () => {
   });
 });
 
-describe("merge-pr.sh on a stack's last open PR", { timeout: 20_000 }, () => {
+describe("merge-pr.sh on a stack's last open PR", { timeout: TIMEOUT }, () => {
   it("merges it with gh stack merge when GitHub refuses a plain merge of a stacked PR", () => {
     expect(gate().merged).toBe(true);
     const result = gate({ refusedAsStacked: true });
@@ -529,7 +533,7 @@ const STACK = [
 const stackRuns = (ci: Record<number, "success" | "failure">) =>
   Object.fromEntries(Object.entries(ci).map(([pr, c]) => [pr, [run(c)]]));
 
-describe("merge-pr.sh on a stacked PR", { timeout: 20_000 }, () => {
+describe("merge-pr.sh on a stacked PR", { timeout: TIMEOUT }, () => {
   it("gates every PR from the bottom of the stack up to the one asked for, then merges them with gh stack merge", () => {
     const result = gate({
       target: 12,
