@@ -493,3 +493,37 @@ describe("CLI text output escapes control characters in remote text", () => {
     },
   );
 });
+
+describe("CLI: status of a worker with no iOS slots (#1689)", () => {
+  it("simlock status prints no iOS capacity line and no iOS warm reserve for a worker that reports 0 iOS devices and 0 iOS running slots", async () => {
+    const output = outputCapture();
+    const status = {
+      ...EMPTY_STATUS,
+      capacity: {
+        ...EMPTY_STATUS.capacity,
+        global: { ...EMPTY_STATUS.capacity.global, maxRunning: 1 },
+        ios: { ...EMPTY_STATUS.capacity.ios, limit: 0, maxRunning: 0 },
+      },
+      host: { arch: "x64", os: "Windows", osVersion: "11", tools: [] },
+      warmPool: { enabled: true, reserveRunning: { android: 1, ios: 0 }, targets: [] },
+    } satisfies StatusGetOutput;
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    expect(output.stdout).toBe(
+      "Daemon: running (worker)\n" +
+        "Simlock: 0.0.0-test\n" +
+        `CLI: ${PACKAGE_VERSION}\n` +
+        "Host: Windows 11 x64\n" +
+        "Running global: 0 + 0 reserved/1, warm 0\n" +
+        "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+        "warm pool: enabled, reserve android 1\n" +
+        "Queue depth: 0\n",
+    );
+  });
+});
