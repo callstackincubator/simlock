@@ -24,7 +24,8 @@ describe("DaemonServer", () => {
       ok: true,
       payload: {
         capacity: {
-          global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+          // why: the harness has an iOS driver only, so the global limit is its one iOS slot (#1689).
+          global: { maxRunning: 1, overLimit: false, reserved: 0, running: 0, warm: 0 },
           ios: {
             limit: 1,
             maxRunning: 1,

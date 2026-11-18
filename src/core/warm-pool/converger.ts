@@ -373,13 +373,23 @@ export class WarmPool {
     return this.#reports;
   }
 
+  /** why: a platform with virtual devices off or no driver on this host holds no running slot for idle devices (ADR 0084 §2, #1689). */
+  #reserveOnServedPlatforms(): { readonly ios: number; readonly android: number } {
+    return reserveOnVirtualPlatforms(
+      this.options.config.reserveRunning,
+      (platform) =>
+        this.options.catalog.virtualDevices(platform) && this.options.hasDriver(platform),
+    );
+  }
+
   /**
    * What `status`, `doctor` and the console read: the pool as the last pass left it. With the
    * pool off, or before a pass has run, every configured target as the operator wrote it: short
    * `disabled` with the pool off, and with no reason before the first pass.
    */
   figures(): WarmPoolFigures {
-    const { enabled, reserveRunning, targets } = this.options.config;
+    const { enabled, targets } = this.options.config;
+    const reserveRunning = this.#reserveOnServedPlatforms();
     const reports =
       enabled && this.#passed
         ? this.#figured
@@ -663,9 +673,7 @@ export class WarmPool {
       config: {
         enabled: this.options.config.enabled,
         maxConcurrentBoots: this.options.config.maxConcurrentBoots,
-        reserveRunning: reserveOnVirtualPlatforms(this.options.config.reserveRunning, (platform) =>
-          this.options.catalog.virtualDevices(platform),
-        ),
+        reserveRunning: this.#reserveOnServedPlatforms(),
         shutdownAfterMs: this.options.idle.shutdownAfterMs,
       },
       devices,
