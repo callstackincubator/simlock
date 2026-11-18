@@ -32,6 +32,7 @@ export function buildDegradedClient(
     cancelLease: () => rejected(),
     renewLease: () => rejected(),
     releaseLease: () => rejected(),
+    releaseRunLeases: () => rejected(),
     listLeases: () => rejected(),
     runDoctor: () => rejected(),
     resolvePassthrough: () => rejected(),

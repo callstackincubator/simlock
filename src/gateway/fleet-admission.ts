@@ -46,6 +46,8 @@ export type FleetRequestOptions = LeaseRequestOptions & {
 /** why: a request whose admission command is running: `lease.cancel` and `dispose` end it by aborting `controller`. */
 interface AskingRequest {
   readonly requesterId: string;
+  readonly runId: string | undefined;
+  readonly ownerId: string;
   readonly platform: Platform;
   readonly controller: AbortController;
   end?: "cancelled" | "stopping";
@@ -103,6 +105,8 @@ export class FleetAdmission {
         controller: new AbortController(),
         platform: deviceRequest.platform,
         requesterId: options.requesterId,
+        runId: options.runId,
+        ownerId: options.ownerId,
       };
       this.#asking.add(asking);
       try {
@@ -374,6 +378,39 @@ export class FleetAdmission {
         this.options.facts.rejected(waiter, "cancelled");
       }
       return "cancelled";
+    });
+  }
+
+  /**
+   * why: a run's cleanup stops every request of the run it owns that no worker has yet (`ownerId`
+   * undefined for an operator), by the rule `cancelPending` applies to one; one a worker already has is marked to release at its grant.
+   */
+  async cancelRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
+    // why: a request still on the admission command has no id to list yet, so it is ended and not named.
+    for (const asking of this.#asking) {
+      if (asking.runId === runId && (ownerId === undefined || asking.ownerId === ownerId)) {
+        this.#endAsking(asking, "cancelled");
+      }
+    }
+    return this.#decisions.run(async () => {
+      const cancelled: string[] = [];
+      for (const waiter of this.options.queue.pending()) {
+        const matches =
+          waiter.options.runId === runId &&
+          (ownerId === undefined || waiter.options.ownerId === ownerId);
+        if (!matches) continue;
+        if (waiter.state === "processing") {
+          // why: a worker has the request, so it is not cancelled: its grant is released once it lands (`FleetGrants.settle`), and its id is listed like a cancelled one.
+          this.options.queue.markReleaseAtGrant(waiter);
+          cancelled.push(waiter.id);
+          continue;
+        }
+        if (this.options.queue.reject(waiter, new RequestCancelledError(waiter.id))) {
+          this.options.facts.rejected(waiter, "cancelled");
+        }
+        cancelled.push(waiter.id);
+      }
+      return cancelled;
     });
   }
 

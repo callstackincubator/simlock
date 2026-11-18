@@ -15,7 +15,7 @@ import { lineOf } from "./wait-queue.js";
 
 export type WaiterOutcomesOptions = Pick<
   LeaseAcquisitionCoordinatorOptions,
-  "drivers" | "eventBus" | "leases" | "queue" | "registry"
+  "drivers" | "endLease" | "eventBus" | "leases" | "queue" | "registry"
 > & { readonly log: Logger };
 
 /** why: every way a waiter waits, is refused or is granted goes through one method here, so each emits its one event in one place. */
@@ -48,6 +48,15 @@ export class WaiterOutcomes {
         : { fleetRequestId: waiter.options.fleetRequestId }),
     });
     this.options.queue.resolve(waiter, granted);
+    if (waiter.releaseAtGrant === true) {
+      // why: this runs inside the decision section the release also needs, so it follows once that section is free.
+      void this.options.endLease(granted.lease.id).catch((error: unknown) => {
+        this.options.log.warn("ending a lease a run release marked failed", {
+          leaseId: granted.lease.id,
+          error: stableError(error),
+        });
+      });
+    }
   }
 
   /** One `warn` line for a device step that failed in the background and is handled here by

@@ -10,6 +10,7 @@ import {
   createHarness,
   flush,
   hello,
+  helloAs,
   leaseIdOf,
   passthroughDriver,
   passthroughFake,
@@ -326,6 +327,57 @@ describe("DaemonServer", () => {
     });
     await holder.close();
     await releaser.close();
+  });
+
+  it("pushes no lease-lost to the connection that asked for lease.release-run, and one to the owner's other connections", async () => {
+    const harness = await createHarness({
+      iosMaxDevices: 3,
+      resolveRole: { resolve: (payload) => (payload.principal === "operator" ? "admin" : "agent") },
+    });
+    const connect = async (principal: string) => {
+      const client = await createClient(harness.socketPath);
+      await helloAs(client, principal);
+      return client;
+    };
+    const alice = await connect("alice");
+    const aliceElsewhere = await connect("alice");
+    const bob = await connect("bob");
+    const operator = await connect("operator");
+    const lease = async (client: typeof alice, requesterId: string, runId: string) =>
+      leaseIdOf(
+        await client.request("lease.request", {
+          requesterId,
+          model: "iPhone 16",
+          osVersion: "26.5",
+          platform: "ios",
+          runId,
+        }),
+      );
+    const first = await lease(alice, "a", "nightly-7");
+    const otherRun = await lease(alice, "b", "nightly-8");
+    const bobs = await lease(bob, "c", "nightly-7");
+
+    await expect(alice.request("lease.release-run", { runId: "nightly-7" })).resolves.toMatchObject(
+      { ok: true, payload: { leaseIds: [first] } },
+    );
+    await expect(
+      aliceElsewhere.nextFrame((frame) => frame.push === "lease-lost"),
+    ).resolves.toMatchObject({ payload: { leaseId: first, reason: "explicit" } });
+
+    await expect(
+      operator.request("lease.release-run", { runId: "nightly-7" }),
+    ).resolves.toMatchObject({ ok: true, payload: { leaseIds: [bobs] } });
+    await expect(bob.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { leaseId: bobs, reason: "explicit" },
+    });
+
+    await expect(
+      aliceElsewhere.request("lease.release", { leaseId: otherRun }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(alice.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { leaseId: otherRun },
+    });
+    await Promise.all([alice, aliceElsewhere, bob, operator].map((client) => client.close()));
   });
 
   it("drops a lease-lost push to a connection whose peer has hung up instead of leaving its failed write unhandled", async () => {

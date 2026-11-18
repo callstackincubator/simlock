@@ -215,6 +215,7 @@ export async function createHarness(
     defaultModes: options.defaultModes ?? {},
     servedModes: {},
     drivers: catalog,
+    endLease: async () => undefined,
     eventBus: bus,
     idGenerator,
     leases,

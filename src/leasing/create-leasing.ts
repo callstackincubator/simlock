@@ -162,6 +162,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
     defaultModes: options.defaultModes ?? {},
     servedModes: options.servedModes ?? {},
     drivers: core.drivers,
+    endLease: (leaseId) => releaseCoordinator.release(leaseId, "explicit"),
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
     leases,
@@ -267,6 +268,11 @@ export function createLeasing(options: LeasingOptions): Leasing {
       await releaseCoordinator.release(leaseId, reason);
     },
     releaseAll: async (reason: ClientReleaseReason) => releaseCoordinator.releaseAll(reason),
+    releaseRun: async (runId: string, ownerId: string | undefined) => {
+      // why: the run's waiting requests stop first, so a device a released lease frees is never granted to one of them.
+      const requestIds = await acquisition.cancelRun(runId, ownerId);
+      return { leaseIds: await releaseCoordinator.releaseRun(runId, ownerId), requestIds };
+    },
     renew: async (leaseId: string, ttlMs?: number): Promise<LeaseRecord> =>
       releaseCoordinator.renew(leaseId, ttlMs),
     expire: async (leaseId: string) => {

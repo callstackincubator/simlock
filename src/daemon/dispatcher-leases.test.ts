@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeDriver } from "../core/testing.js";
 import { FakeClock } from "../ports/index.js";
-import { UnknownLeaseError } from "../core/index.js";
+import { type Config, UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { buildDispatcher, gibibyte, session } from "./test-dispatcher.js";
 
@@ -553,5 +553,206 @@ describe("Dispatcher: lease.release-all", () => {
         .filter((event) => event.event === "lease.released")
         .map((event) => (event.payload as { reason: string }).reason),
     ).toEqual(["killed", "killed"]);
+  });
+});
+
+function roomFor(devices: number): Config["capacity"] {
+  return {
+    config: {
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: devices, maxRunning: devices },
+        maxRunning: devices + 1,
+      },
+      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    },
+    strategy: "resource",
+  };
+}
+
+describe("Dispatcher: lease.release-run", () => {
+  it("ends the leases of the run the caller holds, with reason explicit, and answers their ids", async () => {
+    const { dispatcher, eventBus, registry } = await buildDispatcher({ capacity: roomFor(4) });
+    const lease = async (principal: string, requesterId: string, runId: string) =>
+      (
+        await dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", requesterId, runId },
+          session({ principal }),
+        )
+      ).lease.id;
+    const first = await lease("tok_ci", "job-a", "nightly-7");
+    const second = await lease("tok_ci", "job-b", "nightly-7");
+    const otherRun = await lease("tok_ci", "job-c", "nightly-8");
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+
+    expect(new Set(result.leaseIds)).toEqual(new Set([first, second]));
+    expect(result.requestIds).toEqual([]);
+    expect(registry.snapshot.leases.map((held) => held.id)).toEqual([otherRun]);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.released")
+        .map((event) => (event.payload as { reason: string }).reason),
+    ).toEqual(["explicit", "explicit"]);
+  });
+
+  it("cancels the queued requests of the run the caller holds, rejects them cancelled and lists their ids", async () => {
+    const { dispatcher, eventBus, engine, registry } = await buildDispatcher({
+      capacity: roomFor(1),
+    });
+    const held = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", runId: "nightly-8" },
+      session({ principal: "tok_ci" }),
+    );
+    const queue = (principal: string, runId: string) =>
+      dispatcher
+        .dispatch(
+          "lease.request",
+          {
+            model: "iPhone 17 Pro",
+            osVersion: "26.5",
+            platform: "ios",
+            requesterId: `${principal}-${runId}`,
+            runId,
+          },
+          session({ principal }),
+        )
+        .then(
+          () => undefined,
+          (rejected: unknown) => rejected,
+        );
+    const mine = queue("tok_ci", "nightly-7");
+    await expect.poll(() => engine.queueDepth).toBe(1);
+    const otherRun = queue("tok_ci", "nightly-9");
+    await expect.poll(() => engine.queueDepth).toBe(2);
+    const otherOwner = queue("tok_other", "nightly-7");
+    await expect.poll(() => engine.queueDepth).toBe(3);
+    const myRequestId = engine
+      .waitingRequests()
+      .find((request) => request.requesterId === "tok_ci-nightly-7")?.id;
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+
+    expect(result).toEqual({ leaseIds: [], requestIds: [myRequestId] });
+    expect(await mine).toBeInstanceOf(RequestCancelledError);
+    expect(engine.queueDepth).toBe(2);
+    expect(registry.snapshot.leases.map((lease) => lease.id)).toEqual([held.lease.id]);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload),
+    ).toMatchObject([{ requestId: myRequestId, reason: "cancelled" }]);
+
+    await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-9" },
+      session({ principal: "tok_ci" }),
+    );
+    const otherOwnerRequestId = engine
+      .waitingRequests()
+      .find((request) => request.requesterId === "tok_other-nightly-7")?.id;
+    const byOperator = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_admin", role: "admin" }),
+    );
+    expect(byOperator).toEqual({ leaseIds: [], requestIds: [otherOwnerRequestId] });
+    expect(await otherRun).toBeInstanceOf(RequestCancelledError);
+    expect(await otherOwner).toBeInstanceOf(RequestCancelledError);
+  });
+
+  it.each([
+    { role: "agent", principal: "tok_ci", title: "the caller's own" },
+    { role: "admin", principal: "tok_admin", title: "another owner's, which an operator reaches," },
+  ] as const)(
+    "releases $title request of the run that is booting a virtual device the moment it is granted, and lists its id",
+    async ({ role, principal }) => {
+      const { dispatcher, driver, eventBus, engine, registry } = await buildDispatcher();
+      driver.hangMakeReady();
+      const booting = dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", runId: "nightly-7" },
+        session({ principal: "tok_ci" }),
+      );
+      await expect.poll(() => engine.waitingRequests()[0]?.stage).toBe("starting");
+      const requestId = engine.waitingRequests()[0]?.id;
+
+      const result = await dispatcher.dispatch(
+        "lease.release-run",
+        { runId: "nightly-7" },
+        session({ principal, role }),
+      );
+
+      expect(result).toEqual({ leaseIds: [], requestIds: [requestId] });
+      driver.releaseMakeReady();
+      const granted = await booting;
+      await expect.poll(() => registry.snapshot.leases).toEqual([]);
+      expect(
+        eventBus
+          .replay()
+          .filter((event) => event.event === "lease.released")
+          .map((event) => event.payload),
+      ).toMatchObject([{ leaseId: granted.lease.id, reason: "explicit" }]);
+    },
+  );
+
+  it("reaches only the caller's own leases for an agent and every owner's for an admin, answers empty lists when nothing matches, and refuses a bad run id", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ capacity: roomFor(4) });
+    const lease = async (principal: string, requesterId: string, runId: string) =>
+      (
+        await dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", requesterId, runId },
+          session({ principal }),
+        )
+      ).lease.id;
+    const mine = await lease("tok_ci", "job-a", "nightly-7");
+    const keptOtherRun = await lease("tok_ci", "job-b", "nightly-8");
+    const theirs = await lease("tok_other", "job-c", "nightly-7");
+
+    const agent = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+    expect(agent).toEqual({ leaseIds: [mine], requestIds: [] });
+    expect(registry.snapshot.leases.map((held) => held.id).sort()).toEqual(
+      [keptOtherRun, theirs].sort(),
+    );
+
+    const nothing = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+    expect(nothing).toEqual({ leaseIds: [], requestIds: [] });
+
+    const admin = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_admin", role: "admin" }),
+    );
+    expect(admin).toEqual({ leaseIds: [theirs], requestIds: [] });
+    expect(registry.snapshot.leases.map((held) => held.id)).toEqual([keptOtherRun]);
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.release-run",
+        { runId: "run 1" },
+        session({ principal: "tok_ci" }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });

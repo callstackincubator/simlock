@@ -131,6 +131,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     request: (request, requestOptions) => leasing.request(request, requestOptions),
     release: (leaseId, reason) => leasing.release(leaseId, reason),
     releaseAll: (reason) => leasing.releaseAll(reason),
+    releaseRun: (runId, ownerId) => leasing.releaseRun(runId, ownerId),
     renew: (leaseId, ttlMs) => leasing.renew(leaseId, ttlMs),
     expire: (leaseId) => leasing.expire(leaseId),
     nuke: (deleteDevices) => core.nuke.nuke(deleteDevices),

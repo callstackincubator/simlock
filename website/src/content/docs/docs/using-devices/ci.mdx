@@ -45,6 +45,22 @@ simlock adb shell getprop ro.build.version.release
 
 See [Use the CLI](/simlock/docs/using-devices/remote-agents#use-the-cli).
 
+### Free a job's devices when it ends
+
+A job that is cancelled or fails can leave leases behind, and they hold devices until their TTL runs out. Give every job its own run id with `SIMLOCK_RUN`, so each lease it takes carries it, and end the job with a cleanup step that releases that run:
+
+```yaml
+env:
+  SIMLOCK_RUN: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+steps:
+  # ...the steps that lease and test...
+  - name: Free the devices
+    if: always()
+    run: npx simlock release --run "$SIMLOCK_RUN"
+```
+
+Add `simlock` to the project as a dev dependency (`npm install --save-dev simlock`) so the step runs without a daemon of its own. `simlock release --run` releases the leases of this run and cancels its requests still waiting, and it prints what it freed. It touches only the leases of the token it runs with: an agent token cannot free another job's devices, and another run id is left alone. See [`simlock release`](/simlock/docs/reference/cli#simlock-release).
+
 ## Install the provider
 
 ```sh
