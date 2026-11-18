@@ -11,6 +11,7 @@ import { AdbServerUnavailableError, AndroidDriver } from "./index.js";
 import {
   androidFilesystem,
   avdDirectory,
+  privateAliasOf,
   binaries,
   EmulatorExitingRunner,
   instanceId,
@@ -237,12 +238,12 @@ describe("AndroidDriver ownership", () => {
   it.each([
     {
       reported: "a trailing slash",
-      answer: ok(`${avdDirectory}/simlock_one.avd/\r\nOK\r\n`),
+      answer: ok(`${join(avdDirectory, "simlock_one.avd")}/\r\nOK\r\n`),
       runState: "running",
     },
     {
       reported: "a canonical alias",
-      answer: ok(`/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`),
+      answer: ok(`${privateAliasOf(join(avdDirectory, "simlock_one.avd"))}\r\nOK\r\n`),
       runState: "running",
     },
     { reported: "a blank path", answer: ok("\r\nOK\r\n"), runState: "stopped" },
@@ -260,7 +261,7 @@ describe("AndroidDriver ownership", () => {
     },
     {
       reported: "a sibling AVD",
-      answer: ok(`${avdDirectory}/simlock_two.avd\r\nOK\r\n`),
+      answer: ok(`${join(avdDirectory, "simlock_two.avd")}\r\nOK\r\n`),
       runState: "stopped",
     },
     {
@@ -280,7 +281,7 @@ describe("AndroidDriver ownership", () => {
       filesystem.defineFailure("/unreadable/simlock_one.avd", "EACCES");
       await filesystem.mkdirp(join(avdDirectory, "simlock_two.avd"));
 
-      for (const result of [ok(`${avdDirectory}/simlock_one.avd\r\nOK\r\n`), answer]) {
+      for (const result of [ok(`${join(avdDirectory, "simlock_one.avd")}\r\nOK\r\n`), answer]) {
         const runner = new EmulatorExitingRunner([
           processResult(
             binaries.adb,

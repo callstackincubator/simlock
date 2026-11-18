@@ -12,6 +12,7 @@ import {
   answeringAvdPath,
   androidFilesystem,
   avdDirectory,
+  privateAliasOf,
   binaries,
   bootProbes,
   EmulatorExitingRunner,
@@ -266,13 +267,13 @@ describe("AndroidDriver readiness on a taken console port", () => {
       reported: "with a trailing slash",
     },
     {
-      answer: `/private${join(avdDirectory, "simlock_one", "simlock.avd")}\r\nOK\r\n`,
+      answer: `${privateAliasOf(join(avdDirectory, "simlock_one", "simlock.avd"))}\r\nOK\r\n`,
       reported: "through a link to the device root's directory",
     },
     // why: `/home` is a link to `/private/home`, as macOS's `/var` is to `/private/var`: the link
     // is on the device root's side, and the emulator answers with the resolved path.
     {
-      answer: `/private${join(avdDirectory, "simlock_one", "simlock.avd")}\r\nOK\r\n`,
+      answer: `${privateAliasOf(join(avdDirectory, "simlock_one", "simlock.avd"))}\r\nOK\r\n`,
       filesystem: () => new LinkedHomeFilesystem(),
       reported: "resolved, when the device root's own path runs through a link",
     },

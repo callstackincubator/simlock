@@ -17,6 +17,7 @@ export {
   answeringAvdPath,
   simlockHome,
   instanceId,
+  privateAliasOf,
   avdDirectory,
   binaries,
   ok,

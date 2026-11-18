@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { OWNED_ROOT_MARKER_FILE } from "../../core/index.js";
 import {
   FakeClock,
@@ -27,7 +28,8 @@ const instanceId = "instance-1";
 
 export const adb = binaries.adb;
 
-export const avdDirectory = `${simlockHome}/devices/android`;
+// why: `ensureOwnedRoot` resolves the configured root, so on Windows the driver reads `D:\home\...`.
+export const avdDirectory = resolve(simlockHome, "devices", "android");
 
 export const PHONE = "R58M123ABC";
 

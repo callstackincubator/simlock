@@ -1,4 +1,4 @@
-import { join, win32 } from "node:path";
+import { resolve, win32 } from "node:path";
 import {
   MemoryFilesystem,
   NodeSqliteOpener,
@@ -248,8 +248,13 @@ export const simlockHome = "/home/simlock/.simlock";
 
 export const instanceId = "instance-1";
 
-// why: the driver builds its device root with `join`, so on Windows it reads `\home\...`.
-export const avdDirectory = join(simlockHome, "devices", "android");
+// why: the canonical alias an emulator on macOS reports for a path (`/var` is `/private/var`), in `/` form on every host.
+export function privateAliasOf(path: string): string {
+  return `/private${path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")}`;
+}
+
+// why: `ensureOwnedRoot` resolves the configured root, so on Windows the driver reads `D:\home\...`.
+export const avdDirectory = resolve(simlockHome, "devices", "android");
 
 // why: the driver's SDK search runs with the host's platform, so the fake SDK holds the names
 // that platform has (`adb.exe`, `avdmanager.bat` on Windows).
