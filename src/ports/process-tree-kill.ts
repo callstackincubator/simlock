@@ -79,8 +79,9 @@ function runWindowsKill(
 
 /**
  * why: Signals the child's whole process group (children are spawned `detached`, so the group is
- * the unit that actually dies), or on Windows a batch file's whole tree, a `killChildren` child
- * with its own children, and any other child alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
+ * the unit that actually dies; a `killChildren` child alone), or on Windows a batch file's whole
+ * tree, a `killChildren` child with its own children, and any other child alone, treating an
+ * already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
  * kill identically -- a timeout that only reached the direct child would leave a tool's own
  * subprocesses running.
  *
