@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import {
   type ScriptedProcessExpectation,
@@ -18,6 +19,7 @@ import {
   dataPath,
   instanceId,
   printDisabled,
+  inPosixForm,
 } from "./test-slim.js";
 
 export const listFixture = readFileSync(
@@ -333,12 +335,16 @@ export const IOS_RUNTIME_ASSET_ROOT =
  * as a downloaded runtime bundle of several GiB would; it measures every other path as usual.
  */
 export class SizedFilesystem extends MemoryFilesystem {
-  constructor(private readonly sizes: ReadonlyMap<string, number>) {
+  readonly #sizes: ReadonlyMap<string, number>;
+
+  constructor(sizes: ReadonlyMap<string, number>) {
     super();
+    this.#sizes = new Map([...sizes].map(([path, size]) => [inPosixForm(path), size]));
   }
 
+  // why: the driver joins the bundle's path with `join`, so on a Windows host it asks with backslashes.
   override async directorySize(path: string): Promise<number> {
-    return this.sizes.get(path) ?? super.directorySize(path);
+    return this.#sizes.get(inPosixForm(path)) ?? super.directorySize(path);
   }
 }
 
@@ -368,7 +374,7 @@ export const prepareFull = { mode: "full", purpose: "prepare" } as const;
 
 export const throwawayUdid = "00000000-0000-0000-0000-0000000000bb";
 
-export const logsRoot = "/Logs/CoreSimulator";
+export const logsRoot = join("/Logs", "CoreSimulator");
 
 /** why: the calls that make a seed from a throwaway under the `simlock` set, in order; a test starts its script with these, after the catalog read. */
 type ScriptedStep = Pick<ScriptedProcessExpectation, "match" | "result">;

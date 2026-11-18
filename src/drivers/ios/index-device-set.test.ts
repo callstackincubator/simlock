@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   OWNED_ROOT_MARKER_FILE,
@@ -21,6 +22,8 @@ import {
   deviceHubEdit,
   plantManagedDevice,
   instanceId,
+  simlockDeviceRoot,
+  unownedSourcesSet,
 } from "./test-slim.js";
 import {
   PHYSICAL_DEVICE,
@@ -64,9 +67,9 @@ describe("IosSimctlDriver device set", () => {
     [
       "default",
       { deviceSet: "default" },
-      `${coreSimulatorRoot}/Devices`,
+      join(coreSimulatorRoot, "Devices"),
       false,
-      "/home/.simlock/devices/ios-sources",
+      unownedSourcesSet,
       true,
     ],
   ] as const)(
@@ -223,8 +226,8 @@ describe("IosSimctlDriver device set", () => {
   );
 
   it("an operator who switches with leftovers gets device-set-changed, and an unreadable folder gets unreadable", async () => {
-    const ownRoot = "/home/.simlock/devices/ios";
-    const xcodeDevices = `${coreSimulatorRoot}/Devices`;
+    const ownRoot = simlockDeviceRoot;
+    const xcodeDevices = join(coreSimulatorRoot, "Devices");
     const [first, second, third] = [1, 2, 3].map(
       (n) => `00000000-0000-0000-0000-00000000000${String(n)}`,
     );
@@ -360,7 +363,7 @@ describe("IosSimctlDriver device set", () => {
 
   it.each([
     ["simlock", { deviceRoot, deviceSet: "simlock" }, deviceRoot],
-    ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`],
+    ["default", { deviceSet: "default" }, join(coreSimulatorRoot, "Devices")],
   ] as const)(
     "a new simulator's marks name this instance under deviceSet %s",
     async (setting, config, devicesDir) => {
@@ -398,7 +401,7 @@ describe("IosSimctlDriver device set", () => {
         [
           "simctl",
           "--set",
-          scoped ? sourcesSetPath : "/home/.simlock/devices/ios-sources",
+          scoped ? sourcesSetPath : unownedSourcesSet,
           "clone",
           seedUdid,
           driverData.name,
@@ -434,7 +437,7 @@ describe("IosSimctlDriver device set", () => {
   );
 
   it("under deviceSet default listManaged reports only devices whose durable mark names this instance", async () => {
-    const devicesDir = `${coreSimulatorRoot}/Devices`;
+    const devicesDir = join(coreSimulatorRoot, "Devices");
     const udid = (n: number) => `00000000-0000-0000-0000-00000000010${String(n)}`;
     const mark = (owner?: string) =>
       JSON.stringify({ ...(owner === undefined ? {} : { instanceId: owner }), token: "t" });
@@ -504,7 +507,7 @@ describe("IosSimctlDriver device set", () => {
   });
 
   it("under deviceSet default foreignDevices and the removal's unused count take only devices this instance's mark does not name", async () => {
-    const devicesDir = `${coreSimulatorRoot}/Devices`;
+    const devicesDir = join(coreSimulatorRoot, "Devices");
     const udids = ["A", "B", "C"].map((n) => `0000000${n}-0000-0000-0000-000000000000`);
     const devices = (used: boolean) =>
       JSON.stringify({

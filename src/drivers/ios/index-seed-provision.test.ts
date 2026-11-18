@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, expect, it, vi, describe } from "vitest";
 import { DriverCrashError } from "../../core/index.js";
 import {
@@ -20,6 +21,7 @@ import {
   waitForCalls,
   simctl,
   instanceId,
+  unownedSourcesSet,
 } from "./test-slim.js";
 import {
   UNSCOPED_LEGACY_CALLS,
@@ -309,11 +311,11 @@ describe("IosSimctlDriver", () => {
       hung: [
         "simctl",
         "--set",
-        "/home/.simlock/devices/ios-sources",
+        unownedSourcesSet,
         "clone",
         seedUdid,
         driverData.name,
-        `${coreSimulatorRoot}/Devices`,
+        join(coreSimulatorRoot, "Devices"),
       ],
       isDefault: true,
       seeded: true,
@@ -350,7 +352,7 @@ describe("IosSimctlDriver", () => {
   ])(
     "a create or clone that answers after its limit deletes the simulator it names in its own set ($call)",
     async ({ act, deleteArgs, hung, isDefault, seeded, steps }) => {
-      const devicesDir = `${coreSimulatorRoot}/Devices`;
+      const devicesDir = join(coreSimulatorRoot, "Devices");
       const lateUdid = "00000000-0000-0000-0000-0000000000c1";
       const list = isDefault
         ? { args: ["simctl", "list", "-j", "devicetypes", "runtimes"], command: "xcrun" }
