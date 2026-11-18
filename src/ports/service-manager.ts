@@ -554,7 +554,9 @@ export class TaskSchedulerServiceManager implements ServiceManager {
     await this.checked("schtasks", ["/delete", "/tn", definition.name, "/f"]);
   }
 
-  async start(_definition: ServiceDefinition): Promise<void> {}
+  async start(definition: ServiceDefinition): Promise<void> {
+    await this.checked("schtasks", ["/run", "/tn", definition.name]);
+  }
 }
 
 export function productionServiceManager(
