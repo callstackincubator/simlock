@@ -440,6 +440,8 @@ export interface LeaseRecord {
    * `false`: every ID then was generated.
    */
   readonly idChosenByRequester: boolean;
+  // why: `| undefined` because a lease read from a worker (the contract's type) is projected as this type by a gateway.
+  readonly runId?: string | undefined;
 }
 
 export interface LeaseTiming {
