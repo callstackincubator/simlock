@@ -15,6 +15,7 @@ import { memorySourceDatabase } from "./testing.js";
 import {
   deviceRoot,
   driverData,
+  flushMicrotasks221,
   plantManagedDevice,
   waitForCalls,
   simctl,
@@ -86,6 +87,52 @@ describe("IosSimctlDriver", () => {
         `key ${String(full)}`,
       ).toEqual({ timeoutMs: waitsMs });
     }
+  });
+
+  it("a new iOS seed's throwaway stays booted for 8 minutes after it is ready before it is shut down", async () => {
+    const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ...throwawaySeedSteps(),
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
+    ]);
+    scopedRunners.push(runner);
+    const clock = new FakeClock();
+    const filesystem = new MemoryFilesystem();
+    const driver = await IosSimctlDriver.create({
+      clock,
+      database: await memorySourceDatabase(),
+      driverConfig: { deviceRoot },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: runner,
+      simlockHome: "/home/.simlock",
+    });
+    await plantManagedDevice(filesystem);
+    await plantSeedClone(filesystem);
+    const ready = simctl("listapps", throwawayUdid).args;
+
+    const provision = driver.provision(spec);
+    const outcome = promiseState(provision);
+    await vi.waitFor(() => expect(runner.calls.map((call) => call.args)).toContainEqual(ready));
+    const readyAt = runner.calls.findIndex((call) => call.args.join(" ") === ready.join(" "));
+    clock.advance(479_999);
+    await flushMicrotasks221();
+
+    expect(
+      runner.calls.slice(readyAt + 1).map((call) => call.args),
+      "1 ms before 8 minutes after ready the throwaway is still booted",
+    ).toEqual([]);
+
+    clock.advance(1);
+    await flushMicrotasks221();
+
+    expect(
+      runner.calls[readyAt + 1]?.args,
+      "8 minutes after ready the throwaway is shut down",
+    ).toEqual(simctl("shutdown", throwawayUdid).args);
+    await vi.waitFor(() => expect(outcome.state).toBe("fulfilled"));
   });
 
   it("provisions a copy of the kind's seed, making the seed first when there is none", async () => {
