@@ -407,6 +407,17 @@ export interface TaskSchedulerServiceManagerOptions {
   readonly systemRoot?: string;
 }
 
+const WHOAMI_ARGS = ["/user", "/fo", "csv", "/nh"];
+
+function xmlUnescape(value: string): string {
+  return value
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+}
+
 const TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task";
 
 function quoted(value: string): string {
@@ -473,15 +484,54 @@ export class TaskSchedulerServiceManager implements ServiceManager {
     return result;
   }
 
-  async state(_definition: ServiceDefinition): Promise<ServiceState> {
-    return { state: "not-installed" };
+  private async hasDesktopSession(): Promise<boolean> {
+    try {
+      const user = await this.checked("whoami", WHOAMI_ARGS);
+      const account = /^"([^"]*)"/.exec(user.stdout.trim())?.[1];
+      if (account === undefined) return false;
+      const listed = await this.checked("tasklist", [
+        "/fi",
+        `USERNAME eq ${account}`,
+        "/fi",
+        "SESSION ne 0",
+        "/fo",
+        "csv",
+        "/nh",
+      ]);
+      return listed.stdout.split(/\r?\n/).some((line) => line.startsWith('"'));
+    } catch (error: unknown) {
+      if (error instanceof ServiceFailedError) return false;
+      throw error;
+    }
+  }
+
+  async state(definition: ServiceDefinition): Promise<ServiceState> {
+    const { filesystem } = this.options;
+    // why: plain schtasks writes the OEM code page, which garbles a non-ASCII path.
+    const queried = await this.run("cmd.exe", [
+      "/d",
+      "/c",
+      `chcp 65001 >nul && schtasks /query /tn ${definition.name} /xml`,
+    ]);
+    if (queried.code !== 0) return { state: "not-installed" };
+    const args = xmlUnescape(/<Arguments>([\s\S]*?)<\/Arguments>/.exec(queried.stdout)?.[1] ?? "");
+    const saved = /--headless\s+"([^"]*)"\s+"([^"]*)"/.exec(args);
+    if (saved === null)
+      return { state: "broken", path: definition.path, missing: [definition.path] };
+    const missing: string[] = [];
+    for (const path of [saved[1] as string, saved[2] as string]) {
+      if (!(await filesystem.exists(path))) missing.push(path);
+    }
+    if (missing.length > 0) return { state: "broken", path: definition.path, missing };
+    const disabled = /<Settings>[\s\S]*?<Enabled>\s*false\s*<\/Enabled>/i.test(queried.stdout);
+    const loaded = !disabled && (await this.hasDesktopSession());
+    return { state: loaded ? "installed" : "not-loaded", path: definition.path };
   }
 
   async install(definition: ServiceDefinition): Promise<void> {
     const { filesystem } = this.options;
     await ensureLog(filesystem, definition.logPath);
-    const whoamiArgs = ["/user", "/fo", "csv", "/nh"];
-    const user = await this.checked("whoami", whoamiArgs);
+    const user = await this.checked("whoami", WHOAMI_ARGS);
     const sid = /^"[^"]*","([^"]*)"/.exec(user.stdout.trim())?.[1];
     if (sid === undefined) throw new ServiceFailedError("whoami /user printed no SID");
     const xmlPath = join(dirname(definition.logPath), "service-task.xml");
