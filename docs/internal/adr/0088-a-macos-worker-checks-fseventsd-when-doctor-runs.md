@@ -1,6 +1,6 @@
 # 0088. A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-18
 - **Issue:** [#1733](https://github.com/callstackincubator/simlock/issues/1733) (request [#1618](https://github.com/callstackincubator/simlock/issues/1618))
 - **Narrows:** [ADR 0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md)
