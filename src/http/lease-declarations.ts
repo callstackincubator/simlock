@@ -11,6 +11,7 @@ import {
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
+  refuseBadRunId,
   refuseModelWithClass,
   requesterIdSchema,
   waitingRequestSchema,
@@ -236,7 +237,8 @@ export const leaseRequestBodySchema = z
   .strict()
   .superRefine((body, context) =>
     refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
-  );
+  )
+  .superRefine(refuseBadRunId());
 
 export const leaseRequestCreateRoute = declareRoute({
   method: "post",

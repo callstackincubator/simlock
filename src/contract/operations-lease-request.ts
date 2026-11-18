@@ -241,7 +241,7 @@ export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 export const RUN_ID_REFUSAL = "a run id is 1 to 128 letters, digits, `.`, `_` or `-`";
 
-function refuseBadRunId(): <T extends { readonly runId?: string | undefined }>(
+export function refuseBadRunId(): <T extends { readonly runId?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
 ) => void {
