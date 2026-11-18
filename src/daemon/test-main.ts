@@ -19,9 +19,9 @@ export const runningDaemons: DaemonServer[] = [];
 
 export const temporaryDirectories: string[] = [];
 
-// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test that asks for neither pins them off, and two daemons would clash on port 4701.
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046), and a macOS worker checks fseventsd (ADR 0088); a test that asks for neither pins them off, and two daemons would clash on port 4701.
 export const STANDALONE_OFF = {
-  capabilities: { "agent-device": { enabled: false } },
+  capabilities: { "agent-device": { enabled: false }, fseventsd: { enabled: false } },
   http: { enabled: false },
 } as const;
 

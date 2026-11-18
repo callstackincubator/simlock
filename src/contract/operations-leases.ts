@@ -243,7 +243,7 @@ export const leaseReleaseRun = defineOperation({
 });
 
 /**
- * why: turns a leased iOS phone or tablet simulator, through the lease's device input, whether or not the input module is on.
+ * why: turns a leased iOS phone or tablet simulator (not a foldable), through the lease's device input, whether or not the input module is on.
  */
 export const deviceRotate = defineOperation({
   name: "device.rotate",

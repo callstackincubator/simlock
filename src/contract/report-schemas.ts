@@ -108,6 +108,12 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     message: z.string(),
     remedy: z.string(),
   }),
+  z.object({
+    kind: z.literal("module-advisory"),
+    module: capabilityNameSchema,
+    message: z.string().max(1000),
+    remedy: z.string().max(1000),
+  }),
 ]);
 
 const doctorSourceSchema = z.object({
