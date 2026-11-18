@@ -179,6 +179,7 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
     ["RUNTIME_MISSING", "runtime-missing"],
     ["NO_DRIVER", "no-driver"],
     ["CAPABILITY_MISSING", "capability-missing"],
+    ["MODE_UNAVAILABLE", "mode-unavailable"],
   ] as const)("lists a worker that answered %s before progress as %s", async (code, reason) => {
     const { clients, coordinator } = fleet(["wrk_a", "wrk_b"], saturatedExcept("wrk_a"));
     clients["wrk_a"]?.requestLeaseQueue.push({
