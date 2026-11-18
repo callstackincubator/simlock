@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { DriverCrashError } from "../../core/index.js";
 import { isMissingPathError, type Filesystem, type IdGenerator } from "../../ports/index.js";
 import type { AdbTools } from "./adb-tools.js";
@@ -43,7 +45,7 @@ export class AvdConfig {
       },
       (line) => !isSeedHardwareLine(line),
     );
-    const bootPropPath = `${folder}/boot.prop`;
+    const bootPropPath = join(folder, "boot.prop");
     const properties = Object.entries(profile.bootProperties);
     if (properties.length > 0) {
       await this.#options.filesystem.writeFileAtomic(
@@ -97,7 +99,7 @@ export class AvdConfig {
 
   async #avdConfig(folder: string): Promise<string> {
     try {
-      const contents = await this.#options.filesystem.readFile(`${folder}/config.ini`);
+      const contents = await this.#options.filesystem.readFile(join(folder, "config.ini"));
       return (
         contents
           .split(/\r?\n/)
@@ -143,7 +145,7 @@ export class AvdConfig {
         );
       }
     }
-    const path = `${folder}/config.ini`;
+    const path = join(folder, "config.ini");
     let contents: string;
     try {
       contents = await this.#options.filesystem.readFile(path);
@@ -179,7 +181,7 @@ export class AvdConfig {
 
   async readDurableMark(folder: string): Promise<string | undefined> {
     try {
-      const contents = await this.#options.filesystem.readFile(`${folder}/config.ini`);
+      const contents = await this.#options.filesystem.readFile(join(folder, "config.ini"));
       const line = contents
         .split(/\r?\n/)
         .find((entry) => entry.startsWith(`${DURABLE_MARK_KEY}=`));

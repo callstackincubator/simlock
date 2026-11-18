@@ -13,9 +13,8 @@ import {
   type StreamingProcessHandle,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
-import { emulatorHelpListing } from "./testing.js";
+import { binaries, emulatorHelpListing } from "./testing.js";
 import {
-  sdk,
   adb,
   avdDirectory,
   PHONE,
@@ -112,7 +111,7 @@ async function expectReclaimAccepted(): Promise<void> {
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
 
 function sdkTool(name: "avdmanager" | "sdkmanager"): string {
-  return `${sdk}/cmdline-tools/latest/bin/${name}`;
+  return binaries[name];
 }
 
 function scripted(command: string, args: readonly (string | RegExp)[], stdout = "") {
@@ -806,7 +805,7 @@ describe("Android physical handler: independence from emulator calls", () => {
     // why: the emulator call is the first boot of a seed, made inside `provision`: it holds the seed's lock and a console port while its emulator never answers.
     const emulatorExpectations = [
       scripted(sdkTool("avdmanager"), ["list", "device"], pixelDevices),
-      scripted(`${sdk}/emulator/emulator`, ["-version"], "Android emulator version 36.1.9"),
+      scripted(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       scripted(sdkTool("avdmanager"), [
         "create",
         "avd",
@@ -818,12 +817,12 @@ describe("Android physical handler: independence from emulator calls", () => {
         "pixel_8",
       ]),
       scripted(adb, ["devices"], "List of devices attached\n"),
-      scripted(`${sdk}/emulator/emulator`, ["-help"], emulatorHelpListing),
+      scripted(binaries.emulator, ["-help"], emulatorHelpListing),
       {
         hangs: true,
         match: {
           args: [/^-avd$/, "simlock", ...Array.from({ length: 11 }, () => /.*/)],
-          command: `${sdk}/emulator/emulator`,
+          command: binaries.emulator,
         },
       },
       {
