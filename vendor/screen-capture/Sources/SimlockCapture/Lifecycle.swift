@@ -215,17 +215,23 @@ let maxKeyframeGapNanos: UInt64 = 5_000_000_000
 /// one whenever 5 s of arrival time have passed since the last key frame, whatever its cause, so a
 /// still screen (a few frames a second) still gives a new decoder a picture within 5 s; the encoder's
 /// own `MaxKeyFrameInterval` counts frames and would stretch to half a minute at the idle floor.
+///
+/// Frames are paced on a grid: the deadline moves one interval per frame sent, a frame up to a quarter
+/// interval early is accepted, and the deadline never trails the clock by more than half an interval, so
+/// a slightly early frame is not lost and a pause does not end in a burst.
 func encodeLoop(_ frames: AsyncStream<Pending>, options: Options, session: Session) async {
     let intervalNanos = UInt64(1_000_000_000 / Double(options.fps))
-    var lastSent: UInt64 = 0
+    var deadline: UInt64 = 0
     var started = false
     var metaSize: Dimensions?
     var lastKeyframe: UInt64 = 0
     let encoder = H264Encoder(fps: options.fps, bitrate: options.bitrate)
     let jpegEncoder = VideoEncoder(quality: 0.7)
     for await frame in frames {
-        if started, frame.atNanos &- lastSent < intervalNanos { continue }
-        lastSent = frame.atNanos
+        if started, frame.atNanos &+ intervalNanos / 4 < deadline { continue }
+        deadline = started
+            ? max(deadline &+ intervalNanos, frame.atNanos &+ intervalNanos / 2)
+            : frame.atNanos &+ intervalNanos
         let forceKeyframe = !started || frame.atNanos &- lastKeyframe >= maxKeyframeGapNanos
         started = true
 
