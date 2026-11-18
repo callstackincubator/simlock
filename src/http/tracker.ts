@@ -23,6 +23,7 @@ export interface LeaseRequestInput {
   /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
   readonly leaseId?: string;
+  readonly runId?: string;
   readonly metadata?: Readonly<Record<string, string>>;
 }
 
@@ -80,6 +81,7 @@ export function buildLeasePayload(
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
     ttlMs: lease.ttlMs,
+    ...(lease.runId === undefined ? {} : { runId: lease.runId }),
     dataPlane: null,
     ...(device.mode === undefined ? {} : { mode: device.mode }),
     ...(device.except === undefined ? {} : { except: device.except }),
@@ -120,6 +122,7 @@ function requestOptions(body: LeaseRequestInput) {
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
+    ...(body.runId === undefined ? {} : { runId: body.runId }),
     ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
   };
 }
@@ -416,6 +419,7 @@ interface HttpLeaseRecord {
   readonly grantedAt: number;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  readonly runId?: string | undefined;
   /** ADR 0005 §18: set on a lease a gateway issued, naming the worker it lives on. */
   readonly worker?: { readonly id: string; readonly label?: string | undefined } | undefined;
 }

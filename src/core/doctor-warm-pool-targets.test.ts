@@ -51,6 +51,7 @@ describe("Doctor: warm pool targets", () => {
     readonly figures?: ReturnType<typeof figuresOf>;
     readonly driver?: Omit<ConstructorParameters<typeof FakeDriver>[0], "clock">;
     readonly virtualDevices?: Partial<Record<"ios" | "android", boolean>>;
+    readonly platforms?: readonly ("ios" | "android")[];
   }): Promise<DoctorFinding[]> {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
@@ -62,7 +63,7 @@ describe("Doctor: warm pool targets", () => {
       config: {
         ...base,
         android: { virtualDevices: options.virtualDevices?.android ?? true },
-        ios: { virtualDevices: options.virtualDevices?.ios ?? true },
+        ios: { ...base.ios, virtualDevices: options.virtualDevices?.ios ?? true },
         warmPool: {
           ...base.warmPool,
           enabled: options.enabled ?? true,
@@ -70,7 +71,9 @@ describe("Doctor: warm pool targets", () => {
           targets: options.targets ?? [],
         },
       },
-      drivers: [new FakeDriver({ clock, platform: "ios", ...options.driver })],
+      drivers: (options.platforms ?? ["ios", "android"]).map(
+        (platform) => new FakeDriver({ clock, platform, ...options.driver }),
+      ),
       eventBus,
       registry,
       warmPool: {
@@ -204,6 +207,21 @@ describe("Doctor: warm pool targets", () => {
       expect.objectContaining({ reason: "over-limit", target: "all targets" }),
     ]);
     expect(await ask(false)).toStrictEqual([]);
+  });
+
+  it("leaves the reserveRunning of a platform with no driver on this host out of the room the targets are checked against", async () => {
+    const ask = (platforms: readonly ("ios" | "android")[]) =>
+      findings({
+        limit: { global: 2 },
+        platforms,
+        reserve: { android: 2, ios: 0 },
+        targets: [{ count: 2, model: "iPhone 17", platform: "ios" }],
+      });
+
+    expect(await ask(["ios", "android"])).toStrictEqual([
+      expect.objectContaining({ reason: "over-limit", target: "all targets" }),
+    ]);
+    expect(await ask(["ios"])).toStrictEqual([]);
   });
 
   it("reports a target short with unknown-model as unreachable", async () => {

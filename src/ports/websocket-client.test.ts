@@ -23,7 +23,7 @@ afterEach(async () => {
 
 // why: an adapter over ws, proven by what a real upgrade does: the refusal's status and body, the headers sent, and the pings, close and bytes that arrive.
 describe("NodeWebSocketClientConnector", () => {
-  it("rejects a refused upgrade with its status and body, and reports headers, messages, pings and the close", async () => {
+  it("rejects a refused upgrade with its status and body, and sends text frames, bounds a message by maxPayloadBytes, and reports headers, messages, pings and the close", async () => {
     const refusing = createServer();
     refusing.on("upgrade", (_request, socket) => {
       const body = '{"error":{"code":"TUNNEL_UNAVAILABLE"}}';
@@ -97,6 +97,28 @@ describe("NodeWebSocketClientConnector", () => {
     stuck.terminate();
     await vi.waitFor(() => expect(stuckCloses).toEqual([1006]));
     for (const socket of held) socket.destroy();
+
+    const texting = createServer();
+    const textServer = new WebSocketServer({ server: texting });
+    const frames: boolean[] = [];
+    textServer.on("connection", (socket) => {
+      socket.on("message", (_data, isBinary) => {
+        frames.push(isBinary);
+        socket.send("x".repeat(2048));
+      });
+    });
+    const bounded = await connector.connect(await listen(texting), {
+      ...options,
+      maxPayloadBytes: 1024,
+    });
+    const boundedCloses: number[] = [];
+    const boundedMessages: number[] = [];
+    bounded.onClose((code) => boundedCloses.push(code));
+    bounded.onMessage((bytes) => boundedMessages.push(bytes.length));
+    bounded.sendText("hello");
+    await vi.waitFor(() => expect(boundedCloses).toHaveLength(1));
+    expect(boundedMessages).toEqual([]);
+    expect(frames).toEqual([false]);
 
     const late: [number, string][] = [];
     client.onClose((code, reason) => late.push([code, reason]));

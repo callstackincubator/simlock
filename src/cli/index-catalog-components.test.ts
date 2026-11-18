@@ -93,6 +93,46 @@ describe("CLI: catalog", () => {
     expect(JSON.parse(await run(["catalog", "--json"]))).toEqual({ platforms: [entry] });
   });
 
+  it("prints the modes an iOS worker serves after the runtimes line, both when it sends none, and nothing for Android; --json carries what was sent", async () => {
+    const entryOf = (platform: "android" | "ios", modes?: ("slim" | "full")[]) => ({
+      classDefaults: {},
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      platform,
+      runtimes: [],
+      ...(modes === undefined ? {} : { modes }),
+    });
+    const run = async (arguments_: string[], entry: ReturnType<typeof entryOf>) => {
+      const output = outputCapture();
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ getCatalog: () => Promise.resolve({ platforms: [entry] }) }),
+      });
+      await expect(runCli(arguments_, environment)).resolves.toBe(0);
+      return output.stdout;
+    };
+    const lines = (platform: string, served?: string) => [
+      `Platform: ${platform}`,
+      "  Runtimes: (none) (default: (none))",
+      ...(served === undefined ? [] : [`  Modes served: ${served}`]),
+      "  Models: (none)",
+      "",
+    ];
+
+    expect(await run(["catalog"], entryOf("ios", ["slim"]))).toBe(lines("ios", "slim").join("\n"));
+    expect(await run(["catalog"], entryOf("ios", ["full"]))).toBe(lines("ios", "full").join("\n"));
+    expect(await run(["catalog"], entryOf("ios"))).toBe(lines("ios", "slim, full").join("\n"));
+    expect(await run(["catalog"], entryOf("android"))).toBe(lines("android").join("\n"));
+    expect(JSON.parse(await run(["catalog", "--json"], entryOf("ios", ["slim"])))).toEqual({
+      platforms: [entryOf("ios", ["slim"])],
+    });
+    expect(JSON.parse(await run(["catalog", "--json"], entryOf("ios")))).toEqual({
+      platforms: [entryOf("ios")],
+    });
+  });
+
   it("prints each model with the runtimes it pairs with", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({
@@ -126,6 +166,7 @@ describe("CLI: catalog", () => {
       [
         "Platform: ios",
         "  Runtimes: 18.4, 26.0 (default: 26.0)",
+        "  Modes served: slim, full",
         "  Models:",
         "    (no class):",
         "      iPhone 16: 18.4, 26.0",
@@ -180,6 +221,7 @@ describe("CLI: catalog", () => {
       [
         "Platform: ios",
         "  Runtimes: 26.0 (default: 26.0)",
+        "  Modes served: slim, full",
         "  Models:",
         "    phone (default: iPhone 17):",
         "      iPhone 17: 26.0",

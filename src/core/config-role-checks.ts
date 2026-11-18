@@ -49,6 +49,27 @@ export function validateDeletedRetention(config: Config): void {
   }
 }
 
+/**
+ * why: ADR 0082 §1: a worker must serve the mode it gives a request that names none. A default
+ * the operator wrote must be listed; one they did not write follows a one-mode list. "Wrote" is
+ * read from the layers, since the merged config holds the built-in `full` either way.
+ */
+export function applyServedModesDefault(config: Config, layers: readonly unknown[]): Config {
+  const written = layers.some(
+    (layer) => asObject(asObject(layer)["ios"])["defaultMode"] !== undefined,
+  );
+  if (written) {
+    if (!config.ios.modes.includes(config.ios.defaultMode)) {
+      throw invalidValue("ios.defaultMode", "a mode ios.modes lists");
+    }
+    return config;
+  }
+  const [only] = config.ios.modes;
+  return config.ios.modes.length === 1 && only !== undefined
+    ? { ...config, ios: { ...config.ios, defaultMode: only } }
+    : config;
+}
+
 export function validateEventLogBounds(config: Config): void {
   if (config.eventLog.maxBytes < MIN_EVENT_LOG_MAX_BYTES) {
     throw invalidValue("eventLog.maxBytes", "at least 16 MiB");

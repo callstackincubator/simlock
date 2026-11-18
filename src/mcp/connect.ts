@@ -16,6 +16,7 @@ import {
 } from "../client/index.js";
 import {
   DAEMON_STARTUP_TIMEOUT_MS,
+  type WebSocketClientConnector,
   IpcError,
   startErrorFrom,
   startTimeoutMessage,
@@ -151,4 +152,19 @@ function delay(clock: Clock, milliseconds: number): Promise<void> {
 function errorMessage(error: unknown): string {
   if (isSimlockError(error)) return error.message;
   return error instanceof Error ? error.message : String(error);
+}
+
+/** why: connects to a farm's session path with the token and never launches anything, as a farm has no daemon of this machine's to start (ADR 0081 §3); tool calls and renewals both use it. */
+export function connectToFarm(options: {
+  readonly clock: Clock;
+  readonly token: string;
+  readonly url: string;
+  readonly webSocket: WebSocketClientConnector | undefined;
+}): Promise<SimlockClient> {
+  return connectSimlock({
+    clock: options.clock,
+    token: options.token,
+    url: options.url,
+    ...(options.webSocket === undefined ? {} : { webSocket: options.webSocket }),
+  });
 }

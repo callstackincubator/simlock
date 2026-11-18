@@ -62,6 +62,7 @@ export class FleetGrants {
       idChosenByRequester: forwardedLeaseId !== undefined,
       ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
+      ...(waiter.options.runId === undefined ? {} : { runId: waiter.options.runId }),
       workerId,
       workerLeaseId: grant.lease.id,
     };
@@ -87,6 +88,14 @@ export class FleetGrants {
         worker: workerId,
         workerLeaseId: grant.lease.id,
       });
+      if (this.options.queue.releasesAtGrant(waiter)) {
+        this.options.forwarding.release(gatewayLeaseId).catch((error: unknown) => {
+          this.options.logger.warn("A run release could not end a lease granted after it", {
+            error: error instanceof Error ? error.message : String(error),
+            gatewayLeaseId,
+          });
+        });
+      }
     }
     return "settled";
   }

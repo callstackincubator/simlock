@@ -4,6 +4,7 @@ import type { StateDatabase } from "../state/index.js";
 import {
   buildCapacityFigures,
   CapacityCoordinator,
+  servingOnly,
   capacityDevices,
   CapacityObserver,
   createCapacityStrategy,
@@ -194,7 +195,12 @@ export function createCore(options: CoreOptions): Core {
   };
 
   const capacity = new CapacityCoordinator(
-    createCapacityStrategy(options.config.capacity, options.systemStats),
+    servingOnly(
+      createCapacityStrategy(options.config.capacity, options.systemStats),
+      (platform) =>
+        options.drivers.some((driver) => driver.platform === platform) ||
+        (options.driverRejections ?? []).some((rejection) => rejection.platform === platform),
+    ),
     () => capacityObserver.changed(),
     memoryPressure,
   );
@@ -340,6 +346,7 @@ export function createCore(options: CoreOptions): Core {
     decisions,
     eventBus: options.eventBus,
     hasDriver: (platform) => drivers.select(platform).length > 0,
+    servedModes: options.config.ios.modes,
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),

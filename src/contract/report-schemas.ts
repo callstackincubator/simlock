@@ -98,7 +98,7 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     kind: z.literal("warm-pool-target-unreachable"),
     platform: platformSchema.optional(),
     target: z.string(),
-    reason: z.enum(["runtime-missing", "unknown-model", "over-limit"]),
+    reason: z.enum(["runtime-missing", "unknown-model", "mode-unavailable", "over-limit"]),
     message: z.string(),
     remedy: z.string(),
   }),

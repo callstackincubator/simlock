@@ -54,6 +54,7 @@ export {
   type ServiceState,
 } from "./service-manager.js";
 export { type LeaseSocket, type LeaseSocketAccept, MemoryLeaseSocket } from "./lease-socket.js";
+export type { SessionConnection, SessionOutcome } from "./session-socket.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
  * why: ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
@@ -198,6 +199,13 @@ export {
   type WebSocketClientConnector,
 } from "./websocket-client.js";
 export { FakeHttpJsonClient, FetchHttpJsonClient, type HttpJsonClient } from "./http-json.js";
+export {
+  FakeHttpStreamClient,
+  NodeHttpStreamClient,
+  type HttpStreamAnswer,
+  type HttpStreamClient,
+  type HttpStreamRequest,
+} from "./http-stream.js";
 export {
   defaultWorkerLockPath,
   NodeWorkerLock,

@@ -153,6 +153,7 @@ export function defaultConfig(
       ...driverDefaults(driverSections, "ios"),
       defaultMode: "full",
       defaultModels: {},
+      modes: ["slim", "full"],
       virtualDevices: true,
     },
     android: {

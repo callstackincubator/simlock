@@ -42,6 +42,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
+import { deviceModeWiring } from "./worker-composition.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 export const gibibyte = 1024 ** 3;
@@ -187,6 +188,8 @@ export async function buildDispatcher(
     readonly warmPool?: Partial<Config["warmPool"]>;
     /** why: the `ios.defaultMode` `catalog.get` reports. */
     readonly iosDefaultMode?: "slim" | "full";
+    /** why: the `ios.modes` the worker serves; the default mode and the leasing engine follow it as the loader and the daemon's wiring do (ADR 0082 §1). */
+    readonly iosModes?: readonly ("slim" | "full")[];
     /** why: the `android.defaultImageTag` `config.get` reports. */
     readonly androidDefaultImageTag?: string;
     /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0084). */
@@ -208,6 +211,8 @@ export async function buildDispatcher(
     readonly physicalDevices?: readonly SeededPhysicalDevice[];
     /** why: rows a test writes to `state.db` before the registry loads. */
     readonly seedState?: (state: StateDatabase) => void;
+    /** why: the `state.db` of an earlier build, for a test that restarts the daemon on it. */
+    readonly state?: StateDatabase;
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
     readonly load?: DispatcherOptions["load"];
@@ -223,7 +228,7 @@ export async function buildDispatcher(
     onReading: () => () => undefined,
   };
   const filesystem = new MemoryFilesystem();
-  const state = await openTestState();
+  const state = overrides.state ?? (await openTestState());
   seedPhysicalDevices(state, overrides.physicalDevices ?? []);
   overrides.seedState?.(state);
   const registry = await loadTestRegistry({
@@ -251,6 +256,19 @@ export async function buildDispatcher(
     ),
     overrides.http,
   );
+  const modes = overrides.iosModes;
+  const ios: Config["ios"] = {
+    ...baseConfig.ios,
+    ...(modes === undefined ? {} : { modes }),
+    ...(overrides.iosDefaultMode === undefined
+      ? modes?.length === 1
+        ? { defaultMode: modes[0]! }
+        : {}
+      : { defaultMode: overrides.iosDefaultMode }),
+    ...(overrides.bootTimeouts === undefined
+      ? {}
+      : { full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } }),
+  };
   const config: Config = withVirtualDevices(
     {
       ...baseConfig,
@@ -260,15 +278,10 @@ export async function buildDispatcher(
             android: { ...baseConfig.android, defaultImageTag: overrides.androidDefaultImageTag },
           }),
       warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
-      ...(overrides.iosDefaultMode === undefined
-        ? {}
-        : { ios: { ...baseConfig.ios, defaultMode: overrides.iosDefaultMode } }),
+      ios,
       ...(overrides.bootTimeouts === undefined
         ? {}
-        : {
-            android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android },
-            ios: { ...baseConfig.ios, full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } },
-          }),
+        : { android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android } }),
     },
     overrides.virtualDevices,
   );
@@ -284,6 +297,12 @@ export async function buildDispatcher(
     clock,
     config,
     describeFailure: describeLeaseRequestFailure,
+    ...(overrides.iosModes === undefined
+      ? {}
+      : {
+          defaultModes: deviceModeWiring(config).defaultModes,
+          servedModes: deviceModeWiring(config).servedModes,
+        }),
     ...overrides.engine,
     drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus,

@@ -43,11 +43,11 @@ export type HttpStatus =
  * validation, not-found on gateway-owned resources like lease requests). Thrown core errors
  * are mapped separately by `mapError` -- this class is for facts only the HTTP layer knows.
  *
- * `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, and
+ * `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, and
  * `REQUEST_CANCELLED` (below) are gateway-local codes with no row in the contract's closed
  * `SimlockErrorCode` union (`src/contract/errors.ts`) -- ADR §7's "a code the client does not
  * know wraps as `UNKNOWN_DAEMON_ERROR`" applies here: a typed client built against the contract
- * cannot narrow on any of these four today, only on the raw string inside
+ * cannot narrow on any of these three today, only on the raw string inside
  * `UNKNOWN_DAEMON_ERROR`'s `details`. See the known gaps in https://github.com/callstackincubator/simlock/blob/main/src/http/AGENTS.md.
  */
 export class HttpApiError extends Error {
@@ -78,7 +78,7 @@ export function badRequest(message: string): HttpApiError {
  * has no handler for). Reusing it here for a different resource at a different status (404)
  * meant a client branching on `error.code` alone could not tell "no such request id" from "no
  * such operation" -- ADR §7 makes codes contract, not message text (S8). `UNKNOWN_LEASE_REQUEST`
- * is outside the contract's closed union like `UNAUTHENTICATED`/`REQUEST_NOT_CANCELLABLE`/
+ * is outside the contract's closed union like `REQUEST_NOT_CANCELLABLE`/
  * `REQUEST_CANCELLED` below; see the known gaps in https://github.com/callstackincubator/simlock/blob/main/src/http/AGENTS.md. */
 export function unknownRequest(id: string): HttpApiError {
   return new HttpApiError(404, "UNKNOWN_LEASE_REQUEST", `Unknown lease request: ${id}`);

@@ -132,6 +132,19 @@ describe("assess", () => {
     );
   });
 
+  it("row 5: when only a worker that does not take requests serves the named mode, says NO_CAPACITY, never MODE_UNAVAILABLE", () => {
+    const slimOnly = view("wrk_a", { ...IOS, modes: ["slim"] });
+    const fullAway = view("wrk_b", { ...IOS, modes: ["full"] }, { connection: "disconnected" });
+    const fullDrained = view("wrk_c", { ...IOS, modes: ["full"] }, { drained: true });
+
+    for (const away of [fullAway, fullDrained]) {
+      expect(rejectionOf([slimOnly, away], { ...REQUEST, mode: "full" })).toMatchObject({
+        code: "NO_CAPACITY",
+        reason: "no-worker",
+      });
+    }
+  });
+
   it("row 6: a worker that takes requests and can serve it makes the request route-or-wait, busy or not", () => {
     const capacity = statusFixture().capacity;
     const busy = view("wrk_a", IOS, {

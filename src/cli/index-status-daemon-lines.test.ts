@@ -444,6 +444,43 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Install android 35 on wrk_1: waiting for 0s, 3 waiters\n");
   });
 
+  it("prints a lease's run id after its worker on the lease line, and the line as before for a lease with none", async () => {
+    const output = outputCapture();
+    const lease = {
+      deviceId: "dev_1",
+      grantedAt: 100,
+      idChosenByRequester: false,
+      lastRenewedAt: 200,
+      ownerId: "tok_1",
+      requesterId: "ci-job-42",
+      ttlDeadline: 900_000,
+      ttlMs: 900_000,
+    };
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      leases: [
+        { ...lease, id: "lse_run", runId: "123-1", workerId: "w1" },
+        { ...lease, id: "lse_local", runId: "123-1" },
+        { ...lease, id: "lse_plain" },
+      ],
+    };
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    expect(output.stdout).toContain(
+      "Lease lse_run: ci-job-42 on w1, run 123-1 since 100, last renewed 200\n",
+    );
+    expect(output.stdout).toContain(
+      "Lease lse_local: ci-job-42, run 123-1 since 100, last renewed 200\n",
+    );
+    expect(output.stdout).toContain("Lease lse_plain: ci-job-42 since 100, last renewed 200\n");
+  });
+
   it("prints each device's mode and whether it serves a request naming no mode", async () => {
     const output = outputCapture();
     const spec = {

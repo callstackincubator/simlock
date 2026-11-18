@@ -169,7 +169,11 @@ export interface DaemonServerCommonOptions {
    * `lease-lost` facts back at itself, since nothing would ever mark them self-initiated.
    * Optional so a test exercising neither engine nor gateway leases need not supply one.
    */
-  readonly leaseSnapshot?: () => readonly { readonly id: string; readonly ownerId: string }[];
+  readonly leaseSnapshot?: () => readonly {
+    readonly id: string;
+    readonly ownerId: string;
+    readonly runId?: string | undefined;
+  }[];
 }
 
 /**
@@ -193,6 +197,7 @@ export function buildDispatcher(
   hooks: {
     readonly awaitReady: () => Promise<void>;
     readonly health: () => DaemonHealth;
+    readonly closeSessionsForToken: (tokenId: string) => void;
   },
 ): Dispatcher {
   return new Dispatcher({
@@ -236,6 +241,7 @@ export function buildDispatcher(
     registry: options.registry,
     ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    closeSessionsForToken: hooks.closeSessionsForToken,
     ...(options.update === undefined ? {} : { update: options.update }),
     version: options.version,
   });

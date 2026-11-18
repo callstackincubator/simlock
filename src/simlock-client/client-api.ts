@@ -52,6 +52,8 @@ import type {
   LeaseReleaseAllOutput,
   LeaseReleaseInput,
   LeaseReleaseOutput,
+  LeaseReleaseRunInput,
+  LeaseReleaseRunOutput,
   LeaseRenewInput,
   LeaseRequestInput,
   ListGetInput,
@@ -104,6 +106,7 @@ export interface SimlockClient {
   cancelLease(input?: LeaseCancelInput): Promise<LeaseCancelOutput>;
   renewLease(input: LeaseRenewInput): Promise<LeaseRecord>;
   releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput>;
+  releaseRunLeases(input: LeaseReleaseRunInput): Promise<LeaseReleaseRunOutput>;
   listLeases(): Promise<LeaseListOutput>;
   runDoctor(input?: DoctorRunInput): Promise<DoctorReport>;
   /** Resolves the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision

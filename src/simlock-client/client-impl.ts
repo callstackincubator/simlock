@@ -67,6 +67,8 @@ import type {
   LeaseReleaseAllOutput,
   LeaseReleaseInput,
   LeaseReleaseOutput,
+  LeaseReleaseRunInput,
+  LeaseReleaseRunOutput,
   LeaseRenewInput,
   LeaseRequestInput,
   ListGetInput,
@@ -180,6 +182,10 @@ class SimlockClientImpl {
 
   cancelLease(input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
     return this.#call("lease.cancel", input);
+  }
+
+  releaseRunLeases(input: LeaseReleaseRunInput): Promise<LeaseReleaseRunOutput> {
+    return this.#call("lease.release-run", this.#parseInput("lease.release-run", input));
   }
 
   renewLease(input: LeaseRenewInput): Promise<LeaseRecord> {

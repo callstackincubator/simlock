@@ -3,7 +3,13 @@ import { MemoryEndedLeaseIds } from "./ended-lease-ids.js";
 import { EventBus } from "../bus/index.js";
 import type { LeaseRecord } from "../admin/index.js";
 import type { MaxPerRequester } from "../core/index.js";
-import { FakeClock, type Logger } from "../ports/index.js";
+import {
+  FakeClock,
+  ScriptedProcessRunner,
+  type Logger,
+  type ProcessResult,
+  type ProcessRunOptions,
+} from "../ports/index.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
@@ -17,6 +23,33 @@ import {
 import { WorkerRegistry } from "./worker-registry.js";
 
 export const GATEWAY_PREFIX = "gw:instance-1:";
+
+/** why: a runner whose commands answer only when the test says, as a slow policy script does. */
+export class GatedRunner extends ScriptedProcessRunner {
+  readonly #open: Array<(stdout: string) => void> = [];
+  constructor() {
+    super([]);
+  }
+  override run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    this.calls.push({ args: [...args], command, options });
+    return new Promise((resolve) => {
+      this.#open.push((stdout) => resolve({ code: 0, stderr: "", stdout }));
+      options.signal?.addEventListener(
+        "abort",
+        () =>
+          resolve({ code: null, endedBy: "aborted", signal: "SIGKILL", stderr: "", stdout: "" }),
+        { once: true },
+      );
+    });
+  }
+  answer(index: number, stdout: string): void {
+    this.#open[index]?.(stdout);
+  }
+}
 
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();

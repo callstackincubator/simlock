@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { simlockDevices, type SimlockDevicesOptions } from "./index.js";
 
@@ -30,7 +30,21 @@ function checkedOptions(): Record<string, unknown> {
   return created.options.at(-1) as Record<string, unknown>;
 }
 
+// why: a run on GitHub Actions has these set, so each test says which ones it means.
+function setEnvironment(environment: Record<string, string>): void {
+  for (const name of ["SIMLOCK_RUN", "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"]) {
+    vi.stubEnv(name, environment[name]);
+  }
+}
+
 describe("simlockDevices", () => {
+  beforeEach(() => {
+    setEnvironment({});
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("checks every option at config load, names a bad one in its error, fills the defaults, and returns a provider named simlock", () => {
     expect(call({}).name).toBe("simlock");
     expect(checkedOptions()).toEqual({
@@ -103,6 +117,36 @@ describe("simlockDevices", () => {
     ];
     for (const [given, message] of refused) {
       expect(() => call(given), message).toThrow(new Error(message));
+    }
+  });
+
+  it("picks the run id from `runId`, then `SIMLOCK_RUN` (empty is unset), then GitHub Actions' own run, else none, and refuses a `runId` or `SIMLOCK_RUN` outside the run id rule", () => {
+    const actions = { GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2" };
+    const accepted: [Record<string, unknown>, Record<string, string>, string | undefined][] = [
+      [{}, {}, undefined],
+      [{ runId: "nightly-7" }, {}, "nightly-7"],
+      [{}, { SIMLOCK_RUN: "nightly-7", ...actions }, "nightly-7"],
+      [{ runId: "a" }, { SIMLOCK_RUN: "b", ...actions }, "a"],
+      [{}, { SIMLOCK_RUN: "", ...actions }, "123-2"],
+      [{}, { ...actions, GITHUB_RUN_ATTEMPT: "" }, "123-1"],
+      [{}, { GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2" }, undefined],
+      [{}, { ...actions, GITHUB_RUN_ID: "1 2" }, undefined],
+    ];
+    for (const [given, environment, runId] of accepted) {
+      setEnvironment(environment);
+      call(given);
+      expect(checkedOptions()["runId"], JSON.stringify([given, environment])).toBe(runId);
+    }
+
+    const rule = "must be 1 to 128 letters, digits, ., _ or -";
+    const refused: [Record<string, unknown>, Record<string, string>, string][] = [
+      [{ runId: "run 1" }, {}, `simlockDevices: runId ${rule}; got "run 1"`],
+      [{ runId: "r".repeat(129) }, {}, `simlockDevices: runId ${rule}; got "${"r".repeat(129)}"`],
+      [{}, { SIMLOCK_RUN: "ünï" }, `simlockDevices: SIMLOCK_RUN ${rule}; got "ünï"`],
+    ];
+    for (const [given, environment, message] of refused) {
+      setEnvironment(environment);
+      expect(() => call(given)).toThrow(message);
     }
   });
 });

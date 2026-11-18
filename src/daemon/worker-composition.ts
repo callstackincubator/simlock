@@ -127,6 +127,7 @@ export interface SharedParts {
   readonly upgradeRouter: (options: {
     readonly clock: Clock;
     readonly leaseSocket: ReturnType<typeof createHttpApp>["leaseSocket"];
+    readonly session: ReturnType<typeof createHttpApp>["session"];
   }) => { readonly attach: (server: Server) => void };
   readonly uplinkConnector: () => UplinkConnector;
   readonly version: string;
@@ -375,6 +376,7 @@ export async function composeWorker(
     core,
     defaultImageTags: deviceModeWiring(config).defaultImageTags,
     defaultModes: deviceModeWiring(config).defaultModes,
+    servedModes: deviceModeWiring(config).servedModes,
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
@@ -694,6 +696,7 @@ export async function composeWorker(
     const dispatch: HttpDispatch = (operation, input, session) =>
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
+      acceptSession: (connection, session) => daemon.acceptSession(connection, session),
       clock,
       dispatch,
       eventBus,
@@ -711,7 +714,11 @@ export async function composeWorker(
       host: config.http.host,
       logger: httpLogger,
       onServerCreated: (server) =>
-        upgradeRouter({ clock, leaseSocket: (request) => app.leaseSocket(request) }).attach(server),
+        upgradeRouter({
+          clock,
+          leaseSocket: (request) => app.leaseSocket(request),
+          session: (request) => app.session(request),
+        }).attach(server),
       port: config.http.port,
     });
     await gateway.start();
@@ -767,6 +774,7 @@ export async function composeWorker(
 export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
   readonly defaultImageTags: Readonly<Partial<Record<"android", string>>>;
   readonly defaultModes: Readonly<Partial<Record<"ios" | "android", DeviceMode>>>;
+  readonly servedModes: Readonly<Partial<Record<"ios", readonly DeviceMode[]>>>;
   readonly slimByDefault: boolean;
 } {
   return {
@@ -775,6 +783,7 @@ export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
         ? {}
         : { android: config.android.defaultImageTag },
     defaultModes: { ios: config.ios.defaultMode },
+    servedModes: { ios: config.ios.modes },
     slimByDefault: config.ios.defaultMode === "slim",
   };
 }

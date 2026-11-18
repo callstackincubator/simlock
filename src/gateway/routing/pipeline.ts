@@ -31,6 +31,7 @@ export type WorkerReasonCode =
   | "updating"
   | "busy"
   | "no-driver"
+  | "mode-unavailable"
   | "unknown-model"
   | "runtime-missing"
   | "no-baseline"

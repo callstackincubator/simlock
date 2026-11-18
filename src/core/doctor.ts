@@ -543,19 +543,22 @@ export class Doctor {
     const limits = warmPool.runningCapacity();
     const figures = warmPool.figures().targets.filter((target) => target.origin === "configured");
     const catalogs = await this.#catalogsOfMissingRuntimes(figures);
+    const { android, ios } = this.options.config;
     const findings = figures.flatMap((target) =>
       unreachableTarget(
         target,
         catalogs.get(target.platform),
         this.options.config[target.platform].virtualDevices,
+        ios.modes,
       ),
     );
-    const { android, ios } = this.options.config;
     const reserves = reservedRunning(
       {
         reserveRunning: reserveOnVirtualPlatforms(
           this.options.config.warmPool.reserveRunning,
-          (platform) => (platform === "ios" ? ios : android).virtualDevices,
+          (platform) =>
+            (platform === "ios" ? ios : android).virtualDevices &&
+            this.options.drivers.some((driver) => driver.platform === platform),
         ),
       },
       limits,

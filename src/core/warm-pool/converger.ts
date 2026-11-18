@@ -44,6 +44,8 @@ import { type LearnedKind, type LearnedKindMatch, LearnedKinds } from "./learned
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
+  /** why: the iOS modes the worker serves (ADR 0082); absent means both. */
+  readonly servedModes?: readonly DeviceMode[] | undefined;
   /** why: a learned baseline kind is warmed from the baseline's newest version, and goes when the baseline is removed or stale. */
   readonly baselines: {
     current(
@@ -180,6 +182,7 @@ export class WarmPool {
       clock: options.clock,
       hasDriver: options.hasDriver,
       logger: this.#logger,
+      servedModes: options.servedModes,
       onAnswer: () => this.#trigger(),
     });
   }
@@ -373,13 +376,23 @@ export class WarmPool {
     return this.#reports;
   }
 
+  /** why: a platform with virtual devices off or no driver on this host holds no running slot for idle devices (ADR 0084 §2, #1689). */
+  #reserveOnServedPlatforms(): { readonly ios: number; readonly android: number } {
+    return reserveOnVirtualPlatforms(
+      this.options.config.reserveRunning,
+      (platform) =>
+        this.options.catalog.virtualDevices(platform) && this.options.hasDriver(platform),
+    );
+  }
+
   /**
    * What `status`, `doctor` and the console read: the pool as the last pass left it. With the
    * pool off, or before a pass has run, every configured target as the operator wrote it: short
    * `disabled` with the pool off, and with no reason before the first pass.
    */
   figures(): WarmPoolFigures {
-    const { enabled, reserveRunning, targets } = this.options.config;
+    const { enabled, targets } = this.options.config;
+    const reserveRunning = this.#reserveOnServedPlatforms();
     const reports =
       enabled && this.#passed
         ? this.#figured
@@ -484,7 +497,10 @@ export class WarmPool {
     const kinds = this.#learnedKinds();
     for (const kind of this.#catalogCheck.gone(kinds)) {
       this.#recording("forget a kind", () => this.#learned.forget(kind.spec));
-      this.#logger.info("a warm pool learned kind was forgotten: its model or runtime is gone", {
+      const why = this.#catalogCheck.modeNotServed(kind)
+        ? "its mode is not served"
+        : "its model or runtime is gone";
+      this.#logger.info(`a warm pool learned kind was forgotten: ${why}`, {
         model: kind.spec.model,
         osVersion: kind.spec.osVersion,
         platform: kind.spec.platform,
@@ -663,9 +679,7 @@ export class WarmPool {
       config: {
         enabled: this.options.config.enabled,
         maxConcurrentBoots: this.options.config.maxConcurrentBoots,
-        reserveRunning: reserveOnVirtualPlatforms(this.options.config.reserveRunning, (platform) =>
-          this.options.catalog.virtualDevices(platform),
-        ),
+        reserveRunning: this.#reserveOnServedPlatforms(),
         shutdownAfterMs: this.options.idle.shutdownAfterMs,
       },
       devices,

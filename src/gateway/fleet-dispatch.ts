@@ -62,6 +62,7 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "UNKNOWN_BASELINE",
   "BASELINE_MISMATCH",
   "BASELINE_STALE",
+  "MODE_UNAVAILABLE",
 ]);
 
 export interface FleetDispatchOptions {
@@ -382,6 +383,7 @@ export class FleetDispatch {
             // why: ADR 0020: sent as the requester sent it. The worker grants exactly this id, and
             // its refusal (`LEASE_ID_TAKEN`) is the caller's answer: no other worker is tried.
             ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
+            ...(waiter.options.runId === undefined ? {} : { runId: waiter.options.runId }),
             // why: ADR 0021: this gateway's id for the request marks the dispatch a probe. The worker
             // declines a probe it refuses (`lease.declined`) rather than rejecting it, and names
             // the id on the lease events of the dispatch.

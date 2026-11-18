@@ -369,6 +369,51 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     },
   );
 
+  it("config set writes ios.modes as a non-empty list of slim and full each once, and refuses anything else, or a set ios.defaultMode the list leaves out, with the message and exit 2", async () => {
+    const run = async (key: string, value: string, existing: Record<string, unknown> = {}) => {
+      const output = outputCapture(realCliEnvironmentPorts());
+      let written: Record<string, unknown> | undefined;
+      const exitCode = await runCli(
+        ["config", "set", key, value],
+        output.environmentWith({
+          readConfigFile: async () => structuredClone(existing),
+          writeConfigFile: async (contents) => {
+            written = contents;
+          },
+        }),
+      );
+      return { exitCode, stderr: output.stderr, written };
+    };
+    const shape =
+      'Invalid config value for "ios.modes": expected a non-empty list of "slim" and "full", each once';
+
+    for (const value of ['["slim"]', '["full"]', '["slim","full"]']) {
+      const accepted = await run("ios.modes", value);
+      expect([value, accepted.exitCode]).toEqual([value, 0]);
+      expect(accepted.written).toEqual({ ios: { modes: JSON.parse(value) } });
+    }
+    for (const value of ["[]", '["slim","slim"]', '["fast"]', "slim"]) {
+      const refused = await run("ios.modes", value);
+      expect([value, refused.exitCode, refused.written]).toEqual([value, 2, undefined]);
+      expect(JSON.parse(refused.stderr).error.message, value).toContain(shape);
+    }
+    const unlisted = await run("ios.modes", '["slim"]', { ios: { defaultMode: "full" } });
+    expect([unlisted.exitCode, unlisted.written]).toEqual([2, undefined]);
+    expect(JSON.parse(unlisted.stderr).error.message).toContain(
+      'Invalid config value for "ios.defaultMode": expected a mode ios.modes lists',
+    );
+    const listed = await run("ios.modes", '["slim"]', { ios: { defaultMode: "slim" } });
+    expect([listed.exitCode, listed.written]).toEqual([
+      0,
+      { ios: { defaultMode: "slim", modes: ["slim"] } },
+    ]);
+    const android = await run("android.modes", '["full"]');
+    expect([android.exitCode, android.written]).toEqual([2, undefined]);
+    expect(JSON.parse(android.stderr).error.message).toContain(
+      'Unknown config key: "android.modes"',
+    );
+  });
+
   it("--gateway config set validates against the gateway's rules, not the worker's", async () => {
     const gatewayHome = {
       role: "gateway",

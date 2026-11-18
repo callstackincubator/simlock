@@ -110,7 +110,7 @@ describe("buildOpenApiDocument", () => {
       "403": ["ADMISSION_DENIED", "FORBIDDEN"],
       "404": ["UNKNOWN_BASELINE"],
       "409": ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
-      "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
+      "422": ["UNKNOWN_MODEL", "MODE_UNAVAILABLE", "BASELINE_MISMATCH", "BASELINE_STALE"],
       "503": ["NO_CAPACITY", "ADMISSION_FAILED", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
     const leaseShape = replySchema(operation("/v1/leases/{id}", "get"), "200").properties

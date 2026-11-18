@@ -55,6 +55,8 @@ export interface LeasingOptions {
    * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
    */
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
+  /** why: the device modes the worker serves per platform, built from config by the composition root (ADR 0082 §2). Omitted, or silent on a platform, means every mode. */
+  readonly servedModes?: Readonly<Partial<Record<Platform, readonly DeviceMode[]>>> | undefined;
   /** why: the worker's default image tag per platform, built from config by the composition root (ADR 0078 §1). */
   readonly defaultImageTags?: Readonly<Partial<Record<Platform, string>>> | undefined;
   readonly modelPreferences?: ModelPreferences | undefined;
@@ -158,7 +160,9 @@ export function createLeasing(options: LeasingOptions): Leasing {
     decisions,
     defaultImageTags: options.defaultImageTags ?? {},
     defaultModes: options.defaultModes ?? {},
+    servedModes: options.servedModes ?? {},
     drivers: core.drivers,
+    endLease: (leaseId) => releaseCoordinator.release(leaseId, "explicit"),
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
     leases,
@@ -264,6 +268,11 @@ export function createLeasing(options: LeasingOptions): Leasing {
       await releaseCoordinator.release(leaseId, reason);
     },
     releaseAll: async (reason: ClientReleaseReason) => releaseCoordinator.releaseAll(reason),
+    releaseRun: async (runId: string, ownerId: string | undefined) => {
+      // why: the run's waiting requests stop first, so a device a released lease frees is never granted to one of them.
+      const requestIds = await acquisition.cancelRun(runId, ownerId);
+      return { leaseIds: await releaseCoordinator.releaseRun(runId, ownerId), requestIds };
+    },
     renew: async (leaseId: string, ttlMs?: number): Promise<LeaseRecord> =>
       releaseCoordinator.renew(leaseId, ttlMs),
     expire: async (leaseId: string) => {

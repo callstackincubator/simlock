@@ -1,6 +1,7 @@
 export { CapacityCoordinator } from "./coordinator.js";
 export type { CapacityReservation } from "./coordinator.js";
 export { buildCapacityFigures } from "./figures.js";
+export { servingOnly } from "./serving-only.js";
 export { CapacityObserver, capacityChangedPayload } from "./observer.js";
 export { capacityDevice, capacityDevices, plannedCapacityDevice } from "./devices.js";
 export type { CapacityLimits } from "./limits.js";

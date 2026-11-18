@@ -48,6 +48,7 @@ export const leaseSimulatorInputSchema = leaseRequestFields.omit({
   metadata: true,
   requesterId: true,
   requires: true,
+  runId: true,
 });
 
 /**

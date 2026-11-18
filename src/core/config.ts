@@ -14,6 +14,7 @@ import {
   resolveStrategyName,
   runDriverChecks,
   runModuleChecks,
+  applyServedModesDefault,
   validateDeletedRetention,
   validateEventLogBounds,
   validateGatewayMembership,
@@ -206,6 +207,7 @@ export function configFromLayers(
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
   runModuleChecks(merged, modules);
   runDriverChecks(merged, driverSections);
+  let loaded = merged;
   if (role === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
@@ -215,8 +217,9 @@ export function configFromLayers(
     validateGatewayMembership(merged);
     // why: only a worker keeps device records, so only it reads `devices.deletedRetentionMs`.
     validateDeletedRetention(merged);
+    loaded = applyServedModesDefault(merged, layers);
   }
-  return { config: deepFreeze(merged), defaulted };
+  return { config: deepFreeze(loaded), defaulted };
 }
 
 async function readConfigFile(filesystem: Filesystem, configPath: string): Promise<unknown> {

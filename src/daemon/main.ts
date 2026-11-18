@@ -562,6 +562,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     clock,
     errorCode: classifyError,
     closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
+    closeSessionsForToken: (tokenId) => daemon.closeSessionsForToken(tokenId),
     config,
     coordinator: fleetCoordinator,
     directory: gatewayService,
@@ -600,7 +601,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       logger: logger.child("connection-host"),
     }),
     leaseSnapshot: () =>
-      leaseIndex.all().map((entry) => ({ id: entry.gatewayLeaseId, ownerId: entry.ownerId })),
+      leaseIndex.all().map((entry) => ({
+        id: entry.gatewayLeaseId,
+        ownerId: entry.ownerId,
+        ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+      })),
     logger: logger.child("server"),
     ownerRoutedFacts: gatewayOwnerRoutedFacts,
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
@@ -658,6 +663,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     const dispatch: HttpDispatch = (operation, input, session) =>
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
+      acceptSession: (connection, session) => daemon.acceptSession(connection, session),
       clock,
       dispatch,
       eventBus,
@@ -689,6 +695,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
         createUpgradeRouter({
           clock,
           leaseSocket: (request) => app.leaseSocket(request),
+          session: (request) => app.session(request),
           uplinks,
         }).attach(server),
       port: config.http.port,

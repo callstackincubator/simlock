@@ -88,7 +88,7 @@ export type DoctorFinding =
       readonly kind: "warm-pool-target-unreachable";
       readonly platform?: Platform;
       readonly target: string;
-      readonly reason: "runtime-missing" | "unknown-model" | "over-limit";
+      readonly reason: "runtime-missing" | "unknown-model" | "mode-unavailable" | "over-limit";
       readonly message: string;
       readonly remedy: string;
     }
@@ -139,8 +139,11 @@ export interface DoctorQuarantine {
   enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean>;
 }
 
-export type DoctorConfig = Pick<Config, "stalledTransition" | "warmPool"> &
-  Readonly<Record<"android" | "ios", Pick<Config["ios"], "virtualDevices">>>;
+export type DoctorConfig = Pick<Config, "stalledTransition" | "warmPool"> & {
+  readonly android: Pick<Config["android"], "virtualDevices">;
+  /** why: `modes` is the list a `mode-unavailable` finding names (ADR 0082 §2). */
+  readonly ios: Pick<Config["ios"], "modes" | "virtualDevices">;
+};
 
 export interface DoctorOptions {
   readonly clock: Clock;

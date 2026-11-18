@@ -34,6 +34,10 @@ export interface ErrorDetailsMap {
   DAEMON_STOPPING: Record<string, never>;
   DAEMON_STARTUP_FAILED: Record<string, never>;
   DAEMON_CONNECTION_LOST: Record<string, never>;
+  // why: ADR 0081 §3: a remote typed client could not reach the farm at its URL (nothing listening, no answer in 10 s, a proxy's 502, no session path), as the local client's `DAEMON_CONNECTION_LOST` says for a socket.
+  REMOTE_UNREACHABLE: { readonly url: string };
+  // why: the farm refused the token at the upgrade, or ended the session when the token was revoked; HTTP has answered this code at 401 all along.
+  UNAUTHENTICATED: Record<string, never>;
 
   NO_CAPACITY: {
     readonly capacityReason?:
@@ -73,6 +77,12 @@ export interface ErrorDetailsMap {
     readonly platform: Platform;
     readonly model?: string;
     readonly class?: DeviceClass;
+  };
+  /** why: an iOS lease or warm target whose resolved mode the worker's `ios.modes` does not list (ADR 0082 §3). */
+  MODE_UNAVAILABLE: {
+    readonly platform: "ios";
+    readonly mode: "slim" | "full";
+    readonly served: readonly ("slim" | "full")[];
   };
   INSUFFICIENT_DISK_SPACE: {
     readonly platform: Platform;
@@ -226,6 +236,7 @@ type CodeWithDeclaredDetails = {
 
 const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true> = {
   PROTOCOL_VERSION_UNSUPPORTED: true,
+  REMOTE_UNREACHABLE: true,
   QUEUE_TIMEOUT: true,
   NO_CAPACITY: true,
   REQUESTER_ALREADY_LEASED: true,
@@ -238,6 +249,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   RELAY_TARGET_MISSING: true,
   RUNTIME_MISSING: true,
   UNKNOWN_MODEL: true,
+  MODE_UNAVAILABLE: true,
   HISTORY_NOT_KEPT: true,
   INSUFFICIENT_DISK_SPACE: true,
   FILE_TOO_LARGE: true,
@@ -326,6 +338,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 1,
     httpStatus: 503,
   },
+  REMOTE_UNREACHABLE: {
+    code: "REMOTE_UNREACHABLE",
+    kind: "transport",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
+  UNAUTHENTICATED: { code: "UNAUTHENTICATED", kind: "protocol", cliExitCode: 1, httpStatus: 401 },
   NO_CAPACITY: { code: "NO_CAPACITY", kind: "domain", cliExitCode: 11, httpStatus: 503 },
   QUEUE_TIMEOUT: { code: "QUEUE_TIMEOUT", kind: "domain", cliExitCode: 10, httpStatus: 500 },
   PROVISION_FAILED: { code: "PROVISION_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
@@ -386,6 +405,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   },
   RUNTIME_MISSING: { code: "RUNTIME_MISSING", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   UNKNOWN_MODEL: { code: "UNKNOWN_MODEL", kind: "domain", cliExitCode: 12, httpStatus: 422 },
+  MODE_UNAVAILABLE: { code: "MODE_UNAVAILABLE", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   INSUFFICIENT_DISK_SPACE: {
     code: "INSUFFICIENT_DISK_SPACE",
     kind: "domain",

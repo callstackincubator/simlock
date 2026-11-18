@@ -23,6 +23,7 @@ Serviceability (`assess`):
 - The first check that applies wins, so the order of the checks is the answer a caller gets.
 - A request naming a baseline is checked first; the rest of the table then runs over the
   fitting, fresh holders only, with the request narrowed by `withBaseline`.
+- A request whose mode is named, or a baseline's, is rejected `MODE_UNAVAILABLE` when no known worker with the platform serves it (`servesMode`, after the `NO_DRIVER` row); `can-serve` passes a worker that does not serve it over as `mode-unavailable`. A mode-less or physical request is never affected.
 - A known worker is one that is not `incompatible`. What no known worker could serve is rejected
   with its own code; what a known worker could serve but none taking requests can is `NO_CAPACITY`.
   An updating worker counts as taking requests here, so a request only it can serve waits.
