@@ -254,11 +254,35 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       if (waiter.state === "processing" && waiter.request.physical !== true) {
         return "not-cancellable";
       }
-      const holdsClaim = waiter.state === "processing";
-      this.#outcomes.reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
-      // why: a waiter mid presence read holds a grant claim, and its own wake follows the release.
-      if (!holdsClaim) this.#workflow.wakeQueue();
+      this.#cancelWaiter(waiter);
       return "cancelled";
+    });
+  }
+
+  #cancelWaiter(waiter: AcquisitionWaiter): void {
+    const holdsClaim = waiter.state === "processing";
+    this.#outcomes.reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
+    // why: a waiter mid presence read holds a grant claim, and its own wake follows the release.
+    if (!holdsClaim) this.#workflow.wakeQueue();
+  }
+
+  /**
+   * why: a run's cleanup stops every waiting request of the run it owns, `ownerId` undefined for an
+   * operator, by the rule `cancelPending` applies to one.
+   */
+  async cancelRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
+    return this.options.decisions.run(async () => {
+      const cancelled: string[] = [];
+      for (const waiter of this.options.queue.pending() as readonly AcquisitionWaiter[]) {
+        const matches =
+          waiter.options.runId === runId &&
+          (ownerId === undefined || waiter.options.ownerId === ownerId);
+        if (!matches || (waiter.state === "processing" && waiter.request.physical !== true))
+          continue;
+        this.#cancelWaiter(waiter);
+        cancelled.push(waiter.id);
+      }
+      return cancelled;
     });
   }
 
