@@ -211,3 +211,21 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
     }
   });
 });
+
+describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
+  it("runs `pnpm run test:unit` as `Unit tests (Windows)` on windows-2025 under bash with a 30 minute limit, `quality` needs it, and text files check out with LF", () => {
+    const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+    const attributes = readFileSync(join(REPO_ROOT, ".gitattributes"), "utf8");
+    const jobs = ciJobs(ci);
+    const windows = jobs.get("windows-unit") ?? "";
+
+    expect(windows, "a job `windows-unit`").not.toBe("");
+    expect(windows).toMatch(/\n {4}name: Unit tests \(Windows\)\n/);
+    expect(windows).toContain("runs-on: windows-2025");
+    expect(windows).toMatch(/\n {6}shell: bash\n|\n {4}defaults:\n {6}run:\n {8}shell: bash\n/);
+    expect(windows).toContain("timeout-minutes: 30");
+    expect(windows).toMatch(/run: pnpm run test:unit\n/);
+    expect(jobs.get("quality")).toMatch(/needs:\s*\[[^\]]*\bwindows-unit\b/);
+    expect(attributes.split("\n")).toContain("* text=auto eol=lf");
+  });
+});
