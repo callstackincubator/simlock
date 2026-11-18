@@ -19,12 +19,13 @@ const home = "/h/.simlock";
 const nodePath = "/opt/node/node.exe";
 const mainPath = "/opt/simlock/dist/daemon/main.js";
 const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
-const goodArgv = (...gateway: string[]): string[] => [
+const goodArgv = (...gateway: string[]): string[] => argvFor(installId, ...gateway);
+const argvFor = (id: string, ...gateway: string[]): string[] => [
   ...gateway,
   "--task",
   name,
   "--install-id",
-  installId,
+  id,
   "--environment",
   encode({ SIMLOCK_HOME: home, PATH: "saved" }),
 ];
@@ -103,9 +104,10 @@ describe("the Windows supervisor (#1698)", () => {
     }).then((code) => {
       exit = code;
     });
-    for (let step = 0; step < (options.steps ?? 12) && exit === undefined; step += 1) {
+    // why: one second a step, so a restart delay longer or shorter than 10 s lands on another start time.
+    for (let step = 0; step < (options.steps ?? 120) && exit === undefined; step += 1) {
       await settle();
-      clock.advance(10_000);
+      clock.advance(1_000);
     }
     await settle();
     const lines = sink.records.map((record) => `${record.level}: ${record.message}`);
@@ -165,6 +167,7 @@ describe("the Windows supervisor (#1698)", () => {
     const stops = [
       { label: "the task is gone", stdout: undefined, code: 1 },
       { label: "another install id", stdout: taskXml("another-id"), code: 0 },
+      { label: "an install id that starts with ours", stdout: taskXml(`${installId}-2`), code: 0 },
     ];
     for (const stop of stops) {
       const stopped = await supervise({
@@ -199,6 +202,16 @@ describe("the Windows supervisor (#1698)", () => {
       expect(restarted.startedAt, read.label).toEqual([0, 10_000]);
     }
 
+    const dotted = await supervise({
+      argv: argvFor("a.b"),
+      script: (daemon) => [
+        daemon(result(1)),
+        { match: query, result: { ...result(0), stdout: taskXml("axb") } },
+      ],
+    });
+    expect(dotted.exit, "a dot in our id is not a wildcard").toBe(0);
+    expect(dotted.runner.calls).toHaveLength(2);
+
     const failedStart = await supervise({
       argv: goodArgv(),
       failSpawns: (command, attempt) => command === nodePath && attempt === 0,
@@ -226,6 +239,10 @@ describe("the Windows supervisor (#1698)", () => {
       [...goodArgv(), "extra"],
       ["--install-id", installId, "--task", name, "--environment", encode({})],
       goodArgv().slice(0, -1).concat("!!!"),
+      goodArgv().slice(0, -1).concat("e30="),
+      goodArgv().slice(0, -1).concat(encode(null)),
+      ["--task", "a b", ...goodArgv().slice(2)],
+      argvFor("a b"),
       goodArgv()
         .slice(0, -1)
         .concat(encode(["a"])),

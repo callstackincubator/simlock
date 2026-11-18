@@ -997,6 +997,11 @@ describe("CLI: daemon service on Windows (#1698)", () => {
         message: "whoami /user /fo csv /nh failed: ERROR: no user",
       },
       {
+        label: "whoami prints no SID",
+        whoami: { code: 0, stdout: '"desktop\\me"\r\n', stderr: "" },
+        message: "whoami /user printed no SID",
+      },
+      {
         label: "a call past 10 s",
         create: { code: null, stdout: "", stderr: "" },
         message: `schtasks /create /tn ${name} /xml ${xmlPath} /f did not finish within 10 s`,
@@ -1176,6 +1181,25 @@ describe("CLI: daemon service on Windows (#1698)", () => {
         files: present,
         script: [{ match: query, result: ok(taskXml({ arguments: "--headless node" })) }],
         line: `Service: broken (task-scheduler, ${name}): \\${name} is gone; run simlock daemon install`,
+      },
+      {
+        label: "whoami prints no account name",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          { match: whoami, result: ok("\r\n") },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "a path with an ampersand is read as the task XML escapes it",
+        files: [nodePath, supervisor, "/opt/R&D/node.exe"],
+        script: [
+          { match: query, result: ok(taskXml({ node: "/opt/R&amp;D/node.exe" })) },
+          ...session,
+          { match: tasklist, result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n') },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
       },
       {
         label: "a path with a non-ASCII character is read whole",
