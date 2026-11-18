@@ -101,8 +101,10 @@ a lease across time, the held `simlock lease` and `simlock mcp`, reconnect
 after a dropped connection and keep renewing until the lease's deadline.
 A lease is TTL-first (ADR 0004), so a connection was never what kept it
 alive; reconnecting acquires no device, it only renews one the caller
-already holds. Only when the deadline passes without a renew is the lease
-lost. A drop before the grant re-attaches to the same request by its
+already holds. The lease is lost when the deadline passes without a renew,
+or when a renew is answered `UNKNOWN_LEASE` or `FORBIDDEN`; a renew answered
+as a restart answers (`WORKER_UNREACHABLE`, `DAEMON_STOPPING`) is tried
+again. A drop before the grant re-attaches to the same request by its
 idempotency key, which a worker and a gateway already answer with the
 waiting request instead of a second one, so a granted device is never
 left with nobody renewing it. A drop that sends no close (sleep, a Wi-Fi
