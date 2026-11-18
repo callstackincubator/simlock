@@ -428,6 +428,16 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
     platform,
     runtimes,
     runtimeWorkers: Object.fromEntries(bucket.runtimes),
+    ...slimFields(bucket),
+    ...(bucket.phonesOnly ? { virtualDevices: false as const } : {}),
+    ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
+    ...(agreedImageTag === undefined ? {} : { defaultImageTag: agreedImageTag }),
+  };
+}
+
+/** why: the iOS-only fields of the merged entry: the slim categories any worker names, and the modes, left out once any worker serves both. */
+function slimFields(bucket: CatalogBucket) {
+  return {
     ...(bucket.slimCategories.size === 0
       ? {}
       : {
@@ -436,9 +446,6 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
             .slice(0, CATALOG_LIST_LIMITS.slimCategories),
         }),
     ...(bucket.anyServesBoth ? {} : { modes: [...bucket.modes].sort() }),
-    ...(bucket.phonesOnly ? { virtualDevices: false as const } : {}),
-    ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
-    ...(agreedImageTag === undefined ? {} : { defaultImageTag: agreedImageTag }),
   };
 }
 

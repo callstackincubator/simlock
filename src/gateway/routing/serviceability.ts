@@ -215,10 +215,8 @@ function assessLeading(
       reason: "unresolvable-spec",
     };
   }
-  const withPlatform = known.filter((worker) => hasPlatform(worker, request));
-  if (!withPlatform.some((worker) => servesMode(worker, request))) {
-    return modeUnavailable(request, withPlatform);
-  }
+  const mode = assessMode(request, known);
+  if (mode !== undefined) return mode;
   if (request.physical === true) {
     if (known.some((worker) => physicalMatch(worker, request, "enrolled"))) return undefined;
     return {
@@ -303,6 +301,13 @@ function phonesOnly(request: RoutableRequest): Rejection {
       `(${platform}.virtualDevices is false); ask for a physical device ` +
       "(--physical, or physical: true)",
   };
+}
+
+// why: ADR 0082 §4, I6: the row after `NO_DRIVER`: every known worker with the platform lists modes without the request's.
+function assessMode(request: RoutableRequest, known: readonly WorkerView[]): Rejection | undefined {
+  const withPlatform = known.filter((worker) => hasPlatform(worker, request));
+  if (withPlatform.some((worker) => servesMode(worker, request))) return undefined;
+  return modeUnavailable(request, withPlatform);
 }
 
 // why: ADR 0082 §4, I6: the mode is the request's own or, for a baseline, the first holder's; the message names the other mode as the way out.
