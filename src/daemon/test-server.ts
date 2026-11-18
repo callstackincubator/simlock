@@ -40,6 +40,7 @@ import {
   type ProcessStreamOptions,
   type StreamingProcessHandle,
   type StreamingProcessResult,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
@@ -211,7 +212,7 @@ export async function createHarness(
   if (directory !== undefined) {
     temporaryDirectories.push(directory);
   }
-  const socketPath = options.socketPath ?? join(directory as string, "daemon.sock");
+  const socketPath = options.socketPath ?? resolveDaemonSocketPath(directory as string);
   const clock = options.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const state = options.state ?? (await openTestState());

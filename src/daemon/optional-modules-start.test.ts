@@ -13,6 +13,7 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -204,7 +205,7 @@ describe("optional modules: afterSocketClaimed", () => {
       ),
       on: ["alpha"],
     });
-    socketPath = join(prepared.directory, "daemon.sock");
+    socketPath = resolveDaemonSocketPath(prepared.directory);
 
     const started = await settleWithin(startDaemon(prepared.startOptions), 5_000);
     if (started.state === "fulfilled") daemons.push(started.value);
