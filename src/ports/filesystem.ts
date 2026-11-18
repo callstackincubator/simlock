@@ -900,7 +900,7 @@ export class MemoryFilesystem implements Filesystem {
     }
   }
 
-  /** why: every public method enters here, so the one place that fails an injected path is also the one that reads a path in either style. */
+  /** why: every method that takes a path and can fail enters here, so the one place that fails an injected path is also the one that reads a path in either style. */
   #failIfDefined(given: string): string {
     const path = memoryPath(given);
     const code = this.#failures.get(path);
