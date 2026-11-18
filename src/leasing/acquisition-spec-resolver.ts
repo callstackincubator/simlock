@@ -134,6 +134,7 @@ export class AcquisitionSpecResolver {
       allowDownload: options.allowDownload === true && range === undefined,
     });
     const spec = checkedSpec(resolved, request, mode);
+    this.#requireNotFallenBack(spec, mode);
     return {
       classOf: target.classOf,
       requirement: target.requirement ?? exactRequirement(spec),
@@ -151,6 +152,18 @@ export class AcquisitionSpecResolver {
       served,
       `This worker does not serve ${mode} iOS simulators (ios.modes is ${JSON.stringify(served)}); ` +
         `ask for a ${other} one (--mode ${other}, or mode: "${other}")`,
+    );
+  }
+
+  /** why: a slim request the driver could only answer with a full spec (iOS below 18.5, ADR 0007 §4) is refused on a worker without full, not granted the device the operator turned off (ADR 0082 §2). */
+  #requireNotFallenBack(spec: VirtualSpec, asked: DeviceMode): void {
+    const served = this.servedModes(spec.platform);
+    if (asked !== "slim" || spec.mode === "slim" || served.includes("full")) return;
+    throw new ModeUnavailableError(
+      "full",
+      served,
+      `iOS ${spec.osVersion} cannot be slimmed, and this worker does not serve full iOS simulators ` +
+        `(ios.modes is ${JSON.stringify(served)}); ask for iOS 18.5 or newer`,
     );
   }
 
