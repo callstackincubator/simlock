@@ -77,7 +77,8 @@ describe("CLI: daemon install (#830)", () => {
         daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
-        hostPlatform: "linux",
+        // why: the CLI looks for the daemon at the endpoint of its host platform, and this daemon listens on the one the host gives (a pipe on Windows).
+        hostPlatform: process.platform,
         runTool: async () => ({ outcome: "not-found" }),
         service: {
           manager: serviceManager,
@@ -520,7 +521,8 @@ describe("CLI: a start goes through the service (#830)", () => {
         daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
-        hostPlatform: "linux",
+        // why: the CLI looks for the daemon at the endpoint of its host platform, and this daemon listens on the one the host gives (a pipe on Windows).
+        hostPlatform: process.platform,
         runTool: async () => ({ outcome: "not-found" }),
       });
 
