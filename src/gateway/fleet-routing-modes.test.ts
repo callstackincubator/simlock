@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SimlockError } from "../contract/index.js";
 import { createRoutingPolicy } from "./routing.js";
 import {
   catalogFixture,
@@ -153,5 +154,38 @@ describe("FleetLeaseCoordinator routes an iOS lease by the modes each worker ser
       { filter: { reason: "mode-unavailable" }, workerId: "wrk_a" },
       { workerId: "wrk_b" },
     ]);
+  });
+
+  it("walks on to another worker when a worker answers MODE_UNAVAILABLE before a progress push, and gives the caller the worker's own refusal when none is left", async () => {
+    const refusal = new SimlockError(
+      "MODE_UNAVAILABLE",
+      "domain",
+      "This worker does not serve full iOS simulators",
+      { mode: "full", platform: "ios", served: ["slim"] },
+    );
+
+    // why: both views are stale, with no `modes` field, so only the worker's own refusal says it serves slim alone.
+    const both = fleet({ wrk_a: {}, wrk_b: {} });
+    both.clients["wrk_a"]?.requestLeaseQueue.splice(0, 1, { error: refusal, kind: "error" });
+    const granted = await both.coordinator.request({ ...REQUEST, mode: "full" }, requestOptions());
+
+    expect(granted.lease.worker?.id).toBe("wrk_b");
+    expect(both.directory.catalogRefreshCalls).toEqual(["wrk_a"]);
+
+    const alone = fleet({ wrk_a: {} });
+    alone.clients["wrk_a"]?.requestLeaseQueue.splice(0, 1, { error: refusal, kind: "error" });
+    const outcome = await Promise.race([
+      alone.coordinator.request({ ...REQUEST, mode: "full" }, requestOptions()).then(
+        () => "granted",
+        (error: unknown) => error,
+      ),
+      tick().then(() => "waiting"),
+    ]);
+
+    expect(outcome).toMatchObject({
+      code: "MODE_UNAVAILABLE",
+      details: { mode: "full", platform: "ios", served: ["slim"] },
+      message: "This worker does not serve full iOS simulators",
+    });
   });
 });
