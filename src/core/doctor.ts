@@ -555,7 +555,9 @@ export class Doctor {
       {
         reserveRunning: reserveOnVirtualPlatforms(
           this.options.config.warmPool.reserveRunning,
-          (platform) => (platform === "ios" ? ios : android).virtualDevices,
+          (platform) =>
+            (platform === "ios" ? ios : android).virtualDevices &&
+            this.options.drivers.some((driver) => driver.platform === platform),
         ),
       },
       limits,
