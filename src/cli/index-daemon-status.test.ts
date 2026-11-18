@@ -35,7 +35,7 @@ async function runDaemonStatus(
       definition: async () =>
         serviceDefinition({
           role: testCase.role,
-          root: `${home}/.simlock`,
+          root: join(home, ".simlock"),
           dataDirectory: "/simlock",
           home,
           nodePath: "/Users/me/.nvm/versions/node/v22.13.0/bin/node",
