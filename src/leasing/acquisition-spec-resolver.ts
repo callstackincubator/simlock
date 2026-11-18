@@ -433,6 +433,7 @@ function checkedSpec(resolved: VirtualSpec, request: DeviceRequest, mode: Device
 function refusalOf(error: unknown): Exclude<TargetResolution, { spec: VirtualSpec }>["refusal"] {
   if (error instanceof RuntimeMissingError) return "runtime-missing";
   if (error instanceof UnknownModelError) return "unknown-model";
+  if (error instanceof ModeUnavailableError) return "mode-unavailable";
   return "unresolvable";
 }
 

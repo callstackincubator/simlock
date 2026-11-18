@@ -88,7 +88,7 @@ export type DoctorFinding =
       readonly kind: "warm-pool-target-unreachable";
       readonly platform?: Platform;
       readonly target: string;
-      readonly reason: "runtime-missing" | "unknown-model" | "over-limit";
+      readonly reason: "runtime-missing" | "unknown-model" | "mode-unavailable" | "over-limit";
       readonly message: string;
       readonly remedy: string;
     }

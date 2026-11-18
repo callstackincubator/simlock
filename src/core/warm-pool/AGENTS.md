@@ -34,7 +34,7 @@ The plan (`evaluate`), in this order: pool off → over budget → the queue →
 - Only displacement shuts a device down for a target or learned kind, and never one a configured count keeps; what does not fit is reported short. Nothing is displaced when the capacity strategy would still refuse the kind after the shutdown.
 - At memory pressure `warming-paused` or higher (ADR 0068) the queue, the targets and the learned kinds propose no boot or creation, and a short target reports `memory-pressure` instead of any capacity reason (a target that does not resolve keeps its own). Each reading not yet used sheds one idle device: first one no configured count keeps, then a kept one, least recently used first, never one a waiter would take or one whose shutdown failed recently. `memory.pressure-changed` asks for a pass, so the pool fills again at once when the step lifts.
 - `reserveRunning` holds slots from idle devices only; it never holds back a request.
-- An `unresolvable` target keeps its last spec, so its devices stay spared.
+- An `unresolvable` target keeps its last spec, so its devices stay spared. A target whose iOS mode `ios.modes` leaves out is short `mode-unavailable` and keeps none, so its idle devices are no longer spared; a learned kind of an unserved mode is forgotten, and a baseline kind is judged by the baseline's current mode.
 
 Learned kinds:
 

@@ -12,7 +12,8 @@ How one lease request becomes one concrete device, virtual or physical.
 |---|---|---|
 | Request: `model` or `class`, `osVersion` (exact or range), `mode`, `imageTag`, `physical`, `allowDownload`, `noWait` | `contract/operations.ts` → `DeviceRequest` | Per request |
 | Download permission | `downloads.policy` (`on-request`), `daemon/dispatcher-leases.ts` | Per request, before leasing |
-| Default mode | `ios.defaultMode` (`full`); Android always `full` | Per request with no `mode` |
+| Default mode | `ios.defaultMode` (`full`, or the only mode `ios.modes` lists); Android always `full` | Per request with no `mode` |
+| Served modes | `ios.modes` (both) | A worker refuses a lease, target or learned kind of an unlisted iOS mode, `MODE_UNAVAILABLE` |
 | Operator preference lists | `ios.defaultModels`, `android.defaultModels` | Merged once at start |
 | Built-in preference lists | `Driver.defaultModels` of each driver | Merged once at start, after the operator's |
 | Catalog | `DriverCatalog.listCatalog` → `Driver.listCatalog` | Per class or range request; built on every read (Android keeps only its `avdmanager list device` answer, below) |
@@ -35,7 +36,7 @@ In `AcquisitionSpecResolver` (`leasing/acquisition-spec-resolver.ts`), a part of
 
 1. `physical: true` → skip to the physical branch.
    A virtual Android request with no `imageTag` on a worker with `android.defaultImageTag` is tried first as if it named that tag, with downloads off and `defaultTag` set so only host-CPU images count; a `RuntimeMissingError` runs steps 2 to 9 again on the request as it came (ADR 0078).
-2. Mode = request's, else the platform default.
+2. Mode = request's, else the platform default. An iOS mode `ios.modes` leaves out is refused (`ModeUnavailableError`) here, before step 3 reads or downloads anything; a baseline's mode is checked the same way, and the slim-to-full fallback of step 8 is checked once more (ADR 0082).
 3. Shape of the request:
    - exact model, no range → used as is; no catalog read.
    - no model, no range → class (none named = `phone`).

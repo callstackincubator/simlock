@@ -18,10 +18,17 @@ export class StatusHandlers {
       .map((entry) => this.#withDefaults(entry)),
   });
 
-  /** why: ADR 0066 §5 and ADR 0078 §3: a gateway routes by the worker's default mode (iOS) and default image tag (Android), which only config knows. */
+  /** why: ADR 0066 §5 and ADR 0078 §3: a gateway routes by the worker's default mode and served modes (iOS) and default image tag (Android), which only config knows. */
   #withDefaults<Entry extends { readonly platform: string }>(entry: Entry): Entry {
     const { ios, android } = this.options.config;
-    if (entry.platform === "ios") return { ...entry, defaultMode: ios.defaultMode };
+    if (entry.platform === "ios") {
+      // why: sent only when one mode is served, because absent already means both for every older worker (ADR 0082 §4).
+      return {
+        ...entry,
+        defaultMode: ios.defaultMode,
+        ...(ios.modes.length === 1 ? { modes: ios.modes } : {}),
+      };
+    }
     if (entry.platform === "android" && android.defaultImageTag !== undefined) {
       return { ...entry, defaultImageTag: android.defaultImageTag };
     }

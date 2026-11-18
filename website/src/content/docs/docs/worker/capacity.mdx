@@ -120,11 +120,11 @@ simlock daemon start
 
 A slim iOS simulator has background services turned off that most agent work does not need, such as widgets, Siri, Spotlight, iCloud, the App Store, mail, Photos and telemetry. It uses much less RAM.
 
-An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full`. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`).
+An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full` (or the only mode `ios.modes` lists). To limit the worker to one mode, set `ios.modes` to `["slim"]` or `["full"]`; a lease, warm target or learned kind of the other mode is then refused. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`).
 
 What to expect:
 
-- **A `full` request always gets a full device. A `slim` request may not.** On iOS older than 18.5, and on Android, a slim request gets a full device instead of failing. If Simlock finds after the boot that the services are not off as asked, the lease also gets a full device, and the daemon log says why. The lease always reports the mode the device really has.
+- **A `full` request always gets a full device. A `slim` request may not.** On iOS older than 18.5, and on Android, a slim request gets a full device instead of failing, unless `ios.modes` leaves out `full`: then an iOS request that would get a full device is refused with `MODE_UNAVAILABLE`. If Simlock finds after the boot that the services are not off as asked, the lease also gets a full device, and the daemon log says why. The lease always reports the mode the device really has.
 - **The first boot of a slim simulator can be slow**, up to `ios.slim.bootTimeoutMs` (10 minutes by default).
 - **Slim and full devices are never mixed up.** A request only reuses an idle device of the mode it asked for.
 

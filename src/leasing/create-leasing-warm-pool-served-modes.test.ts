@@ -144,4 +144,37 @@ describe("the warm pool on a worker that does not serve every iOS mode", () => {
       await idleFullDeviceIsTargeted(["slim"]),
     ]).toEqual([true, false]);
   });
+
+  it("doctor reports a warm target the worker cannot meet because it does not serve its mode, naming the mode, the list and the way out, and nothing when the mode is served", async () => {
+    const findings = async (modes: Modes | undefined, mode: "slim" | "full") => {
+      const harness = await createHarness({
+        driver: iosDriver(),
+        ...(modes === undefined ? {} : { iosModes: modes }),
+        limits: LIMITS,
+        startPool: true,
+        warmPool: {
+          targets: [{ count: 1, mode, model: "iPhone 16", osVersion: "26.1", platform: "ios" }],
+        },
+      });
+      await harness.engine.core.passWarmPool();
+      await harness.engine.settle();
+      const report = await harness.engine.core.doctor.reconcile();
+      return report.findings.filter((finding) => finding.kind === "warm-pool-target-unreachable");
+    };
+    const unreachable = (mode: string, list: string) => [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `iPhone 16 / 26.1 / ${mode} cannot be met: this worker does not serve ${mode} iOS simulators (ios.modes is ${list})`,
+        platform: "ios",
+        reason: "mode-unavailable",
+        remedy: `remove the target from warmPool.targets, or add ${mode} to ios.modes`,
+        target: `iPhone 16 / 26.1 / ${mode}`,
+      },
+    ];
+
+    expect(await findings(["slim"], "full")).toEqual(unreachable("full", '["slim"]'));
+    expect(await findings(["full"], "slim")).toEqual(unreachable("slim", '["full"]'));
+    expect(await findings(undefined, "full")).toEqual([]);
+    expect(await findings(undefined, "slim")).toEqual([]);
+  });
 });

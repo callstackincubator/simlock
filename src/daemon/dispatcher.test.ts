@@ -214,11 +214,17 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]).not.toHaveProperty("protocol");
   });
 
-  it("catalog.get reports the iOS slim categories and the default mode", async () => {
-    for (const defaultMode of ["slim", "full"] as const) {
+  it("catalog.get reports the iOS slim categories and the default mode, and the modes only when the worker serves one", async () => {
+    for (const { defaultMode, modes } of [
+      { defaultMode: "slim", modes: ["slim"] },
+      { defaultMode: "full", modes: ["full"] },
+      { defaultMode: "full", modes: undefined },
+      { defaultMode: "slim", modes: ["slim", "full"] },
+    ] as const) {
       const { dispatcher } = await buildDispatcher({
         driverOptions: { knownModels: ["iPhone 17"], slimCategories: ["store"] },
         iosDefaultMode: defaultMode,
+        ...(modes === undefined ? {} : { iosModes: modes }),
       });
 
       const { platforms } = await dispatcher.dispatch("catalog.get", {}, admin);
@@ -229,6 +235,8 @@ describe("Dispatcher: the fleet operations on a worker", () => {
         platform: "ios",
         slimCategories: ["store"],
       });
+      if (modes?.length === 1) expect(platforms[0]?.modes, String(modes)).toEqual(modes);
+      else expect(platforms[0], String(modes)).not.toHaveProperty("modes");
     }
   });
 
@@ -238,6 +246,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const set = await buildDispatcher({
       androidDefaultImageTag: "google_apis_playstore",
       extraDrivers: [android()],
+      iosModes: ["slim"],
     });
     const unset = await buildDispatcher({ extraDrivers: [android()] });
 
@@ -249,6 +258,8 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       "google_apis_playstore",
     );
     expect(withTag.find((entry) => entry.platform === "ios")).not.toHaveProperty("defaultImageTag");
+    expect(withTag.find((entry) => entry.platform === "ios")?.modes).toEqual(["slim"]);
+    expect(withTag.find((entry) => entry.platform === "android")).not.toHaveProperty("modes");
     expect(without.find((entry) => entry.platform === "android")).not.toHaveProperty(
       "defaultImageTag",
     );

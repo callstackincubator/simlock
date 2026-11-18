@@ -78,6 +78,9 @@ function formatCatalog(response: CatalogGetOutput): string {
         `Platform: ${entry.platform}`,
         ...phonesOnlyLine(entry),
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
+        ...(entry.platform === "ios"
+          ? [`  Modes served: ${(entry.modes ?? ["slim", "full"]).join(", ")}`]
+          : []),
         ...(entry.defaultImageTag === undefined
           ? []
           : [`  Default image tag: ${esc(entry.defaultImageTag)}`]),

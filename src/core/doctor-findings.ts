@@ -1,6 +1,7 @@
 import { boundDriverSummary, DRIVER_DETAIL_MAX, parseOsConstraint } from "../contract/index.js";
 import type { Config } from "./config.js";
 import {
+  type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,
   type Platform,
@@ -158,6 +159,7 @@ export function unreachableTarget(
   target: WarmTargetFigures,
   catalog: DriverCatalogEntry | undefined,
   virtualDevices: boolean,
+  servedModes: readonly DeviceMode[],
 ): DoctorFinding[] {
   const { model, osVersion, platform, short } = target;
   const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
@@ -215,6 +217,19 @@ export function unreachableTarget(
           osVersion === undefined
             ? `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version>`
             : `run simlock component install ${platform} ${osVersion}`,
+        target: named,
+      },
+    ];
+  }
+  if (short === "mode-unavailable") {
+    const mode = target.mode;
+    return [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${named} cannot be met: this worker does not serve ${mode} iOS simulators (ios.modes is ${JSON.stringify(servedModes)})`,
+        platform,
+        reason: short,
+        remedy: `remove the target from warmPool.targets, or add ${mode} to ios.modes`,
         target: named,
       },
     ];
