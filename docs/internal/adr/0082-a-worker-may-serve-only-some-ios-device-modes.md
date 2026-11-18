@@ -1,6 +1,6 @@
 # 0082. A worker may serve only some iOS device modes
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-17
 - **Issue:** [#1645](https://github.com/callstackincubator/simlock/issues/1645) (request [#1557](https://github.com/callstackincubator/simlock/issues/1557))
 - **Narrows:** [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md)

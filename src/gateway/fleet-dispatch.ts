@@ -62,6 +62,7 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "UNKNOWN_BASELINE",
   "BASELINE_MISMATCH",
   "BASELINE_STALE",
+  "MODE_UNAVAILABLE",
 ]);
 
 export interface FleetDispatchOptions {

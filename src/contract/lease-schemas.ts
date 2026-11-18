@@ -118,6 +118,7 @@ const gatewayWaitingReasonSchema = z.enum([
   "updating",
   "busy",
   "no-driver",
+  "mode-unavailable",
   "unknown-model",
   "runtime-missing",
   "no-baseline",

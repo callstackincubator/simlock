@@ -41,7 +41,7 @@ function phonesOnlyLine(entry: CatalogGetOutput["platforms"][number]): string[] 
   ];
 }
 
-// why: the daemon sends `modes` only when one mode is served, so a missing field means both.
+// why: a missing `modes` field means the entry serves both modes (a worker serving both, or the gateway merge leaving it out); a present one lists the modes served, which can be both for a split fleet.
 function modesLine(entry: CatalogGetOutput["platforms"][number]): string[] {
   if (entry.platform !== "ios") return [];
   return [`  Modes served: ${(entry.modes ?? ["slim", "full"]).join(", ")}`];
