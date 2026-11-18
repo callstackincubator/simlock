@@ -101,7 +101,7 @@ export class IdempotencyConflictError extends Error {
     readonly idempotencyKey: string,
   ) {
     super(
-      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request or lease ID`,
+      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request or lease ID, or run ID`,
     );
     this.name = "IdempotencyConflictError";
   }

@@ -55,5 +55,7 @@ describe("Dispatcher: lease.request with a run id", () => {
       runId: "123-1",
     });
     expect(afterRestart.find((lease) => lease.id === plain.lease.id)).not.toHaveProperty("runId");
+    const replayed = await restarted.dispatch("lease.request", taggedAsk, agent);
+    expect(replayed.lease).toMatchObject({ id: tagged.lease.id, runId: "123-1" });
   });
 });
