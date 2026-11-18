@@ -187,7 +187,7 @@ export const leaseRotateRoute = declareRoute({
   summary: "Rotate the lease's iOS simulator",
   role: "agent",
   notes:
-    "Turns an iPhone or iPad simulator, whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
+    "Turns an iPhone or iPad simulator (not a foldable iPhone Duo), whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
   request: { params: leaseParamsSchema, json: rotateBodySchema },
   reply: OPERATIONS["device.rotate"].output,
   errors: {

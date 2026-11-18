@@ -612,6 +612,22 @@ describe("Doctor: optional module findings", () => {
     expect(report.findings.at(-1)).toStrictEqual(unavailable);
   });
 
+  it("keeps a module-advisory finding out of doctor.reconciled's driftFindings", async () => {
+    const advisory: OptionalModuleFinding = {
+      kind: "module-advisory",
+      message: "fseventsd uses 28.0 GB",
+      module: "fseventsd",
+      remedy: "restart it",
+    };
+    const { doctor, eventBus } = await setup({ optionalModules: () => [advisory] });
+
+    const report = await doctor.reconcile();
+
+    expect(report.findings).toEqual([advisory]);
+    const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
+    expect((reconciled!.payload as { readonly driftFindings: unknown }).driftFindings).toEqual([]);
+  });
+
   it("returns no module-unavailable finding when optionalModules is omitted or returns none", async () => {
     const omitted = await (await setup()).doctor.reconcile();
     const none = await (await setup({ optionalModules: () => [] })).doctor.reconcile();

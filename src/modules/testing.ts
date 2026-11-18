@@ -34,7 +34,7 @@ export interface FakeModuleOptions {
   readonly capabilityName?: string;
   readonly state?: string;
   readonly hooks?: WorkerHooks;
-  readonly findings?: () => readonly ModuleFinding[];
+  readonly findings?: () => readonly ModuleFinding[] | Promise<readonly ModuleFinding[]>;
   readonly relayTarget?: WorkerModule["relayTarget"];
   readonly mount?: WorkerModule["mount"];
   readonly loadError?: Error;

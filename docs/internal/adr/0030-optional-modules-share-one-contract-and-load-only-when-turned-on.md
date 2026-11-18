@@ -1,6 +1,6 @@
 # 0030. Optional modules share one contract and load only when turned on
 
-- **Status:** Accepted; §2 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md); §3 narrowed by [ADR 0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md)
+- **Status:** Accepted; §2 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md); §3 narrowed by [ADR 0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md); §2, §3 and §7 narrowed by [ADR 0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md)
 - **Date:** 2026-10-15
 - **Issue:** [#591](https://github.com/callstackincubator/simlock/issues/591)
 - **Supersedes:** nothing. Narrows [ADR
