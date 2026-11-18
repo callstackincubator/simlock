@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { BASH } from "./test-support/fake-command.js";
+import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..");
 const VERSION = "0.0.0-pack";
@@ -73,13 +73,24 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
     write(join(project, "packages/e2e/dist/index.test.d.ts"), "export {};\n", 0o644);
     write(join(project, "packages/e2e/dist/config.sample.js"), "export {};\n", 0o644);
 
+    // why: Git Bash ships sha256sum but not the shasum the Pack step calls.
+    const shims = join(root, "shims");
+    mkdirSync(shims);
+    if (process.platform === "win32") {
+      writeFakeCommand(shims, "shasum", '#!/bin/sh\nshift 2\nexec sha256sum "$@"\n');
+    }
     const result = spawnSync(
       BASH,
       ["--noprofile", "--norc", "-eo", "pipefail", "-c", packStepScript()],
       {
         cwd: project,
         encoding: "utf8",
-        env: { ...process.env, RUNNER_TEMP: root, VERSION },
+        env: {
+          ...process.env,
+          ...(process.platform === "win32" ? fakeCommandEnv(shims) : {}),
+          RUNNER_TEMP: root,
+          VERSION,
+        },
       },
     );
     expect(result.stderr).not.toContain("::error::");

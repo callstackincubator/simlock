@@ -139,6 +139,8 @@ fi
 
 tmp=${TMPDIR:-/tmp}
 out=$(mktemp -d "${tmp%/}/review-$pr.XXXXXX")
+# why: on Windows mktemp answers with an MSYS path (/tmp/...) that node and git cannot open.
+! command -v cygpath >/dev/null 2>&1 || out=$(cygpath -m "$out")
 mkdir "$out/spec" "$out/rules"
 
 git diff "$fork" "$head" >"$out/diff.patch"
