@@ -35,7 +35,10 @@ export interface Output {
 /** why: the CLI's own shape for "start the stdio MCP server and run until it closes";
  * `src/mcp/main.ts` has a runner of the same job under the same name and a different shape, so
  * this one is named for what the CLI holds rather than shared, which would couple the two. */
-export type McpStdioLauncher = (options: { readonly daemonFlag: DaemonFlag }) => Promise<void>;
+export type McpStdioLauncher = (options: {
+  readonly daemonFlag: DaemonFlag;
+  readonly remote?: { readonly url: string; readonly token: string };
+}) => Promise<void>;
 
 export interface ServiceSetup {
   readonly manager: ServiceManager | undefined;

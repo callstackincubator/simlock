@@ -37,10 +37,8 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
   environment.stderr.write(`${JSON.stringify({ notice })}\n`);
 }
 
-// why: the one check of a farm's URL and token, shared by the session connection and the HTTP commands (`simlock files`), so both refuse the same input with the same words.
-export async function farmEndpoint(
-  farm: RemoteFarm,
-): Promise<{ readonly url: string; readonly token: string }> {
+// why: remote mode needs a valid URL and a token before anything connects, for a command that connects (`connectFarm`), for `simlock mcp`, which connects only on a tool call, and for the HTTP commands (`simlock files`), so all refuse the same input with the same words.
+export async function checkedFarm(farm: RemoteFarm): Promise<{ url: string; token: string }> {
   const { checkedFarmUrl, FarmUrlError, farmTokenFits } =
     await import("../simlock-client/farm-url.js");
   let url: string;
@@ -56,14 +54,14 @@ export async function farmEndpoint(
   return { token: farm.token, url };
 }
 
-// why: remote mode needs a token and never falls back to an agent session or launches a daemon (ADR 0081 §3): the token decides the role, and there is no local daemon to fall back to.
+// why: remote mode never falls back to an agent session or launches a daemon (ADR 0081 §3): the token decides the role, and there is no local daemon to fall back to.
 async function connectFarm(
   environment: CliEnvironment,
   farm: RemoteFarm,
 ): Promise<SimlockAdminClient> {
   const [{ connectSimlockAdmin }, { token, url }] = await Promise.all([
     import("../admin/index.js"),
-    farmEndpoint(farm),
+    checkedFarm(farm),
   ]);
   return connectSimlockAdmin({
     clock: environment.clock,

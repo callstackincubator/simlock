@@ -7,7 +7,7 @@ import {
   UsageError,
   withHelpHint,
 } from "../args.js";
-import { connectDaemonClient, farmEndpoint } from "../connect.js";
+import { connectDaemonClient, checkedFarm } from "../connect.js";
 import { ERROR_TABLE, isSimlockError, SimlockError } from "../../contract/index.js";
 import type { HttpStreamAnswer, HttpStreamRequest, TimerHandle } from "../../ports/index.js";
 import { resolveRemoteLeaseId } from "../remote-lease.js";
@@ -50,7 +50,7 @@ async function farmOf(environment: Environment) {
       "simlock files needs --url or SIMLOCK_URL: on the daemon's machine the lease's folder is a local folder",
     );
   }
-  return farmEndpoint(environment.remote);
+  return checkedFarm(environment.remote);
 }
 
 async function folderOf(context: CommandContext, flag: unknown): Promise<Folder> {

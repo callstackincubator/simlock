@@ -348,6 +348,14 @@ export function createMcpServer(
     void server.server.sendLoggingMessage(deviceHealthLoggingMessage(notice));
   });
 
+  session.onNotice((notice) => {
+    void server.server.sendLoggingMessage({
+      data: { message: notice.message },
+      level: notice.level,
+      logger: "simlock",
+    });
+  });
+
   server.registerTool(
     "rotate_device",
     {
