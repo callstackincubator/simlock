@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, expect, it, describe } from "vitest";
 import { OWNED_ROOT_MARKER_FILE, OwnedRootError } from "../../core/index.js";
 import { ScriptedProcessRunner, MemoryFilesystem, FakeClock } from "../../ports/index.js";
@@ -9,6 +10,7 @@ import {
   sourcesSetPath,
   driverData,
   dataPath,
+  simlockDeviceRoot,
   plantManagedDevice,
   instanceId,
 } from "./test-slim.js";
@@ -122,7 +124,7 @@ describe("IosSimctlDriver", () => {
     await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
 
     await expect(driver.provision(spec)).rejects.toThrow(
-      `ENOENT: no such file or directory, open '${dataPath}'`,
+      `ENOENT: no such file or directory, open '/Devices/${driverData.udid}/data'`,
     );
 
     // why: A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
@@ -223,7 +225,7 @@ describe("IosSimctlDriver", () => {
       simlockHome: "/home/.simlock",
     });
 
-    expect(driver.deviceRoot).toBe("/home/.simlock/devices/ios");
+    expect(driver.deviceRoot).toBe(resolve(simlockDeviceRoot));
     await expect(
       filesystem.exists(`/home/.simlock/devices/ios/${OWNED_ROOT_MARKER_FILE}`),
     ).resolves.toBe(true);

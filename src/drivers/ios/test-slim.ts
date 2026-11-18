@@ -25,6 +25,15 @@ export const deviceRoot = resolve("/Devices");
 
 export const sourcesSetPath = join(deviceRoot, "sources");
 
+// why: the driver joins these under `simlockHome` with `join`, so a Windows host spells them with backslashes.
+export const simlockDeviceRoot = join("/home/.simlock", "devices", "ios");
+export const unownedSourcesSet = join("/home/.simlock", "devices", "ios-sources");
+
+/** why: the in-memory filesystem names a path in `/` form without a drive letter, so a test compares in that form. */
+export function inPosixForm(path: string): string {
+  return path.replace(/^[A-Za-z]:(?=[\\/])/, "").replaceAll("\\", "/");
+}
+
 export const instanceId = "instance-1";
 
 export const driverData = {
@@ -129,7 +138,7 @@ export function overridesPath(udid: string): string {
 
 /** why: ADR 0083 S2: the record of named services sits beside the overrides file. */
 export function recordPath(udid: string): string {
-  return `${overridesFolder(udid)}/simlock-managed.json`;
+  return join(overridesFolder(udid), "simlock-managed.json");
 }
 
 export function overridesPlist(entries: Readonly<Record<string, boolean>>): string {
