@@ -146,7 +146,7 @@ Everything the worker keeps is under `~/.simlock`, or the folder `SIMLOCK_HOME` 
 `~/.simlock/devices` can grow to tens of gigabytes. Do not delete folders in it by hand while the daemon runs. Use `simlock cleanup`, or [`simlock nuke`](/simlock/docs/worker/cleanup#reset-a-machine-with-nuke) to start over.
 </Aside>
 
-Anyone who can open `~/.simlock` can lease devices, so Simlock creates it readable by your user only. It does not change a folder that already exists. If other users can open it, the daemon log says so at each start, with the `chmod 700` command that fixes it.
+Anyone who can open `~/.simlock` can lease devices, so Simlock creates it readable by your user only. It does not change a folder that already exists. If other users can open it, the daemon log says so at each start, with the command that fixes it: `chmod 700` on macOS and Linux, `icacls` on Windows.
 
 A gateway on the same machine keeps its own files in `~/.simlock/gateway` and runs its own daemon. Add `--gateway` to reach it, for example `simlock --gateway daemon status`. See [Set up a gateway](/simlock/docs/gateway/setup).
 
