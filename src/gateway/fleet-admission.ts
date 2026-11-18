@@ -383,7 +383,7 @@ export class FleetAdmission {
 
   /**
    * why: a run's cleanup stops every request of the run it owns that no worker has yet (`ownerId`
-   * undefined for an operator), by the rule `cancelPending` applies to one.
+   * undefined for an operator), by the rule `cancelPending` applies to one; one a worker already has is marked to release at its grant.
    */
   async cancelRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
     // why: a request still on the admission command has no id to list yet, so it is ended and not named.
@@ -398,7 +398,12 @@ export class FleetAdmission {
         const matches =
           waiter.options.runId === runId &&
           (ownerId === undefined || waiter.options.ownerId === ownerId);
-        if (!matches || waiter.state === "processing") continue;
+        if (!matches) continue;
+        if (waiter.state === "processing") {
+          // why: a worker has the request, so it is not cancelled: its grant is released once it lands (`FleetGrants.settle`), and its id is not listed.
+          this.options.queue.markReleaseAtGrant(waiter);
+          continue;
+        }
         if (this.options.queue.reject(waiter, new RequestCancelledError(waiter.id))) {
           this.options.facts.rejected(waiter, "cancelled");
         }
