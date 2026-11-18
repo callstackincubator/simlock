@@ -108,8 +108,11 @@ export function killProcessTree(
     return;
   }
 
+  // why: a `killChildren` child is signalled alone: the process group also holds what its child
+  // started for others to use (the host's one `netsimd`, in the first emulator's group).
+  const target = windowsKill === "children" ? pid : -pid;
   try {
-    process.kill(-pid, signal);
+    process.kill(target, signal);
   } catch (error: unknown) {
     if (isNoSuchProcessError(error)) {
       return;
@@ -117,6 +120,12 @@ export function killProcessTree(
 
     throw error;
   }
+}
+
+// why: only a Windows kill is a helper's, so only there the handle reports the signal it sent;
+// off Windows a killed child's own exit code stands, as the signal is the kernel's.
+export function reportsKillSignal(windowsKill: WindowsKill): boolean {
+  return process.platform === "win32" && windowsKill !== "child";
 }
 
 // why: a wrapper that already exited, its output still held open by a grandchild, is never
