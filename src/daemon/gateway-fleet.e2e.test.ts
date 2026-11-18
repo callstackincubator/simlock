@@ -23,7 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -129,7 +129,16 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       directories.splice(0).map((directory) =>
         removeDirectory(directory).catch(async (error: unknown) => {
           const left = await readdir(directory, { recursive: true }).catch(() => ["<gone>"]);
-          throw new Error(`DIAG left: ${JSON.stringify(left)} ${String(error)}`);
+          const each: string[] = [];
+          for (const name of left) {
+            await rm(join(directory, name), { force: true, recursive: true }).then(
+              () => each.push(`${name}:ok`),
+              (e: unknown) => each.push(`${name}:${String(e)}`),
+            );
+          }
+          throw new Error(
+            `DIAG left: ${JSON.stringify(left)} ${each.join(" | ")} ${String(error)}`,
+          );
         }),
       ),
     );
