@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { fakeWorkerContext } from "../modules/testing.js";
-import { ScriptedProcessRunner, type ScriptedProcessExpectation } from "../ports/index.js";
+import {
+  NoopLogger,
+  ScriptedProcessRunner,
+  type Logger,
+  type ScriptedProcessExpectation,
+} from "../ports/index.js";
 import { fseventsdModule } from "./index.js";
 
 const PGREP = { args: ["-x", "fseventsd"], command: "pgrep" };
@@ -23,9 +28,15 @@ const topPrints = (figure: string): ScriptedProcessExpectation => ({
 async function macWorker(script: readonly ScriptedProcessExpectation[]) {
   const { ctx } = await fakeWorkerContext("fseventsd", {});
   const processRunner = new ScriptedProcessRunner(script);
+  const warnings: string[] = [];
+  const logger: Logger = new (class extends NoopLogger {
+    override warn(message: string): void {
+      warnings.push(message);
+    }
+  })();
   const loaded = await fseventsdModule.loadWorker();
-  const worker = loaded.createWorker({ ...ctx, hostPlatform: "darwin", processRunner });
-  return { processRunner, worker };
+  const worker = loaded.createWorker({ ...ctx, hostPlatform: "darwin", logger, processRunner });
+  return { processRunner, warnings, worker };
 }
 
 const messagesOf = async (worker: Awaited<ReturnType<typeof macWorker>>["worker"]) =>
@@ -54,5 +65,27 @@ describe("fseventsd module", () => {
     const again = await macWorker([pgrepFound, topPrints("28G"), pgrepFound, topPrints("14M")]);
     expect(await messagesOf(again.worker)).toHaveLength(1);
     expect(await messagesOf(again.worker)).toHaveLength(0);
+  });
+
+  it("adds no finding for a failed reading and logs one warning per run", async () => {
+    const failures: readonly (readonly ScriptedProcessExpectation[])[] = [
+      [pgrepFound, { match: TOP, result: { code: 1, stderr: "", stdout: "" } }],
+      [pgrepFound, topPrints("n/a")],
+      [
+        pgrepFound,
+        { match: TOP, result: { code: null, endedBy: "timeout", stderr: "", stdout: "" } },
+      ],
+      [{ match: PGREP, result: { code: 2, stderr: "", stdout: "" } }],
+      [{ match: PGREP, result: { code: 0, stderr: "", stdout: "\n" } }],
+    ];
+    for (const script of failures) {
+      const { warnings, worker } = await macWorker(script);
+      expect(await messagesOf(worker)).toEqual([]);
+      expect(warnings).toHaveLength(1);
+    }
+
+    const quiet = await macWorker([pgrepNone]);
+    await messagesOf(quiet.worker);
+    expect(quiet.warnings).toEqual([]);
   });
 });
