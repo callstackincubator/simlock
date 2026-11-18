@@ -239,7 +239,7 @@ function refuseBadMetadata(): <
 /** why: the CLI checks a run id against it before connecting, so a bad `SIMLOCK_RUN` fails before a lease waits. */
 export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
-export const RUN_ID_REFUSAL = "a run id is 1 to 128 letters, digits, `.`, `_` or `-`";
+const RUN_ID_REFUSAL = "a run id is 1 to 128 letters, digits, `.`, `_` or `-`";
 
 export function refuseBadRunId(): <T extends { readonly runId?: string | undefined }>(
   input: T,
