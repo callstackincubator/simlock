@@ -10,6 +10,7 @@ export const fseventsdModule: OptionalModuleDefinition<FseventsdModuleConfig> = 
     gatewayKeys: [],
     validator: objectValidator({}),
   },
+  enabledByDefault: "macos-worker",
   loadWorker: () => import("./worker.js"),
   name: "fseventsd",
 };

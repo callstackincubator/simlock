@@ -371,7 +371,7 @@ export interface OptionalModuleDefinition<C> {
   readonly config: ModuleConfig<C>;
   readonly localProfile?: ModuleLocalProfile;
   // why: plain data the config loader reads without naming the module; a missing `enabled` then means on for a standalone worker (ADR 0046 §1).
-  readonly enabledByDefault?: "standalone-worker";
+  readonly enabledByDefault?: "standalone-worker" | "macos-worker";
   readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
