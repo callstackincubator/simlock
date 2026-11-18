@@ -11,6 +11,16 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     ios: { maxDevices: 2, maxRunning: 1 },
     maxRunning: 2,
   };
+  // why: a host serves a platform only with a driver for it (#1689), so a global limit above the iOS one needs an Android driver.
+  const androidDriver = () => new FakeDriver({ clock: new FakeClock(1_000), platform: "android" });
+  const bothPlatforms = () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    return { driver, drivers: [driver, androidDriver()] };
+  };
   const asking = (requesterId: string, more: Record<string, unknown> = {}) => ({
     ownerId: requesterId,
     requesterId,
@@ -24,7 +34,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     }));
 
   it("lists a queued request at the iOS running limit as platform-running-limit and one behind it as behind-earlier-request, and stores no reason", async () => {
-    const harness = await createHarness({ limits: runningLimit });
+    const harness = await createHarness({ limits: runningLimit, ...bothPlatforms() });
     await harness.engine.request(request, asking("holder"));
     void harness.engine.request(request, asking("head"));
     void harness.engine.request(request, asking("behind"));
@@ -40,7 +50,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
   });
 
   it("follows the latest attempt: when the head is granted, the request behind it lists its own new reason", async () => {
-    const harness = await createHarness({ limits: runningLimit });
+    const harness = await createHarness({ limits: runningLimit, ...bothPlatforms() });
     const holder = await harness.engine.request(request, asking("holder"));
     const head = harness.engine.request(request, asking("head"));
     void harness.engine.request(request, asking("behind"));
@@ -56,7 +66,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
   });
 
   it("cancelling the queued head makes the request behind it plan again and list its own reason", async () => {
-    const harness = await createHarness({ limits: runningLimit });
+    const harness = await createHarness({ limits: runningLimit, ...bothPlatforms() });
     await harness.engine.request(request, asking("holder"));
     const head = harness.engine.request(request, asking("head"));
     void harness.engine.request(request, asking("behind"));
@@ -130,7 +140,11 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       latencyMs: { provision: 50 },
       platform: "ios",
     });
-    const harness = await createHarness({ driver, limits: runningLimit });
+    const harness = await createHarness({
+      driver,
+      drivers: [driver, androidDriver()],
+      limits: runningLimit,
+    });
     const provisioning = harness.engine
       .request(request, asking("provisioning"))
       .catch((error: unknown) => error);
@@ -170,7 +184,11 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       platform: "ios",
     });
     driver.failOn("provision", 1, new DriverCrashError("simulator exited"));
-    const harness = await createHarness({ driver, limits: runningLimit });
+    const harness = await createHarness({
+      driver,
+      drivers: [driver, androidDriver()],
+      limits: runningLimit,
+    });
     const failing = harness.engine
       .request(request, asking("failing"))
       .catch((error: unknown) => error);
@@ -201,7 +219,11 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       latencyMs: { resolveSpec: 50 },
       platform: "ios",
     });
-    const harness = await createHarness({ driver, limits: runningLimit });
+    const harness = await createHarness({
+      driver,
+      drivers: [driver, androidDriver()],
+      limits: runningLimit,
+    });
     const resolving = harness.engine
       .request(request, asking("resolving"))
       .catch((error: unknown) => error);
@@ -261,7 +283,11 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("shutdown", 1, new DriverCrashError("cannot stop victim"));
-    const harness = await createHarness({ driver, limits: runningLimit });
+    const harness = await createHarness({
+      driver,
+      drivers: [driver, androidDriver()],
+      limits: runningLimit,
+    });
     await seedReady(harness);
 
     void harness.engine.request({ ...request, model: "iPhone SE" }, asking("new-spec"));

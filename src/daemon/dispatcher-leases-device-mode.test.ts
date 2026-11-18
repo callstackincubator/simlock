@@ -216,6 +216,8 @@ describe("Dispatcher: device mode on every surface", () => {
 
   it("status.get on a daemon whose pool is off carries enabled false, the reserve and every configured target with ready 0, booting 0 and short disabled", async () => {
     const { dispatcher } = await buildDispatcher({
+      // why: a platform without a driver on the host reserves nothing (#1689), and the reserve below names Android.
+      extraDrivers: [new FakeDriver({ clock: new FakeClock(1_000), platform: "android" })],
       warmPool: {
         enabled: false,
         reserveRunning: { android: 1, ios: 0 },
