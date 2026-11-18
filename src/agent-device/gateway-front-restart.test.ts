@@ -97,6 +97,12 @@ describe(
         false,
       ],
       ["a worker restart ends a lease allocated without it", "worker", {}, true],
+      [
+        "a gateway restart, then a worker restart, keeps a lease allocated with retainOnClose (#1463)",
+        "both",
+        { retainOnClose: true },
+        false,
+      ],
     ] as const)(
       "through a gateway, after %s, a close that names no ended lease: the fleet lease list",
       async (_case, restart, extra, ends) => {
@@ -106,7 +112,9 @@ describe(
         const member =
           restart === "gateway"
             ? (await restarted(rig, original, 1), original)
-            : await restartedWorker(rig, original);
+            : restart === "both"
+              ? (await restarted(rig, original, 1), await restartedWorker(rig, original))
+              : await restartedWorker(rig, original);
         expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
         expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
 

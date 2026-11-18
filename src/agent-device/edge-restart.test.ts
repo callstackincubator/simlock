@@ -119,6 +119,29 @@ describe("the agent-device front, through the whole worker daemon: after agent-d
     },
   );
 
+  it("after a standalone worker restarts, a lease allocated with retainOnClose is re-allocated with it, and a close with no open since keeps the simlock lease (#1463)", async () => {
+    const first = await setUpWithPhone();
+    await granted(first, 1, { platform: "android", retainOnClose: true });
+    expect(first.fake.leases.get(hex(1))?.retainOnClose).toBe(true);
+    const rig = await first.restart(() => {
+      first.fake.restart();
+    });
+    expect((await envelopeOf(await heartbeat(rig, 1))).error).toBeUndefined();
+    expect(allocatesReceived(rig, 1).map((request) => request.params?.["retainOnClose"])).toEqual([
+      true,
+      true,
+    ]);
+    expect(rig.fake.leases.get(hex(1))?.retainOnClose).toBe(true);
+    expect((await envelopeOf(await runCommand(rig, "snapshot", 1))).error).toBeUndefined();
+
+    const closed = await envelopeOf(await runCommand(rig, "close", 1));
+
+    expect(closed.result).toMatchObject({ ok: true });
+    await sleep(50);
+    expect(await listed(rig)).toEqual([hex(1)]);
+    expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+  });
+
   it.each([
     ["a batch whose steps end with a close ends it", "batch", true],
     ["a close agent-device answers with an error keeps it", "failed", false],
