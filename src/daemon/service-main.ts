@@ -55,16 +55,16 @@ function decodeEnvironment(text: string): Record<string, string> | undefined {
 /** why: the task's own arguments are the only input, in one fixed order; anything else is a stale or hand-edited task and starts nothing. */
 function parseArguments(argv: readonly string[]): SupervisorArguments | undefined {
   const gateway = argv[0] === "--gateway";
-  const [taskFlag, task, idFlag, installId, environmentFlag, environmentText, ...extra] = gateway
-    ? argv.slice(1)
-    : argv;
-  if (taskFlag !== "--task" || idFlag !== "--install-id" || environmentFlag !== "--environment") {
-    return undefined;
-  }
-  if (extra.length > 0 || task === undefined || installId === undefined) return undefined;
-  if (!WORD.test(task) || !WORD.test(installId) || environmentText === undefined) return undefined;
-  const environment = decodeEnvironment(environmentText);
-  return environment === undefined ? undefined : { gateway, task, installId, environment };
+  const rest = gateway ? argv.slice(1) : argv;
+  const flagged = ["--task", "--install-id", "--environment"].every(
+    (flag, index) => rest[index * 2] === flag,
+  );
+  const [task, installId, environmentText] = [rest[1], rest[3], rest[5]];
+  if (!flagged || rest.length !== 6) return undefined;
+  if (!WORD.test(task ?? "") || !WORD.test(installId ?? "")) return undefined;
+  const environment = decodeEnvironment(environmentText ?? "");
+  if (environment === undefined) return undefined;
+  return { gateway, task: task as string, installId: installId as string, environment };
 }
 
 function describeExit(result: ProcessResult): string {
