@@ -513,8 +513,8 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     }
   });
 
-  // why: `killChildren` is a Windows kill; elsewhere a child that answers SIGTERM with its own
-  // exit code keeps reporting it.
+  // why: off Windows a `killChildren` kill signals the child's pid alone (process-tree-kill.ts:112),
+  // so a child that answers SIGTERM with its own exit code keeps reporting it.
   it.skipIf(process.platform === "win32")(
     "reports the exit code of a killChildren child that exits on SIGTERM",
     async () => {
