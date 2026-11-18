@@ -125,15 +125,15 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
-    // why: worker-b's directory stays busy on Windows for a few seconds after its daemon stopped (a leftover handle nobody could name), longer than `removeDirectory` waits, so the removal is tried again until it goes through, for less than the hook's 10 s default so a handle that stays held fails with the removal's own error.
+    // why: worker-b's directory stays busy on Windows for a few seconds after its daemon stopped (a leftover handle nobody could name), longer than `removeDirectory` waits, so the removal is tried again until it goes through, for less than the hook's own 30 s so a handle that stays held fails with the removal's own error.
     await Promise.all(
       directories
         .splice(0)
         .map((directory) =>
-          vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 5_000 }),
+          vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 25_000 }),
         ),
     );
-  });
+  }, 30_000);
 
   async function startGateway(
     alerts: {
