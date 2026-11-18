@@ -35,6 +35,7 @@ const leasePayloadSchema = z.object({
   os: z.string(),
   platform: z.string(),
   requestId: z.string().optional(),
+  runId: z.string().max(128).optional(),
   ttlMs: z.number(),
   udid: z.string(),
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
@@ -227,6 +228,8 @@ export const leaseRequestBodySchema = z
     os: z.string().min(1).optional(),
     physical: z.boolean().optional(),
     platform: z.enum(["ios", "android"]),
+    // why: A plain string, bounded by `refuseBadRunId` below as the one check, like `lease.request`'s: the same words on every transport.
+    runId: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })

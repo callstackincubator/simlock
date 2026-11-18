@@ -22,7 +22,14 @@ import {
   readSseFrames,
   settle,
 } from "./test-app.js";
-import { FakeDispatcher, makeGrant, sequenceIdGenerator, waitForDispatch } from "./test-fakes.js";
+import {
+  FakeDispatcher,
+  makeDevice,
+  makeGrant,
+  makeLease,
+  sequenceIdGenerator,
+  waitForDispatch,
+} from "./test-fakes.js";
 
 describe("POST /v1/lease-requests", () => {
   it("creates a request resource, 201 with a Location header", async () => {
@@ -333,6 +340,41 @@ describe("POST /v1/lease-requests", () => {
     call.resolve(makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 61_000 } }));
     await responsePromise;
     expect(dispatcher.calls.filter((c) => c.operation === "lease.renew")).toHaveLength(0);
+  });
+});
+
+describe("POST /v1/lease-requests runId", () => {
+  it("passes a body's runId onto the dispatch input and names it on the granted lease and on GET /v1/leases/{id}, and refuses a bad one with 400 BAD_REQUEST before dispatching", async () => {
+    const { app, dispatcher, registry } = buildHarness();
+    type Reply = { request: { lease: Record<string, unknown> } };
+    const tagged = postLeaseRequest(app, { ...defaultBody, runId: "123-1" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ runId: "123-1" });
+    call.resolve(makeGrant({ lease: { id: "lse_1", runId: "123-1" } }));
+    expect(((await (await tagged).json()) as Reply).request.lease).toMatchObject({
+      runId: "123-1",
+    });
+
+    registry.devices = [makeDevice({ id: "dev_1" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", runId: "123-1" })];
+    const got = await app.request("/v1/leases/lse_1", { headers: agentAuth });
+    expect(((await got.json()) as { lease: Record<string, unknown> }).lease).toMatchObject({
+      runId: "123-1",
+    });
+
+    const plain = postLeaseRequest(app, defaultBody, otherAgentAuth);
+    const second = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(second.input).not.toHaveProperty("runId");
+    second.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    expect(((await (await plain).json()) as Reply).request.lease).not.toHaveProperty("runId");
+
+    const calls = dispatcher.calls.length;
+    const refused = await postLeaseRequest(app, { ...defaultBody, runId: "run 1" });
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({
+      error: { code: "BAD_REQUEST", message: expect.stringContaining("a run id is 1 to 128") },
+    });
+    expect(dispatcher.calls).toHaveLength(calls);
   });
 });
 
