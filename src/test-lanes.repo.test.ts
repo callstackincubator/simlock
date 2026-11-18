@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { windowsSkipped } from "./test-support/windows-skipped.js";
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const packageJson = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
@@ -227,5 +229,24 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
     expect(windows).toMatch(/run: pnpm run test:unit\n/);
     expect(jobs.get("quality")).toMatch(/needs:\s*\[[^\]]*\bwindows-unit\b/);
     expect(attributes.split("\n")).toContain("* text=auto eol=lf");
+  });
+});
+
+describe("the files the Windows job leaves out (src/test-support/windows-skipped.ts)", () => {
+  it("`windowsSkipped` is the list on win32 and empty on linux and darwin, holds sorted tracked test files once each, and `vitest.config.ts` gives it to the `unit` project only", () => {
+    const tracked = new Set(
+      spawnSync("git", ["ls-files"], { cwd: REPO_ROOT, encoding: "utf8" }).stdout.split("\n"),
+    );
+    const list = windowsSkipped("win32");
+    const config = readFileSync(join(REPO_ROOT, "vitest.config.ts"), "utf8");
+    const unitProject = /name:\s*"unit"[\s\S]*?name:\s*"ui-dom"/.exec(config)?.[0] ?? "";
+
+    expect(windowsSkipped("linux")).toEqual([]);
+    expect(windowsSkipped("darwin")).toEqual([]);
+    expect(list).toEqual([...new Set(list)].sort());
+    expect(list.filter((path) => !tracked.has(path))).toEqual([]);
+    expect(list.filter((path) => !/\.test\.tsx?$/.test(path))).toEqual([]);
+    expect(unitProject).toContain("...windowsSkipped(process.platform)");
+    expect(config.match(/windowsSkipped\(/g)).toHaveLength(1);
   });
 });
