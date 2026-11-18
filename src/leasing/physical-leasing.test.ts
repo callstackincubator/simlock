@@ -193,7 +193,9 @@ function claimKind(harness: Harness, device: PhysicalDevice): string | undefined
   return harness.engine.core.claims.claim(device.id)?.kind;
 }
 
-async function waiterMidPresenceRead(options: { readonly timeoutMs?: number } = {}) {
+async function waiterMidPresenceRead(
+  options: { readonly timeoutMs?: number; readonly runId?: string } = {},
+) {
   const harness = await createHarness();
   const device = await enrollIphone(harness, "UDID-A");
   await startReclaiming(harness, device);
@@ -399,6 +401,20 @@ describe("createLeasing with physical devices", () => {
     expect(killed.harness.registry.snapshot.leases).toEqual([]);
     expect(stateOf(killed.harness, killed.device)).toBe("ready");
     expect(killed.harness.engine.core.claims.isClaimed(killed.device.id)).toBe(false);
+  });
+
+  it("cancels a physical request of the run during its presence read: it is not granted, its id is listed, the device stays ready", async () => {
+    const { device, harness, promise } = await waiterMidPresenceRead({ runId: "nightly-7" });
+    expect(claimKind(harness, device)).toBe("grant");
+    const requestId = harness.engine.waitingRequests()[0]?.id;
+
+    const released = await harness.engine.releaseRun("nightly-7", "agent");
+    harness.driver.releasePresenceReads();
+
+    expect(released).toEqual({ leaseIds: [], requestIds: [requestId] });
+    expect(await outcome(promise)).toBeInstanceOf(RequestCancelledError);
+    expect(stateOf(harness, device)).toBe("ready");
+    expect(harness.engine.core.claims.isClaimed(device.id)).toBe(false);
   });
 
   it("wakes the queue after a grant: a queued physical request that no wake reached since a second device became ready is granted it", async () => {

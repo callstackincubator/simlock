@@ -697,4 +697,52 @@ describe("Dispatcher: lease.release-run", () => {
         .map((event) => event.payload),
     ).toMatchObject([{ leaseId: granted.lease.id, reason: "explicit" }]);
   });
+
+  it("reaches only the caller's own leases for an agent and every owner's for an admin, answers empty lists when nothing matches, and refuses a bad run id", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ capacity: roomFor(4) });
+    const lease = async (principal: string, requesterId: string, runId: string) =>
+      (
+        await dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", requesterId, runId },
+          session({ principal }),
+        )
+      ).lease.id;
+    const mine = await lease("tok_ci", "job-a", "nightly-7");
+    const keptOtherRun = await lease("tok_ci", "job-b", "nightly-8");
+    const theirs = await lease("tok_other", "job-c", "nightly-7");
+
+    const agent = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+    expect(agent).toEqual({ leaseIds: [mine], requestIds: [] });
+    expect(registry.snapshot.leases.map((held) => held.id).sort()).toEqual(
+      [keptOtherRun, theirs].sort(),
+    );
+
+    const nothing = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+    expect(nothing).toEqual({ leaseIds: [], requestIds: [] });
+
+    const admin = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_admin", role: "admin" }),
+    );
+    expect(admin).toEqual({ leaseIds: [theirs], requestIds: [] });
+    expect(registry.snapshot.leases.map((held) => held.id)).toEqual([keptOtherRun]);
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.release-run",
+        { runId: "run 1" },
+        session({ principal: "tok_ci" }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
 });
