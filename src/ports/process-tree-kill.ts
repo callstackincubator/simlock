@@ -79,8 +79,9 @@ function runWindowsKill(
 
 /**
  * why: Signals the child's whole process group (children are spawned `detached`, so the group is
- * the unit that actually dies), or on Windows a batch file's whole tree, a `killChildren` child
- * with its own children, and any other child alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
+ * the unit that actually dies; a `killChildren` child alone), or on Windows a batch file's whole
+ * tree, a `killChildren` child with its own children, and any other child alone, treating an
+ * already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
  * kill identically -- a timeout that only reached the direct child would leave a tool's own
  * subprocesses running.
  *
@@ -108,8 +109,11 @@ export function killProcessTree(
     return;
   }
 
+  // why: a `killChildren` child is signalled alone: the process group also holds what its child
+  // started for others to use (the host's one `netsimd`, in the first emulator's group).
+  const target = windowsKill === "children" ? pid : -pid;
   try {
-    process.kill(-pid, signal);
+    process.kill(target, signal);
   } catch (error: unknown) {
     if (isNoSuchProcessError(error)) {
       return;
@@ -117,6 +121,12 @@ export function killProcessTree(
 
     throw error;
   }
+}
+
+// why: only a Windows kill is a helper's, so only there the handle reports the signal it sent;
+// off Windows a killed child's own exit code stands, as the signal is the kernel's.
+export function reportsKillSignal(windowsKill: WindowsKill): boolean {
+  return process.platform === "win32" && windowsKill !== "child";
 }
 
 // why: a wrapper that already exited, its output still held open by a grandchild, is never

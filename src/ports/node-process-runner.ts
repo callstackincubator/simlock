@@ -3,7 +3,13 @@ import { closeSync, openSync } from "node:fs";
 import type { Writable } from "node:stream";
 
 import { LineBuffer, captureLines } from "./process-line-buffer.js";
-import { isRunning, killProcessTree, runLimits, type WindowsKill } from "./process-tree-kill.js";
+import {
+  isRunning,
+  killProcessTree,
+  reportsKillSignal,
+  runLimits,
+  type WindowsKill,
+} from "./process-tree-kill.js";
 import { childLaunch } from "./windows-command.js";
 import {
   InputStreamFailedError,
@@ -331,7 +337,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         settled = true;
         const killedWith = this.#killedWith;
         resolve(
-          windowsKill !== "child" && killedWith !== undefined
+          reportsKillSignal(windowsKill) && killedWith !== undefined
             ? { code: null, signal: killedWith }
             : { code, signal },
         );
@@ -497,7 +503,7 @@ class NodeProcessHandle implements ProcessHandle {
         }
         settled = true;
         resolve({
-          code: windowsKill !== "child" && this.#killedWith !== undefined ? null : code,
+          code: reportsKillSignal(windowsKill) && this.#killedWith !== undefined ? null : code,
           stderr: this.#stderrChunks.join(""),
           stdout: this.#stdoutChunks.join(""),
           ...(this.#endedBy === undefined ? {} : { endedBy: this.#endedBy }),
@@ -580,10 +586,10 @@ function childStdio(
   return stdio === undefined || typeof stdio === "object" ? "pipe" : stdio;
 }
 
-// why: a batch file's `cmd.exe` wrapper dies with its whole tree; a `killChildren` child with its
-// own children only; any other child alone. Off Windows every child is `"child"`: its exit code
-// stands, as the kill there is the process group's own signal.
+// why: a batch file's `cmd.exe` wrapper dies with its whole tree; a `killChildren` child alone
+// off Windows (its process group would end what it started for others) and with its own children
+// on Windows; any other child alone there, and off Windows its whole process group.
 function windowsKillOf(wrapped: boolean, killChildren: boolean): WindowsKill {
   if (wrapped) return "tree";
-  return killChildren && process.platform === "win32" ? "children" : "child";
+  return killChildren ? "children" : "child";
 }

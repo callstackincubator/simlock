@@ -112,6 +112,7 @@ export default defineConfig({
           label: "Worker",
           items: [
             doc("worker/running-the-daemon", "Run the daemon"),
+            doc("worker/windows", "Set up a Windows worker"),
             doc("worker/configuration", "Configuration"),
             doc("worker/capacity", "Capacity and warm pool"),
             doc("worker/runtimes-and-images", "Runtimes and system images"),
