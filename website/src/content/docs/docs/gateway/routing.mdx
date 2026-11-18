@@ -16,7 +16,7 @@ A worker can take a request only when it:
 - is connected, not drained, healthy, and has finished reporting its devices since it connected;
 - has every optional capability the request needs (for example, a lease through the agent-device integration needs a worker with that integration turned on);
 - offers the model or device class asked for, with a matching OS version already installed;
-- serves the iOS device mode the request names, or its baseline has (a worker lists the modes it serves in `ios.modes`; one that lists only `slim` is passed over for a `full` request). A request that names no mode goes to any worker. `simlock --gateway catalog` shows an iOS `modes` line only when every worker with iOS serves a single mode;
+- serves the iOS device mode the request names, or its baseline has (a worker lists the modes it serves in `ios.modes`; one that lists only `slim` is passed over for a `full` request). A request that names no mode goes to any worker. `simlock --gateway catalog` lists the iOS modes served across all workers on its "Modes served" line;
 - holds a fresh copy of the baseline, when the request names one (see [Baselines through a gateway](/simlock/docs/gateway/managing-workers#baselines-through-a-gateway));
 - slims every category in the request's `except` list and would give a slim device: the request's mode, or the baseline's, or else the worker's `ios.defaultMode` is `slim`;
 - has no requests waiting in its own queue, for example from agents on that machine. This doesn't apply to physical devices.
