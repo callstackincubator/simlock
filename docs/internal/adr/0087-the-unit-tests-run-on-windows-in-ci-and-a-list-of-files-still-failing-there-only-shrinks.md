@@ -64,7 +64,7 @@ fake returned expects the `/` form.
 ### 3. A test of a fact Windows does not have runs off Windows only
 
 A test that checks a POSIX mode, a umask, a launchd or systemd file, or a
-tool Windows does not ship is skipped on `win32`, the way the e2e files
+call Windows does not have (such as Python's `os.fork`) is skipped on `win32`, the way the e2e files
 already skip by platform. That is not skipping a test to get to green:
 the fact it checks does not exist there. Every other test runs on both.
 
