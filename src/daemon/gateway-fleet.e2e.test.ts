@@ -23,7 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -125,22 +125,13 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
+    // why: worker-b's directory stays busy on Windows for a few seconds after its daemon stopped (a leftover handle nobody could name), longer than `removeDirectory` waits, so the removal is tried again until it goes through.
     await Promise.all(
-      directories.splice(0).map((directory) =>
-        removeDirectory(directory).catch(async (error: unknown) => {
-          const left = await readdir(directory, { recursive: true }).catch(() => ["<gone>"]);
-          const each: string[] = [];
-          for (const name of left) {
-            await rm(join(directory, name), { force: true, recursive: true }).then(
-              () => each.push(`${name}:ok`),
-              (e: unknown) => each.push(`${name}:${String(e)}`),
-            );
-          }
-          throw new Error(
-            `DIAG left: ${JSON.stringify(left)} ${each.join(" | ")} ${String(error)}`,
-          );
-        }),
-      ),
+      directories
+        .splice(0)
+        .map((directory) =>
+          vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 10_000 }),
+        ),
     );
   });
 
