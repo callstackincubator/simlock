@@ -34,6 +34,21 @@ describe("Dispatcher: lease.request with a run id", () => {
       .catch((error: unknown) => error);
     expect(classifyError(conflict)).toBe("IDEMPOTENCY_CONFLICT");
 
+    const refused = [
+      ["a space", "run 1"],
+      ["empty", ""],
+      ["129 characters", "a".repeat(129)],
+    ] as const;
+    for (const [label, runId] of refused) {
+      const error = await dispatcher
+        .dispatch("lease.request", { ...ask, noWait: true, requesterId: "bad", runId }, agent)
+        .catch((caught: unknown) => caught);
+      expect(classifyError(error), label).toBe("BAD_REQUEST");
+      expect((error as Error).message, label).toBe(
+        "a run id is 1 to 128 letters, digits, `.`, `_` or `-`",
+      );
+    }
+
     const restarted = (await buildDispatcher({ state })).dispatcher;
     const afterRestart = (await restarted.dispatch("lease.list", {}, agent)).leases;
     expect(afterRestart.find((lease) => lease.id === tagged.lease.id)).toMatchObject({
