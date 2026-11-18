@@ -56,15 +56,14 @@ function decodeEnvironment(text: string): Record<string, string> | undefined {
 function parseArguments(argv: readonly string[]): SupervisorArguments | undefined {
   const gateway = argv[0] === "--gateway";
   const rest = gateway ? argv.slice(1) : argv;
-  const flagged = ["--task", "--install-id", "--environment"].every(
-    (flag, index) => rest[index * 2] === flag,
-  );
-  const [task, installId, environmentText] = [rest[1], rest[3], rest[5]];
-  if (!flagged || rest.length !== 6) return undefined;
-  if (!WORD.test(task ?? "") || !WORD.test(installId ?? "")) return undefined;
-  const environment = decodeEnvironment(environmentText ?? "");
-  if (environment === undefined) return undefined;
-  return { gateway, task: task as string, installId: installId as string, environment };
+  const [, task = "", , installId = "", , environmentText = ""] = rest;
+  const shaped =
+    rest.length === 6 &&
+    ["--task", "--install-id", "--environment"].every((flag, index) => rest[index * 2] === flag) &&
+    WORD.test(task) &&
+    WORD.test(installId);
+  const environment = shaped ? decodeEnvironment(environmentText) : undefined;
+  return environment === undefined ? undefined : { gateway, task, installId, environment };
 }
 
 function describeExit(result: ProcessResult): string {
