@@ -221,6 +221,9 @@ interface CatalogBucket {
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly slimCategories: Set<string>;
+  /** why: ADR 0082 §4: the modes the workers that list `modes` serve; `anyServesBoth` is set by the first worker with no field, and then the merged entry has none. */
+  readonly modes: Set<"slim" | "full">;
+  anyServesBoth: boolean;
   /** why: ADR 0084 §3: stays true only while every worker reporting the platform says `virtualDevices: false`. */
   phonesOnly: boolean;
   readonly defaults: Set<string | undefined>;
@@ -261,6 +264,8 @@ function addCatalogEntry(
   addCustomModels(bucket.customModels, entry);
   bucket.phonesOnly &&= entry.virtualDevices === false;
   for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
+  if (entry.modes === undefined) bucket.anyServesBoth = true;
+  for (const mode of entry.modes ?? []) bucket.modes.add(mode);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
   bucket.imageTagDefaults.add(entry.defaultImageTag);
@@ -286,6 +291,8 @@ function emptyBucket(): CatalogBucket {
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
+    anyServesBoth: false,
+    modes: new Set<"slim" | "full">(),
     phonesOnly: true,
     slimCategories: new Set<string>(),
   };
@@ -428,6 +435,7 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
             .sort()
             .slice(0, CATALOG_LIST_LIMITS.slimCategories),
         }),
+    ...(bucket.anyServesBoth ? {} : { modes: [...bucket.modes].sort() }),
     ...(bucket.phonesOnly ? { virtualDevices: false as const } : {}),
     ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
     ...(agreedImageTag === undefined ? {} : { defaultImageTag: agreedImageTag }),
