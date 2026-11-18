@@ -505,8 +505,19 @@ export class TaskSchedulerServiceManager implements ServiceManager {
     }
   }
 
+  /** why: a task whose arguments do not hold the two paths is as broken as one whose paths are gone; its own path stands for them, as systemd's unit path does. */
+  private async missingPaths(xml: string, definition: ServiceDefinition): Promise<string[]> {
+    const args = xmlUnescape(/<Arguments>([\s\S]*?)<\/Arguments>/.exec(xml)?.[1] ?? "");
+    const saved = /--headless\s+"([^"]*)"\s+"([^"]*)"/.exec(args);
+    if (saved === null) return [definition.path];
+    const missing: string[] = [];
+    for (const path of saved.slice(1, 3)) {
+      if (!(await this.options.filesystem.exists(path))) missing.push(path);
+    }
+    return missing;
+  }
+
   async state(definition: ServiceDefinition): Promise<ServiceState> {
-    const { filesystem } = this.options;
     // why: plain schtasks writes the OEM code page, which garbles a non-ASCII path.
     const queried = await this.run("cmd.exe", [
       "/d",
@@ -514,14 +525,7 @@ export class TaskSchedulerServiceManager implements ServiceManager {
       `chcp 65001 >nul && schtasks /query /tn ${definition.name} /xml`,
     ]);
     if (queried.code !== 0) return { state: "not-installed" };
-    const args = xmlUnescape(/<Arguments>([\s\S]*?)<\/Arguments>/.exec(queried.stdout)?.[1] ?? "");
-    const saved = /--headless\s+"([^"]*)"\s+"([^"]*)"/.exec(args);
-    if (saved === null)
-      return { state: "broken", path: definition.path, missing: [definition.path] };
-    const missing: string[] = [];
-    for (const path of [saved[1] as string, saved[2] as string]) {
-      if (!(await filesystem.exists(path))) missing.push(path);
-    }
+    const missing = await this.missingPaths(queried.stdout, definition);
     if (missing.length > 0) return { state: "broken", path: definition.path, missing };
     const disabled = /<Settings>[\s\S]*?<Enabled>\s*false\s*<\/Enabled>/i.test(queried.stdout);
     const loaded = !disabled && (await this.hasDesktopSession());
