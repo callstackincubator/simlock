@@ -386,7 +386,7 @@ export interface ModuleHost {
   leaseRoutes(): readonly ModuleLeaseRoute[];
   findings(): Promise<
     readonly {
-      readonly kind: "module-unavailable";
+      readonly kind: "module-unavailable" | "module-advisory";
       readonly module: string;
       readonly message: string;
       readonly remedy: string;

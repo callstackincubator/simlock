@@ -99,7 +99,8 @@ export function isDrift(finding: DoctorFinding): boolean {
     finding.kind !== "prerequisite-missing" &&
     finding.kind !== "service-broken" &&
     finding.kind !== "warm-pool-target-unreachable" &&
-    finding.kind !== "module-unavailable"
+    finding.kind !== "module-unavailable" &&
+    finding.kind !== "module-advisory"
   );
 }
 

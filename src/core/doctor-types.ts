@@ -93,7 +93,7 @@ export type DoctorFinding =
       readonly remedy: string;
     }
   | {
-      readonly kind: "module-unavailable";
+      readonly kind: "module-unavailable" | "module-advisory";
       readonly module: string;
       readonly message: string;
       readonly remedy: string;
@@ -109,7 +109,10 @@ export interface ServiceCheck {
   readonly check: () => Promise<readonly string[]>;
 }
 
-export type OptionalModuleFinding = Extract<DoctorFinding, { readonly kind: "module-unavailable" }>;
+export type OptionalModuleFinding = Extract<
+  DoctorFinding,
+  { readonly kind: "module-unavailable" | "module-advisory" }
+>;
 
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
 

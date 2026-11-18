@@ -119,7 +119,8 @@ const FINDINGS_DEADLINE_MS = 10_000;
 
 function moduleFindings(module: string, found: readonly ModuleFinding[]) {
   return found.map((finding) => ({
-    kind: "module-unavailable" as const,
+    kind:
+      finding.advisory === true ? ("module-advisory" as const) : ("module-unavailable" as const),
     message: finding.message,
     module,
     remedy: finding.remedy,
