@@ -381,17 +381,20 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
     beforeDrain: () => runStopStep("beforeDrain"),
     beforeDriversDispose: () => runStopStep("beforeDriversDispose"),
     capabilitySources,
-    findings() {
-      return started.flatMap(({ name, worker }) => {
+    async findings() {
+      const all = [];
+      for (const { name, worker } of started) {
         try {
-          const found = worker.findings?.() ?? [];
+          const found = (await worker.findings?.()) ?? [];
           unreadable.delete(name);
-          return found.map((finding) => ({
-            kind: "module-unavailable" as const,
-            message: finding.message,
-            module: name,
-            remedy: finding.remedy,
-          }));
+          all.push(
+            ...found.map((finding) => ({
+              kind: "module-unavailable" as const,
+              message: finding.message,
+              module: name,
+              remedy: finding.remedy,
+            })),
+          );
         } catch (error: unknown) {
           if (!unreadable.has(name)) {
             unreadable.add(name);
@@ -400,9 +403,9 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
               module: name,
             });
           }
-          return [];
         }
-      });
+      }
+      return all;
     },
     leaseEndParticipants,
     mounts(deps: MountDeps): readonly ModuleMount[] {

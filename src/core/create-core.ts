@@ -77,7 +77,9 @@ interface CoreOptions {
   readonly logger?: Logger | undefined;
   /** ADR 0015 §4: the model names to try for each class, per platform, operator's list first. */
   readonly modelPreferences?: ModelPreferences | undefined;
-  readonly optionalModules?: (() => readonly OptionalModuleFinding[]) | undefined;
+  readonly optionalModules?:
+    | (() => readonly OptionalModuleFinding[] | Promise<readonly OptionalModuleFinding[]>)
+    | undefined;
   /** The checks `doctor` runs per platform this host could run. None if omitted. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[] | undefined;
   readonly serviceCheck?: ServiceCheck | undefined;

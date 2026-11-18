@@ -161,7 +161,9 @@ export interface DoctorOptions {
   readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
   readonly driverRejections?: readonly DriverRejection[];
   readonly logger?: Logger;
-  readonly optionalModules?: () => readonly OptionalModuleFinding[];
+  readonly optionalModules?: () =>
+    | readonly OptionalModuleFinding[]
+    | Promise<readonly OptionalModuleFinding[]>;
   readonly warmPool?: {
     readonly figures: WarmPoolReader["figures"];
     readonly runningCapacity: () => CapacityReader["runningCapacity"];
