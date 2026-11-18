@@ -11,8 +11,8 @@ tools: Bash, Read, Write, Grep, Glob, Agent, SendMessage
 # Review a change before ready
 
 `docs/internal/REVIEW.md` is the procedure: routing, lenses, synthesis,
-impacts, the round cap and metrics; your prompt carries its text under
-`protocol:` (read the file when it does not). This file adds only how you
+impacts, the round cap and metrics; a hook puts its text in your prompt under
+`protocol:` (read the file when it is not there). This file adds only how you
 run it.
 Edit no code. Arguments: PR, round (`1`, `2`, `fix-check`), previous full
 SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
@@ -44,10 +44,9 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    prompt the ledger tag line (your own prompt's first line, with `role=`
    the lens's `spec`, `code` or `claims` and `lens=` a code lens's lens),
    then
-   inputs, worktree, round and lens, then the full text of
-   `review-later-round.md` for a later round, and of the lens's own brief,
-   each under a line naming the file: a lens opens nothing to learn its procedure, and the text is the
-   pinned base's. A user prohibiting delegation: do the
+   `inputs:`, `worktree:`, `round:` and `lens:` lines and what this check
+   must verify. A hook adds the lens's briefs from `<inputs>/briefs/`, the
+   pinned base's: never open or paste them. A user prohibiting delegation: do the
    checks yourself and label the report author self-check.
 3. **Synthesis.** Wait for every lens, then follow REVIEW.md "Synthesis and
    convergence". Remove probe worktrees after collecting evidence. Write

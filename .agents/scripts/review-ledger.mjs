@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 // `node .agents/scripts/review-ledger.mjs <pr> --issue <n> --findings <file.json> --round
-// <r>:<sha> [--round <r>:<sha> ...] [--dry-run]`: posts a PR's `## Review ledger` comment
-// (docs/internal/REVIEW.md, "Measurement") and then checks the PR body, so neither is built or
-// run by hand.
+// <r>:<sha> [--round <r>:<sha> ...] [--skipped <roles>] [--notes <file>] [--rejected <file>]
+// [--incomplete <why>] [--dry-run]`: posts a PR's `## Review ledger` comment
+// (docs/internal/REVIEW.md, "Measurement"), writes the PR body's `## Review` section
+// (review-section.mjs) and then checks the PR body, so none of them is built or run by hand.
+//
+// For the section: `--skipped spec,claims` names the reviews the diff's kind left out, `--notes`
+// a file of the reports' note lines (`- <role>: ...`), `--rejected` a file of the rejected lines
+// (`- <role>: <claim> [incorrect|intentional|nonblocking] — <reason>`), `--incomplete` why
+// coverage is not complete. Tokens come from usage.mjs (`n/a` without a transcript).
 //
 // The comment: one `Round <r>: <full sha>` line per --round, in the order given (<r> is 1, 2 or
 // fix-check; a short sha is expanded), then what `review-metrics.mjs --pr <pr> --issue <n>
@@ -11,18 +17,19 @@
 // after fetching the PR's head, a findings file review-metrics.mjs rejects, and a finding with no
 // `round` or a round no --round names; it warns on stderr when a sha is not in the PR head's
 // history. It updates the PR's existing comment headed `## Review ledger`, else posts a new one,
-// prints `ledger: updated <comment url>` or `ledger: posted <url>`, then runs `pr-body-check.mjs
-// <pr>`, prints its output and exits with its code. `--dry-run` prints the comment and does
-// neither. Usage errors exit 2. The repo is GH_REPO, else the origin remote's owner/name.
+// prints `ledger: updated <comment url>` or `ledger: posted <url>`, sets the body's Review section
+// through issue-body.mjs, then runs `pr-body-check.mjs <pr>`, prints its output and exits with
+// its code. `--dry-run` prints the comment and the section and does none of it. Usage errors exit 2. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { option } from "./cli-args.mjs";
+import { reviewSection } from "./review-section.mjs";
 
 const USAGE =
-  "usage: review-ledger.mjs <pr> --issue <n> --findings <file.json> --round <r>:<sha> [--round ...] [--dry-run]";
+  "usage: review-ledger.mjs <pr> --issue <n> --findings <file.json> --round <r>:<sha> [--round ...] [--skipped <roles>] [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]";
 const argv = process.argv.slice(2);
 const pr = argv[0];
 const issue = option("--issue");
@@ -117,8 +124,25 @@ const comment = [
   `\`\`\`json\n${JSON.stringify(findings)}\n\`\`\``,
   "*Written by an agent.*",
 ].join("\n\n");
+const usage = spawnSync("node", [join(here, "usage.mjs")], { encoding: "utf8" });
+const fileText = (name) => (option(name) === null ? "" : readFileSync(option(name), "utf8"));
+let section;
+try {
+  section = reviewSection({
+    findings: Array.isArray(findings.findings) ? findings.findings : [],
+    rounds: rounds.map((r) => r.split(":")[0]),
+    skipped: (option("--skipped") ?? "").split(",").filter(Boolean),
+    notes: fileText("--notes"),
+    rejected: fileText("--rejected"),
+    incomplete: option("--incomplete"),
+    tokens: /tokens=([\d.]+)M/.exec(usage.stdout ?? "")?.[1],
+    runs: metrics.stdout.split("\n")[0].trim(),
+  });
+} catch (error) {
+  refuse(error.message);
+}
 if (dryRun) {
-  console.log(comment);
+  console.log(`${comment}\n\n## Review\n\n${section}`);
   process.exit(0);
 }
 
@@ -155,6 +179,17 @@ try {
   console.log(`ledger: ${existing === undefined ? "posted" : "updated"} ${posted.html_url}`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
+}
+
+const sectionDir = mkdtempSync(join(tmpdir(), "review-section-"));
+try {
+  const file = join(sectionDir, "review.md");
+  writeFileSync(file, `${section}\n`);
+  process.stdout.write(
+    run("node", [join(here, "issue-body.mjs"), pr, "--pr", "set-section", "Review", file]),
+  );
+} finally {
+  rmSync(sectionDir, { recursive: true, force: true });
 }
 
 const check = spawnSync("node", [join(here, "pr-body-check.mjs"), pr], { encoding: "utf8" });

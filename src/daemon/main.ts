@@ -48,6 +48,8 @@ import {
   type IpcListenerFactory,
   type Logger,
   NodeFilesystem,
+  PowerShellDirectoryAccessReader,
+  type DirectoryAccessReader,
   filterSqliteExperimentalWarning,
   NodeSqliteOpener,
   NodeHostInfo,
@@ -142,6 +144,7 @@ export interface StartDaemonOptions extends WorkerOptions {
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly role?: DaemonMode;
   readonly filesystem?: Filesystem;
+  readonly directoryAccess?: DirectoryAccessReader;
   readonly hostInfo?: HostInfo;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
@@ -229,7 +232,11 @@ async function composeDaemon(
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
-  const dataDirectoryWarning = await prepareDataDirectory(filesystem, dataDirectory);
+  const dataDirectoryWarning = await prepareDataDirectory(filesystem, dataDirectory, {
+    platform: process.platform,
+    directoryAccess:
+      options.directoryAccess ?? new PowerShellDirectoryAccessReader(baseProcessRunner),
+  });
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
   const { config, defaulted } = await loadConfigWithDefaults({
