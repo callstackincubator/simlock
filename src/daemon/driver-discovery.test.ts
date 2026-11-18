@@ -648,6 +648,7 @@ describe("deviceModeWiring", () => {
           ios: {
             defaultMode,
             defaultModels: {},
+            modes: ["slim", "full"],
             virtualDevices: true,
           },
         }),
@@ -659,7 +660,12 @@ describe("deviceModeWiring", () => {
   );
 
   it("passes android.defaultImageTag to leasing as the Android default tag, and nothing when it is unset", () => {
-    const ios = { defaultMode: "full", defaultModels: {}, virtualDevices: true } as const;
+    const ios = {
+      defaultMode: "full",
+      defaultModels: {},
+      modes: ["slim", "full"],
+      virtualDevices: true,
+    } as const;
 
     expect(
       deviceModeWiring({

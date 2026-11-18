@@ -213,6 +213,7 @@ export async function createHarness(
     decisions,
     defaultImageTags: options.defaultImageTags ?? {},
     defaultModes: options.defaultModes ?? {},
+    servedModes: {},
     drivers: catalog,
     eventBus: bus,
     idGenerator,

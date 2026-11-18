@@ -42,6 +42,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
+import { deviceModeWiring } from "./worker-composition.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 export const gibibyte = 1024 ** 3;
@@ -187,6 +188,8 @@ export async function buildDispatcher(
     readonly warmPool?: Partial<Config["warmPool"]>;
     /** why: the `ios.defaultMode` `catalog.get` reports. */
     readonly iosDefaultMode?: "slim" | "full";
+    /** why: the `ios.modes` the worker serves; the default mode and the leasing engine follow it as the loader and the daemon's wiring do (ADR 0082 §1). */
+    readonly iosModes?: readonly ("slim" | "full")[];
     /** why: the `android.defaultImageTag` `config.get` reports. */
     readonly androidDefaultImageTag?: string;
     /** why: a platform a test turns `<platform>.virtualDevices` off for (ADR 0084). */
@@ -263,6 +266,19 @@ export async function buildDispatcher(
       ...(overrides.iosDefaultMode === undefined
         ? {}
         : { ios: { ...baseConfig.ios, defaultMode: overrides.iosDefaultMode } }),
+      ...(overrides.iosModes === undefined
+        ? {}
+        : {
+            ios: {
+              ...baseConfig.ios,
+              defaultMode:
+                overrides.iosDefaultMode ??
+                (overrides.iosModes.length === 1
+                  ? overrides.iosModes[0]!
+                  : baseConfig.ios.defaultMode),
+              modes: overrides.iosModes,
+            },
+          }),
       ...(overrides.bootTimeouts === undefined
         ? {}
         : {
@@ -284,6 +300,12 @@ export async function buildDispatcher(
     clock,
     config,
     describeFailure: describeLeaseRequestFailure,
+    ...(overrides.iosModes === undefined
+      ? {}
+      : {
+          defaultModes: deviceModeWiring(config).defaultModes,
+          servedModes: deviceModeWiring(config).servedModes,
+        }),
     ...overrides.engine,
     drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus,

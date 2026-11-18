@@ -46,6 +46,7 @@ export type AcquisitionSpecResolverOptions = Pick<
   | "defaultModes"
   | "drivers"
   | "modelPreferences"
+  | "servedModes"
 >;
 
 /** why: turns a request into the exact spec a driver resolves, and a baseline request into that baseline's spec, so the root and the workflow never resolve a spec themselves. */
