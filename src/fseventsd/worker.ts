@@ -35,6 +35,18 @@ export function createWorker(ctx: WorkerContext<FseventsdModuleConfig>): WorkerM
     const bytes = top.code === 0 ? bytesOf(top.stdout.trim().split("\n").at(-1) ?? "") : undefined;
     return bytes === undefined ? { failed: "top gave no memory figure" } : { bytes };
   };
+  if (ctx.hostPlatform !== "darwin") {
+    const reason = "fseventsd exists only on macOS";
+    return {
+      capability: { name: ctx.name, read: () => Promise.resolve({ reason, state: "unavailable" }) },
+      findings: () => [
+        {
+          message: "capabilities.fseventsd.enabled is true, but this host is not macOS.",
+          remedy: "Set capabilities.fseventsd.enabled to false.",
+        },
+      ],
+    };
+  }
   return {
     capability: { name: ctx.name, read: () => Promise.resolve({ state: "available" }) },
     findings: async () => {

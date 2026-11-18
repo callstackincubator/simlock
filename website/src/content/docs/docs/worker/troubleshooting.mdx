@@ -62,6 +62,7 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 | `driver-unavailable` | A platform's driver was refused at start, so the platform is off. The finding carries the `reason` (such as `invalid-device-set` or `device-set-changed`) and a `detail` that says what to run; `simlock doctor` also prints it as `Unavailable [<platform>] <reason>: <detail>` on stderr. | Nothing. Fix it, then restart the daemon. |
 | `driver-advisory` | A platform tool reported something worth knowing that is not a fault. The code is in the message; see [`default-image-tag-not-installed`](#default-image-tag-not-installed). | Nothing. |
 | `module-unavailable` | An optional feature that is turned on cannot run on this machine. The remedy says why. | Nothing. |
+| `module-advisory` | An optional feature works, and tells you something worth acting on. `simlock doctor` prints it as `Warning [<module>] <message> <remedy>` on stderr, for example [`fseventsd` using a lot of memory](#fseventsd-uses-a-lot-of-memory). | Nothing. |
 
 ## default-image-tag-not-installed
 
@@ -70,6 +71,42 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 **Cause.** No installed system image built for this machine's CPU has the tag the setting names, for example a typo, or an image installed only for another CPU. The message lists the tags that are installed for this CPU. When no image for this CPU is installed at all, the message lists `none`. Doctor says nothing when the setting is not set.
 
 **Fix.** Install an image with that tag, such as `sdkmanager "system-images;android-35;google_apis_playstore;arm64-v8a"` (use your CPU's ABI), or correct `android.defaultImageTag`. See [Choose the system image](/simlock/docs/using-devices/choosing-a-device#choose-the-system-image-android).
+
+## fseventsd uses a lot of memory
+
+**Symptom.** `simlock doctor` prints `Warning [fseventsd] fseventsd uses 28.0 GB of memory, over the 2 GB limit` on stderr, and the Mac swaps while leases churn.
+
+**Cause.** Under heavy device churn the macOS service `fseventsd` can grow to tens of GB. It is a macOS bug, and Simlock's own processes are fine. Doctor reads `fseventsd`'s memory when you run it, on a macOS worker, joined to a gateway or not. Turn the check off with `capabilities.fseventsd.enabled` set to `false`.
+
+**Fix.** Restart `fseventsd`; macOS starts it again at once:
+
+```sh
+sudo killall fseventsd
+```
+
+Simlock does not do this itself, because it needs root. To restart it every hour, save this as `/Library/LaunchDaemons/com.example.restart-fseventsd.plist` and load it:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.restart-fseventsd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/killall</string>
+    <string>fseventsd</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+</dict>
+</plist>
+```
+
+```sh
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.example.restart-fseventsd.plist
+```
 
 ## The daemon will not start
 
