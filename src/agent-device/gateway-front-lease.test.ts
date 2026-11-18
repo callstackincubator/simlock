@@ -484,4 +484,29 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       heartbeat: expect.objectContaining({ ok: true }),
     });
   });
+
+  it("through a gateway, an allocate's `runId` `123-1` is the fleet lease's run id, and `lease.release-run` then ends it and releases the worker's agent-device lease", async () => {
+    const rig = await setUp();
+    const member = first(rig);
+    await grantedOnGateway(rig, 1, { runId: "123-1" });
+    await grantedOnGateway(rig, 2, { runId: "123-2" });
+
+    expect((await fleetLeases(rig)).map((lease) => lease.runId).sort()).toEqual(["123-1", "123-2"]);
+
+    const ended = await rig.gateway.dispatch(
+      "lease.release-run",
+      { runId: "123-1" },
+      sessionFor(principals.one),
+    );
+
+    expect(ended.leaseIds).toEqual([hex(1)]);
+    expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(2)]);
+    await expect
+      .poll(() =>
+        member.fake
+          .rpcRequests("agent_device.lease.release")
+          .map((request) => request.params?.["leaseId"]),
+      )
+      .toEqual([hex(1)]);
+  });
 });
