@@ -119,3 +119,4 @@ the status is stale.
 | [0083](0083-a-worker-may-turn-single-slim-services-on-or-off-beside-its-categories.md) | A worker may turn single slim services on or off beside its categories | Accepted; narrows 0060 §1, §2 and 0066 §2 |
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
+| [0087](0087-the-unit-tests-run-on-windows-in-ci-and-a-list-of-files-still-failing-there-only-shrinks.md) | The unit tests run on Windows in CI, and a list of files still failing there only shrinks | Proposed; narrows testing rule 5 |
