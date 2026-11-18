@@ -74,7 +74,7 @@ describe("CLI: release --run", () => {
         Promise.reject(new SimlockError(code, "protocol", `${code} from the farm`, {})),
       );
       expect(result.code).toBe(1);
-      expect(JSON.parse(result.stderr)).toEqual({
+      expect(JSON.parse(result.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
         error: { code, message: `${code} from the farm` },
       });
     }

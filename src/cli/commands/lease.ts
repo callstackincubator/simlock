@@ -19,6 +19,7 @@ import type { DeviceClass, Role } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
+import { checkedRunId } from "./run-id.js";
 import { writeError } from "../errors.js";
 import { reconnectToFarm } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
@@ -562,15 +563,6 @@ function exportEnvLines(environment: Readonly<Record<string, string>>): string {
 }
 
 export { run };
-
-function checkedRunId(value: string, source: string): string {
-  if (!RUN_ID_PATTERN.test(value)) {
-    throw new UsageError(
-      `${source} takes a run id: 1 to 128 letters, digits, \`.\`, \`_\` or \`-\``,
-    );
-  }
-  return value;
-}
 
 /** why: `--run`, else `SIMLOCK_RUN` (empty is unset), else GitHub Actions' own run; a GitHub value that fails the rule is no run id, not an error, since the user set none. */
 function runIdOf(flag: unknown, environment: CommandContext["environment"]): string | undefined {
