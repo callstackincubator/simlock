@@ -17,7 +17,6 @@ Does: how many virtual devices may exist and run at once — limits, RAM budget,
 - Release is idempotent. Every take and release calls the observer.
 - `CapacityObserver.changed()` runs after every registry commit and reservation change, and emits `capacity.changed` only when the payload differs from the last one. It is silent until `start()` in `core.converge`, which emits once.
 - Top-level `limits` and `ramBudget` are folded into `capacity.config` under `resource`, and ignored with a warning under `fixed` (`core/config-role-checks.ts`).
-- `servingOnly` wraps the strategy: a platform with no driver and no refused driver on the host gets 0 devices and 0 running slots, and the global running limit is capped at the other platforms' slots (#1689).
 - Adding a strategy is a directory under `strategies/` and one line in its `index.ts`.
 
 ## Known gaps

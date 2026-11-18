@@ -369,7 +369,7 @@ function formatWarmPool(
     .map((platform) => `${platform} ${reserveRunning[platform]}`)
     .join(" ");
   return [
-    `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ${reserve}`,
+    `warm pool: ${enabled ? "enabled" : "disabled"}${reserve === "" ? "" : `, reserve ${reserve}`}`,
     ...targets.map((target) => {
       const name = esc(
         [
