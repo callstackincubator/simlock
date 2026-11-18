@@ -14,6 +14,17 @@ export const healthzRoute = declareRoute({
   reply: z.object({ ok: z.literal(true) }),
 });
 
+export const sessionRoute = declareRoute({
+  method: "get",
+  path: "/v1/session",
+  tag: "System",
+  summary: "Open a daemon protocol session over a WebSocket",
+  role: "agent",
+  notes:
+    "Each text message is one line of the daemon's socket protocol. The token sets the session's role and principal. A plain GET without an upgrade answers 426.",
+  status: 204,
+});
+
 export const statusRoute = declareRoute({
   method: "get",
   path: "/v1/status",
@@ -114,6 +125,7 @@ export const devicesRoute = declareRoute({
 
 export const DECLARED_ROUTES = [
   healthzRoute,
+  sessionRoute,
   statusRoute,
   catalogRoute,
   deviceAddRoute,

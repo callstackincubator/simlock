@@ -29,7 +29,8 @@ Start and stop:
 
 Connections:
 
-- Role and principal are fixed at `hello` for the connection's life. The uplink connection is `admin` by acceptance; otherwise admin comes only from a credential at `hello`, never from the socket itself.
+- Role and principal are fixed at `hello` for the connection's life. The uplink connection is `admin` by acceptance; a session (`acceptSession`, ADR 0081) has its token's role, principal, name and `via` from the upgrade, so its `hello` names no principal that counts and a credential is refused; otherwise admin comes only from a credential at `hello`, never from the socket itself.
+- `token.revoke` closes the token's open sessions (`closeSessionsForToken`, 4003) on a worker and a gateway; a session's principal is its token id. The leases go on.
 - No protocol overlap leaves the connection open: every request but `daemon.stop` and `daemon.update` gets `PROTOCOL_VERSION_UNSUPPORTED`.
 - A closed connection only silences its pushes; the request, the lease and a running command go on.
 - `lease-lost` skips the connection that asked for that release.

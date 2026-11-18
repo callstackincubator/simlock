@@ -117,6 +117,7 @@ describe("the routes createHttpApp registers", () => {
         "inbox",
         "lease-requests",
         "leases",
+        "session",
         "stats",
         "status",
         "update",

@@ -39,12 +39,13 @@ export interface HttpGatewayOptions {
   /** The built console's directory. Defaults to `dist/ui` beside this module; tests pass their own. */
   readonly consoleRoot?: string;
   /**
-   * Called once, with the Node HTTP server, as soon as it exists (before it is listening).
+   * why: Called once, with the Node HTTP server, as soon as it exists (before it is listening).
    * ADR 0005 §4 puts the worker uplink on this same listener -- upgraded on `/v1/uplink` -- so
    * that the whole fleet has exactly one inbound port. The uplink adapter needs the server's
    * `upgrade` event to do that, and this is the only thing it needs; handing it the server
    * here keeps `HttpGateway` from growing any knowledge of WebSockets, uplinks, or workers.
-   * Undefined on a worker, which upgrades nothing.
+   * A standalone worker upgrades lease sockets and the session path; a gateway also the uplink.
+   * A worker that joined a gateway keeps HTTP off.
    */
   readonly onServerCreated?: (server: Server) => void;
 }

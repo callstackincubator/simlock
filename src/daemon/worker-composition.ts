@@ -127,6 +127,7 @@ export interface SharedParts {
   readonly upgradeRouter: (options: {
     readonly clock: Clock;
     readonly leaseSocket: ReturnType<typeof createHttpApp>["leaseSocket"];
+    readonly session: ReturnType<typeof createHttpApp>["session"];
   }) => { readonly attach: (server: Server) => void };
   readonly uplinkConnector: () => UplinkConnector;
   readonly version: string;
@@ -694,6 +695,7 @@ export async function composeWorker(
     const dispatch: HttpDispatch = (operation, input, session) =>
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
+      acceptSession: (connection, session) => daemon.acceptSession(connection, session),
       clock,
       dispatch,
       eventBus,
@@ -711,7 +713,11 @@ export async function composeWorker(
       host: config.http.host,
       logger: httpLogger,
       onServerCreated: (server) =>
-        upgradeRouter({ clock, leaseSocket: (request) => app.leaseSocket(request) }).attach(server),
+        upgradeRouter({
+          clock,
+          leaseSocket: (request) => app.leaseSocket(request),
+          session: (request) => app.session(request),
+        }).attach(server),
       port: config.http.port,
     });
     await gateway.start();
