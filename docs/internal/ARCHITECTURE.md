@@ -51,6 +51,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | agent-device | Optional edge: the two agent-device daemons (simulators, phones) beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
 | stream | Optional edge: a running device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
 | input | Optional edge: a lease holder's taps and keys over a WebSocket, relayed by a gateway | [input](../../src/input/AGENTS.md) |
+| fseventsd | Optional module: doctor warns when a macOS worker's `fseventsd` uses over 2 GB | [fseventsd](../../src/fseventsd/AGENTS.md) |
 | tunnel | Optional edge: a lease holder's reverse tunnels (device to caller) and forward tunnels (caller to device) on its Android device or iOS simulator over a WebSocket, on a lone worker or through a gateway | [tunnel](../../src/tunnel/AGENTS.md) |
 | lease-files | Core worker feature: a lease's files uploaded over HTTP to a folder under the data directory, served back with ranges, and removed when the lease ends | [lease-files](../../src/lease-files/AGENTS.md) |
 | auth | Credential → identity: tokens, admin secret, `hello`, uplink join token, HTTP strategies | [auth](../../src/auth/AGENTS.md) |
