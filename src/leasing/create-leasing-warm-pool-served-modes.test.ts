@@ -24,6 +24,15 @@ function iosDriver(): FakeDriver {
   });
 }
 
+function androidDriver(): FakeDriver {
+  return new FakeDriver({
+    availableOsVersions: ["36"],
+    clock: new FakeClock(1_000),
+    knownModels: ["Pixel 9"],
+    platform: "android",
+  });
+}
+
 // why: the engine reads a baseline from `baselines` and copies the source the driver holds, so a row and a saved source stand in for an operator's save.
 async function saveFullBaseline(harness: Harness, name: string): Promise<void> {
   const spec = { ...phone, osVersion: "26.1", physical: false } as const;
@@ -43,9 +52,10 @@ const learnedKinds = (harness: Harness) =>
 
 const learnCases: readonly {
   readonly kept: boolean;
-  readonly learn: "full" | "full baseline" | "slim";
+  readonly learn: "android" | "full" | "full baseline" | "slim";
   readonly modes: Modes;
 }[] = [
+  { kept: true, learn: "android", modes: ["slim"] },
   { kept: false, learn: "full", modes: ["slim"] },
   { kept: false, learn: "full baseline", modes: ["slim"] },
   { kept: false, learn: "slim", modes: ["full"] },
@@ -55,12 +65,14 @@ const learnCases: readonly {
 
 // why: a worker that learned a kind while it served both modes, then restarts serving fewer, on the same state.
 async function learnedAfterSwitch(
-  learn: "full" | "full baseline" | "slim",
+  learn: "android" | "full" | "full baseline" | "slim",
   modes: Modes,
 ): Promise<number> {
   const state = await openTestState();
+  const ios = iosDriver();
   const options = {
-    driver: iosDriver(),
+    driver: ios,
+    drivers: [ios, androidDriver()],
     limits: LIMITS,
     startPool: true,
     state,
@@ -69,9 +81,11 @@ async function learnedAfterSwitch(
   const before = await createHarness(options);
   if (learn === "full baseline") await saveFullBaseline(before, "checkout");
   const asked =
-    learn === "full baseline"
-      ? { baseline: "checkout", platform: "ios" as const }
-      : { ...phone, mode: learn, osVersion: "26.1" };
+    learn === "android"
+      ? { model: "Pixel 9", osVersion: "36", platform: "android" as const }
+      : learn === "full baseline"
+        ? { baseline: "checkout", platform: "ios" as const }
+        : { ...phone, mode: learn, osVersion: "26.1" };
   const grant = await before.engine.request(asked, { ownerId: "learner", requesterId: "learner" });
   await before.engine.release(grant.lease.id, "explicit");
   await flush();
