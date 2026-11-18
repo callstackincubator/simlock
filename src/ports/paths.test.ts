@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "./filesystem.js";
@@ -110,7 +110,9 @@ describe("resolveSimlockHome", () => {
   });
 
   it("uses SIMLOCK_HOME when set", () => {
-    expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home" })).toBe("/tmp/custom-home");
+    expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home" })).toBe(
+      resolve("/tmp/custom-home"),
+    );
   });
 
   it("makes a relative SIMLOCK_HOME absolute, since device roots derived from it must be", () => {
@@ -121,7 +123,7 @@ describe("resolveSimlockHome", () => {
 
   it("normalises a SIMLOCK_HOME that is absolute but not canonical", () => {
     expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home/../other-home" })).toBe(
-      "/tmp/other-home",
+      resolve("/tmp/other-home"),
     );
   });
 });
@@ -130,7 +132,7 @@ describe("resolveDaemonHome", () => {
   const root = "/home/me/.simlock";
 
   it.each([
-    ["gateway", "gateway", `${root}/gateway`],
+    ["gateway", "gateway", join(root, "gateway")],
     [undefined, "worker", root],
   ] as const)(
     "sends the gateway flag to <root>/gateway and everything else to <root> (flag %s)",
@@ -240,7 +242,7 @@ describe("resolveDaemonHome", () => {
     await inner.writeFileAtomic(`${root}/gateway/config.json`, "{}");
     const filesystem = {
       exists: (path: string) =>
-        path === `${root}/instance.json`
+        path === join(root, "instance.json")
           ? Promise.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }))
           : inner.exists(path),
     };

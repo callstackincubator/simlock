@@ -207,9 +207,9 @@ describe("a lease's folder", () => {
     const filesystem = new GatedFilesystem();
     const files = leaseFilesOver(filesystem);
 
-    expect(await files.folderOf(grant("CI", 1))).toBe("/data/lease-files/4349-1");
-    expect(await files.folderOf(grant("ci", 1))).toBe("/data/lease-files/6369-1");
-    expect(await files.folderOf(grant("ci", 2))).toBe("/data/lease-files/6369-2");
+    expect(await files.folderOf(grant("CI", 1))).toBe(join("/data", "lease-files", "4349-1"));
+    expect(await files.folderOf(grant("ci", 1))).toBe(join("/data", "lease-files", "6369-1"));
+    expect(await files.folderOf(grant("ci", 2))).toBe(join("/data", "lease-files", "6369-2"));
 
     await files.leaseEnd.leaseEnded(ended("ci", 1), new AbortController().signal);
 

@@ -1,8 +1,9 @@
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Config, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
 import { androidDriverConfig } from "../drivers/android/index.js";
+import { binaries } from "../drivers/android/testing.js";
 import { IosSimctlDriver, iosDriverConfig } from "../drivers/ios/index.js";
 import { EventBus } from "../bus/index.js";
 import {
@@ -169,9 +170,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     const { drivers, rejections } = await discoverAndroid(filesystem, probe, [4242]);
 
     expect(rejections).toEqual([]);
-    expect(drivers.find((driver) => driver.platform === "android")?.deviceRoot).toBe(
-      join(SIMLOCK_HOME, "devices", "android"),
-    );
+    expect(drivers.find((driver) => driver.platform === "android")?.deviceRoot).toBe(ANDROID_ROOT);
   });
 
   it.each([
@@ -184,7 +183,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     },
     {
       platform: "android",
-      root: join(SIMLOCK_HOME, "devices", "android"),
+      root: ANDROID_ROOT,
       discover: async (filesystem: MemoryFilesystem) => {
         await filesystem.mkdirp(SIMLOCK_HOME);
         await filesystem.writeFileAtomic(
@@ -204,7 +203,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
 
       expect(rename).toHaveBeenCalledWith(
         expect.stringMatching(
-          new RegExp(`/devices/\\.${platform}\\.${process.pid}\\.[^/]+\\.staging$`),
+          new RegExp(`[\\\\/]devices[\\\\/]\\.${platform}\\.${process.pid}\\.[^\\\\/]+\\.staging$`),
         ),
         root,
       );
@@ -220,11 +219,11 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     );
     const processRunner = new ScriptedProcessRunner([
       {
-        match: { args: ["devices"], command: "/android-sdk/platform-tools/adb" },
+        match: { args: ["devices"], command: binaries.adb },
         result: { code: 0, stderr: "", stdout: "List of devices attached\n" },
       },
       {
-        match: { args: ["-help"], command: "/android-sdk/emulator/emulator" },
+        match: { args: ["-help"], command: binaries.emulator },
         result: { code: 0, stderr: "", stdout: "  -crash-report-mode <mode>  crash reporting\n" },
       },
     ]);
@@ -353,7 +352,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         {
           match: {
             args: ["list", "device"],
-            command: "/android-sdk/cmdline-tools/latest/bin/avdmanager",
+            command: binaries.avdmanager,
           },
           result: { code: 0, stderr: "", stdout: "Available devices:\n" },
         },
@@ -515,12 +514,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
     process.env.ANDROID_HOME = "/android-sdk";
-    for (const binary of [
-      "/android-sdk/platform-tools/adb",
-      "/android-sdk/emulator/emulator",
-      "/android-sdk/cmdline-tools/latest/bin/avdmanager",
-      "/android-sdk/cmdline-tools/latest/bin/sdkmanager",
-    ]) {
+    for (const binary of Object.values(binaries)) {
       await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
       await filesystem.writeFileAtomic(binary, "binary");
     }
@@ -569,7 +563,9 @@ describe("discoverDrivers on a host with an Android SDK", () => {
   }
 });
 
-const IOS_ROOT = join(SIMLOCK_HOME, "devices", "ios");
+// why: `ensureOwnedRoot` resolves the configured root, so on Windows the driver reads `D:\home\...`.
+const IOS_ROOT = resolve(SIMLOCK_HOME, "devices", "ios");
+const ANDROID_ROOT = resolve(SIMLOCK_HOME, "devices", "android");
 
 const INSTANCE_ID = "instance-1";
 

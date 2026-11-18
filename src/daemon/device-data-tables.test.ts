@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import { iosDeviceDataTable } from "../drivers/ios/index.js";
 import { FakeClock, NodeFilesystem, NodeSqliteOpener, NoopLogger } from "../ports/index.js";
 import { openStateDatabase } from "../state/index.js";
 import { productionDeviceDataTables } from "./driver-discovery.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 describe("the production device-data tables", () => {
   it("a registry restarted on one state.db returns an iOS and an Android device's driverData unchanged", async () => {
@@ -72,7 +73,7 @@ describe("the production device-data tables", () => {
       expect(byDriverId.get("drv-ios")).toStrictEqual(iosData);
       expect(byDriverId.get("drv-android")).toStrictEqual(androidData);
     } finally {
-      await rm(directory, { force: true, recursive: true });
+      await removeDirectory(directory);
     }
   });
 });
