@@ -50,6 +50,7 @@ describe("MemoryFilesystem path styles", () => {
     relative.defineFailure("rel\\file", "EIO");
     await expect(relative.readFile("rel\\file")).rejects.toMatchObject({ code: "EIO" });
     await expect(relative.readFile("/rel/file")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(relative.readFile("rel/file")).rejects.toMatchObject({ code: "ENOENT" });
 
     const missing = new MemoryFilesystem();
     await expect(missing.readFile("D:\\nope")).rejects.toThrow(/D:\\nope|\/nope/);
