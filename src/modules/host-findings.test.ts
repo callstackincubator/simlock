@@ -38,7 +38,7 @@ async function hostOf(
 }
 
 describe("the module host's findings", () => {
-  it("awaits sync and async findings under one deadline and drops a late or throwing module's", async () => {
+  it("awaits sync and async findings under one deadline and drops a late or throwing module's, and marks an advisory one", async () => {
     const never = new Promise<readonly ModuleFinding[]>(() => undefined);
     const cases: readonly [
       label: string,
@@ -46,6 +46,11 @@ describe("the module host's findings", () => {
       expected: readonly string[],
     ][] = [
       ["one sync", { sync: () => [finding("s")] }, ["sync: s"]],
+      [
+        "one advisory",
+        { warn: () => [{ ...finding("w"), advisory: true as const }] },
+        ["warn: w (advisory)"],
+      ],
       ["one async", { slow: () => Promise.resolve([finding("a")]) }, ["slow: a"]],
       [
         "one async past the deadline beside a sync one",
@@ -73,7 +78,10 @@ describe("the module host's findings", () => {
       clock.advance(FINDINGS_DEADLINE_MS);
       await new Promise((resolve) => setImmediate(resolve));
       expect(
-        (found ?? []).map((entry) => `${entry.module}: ${entry.message}`),
+        (found ?? []).map(
+          (entry) =>
+            `${entry.module}: ${entry.message}${entry.kind === "module-advisory" ? " (advisory)" : ""}`,
+        ),
         label,
       ).toEqual(expected);
     }
