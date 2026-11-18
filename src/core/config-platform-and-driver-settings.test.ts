@@ -115,6 +115,47 @@ describe("loadConfig", () => {
     );
   });
 
+  it("loads ios.modes as both when unset, makes ios.defaultMode follow a one-mode list that leaves it unset, and ignores the key with a warning on a gateway", async () => {
+    const load = async (file: unknown, role: "gateway" | "worker" = "worker") => {
+      const filesystem = new MemoryFilesystem();
+      const warn = vi.fn();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(file));
+      const config = await loadConfig({
+        configPath,
+        filesystem,
+        role,
+        systemStats: createStats(),
+        warn,
+      });
+      return { config, warn };
+    };
+
+    const seen = async (ios: object) => {
+      const { config } = await load({ ios });
+      return [config.ios.modes, config.ios.defaultMode];
+    };
+    expect([
+      await seen({}),
+      await seen({ modes: ["full"] }),
+      await seen({ modes: ["slim"] }),
+      await seen({ modes: ["slim", "full"] }),
+      await seen({ modes: ["slim", "full"], defaultMode: "slim" }),
+      await seen({ defaultMode: "slim" }),
+    ]).toEqual([
+      [["slim", "full"], "full"],
+      [["full"], "full"],
+      [["slim"], "slim"],
+      [["slim", "full"], "full"],
+      [["slim", "full"], "slim"],
+      [["slim", "full"], "slim"],
+    ]);
+    const gateway = await load({ ios: { modes: ["slim"] } }, "gateway");
+    expect(gateway.warn).toHaveBeenCalledWith(
+      'Ignoring "ios": it configures a worker, and this daemon runs in gateway mode.',
+    );
+  });
+
   it.each(["fast", "worker", true])(
     "rejects an ios.defaultMode of %j, naming the key",
     async (value) => {

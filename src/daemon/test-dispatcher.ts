@@ -254,6 +254,19 @@ export async function buildDispatcher(
     ),
     overrides.http,
   );
+  const modes = overrides.iosModes;
+  const ios: Config["ios"] = {
+    ...baseConfig.ios,
+    ...(modes === undefined ? {} : { modes }),
+    ...(overrides.iosDefaultMode === undefined
+      ? modes?.length === 1
+        ? { defaultMode: modes[0]! }
+        : {}
+      : { defaultMode: overrides.iosDefaultMode }),
+    ...(overrides.bootTimeouts === undefined
+      ? {}
+      : { full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } }),
+  };
   const config: Config = withVirtualDevices(
     {
       ...baseConfig,
@@ -263,28 +276,10 @@ export async function buildDispatcher(
             android: { ...baseConfig.android, defaultImageTag: overrides.androidDefaultImageTag },
           }),
       warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
-      ...(overrides.iosDefaultMode === undefined
-        ? {}
-        : { ios: { ...baseConfig.ios, defaultMode: overrides.iosDefaultMode } }),
-      ...(overrides.iosModes === undefined
-        ? {}
-        : {
-            ios: {
-              ...baseConfig.ios,
-              defaultMode:
-                overrides.iosDefaultMode ??
-                (overrides.iosModes.length === 1
-                  ? overrides.iosModes[0]!
-                  : baseConfig.ios.defaultMode),
-              modes: overrides.iosModes,
-            },
-          }),
+      ios,
       ...(overrides.bootTimeouts === undefined
         ? {}
-        : {
-            android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android },
-            ios: { ...baseConfig.ios, full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } },
-          }),
+        : { android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android } }),
     },
     overrides.virtualDevices,
   );

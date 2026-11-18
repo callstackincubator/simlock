@@ -408,17 +408,22 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
   });
 
-  it("an admin reads the config and sees ios.full.bootTimeoutMs and android.bootTimeoutMs", async () => {
+  it("an admin reads the config and sees ios.full.bootTimeoutMs, android.bootTimeoutMs and ios.modes, both when unset", async () => {
     const configured = await buildDispatcher({
       bootTimeouts: { android: 600_000, iosFull: 400_000 },
+      iosModes: ["slim"],
     });
+    const unset = await buildDispatcher({});
 
     const config = await configured.dispatcher.dispatch("config.get", {}, admin);
+    const defaults = await unset.dispatcher.dispatch("config.get", {}, admin);
 
-    expect([config.ios["full"], config.android["bootTimeoutMs"]]).toEqual([
+    expect([config.ios["full"], config.android["bootTimeoutMs"], config.ios.modes]).toEqual([
       { bootTimeoutMs: 400_000 },
       600_000,
+      ["slim"],
     ]);
+    expect(defaults.ios.modes).toEqual(["slim", "full"]);
   });
 
   it("config.get carries android.defaultImageTag when set and leaves it out when not", async () => {
