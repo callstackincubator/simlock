@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "../core/index.js";
-import { FakeSystemStats, MemoryFilesystem, NoopLogger } from "../ports/index.js";
+import { FakeSystemStats, MemoryFilesystem, NoopLogger, type Logger } from "../ports/index.js";
 import { createModuleHost, type ModuleFinding } from "./index.js";
 import { fakeModule, fakeModuleTokens, fakeWorkerContext } from "./testing.js";
 
-const FINDINGS_DEADLINE_MS = 10_000;
+const FINDINGS_DEADLINE_MS = 15_000;
 
 const finding = (message: string): ModuleFinding => ({ message, remedy: "fix it" });
 
@@ -26,15 +26,21 @@ async function hostOf(
     } as never,
     systemStats: new FakeSystemStats({ cpuCount: 4, totalRamBytes: 16 * 1024 ** 3 }),
   });
+  const warnings: string[] = [];
+  const logger: Logger = new (class extends NoopLogger {
+    override warn(message: string, fields?: Record<string, unknown>): void {
+      warnings.push(`${message} ${String(fields?.["module"])}`);
+    }
+  })();
   const host = await createModuleHost({
     config,
     context: ctx,
     definitions: fakes as never,
-    logger: new NoopLogger(),
+    logger,
     role: "worker",
     tokens: fakeModuleTokens(),
   });
-  return { clock, host };
+  return { clock, host, warnings };
 }
 
 describe("the module host's findings", () => {
@@ -74,7 +80,7 @@ describe("the module host's findings", () => {
       ],
     ];
     for (const [label, modules, expected] of cases) {
-      const { clock, host } = await hostOf(modules);
+      const { clock, host, warnings } = await hostOf(modules);
       let found: Awaited<ReturnType<typeof host.findings>> | undefined;
       void host.findings().then((all) => {
         found = all;
@@ -89,6 +95,14 @@ describe("the module host's findings", () => {
         ),
         label,
       ).toEqual(expected);
+      expect(
+        warnings.filter((warning) => warning.startsWith("Optional module findings timed out")),
+        label,
+      ).toEqual(
+        label === "one async past the deadline beside a sync one"
+          ? ["Optional module findings timed out hung"]
+          : [],
+      );
     }
   });
 });

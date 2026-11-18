@@ -6,8 +6,6 @@ Does: the contract an optional module implements, and the host that loads each t
 
 - A module is on only under `capabilities.<name>.enabled`; off, nothing of it is loaded and its capability reads `off`.
 - A definition with `enabledByDefault: "standalone-worker"` is on, when no config layer sets `enabled`, only on a worker with no `gateway.url`. The config loader decides that (`loadConfigWithDefaults`), not the host; the host hands the module `ctx.enabledByDefault`.
-- A definition with `enabledByDefault: "macos-worker"` is on, when no config layer sets `enabled`, on a worker whose host OS is macOS, joined or not (ADR 0088 §1). Never on a gateway or another OS.
-- `findings()` may return a promise. The host reads all modules at once under `FINDINGS_DEADLINE_MS`: a module past it, or one that throws, adds no finding and is logged. A finding with `advisory` becomes `module-advisory`, which is not drift.
 - A module name follows the capability name pattern, is unique, and is no core route segment and no core lease sub-route. The count is capped by `MAX_CAPABILITIES` (contract).
 - Creating starts nothing. A start that fails before the socket is claimed drops created modules; after it, the normal stop runs their stop hooks.
 - Hooks are direct calls. `afterSocketClaimed` is not awaited. `beforeDrain` and `beforeDriversDispose` each run all modules under one deadline per step (`HOOK_DEADLINE_MS` in `host.ts`); a throw is logged and the step goes on.

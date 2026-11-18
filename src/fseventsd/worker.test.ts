@@ -9,8 +9,8 @@ import {
 } from "../ports/index.js";
 import { fseventsdModule } from "./index.js";
 
-const PGREP = { args: ["-x", "fseventsd"], command: "pgrep" };
-const TOP = { args: ["-l", "1", "-pid", "355", "-stats", "mem"], command: "top" };
+const PGREP = { args: ["-x", "fseventsd"], command: "/usr/bin/pgrep" };
+const TOP = { args: ["-l", "1", "-pid", "355", "-stats", "mem"], command: "/usr/bin/top" };
 
 const pgrepFound: ScriptedProcessExpectation = {
   match: PGREP,
@@ -62,26 +62,41 @@ describe("fseventsd module", () => {
       expect(messages.map((message) => /\d+\.\d GB/.exec(message)?.[0])).toEqual(expected);
     }
 
+    const { worker: texts } = await macWorker([pgrepFound, topPrints("3221225472B")]);
+    const found = (await texts.findings?.()) ?? [];
+    expect(found).toEqual([
+      {
+        advisory: true,
+        message:
+          "fseventsd uses 3.0 GB of memory, over the 2 GB limit. macOS keeps file-change records there, and lease churn can grow it until the Mac swaps.",
+        remedy:
+          'Restart it with `sudo killall fseventsd` (macOS starts it again at once). To restart it every hour, see "fseventsd uses too much memory" in the worker troubleshooting docs.',
+      },
+    ]);
+
     const again = await macWorker([pgrepFound, topPrints("28G"), pgrepFound, topPrints("14M")]);
     expect(await messagesOf(again.worker)).toHaveLength(1);
     expect(await messagesOf(again.worker)).toHaveLength(0);
   });
 
   it("adds no finding for a failed reading and logs one warning per run", async () => {
-    const failures: readonly (readonly ScriptedProcessExpectation[])[] = [
-      [pgrepFound, { match: TOP, result: { code: 1, stderr: "", stdout: "" } }],
-      [pgrepFound, topPrints("n/a")],
+    const timedOut = { code: null, endedBy: "timeout", stderr: "", stdout: "" } as const;
+    const failures: readonly [script: readonly ScriptedProcessExpectation[], reason: string][] = [
+      [[pgrepFound, { match: TOP, result: { code: 1, stderr: "", stdout: "" } }], "top exited 1"],
+      [[pgrepFound, topPrints("n/a")], 'unexpected output "n/a"'],
+      [[pgrepFound, { match: TOP, result: timedOut }], "top timed out after 5 s"],
+      [[{ match: PGREP, result: timedOut }], "pgrep timed out after 5 s"],
+      [[{ match: PGREP, result: { code: 2, stderr: "", stdout: "" } }], "pgrep exited 2"],
+      [[{ match: PGREP, result: { code: 0, stderr: "", stdout: "\n" } }], 'unexpected output ""'],
       [
-        pgrepFound,
-        { match: TOP, result: { code: null, endedBy: "timeout", stderr: "", stdout: "" } },
+        [pgrepFound, topPrints(`\u001b[31m${"x".repeat(100)}`)],
+        `unexpected output "\\u001b[31m${"x".repeat(75)}"`,
       ],
-      [{ match: PGREP, result: { code: 2, stderr: "", stdout: "" } }],
-      [{ match: PGREP, result: { code: 0, stderr: "", stdout: "\n" } }],
     ];
-    for (const script of failures) {
+    for (const [script, reason] of failures) {
       const { warnings, worker } = await macWorker(script);
       expect(await messagesOf(worker)).toEqual([]);
-      expect(warnings).toHaveLength(1);
+      expect(warnings).toEqual([`Could not read fseventsd's memory: ${reason}`]);
     }
 
     const quiet = await macWorker([pgrepNone]);

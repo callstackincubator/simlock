@@ -48,7 +48,7 @@ describe("fseventsd's definition: capabilities.fseventsd.enabled", () => {
     const found = await worker.findings?.();
     expect(found).toEqual([
       {
-        message: "capabilities.fseventsd.enabled is true, but this host is not macOS.",
+        message: "fseventsd exists only on macOS",
         remedy: "Set capabilities.fseventsd.enabled to false.",
       },
     ]);
