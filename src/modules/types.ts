@@ -275,6 +275,7 @@ export interface FleetLease {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  readonly runId?: string;
   readonly idChosenByRequester?: boolean;
 }
 

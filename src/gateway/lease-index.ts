@@ -32,6 +32,7 @@ export interface FleetLeaseEntry {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  readonly runId?: string;
   /** why: ADR 0074 §4: only a requester-chosen id is remembered when its lease ends. */
   readonly idChosenByRequester?: boolean;
 }
@@ -44,6 +45,7 @@ export interface WorkerReportedLease {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  readonly runId?: string | undefined;
   /** ADR 0020: whether the requester chose `id`. Absent, the id is a generated one. */
   readonly idChosenByRequester?: boolean;
 }
@@ -304,6 +306,7 @@ export class FleetLeaseIndex {
           ownerId: lease.ownerId,
           idChosenByRequester: gatewayLeaseId === lease.id,
           requesterId: lease.requesterId.slice(this.gatewayRequesterPrefix.length),
+          ...(lease.runId === undefined ? {} : { runId: lease.runId }),
           workerId,
           workerLeaseId: lease.id,
         },
