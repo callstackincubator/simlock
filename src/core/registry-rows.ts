@@ -239,6 +239,10 @@ function upsertSql(table: string, columns: readonly string[], key: string): stri
     ON CONFLICT (${key}) DO UPDATE SET ${updates}`;
 }
 
+function nullable(value: string | undefined): string | null {
+  return value ?? null;
+}
+
 function flagValue(value: boolean | undefined): number | null {
   return value === undefined ? null : value ? 1 : 0;
 }
@@ -375,7 +379,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       record.idempotencyKey ?? null,
       record.leaseId ?? null,
       record.fleetRequestId ?? null,
-      record.runId ?? null,
+      nullable(record.runId),
       request.platform,
       request.model ?? null,
       request.osVersion ?? null,
