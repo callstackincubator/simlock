@@ -16,6 +16,7 @@ import { memorySourceDatabase } from "./testing.js";
 import {
   driverData,
   deviceRoot,
+  sourcesSetPath,
   simctlArgs,
   deviceHubEdit,
   plantManagedDevice,
@@ -58,8 +59,8 @@ describe("IosSimctlDriver device set", () => {
   }
 
   it.each([
-    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`, false],
-    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`, false],
+    ["unset", {}, deviceRoot, true, sourcesSetPath, false],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, sourcesSetPath, false],
     [
       "default",
       { deviceSet: "default" },
@@ -398,7 +399,7 @@ describe("IosSimctlDriver device set", () => {
         [
           "simctl",
           "--set",
-          scoped ? `${deviceRoot}/sources` : "/home/.simlock/devices/ios-sources",
+          scoped ? sourcesSetPath : "/home/.simlock/devices/ios-sources",
           "clone",
           seedUdid,
           driverData.name,

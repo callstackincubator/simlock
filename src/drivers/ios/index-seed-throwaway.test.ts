@@ -5,6 +5,7 @@ import { memorySourceDatabase, plantSource } from "./testing.js";
 import {
   deviceHubEdit,
   deviceRoot,
+  sourcesSetPath,
   driverData,
   instanceId,
   plantManagedDevice,
@@ -53,7 +54,7 @@ const worlds: readonly World[] = [
     devicesDir: deviceRoot,
     isDefault: false,
     label: "simlock set",
-    sourcesSet: `${deviceRoot}/sources`,
+    sourcesSet: sourcesSetPath,
   },
   {
     config: { deviceSet: "default" },
@@ -413,7 +414,7 @@ describe("IosSimctlDriver seed throwaway", () => {
   it("baseline.save deletes the saved-from lease's log folder", async () => {
     const baselineName = "simlock-baseline-device-1";
     const leaseLogs = `${logsRoot}/${driverData.udid}`;
-    const clone = simctl("clone", driverData.udid, baselineName, `${deviceRoot}/sources`);
+    const clone = simctl("clone", driverData.udid, baselineName, sourcesSetPath);
     const cloneUdid = "00000000-0000-0000-0000-0000000000cc";
     const cases = [
       { label: "present", plant: true, clone: "ok", logs: false, warnings: [] },
