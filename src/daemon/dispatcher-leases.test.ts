@@ -668,4 +668,33 @@ describe("Dispatcher: lease.release-run", () => {
     expect(await otherRun).toBeInstanceOf(RequestCancelledError);
     expect(await otherOwner).toBeInstanceOf(RequestCancelledError);
   });
+
+  it("releases the caller's request of the run that is booting a virtual device the moment it is granted, and lists its id", async () => {
+    const { dispatcher, driver, eventBus, engine, registry } = await buildDispatcher();
+    driver.hangMakeReady();
+    const booting = dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", runId: "nightly-7" },
+      session({ principal: "tok_ci" }),
+    );
+    await expect.poll(() => engine.waitingRequests()[0]?.stage).toBe("starting");
+    const requestId = engine.waitingRequests()[0]?.id;
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci" }),
+    );
+
+    expect(result).toEqual({ leaseIds: [], requestIds: [requestId] });
+    driver.releaseMakeReady();
+    const granted = await booting;
+    await expect.poll(() => registry.snapshot.leases).toEqual([]);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.released")
+        .map((event) => event.payload),
+    ).toMatchObject([{ leaseId: granted.lease.id, reason: "explicit" }]);
+  });
 });
