@@ -292,7 +292,11 @@ describe("the agent-device front's orientation command", () => {
       physical: false,
       platform: "ios",
     } as const;
-    expect(rotationRefusal(leaseId, duo)?.code).toBe("ROTATION_UNSUPPORTED");
+    const refusal = rotationRefusal(leaseId, duo);
+    expect(refusal?.code).toBe("ROTATION_UNSUPPORTED");
+    expect(refusal?.message).toBe(
+      `Lease ${leaseId} is on a foldable iPhone Duo simulator; Simlock cannot rotate it, use \`agent-device orientation\``,
+    );
     for (const gateway of [true, false]) {
       for (const [typed] of rotated) {
         const { handle, forwarded } = rig({
