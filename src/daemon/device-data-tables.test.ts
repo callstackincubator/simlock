@@ -16,6 +16,7 @@ import { removeDirectory } from "../test-support/remove-directory.js";
 describe("the production device-data tables", () => {
   it("a registry restarted on one state.db returns an iOS and an Android device's driverData unchanged", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-device-data-"));
+    const states: Awaited<ReturnType<typeof openStateDatabase>>[] = [];
     try {
       const clock = new FakeClock(1_000);
       const iosData = {
@@ -33,22 +34,25 @@ describe("the production device-data tables", () => {
         serial: "emulator-5554",
       };
       let next = 0;
-      const open = async () =>
-        Registry.load({
+      const open = async () => {
+        const state = await openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [registryOwner, iosDeviceDataTable, androidDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+        states.push(state);
+        return Registry.load({
           clock,
           deviceData: productionDeviceDataTables(),
           eventBus: new EventBus(clock),
           idGenerator: { generate: () => String((next += 1)) },
-          state: await openStateDatabase({
-            dataDirectory: directory,
-            filesystem: new NodeFilesystem(),
-            logger: new NoopLogger(),
-            oldFiles: [],
-            owners: [registryOwner, iosDeviceDataTable, androidDeviceDataTable],
-            sqlite: new NodeSqliteOpener(),
-            upgradeStep: "remove it.",
-          }),
+          state,
         });
+      };
       const registry = await open();
       await registry.registerDevice({
         driverData: iosData,
@@ -73,6 +77,8 @@ describe("the production device-data tables", () => {
       expect(byDriverId.get("drv-ios")).toStrictEqual(iosData);
       expect(byDriverId.get("drv-android")).toStrictEqual(androidData);
     } finally {
+      // why: Windows refuses to delete a database file that is still open.
+      for (const state of states) state.database.close();
       await removeDirectory(directory);
     }
   });

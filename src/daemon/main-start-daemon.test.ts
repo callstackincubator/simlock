@@ -445,11 +445,11 @@ describe("startDaemon", () => {
       ...host,
       manager: { ...manager, manager: "systemd" },
       home: "/home/me",
-      root: "/home/me/.simlock",
+      root: join("/home/me", ".simlock"),
     });
     await systemd.serviceCheck?.check();
     expect(seen.at(-1)?.path).toBe(
-      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+      join("/home/me", ".config", "systemd", "user", "com.callstack.simlock.worker.service"),
     );
   });
 

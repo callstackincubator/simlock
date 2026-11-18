@@ -459,7 +459,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         processRunner: runner,
       });
       const driver = drivers.find((candidate) => candidate.platform === "android");
-      const avdHome = join(SIMLOCK_HOME, "devices", "android", "device-1");
+      const avdHome = join(ANDROID_ROOT, "device-1");
       await filesystem.mkdirp(join(avdHome, "simlock.avd"));
       const ready = driver!.makeReady(
         {
