@@ -217,15 +217,7 @@ function assessLeading(
   }
   const mode = assessMode(request, known);
   if (mode !== undefined) return mode;
-  if (request.physical === true) {
-    if (known.some((worker) => physicalMatch(worker, request, "enrolled"))) return undefined;
-    return {
-      ...noPhysicalMatch(request),
-      code: "UNKNOWN_MODEL",
-      kind: "reject",
-      reason: "unresolvable-spec",
-    };
-  }
+  if (request.physical === true) return assessPhysical(request, known);
   if (phonesOnlyEverywhere(known, request)) return phonesOnly(request);
   if (!known.some((worker) => listsModel(worker, request))) return unknownModel(request);
   if (!known.some((worker) => matchRequest(worker, request) !== undefined)) {
@@ -239,6 +231,20 @@ function assessLeading(
     };
   }
   return undefined;
+}
+
+// why: a physical request is served by any known worker with an enrolled device that fits, whatever the catalog lists.
+function assessPhysical(
+  request: RoutableRequest,
+  known: readonly WorkerView[],
+): Rejection | undefined {
+  if (known.some((worker) => physicalMatch(worker, request, "enrolled"))) return undefined;
+  return {
+    ...noPhysicalMatch(request),
+    code: "UNKNOWN_MODEL",
+    kind: "reject",
+    reason: "unresolvable-spec",
+  };
 }
 
 // why: `presence` plays no part in the table: a device last read not present makes the request wait, not fail.
