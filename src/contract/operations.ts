@@ -49,6 +49,7 @@ import {
   leaseList,
   leaseRelease,
   leaseReleaseAll,
+  leaseReleaseRun,
   leaseRenew,
 } from "./operations-leases.js";
 import {
@@ -101,6 +102,8 @@ export {
   leaseGet,
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
   leaseReleaseAll,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  leaseReleaseRun,
 } from "./operations-leases.js";
 export {
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -230,6 +233,7 @@ export const OPERATIONS = {
   "device.rotate": deviceRotate,
   "doctor.run": doctorRun,
   "lease.release-all": leaseReleaseAll,
+  "lease.release-run": leaseReleaseRun,
   "list.get": listGet,
   "cleanup.run": cleanupRun,
   "nuke.run": nukeRun,

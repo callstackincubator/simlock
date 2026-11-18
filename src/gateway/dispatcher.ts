@@ -294,6 +294,7 @@ export class GatewayDispatcher {
       "lease.release": this.#leaseRelease,
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
+      "lease.release-run": async () => ({ leaseIds: [], requestIds: [] }),
       "device.exec": this.#deviceExec,
       "device.rotate": this.#deviceRotate,
       "relay.request": relayRefused,

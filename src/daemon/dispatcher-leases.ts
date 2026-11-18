@@ -126,6 +126,11 @@ export class LeaseHandlers {
     return { leaseIds: [...leaseIds] };
   };
 
+  readonly leaseReleaseRun: Handler<"lease.release-run"> = async () => ({
+    leaseIds: [],
+    requestIds: [],
+  });
+
   readonly leaseGet: Handler<"lease.get"> = (input, session) => {
     const lease = this.options.registry.snapshot.leases.find(
       (candidate) => candidate.id === input.leaseId,

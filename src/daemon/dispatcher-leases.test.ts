@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeDriver } from "../core/testing.js";
 import { FakeClock } from "../ports/index.js";
-import { UnknownLeaseError } from "../core/index.js";
+import { type Config, UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { buildDispatcher, gibibyte, session } from "./test-dispatcher.js";
 
@@ -553,5 +553,50 @@ describe("Dispatcher: lease.release-all", () => {
         .filter((event) => event.event === "lease.released")
         .map((event) => (event.payload as { reason: string }).reason),
     ).toEqual(["killed", "killed"]);
+  });
+});
+
+const roomForFour: Config["capacity"] = {
+  config: {
+    limits: {
+      android: { maxDevices: 1, maxRunning: 1 },
+      ios: { maxDevices: 4, maxRunning: 4 },
+      maxRunning: 5,
+    },
+    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+  },
+  strategy: "resource",
+};
+
+describe("Dispatcher: lease.release-run", () => {
+  it("ends the leases of the run the caller holds, with reason explicit, and answers their ids", async () => {
+    const { dispatcher, eventBus, registry } = await buildDispatcher({ capacity: roomForFour });
+    const lease = async (principal: string, requesterId: string, runId: string) =>
+      (
+        await dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", requesterId, runId },
+          session({ principal }),
+        )
+      ).lease.id;
+    const first = await lease("tok_ci", "job-a", "nightly-7");
+    const second = await lease("tok_ci", "job-b", "nightly-7");
+    const otherRun = await lease("tok_ci", "job-c", "nightly-8");
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+
+    expect(new Set(result.leaseIds)).toEqual(new Set([first, second]));
+    expect(result.requestIds).toEqual([]);
+    expect(registry.snapshot.leases.map((held) => held.id)).toEqual([otherRun]);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.released")
+        .map((event) => (event.payload as { reason: string }).reason),
+    ).toEqual(["explicit", "explicit"]);
   });
 });
