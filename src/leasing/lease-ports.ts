@@ -11,10 +11,17 @@ import type { LeaseRequestOptions } from "./wait-queue.js";
 
 export type ClientReleaseReason = Exclude<LeaseReleaseReason, "device-lost">;
 
+/** why: the ids a run release ended or cancelled: the leases, and the waiting requests it stopped. */
+export interface RunRelease {
+  readonly leaseIds: readonly string[];
+  readonly requestIds: readonly string[];
+}
+
 export interface LeaseCommands {
   request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant>;
   release(leaseId: string, reason: ClientReleaseReason): Promise<void>;
   releaseAll(reason: ClientReleaseReason): Promise<readonly string[]>;
+  releaseRun(runId: string, ownerId: string | undefined): Promise<RunRelease>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
 }
 

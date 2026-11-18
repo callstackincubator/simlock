@@ -267,6 +267,10 @@ export function createLeasing(options: LeasingOptions): Leasing {
       await releaseCoordinator.release(leaseId, reason);
     },
     releaseAll: async (reason: ClientReleaseReason) => releaseCoordinator.releaseAll(reason),
+    releaseRun: async (runId: string, ownerId: string | undefined) => ({
+      leaseIds: await releaseCoordinator.releaseRun(runId, ownerId),
+      requestIds: [],
+    }),
     renew: async (leaseId: string, ttlMs?: number): Promise<LeaseRecord> =>
       releaseCoordinator.renew(leaseId, ttlMs),
     expire: async (leaseId: string) => {

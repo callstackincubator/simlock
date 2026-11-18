@@ -126,10 +126,13 @@ export class LeaseHandlers {
     return { leaseIds: [...leaseIds] };
   };
 
-  readonly leaseReleaseRun: Handler<"lease.release-run"> = async () => ({
-    leaseIds: [],
-    requestIds: [],
-  });
+  readonly leaseReleaseRun: Handler<"lease.release-run"> = async (input, session) => {
+    const released = await this.options.leases.releaseRun(
+      input.runId,
+      session.role === "admin" ? undefined : session.principal,
+    );
+    return { leaseIds: [...released.leaseIds], requestIds: [...released.requestIds] };
+  };
 
   readonly leaseGet: Handler<"lease.get"> = (input, session) => {
     const lease = this.options.registry.snapshot.leases.find(
