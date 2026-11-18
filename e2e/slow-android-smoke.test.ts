@@ -401,5 +401,81 @@ describe.skipIf(ANDROID_SDK === undefined)(
         }
       },
     );
+    // why: #1690: qemu starts the host's one `netsimd` in the first emulator's group, and every emulator's network goes through it; stopping one emulator must leave it running.
+    it.skipIf(process.platform === "win32")(
+      "releasing one of two Android emulators leaves the host's netsimd running and the other emulator reaching the host",
+      { timeout: 900_000 },
+      async () => {
+        const env = await withDaemon({
+          driver: "real",
+          configOverrides: { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } },
+        });
+        try {
+          const lease = async (agent: string) => {
+            const granted = await env.cli(
+              [
+                "lease",
+                "--platform",
+                "android",
+                "--device",
+                "Pixel 9",
+                "--agent-id",
+                agent,
+                "--detach",
+              ],
+              { timeout: DEVICE_READY_MS },
+            );
+            expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
+            return granted.json as {
+              device: { address?: string; driverDeviceId: string };
+              lease: { id: string };
+            };
+          };
+          const netsimdPids = async (): Promise<number[]> => {
+            const { stdout } = await execFileAsync("pgrep", ["-x", "netsimd"]).catch(() => ({
+              stdout: "",
+            }));
+            return stdout
+              .split("\n")
+              .filter((line) => line.trim() !== "")
+              .map(Number);
+          };
+          const [first, second] = await Promise.all([lease("netsimd-one"), lease("netsimd-two")]);
+          const before = await netsimdPids();
+          expect(before.length, "two running emulators have started a netsimd").toBeGreaterThan(0);
+
+          const release = await env.cli(["release", first.lease.id]);
+          expect(release.code, `release failed: ${release.stderr}`).toBe(0);
+          await waitFor(
+            async () =>
+              !existsSync(join(env.home, "devices", "android", first.device.driverDeviceId)),
+            { timeout: 120_000, interval: 500, label: "released emulator's folder deleted" },
+          );
+
+          const alive = (await netsimdPids()).filter((pid) => before.includes(pid));
+          expect(alive, "stopping one emulator ended the host's netsimd").toEqual(before);
+          const ping = await env.cli([
+            "adb",
+            "-s",
+            second.device.address ?? "",
+            "shell",
+            "ping",
+            "-c",
+            "1",
+            "-W",
+            "5",
+            "10.0.2.2",
+          ]);
+          expect(
+            ping.code,
+            `the other emulator lost its network: ${ping.stdout}${ping.stderr}`,
+          ).toBe(0);
+        } finally {
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
+        }
+      },
+    );
   },
 );
