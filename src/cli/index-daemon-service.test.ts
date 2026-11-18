@@ -12,6 +12,7 @@ import {
   ScriptedProcessRunner,
   MemoryFilesystem,
   MemoryIpcTransport,
+  resolveDaemonSocketPath,
   serviceDefinition,
   type ServiceState,
   FakeSystemStats,
@@ -63,7 +64,7 @@ describe("CLI: daemon install (#830)", () => {
           adminTokenPath: join(dataDirectory, "admin.token"),
           filesystem,
           ipcTransport,
-          socketPath: join(dataDirectory, "daemon.sock"),
+          socketPath: resolveDaemonSocketPath(dataDirectory),
         });
       },
     });
@@ -104,7 +105,7 @@ describe("CLI: daemon install (#830)", () => {
         root: join(home, ".simlock"),
         name: "com.callstack.simlock.worker",
         args: [mainPath],
-        logPath: "/Users/me/.simlock/daemon.log",
+        logPath: join(home, ".simlock", "daemon.log"),
       },
       {
         label: "gateway on a host with no gateway folder yet",
@@ -113,7 +114,7 @@ describe("CLI: daemon install (#830)", () => {
         root: join(home, ".simlock"),
         name: "com.callstack.simlock.gateway",
         args: [mainPath, "--gateway"],
-        logPath: "/Users/me/.simlock/gateway/daemon.log",
+        logPath: join(home, ".simlock", "gateway", "daemon.log"),
       },
       {
         label: "another SIMLOCK_HOME",
@@ -122,7 +123,7 @@ describe("CLI: daemon install (#830)", () => {
         root: "/tmp/x",
         name: "com.callstack.simlock.worker.2e56aa",
         args: [mainPath],
-        logPath: "/tmp/x/daemon.log",
+        logPath: join("/tmp/x", "daemon.log"),
       },
     ];
 
@@ -134,7 +135,7 @@ describe("CLI: daemon install (#830)", () => {
       expect(serviceManager.installs, label).toHaveLength(1);
       expect(serviceManager.installs[0], label).toMatchObject({
         name: testCase.name,
-        path: `/Users/me/Library/LaunchAgents/${testCase.name}.plist`,
+        path: join(home, "Library", "LaunchAgents", `${testCase.name}.plist`),
         command: nodePath,
         args: testCase.args,
         logPath: testCase.logPath,
@@ -173,7 +174,7 @@ describe("CLI: daemon install (#830)", () => {
         state: "installed",
         manager: "launchd",
         name: "com.callstack.simlock.worker",
-        path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+        path: join(home, "Library", "LaunchAgents", "com.callstack.simlock.worker.plist"),
       },
     });
   });
@@ -183,12 +184,18 @@ describe("CLI: daemon install (#830)", () => {
       {
         label: "default config directory",
         env: {},
-        unit: "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+        unit: join(
+          "/home/me",
+          ".config",
+          "systemd",
+          "user",
+          "com.callstack.simlock.worker.service",
+        ),
       },
       {
         label: "absolute XDG_CONFIG_HOME",
         env: { XDG_CONFIG_HOME: "/xdg" },
-        unit: "/xdg/systemd/user/com.callstack.simlock.worker.service",
+        unit: join("/xdg", "systemd", "user", "com.callstack.simlock.worker.service"),
       },
     ];
     for (const { label, env, unit } of cases) {
@@ -486,7 +493,7 @@ describe("CLI: a start goes through the service (#830)", () => {
             adminTokenPath: join(root, "admin.token"),
             filesystem,
             ipcTransport,
-            socketPath: join(root, "daemon.sock"),
+            socketPath: resolveDaemonSocketPath(root),
           });
         },
       });
@@ -619,7 +626,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
   const home = "/Users/me";
   const root = join(home, ".simlock");
   const name = "com.callstack.simlock.worker";
-  const plist = `${home}/Library/LaunchAgents/${name}.plist`;
+  const plist = join(home, "Library", "LaunchAgents", `${name}.plist`);
   const nodePath = "/opt/node/bin/node";
   const mainPath = "/opt/simlock/dist/daemon/main.js";
   const done = (code: number | null, stderr = "") => ({ code, stdout: "", stderr });

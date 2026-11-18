@@ -762,7 +762,8 @@ describe("createDaemonProbe", () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp(dataDirectory);
     await filesystem.writeFileAtomic(`${dataDirectory}/admin.token`, "token\n");
-    await filesystem.writeFileAtomic(endpoint, "");
+    // why: the endpoint is a named pipe on Windows, which leaves no file behind.
+    if (process.platform !== "win32") await filesystem.writeFileAtomic(endpoint, "");
     const ipc = new MemoryIpcTransport();
     return { ipc, probe: createDaemonProbe({ dataDirectory, filesystem, ipc }) };
   };

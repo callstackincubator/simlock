@@ -11,6 +11,7 @@ import {
   MemoryFilesystem,
   MemoryIpcTransport,
   NodeIpcTransport,
+  resolveDaemonSocketPath,
   type IpcConnection,
   type IpcConnector,
   FakeSystemStats,
@@ -223,7 +224,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
   it("fails a start with DAEMON_STARTUP_FAILED when the daemon stops reading after hello, without waiting for its side of the close", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-wedged-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     const sockets: Socket[] = [];
     let hellos = 0;
     const server = createServer((socket) => {
@@ -313,7 +314,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     ]) {
       const directory = await mkdtemp(join(tmpdir(), "simlock-closed-"));
       temporaryDirectories.push(directory);
-      const socketPath = join(directory, "daemon.sock");
+      const socketPath = resolveDaemonSocketPath(directory);
       let accepted = 0;
       // why: the daemon that refuses its history accepts the CLI's connection, then stops and
       // closes it; the CLI is still reading `admin.token` then, so the close lands before `hello`.

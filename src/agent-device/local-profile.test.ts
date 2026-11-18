@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -21,9 +22,7 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
-  await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  await Promise.all(temporaryDirectories.splice(0).map((path) => removeDirectory(path)));
 });
 
 const LABEL = "agent-device on this Mac";

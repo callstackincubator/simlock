@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FakeServiceManager,
@@ -109,7 +110,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     const main = "/Users/me/simlock/dist/daemon/main.js";
     const worker = "com.callstack.simlock.worker";
     const gateway = "com.callstack.simlock.gateway";
-    const plist = (name: string) => `${home}/Library/LaunchAgents/${name}.plist`;
+    const plist = (name: string) => join(home, "Library", "LaunchAgents", `${name}.plist`);
     const cases: readonly {
       readonly label: string;
       readonly role: "worker" | "gateway";
@@ -225,7 +226,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         definition: async () =>
           serviceDefinition({
             role: "worker",
-            root: "/Users/me/.simlock",
+            root: join("/Users/me", ".simlock"),
             dataDirectory: "/simlock",
             home: "/Users/me",
             nodePath: "/n",
