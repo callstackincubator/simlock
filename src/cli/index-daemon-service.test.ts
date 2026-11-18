@@ -907,6 +907,31 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     );
   }
 
+  async function expectGatewayAndJsonInstalls(): Promise<void> {
+    const gateway = await installOnWindows({
+      argv: ["--gateway", "daemon", "install"],
+      role: "gateway",
+    });
+    expect(gateway.output.stderr).toBe("");
+    expect(gateway.output.stdout.split("\n")[0]).toBe(
+      "Service installed: com.callstack.simlock.gateway (task-scheduler)",
+    );
+    const gatewayParts = supervisorArguments(gateway.written?.text ?? "");
+    expect(gatewayParts?.[3], "the supervisor gets --gateway").toBe(" --gateway");
+    expect(gatewayParts?.[4]).toBe("com.callstack.simlock.gateway");
+
+    const json = await installOnWindows({ argv: ["daemon", "install", "--json"] });
+    expect(JSON.parse(json.output.stdout)).toEqual({
+      status: "installed",
+      service: {
+        state: "installed",
+        manager: "task-scheduler",
+        name: "com.callstack.simlock.worker",
+        path: "\\com.callstack.simlock.worker",
+      },
+    });
+  }
+
   it("an operator runs daemon install on Windows: the user's SID goes into a UTF-16 logon task that runs the supervisor hidden with the saved variables, the daemon answers, and install prints the name, Daemon running and the login hint; --gateway names the gateway task and passes --gateway to the supervisor, and --json answers the task-scheduler manager", async () => {
     const { exitCode, output, runner, filesystem, name, xmlPath, written } = await installOnWindows(
       { argv: ["daemon", "install"] },
@@ -955,29 +980,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
       PATH: "C:\\bin",
     });
     expect(await filesystem.exists(xmlPath), "the XML file is deleted after create").toBe(false);
-
-    const gateway = await installOnWindows({
-      argv: ["--gateway", "daemon", "install"],
-      role: "gateway",
-    });
-    expect(gateway.output.stderr).toBe("");
-    expect(gateway.output.stdout.split("\n")[0]).toBe(
-      "Service installed: com.callstack.simlock.gateway (task-scheduler)",
-    );
-    const gatewayParts = supervisorArguments(gateway.written?.text ?? "");
-    expect(gatewayParts?.[3], "the supervisor gets --gateway").toBe(" --gateway");
-    expect(gatewayParts?.[4]).toBe("com.callstack.simlock.gateway");
-
-    const json = await installOnWindows({ argv: ["daemon", "install", "--json"] });
-    expect(JSON.parse(json.output.stdout)).toEqual({
-      status: "installed",
-      service: {
-        state: "installed",
-        manager: "task-scheduler",
-        name: "com.callstack.simlock.worker",
-        path: "\\com.callstack.simlock.worker",
-      },
-    });
+    await expectGatewayAndJsonInstalls();
   });
 
   it("an install whose registration fails is SERVICE_FAILED with the command's first stderr line, and leaves no task XML", async () => {
