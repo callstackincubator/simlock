@@ -52,8 +52,8 @@ flowchart LR
 ### 2. The in-memory filesystem reads both path styles
 
 The fake reads `D:\a\b`, `\a\b` and `/a/b` as one entry: it drops a drive
-letter and reads `\` as `/`, for every path it is given and every link
-target it stores. What it returns, such as `realpath`, is the `/` form.
+letter and reads `\` as `/` in an absolute path it is given and in every
+link target it stores. A relative path is read as today. What it returns, such as `realpath`, is the `/` form.
 Production code keeps the host's `node:path`, and no source file is given
 a path flavour or a platform option to make a test pass; a test's fixtures
 follow the host instead (a fake Android SDK holds `emulator.exe` on
