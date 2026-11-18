@@ -27,7 +27,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { posix } from "node:path";
+
+// why: every path here comes from git, which spells it with "/" on every host, and the file lists
+// are compared with git's; the host's join would turn them into "\" on Windows.
+const { dirname, join } = posix;
 
 const REPORT = ".stryker-tmp/report/mutation.json";
 const KEEP_MS = 14 * 24 * 60 * 60 * 1000;

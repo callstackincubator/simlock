@@ -26,6 +26,15 @@ afterEach(() => {
   }
 });
 
+// why: the script's Python prints "\r\n" line ends on Windows.
+function lf<T extends { stdout: string; stderr: string }>(result: T): T {
+  return {
+    ...result,
+    stdout: result.stdout.replaceAll("\r\n", "\n"),
+    stderr: result.stderr.replaceAll("\r\n", "\n"),
+  };
+}
+
 function machine() {
   const dir = mkdtempSync(join(tmpdir(), "slow-e2e-"));
   const repo = join(dir, "repo");
@@ -44,7 +53,7 @@ function machine() {
     SIMLOCK_E2E_AGENT_DEVICE: "",
   };
   const run = (...args: string[]) =>
-    spawnSync(BASH, [SCRIPT, ...args], { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
+    lf(spawnSync(BASH, [SCRIPT, ...args], { cwd: repo, env, encoding: "utf8", timeout: 60_000 }));
   return { dir, repo, env, run, lock: env.SIMLOCK_SLOW_LOCK, lane: env.SIMLOCK_SLOW_TMP };
 }
 
@@ -246,11 +255,13 @@ describe("scripts/slow-e2e.sh", () => {
   it("check refuses an agent-device install of another version than package.json pins for @agent-device/proxy", () => {
     const { dir, env, repo } = machine();
 
-    const result = spawnSync(BASH, [SCRIPT, "check"], {
-      cwd: repo,
-      env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, "0.21.27") },
-      encoding: "utf8",
-    });
+    const result = lf(
+      spawnSync(BASH, [SCRIPT, "check"], {
+        cwd: repo,
+        env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, "0.21.27") },
+        encoding: "utf8",
+      }),
+    );
 
     expect(result.status).toBe(69);
     expect(result.stderr).toBe(
@@ -261,11 +272,13 @@ describe("scripts/slow-e2e.sh", () => {
   it("check passes an agent-device install of the version package.json pins", () => {
     const { dir, env, repo } = machine();
 
-    const result = spawnSync(BASH, [SCRIPT, "check"], {
-      cwd: repo,
-      env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, PINNED) },
-      encoding: "utf8",
-    });
+    const result = lf(
+      spawnSync(BASH, [SCRIPT, "check"], {
+        cwd: repo,
+        env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, PINNED) },
+        encoding: "utf8",
+      }),
+    );
 
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
