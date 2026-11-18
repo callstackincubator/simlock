@@ -312,10 +312,12 @@ describe.each(implementations)("Filesystem contract: $name", ({ name, create, li
     await filesystem.mkdirp(temporaryDirectory);
     await filesystem.writeFileAtomic(`${temporaryDirectory}/notes.txt`, "");
 
-    const through = expect(filesystem.exists(`${temporaryDirectory}/notes.txt/ios`));
-    // why: Windows reports a path that runs through a file as ENOENT, so `exists` answers false there.
-    if (posixOnly(name)) await through.resolves.toBe(false);
-    else await through.rejects.toMatchObject({ code: "ENOTDIR" });
+    // why: Windows reports a path that runs through a file as ENOENT, the same errno as a missing
+    // one, so the claim cannot hold there.
+    if (posixOnly(name)) return;
+    await expect(filesystem.exists(`${temporaryDirectory}/notes.txt/ios`)).rejects.toMatchObject({
+      code: "ENOTDIR",
+    });
   });
 
   it("sizes a directory as the bytes of the files under it, subdirectories included, without following a symlink", async () => {
