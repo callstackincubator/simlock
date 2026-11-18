@@ -41,7 +41,7 @@ Learned kinds:
 - A kind is learned on `lease.granted`, never for a physical device and never with the pool off. A plain kind is learned on its first lease.
 - A baseline kind is one row per baseline name, learned once its grants in the window reach `warmPool.baselineLearnAfter`. The mark is stored and never worked out again. Until then the row counts but is not planned, not in `figures()` or `targeted()`, and not matched by `forgetKinds`. Each pass warms it as the baseline's newest version.
 - `start()` closes the lease rows whose lease the registry no longer holds.
-- The catalog check forgets a kind whose model, OS, image tag or driver is gone, or whose baseline is removed or stale. `LEARNED_FAILURES_LIMIT` (`converger.ts`) failed boots in a row forget it too.
+- The catalog check forgets a kind whose model, OS, image tag, iOS mode (`ios.modes`) or driver is gone, or whose baseline is removed or stale. `LEARNED_FAILURES_LIMIT` (`converger.ts`) failed boots in a row forget it too.
 - A kind whose platform has no catalog answer yet (read pending, failed or timed out) is kept and planned for nothing that pass.
 - `forgetKinds` (ADR 0050) drops a kind's failed-boot count unless a configured target shares its spec. The devices the kind kept are left to the reaper's idle rules.
 - The learned kinds are the pool's own `state.db` tables (`warmPoolOwner`), kept across restarts and cleared by nuke. Targets are config.
