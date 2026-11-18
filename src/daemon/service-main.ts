@@ -98,9 +98,17 @@ export async function runSupervisor(dependencies: SupervisorDependencies): Promi
     }
     if (read.code === null) return true;
     if (read.code !== 0) return false;
-    return new RegExp(`--install-id ${parsed.installId.replaceAll(".", "\\.")}(?![\\w.-])`).test(
-      read.stdout,
-    );
+    // why: a plain search, not a pattern built from the argument; the id must end at a character no id contains.
+    const needle = `--install-id ${parsed.installId}`;
+    for (
+      let at = read.stdout.indexOf(needle);
+      at !== -1;
+      at = read.stdout.indexOf(needle, at + 1)
+    ) {
+      const next = read.stdout.charAt(at + needle.length);
+      if (!/[\w.-]/.test(next)) return true;
+    }
+    return false;
   };
 
   for (;;) {
