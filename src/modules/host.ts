@@ -7,6 +7,7 @@ import type {
   GatewayModule,
   GatewayModuleHost,
   ModuleCapabilitySource,
+  ModuleFinding,
   ModuleHost,
   ModuleHostOptions,
   ModuleLeaseEndParticipant,
@@ -112,6 +113,18 @@ function targetsByName<T>(
 
 // why: a module's lease route is `/v1/leases/:id/<name>`; these are the sub-routes the HTTP app registers itself, and a module may not take one.
 const CORE_LEASE_SUBROUTES: readonly string[] = ["exec", "files", "renew", "rotate"];
+
+// why: doctor.run has no client time limit, so this bounds how long a slow module can hold a doctor run or the start's reconcile.
+const FINDINGS_DEADLINE_MS = 10_000;
+
+function moduleFindings(module: string, found: readonly ModuleFinding[]) {
+  return found.map((finding) => ({
+    kind: "module-unavailable" as const,
+    message: finding.message,
+    module,
+    remedy: finding.remedy,
+  }));
+}
 
 type StopHook = "beforeDrain" | "beforeDriversDispose";
 
@@ -382,19 +395,13 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
     beforeDriversDispose: () => runStopStep("beforeDriversDispose"),
     capabilitySources,
     async findings() {
-      const all = [];
-      for (const { name, worker } of started) {
+      const slots = started.map(() => [] as ReturnType<typeof moduleFindings>);
+      const running = new Set(started.map(({ name }) => name));
+      const calls = started.map(async ({ name, worker }, index) => {
         try {
           const found = (await worker.findings?.()) ?? [];
           unreadable.delete(name);
-          all.push(
-            ...found.map((finding) => ({
-              kind: "module-unavailable" as const,
-              message: finding.message,
-              module: name,
-              remedy: finding.remedy,
-            })),
-          );
+          slots[index] = moduleFindings(name, found);
         } catch (error: unknown) {
           if (!unreadable.has(name)) {
             unreadable.add(name);
@@ -403,9 +410,20 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
               module: name,
             });
           }
+        } finally {
+          running.delete(name);
         }
-      }
-      return all;
+      });
+      if (calls.length === 0) return [];
+      let timer: ReturnType<typeof options.context.clock.setTimer> | undefined;
+      const deadline = new Promise<void>((resolve) => {
+        timer = options.context.clock.setTimer(FINDINGS_DEADLINE_MS, resolve);
+      });
+      await Promise.race([Promise.all(calls), deadline]);
+      if (timer !== undefined) options.context.clock.cancel(timer);
+      for (const module of running)
+        logger.warn("Optional module findings ran out of time", { module });
+      return slots.flat();
     },
     leaseEndParticipants,
     mounts(deps: MountDeps): readonly ModuleMount[] {
