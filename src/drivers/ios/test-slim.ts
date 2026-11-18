@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { expect, vi, type Mock } from "vitest";
 
 import {
@@ -115,7 +117,7 @@ export async function createSlimDriver(
 export const overridesRoot = "/private/var/tmp";
 
 export function overridesFolder(udid: string): string {
-  return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}`;
+  return join(overridesRoot, `com.apple.CoreSimulator.SimDevice.${udid}`);
 }
 
 export function overridesPath(udid: string): string {
@@ -264,7 +266,7 @@ export const prepareSlim = { mode: "slim", purpose: "prepare" } as const;
 
 // why: DeviceHub's preferences are edited as an export, a PlistBuddy edit of it and an import back
 // through cfprefsd (`defaults`); the export sits in the launchd overrides root.
-const deviceHubStaging = "/private/var/tmp/devicehub-preferences.plist";
+const deviceHubStaging = join(overridesRoot, "devicehub-preferences.plist");
 
 export function deviceHubEdit(command: string) {
   return [
