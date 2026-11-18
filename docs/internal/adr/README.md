@@ -84,7 +84,7 @@ the status is stale.
 | [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part; §4 narrowed by 0046 |
 | [0044](0044-the-console-reads-what-its-page-shows-and-events-mark-it-stale.md) | The console reads what its page shows, and events mark it stale | Accepted — not yet implemented; supersedes 0013 §3 |
 | [0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Accepted; §2 narrowed by 0049, §5 by 0079 |
-| [0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) | A standalone worker serves agent-device by default and hands local agents a private profile | Accepted — not yet implemented; narrows 0023 §1, §3–4, 0030 §2, 0039 and 0043 §4; §1 narrowed by 0088 |
+| [0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) | A standalone worker serves agent-device by default and hands local agents a private profile | Accepted; narrows 0023 §1, §3–4, 0030 §2, 0039 and 0043 §4; §1 narrowed by 0088 |
 | [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted; narrows 0001 §1, §2, §3, §5, §6 and §7 for iOS under `deviceSet: "default"` |
 | [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted; §3 narrowed by 0052; §4 narrowed by 0085 |
@@ -120,4 +120,4 @@ the status is stale.
 | [0083](0083-a-worker-may-turn-single-slim-services-on-or-off-beside-its-categories.md) | A worker may turn single slim services on or off beside its categories | Accepted; narrows 0060 §1, §2 and 0066 §2 |
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
-| [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted — not yet implemented; narrows 0030 §2, §3 and §7, and 0046 §1 |
+| [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
