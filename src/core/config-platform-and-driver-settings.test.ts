@@ -58,6 +58,7 @@ describe("loadConfig", () => {
     expect(set.config.ios).toEqual({
       defaultMode: "full",
       defaultModels: {},
+      modes: ["slim", "full"],
       virtualDevices: true,
     });
   });

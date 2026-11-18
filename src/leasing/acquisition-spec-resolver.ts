@@ -23,7 +23,7 @@ import {
   UnknownModelError,
   type VirtualSpec,
 } from "../core/index.js";
-import { asError, VirtualDevicesOffError } from "./acquisition-errors.js";
+import { asError, ModeUnavailableError, VirtualDevicesOffError } from "./acquisition-errors.js";
 import { type LeaseAcquisitionCoordinatorOptions } from "./acquisition-ports.js";
 import {
   downloadingProgress,
@@ -55,6 +55,11 @@ export class AcquisitionSpecResolver {
 
   defaultMode(platform: Platform): DeviceMode {
     return this.options.defaultModes[platform] ?? "full";
+  }
+
+  /** why: the modes this worker serves on a platform; a platform with no `ios.modes` of its own serves both (ADR 0082 §1). */
+  servedModes(platform: Platform): readonly DeviceMode[] {
+    return this.options.servedModes[platform] ?? ["slim", "full"];
   }
 
   async resolveSpec(
@@ -116,6 +121,7 @@ export class AcquisitionSpecResolver {
         "except needs a slim lease (this worker's default mode is full)",
       );
     }
+    this.#requireServed(request.platform, mode);
     const range = requestedRange(request);
     const target =
       range === undefined
@@ -133,6 +139,19 @@ export class AcquisitionSpecResolver {
       requirement: target.requirement ?? exactRequirement(spec),
       spec,
     };
+  }
+
+  /** why: the asked or default mode is checked before the spec is resolved, so a refused mode downloads nothing (ADR 0082 §2). */
+  #requireServed(platform: Platform, mode: DeviceMode): void {
+    const served = this.servedModes(platform);
+    if (served.includes(mode)) return;
+    const other = mode === "full" ? "slim" : "full";
+    throw new ModeUnavailableError(
+      mode,
+      served,
+      `This worker does not serve ${mode} iOS simulators (ios.modes is ${JSON.stringify(served)}); ` +
+        `ask for a ${other} one (--mode ${other}, or mode: "${other}")`,
+    );
   }
 
   /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
