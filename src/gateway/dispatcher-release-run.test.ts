@@ -202,7 +202,7 @@ describe("GatewayDispatcher: lease.release-run", () => {
   });
 
   it("marks a request already dispatched to a worker to release at its grant: the caller gets the lease, the worker is told to release it, and the id is listed", async () => {
-    const { dispatcher, directory, leaseIndex, workers } = harness();
+    const { coordinator, dispatcher, directory, leaseIndex, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
@@ -220,6 +220,8 @@ describe("GatewayDispatcher: lease.release-run", () => {
     );
     await tick();
     expect(client.calls).toContain("lease.request:gw:instance-1:ci");
+    const dispatchedId = coordinator.waitingRequests()[0]?.id;
+    expect(dispatchedId).toBeDefined();
 
     const result = await dispatcher.dispatch(
       "lease.release-run",
@@ -227,7 +229,7 @@ describe("GatewayDispatcher: lease.release-run", () => {
       session({ principal: "tok_ci", role: "agent" }),
     );
     expect(result.leaseIds).toEqual([]);
-    expect(result.requestIds).toHaveLength(1);
+    expect(result.requestIds).toEqual([dispatchedId]);
     expect(client.calls.filter((call) => call.startsWith("lease.release"))).toEqual([]);
 
     openGrant();
