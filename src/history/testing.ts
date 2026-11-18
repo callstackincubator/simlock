@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,7 @@ import {
   openHistoryReader,
   type ProjectionHandle,
 } from "./index.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 export function plainProjection(
   name: string,
@@ -174,11 +175,12 @@ export const DAY = 24 * HOUR;
 export const T0 = 1_760_605_920_000;
 
 const directories: string[] = [];
+const openRigs: EventHistoryHandle[] = [];
 
 export async function removeUsageRigs(): Promise<void> {
-  await Promise.all(
-    directories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  // why: Windows refuses to delete a database file that is still open.
+  await Promise.all(openRigs.splice(0).map((history) => history.stop()));
+  await Promise.all(directories.splice(0).map((path) => removeDirectory(path)));
 }
 
 export interface UsageRig {
@@ -223,6 +225,7 @@ export async function usageRig(options: UsageRigOptions = {}): Promise<UsageRig>
     projections: options.projections ?? Object.values(HISTORY_PROJECTIONS),
     sqlite: new NodeSqliteOpener(),
   });
+  openRigs.push(history);
   await history.start();
   const historyPath = join(directory, HISTORY_DB_NAME);
   let relayed = 0;

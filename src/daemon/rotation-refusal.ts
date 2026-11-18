@@ -1,4 +1,4 @@
-import { isRotatableModel, modelFamily } from "../contract/index.js";
+import { FOLDABLE_MODELS, isRotatableModel, modelFamily } from "../contract/index.js";
 import type { DeviceSpec } from "../core/index.js";
 import { DispatchError } from "./dispatch.js";
 
@@ -29,6 +29,13 @@ function describeTarget(spec: DeviceSpec): { readonly phrase: string; readonly c
 /** why: the one place that says which leases `device.rotate` turns, and how a refusal names the device. */
 export function rotationRefusal(leaseId: string, spec: DeviceSpec): DispatchError | undefined {
   if (!spec.physical && spec.platform === "ios" && isRotatableModel(spec.model)) return undefined;
+  if (!spec.physical && spec.platform === "ios" && FOLDABLE_MODELS.has(spec.model)) {
+    return new DispatchError(
+      "ROTATION_UNSUPPORTED",
+      `Lease ${leaseId} is on a foldable ${spec.model} simulator; Simlock cannot rotate it, use \`agent-device orientation\``,
+      { class: "phone", leaseId, physical: false, platform: spec.platform },
+    );
+  }
   const target = describeTarget(spec);
   return new DispatchError(
     "ROTATION_UNSUPPORTED",

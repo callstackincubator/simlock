@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { OWNED_ROOT_MARKER_FILE } from "../../core/index.js";
 import {
   FakeClock,
@@ -15,7 +16,7 @@ import {
 } from "../../ports/index.js";
 import type { AndroidDriverConfig } from "./definition.js";
 import { AndroidDriver } from "./index.js";
-import { memoryAndroidSourceDatabase } from "./testing.js";
+import { binaries, memoryAndroidSourceDatabase } from "./testing.js";
 
 export const sdk = "/android-sdk";
 
@@ -25,9 +26,10 @@ const simlockHome = "/home/simlock/.simlock";
 
 const instanceId = "instance-1";
 
-export const adb = `${sdk}/platform-tools/adb`;
+export const adb = binaries.adb;
 
-export const avdDirectory = `${simlockHome}/devices/android`;
+// why: `ensureOwnedRoot` resolves the configured root, so on Windows the driver reads `D:\home\...`.
+export const avdDirectory = resolve(simlockHome, "devices", "android");
 
 export const PHONE = "R58M123ABC";
 
@@ -250,11 +252,7 @@ export async function androidFilesystem(): Promise<MemoryFilesystem> {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp(`${sdk}/platform-tools`);
   await filesystem.writeFileAtomic(adb, "binary");
-  for (const binary of [
-    `${sdk}/cmdline-tools/latest/bin/avdmanager`,
-    `${sdk}/cmdline-tools/latest/bin/sdkmanager`,
-    `${sdk}/emulator/emulator`,
-  ]) {
+  for (const binary of [binaries.avdmanager, binaries.sdkmanager, binaries.emulator]) {
     await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
     await filesystem.writeFileAtomic(binary, "binary");
   }

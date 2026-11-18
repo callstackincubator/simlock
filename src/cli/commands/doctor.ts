@@ -47,6 +47,7 @@ function writeDoctorFindings(
   writeBrokenService(environment, report);
   writeUnreachableWarmTargets(environment, report);
   writeModuleUnavailable(environment, report);
+  writeModuleAdvisories(environment, report);
 }
 
 function writeDriverAdvisoryWarnings(
@@ -118,6 +119,18 @@ function writeModuleUnavailable(
     if (finding.kind !== "module-unavailable") continue;
     environment.stderr.write(
       `${esc(finding.module)}  fail  ${oneLine(finding.message)}; ${oneLine(finding.remedy)}\n`,
+    );
+  }
+}
+
+function writeModuleAdvisories(
+  environment: CommandContext["environment"],
+  report: DoctorReport,
+): void {
+  for (const finding of report.findings) {
+    if (finding.kind !== "module-advisory") continue;
+    environment.stderr.write(
+      `Warning [${esc(finding.module)}] ${esc(finding.message)} ${esc(finding.remedy)}\n`,
     );
   }
 }

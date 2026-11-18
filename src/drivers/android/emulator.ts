@@ -158,7 +158,7 @@ export class Emulator {
   }
 
   #logPath(data: AndroidDriverData): string {
-    return `${this.#options.adbTools.avdFolder(data)}/emulator.log`;
+    return join(this.#options.adbTools.avdFolder(data), "emulator.log");
   }
 
   /** why: bounded, since an emulator that ran a while may have written a lot before it exited. */

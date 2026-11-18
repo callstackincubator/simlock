@@ -122,7 +122,7 @@ export interface SimlockClient {
    */
   exec(input: ExecInput, options?: ExecOptions): Promise<ExecOutput>;
   /**
-   * why: turns the lease's iOS phone or tablet simulator to `orientation`, whether or not the daemon's input module is on. `requesterId` is for an operator that acts for the lease's requester, as `exec`'s is.
+   * why: turns the lease's iOS phone or tablet simulator (not a foldable) to `orientation`, whether or not the daemon's input module is on. `requesterId` is for an operator that acts for the lease's requester, as `exec`'s is.
    */
   rotate(
     leaseId: string,
