@@ -125,11 +125,13 @@ describe("Registry", () => {
       });
       migrated.close();
 
-      const reopened = await loadRegistry(await openState(registryOwner));
+      const reopenedState = await openState(registryOwner);
+      const reopened = await loadRegistry(reopenedState);
       expect(reopened.leaseRequests().map((record) => record.request.baseline)).toEqual([
         undefined,
         "checkout",
       ]);
+      reopenedState.close();
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -248,10 +250,12 @@ describe("Registry", () => {
       });
       migrated.close();
 
-      const reopened = await loadRegistry(await openState(registryOwner));
+      const reopenedState = await openState(registryOwner);
+      const reopened = await loadRegistry(reopenedState);
       expect(
         reopened.snapshot.devices.map((device) => device.physical && device.hardwareSerial),
       ).toEqual([undefined, "R58Y61A60HN2"]);
+      reopenedState.close();
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

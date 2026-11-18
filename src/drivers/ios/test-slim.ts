@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { expect, vi, type Mock } from "vitest";
 
@@ -20,7 +20,8 @@ import { memorySourceDatabase } from "./testing.js";
 
 // why: the slim boot's fixtures, shared by the driver's two test files (index.test.ts is at its size limit).
 
-export const deviceRoot = "/Devices";
+// why: the driver passes `resolve(root)` to simctl, which puts a drive letter on a Windows host.
+export const deviceRoot = resolve("/Devices");
 
 export const instanceId = "instance-1";
 
