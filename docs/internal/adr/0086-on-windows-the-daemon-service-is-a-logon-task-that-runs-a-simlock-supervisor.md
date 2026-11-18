@@ -63,10 +63,10 @@ flowchart LR
 2. **The task runs a Simlock supervisor, with no window.** The task runs
    `conhost.exe --headless` with the Node path and the supervisor entry
    that ships beside `dist/daemon/main.js`. The supervisor starts the
-   daemon as auto-start does (the role's flag, stdout and stderr appended
-   to `daemon.log`, no window), with the variables install saved (ADR
-   0041 §3) carried in the task's own arguments. The supervisor holds no
-   daemon state.
+   daemon with the role's flag, its stdout and stderr appended to
+   `daemon.log` and no window, as a child it waits on (not detached), with
+   the variables install saved (ADR 0041 §3) carried in the task's own
+   arguments. The supervisor holds no daemon state.
 3. **The supervisor restarts after a failure only.** A daemon that exits
    0 (a clean stop, or `Daemon already running`) ends the supervisor and
    the task. A daemon that exits non-zero or is killed is started again
@@ -74,7 +74,9 @@ flowchart LR
    `daemon.log`. Before each restart the supervisor reads its task: when
    the task is gone (uninstall) or names another install (a new install),
    it stops instead, so a restart loop ends with the service, as launchd's
-   `bootout` and systemd's `disable --now` end theirs.
+   `bootout` and systemd's `disable --now` end theirs. Install ends the
+   running task instance before it replaces the task, so its start is not
+   ignored while an old supervisor waits.
 4. **A stop is `daemon.stop`.** Windows has no SIGTERM. `daemon stop`,
    install and uninstall stop the daemon through the daemon contract, as
    on every platform. Ending the task in Task Scheduler stops nothing
