@@ -25,7 +25,7 @@ Start and stop:
 - `daemon.stop` releases nothing; leases persist with their deadlines.
 - `dispose` stops the event history after the drivers are disposed, and closes `state.db` last.
 - A history file that fails costs only history. A start the history refuses (a newer stored projection version, a failed migration) stops the daemon (`history-refused`).
-- `service-main.ts` is not the daemon: a Windows logon task runs it (ADR 0086). It starts `main.js` as a child it waits on, restarts it 10 s after a non-zero exit while its task still carries its install id, and imports only `ports/`.
+- The Windows supervisor (`service-main.ts`, ADR 0086) starts the daemon as a child and imports only `ports/`; it restarts it after a non-zero exit while its task carries its install id.
 - A daemon works in its own role's data directory. Its one look outside is the update's `socketHeld` probe of the other role's socket (`composition-support.ts`).
 
 Connections:
