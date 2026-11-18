@@ -65,6 +65,16 @@ const GOOD = {
   device: "iPhone 17 Pro",
 } as const;
 
+// why: a run on GitHub Actions has these set, and they would pick a run id these tests do not mean.
+beforeEach(() => {
+  for (const name of ["SIMLOCK_RUN", "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"]) {
+    vi.stubEnv(name, undefined);
+  }
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function provider(
   load: () => Promise<Factory>,
   patch: Record<string, unknown> = {},

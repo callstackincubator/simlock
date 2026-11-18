@@ -132,6 +132,29 @@ function checkExtraApps(value: unknown): readonly string[] {
   return apps;
 }
 
+const RUN_ID_RULE = "must be 1 to 128 letters, digits, ., _ or -";
+const RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+
+function checkRunId(name: string, value: unknown): string {
+  if (typeof value !== "string" || !RUN_ID_PATTERN.test(value)) {
+    fail(`${name} ${RUN_ID_RULE}; got ${show(value)}`);
+  }
+  return value;
+}
+
+// why: the same steps as `simlock lease` (the package imports no simlock code, ADR 0077); a GitHub value that fails the rule is no run id, since the user set none.
+function pickRunId(option: unknown): string | undefined {
+  if (option !== undefined) return checkRunId("runId", option);
+  const fromEnvironment = process.env["SIMLOCK_RUN"];
+  if (fromEnvironment !== undefined && fromEnvironment !== "") {
+    return checkRunId("SIMLOCK_RUN", fromEnvironment);
+  }
+  const { GITHUB_ACTIONS: actions, GITHUB_RUN_ID: id, GITHUB_RUN_ATTEMPT: attempt } = process.env;
+  if (actions !== "true" || id === undefined) return undefined;
+  const github = `${id}-${attempt === undefined || attempt === "" ? "1" : attempt}`;
+  return RUN_ID_PATTERN.test(github) ? github : undefined;
+}
+
 export function checkOptions(options: SimlockDevicesOptions): ProviderOptions {
   const given = options as unknown as Record<string, unknown>;
   for (const name of Object.keys(given)) {
@@ -146,7 +169,7 @@ export function checkOptions(options: SimlockDevicesOptions): ProviderOptions {
   const osVersion = checkOptionalString("osVersion", given["osVersion"]);
   const imageTag = checkOptionalString("imageTag", given["imageTag"]);
   const deviceBaseline = checkOptionalString("deviceBaseline", given["deviceBaseline"]);
-  const runId = checkOptionalString("runId", given["runId"]);
+  const runId = pickRunId(given["runId"]);
   return {
     url,
     token,
