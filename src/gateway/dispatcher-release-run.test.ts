@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SimlockError } from "../contract/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
-import { leaseFixture, ScriptedWorkerClient } from "./test-support.js";
+import { grantFixture, leaseFixture, ScriptedWorkerClient } from "./test-support.js";
 import { harness, session } from "./test-dispatcher.js";
 import { connectWorker, GatedRunner, saturatedIos, tick } from "./test-fleet.js";
 
@@ -199,5 +199,41 @@ describe("GatewayDispatcher: lease.release-run", () => {
     expect(ended).not.toHaveProperty("otherRun");
     expect(ended).not.toHaveProperty("otherOwner");
     expect(coordinator.waitingRequests()).toHaveLength(2);
+  });
+
+  it("marks a request already dispatched to a worker to release at its grant: the caller gets the lease, the worker is told to release it, and the id is not listed", async () => {
+    const { dispatcher, directory, leaseIndex, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    let openGrant = (): void => undefined;
+    const gate = new Promise<void>((resolve) => (openGrant = resolve));
+    client.requestLeaseQueue.push({
+      beforeGrant: () => gate,
+      grant: grantFixture(),
+      kind: "grant",
+    });
+    const granted = dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17", platform: "ios", requesterId: "ci", runId: "nightly-7" },
+      session({ principal: "tok_ci" }),
+    );
+    await tick();
+    expect(client.calls).toContain("lease.request:gw:instance-1:ci");
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+    expect(result).toEqual({ leaseIds: [], requestIds: [] });
+    expect(client.calls.filter((call) => call.startsWith("lease.release"))).toEqual([]);
+
+    openGrant();
+    const grant = await granted;
+    expect(grant.lease.id).toBe("wrk_a.lse_1");
+    await tick();
+    expect(client.calls).toContain("lease.release:lse_1");
+    expect(leaseIndex.all()).toEqual([]);
   });
 });
