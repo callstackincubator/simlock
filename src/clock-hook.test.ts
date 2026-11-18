@@ -1,10 +1,13 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+// @ts-expect-error why: a plain script with no types
+import { awakeMs } from "../.agents/scripts/awake.mjs";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -15,17 +18,18 @@ const SCRIPT = join(
 );
 const MINUTE = 60_000;
 
+// why: the same clock the hook reads, found the way the hook finds Python.
 function awakeNowMs(): number {
-  return (
-    Number(execFileSync("python3", ["-I", "-c", "import time; print(time.monotonic())"])) * 1000
-  );
+  const now = awakeMs();
+  if (now === null) throw new Error("no Python 3 on this host");
+  return now;
 }
 
 function call(dir: string, input: object): string {
   return spawnSync("node", [SCRIPT], {
     input: JSON.stringify(input),
     encoding: "utf8",
-    env: { ...process.env, TMPDIR: dir },
+    env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir },
   }).stdout;
 }
 

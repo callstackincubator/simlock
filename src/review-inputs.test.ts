@@ -1,17 +1,12 @@
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
+
+import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -104,16 +99,15 @@ function inputs(
       "repos/o/r/issues/602": FEATURE,
     }),
   );
-  writeFileSync(join(dirname(file), "gh"), FAKE_GH);
-  chmodSync(join(dirname(file), "gh"), 0o755);
+  writeFakeCommand(dirname(file), "gh", FAKE_GH);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PATH: `${dirname(file)}:${process.env.PATH}`,
+    ...fakeCommandEnv(dirname(file)),
     FAKE_GH_FILE: file,
     TMPDIR: root,
   };
   delete env.GH_REPO;
-  const stdout = execFileSync("sh", [SCRIPT, "7", ...(previous === undefined ? [] : [previous])], {
+  const stdout = execFileSync(BASH, [SCRIPT, "7", ...(previous === undefined ? [] : [previous])], {
     cwd: work,
     env,
     encoding: "utf8",

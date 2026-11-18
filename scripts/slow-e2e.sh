@@ -40,8 +40,13 @@ min_free=${SIMLOCK_SLOW_MIN_FREE_GIB:-15}
 worker_lock=${SIMLOCK_SLOW_WORKER_LOCK:-/tmp/simlock-$(id -u)/worker.lock}
 root=$(git rev-parse --show-toplevel)
 
+# why: on Windows 11 `python3` is by default the Microsoft Store alias, which prints "Python was
+# not found" instead of a version; the first of the two that says "Python 3" is the interpreter.
+py=python3
+case $(python3 --version 2>&1) in "Python 3"*) ;; *) py=python ;; esac
+
 helper() {
-  python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
+  $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
 import json, os, re, shutil, signal, subprocess, sys, time
 lock, lane_tmp, root, min_free, worker_lock, command = sys.argv[1:7]
 
@@ -254,7 +259,7 @@ echo "$log" > "$lock/log"
 echo "$log" > "$lock.last"
 mkdir -p "$lane_tmp"
 
-SIMLOCK_E2E_LOG_DIR="${log%.log}-daemons" TMPDIR="$lane_tmp/" python3 - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
+SIMLOCK_E2E_LOG_DIR="${log%.log}-daemons" TMPDIR="$lane_tmp/" $py - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
 import os, subprocess, sys
 lock, log, root, script, args = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 child = os.fork()

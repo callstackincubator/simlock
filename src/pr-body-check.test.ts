@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -52,8 +54,9 @@ function fromGitHub(pull: object, options: GitHub = {}) {
     routes["issues/7/comments -f per_page=100"] = options.comments.map((body) => ({ body }));
   }
   writeFileSync(join(dir, "routes.json"), JSON.stringify(routes));
-  writeFileSync(
-    join(dir, "gh"),
+  writeFakeCommand(
+    dir,
+    "gh",
     `#!/usr/bin/env node
 const routes = JSON.parse(require("node:fs").readFileSync(${JSON.stringify(join(dir, "routes.json"))}, "utf8"));
 const args = process.argv.slice(2);
@@ -69,10 +72,9 @@ if (routes[key] === null) {
 process.stdout.write(JSON.stringify(routes[key]));
 `,
   );
-  chmodSync(join(dir, "gh"), 0o755);
   const env = {
     ...process.env,
-    PATH: `${dir}:${process.env.PATH}`,
+    ...fakeCommandEnv(dir),
     GH_REPO: "o/r",
     GITHUB_ACTIONS: "",
   };

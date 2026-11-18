@@ -24,7 +24,7 @@ pr=${1:-}
 case $pr in '' | *[!0-9]*) echo "usage: pr-shas.sh <pr>" >&2; exit 0 ;; esac
 # why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr view` uses, so this script
 # calls repo-scoped REST only.
-nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
+nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\\#/#g; s#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
 api() {
   at=$1
   shift
