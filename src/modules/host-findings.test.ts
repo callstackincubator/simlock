@@ -51,6 +51,11 @@ describe("the module host's findings", () => {
         { warn: () => [{ ...finding("w"), advisory: true as const }] },
         ["warn: w (advisory)"],
       ],
+      [
+        "two sync, in module order",
+        { first: () => [finding("1")], second: () => [finding("2")] },
+        ["first: 1", "second: 2"],
+      ],
       ["one async", { slow: () => Promise.resolve([finding("a")]) }, ["slow: a"]],
       [
         "one async past the deadline beside a sync one",
