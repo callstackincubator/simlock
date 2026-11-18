@@ -74,6 +74,8 @@ export type {
   LeaseReleaseAllOutput,
   LeaseReleaseInput,
   LeaseReleaseOutput,
+  LeaseReleaseRunInput,
+  LeaseReleaseRunOutput,
   LeaseRenewInput,
   LeaseRecord,
   LeaseRequestInput,

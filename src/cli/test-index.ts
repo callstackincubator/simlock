@@ -239,6 +239,7 @@ export function fakeClient(overrides: Partial<SimlockAdminClient> = {}): Simlock
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
+    releaseRunLeases: () => Promise.resolve({ leaseIds: [], requestIds: [] }),
     listLeases: () => Promise.resolve(emptyLeaseList),
     runDoctor: () => Promise.resolve(emptyDoctor),
     onLeaseLost: () => () => {},

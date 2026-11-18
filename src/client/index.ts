@@ -48,6 +48,8 @@ export type {
   LeaseProgress,
   LeaseReleaseInput,
   LeaseReleaseOutput,
+  LeaseReleaseRunInput,
+  LeaseReleaseRunOutput,
   LeaseRenewInput,
   LeaseRecord,
   LeaseRequestInput,
