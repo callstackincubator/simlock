@@ -10,21 +10,24 @@
 // each line `+ #<n> <age>d <label> | <action> | <title>`; `+` marks an item that is new in its
 // section, and a last `Gone:` line names what left. The sections:
 //
-//   decide     a one-click decision: a triage report to read, a blocker to clear
+//   decide     a one-click decision: a triage report to read, a blocker to clear, a proposed
+//              refactor to set ready or close
 //   prs        a PR to review, to merge by hand, to run on hardware, or a routine PR stuck in draft
 //   sort       an issue with no <kind>:<state> label, which no automation sees
 //   session    work that starts with a spec session: a request, an unfinished spec, a draft task
 //   run        work an agent may start now: `deliver` on it
-//   decisions  an issue, open or closed, whose body still marks a decision delivery took as
-//              pending the maintainer
+//   decisions  an issue, open or closed, that still marks a decision delivery took as pending
+//              the maintainer: in its body, or in a comment when the body has none
 //   untriaged  a `bug:new` with no triage report; this one waits on an agent, not on a person
 //
 // A `task:draft` under a `feature:spec` feature is left out: its feature's line covers it.
 //
-// GitHub is read through repo-scoped REST only, as the other scripts do. --input reads the same
-// data from a file instead: { now, me, issues: [{ number, title, state, labels, assignees,
-// author, createdAt, body, parent, triaged, pr: null | { draft, head, updatedAt } }], runnable:
-// { "<feature>": [<task>] } }. `parent` is the number of the issue it is a sub-issue of, or null.
+// GitHub is read through `gh api`: the repository's REST endpoints, the search endpoint for the
+// pending decisions, and `user` for whose inbox it is. --input reads the same data from a file
+// instead: { now, me, issues: [{ number, title, state, labels, assignees, author, createdAt,
+// parent, pending, triaged, pr: null | { draft, head, updatedAt } }], runnable: { "<feature>":
+// [<task>] } }. `parent` is the number of the issue it is a sub-issue of, or null; `pending` is
+// how many decisions it marks pending.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -48,6 +51,7 @@ const ISSUE_RULES = [
   [(i) => i.labels.includes("upstream"), null, ""],
   [(i) => i.kindState?.endsWith(":blocked"), "decide", "read the handoff, clear the blocker"],
   [(i) => i.kindState === undefined, "sort", "label it bug:new or request:new"],
+  [(i) => i.kindState === "refactor:new", "decide", "set refactor:ready, or close it"],
   [(i) => i.assignees.length > 0, null, ""],
   [(i) => i.kindState === "bug:new" && !i.triaged, "untriaged", "an agent triages it"],
   [(i) => i.kindState === "bug:new", "decide", "read the triage report: add bug:ready, or reply"],
@@ -88,7 +92,7 @@ export function inboxItems(world) {
     const base = { number: issue.number, age, title: issue.title };
     const found = issue.pr ? prItem(issue, world.me, now) : issueItem(issue, world.runnable ?? {});
     if (found !== null) items.push({ ...base, ...found });
-    const pending = issue.body.split(PENDING).length - 1;
+    const pending = issue.pending ?? 0;
     if (pending > 0) {
       const action = `confirm or reverse ${pending} decision${pending === 1 ? "" : "s"} delivery took`;
       items.push({ ...base, section: "decisions", label: issue.state, action });
@@ -150,16 +154,20 @@ function gh(path, fields = {}) {
   return JSON.parse(out).flatMap((page) => page.items ?? page);
 }
 
+const marks = (text) => (text ?? "").split(PENDING).length - 1;
+
 function fetchWorld(now) {
   const repo = `repos/${repository()}`;
   const pulls = new Map(
     gh(`${repo}/pulls`, { state: "open", per_page: 100 }).map((p) => [p.number, p]),
   );
   const open = gh(`${repo}/issues`, { state: "open", per_page: 100 });
-  // why: delivery marks a decision pending in the issue body, and the issue usually closes with
-  // its PR before the maintainer has confirmed it; only the search endpoint finds those.
-  const q = `repo:${repository()} is:issue is:closed in:body "pending the maintainer"`;
-  const closed = gh("search/issues", { q, per_page: 100 });
+  // why: delivery marks a decision pending in the issue body, or for a bug in a `## Decision`
+  // comment (delivery rule 3), and the issue usually closes with its PR before the maintainer
+  // has confirmed it; only the search endpoint finds a closed one, and a comment.
+  const q = `repo:${repository()} is:issue "pending the maintainer"`;
+  const marked = new Map(gh("search/issues", { q, per_page: 100 }).map((i) => [i.number, i]));
+  const closed = [...marked.values()].filter((i) => i.state === "closed");
   const issues = [...open, ...closed].map((i) => {
     const labels = i.labels.map((l) => l.name);
     const pull = pulls.get(i.number);
@@ -171,8 +179,8 @@ function fetchWorld(now) {
       assignees: i.assignees.map((a) => a.login),
       author: i.user.login,
       createdAt: i.created_at,
-      body: i.body ?? "",
       parent: i.parent_issue_url ? Number(i.parent_issue_url.split("/").pop()) : null,
+      pending: marked.has(i.number) ? pendingDecisions(repo, i) : 0,
       triaged: labels.includes("bug:new") && i.comments > 0 && hasTriageReport(repo, i.number),
       pr: pull ? { draft: pull.draft, head: pull.head.ref, updatedAt: pull.updated_at } : null,
     };
@@ -185,6 +193,13 @@ function fetchWorld(now) {
     issues,
     runnable: Object.fromEntries(features.map(runnable)),
   };
+}
+
+function pendingDecisions(repo, issue) {
+  const inBody = marks(issue.body);
+  if (inBody > 0) return inBody;
+  const comments = gh(`${repo}/issues/${issue.number}/comments`, { per_page: 100 });
+  return comments.reduce((sum, c) => sum + marks(c.body), 0);
 }
 
 function hasTriageReport(repo, number) {

@@ -15,8 +15,8 @@ function issue(number: number, labels: string[], extra: Record<string, unknown> 
     assignees: [],
     author: "reporter",
     createdAt: TWO_DAYS_AGO,
-    body: "",
     parent: null,
+    pending: 0,
     triaged: false,
     pr: null,
     ...extra,
@@ -32,8 +32,6 @@ function sections(issues: unknown[], runnable = {}) {
 
 describe("inbox.mjs", () => {
   it("puts each issue in the section of the person or agent it waits on", () => {
-    const pending = "Keeps it. (decided in delivery, pending the maintainer)";
-
     expect(
       sections(
         [
@@ -50,7 +48,9 @@ describe("inbox.mjs", () => {
           issue(11, ["bug:ready"]),
           issue(12, ["feature:planned"]),
           issue(13, ["feature:planned"]),
-          issue(14, ["task:ready"], { state: "closed", body: pending }),
+          issue(14, ["bug:ready"], { state: "closed", pending: 2 }),
+          issue(15, ["refactor:new"]),
+          issue(16, ["bug:needs-info"]),
         ],
         { 12: [20, 21] },
       ),
@@ -65,6 +65,7 @@ describe("inbox.mjs", () => {
       "run#11",
       "run#12",
       "decisions#14",
+      "decide#15",
     ]);
   });
 
