@@ -70,8 +70,11 @@ flowchart LR
 3. **The supervisor restarts after a failure only.** A daemon that exits
    0 (a clean stop, or `Daemon already running`) ends the supervisor and
    the task. A daemon that exits non-zero or is killed is started again
-   10 s later, forever, as launchd and systemd do. Each restart writes one
-   line to `daemon.log`.
+   10 s later, as launchd and systemd do. Each restart writes one line to
+   `daemon.log`. Before each restart the supervisor reads its task: when
+   the task is gone (uninstall) or names another install (a new install),
+   it stops instead, so a restart loop ends with the service, as launchd's
+   `bootout` and systemd's `disable --now` end theirs.
 4. **A stop is `daemon.stop`.** Windows has no SIGTERM. `daemon stop`,
    install and uninstall stop the daemon through the daemon contract, as
    on every platform. Ending the task in Task Scheduler stops nothing
