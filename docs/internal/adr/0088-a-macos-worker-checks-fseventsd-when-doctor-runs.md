@@ -46,8 +46,11 @@ default is never written to `config.json`, as in ADR 0046.
 `findings()` may return a promise. The module host awaits each module's
 findings under one deadline, as it does for its stop steps; a module past
 it, or one that throws, adds no finding and is logged. Doctor is the only
-reader, so a check runs only when an operator asks for one, and nothing
-runs on an idle worker.
+reader: a check runs when an operator asks for one, and once when the
+daemon starts, because the startup reconcile reads every module's findings
+(`src/daemon/worker-composition.ts:490`, `src/core/doctor.ts:121`). The
+deadline bounds the start's wait for it. Nothing runs on an idle worker
+after that.
 
 ### 3. A module finding may be advisory
 
@@ -88,6 +91,6 @@ sequenceDiagram
 
 ## Consequences
 
-- A macOS worker runs `pgrep` and `top` once per doctor run, about a second.
+- A macOS worker runs `pgrep` and `top` once per doctor run and once at daemon start, about a second each, and the start waits no longer than the findings deadline.
 - Every macOS worker's `status` lists the `fseventsd` capability.
 - Any later module may use §1 to §3 without a new ADR.
