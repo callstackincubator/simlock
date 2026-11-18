@@ -427,7 +427,10 @@ describe("launcherFor with the Windows task (#1698)", () => {
   const taskXml = `<Task><Settings><Enabled>true</Enabled></Settings><Exec><Arguments>--headless "${nodePath}" "${supervisor}" --task ${name}</Arguments></Exec></Task>`;
   const session = [
     {
-      match: { command: "whoami", args: ["/user", "/fo", "csv", "/nh"] },
+      match: {
+        command: "cmd.exe",
+        args: ["/d", "/c", "chcp 65001 >nul && whoami /user /fo csv /nh"],
+      },
       result: ok('"desktop\\me","S-1-5-21-1"\r\n'),
     },
     {

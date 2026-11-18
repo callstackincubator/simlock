@@ -126,13 +126,13 @@ Daemon: running (worker)
 
 `starting` means the daemon is still reading the machine's devices. Devices, leases and capacity appear once it finishes. [Monitoring](/simlock/docs/worker/monitoring) explains the rest of the report.
 
-On macOS and Linux the last line shows the service:
+The last line shows the service:
 
 | Line | What it means |
 | --- | --- |
 | `Service: not installed` | You have not run `simlock daemon install`. |
 | `Service: installed (launchd, com.callstack.simlock.worker)` | The service is set up and working. |
-| `Service: not loaded (...)` | Nobody is logged in at the screen, or there is no Linux user session. Commands start the daemon without the service. |
+| `Service: not loaded (...)` | Nobody is logged in at the screen, there is no Linux user session, or on Windows the task is disabled. Commands start the daemon without the service. |
 | `Service: broken (...): <path> is gone; run simlock daemon install` | The Node or Simlock the service starts has moved, for example after an nvm or Homebrew upgrade. Run `simlock daemon install` again. |
 
 Add `--json` for a machine-readable answer, such as `{"status":"stopped"}`.

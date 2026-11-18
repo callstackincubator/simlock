@@ -486,7 +486,12 @@ export class TaskSchedulerServiceManager implements ServiceManager {
 
   private async hasDesktopSession(): Promise<boolean> {
     try {
-      const user = await this.checked("whoami", WHOAMI_ARGS);
+      // why: plain whoami writes the OEM code page, which garbles a non-ASCII account name and makes the tasklist filter match nothing.
+      const user = await this.checked("cmd.exe", [
+        "/d",
+        "/c",
+        `chcp 65001 >nul && whoami ${WHOAMI_ARGS.join(" ")}`,
+      ]);
       const account = /^"([^"]*)"/.exec(user.stdout.trim())?.[1];
       if (account === undefined) return false;
       const listed = await this.checked("tasklist", [

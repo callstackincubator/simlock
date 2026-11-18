@@ -114,7 +114,7 @@ export async function runSupervisor(dependencies: SupervisorDependencies): Promi
   for (;;) {
     let outcome: string;
     try {
-      // why: no timeoutMs: the daemon runs until it exits, the one wait in Simlock with no limit.
+      // why: no timeoutMs: the daemon runs until it exits, so this wait has no limit by design.
       const result = await runner
         .spawn(
           dependencies.nodePath,

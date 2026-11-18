@@ -907,7 +907,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     );
   }
 
-  it("an operator runs daemon install on Windows: the user's SID goes into a UTF-16 logon task that runs the supervisor hidden with the saved variables, the daemon answers, and install prints the name, Daemon running and the login hint", async () => {
+  it("an operator runs daemon install on Windows: the user's SID goes into a UTF-16 logon task that runs the supervisor hidden with the saved variables, the daemon answers, and install prints the name, Daemon running and the login hint; --gateway names the gateway task and passes --gateway to the supervisor, and --json answers the task-scheduler manager", async () => {
     const { exitCode, output, runner, filesystem, name, xmlPath, written } = await installOnWindows(
       { argv: ["daemon", "install"] },
     );
@@ -955,9 +955,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
       PATH: "C:\\bin",
     });
     expect(await filesystem.exists(xmlPath), "the XML file is deleted after create").toBe(false);
-  });
 
-  it("daemon install --gateway on Windows names the gateway task and passes --gateway to the supervisor, and --json answers the task-scheduler manager", async () => {
     const gateway = await installOnWindows({
       argv: ["--gateway", "daemon", "install"],
       role: "gateway",
@@ -966,9 +964,9 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     expect(gateway.output.stdout.split("\n")[0]).toBe(
       "Service installed: com.callstack.simlock.gateway (task-scheduler)",
     );
-    const parts = supervisorArguments(gateway.written?.text ?? "");
-    expect(parts?.[3], "the supervisor gets --gateway").toBe(" --gateway");
-    expect(parts?.[4]).toBe("com.callstack.simlock.gateway");
+    const gatewayParts = supervisorArguments(gateway.written?.text ?? "");
+    expect(gatewayParts?.[3], "the supervisor gets --gateway").toBe(" --gateway");
+    expect(gatewayParts?.[4]).toBe("com.callstack.simlock.gateway");
 
     const json = await installOnWindows({ argv: ["daemon", "install", "--json"] });
     expect(JSON.parse(json.output.stdout)).toEqual({
@@ -1091,7 +1089,10 @@ describe("CLI: daemon service on Windows (#1698)", () => {
       command: "cmd.exe",
       args: ["/d", "/c", `chcp 65001 >nul && schtasks /query /tn ${name} /xml`],
     };
-    const whoami = { command: "whoami", args: ["/user", "/fo", "csv", "/nh"] };
+    const whoami = {
+      command: "cmd.exe",
+      args: ["/d", "/c", "chcp 65001 >nul && whoami /user /fo csv /nh"],
+    };
     const tasklist = {
       command: "tasklist",
       args: ["/fi", "USERNAME eq desktop\\me", "/fi", "SESSION ne 0", "/fo", "csv", "/nh"],
@@ -1190,6 +1191,30 @@ describe("CLI: daemon service on Windows (#1698)", () => {
           { match: whoami, result: ok("\r\n") },
         ],
         line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "a non-ASCII account name is read as UTF-8 and filtered by whole",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          { match: whoami, result: ok('"desktop\\józef","S-1-5-21-1"\r\n') },
+          {
+            match: {
+              command: "tasklist",
+              args: [
+                "/fi",
+                "USERNAME eq desktop\\józef",
+                "/fi",
+                "SESSION ne 0",
+                "/fo",
+                "csv",
+                "/nh",
+              ],
+            },
+            result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n'),
+          },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
       },
       {
         label: "a path with an ampersand is read as the task XML escapes it",
