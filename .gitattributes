@@ -2,3 +2,7 @@
 # a union merge keeps both instead of stopping the stack sync on an add/add conflict. The
 # src/adr-index.repo.test.ts check keeps the table complete and in order.
 docs/internal/adr/README.md merge=union
+
+# why: a Windows checkout would otherwise turn text files into CRLF, which breaks the tests that
+# compare file text and the scripts bash runs.
+* text=auto eol=lf
