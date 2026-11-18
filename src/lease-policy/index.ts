@@ -31,7 +31,7 @@
  *   could have kept, one running slow keeps trying against a lease the daemon has expired,
  *   and neither can extend a lease the daemon did not.
  */
-import { isSimlockError } from "../contract/index.js";
+import { isSimlockError, SimlockError, type AnySimlockError } from "../contract/index.js";
 import type { Clock, TimerHandle } from "../ports/index.js";
 
 /** ADR 0004 §2's "one third of the TTL". */
@@ -387,4 +387,128 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       cancelTimer();
     },
   };
+}
+
+// why: ADR 0081 §4: a short drop is back within seconds, so the first tries come fast and then settle to a poll that is cheap for a farm.
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+const STEADY_RECONNECT_DELAY_MS = 15_000;
+
+// why: the farm answered and said no, so another try would only repeat it: the token was refused or this client is too old for the farm.
+function isRefusal(error: unknown): error is AnySimlockError {
+  return (
+    isSimlockError(error) &&
+    (error.code === "UNAUTHENTICATED" || error.code === "PROTOCOL_VERSION_UNSUPPORTED")
+  );
+}
+
+export interface ReconnectOptions<T> {
+  readonly clock: Clock;
+  readonly deadline: number;
+  readonly attempt: () => Promise<T>;
+  readonly onReconnected: (answer: T) => void;
+  readonly onDeadline: () => void;
+  readonly onLeaseGone: (error: unknown) => void;
+  readonly onRefused: (error: AnySimlockError) => void;
+  // why: an attempt that answers after `stop()` has an answer nobody takes, and a connection in it would stay open.
+  readonly onAbandoned?: (answer: T) => void;
+}
+
+export interface Reconnect {
+  stop(): void;
+}
+
+// why: the reconnect half of a holder's policy (ADR 0081 §4): the typed client never reconnects, so a frontend tries again on a schedule, outside it, and none after the deadline.
+export function startReconnect<T>(options: ReconnectOptions<T>): Reconnect {
+  const { clock, deadline, attempt, onReconnected, onDeadline, onLeaseGone, onRefused } = options;
+  const { onAbandoned } = options;
+  let stopped = false;
+  let tries = 0;
+  let timer: TimerHandle | undefined;
+  const deadlineTimer = clock.setTimer(Math.max(0, deadline - clock.now()), () => {
+    if (stopped) return;
+    stop();
+    onDeadline();
+  });
+  function stop(): void {
+    stopped = true;
+    clock.cancel(deadlineTimer);
+    if (timer !== undefined) clock.cancel(timer);
+    timer = undefined;
+  }
+  const schedule = (): void => {
+    timer = clock.setTimer(RECONNECT_DELAYS_MS[tries] ?? STEADY_RECONNECT_DELAY_MS, () => {
+      timer = undefined;
+      void tryOnce();
+    });
+  };
+  const tryOnce = async (): Promise<void> => {
+    try {
+      const answer = await attempt();
+      if (stopped) {
+        onAbandoned?.(answer);
+        return;
+      }
+      stop();
+      onReconnected(answer);
+    } catch (error: unknown) {
+      if (stopped) return;
+      if (isLeaseGone(error)) {
+        stop();
+        onLeaseGone(error);
+      } else if (isRefusal(error)) {
+        stop();
+        onRefused(error);
+      } else {
+        tries += 1;
+        schedule();
+      }
+    }
+  };
+  schedule();
+  return { stop };
+}
+
+// why: ADR 0081 §4: a queued request is waited for as long as its timeout says, but a farm that stays out of reach this long is gone, and a caller with no timeout would otherwise wait for ever.
+export const UNREACHABLE_GIVE_UP_MS = 300_000;
+
+// why: the reconnect of a caller that holds no lease yet resolves with the new connection, for the caller to send its request again on; the abort is the caller's cancel, which ends the wait as a cancelled request. A connection that opens after the wait ended goes to `abandon`.
+export function reconnectWhileWaiting<T>(options: {
+  readonly clock: Clock;
+  readonly origin: string;
+  readonly deadline: number;
+  readonly signal: AbortSignal | undefined;
+  readonly attempt: () => Promise<T>;
+  readonly abandon: (answer: T) => void;
+}): Promise<T> {
+  const { clock, origin, deadline, signal, attempt, abandon } = options;
+  return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {}));
+      return;
+    }
+    const reconnect = startReconnect({
+      attempt,
+      clock,
+      deadline,
+      onAbandoned: abandon,
+      onDeadline: () => {
+        reject(
+          new SimlockError("REMOTE_UNREACHABLE", "transport", `${origin} stayed out of reach`, {
+            url: origin,
+          }),
+        );
+      },
+      onLeaseGone: reject,
+      onReconnected: resolve,
+      onRefused: reject,
+    });
+    signal?.addEventListener(
+      "abort",
+      () => {
+        reconnect.stop();
+        reject(new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {}));
+      },
+      { once: true },
+    );
+  });
 }

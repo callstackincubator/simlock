@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import {
   isSimlockError,
   SimlockError,
   type DeviceOutputChunk,
   type ExecOutput,
+  type LeaseGrant,
   type LeaseProgress,
   type LeaseRecord,
   type LeaseRequestInput,
@@ -12,9 +14,13 @@ import {
 import { parseOrientation } from "../contract/index.js";
 import {
   awaitWithin,
+  reconnectWhileWaiting,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
+  startReconnect,
+  UNREACHABLE_GIVE_UP_MS,
   type LeaseRenewal,
+  type Reconnect,
 } from "../lease-policy/index.js";
 import type { Clock } from "../ports/index.js";
 import type {
@@ -60,10 +66,22 @@ export interface McpSessionOptions {
    * triggers have deliberately different powers -- see `#renewHeldLease`.
    */
   readonly connectForRenew: () => Promise<SimlockClient>;
+  /**
+   * why: Set when the session talks to a farm (ADR 0081): the farm's principal is the token, not
+   * this agent, so every lease request names `requesterId` and goes under a key of its own; and a
+   * dropped connection is ridden out by reconnecting and renewing on `startReconnect`'s
+   * schedule until the lease's deadline (ADR 0081 §4), with notices for the agent.
+   */
+  readonly farm?: { readonly origin: string; readonly requesterId: string };
 }
 
 export interface McpErrorResult {
   readonly code: string;
+  readonly message: string;
+}
+
+export interface SessionNotice {
+  readonly level: "info" | "warning";
   readonly message: string;
 }
 
@@ -144,6 +162,9 @@ export class McpSession {
    * it actually stands rather than as it stood at grant time -- see `release()`.
    */
   readonly #renewals = new Map<string, HeldLease>();
+  readonly #farm: McpSessionOptions["farm"];
+  readonly #reconnects = new Map<string, Reconnect>();
+  readonly #noticeListeners = new Set<(notice: SessionNotice) => void>();
   /** why: Lease ids already announced as lost, so one ending never reaches a listener twice -- see
    * `#announceLeaseLost`. */
   readonly #announcedLost = new Set<string>();
@@ -152,6 +173,7 @@ export class McpSession {
     this.#clock = options.clock;
     this.#connect = options.connect;
     this.#connectForRenew = options.connectForRenew;
+    this.#farm = options.farm;
   }
 
   lease(
@@ -162,11 +184,11 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      const request: LeaseRequestInput = { ...input };
-      const grant = await client.requestLease(request, {
-        ...(onProgress === undefined ? {} : { onProgress }),
-        ...(signal === undefined ? {} : { signal }),
-      });
+      const request: LeaseRequestInput =
+        this.#farm === undefined
+          ? { ...input }
+          : { ...input, idempotencyKey: randomUUID(), requesterId: this.#farm.requesterId };
+      const grant = await this.#requestWithReattach(client, request, signal, onProgress);
       if (this.#closed) {
         // why: The session ended while the daemon was provisioning. `close()` does not queue behind
         // `#mutations`, so it has already stopped renewing: arming a timer now would leave a
@@ -183,6 +205,81 @@ export class McpSession {
       this.#startRenewal(grant.lease);
       return grant;
     });
+  }
+
+  /**
+   * why: ADR 0081 §4: against a farm a drop leaves the request queued there, so the request goes
+   * again under its idempotency key on the reconnect schedule and attaches to the one waiting. A
+   * cancel during the wait takes one bounded connection to cancel it, as the client's abort does
+   * on a live connection.
+   */
+  async #requestWithReattach(
+    first: SimlockClient,
+    request: LeaseRequestInput,
+    signal: AbortSignal | undefined,
+    onProgress: ((progress: LeaseProgressNotice) => void) | undefined,
+  ): Promise<LeaseGrant> {
+    let client = first;
+    for (;;) {
+      try {
+        return await client.requestLease(request, {
+          ...(onProgress === undefined ? {} : { onProgress }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch (error: unknown) {
+        const farm = this.#farm;
+        if (farm === undefined || !isSimlockError(error) || error.code !== "DAEMON_CONNECTION_LOST")
+          throw error;
+        client = await this.#reconnectForRequest(farm.origin, request, signal);
+      }
+    }
+  }
+
+  async #reconnectForRequest(
+    origin: string,
+    request: LeaseRequestInput,
+    signal: AbortSignal | undefined,
+  ): Promise<SimlockClient> {
+    this.#throwIfClosed();
+    this.#notify({
+      level: "warning",
+      message: `lost the connection to ${origin}; reconnecting to the waiting request`,
+    });
+    let client: SimlockClient;
+    try {
+      client = await reconnectWhileWaiting({
+        abandon: () => undefined,
+        // why: the connection is adopted by the session as it opens, so one that opens after the wait ended is the session's to close.
+        attempt: () => this.#clientForUse(this.#connectForRenew),
+        clock: this.#clock,
+        deadline: this.#clock.now() + UNREACHABLE_GIVE_UP_MS,
+        origin,
+        signal,
+      });
+    } catch (error: unknown) {
+      if (signal?.aborted === true) await this.#cancelWaitingRequest(request);
+      throw error;
+    }
+    if (signal?.aborted === true) {
+      await this.#cancelWaitingRequest(request);
+      throw new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {});
+    }
+    return client;
+  }
+
+  async #cancelWaitingRequest(request: LeaseRequestInput): Promise<void> {
+    try {
+      await awaitWithin(
+        this.#clock,
+        RELEASE_TIMEOUT_MS,
+        this.#clientForUse(this.#connectForRenew).then((client) =>
+          client.cancelLease({ platform: request.platform, requesterId: request.requesterId }),
+        ),
+        "Timed out cancelling the waiting lease request",
+      );
+    } catch {
+      // why: the cancelled call is the answer; a farm that stays out of reach holds the request until its own timeout.
+    }
   }
 
   release(input: ReleaseSimulatorInput): Promise<ReleaseSimulatorOutput> {
@@ -298,6 +395,11 @@ export class McpSession {
   onLeaseLost(listener: (notice: LeaseLostNotice) => void): () => void {
     this.#leaseLostListeners.add(listener);
     return () => this.#leaseLostListeners.delete(listener);
+  }
+
+  onNotice(listener: (notice: SessionNotice) => void): () => void {
+    this.#noticeListeners.add(listener);
+    return () => this.#noticeListeners.delete(listener);
   }
 
   onDeviceHealth(listener: (notice: DeviceHealthNotice) => void): () => void {
@@ -474,11 +576,75 @@ export class McpSession {
   #stopRenewal(leaseId: string): void {
     this.#renewals.get(leaseId)?.renewal.stop();
     this.#renewals.delete(leaseId);
+    this.#reconnects.get(leaseId)?.stop();
+    this.#reconnects.delete(leaseId);
   }
 
   #stopAllRenewals(): void {
     for (const held of this.#renewals.values()) held.renewal.stop();
     this.#renewals.clear();
+    for (const reconnect of this.#reconnects.values()) reconnect.stop();
+    this.#reconnects.clear();
+  }
+
+  #notify(notice: SessionNotice): void {
+    for (const listener of this.#noticeListeners) listener(notice);
+  }
+
+  /**
+   * why: ADR 0081 §4, the farm's half of a held lease: the connection dropped, but the lease
+   * lives until its deadline, so each held lease reconnects on `startReconnect`'s schedule and
+   * renews over the new connection. The renew timer is stopped meanwhile (its own retry would
+   * answer to the lease's cadence, not the schedule), and the typed client itself still never
+   * reconnects.
+   */
+  #rideOutDrop(): void {
+    const farm = this.#farm;
+    if (farm === undefined || this.#closed) return;
+    for (const [leaseId, held] of this.#renewals) {
+      if (this.#reconnects.has(leaseId)) continue;
+      held.renewal.stop();
+      const lease = held.lease;
+      const until = (): string =>
+        new Date(this.#renewals.get(leaseId)?.lease.ttlDeadline ?? 0).toISOString();
+      this.#notify({
+        level: "warning",
+        message: `lost the connection to ${farm.origin}; reconnecting until ${until()} to keep lease ${leaseId}`,
+      });
+      this.#reconnects.set(
+        leaseId,
+        startReconnect({
+          attempt: async () => {
+            const client = await this.#clientForUse(this.#connectForRenew);
+            return client.renewLease({ leaseId });
+          },
+          clock: this.#clock,
+          deadline: lease.ttlDeadline,
+          onDeadline: () => {
+            this.#reportLeaseLost({ deviceId: lease.deviceId, leaseId, reason: "renew-failed" });
+          },
+          onLeaseGone: () => {
+            this.#reportLeaseLost({ deviceId: lease.deviceId, leaseId, reason: "renew-rejected" });
+          },
+          onReconnected: (renewed) => {
+            this.#reconnects.delete(leaseId);
+            this.#startRenewal(renewed);
+            this.#notify({
+              level: "info",
+              message: `reconnected to ${farm.origin}; lease ${leaseId} renewed`,
+            });
+          },
+          onRefused: (error) => {
+            const deadline = until();
+            this.#stopRenewal(leaseId);
+            this.#notify({
+              level: "warning",
+              message: `${error.message}; lease ${leaseId} is still yours until ${deadline}`,
+            });
+          },
+        }),
+      );
+    }
   }
 
   #forgetLease(leaseId: string): void {
@@ -597,6 +763,7 @@ export class McpSession {
         if (this.#client === client) {
           this.#client = undefined;
           this.#unwireClient();
+          this.#rideOutDrop();
         }
       }),
     ];

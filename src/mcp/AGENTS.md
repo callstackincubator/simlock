@@ -7,9 +7,9 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
 
 Session:
 
-- The requester id (`resolveRequesterId`) is the principal. The session sends no credential, so it is always `agent`.
+- The requester id (`resolveRequesterId`) is the principal. Locally the session sends no credential, so it is always `agent`.
 - stdout is the protocol. A push (lease lost, device unhealthy, device recovered) goes out as an MCP logging message.
-- Every connect, a tool call's and a renew's, asks `resolveDaemonHome` again, so a gateway started mid-session is found. With `--gateway` and none present the connect throws `GATEWAY_NOT_PRESENT` before it connects.
+- Locally, every connect, a tool call's and a renew's, asks `resolveDaemonHome` again, so a gateway started mid-session is found. With `--gateway` and none present the connect throws `GATEWAY_NOT_PRESENT` before it connects.
 - Never imports core, daemon, drivers or http: it reaches a daemon only through `simlock/client`. No lint rule holds this.
 - `run_on_device` and `rotate_device` act on the held lease: their input never names a lease or a device. A non-zero exit is a result, not a tool error.
 
