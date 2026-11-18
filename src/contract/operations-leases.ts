@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { authorizeOneLeaseCall, defineOperation } from "./operation-definition.js";
+import { refuseBadRunId } from "./operations-lease-request.js";
 import { INPUT_ORIENTATIONS } from "./orientation.js";
 import { ownsLease } from "./roles.js";
 import {
@@ -226,6 +227,19 @@ export const leaseReleaseAll = defineOperation({
   effect: "write",
   input: z.object({}),
   output: z.object({ leaseIds: z.array(z.string()) }),
+});
+
+/**
+ * why: a run's cleanup step frees the caller's own leases and waiting requests of one run in a call; `release-all` stays admin-only and unfiltered with reason `killed`, this is the caller's own act, `explicit`.
+ */
+export const leaseReleaseRun = defineOperation({
+  name: "lease.release-run",
+  role: "agent",
+  effect: "write",
+  // why: a plain string, bounded by `refuseBadRunId` as the one object-level check, as `lease.request`'s is.
+  input: z.object({ runId: z.string() }).strict().superRefine(refuseBadRunId()),
+  // why: the daemon's own answer, as `lease.release-all`'s; a client reads it, no wire input.
+  output: z.object({ leaseIds: z.array(z.string()), requestIds: z.array(z.string()) }),
 });
 
 /**

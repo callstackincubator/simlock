@@ -78,6 +78,7 @@ export class Dispatcher {
       "relay.cancel": this.#fleet.relayCancel,
       "doctor.run": this.#admin.doctorRun,
       "lease.release-all": this.#leases.leaseReleaseAll,
+      "lease.release-run": this.#leases.leaseReleaseRun,
       "list.get": this.#status.listGet,
       "cleanup.run": this.#admin.cleanupRun,
       "nuke.run": this.#admin.nukeRun,

@@ -237,6 +237,16 @@ export class FleetLeaseCoordinator {
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  async releaseRun(
+    runId: string,
+    ownerId: string | undefined,
+  ): Promise<{ readonly leaseIds: readonly string[]; readonly requestIds: readonly string[] }> {
+    // why: the run's waiting requests stop first, so a lease freed here is never the room a request of the run is granted.
+    const requestIds = await this.#admission.cancelRun(runId, ownerId);
+    return { leaseIds: await this.#forwarding.releaseRun(runId, ownerId), requestIds };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   exec(input: FleetExecInput, session: DispatchSession): Promise<{ readonly exitCode: number }> {
     return this.#forwarding.exec(input, session);
   }

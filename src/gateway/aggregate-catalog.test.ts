@@ -110,6 +110,26 @@ describe("aggregateCatalog", () => {
     expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
   });
 
+  it("carries the union of the workers' iOS modes, and none when any worker serves both", () => {
+    const serving = (modes?: ("slim" | "full")[]) => ({
+      ...iosOnA,
+      ...(modes === undefined ? {} : { modes }),
+    });
+    const merged = (...entries: ReturnType<typeof serving>[]) =>
+      aggregateCatalog(
+        entries.map((entry, index) => view({ catalog: [entry], id: `wrk_${index}` })),
+      );
+
+    const slimmers = merged(serving(["slim"]), serving(["slim"]));
+    const split = merged(serving(["slim"]), serving(["full"]));
+    const withBoth = merged(serving(["slim"]), serving());
+
+    expect(slimmers.platforms[0]?.modes).toEqual(["slim"]);
+    expect(split.platforms[0]?.modes).toEqual(["full", "slim"]);
+    expect(withBoth.platforms[0]).not.toHaveProperty("modes");
+    expect(() => OPERATIONS["catalog.get"].output.parse(split)).not.toThrow();
+  });
+
   it("carries the union of the connected workers' model classes, and keeps the class of the first worker in id order when two disagree", () => {
     const classed = (modelClasses: Record<string, "phone" | "tablet" | "tv">) => ({
       ...iosOnB,

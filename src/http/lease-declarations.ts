@@ -11,6 +11,7 @@ import {
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
+  refuseBadRunId,
   refuseModelWithClass,
   requesterIdSchema,
   waitingRequestSchema,
@@ -35,6 +36,7 @@ const leasePayloadSchema = z.object({
   os: z.string(),
   platform: z.string(),
   requestId: z.string().optional(),
+  runId: z.string().max(128).optional(),
   ttlMs: z.number(),
   udid: z.string(),
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
@@ -227,13 +229,16 @@ export const leaseRequestBodySchema = z
     os: z.string().min(1).optional(),
     physical: z.boolean().optional(),
     platform: z.enum(["ios", "android"]),
+    // why: A plain string, bounded by `refuseBadRunId` below as the one check, like `lease.request`'s: the same words on every transport.
+    runId: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((body, context) =>
     refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
-  );
+  )
+  .superRefine(refuseBadRunId());
 
 export const leaseRequestCreateRoute = declareRoute({
   method: "post",
@@ -258,7 +263,7 @@ export const leaseRequestCreateRoute = declareRoute({
     409: ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
     403: ["ADMISSION_DENIED"],
     404: ["UNKNOWN_BASELINE"],
-    422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
+    422: ["UNKNOWN_MODEL", "MODE_UNAVAILABLE", "BASELINE_MISMATCH", "BASELINE_STALE"],
     503: ["NO_CAPACITY", "ADMISSION_FAILED"],
   },
   errorExtras: {

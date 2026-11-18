@@ -46,6 +46,18 @@ export function baselineMismatchOf(worker: WorkerView, request: RoutableRequest)
 }
 
 /**
+ * why: ADR 0082 §4: whether the worker serves the iOS mode the request names or a baseline gives it
+ * (`withBaseline`). A request with no mode, a physical one, another platform, or a catalog without
+ * `modes` (a worker that serves both, or one from before the field) is served.
+ */
+export function servesMode(worker: WorkerView, request: RoutableRequest): boolean {
+  if (request.physical === true) return true;
+  const { mode } = withBaseline(worker, request);
+  const modes = catalogOf(worker, request)?.modes;
+  return mode === undefined || modes === undefined || modes.includes(mode);
+}
+
+/**
  * why: ADR 0061 §5: a request naming a baseline takes the baseline's model, exact OS, mode and
  * image tag, so it is read as that request on a worker that holds the baseline; the class is
  * dropped because the model is named. A request naming none, or a worker without the baseline,

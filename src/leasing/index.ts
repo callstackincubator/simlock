@@ -2,6 +2,7 @@ export { createLeasing, type UpdateHold } from "./create-leasing.js";
 export { capacityReasonOf } from "./acquisition-planner.js";
 export {
   DaemonUpdatingError,
+  ModeUnavailableError,
   NoCapacityError,
   ProvisionFailedError,
 } from "./lease-acquisition-coordinator.js";

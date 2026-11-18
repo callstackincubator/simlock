@@ -1,9 +1,18 @@
-import { hasPlatform, listsModel, matchRequest, physicalMatch } from "../request-match.js";
+import {
+  hasPlatform,
+  listsModel,
+  matchRequest,
+  physicalMatch,
+  servesMode,
+} from "../request-match.js";
 import type { FilterStage } from "../pipeline.js";
 
 export const canServe: FilterStage = {
   check(worker, request) {
     const physical = request.physical === true;
+    if (hasPlatform(worker, request) && !servesMode(worker, request)) {
+      return { reason: "mode-unavailable" };
+    }
     if (physical ? physicalMatch(worker, request, "enrolled") : matchRequest(worker, request)) {
       return undefined;
     }

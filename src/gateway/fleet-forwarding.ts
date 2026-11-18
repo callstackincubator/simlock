@@ -103,9 +103,24 @@ export class FleetForwarding {
   }
 
   async releaseAll(): Promise<readonly string[]> {
+    return this.#releaseEntries(this.options.leaseIndex.all());
+  }
+
+  /** why: the gateway matches its own index and releases each lease on its worker, never `lease.release-run` there: a worker sees the gateway as admin and would match every owner. */
+  async releaseRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
+    return this.#releaseEntries(
+      this.options.leaseIndex
+        .all()
+        .filter(
+          (entry) => entry.runId === runId && (ownerId === undefined || entry.ownerId === ownerId),
+        ),
+    );
+  }
+
+  async #releaseEntries(entries: readonly FleetLeaseEntry[]): Promise<readonly string[]> {
     const released: string[] = [];
     let firstFailure: unknown;
-    for (const entry of this.options.leaseIndex.all()) {
+    for (const entry of entries) {
       try {
         await this.#forwardToWorker(entry.workerId, (client) =>
           client.releaseLease({ leaseId: entry.workerLeaseId }),

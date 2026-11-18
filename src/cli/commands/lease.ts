@@ -8,12 +8,18 @@ import {
   type LeaseRenewal,
   type Reconnect,
 } from "../../lease-policy/index.js";
-import { ERROR_TABLE, isSimlockError, LEASE_LOST_EXIT_CODE } from "../../contract/index.js";
+import {
+  ERROR_TABLE,
+  isSimlockError,
+  LEASE_LOST_EXIT_CODE,
+  RUN_ID_PATTERN,
+} from "../../contract/index.js";
 import type { LeaseGrant, SimlockAdminClient } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
+import { checkedRunId } from "./run-id.js";
 import { writeError } from "../errors.js";
 import { reconnectToFarm } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
@@ -76,6 +82,7 @@ async function runLease(
     os: { type: "string" },
     physical: { type: "boolean" },
     platform: { type: "string" },
+    run: { type: "string" },
     timeout: { type: "string" },
     ttl: { type: "string" },
   });
@@ -86,7 +93,7 @@ async function runLease(
         "                     [--except <category,...>] [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
-        "                     [--meta <key=value>]... [--export-env] [--bind-pid <pid>]\n",
+        "                     [--run <id>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -94,6 +101,7 @@ async function runLease(
     throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   const platform = values.platform as "ios" | "android";
   const metadata = parseMeta(values.meta);
+  const runId = runIdOf(values.run, environment);
   const baseline =
     typeof values.baseline === "string"
       ? values.baseline
@@ -313,6 +321,7 @@ async function runLease(
       ...(typeof values.except === "string" ? { except: values.except.split(",") } : {}),
       ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
       ...(baseline === undefined ? {} : { baseline }),
+      ...(runId === undefined ? {} : { runId }),
       ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
       ...(metadata === undefined ? {} : { metadata }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -554,3 +563,13 @@ function exportEnvLines(environment: Readonly<Record<string, string>>): string {
 }
 
 export { run };
+
+/** why: `--run`, else `SIMLOCK_RUN` (empty is unset), else GitHub Actions' own run; a GitHub value that fails the rule is no run id, not an error, since the user set none. */
+function runIdOf(flag: unknown, environment: CommandContext["environment"]): string | undefined {
+  if (typeof flag === "string") return checkedRunId(flag, "--run");
+  if (environment.runFromEnv !== undefined && environment.runFromEnv !== "") {
+    return checkedRunId(environment.runFromEnv, "SIMLOCK_RUN");
+  }
+  const github = environment.githubRunFromEnv;
+  return github !== undefined && RUN_ID_PATTERN.test(github) ? github : undefined;
+}

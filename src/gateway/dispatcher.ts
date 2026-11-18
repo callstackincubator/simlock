@@ -149,6 +149,7 @@ export interface GatewayDispatcherOptions {
     | "release"
     | "saveBaseline"
     | "releaseAll"
+    | "releaseRun"
     | "exec"
     | "rotate"
     | "queueDepth"
@@ -294,6 +295,7 @@ export class GatewayDispatcher {
       "lease.release": this.#leaseRelease,
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
+      "lease.release-run": this.#leaseReleaseRun,
       "device.exec": this.#deviceExec,
       "device.rotate": this.#deviceRotate,
       "relay.request": relayRefused,
@@ -732,6 +734,7 @@ export class GatewayDispatcher {
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
         ...(input.requires === undefined ? {} : { requires: input.requires }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         // why: Always explicit past this point (§15): a request that named none is filled in here,
@@ -792,6 +795,14 @@ export class GatewayDispatcher {
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
     const leaseIds = await this.options.coordinator.releaseAll();
     return { leaseIds: [...leaseIds] };
+  };
+
+  #leaseReleaseRun: Handler<"lease.release-run"> = async (input, session) => {
+    const released = await this.options.coordinator.releaseRun(
+      input.runId,
+      session.role === "admin" ? undefined : session.principal,
+    );
+    return { leaseIds: [...released.leaseIds], requestIds: [...released.requestIds] };
   };
 
   #deviceRotate: Handler<"device.rotate"> = async (input, session) =>

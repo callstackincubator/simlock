@@ -75,6 +75,7 @@ const warmPoolShortSchema = z.enum([
   "no-driver",
   "runtime-missing",
   "unknown-model",
+  "mode-unavailable",
   "unresolvable",
   "boot-failed",
   "device-limit",
@@ -305,6 +306,8 @@ export const platformCatalogSchema = z.object({
     .max(CATALOG_SLIM_CATEGORIES_MAX)
     .optional(),
   defaultMode: deviceModeSchema.optional(),
+  /** why: ADR 0082 §4: the iOS modes a worker serves, sent only when it serves one; absent means both, which is also what a worker from before this field means. */
+  modes: z.array(deviceModeSchema).min(1).max(2).optional(),
   defaultImageTag: imageTagSchema.optional(),
   /** why: ADR 0084 §3: `false` says this worker serves only enrolled physical devices of the platform; absent means it makes virtual devices. */
   virtualDevices: z.literal(false).optional(),

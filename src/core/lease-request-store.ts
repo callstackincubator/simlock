@@ -20,6 +20,7 @@ export interface NewLeaseRequest {
   readonly ownerId: string;
   readonly idempotencyKey?: string;
   readonly leaseId?: string;
+  readonly runId?: string;
   readonly fleetRequestId?: string;
   readonly request: DeviceRequest;
 }
@@ -104,6 +105,7 @@ export function newLeaseRequestRecord<Grant>(
     id,
     ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
     ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
     ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
     ownerId: input.ownerId,
     request: { ...input.request },

@@ -14,6 +14,8 @@ export interface AcquisitionWaiter extends Waiter {
   classOf?: ((model: string) => DeviceClass | undefined) | undefined;
   requirement?: DeviceRequirement | undefined;
   spec?: VirtualSpec;
+  /** why: a run release marked this booting request; the grant it gets is ended at once. */
+  releaseAtGrant?: true;
   timing: LeaseTiming;
 }
 

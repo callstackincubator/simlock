@@ -692,6 +692,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     ttlMs,
     ttlDeadline,
     leaseId,
+    runId,
     except,
     request,
   }: CreateLeaseInput): Promise<LeaseRecord> {
@@ -721,6 +722,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       lastRenewedAt: grantedAt,
       ownerId,
       requesterId,
+      ...(runId === undefined ? {} : { runId }),
       ttlMs,
       ttlDeadline,
     };

@@ -51,6 +51,8 @@ export class FleetQueue {
   readonly #queue: WaitQueue;
   /** why: the priority the admission command answered, kept by waiter; a waiter with none has 0. */
   readonly #priorities = new WeakMap<object, number>();
+  /** why: a run release reached this request after a worker took it, so its grant is given back at once; kept by waiter. */
+  readonly #releaseAtGrant = new WeakSet<object>();
 
   constructor(options: FleetQueueOptions) {
     this.#queue = new WaitQueue({
@@ -84,6 +86,10 @@ export class FleetQueue {
     return this.#queue.pendingPlatforms(requesterId);
   }
 
+  pending(): readonly FleetWaiter[] {
+    return this.#queue.pending().map((waiter) => asFleet(waiter));
+  }
+
   findPendingWaiter(requesterId: string, platform?: Platform): FleetWaiter | undefined {
     return asFleet(this.#queue.findPendingWaiter(requesterId, platform));
   }
@@ -97,6 +103,14 @@ export class FleetQueue {
     const waiter = this.#queue.create(request, options, id);
     this.#priorities.set(waiter, priority);
     return asFleet(waiter);
+  }
+
+  markReleaseAtGrant(waiter: FleetWaiter): void {
+    this.#releaseAtGrant.add(waiter);
+  }
+
+  releasesAtGrant(waiter: FleetWaiter): boolean {
+    return this.#releaseAtGrant.has(waiter);
   }
 
   positionOf(waiter: FleetWaiter): number {

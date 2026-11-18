@@ -64,9 +64,13 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly components: Pick<ComponentInstaller, "install">;
   readonly decisions: AcquisitionDecision;
   readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
+  /** why: the modes the worker serves per platform (ADR 0082 §2); silent on a platform means every mode. */
+  readonly servedModes: Readonly<Partial<Record<Platform, readonly DeviceMode[]>>>;
   /** why: the image tag a worker gives an Android lease that names none (ADR 0078 §1). */
   readonly defaultImageTags: Readonly<Partial<Record<Platform, string>>>;
   readonly drivers: AcquisitionDrivers;
+  /** why: a run release ends a lease its request got at the grant; the release coordinator is built after this one, so the root hands the ending in. */
+  readonly endLease: (leaseId: string) => Promise<void>;
   readonly eventBus: Pick<EventBus, "emit">;
   /** Mints a request's id before admission checks, so a request refused there still has one. */
   readonly idGenerator: IdGenerator;

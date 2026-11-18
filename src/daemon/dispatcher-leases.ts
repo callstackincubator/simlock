@@ -61,6 +61,7 @@ export class LeaseHandlers {
           onAdmitted: admittedHook(session.onRequestAdmitted),
           ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
           ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+          ...(input.runId === undefined ? {} : { runId: input.runId }),
           ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
           ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
@@ -123,6 +124,14 @@ export class LeaseHandlers {
   readonly leaseReleaseAll: Handler<"lease.release-all"> = async () => {
     const leaseIds = await this.options.leases.releaseAll("killed");
     return { leaseIds: [...leaseIds] };
+  };
+
+  readonly leaseReleaseRun: Handler<"lease.release-run"> = async (input, session) => {
+    const released = await this.options.leases.releaseRun(
+      input.runId,
+      session.role === "admin" ? undefined : session.principal,
+    );
+    return { leaseIds: [...released.leaseIds], requestIds: [...released.requestIds] };
   };
 
   readonly leaseGet: Handler<"lease.get"> = (input, session) => {

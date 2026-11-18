@@ -119,7 +119,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
-              [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
+              [--run <id>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
 ```
 
 | Flag | Meaning | Default |
@@ -135,6 +135,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
+| `--run <id>` | The run id the lease carries: a name a CI job gives every lease it takes, 1 to 128 letters, digits, `.`, `_` or `-`, such as `123-1`. A gateway passes it to its worker and its admission command. `simlock status` shows it on the lease line. A bad value exits 2, before the command connects. The `SIMLOCK_RUN` environment variable sets it when the flag is absent; an empty value is unset. | `SIMLOCK_RUN`, else on GitHub Actions `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` (`-1` when the attempt is unset), else none |
 | `--meta <key=value>` | Repeatable. Context for the gateway's admission command, such as `--meta project=checkout-app --meta role=ci`. The key is the text before the first `=`; the value is everything after it. The same key twice keeps the last. At most 16 keys; a key is 1 to 64 characters, a value 0 to 256, and keys and values together at most 2048. A gateway passes it to its admission command only: it is stored nowhere, in no event, and a worker ignores it. A flag with no `=`, or a bound broken, exits 2. | None |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
@@ -172,15 +173,17 @@ Give a lease back. The command returns as soon as the lease ends; the device is 
 ```text
 simlock release <lease-id>
 simlock release --all [--yes]
+simlock release --run <id>
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `<lease-id>` | The lease to release. | — |
 | `--all` | Release every lease on the daemon. Needs the admin role. Asks for confirmation. | Off |
+| `--run <id>` | Release every lease that carries this [run id](#simlock-lease) and cancel the lease requests of the run that are still waiting. An agent frees its own; an admin frees every owner's. It asks for no confirmation. Prints `{"leaseIds":[…],"requestIds":[…]}`: the leases it released and the requests it cancelled or marked. A request a worker has already taken is listed too but not cancelled: it is released as soon as it is granted, so the caller of that request gets the lease and then a `lease-lost`. Nothing matching is not an error. On a gateway, a worker that cannot be reached fails the command with `WORKER_UNREACHABLE` after the others are released. | — |
 | `--yes` | Skip the confirmation for `--all`. Required when there is no terminal to ask in. | Off |
 
-Releasing a lease taken under a different [requester identity](#requester-identity) needs the admin role. A lease ID and `--all` together are a usage error.
+Releasing a lease taken under a different [requester identity](#requester-identity) needs the admin role. A lease ID, `--all` and `--run` together are a usage error: give only one.
 
 ## simlock simctl
 
@@ -358,6 +361,8 @@ The `CLI:` line below `Simlock:` is the version of the `simlock` command you ran
 When the daemon has seen a newer Simlock version on npm, the `Simlock:` line says so: `Simlock: 0.3.0 (0.4.0 available)`. A daemon learns the newest version at start and every 24 hours after, unless `update.check` is `false`.
 
 While an update runs, the line below `CLI:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
+
+A lease that carries a run id (`simlock lease --run`) shows it on its line: `Lease <id>: <requester> on <worker>, run <run id> since …`. `--json` carries it as the lease's `runId`.
 
 ```text
 simlock status [--json]
@@ -842,6 +847,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_HOME` | The folder Simlock keeps everything in. The worker uses it directly; a gateway uses its `gateway` subfolder. A path so long that the daemon's socket path would pass the system limit fails with `USAGE` (exit 2). | `~/.simlock` |
 | `SIMLOCK_ADMIN_TOKEN` | An admin credential: an operator token or the daemon's `admin.token` secret. Used when `--token` is not given. | Unset: the CLI reads `admin.token` |
 | `SIMLOCK_AGENT_ID` | The requester identity: printable, no control characters, at most 256 characters. When set, it wins over the session variables below. | Unset |
+| `SIMLOCK_RUN` | The run id `simlock lease` gives its lease when `--run` is not given: 1 to 128 letters, digits, `.`, `_` or `-`. An empty value is unset; any other bad value exits 2, naming the variable. Without it, on GitHub Actions (`GITHUB_ACTIONS` is `true` and `GITHUB_RUN_ID` is set), the run id is `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT`. | Unset |
 | `SIMLOCK_URL` | The farm every command runs on, when `--url` is not given; the same rules as `--url`. See [Remote mode](#remote-mode). | Unset |
 | `SIMLOCK_TOKEN` | The bearer token sent to the farm, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |

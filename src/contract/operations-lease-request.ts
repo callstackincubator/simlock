@@ -63,6 +63,8 @@ const leaseRequestBaseSchema = z
     ttlMs: z.number().finite().positive().optional(),
     owner: z.string().optional(),
     idempotencyKey: z.string().min(1).max(200).optional(),
+    // why: A plain string, bounded by `refuseBadRunId` as the one object-level check, like `osVersion`: a refined field would be checked by the MCP SDK before the handler.
+    runId: z.string().optional(),
     leaseId: leaseIdSchema.optional(),
     fleetRequestId: z.string().min(1).max(200).optional(),
     // why: A plain record of plain strings, bounded by `refuseBadMetadata` as one object-level check, like `except`: a bound on the field itself would be checked by the MCP SDK before the handler.
@@ -234,6 +236,21 @@ function refuseBadMetadata(): <
   };
 }
 
+/** why: the CLI checks a run id against it before connecting, so a bad `SIMLOCK_RUN` fails before a lease waits. */
+export const RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+
+const RUN_ID_REFUSAL = "a run id is 1 to 128 letters, digits, `.`, `_` or `-`";
+
+export function refuseBadRunId(): <T extends { readonly runId?: string | undefined }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.runId === undefined || RUN_ID_PATTERN.test(input.runId)) return;
+    context.addIssue({ code: "custom", message: RUN_ID_REFUSAL });
+  };
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -270,6 +287,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseBadOsVersion())
   .superRefine(refuseBadExcept())
   .superRefine(refuseBadMetadata())
+  .superRefine(refuseBadRunId())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 

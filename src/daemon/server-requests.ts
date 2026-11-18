@@ -1,7 +1,7 @@
 import { type DriverRejection, NoDriverError, UnknownPassthroughToolError } from "../core/index.js";
 import { type IpcConnection, type Logger } from "../ports/index.js";
 import { type RequestFrame, type RequestId } from "../daemon-protocol/index.js";
-import { leaseRelease, relayChannelSchema } from "../contract/index.js";
+import { leaseRelease, leaseReleaseRun, relayChannelSchema } from "../contract/index.js";
 import { type LinkChannel } from "../link/index.js";
 import { type ContractDispatcher, type DispatchSession } from "./dispatcher.js";
 import { type Connection, errorMessage } from "./server-connection.js";
@@ -13,7 +13,11 @@ interface ConnectionRequestsOptions {
   readonly pushes: ConnectionPushes;
   readonly logger: Logger;
   readonly driverRejections: readonly DriverRejection[];
-  readonly leaseSnapshot: () => readonly { readonly id: string; readonly ownerId: string }[];
+  readonly leaseSnapshot: () => readonly {
+    readonly id: string;
+    readonly ownerId: string;
+    readonly runId?: string | undefined;
+  }[];
 }
 
 export class ConnectionRequests {
@@ -91,6 +95,28 @@ export class ConnectionRequests {
           return await this.options.dispatcher.dispatch(
             "lease.release-all",
             frame.payload ?? {},
+            this.#session(connection),
+          );
+        } finally {
+          for (const leaseId of releasing) connection.selfInitiatedReleases.delete(leaseId);
+        }
+      }
+      case "lease.release-run": {
+        const input = parseInput(leaseReleaseRun.input, frame.payload);
+        // why: the leases of this run the caller owns (any owner's for an admin) are about to end at its own request, so its connection is not told they were lost.
+        const releasing = this.options
+          .leaseSnapshot()
+          .filter(
+            (lease) =>
+              lease.runId === input.runId &&
+              (connection.role === "admin" || lease.ownerId === connection.principal),
+          )
+          .map((lease) => lease.id);
+        for (const leaseId of releasing) connection.selfInitiatedReleases.add(leaseId);
+        try {
+          return await this.options.dispatcher.dispatch(
+            "lease.release-run",
+            frame.payload,
             this.#session(connection),
           );
         } finally {

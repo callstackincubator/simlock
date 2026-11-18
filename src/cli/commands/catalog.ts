@@ -41,6 +41,12 @@ function phonesOnlyLine(entry: CatalogGetOutput["platforms"][number]): string[] 
   ];
 }
 
+// why: a missing `modes` field means the entry serves both modes (a worker serving both, or the gateway merge leaving it out); a present one lists the modes served, which can be both for a split fleet.
+function modesLine(entry: CatalogGetOutput["platforms"][number]): string[] {
+  if (entry.platform !== "ios") return [];
+  return [`  Modes served: ${(entry.modes ?? ["slim", "full"]).join(", ")}`];
+}
+
 function formatCatalog(response: CatalogGetOutput): string {
   if (response.platforms.length === 0) return "No platforms available.";
   return response.platforms
@@ -78,6 +84,7 @@ function formatCatalog(response: CatalogGetOutput): string {
         `Platform: ${entry.platform}`,
         ...phonesOnlyLine(entry),
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
+        ...modesLine(entry),
         ...(entry.defaultImageTag === undefined
           ? []
           : [`  Default image tag: ${esc(entry.defaultImageTag)}`]),

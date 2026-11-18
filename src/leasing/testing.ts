@@ -55,6 +55,7 @@ export interface TestEngineOptions {
   readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
   readonly defaultImageTags?: Readonly<Partial<Record<Platform, string>>> | undefined;
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
+  readonly servedModes?: Readonly<Partial<Record<Platform, readonly DeviceMode[]>>> | undefined;
   readonly modelPreferences?: ModelPreferences | undefined;
   readonly leaseEndParticipants?: readonly LeaseEndParticipant[] | undefined;
 }
@@ -110,6 +111,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     core,
     defaultImageTags: options.defaultImageTags,
     defaultModes: options.defaultModes,
+    servedModes: options.servedModes,
     describeFailure: options.describeFailure ?? describeTestFailure,
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
@@ -129,6 +131,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     request: (request, requestOptions) => leasing.request(request, requestOptions),
     release: (leaseId, reason) => leasing.release(leaseId, reason),
     releaseAll: (reason) => leasing.releaseAll(reason),
+    releaseRun: (runId, ownerId) => leasing.releaseRun(runId, ownerId),
     renew: (leaseId, ttlMs) => leasing.renew(leaseId, ttlMs),
     expire: (leaseId) => leasing.expire(leaseId),
     nuke: (deleteDevices) => core.nuke.nuke(deleteDevices),

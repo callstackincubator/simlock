@@ -101,7 +101,7 @@ export class IdempotencyConflictError extends Error {
     readonly idempotencyKey: string,
   ) {
     super(
-      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request or lease ID`,
+      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request or lease ID, or run ID`,
     );
     this.name = "IdempotencyConflictError";
   }
@@ -219,7 +219,11 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       );
     if (record === undefined) return undefined;
     if (record.ownerId !== options.ownerId) throw new LeaseRequestForbiddenError(record.id);
-    if (!sameDeviceRequest(record.request, request) || record.leaseId !== options.leaseId) {
+    if (
+      !sameDeviceRequest(record.request, request) ||
+      record.leaseId !== options.leaseId ||
+      record.runId !== options.runId
+    ) {
       throw new IdempotencyConflictError(options.requesterId, key);
     }
     return record;
@@ -243,6 +247,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       id,
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
       ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
+      ...(options.runId === undefined ? {} : { runId: options.runId }),
       ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
       ownerId: options.ownerId,
       request,

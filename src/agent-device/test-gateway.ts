@@ -515,6 +515,7 @@ export interface LeaseView {
   readonly ownerId: string;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  readonly runId?: string;
   readonly worker?: { readonly id: string; readonly label?: string };
 }
 
