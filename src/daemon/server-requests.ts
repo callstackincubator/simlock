@@ -101,6 +101,12 @@ export class ConnectionRequests {
           for (const leaseId of releasing) connection.selfInitiatedReleases.delete(leaseId);
         }
       }
+      case "lease.release-run":
+        return this.options.dispatcher.dispatch(
+          "lease.release-run",
+          frame.payload,
+          this.#session(connection),
+        );
       case "lease.renew":
         return this.options.dispatcher.dispatch(
           "lease.renew",
