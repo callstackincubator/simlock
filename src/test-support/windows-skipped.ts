@@ -5,6 +5,7 @@
 const WINDOWS_SKIPPED: readonly string[] = [
   "src/agent-device/host/agent-device-supervisor-state.test.ts",
   "src/agent-device/host/install.test.ts",
+  "src/agent-device/rig-ports.e2e.test.ts",
   "src/budget-guard.test.ts",
   "src/ci-failures.test.ts",
   "src/claim.test.ts",
