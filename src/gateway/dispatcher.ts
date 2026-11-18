@@ -126,6 +126,8 @@ export interface GatewayDispatcherOptions {
   readonly directory: WorkerDirectory;
   readonly tokens?: TokenOperations;
   readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
+  // why: ADR 0081 §2: a revoked token's open sessions close at once, as its uplinks do.
+  readonly closeSessionsForToken?: (tokenId: string) => void;
   readonly clock: Clock;
   readonly logger?: Logger;
   /** why: Classifies a thrown error for the `operation` log line (`classifyError` in production),
@@ -430,7 +432,10 @@ export class GatewayDispatcher {
 
   #tokenRevoke: Handler<"token.revoke"> = async (input) => {
     const revoked = await this.#requireTokens().revoke(input.id);
-    if (revoked) await this.options.closeUplinksForToken?.(input.id);
+    if (revoked) {
+      this.options.closeSessionsForToken?.(input.id);
+      await this.options.closeUplinksForToken?.(input.id);
+    }
     return { revoked };
   };
 
@@ -681,8 +686,8 @@ export class GatewayDispatcher {
    * and its `lease.maxTtlMs` caps what its own clients may ask for, both before anything is
    * dispatched". `owner` (§27a, narrowed round 3 review H3) is read only from `session.
    * isGatewayUplink` -- never merely `role === "admin"`, which HTTP's `operator` token also maps
-   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher.ts`'s own
-   * `#leaseRequest` used to share with this one.
+   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher-leases.ts`'s
+   * `leaseRequest` used to share with this one.
    *
    * Unlike the worker, nothing ever forwards *into* a gateway's own front door the way this
    * gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005, so no

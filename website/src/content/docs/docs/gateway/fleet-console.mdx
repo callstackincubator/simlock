@@ -76,6 +76,7 @@ On **Queue**, a request's **Queue** field says where it waits: `the gateway's qu
 | Model not offered | The worker does not offer the model or device class asked for. |
 | OS not installed | The worker offers the model, but has no matching OS version installed. |
 | No iOS support, No Android support | The worker does not support the platform. |
+| Mode not served | The request names an iOS device mode, or a baseline has one, and the worker's `ios.modes` does not list it. |
 | Missing capability | The worker lacks an optional capability the request needs. |
 | Cannot keep these slim categories | The request names `except` categories the worker does not slim, or the worker would not give a slim device (its default mode is full and the request names no mode, or the baseline is full). |
 

@@ -5,7 +5,9 @@
 // one without the other prints the surfaces it changed and the exit code is 1. The surface is:
 //
 //   cli        src/cli/tree.ts, the command tree
-//   config     src/core/config.ts, the config type, defaults and validator
+//   config     src/core/config.ts and the parts it re-exports (config-types.ts, -defaults.ts,
+//              -validators.ts, -role-checks.ts, -helpers.ts, -alerts.ts): the config type, defaults
+//              and validator
 //   errors     the ERROR_TABLE object in src/contract/errors.ts
 //   mcp        each `registerTool(` name and definition object in src/mcp/server.ts, and the
 //              tool schemas in src/mcp/contracts.ts
@@ -50,7 +52,13 @@ const tools = (text) =>
 
 const SURFACES = [
   { name: "cli", files: ["src/cli/tree.ts"], parts: whole },
-  { name: "config", files: ["src/core/config.ts"], parts: whole },
+  {
+    name: "config",
+    files: ["", "-types", "-defaults", "-validators", "-role-checks", "-helpers", "-alerts"].map(
+      (part) => `src/core/config${part}.ts`,
+    ),
+    parts: whole,
+  },
   {
     name: "errors",
     files: ["src/contract/errors.ts"],

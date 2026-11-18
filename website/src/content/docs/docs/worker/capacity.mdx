@@ -120,11 +120,11 @@ simlock daemon start
 
 A slim iOS simulator has background services turned off that most agent work does not need, such as widgets, Siri, Spotlight, iCloud, the App Store, mail, Photos and telemetry. It uses much less RAM.
 
-An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full`. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`).
+An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full` (or the only mode `ios.modes` lists). To limit the worker to one mode, set `ios.modes` to `["slim"]` or `["full"]`; a lease, warm target or learned kind of the other mode is then refused. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`).
 
 What to expect:
 
-- **A `full` request always gets a full device. A `slim` request may not.** On iOS older than 18.5, and on Android, a slim request gets a full device instead of failing. If Simlock finds after the boot that the services are not off as asked, the lease also gets a full device, and the daemon log says why. The lease always reports the mode the device really has.
+- **A `full` request always gets a full device. A `slim` request may not.** On iOS older than 18.5, and on Android, a slim request gets a full device instead of failing, unless `ios.modes` leaves out `full`: then an iOS request that would get a full device is refused with `MODE_UNAVAILABLE`. If Simlock finds after the boot that the services are not off as asked, the lease also gets a full device, and the daemon log says why. The lease always reports the mode the device really has.
 - **The first boot of a slim simulator can be slow**, up to `ios.slim.bootTimeoutMs` (10 minutes by default).
 - **Slim and full devices are never mixed up.** A request only reuses an idle device of the mode it asked for.
 
@@ -219,13 +219,14 @@ warm pool: enabled, reserve ios 1 android 0
 | --- | --- |
 | `disabled` | The warm pool is off (`warmPool.enabled` is `false`). |
 | `runtime-missing` | Install the runtime or system image. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images). |
-| `unknown-model` | The model does not exist on this machine. Check `simlock catalog`. |
+| `unknown-model` | The model does not exist on this machine, or the platform's `<platform>.virtualDevices` is `false`. Check `simlock catalog`. |
+| `mode-unavailable` | The target is an iOS mode that `ios.modes` leaves out, or a slim target on iOS below 18.5 (which can only be full) when `ios.modes` has no `full`. Remove the target or add the mode to `ios.modes`. |
 | `unresolvable` | No device can be created for it. Check its OS version and mode. |
 | `no-driver` | The platform's tools are missing. Run `simlock doctor`. |
 | `boot-failed` | The last boot failed, or did not finish within `ios.full.bootTimeoutMs`, `ios.slim.bootTimeoutMs` or `android.bootTimeoutMs`. Simlock tries again later. Check `simlock daemon logs`. |
 | `running-limit` | No running slot is free. Raise the running limits or lower `count`. |
 | `device-limit` | The platform is at its device limit. |
-| `reserve` | The slot is held back by `warmPool.reserveRunning`. |
+| `reserve` | The slot is held back by `warmPool.reserveRunning`. A platform with `<platform>.virtualDevices` set to `false` holds none. |
 | `ram-budget` | The device would not fit in the RAM budget. |
 | `memory-pressure` | The host is short of memory and warming is paused (`memoryPressure.*`). |
 

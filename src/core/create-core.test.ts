@@ -10,6 +10,7 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import {
+  buildCapacityFigures,
   type Config,
   type ConfigOverrides,
   type Core,
@@ -35,6 +36,8 @@ async function build(
     readonly overrides?: ConfigOverrides;
     readonly sink?: MemoryLogSink;
     readonly withAndroid?: boolean;
+    /** why: a host with no iOS driver at all, as a Windows or Linux worker (#1689). */
+    readonly androidOnly?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -49,7 +52,12 @@ async function build(
     platform: "ios",
   });
   const androidDriver = new FakeDriver({ clock, platform: "android" });
-  const drivers = options.withAndroid === true ? [driver, androidDriver] : [driver];
+  const drivers =
+    options.androidOnly === true
+      ? [androidDriver]
+      : options.withAndroid === true
+        ? [driver, androidDriver]
+        : [driver];
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
@@ -619,6 +627,30 @@ describe("createCore", () => {
       expect(rig.stateOf(rig.ghost.id)).toBe("ready");
       expect(rig.failureLines()).toEqual([]);
       expect(rig.core.capacityReader.runningCapacity.global.overLimit).toBe(false);
+    });
+  });
+});
+
+describe("createCore on a host with no iOS driver (#1689)", () => {
+  it("reports no iOS device or running slot, no iOS warm reserve, and a global running limit of the Android slots alone", async () => {
+    // why: the default resource limits on 8 CPUs and 32 GiB are 4 iOS and 2 Android, 6 in all.
+    const { core, registry } = await build({
+      androidOnly: true,
+      overrides: { warmPool: { reserveRunning: { android: 1, ios: 1 } } },
+    });
+
+    const figures = buildCapacityFigures(registry.snapshot.virtualDevices, core.capacityReader);
+
+    expect({
+      ios: { limit: figures.ios.limit, maxRunning: figures.ios.maxRunning },
+      android: { limit: figures.android.limit, maxRunning: figures.android.maxRunning },
+      global: { maxRunning: figures.global.maxRunning, overLimit: figures.global.overLimit },
+      reserveRunning: core.warmPoolReader.figures().reserveRunning,
+    }).toStrictEqual({
+      ios: { limit: 0, maxRunning: 0 },
+      android: { limit: 2, maxRunning: 2 },
+      global: { maxRunning: 2, overLimit: false },
+      reserveRunning: { android: 1, ios: 0 },
     });
   });
 });

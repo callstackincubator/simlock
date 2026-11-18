@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -8,6 +8,13 @@ import { join } from "node:path";
 import { FakeDaemonLauncher, NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
 import { launcherFor } from "./service-launcher.js";
 import { FakeServiceManager, type ServiceState } from "./service-manager.js";
+
+// why: lets one test refuse a mkdir of one existing folder, as Windows does for a drive root; every
+// other call goes to the real `mkdir`.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdir: vi.fn(actual.mkdir) };
+});
 
 describe("NodeDaemonLauncher", () => {
   it("rejects asynchronous spawn failures", async () => {
@@ -100,6 +107,35 @@ describe("NodeDaemonLauncher", () => {
     } finally {
       process.umask(previousUmask);
       await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("starts the daemon when the folder holding SIMLOCK_HOME exists but refuses mkdir", async () => {
+    // why: #1663: on Windows `mkdir('D:\\')`, recursive or not, rejects EPERM though the root exists
+    // (Node 22.23.5, Windows 11). The temporary folder stands in for the drive root.
+    const driveRoot = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+    const home = join(driveRoot, "simlock");
+    const logPath = join(home, "daemon.log");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(mkdir).mockImplementation(async (path, options) => {
+      if (path === driveRoot)
+        throw Object.assign(new Error(`EPERM: operation not permitted, mkdir '${driveRoot}'`), {
+          code: "EPERM",
+        });
+      return actual.mkdir(path, options);
+    });
+    try {
+      const launch = new NodeDaemonLauncher({
+        args: ["-e", "console.log('out')"],
+        command: process.execPath,
+        logPath,
+        simlockHome: home,
+      }).launch();
+      await expect(launch).resolves.toHaveProperty("exited");
+      await expect.poll(async () => (await readFile(logPath, "utf8")).trim()).toBe("out");
+    } finally {
+      vi.mocked(mkdir).mockImplementation(actual.mkdir);
+      await rm(driveRoot, { force: true, recursive: true });
     }
   });
 

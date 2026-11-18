@@ -29,6 +29,7 @@ Route declarations:
 - A handler's JSON reply is type-checked against its declaration, never at run time. A stream or a bodiless 204 returns any `Response`.
 - `buildOpenApiDocument` writes the document from the same declarations, plus the routes of every module definition that carries `http`. `core-routes.test.ts` checks that every route the app serves is declared, and that its first path segment is in the contract's `CORE_ROUTE_SEGMENTS`, which a module's name may not start with.
 - A module's lease route (`HttpLeaseRoute`) gets the lease already resolved with `lease.get`: the owner or an operator; anyone else, and an unknown id, get 404 `UNKNOWN_LEASE`. The module never checks an owner, and http knows a module only by its name.
+- `GET /v1/session` is the daemon protocol over a WebSocket (ADR 0081): `app.session` runs `requireAuth`, then hands the connection and `buildHttpSession(identity)` to `deps.acceptSession`. An identity with `expiresAt` ends its session then. A plain GET answers 426.
 - A WebSocket upgrade of a lease route goes through `app.leaseSocket`, which runs the same auth and lease resolution, then the route's `socket.open`. A route with no `socket` answers 404 to an upgrade.
 
 Lease requests:
@@ -47,4 +48,4 @@ Streams:
 
 - **The notice buffer is the last frontend-held state.** It is in memory and resets on a daemon restart, so a polling client loses the health facts it had not drained. It needs a durable record of why a lease ended first.
 - **Single-lease reads answer 404, not 403, for an unowned lease.** `GET /v1/leases/{id}` and its `/events` dispatch `lease.get`, which answers `UNKNOWN_LEASE` for a lease that is not there and for one the caller does not own alike. Renew and release dispatch directly and answer 403.
-- **Error codes outside the contract union.** `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so a typed client sees `UNKNOWN_DAEMON_ERROR`.
+- **Error codes outside the contract union.** `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so a typed client sees `UNKNOWN_DAEMON_ERROR`.

@@ -11,6 +11,7 @@ import type {
   DaemonLauncher,
   Filesystem,
   HttpJsonClient,
+  HttpStreamClient,
   IpcConnector,
   ParentWatch,
   ProcessRunner,
@@ -34,7 +35,10 @@ export interface Output {
 /** why: the CLI's own shape for "start the stdio MCP server and run until it closes";
  * `src/mcp/main.ts` has a runner of the same job under the same name and a different shape, so
  * this one is named for what the CLI holds rather than shared, which would couple the two. */
-export type McpStdioLauncher = (options: { readonly daemonFlag: DaemonFlag }) => Promise<void>;
+export type McpStdioLauncher = (options: {
+  readonly daemonFlag: DaemonFlag;
+  readonly remote?: { readonly url: string; readonly token: string };
+}) => Promise<void>;
 
 export interface ServiceSetup {
   readonly manager: ServiceManager | undefined;
@@ -55,11 +59,20 @@ export interface CliServiceAccess {
   readonly definition: () => Promise<ServiceDefinition>;
 }
 
+/** why: set by the router when a command runs against a farm (`--url` or `SIMLOCK_URL`); `token` is `--token` else `SIMLOCK_TOKEN`, and may be missing. */
+export interface RemoteFarm {
+  readonly url: string;
+  readonly token: string | undefined;
+}
+
 export interface CliEnvironment {
+  readonly remote?: RemoteFarm | undefined;
   readonly clock: Clock;
   readonly configPath: string;
   readonly daemonHome: DaemonHome;
   readonly requesterId: string;
+  /** why: with no `SIMLOCK_AGENT_ID` and no agent session the requester is this process, which no later command of a shell can name. */
+  readonly requesterIsProcess?: boolean;
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly codexHome?: string | undefined;
@@ -96,11 +109,15 @@ export interface CliEnvironment {
   readonly parentWatch?: ParentWatch;
   readonly stderr: Output;
   readonly stdout: Output;
+  /** why: `simlock files get` prints a binary file as it is, which a string sink would re-encode. */
+  readonly stdoutBytes: (bytes: Uint8Array) => unknown;
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
   /** why: `simlock tunnel` reaches a worker or gateway over HTTP and WebSocket, not the daemon's socket; each port loads its adapter on first use. */
   readonly webSocket: WebSocketClientConnector;
   readonly httpJson: HttpJsonClient;
+  /** why: `simlock files` moves a file of any size over HTTP, which the capped GET of `httpJson` cannot. */
+  readonly httpStream: HttpStreamClient;
   readonly tcpStreams: TcpStreamConnector;
   /** why: a `forward` tunnel listens on the caller's loopback port; the adapter loads on first use. */
   readonly tcpListeners: TcpListenerFactory;
@@ -108,7 +125,7 @@ export interface CliEnvironment {
   readonly processRunner?: ProcessRunner | undefined;
   /** why: the commands that may be the caller's adb, in the order they are tried: `adb` on the PATH, then each Android SDK folder's `platform-tools`. */
   readonly adbCandidates?: readonly string[] | undefined;
-  /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the daemon `simlock tunnel` calls and the credential it sends. */
+  /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the farm every command reaches, and the credential it sends, when no `--url` or `--token` does. */
   readonly tunnelUrl?: string;
   readonly tunnelToken?: string;
   readonly readStdin?: () => Promise<string>;
@@ -137,6 +154,7 @@ export interface CliEnvironmentPorts {
   readonly parentPid?: number;
   readonly webSocket?: WebSocketClientConnector;
   readonly httpJson?: HttpJsonClient;
+  readonly httpStream?: HttpStreamClient;
   readonly tcpStreams?: TcpStreamConnector;
   readonly tcpListeners?: TcpListenerFactory;
   readonly processRunner?: ProcessRunner;

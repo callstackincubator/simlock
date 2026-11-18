@@ -31,7 +31,9 @@ const virtualRequest = {
 
 function config(leaseOverrides: object = {}): TestEngineConfig {
   return {
+    android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    ios: { modes: ["slim", "full"], virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -118,11 +120,16 @@ async function createHarness(
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
-async function enrollIphone(harness: Harness, driverDeviceId: string): Promise<PhysicalDevice> {
+async function enrollIphone(
+  harness: Harness,
+  driverDeviceId: string,
+  hardwareSerial?: string,
+): Promise<PhysicalDevice> {
   const device = await harness.registry.enrollPhysical({
     apps: [],
     class: "phone",
     driverDeviceId,
+    ...(hardwareSerial === undefined ? {} : { hardwareSerial }),
     model: "iPhone 15 Pro",
     osVersion: "18.4",
     platform: "ios",
@@ -168,10 +175,18 @@ function stateOf(harness: Harness, device: PhysicalDevice): string | undefined {
   return harness.registry.snapshot.devices.find((candidate) => candidate.id === device.id)?.state;
 }
 
-function presenceReads(harness: Harness): unknown[] {
+function presenceEntries(harness: Harness): unknown[] {
   return harness.driver.calls
     .filter((call) => call.operation === "listPresentPhysical")
     .map((call) => call.arguments[0]);
+}
+
+function presenceReads(harness: Harness): unknown[] {
+  return presenceEntries(harness).map((entries) =>
+    (entries as readonly { readonly driverDeviceId: string }[]).map(
+      (entry) => entry.driverDeviceId,
+    ),
+  );
 }
 
 function claimKind(harness: Harness, device: PhysicalDevice): string | undefined {
@@ -239,6 +254,18 @@ describe("createLeasing with physical devices", () => {
     expect(lookups(refusing)).toEqual([]);
     expect(granted).toMatchObject({ device: { id: device.id } });
     expect(refused).toBeInstanceOf(UnknownModelError);
+  });
+
+  it("reads a device's presence before the grant with its driverDeviceId and hardwareSerial", async () => {
+    const harness = await createHarness();
+    await enrollIphone(harness, "UDID-A", "SER-A");
+
+    const result = await outcome(harness.engine.request(physicalRequest, asking("agent")));
+
+    expect(result).toMatchObject({ device: { driverDeviceId: "UDID-A" } });
+    expect(presenceEntries(harness)).toEqual([
+      [{ driverDeviceId: "UDID-A", hardwareSerial: "SER-A" }],
+    ]);
   });
 
   it("counts a presence read that rejects as not present and releases the grant claim", async () => {

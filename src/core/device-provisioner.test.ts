@@ -446,8 +446,11 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // doctor and registry tests split out of one file (ADR 0063).
       [join("core", "test-doctor.ts")]: 2,
       [join("core", "test-registry.ts")]: 1,
-      // why: the harness the lease-acquisition coordinator tests split out of one file share (ADR 0063).
+      [join("core", "test-registry-corrupt-row.ts")]: 1,
+      // why: the harnesses the lease-acquisition coordinator and createLeasing tests split out of one
+      // file share (ADR 0063).
       [join("leasing", "test-lease-acquisition.ts")]: 1,
+      [join("leasing", "test-create-leasing.ts")]: 1,
       // why: the dispatcher tests' seeded warm device, shared by the files that start from one.
       [join("daemon", "test-dispatcher.ts")]: 1,
     });
@@ -455,15 +458,20 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // The driver call itself.
       [join("core", "device-provisioner.ts")]: 1,
       // `provisioner.provision(...)`: the lease path asking this module, not a driver.
-      [join("leasing", "lease-acquisition-coordinator.ts")]: 1,
+      [join("leasing", "acquisition-workflow.ts")]: 1,
       // The same, for a device the warm pool creates for a target.
       [join("core", "warm-pool", "converger.ts")]: 1,
-      // why: not a second creator: the Android driver's own `provision` hands the call to its seeds
-      // part, and its test helpers (never loaded in production) drive the driver to build fixtures.
+      // why: not a second creator: each driver's own `provision` hands the call to its seeds part,
+      // and the Android test helpers (never loaded in production) drive the driver to build fixtures.
       [join("drivers", "android", "index.ts")]: 1,
-      [join("drivers", "android", "testing.ts")]: 2,
+      [join("drivers", "ios", "index.ts")]: 1,
+      [join("drivers", "android", "test-driver-harness.ts")]: 1,
+      [join("drivers", "android", "test-seed-harness.ts")]: 1,
+      [join("drivers", "android", "test-seeds.ts")]: 1,
       // why: the harness's fixture devices, as for registerDevice above.
       [join("leasing", "test-lease-acquisition.ts")]: 1,
+      [join("leasing", "test-create-leasing.ts")]: 1,
+      [join("core", "test-quarantine-coordinator.ts")]: 1,
       [join("daemon", "test-dispatcher.ts")]: 1,
     });
   });

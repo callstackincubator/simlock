@@ -1,23 +1,8 @@
 /**
- * The single place that turns a thrown core/daemon error into a `SimlockErrorCode`. ADR 0003
- * §7: "CLI exit codes and HTTP status codes are columns of the same error table, not second
- * mappings." Both transports -- `DaemonServer`'s socket frame handling (`errorCode` in
- * `server.ts`) and the HTTP gateway (`mapError` in `../http/errors.ts`) -- call `classifyError`
- * to get the *code*, then read whichever column they need (`cliExitCode`/`httpStatus`) off
- * `ERROR_TABLE` themselves. Before this module existed, each transport hand-wrote its own
- * `instanceof` chain for these errors and the two silently drifted (see the ADR 0003-09 review,
- * finding B5): `InsufficientDiskSpaceError`, `LicenseNotAcceptedError`, `StartupFailedError`,
- * `DoctorUnavailableError`, and `NukeUnavailableError` all mapped correctly over the socket but
- * fell through to `INTERNAL` over HTTP. Adding a new core error now means adding one branch
- * here, not one in each transport.
- *
- * `DispatchError`'s own `code` is used verbatim (trusted by construction -- see `dispatcher.ts`,
- * every call site passes a real `SimlockErrorCode`) rather than re-classified, since it is
- * already the shared dispatcher's own protocol-shaped rejection.
- *
- * Deliberately excludes anything that is socket-framing-specific (`ProtocolError`, thrown only
- * while parsing a request frame before a `Session` exists -- it never reaches the shared
- * dispatcher, so it never reaches HTTP either) -- that stays local to `server.ts`.
+ * why: both transports classify a thrown error here and read their own column off
+ * `ERROR_TABLE`, so a core error maps the same over the socket and over HTTP; per-transport
+ * `instanceof` chains drifted apart before. `ProtocolError` is left out: it is thrown only while
+ * parsing a frame before a `Session` exists, so it never reaches HTTP.
  */
 import {
   BaselineMismatchError,
@@ -45,6 +30,7 @@ import {
   IdempotencyConflictError,
   LeaseIdTakenError,
   LeaseRequestForbiddenError,
+  ModeUnavailableError,
   NoCapacityError,
   ProvisionFailedError,
   QueueTimeoutError,
@@ -84,10 +70,8 @@ export class StartupFailedError extends Error {
  */
 // fallow-ignore-next-line complexity -- one exhaustive classifier is the point (ADR §7).
 export function classifyError(error: unknown): SimlockErrorCode | undefined {
-  // `DispatchError` is `Dispatcher`'s own protocol-shaped rejection (bad input, role/authorize
-  // failure, unknown operation, a rejected credential) -- its `code` is already a
-  // `SimlockErrorCode` by construction (see `dispatcher.ts`), so it is used verbatim rather than
-  // re-derived.
+  // why: a `DispatchError` carries a `SimlockErrorCode` by construction, so its code is used
+  // verbatim rather than re-derived.
   if (error instanceof DispatchError) {
     return error.code as SimlockErrorCode;
   }
@@ -145,6 +129,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof UnknownModelError) {
     return "UNKNOWN_MODEL";
+  }
+  if (error instanceof ModeUnavailableError) {
+    return "MODE_UNAVAILABLE";
   }
   if (error instanceof UnknownBaselineError) {
     return "UNKNOWN_BASELINE";

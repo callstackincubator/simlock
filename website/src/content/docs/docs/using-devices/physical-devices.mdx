@@ -18,7 +18,7 @@ When a physical lease ends, Simlock uninstalls every app that wasn't on the devi
 ## Before you start
 
 - **The device is enrolled.** An admin enrols it on the worker it is plugged into, or the worker does it for every plugged-in phone when its admin turned on `devices.autoEnroll`. Simlock never leases a device that isn't enrolled. See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
-- **The device is ready to use.** It is plugged in by USB, trusted, and usable when the lease is granted. A device that isn't is skipped, and your request waits for it.
+- **The device is ready to use.** It is plugged in by USB (an Android phone may instead be reached over the network when the worker sets `android.networkDevices`, and then its ID, and `ANDROID_SERIAL` in the grant, is its address), trusted, and usable when the lease is granted. A device that isn't is skipped, and your request waits for it.
 - **An iPhone or iPad is unlocked.** One that asks for its passcode counts as not there.
 
 ## See which devices are enrolled
@@ -57,6 +57,26 @@ The grant is the same JSON line as for a simulator, with `device.physical` set t
 ```
 
 Physical requests have their own queue. A simulator request never waits behind a physical one, and a request for one phone model never waits behind a request for another.
+
+## Serve enrolled devices only
+
+To keep a worker for real phones, set `android.virtualDevices` or `ios.virtualDevices` to `false` and restart the worker:
+
+```bash
+simlock config set android.virtualDevices false
+simlock daemon stop && simlock daemon start
+```
+
+From then on the worker never creates, boots or keeps an emulator (or simulator) of that platform:
+
+- A lease without `--physical` fails at once with `UNKNOWN_MODEL` (exit 12), whatever else it asks for. It never waits and never downloads.
+- The warm pool boots nothing on that platform, and idle devices of it are deleted when the worker starts. A leased one runs to its release. Saved baselines stay.
+- `simlock catalog` says virtual devices are off for the platform.
+- A lease with `--physical`, the other platform and components work as before.
+
+```json
+{"error":{"code":"UNKNOWN_MODEL","message":"This worker serves only enrolled physical android devices (android.virtualDevices is false); ask for a physical device (--physical, or physical: true)"}}
+```
 
 ## Use the device
 

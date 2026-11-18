@@ -439,6 +439,7 @@ describe("Dispatcher: status.get RAM budget", () => {
   describe("atRamBudget", () => {
     async function withIosDevices(count: number) {
       const built = await buildDispatcher({
+        extraDrivers: [new FakeDriver({ clock: new FakeClock(1_000), platform: "android" })],
         capacity: {
           strategy: "resource",
           config: {

@@ -59,6 +59,23 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     ]);
   });
 
+  it("writes a file in place: the same file, emptied or filled, ending at the mode it is given", async () => {
+    const filesystem = create();
+    const file = `${temporaryDirectory}/emulator.log`;
+
+    await filesystem.mkdirp(temporaryDirectory);
+    await filesystem.writeFileAtomic(file, "old output", { mode: 0o644 });
+    const before = (await filesystem.stat(file)).identity;
+    await filesystem.writeFileInPlace(file, "", { mode: 0o600 });
+
+    await expect(filesystem.readFile(file)).resolves.toBe("");
+    expect((await filesystem.stat(file)).identity).toBe(before);
+    expect((await filesystem.stat(file)).mode).toBe(0o600);
+
+    await filesystem.writeFileInPlace(`${temporaryDirectory}/new.log`, "text", { mode: 0o600 });
+    await expect(filesystem.readFile(`${temporaryDirectory}/new.log`)).resolves.toBe("text");
+  });
+
   it("copies a file's contents over the target and leaves the source", async () => {
     const filesystem = create();
     await filesystem.mkdirp(temporaryDirectory);
@@ -233,6 +250,27 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.realpath(`${temporaryDirectory}/devices/ios`)).resolves.toBe(
       await filesystem.realpath(`${temporaryDirectory}/devices/real`),
     );
+  });
+
+  it("reads where a link points, repoints it, and writes bytes into a file at an offset without truncating it or touching its modification time, and refuses to read a file as a link or write into a file that is not there", async () => {
+    const filesystem = create();
+    const dir = temporaryDirectory;
+    await filesystem.mkdirp(dir);
+    await filesystem.writeFileAtomic(`${dir}/file`, "abcdef");
+    // why: the memory filesystem has no disk file to age, and its write never touches the time.
+    if (filesystem instanceof NodeFilesystem) await utimes(`${dir}/file`, 1_000_000, 1_000_000);
+    const modifiedBefore = (await filesystem.stat(`${dir}/file`)).modifiedAtMs;
+    await link(filesystem, `${dir}/link`, `${dir}/old`);
+
+    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/old`);
+    await filesystem.replaceSymlink(`${dir}/link`, `${dir}/new`);
+    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/new`);
+    await filesystem.writeAt(`${dir}/file`, 2, new TextEncoder().encode("XY"));
+    await expect(filesystem.readFile(`${dir}/file`)).resolves.toBe("abXYef");
+    expect((await filesystem.stat(`${dir}/file`)).modifiedAtMs).toBe(modifiedBefore);
+
+    await expect(filesystem.readlink(`${dir}/file`)).rejects.toThrow();
+    await expect(filesystem.writeAt(`${dir}/missing`, 0, new Uint8Array(1))).rejects.toThrow();
   });
 
   it("refuses to answer for a path that runs through a file", async () => {

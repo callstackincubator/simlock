@@ -59,7 +59,7 @@ grounds for rejecting a change even if the prose reads well.
    edited with every change. A line that restates code is deleted, not
    fixed. The shape and the budget are in
    [../templates/manual.md](../templates/manual.md), and
-   `src/docs-manuals.test.ts` holds them. A `CLAUDE.md` beside a manual
+   `src/docs-manuals.repo.test.ts` holds them. A `CLAUDE.md` beside a manual
    holds only `@AGENTS.md`, so Claude Code loads the manual when it reads
    a file in the module; other agents load it by the rule in the root
    `AGENTS.md`. A path that runs through several modules (startup,

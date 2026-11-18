@@ -24,7 +24,7 @@ A target is one of these, and nothing else:
 - **A file over a cut-off an accepted ADR sets.** ADR 0063 §3: code over
   1,400 lines, a test file over 2,500, counted with `git ls-files src ui
   e2e scripts .agents/scripts | xargs wc -l`; the files on
-  `SHRINK_ONLY` in `src/source-hygiene.test.ts` count too.
+  `SHRINK_ONLY` in `src/source-hygiene.repo.test.ts` count too.
 - **A Fallow refactoring target**: `pnpm exec fallow health --format json
   --quiet --targets`, the first-ranked target.
 - **A Fallow duplication finding**: `pnpm exec fallow dupes --format json

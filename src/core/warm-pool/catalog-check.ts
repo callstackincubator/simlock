@@ -1,5 +1,5 @@
 import type { Clock, Logger } from "../../ports/index.js";
-import type { Platform, VirtualSpec } from "../domain.js";
+import { type DeviceMode, type Platform, specMode, type VirtualSpec } from "../domain.js";
 import type { DriverCatalog, PlatformCatalog } from "../driver-catalog.js";
 import { stableError } from "../stable-error.js";
 import type { LearnedKind } from "./learned.js";
@@ -9,12 +9,14 @@ const CATALOG_READ_LIMIT_MS = 30_000;
 
 interface CatalogCheckOptions {
   readonly baselines: {
-    current(name: string): { readonly staleReason?: string } | undefined;
+    current(name: string): { readonly mode: DeviceMode; readonly staleReason?: string } | undefined;
   };
   readonly catalog: Pick<DriverCatalog, "listCatalog">;
   readonly clock: Clock;
   readonly hasDriver: (platform: Platform) => boolean;
   readonly logger: Logger;
+  /** why: the iOS modes the worker serves (ADR 0082 §2); a learned kind is planned from its stored spec and never resolved, so this is where its mode is checked. Absent means both. */
+  readonly servedModes?: readonly DeviceMode[] | undefined;
   /** why: a read lists a platform that had no answer, so the kinds waiting on it can be planned now, not at the next tick. A failed or timed out read does not call it: its retry would loop. */
   readonly onAnswer: () => void;
 }
@@ -48,9 +50,22 @@ export class CatalogCheck {
         if (current === undefined || current.staleReason !== undefined) return true;
       }
       if (!this.options.hasDriver(platform)) return true;
+      if (this.modeNotServed(kind)) return true;
       const answer = this.#answers.get(platform);
       return answer !== undefined && !lists(answer, kind.spec);
     });
+  }
+
+  /** why: whether the kind's mode (a baseline kind's from its baseline's current spec) is an iOS mode the worker does not serve. */
+  modeNotServed(kind: LearnedKind): boolean {
+    const { servedModes } = this.options;
+    const { baseline, platform } = kind.spec;
+    if (servedModes === undefined || platform !== "ios") return false;
+    const mode =
+      baseline === undefined
+        ? specMode(kind.spec)
+        : this.options.baselines.current(baseline.name)?.mode;
+    return mode !== undefined && !servedModes.includes(mode);
   }
 
   /** why: the kinds whose platform has a driver and no answer yet: a read pending, failed or timed out. */

@@ -55,6 +55,10 @@ export interface LeasingOptions {
    * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
    */
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
+  /** why: the device modes the worker serves per platform, built from config by the composition root (ADR 0082 §2). Omitted, or silent on a platform, means every mode. */
+  readonly servedModes?: Readonly<Partial<Record<Platform, readonly DeviceMode[]>>> | undefined;
+  /** why: the worker's default image tag per platform, built from config by the composition root (ADR 0078 §1). */
+  readonly defaultImageTags?: Readonly<Partial<Record<Platform, string>>> | undefined;
   readonly modelPreferences?: ModelPreferences | undefined;
   /** why: not started on build: a health probe would shell out while startup convergence does. */
   readonly healthMonitor?: boolean | undefined;
@@ -154,7 +158,9 @@ export function createLeasing(options: LeasingOptions): Leasing {
     claims: core.claims,
     components: options.components,
     decisions,
+    defaultImageTags: options.defaultImageTags ?? {},
     defaultModes: options.defaultModes ?? {},
+    servedModes: options.servedModes ?? {},
     drivers: core.drivers,
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,

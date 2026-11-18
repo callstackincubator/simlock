@@ -75,7 +75,10 @@ A device that isn't running has no picture, and the page says why: shut down, st
 - **The picture ends when the device stops or is handed back.** When the device shuts down, loses its connection, is quarantined or deleted, or its lease ends, the stream stops. So nobody can watch a device after it is handed back or reset. When a lease end stops it, the page says why: "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost."
 - **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the page opens it again.
 - **A frozen device doesn't look live.** A stream that gets no new frames for 30 seconds ends with an error.
-- **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
+- **Viewers of a device share one capture.** Two browser tabs on one device capture it once, and the capture stops when the last tab leaves.
+- **A viewer that joins can wait up to 5 seconds for its picture.** It starts at the next key frame, which every capture sends at least every 5 seconds.
+- **A slow viewer skips frames.** A tab that stops reading, such as one in the background, misses frames up to the next key frame and slows nobody else.
+- **A phone that went dark off its charger shows no picture to a viewer that joins.** Nothing wakes it for the joiner; the picture comes when its screen is on again.
 - **Rotation.** An Android device's picture follows the rotation. So does an iOS simulator's or an iPhone's whenever its picture changes size: a new meta frame gives the new size, and nobody has run it on a physical iPhone yet.
 - **Foldables.** An iPhone Duo simulator shows the panel in use, upright, and the open stream switches panels within about 5 seconds after the device folds or unfolds, with no reconnect. A stream opened while the screen is all black can show the cover for a few seconds before it switches. If SpringBoard's log never names the move, the stream stays on the panel it opened on.
 - **The size can change.** The size headers give the picture's size when the stream opens; a meta frame in the body gives each later size. A viewer that reads the size once draws a stretched picture after a fold until it reconnects.
@@ -126,6 +129,8 @@ What the routes answer:
 - A device streams while it is `ready` or `leased`. In any other state, the device route answers `409 DEVICE_NOT_RUNNING`.
 - A lease that isn't yours, or doesn't exist, answers `404 UNKNOWN_LEASE`.
 - With streaming off on the daemon you call, the route answers a plain `404`. Through a gateway, streaming must also be on for the lease's worker, or the answer is `503 STREAM_UNAVAILABLE`.
+
+A worker's answer carries `simlock-stream-keyframe-ms: 5000`, its promise of a key frame at least every 5 seconds. A gateway shares one relayed stream between the viewers of a device or lease only for a worker that makes the promise, and its own answer to you never carries the header. A client can ignore it.
 
 The body is H.264 frames in Simlock's own framing, made for the console's player. It runs until you close the request, or until the device stops or its lease ends. When a lease end stops the stream, the last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Other ends send no such frame.
 
@@ -180,8 +185,8 @@ A message is dropped, and the socket stays open, when it isn't valid JSON, has a
 ### On an iOS simulator
 
 - **Taps, swipes and scrolls** work. A scroll is sent as a finger drag.
-- **`home`** brings the home screen forward and sends the app to the background. `app_switcher`, `lock` and `back` are dropped.
-- **Keys** work on iOS 26 and older. On iOS 27 and newer the simulator ignores injected keys, so they are dropped, and `0x82` carries `"keyboardUnavailable":true`.
+- **`home`** brings the home screen forward and sends the app to the background. `app_switcher` opens the app switcher, and `lock` locks the screen or wakes it when it is locked. `back` is dropped, since an iPhone has no Back button. A press the simulator ignores is not detected, and nothing tells the client.
+- **Keys** work on every runtime, and `0x82` never says `keyboardUnavailable` for a simulator.
 - **Orientation (`0x07`)** turns the simulator as if you turned the phone in your hand. A screen that doesn't rotate, such as the iPhone home screen, stays as it is, and nothing tells the client.
 - `0x82` always says `"orientation":"portrait"`, even after a rotation, and touch positions stay fractions of the screen in portrait.
 - **On an iPhone Duo** a tap lands at its fraction of the panel in use, upright, folded or unfolded: the cover when folded, the inner panel when unfolded. A fold while the socket is open sends a new `0x82` with the new panel's size, so a client that reads `0x82` follows it.

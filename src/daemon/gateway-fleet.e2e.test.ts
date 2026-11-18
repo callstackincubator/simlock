@@ -227,6 +227,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     readonly npm?: NpmCli;
     /** why: a worker that runs a real command runs it in its lease folder, which has to exist on disk. */
     readonly realFilesystem?: boolean;
+    /** why: holds the gateway's first catalog read open, so a view shows `connected` before it lists the worker's model. */
+    readonly catalogLatencyMs?: number;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
@@ -247,6 +249,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       }),
       clock: new SystemClock(),
       knownModels: [options.model],
+      ...(options.catalogLatencyMs === undefined
+        ? {}
+        : { latencyMs: { listCatalog: options.catalogLatencyMs } }),
       platform: "android",
     });
     options.onDriver?.(driver);
@@ -574,15 +579,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const workerBId = beforeDrain.find((worker) => worker.label === "worker-b")?.id;
     if (workerBId === undefined) throw new Error("worker-b never connected");
 
-    // Lease worker-a's own device -- the fleet client below must still be able to renew this
-    // exact lease after everything that follows.
-    // P2 (round 1 review, #119): `requesterId` set explicitly, distinct from the session
-    // principal -- `agentSession({ principal: "fleet-owner" })` alone makes `ownerId` and
-    // `requesterId` the same string (`dispatcher.ts` defaults both to `session.principal`), so
-    // the §27a assertion below (owner authorizes, requester does not) could not tell the two
-    // fields apart: mutating `lease-index.ts` to re-derive `ownerId` from `requesterId` on
-    // rebuild would still pass. With a distinct `requesterId`, only a genuinely separate
-    // `ownerId` on the rebuilt entry can authorize the renew below.
+    // why: a `requesterId` distinct from the session principal, because with both defaulted to
+    // `session.principal` the renew below would still pass if the rebuilt index re-derived
+    // `ownerId` from `requesterId`.
     const grant = await firstGateway.dispatch(
       "lease.request",
       {
@@ -668,6 +667,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       stdout: "hello-from-b",
       gatewayUrl: restartGatewayUrl(),
       existing: { directory: workerB.directory, filesystem: workerB.filesystem },
+      // why: #1628: the catalog lands after `connected` and `drained`; held here so the wait below must cover it on every run.
+      catalogLatencyMs: 1_000,
     });
     await vi.waitFor(
       async () => {
@@ -675,6 +676,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         const view = workers.find((worker) => worker.id === workerBId);
         expect(view?.connection).toBe("connected");
         expect(view?.drained).toBe(true);
+        // why: `connected` and `drained` show before the catalog read lands; a fresh gateway has no older catalog, so routing answers UNKNOWN_MODEL until then.
+        expect(view?.catalog?.some((entry) => entry.models.includes("Pixel-B"))).toBe(true);
       },
       { timeout: 15_000 },
     );

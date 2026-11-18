@@ -10,6 +10,7 @@ copies "Tests agents run"; change both together (a repo test compares them).
 | ---------------------------------------------- | -------------------------------------------- |
 | Unit tests that import what the branch changed | `pnpm test:changed`                          |
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
+| Types across the project, before a commit      | `pnpm typecheck`                             |
 | One console DOM test file (`*.dom.test.tsx`)   | `pnpm exec vitest run --project ui-dom <file>` |
 | One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
@@ -18,14 +19,11 @@ copies "Tests agents run"; change both together (a repo test compares them).
 | Website build and its HTTP API check (2)       | `pnpm --dir website install && pnpm --dir website build && node website/scripts/check-openapi.mjs` |
 
 (1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
-`src/contract/`, and only the spec files the diff changed or whose page
-it changes: the whole lane is CI's, on every push. The lane holds only
-what needs a real daemon or a real browser engine; a page's behaviour is a
-DOM test, which `pnpm test:changed` runs. A stage agent never
-runs it without a spec file (the tool guard refuses), never in the
-background, and sets `timeout: 600000` on the Bash call: the default
-120 s moves the run to the background, where it holds the agent's
-report until it ends.
+`src/contract/`, and only the spec files it changed or whose page it
+changes; CI runs the whole lane. A page's behaviour is a DOM test, which
+`pnpm test:changed` runs; this lane holds what needs a real daemon or
+browser engine. Always with a spec file, in the foreground, with
+`timeout: 600000` on the Bash call (the tool guard refuses otherwise).
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.
@@ -37,7 +35,7 @@ pages; it compares nothing. Open the pictures the change touched.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
+`pnpm test:timing`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine and a
 refactor's `--touched-by` run, below), the whole
@@ -54,8 +52,12 @@ list and this one the same.
   (`.agents/scripts/commit-msg-check.mjs`) refuses a subject on
   `<kind>/<n>` that is not `<type>(<scope>): <what> (#<n>)`, and on
   `bug/<n>-repro` one that is not `test: reproduce #<n> — <claim>`.
-- **Push hook:** Fallow's audit (the findings the branch adds against
-  `origin/main`), then the e2e typecheck.
+- **Push hook:** CI's Fallow command on the whole tree, the
+  `*.repo.test.ts` files, the protocol and docs-surface checks, then the
+  e2e typecheck. A test that reads the repository's files instead of
+  importing code is named `*.repo.test.ts` and runs in about a second:
+  `pnpm test:changed` selects it only when the branch edits the test
+  itself, so the hook runs every one.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. CI's Fallow
   (`fallow --ci`) checks the whole tree and fails on any dead-code finding
   or clone group, `warn` rules included; complexity fails above the
@@ -104,7 +106,6 @@ kind gets and the merge gate:
 | Test hardening     | `harden-tests`      | weekly |
 | Test audit         | `audit-tests`       | weekly |
 | Comment gardening  | `garden-comments`   | weekly |
-| Review calibration | `calibrate-reviews` | weekly |
 | Recurring findings | `recurring-findings` | weekly |
 | Refactor           | `refactor`          | weekly |
 | Upstream check     | `check-upstream`    | weekly |
@@ -195,6 +196,9 @@ Tests that start real simulators or emulators. Run them only through
 - It first stops what earlier runs left behind. By hand: `scripts/slow-e2e.sh
   clean` (refused while a run holds the lock). Never stop a simulator,
   emulator or daemon any other way.
+- `scripts/slow-e2e.sh check`: the checks a run starts with, without a
+  run. Exit 69 with why when the machine is unfit. While a lane runs it
+  stops nothing and checks only free disk and the other tools.
 - `scripts/slow-e2e.sh status`: the running test, the counts so far, how
   long the log has been quiet, and each failure. `scripts/slow-e2e.sh stop`
   ends the running lane and what it started.
@@ -211,8 +215,9 @@ The machine can run a line only if:
 | iOS window | the iOS check; `mdfind "kMDItemCFBundleIdentifier == 'com.apple.dt.Devices'"` prints a path; `stat -f %Su /dev/console` is not `root` (someone is logged in); `pgrep -x DeviceHub` finds nothing (the test starts DeviceHub itself with `-shutdownStartedDevicesOnQuit NO` and quits it at the end). Run `scripts/slow-e2e.sh e2e/slow-ios-window.test.ts` |
 | Physical iOS | `uname -s` is `Darwin`; `SIMLOCK_PHYSICAL_IOS` is the UDID of an iPhone on USB (trusted, Developer Mode on, unlocked, Auto-Lock Never); `SIMLOCK_PHYSICAL_IOS_APP` is a `.app` signed for it. `/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /Library/Developer/PrivateFrameworks/CoreDevice.framework/Resources/Info.plist` prints a version whose major is 642 or later (streaming a phone needs the CoreDevice of Xcode 27 or later; the framework is machine-wide and does not follow `xcode-select`). DeviceHub and Xcode are not running during the lane. The stream cases need the iPhone on iOS 27 or later; an older iPhone runs the refusal case instead. Run `scripts/slow-e2e.sh --physical e2e/slow-ios-physical.test.ts` |
 | iOS foldable | the iOS check; `xcrun simctl list runtimes` lists iOS 27.1 or later and `xcrun simctl list devicetypes` lists `iPhone Duo`; `SIMLOCK_E2E_AGENT_DEVICE` names agent-device 0.21.35 or later; `command -v ffmpeg` finds it. Run `scripts/slow-e2e.sh e2e/slow-ios-foldable.test.ts` |
+| iOS simulator input | the iOS check; `xcrun simctl list runtimes` lists an iOS 27 or later runtime; `uname -m` is `arm64`; `SIMLOCK_E2E_AGENT_DEVICE` names the agent-device the lane pins (agent-device through simlock row). Run `scripts/slow-e2e.sh e2e/slow-ios-input.test.ts` |
 | agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `SIMLOCK_E2E_AGENT_DEVICE` (in `.slow-lane.env`) is the absolute path of `bin/agent-device.mjs` in an install of the agent-device version `package.json` pins for `@agent-device/proxy` (`npm install -g agent-device@<version>`, or a checkout at tag `v<version>` built with `pnpm install && pnpm build && pnpm build:android`, the last building the Android snapshot helper); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
-| Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
+| Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK; `SIMLOCK_PHYSICAL_ANDROID_NETWORK` beside it names an address `adb devices -l` lists in state `device` with no `usb:` field, for the network case. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
 | agent-device with a physical phone | the agent-device through simlock checks above (the Android or iOS one), and the Physical Android checks with `SIMLOCK_PHYSICAL_ANDROID`, or the Physical iOS checks with `SIMLOCK_PHYSICAL_IOS`; for iOS also `SIMLOCK_E2E_IOS_TEAM_ID` and `SIMLOCK_E2E_IOS_BUNDLE_ID` (in `.slow-lane.env`); set `SIMLOCK_E2E_IOS_PROVISIONING_PROFILE` and `SIMLOCK_E2E_IOS_SIGNING_IDENTITY` only for manual signing, which an Xcode-managed profile fails. Run `scripts/slow-e2e.sh --physical e2e/slow-agent-device-physical.test.ts` |
 | Physical Android, a person at the phone | the Physical Android checks above, and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-android-physical-manual.test.ts` |
 | Physical iOS, a person at the phone | the Physical iOS checks above, a passcode set on the phone (locking it then needs the passcode), and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-ios-physical-manual.test.ts` |

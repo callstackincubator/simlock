@@ -132,6 +132,19 @@ describe("assess", () => {
     );
   });
 
+  it("row 5: when only a worker that does not take requests serves the named mode, says NO_CAPACITY, never MODE_UNAVAILABLE", () => {
+    const slimOnly = view("wrk_a", { ...IOS, modes: ["slim"] });
+    const fullAway = view("wrk_b", { ...IOS, modes: ["full"] }, { connection: "disconnected" });
+    const fullDrained = view("wrk_c", { ...IOS, modes: ["full"] }, { drained: true });
+
+    for (const away of [fullAway, fullDrained]) {
+      expect(rejectionOf([slimOnly, away], { ...REQUEST, mode: "full" })).toMatchObject({
+        code: "NO_CAPACITY",
+        reason: "no-worker",
+      });
+    }
+  });
+
   it("row 6: a worker that takes requests and can serve it makes the request route-or-wait, busy or not", () => {
     const capacity = statusFixture().capacity;
     const busy = view("wrk_a", IOS, {
@@ -139,6 +152,16 @@ describe("assess", () => {
     });
 
     expect(assess(REQUEST, [busy]).kind).toBe("route-or-wait");
+  });
+
+  it("answers a tagless Android request the same on a worker with a default image tag and on one without", () => {
+    const pixel: CatalogEntry = { models: ["Pixel 9"], platform: "android", runtimes: ["36"] };
+    const request = { model: "Pixel 9", platform: "android" as const };
+
+    expect(
+      assess(request, [view("wrk_a", { ...pixel, defaultImageTag: "google_apis_playstore" })]),
+    ).toEqual(assess(request, [view("wrk_a", pixel)]));
+    expect(assess(request, [view("wrk_a", pixel)]).kind).toBe("route-or-wait");
   });
 
   it("says NO_CAPACITY, never UNKNOWN_MODEL, when the only worker connected for the first time and its catalog has not arrived", () => {

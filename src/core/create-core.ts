@@ -4,6 +4,7 @@ import type { StateDatabase } from "../state/index.js";
 import {
   buildCapacityFigures,
   CapacityCoordinator,
+  servingOnly,
   capacityDevices,
   CapacityObserver,
   createCapacityStrategy,
@@ -194,7 +195,12 @@ export function createCore(options: CoreOptions): Core {
   };
 
   const capacity = new CapacityCoordinator(
-    createCapacityStrategy(options.config.capacity, options.systemStats),
+    servingOnly(
+      createCapacityStrategy(options.config.capacity, options.systemStats),
+      (platform) =>
+        options.drivers.some((driver) => driver.platform === platform) ||
+        (options.driverRejections ?? []).some((rejection) => rejection.platform === platform),
+    ),
     () => capacityObserver.changed(),
     memoryPressure,
   );
@@ -218,6 +224,10 @@ export function createCore(options: CoreOptions): Core {
   const drivers = new DriverCatalog(options.drivers, {
     logger: options.logger,
     preferences: options.modelPreferences,
+    virtualDevices: {
+      android: options.config.android.virtualDevices,
+      ios: options.config.ios.virtualDevices,
+    },
   });
   const deviceLifecycle = new ManagedDeviceLifecycle(
     drivers,
@@ -259,6 +269,7 @@ export function createCore(options: CoreOptions): Core {
     eventBus: options.eventBus,
     leaseSave: () => port("leaseSave"),
     lifecycle: deviceLifecycle,
+    logger: options.logger,
     reclaim,
     registry,
     state: options.state,
@@ -335,6 +346,7 @@ export function createCore(options: CoreOptions): Core {
     decisions,
     eventBus: options.eventBus,
     hasDriver: (platform) => drivers.select(platform).length > 0,
+    servedModes: options.config.ios.modes,
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -390,6 +402,29 @@ export function createCore(options: CoreOptions): Core {
   const startup = new StartupConverger({
     claims,
     decisions,
+    idleDeletion: {
+      // why: a failed shutdown or delete must not stop the daemon from starting: the device stays in the state it reached and the next start tries again (ADR 0084 §2).
+      deleteIdle: async (device) => {
+        try {
+          const stopped =
+            device.state === "ready"
+              ? await deviceLifecycle.shutdown(device, "virtual-devices-off", "cleanup")
+              : device;
+          if (stopped !== undefined) {
+            await deviceLifecycle.destroy(stopped, "virtual-devices-off", "cleanup");
+          }
+        } catch (error: unknown) {
+          options.logger?.warn("Could not delete an idle device at start", {
+            deviceId: device.id,
+            error: stableError(error),
+            platform: device.spec.platform,
+          });
+        }
+      },
+      platforms: (["ios", "android"] as const).filter(
+        (platform) => !drivers.virtualDevices(platform),
+      ),
+    },
     interruptedReclaimRecovery: {
       recoverInterruptedReclaim: async (device) => {
         await reclaim.recoverInterrupted(device.id);
@@ -444,6 +479,13 @@ export function createCore(options: CoreOptions): Core {
       await startup.converge(read);
       await dropReplacedBaselines();
       await listStartupSources(options.drivers, options.logger);
+      try {
+        await baselines.checkStale();
+      } catch (error: unknown) {
+        options.logger?.warn(
+          `could not check baselines at startup: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       warmPool.start();
       capacityObserver.start();
     },

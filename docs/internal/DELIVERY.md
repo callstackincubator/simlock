@@ -184,8 +184,8 @@ ADRs to _Accepted_ (delivery rule 10) is yours too, unless delivery did it.
 `node .agents/scripts/delivery-stats.mjs` prints one row per week for the
 last five: blocking findings per review raised and fixed, notes, PRs
 needing a second round, median hours to merge, rounds and tokens,
-handoffs. `--since <date>` lists PRs; `--calibration` prints the recent
-incorrect findings every reviewer reads. `delivery-counters.mjs --since
+handoffs. `--since <date>` lists PRs; `--calibration` prints the last four
+weeks' rejected findings, to read when a review's confirmation rate drops. `delivery-counters.mjs --since
 <date>` prints the per-PR counters the process review judges delivery
 changes by (CI lines sent to fix runs, stack syncs, empty builds, fix runs
 that changed nothing, tests per Tests line), and `instruction-reads.mjs`
@@ -193,7 +193,7 @@ how often each role opens each rule, brief and manual. Change one thing in
 the pipeline at a time and compare the rows before and after.
 
 Weekly routines keep the suite and the reviews in shape: `harden-tests`,
-`audit-tests`, `garden-comments`, `calibrate-reviews` and `refactor`
+`audit-tests`, `garden-comments` and `refactor`
 ([toolchain.md](agent-rules/toolchain.md) "Routines"). `check-upstream`
 reads every `upstream` issue's `## Waiting on upstream` links each week
 and comments when they are fixed in a release; you move the issue back to

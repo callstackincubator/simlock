@@ -36,6 +36,7 @@ import {
   type IdGenerator,
   type Logger,
   NodeBytePipeLauncher,
+  NodeSqliteOpener,
   NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   type ProcessRunner,
@@ -63,6 +64,8 @@ const PACKAGED_SCRCPY_SERVER = fileURLToPath(
 export interface DriverDiscoveryContext {
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  /** why: the worker's `android.defaultImageTag`, which the Android driver checks against its installed images. */
+  readonly androidDefaultImageTag?: string;
   readonly database: SqliteDatabase;
   readonly driversConfig: Config["drivers"];
   readonly eventBus: Pick<EventBus, "emit">;
@@ -197,9 +200,11 @@ async function discoverIosDriver(
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       logger: logger.child("ios"),
+      logsRoot: `${homedir()}/Library/Logs/CoreSimulator`,
       onSilenceFailed: logSilenceFailure(logger),
       onWindowFailed: logWindowFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
+      sqliteOpener: new NodeSqliteOpener(),
       screenCapture: {
         baseEnvironment: process.env,
         command: PACKAGED_SCREEN_CAPTURE,
@@ -273,6 +278,9 @@ async function discoverAndroidDriver(
       database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       config: options.androidConfig,
+      ...(options.androidDefaultImageTag === undefined
+        ? {}
+        : { defaultImageTag: options.androidDefaultImageTag }),
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),

@@ -11,10 +11,15 @@ Simlock uses the platform tools already on your machine. It never installs Xcode
 
 | You want | Runs on | You need |
 | --- | --- | --- |
-| The `simlock` CLI | macOS or Linux | Node.js 22.13 or later |
+| The `simlock` CLI | macOS, Linux or Windows | Node.js 22.13 or later |
 | iOS simulators | macOS only | Xcode, selected, with its license accepted and its first-launch setup done |
-| Android emulators | macOS or Linux | The Android SDK with the command-line tools, `emulator` and `platform-tools`, and a JDK with `JAVA_HOME` set |
-| A gateway | macOS or Linux | Node.js 22.13 or later. A gateway runs no devices, so it needs no Xcode or Android SDK. |
+| Android emulators | macOS, Linux or Windows | The Android SDK with the command-line tools, `emulator` and `platform-tools`, and a JDK with `JAVA_HOME` set. On Windows also the Windows Hypervisor Platform. |
+| A gateway | macOS, Linux or Windows | Node.js 22.13 or later. A gateway runs no devices, so it needs no Xcode or Android SDK. |
+| A physical iPhone or iPad | A Mac | See [Use physical devices](#use-physical-devices) |
+| A physical Android phone | No system is named. Not checked on Windows yet. | See [Use physical devices](#use-physical-devices) |
+| Start at login (`daemon install`) | macOS and Linux. Not on Windows yet. | See [Run the daemon](/simlock/docs/worker/running-the-daemon) |
+
+On Windows, follow [Set up a Windows worker](/simlock/docs/worker/windows).
 
 ## Set up iOS simulators
 
@@ -42,7 +47,7 @@ To watch a simulator's screen in the console, you need macOS 14 or later.
 
 ## Set up Android emulators
 
-1. Install the Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and uses the first one that has every tool it needs. Linux has no default location, so set `ANDROID_HOME` there.
+1. Install the Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk` (on Windows `%LOCALAPPDATA%\Android\Sdk`), and uses the first one that has every tool it needs. Linux has no default location, so set `ANDROID_HOME` there.
 2. Install the SDK command-line tools (`sdkmanager` and `avdmanager`), from Android Studio or the [command-line tools download](https://developer.android.com/studio#command-line-tools-only). Unpack them to `$ANDROID_HOME/cmdline-tools/latest`.
 3. Install the `emulator` and `platform-tools` packages:
 

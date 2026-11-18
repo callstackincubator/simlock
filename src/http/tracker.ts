@@ -364,6 +364,7 @@ export class LeaseRequestTracker {
     return { kind: "not-cancellable" };
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the app's tracker, and by its tests through a test-* harness.
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.requests.requestIdForLease(leaseId);
   }

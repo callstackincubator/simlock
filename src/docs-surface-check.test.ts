@@ -72,6 +72,8 @@ describe("docs-surface-check.mjs", () => {
   it.each([
     ["cli", edit("src/cli/tree.ts", '"lease" }', '"lease", nuke: "nuke" }')],
     ["config", edit("src/core/config.ts", "ttl: 1", "ttl: 2")],
+    ["config", { "src/core/config-defaults.ts": "export const DEFAULT_TTL = 2;\n" }],
+    ["config", { "src/core/config-alerts.ts": "export const ALERT_EVENTS = [];\n" }],
     ["errors", edit("src/contract/errors.ts", "exit: 2", "exit: 3")],
     ["mcp", edit("src/mcp/server.ts", '"List devices"', '"List the devices"')],
     ["mcp", edit("src/mcp/contracts.ts", "z.object({})", "z.object({ id: z.string() })")],

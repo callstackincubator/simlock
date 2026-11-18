@@ -127,6 +127,7 @@ export class FakeDeviceTcp implements DeviceTcp {
     return peer.stream;
   }
 
+  // fallow-ignore-next-line unused-class-member -- tests call it on fakes their test-* helpers build.
   openFromDevice(devicePort: number): FakeTcpPeer {
     const peer = new FakeTcpPeer();
     this.#reverses.get(devicePort)?.accept(peer.stream);

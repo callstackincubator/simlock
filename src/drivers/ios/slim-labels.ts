@@ -341,23 +341,40 @@ export const NEVER_DISABLE_LABELS: readonly string[] = [
   "com.apple.sharingd",
 ];
 
+export interface NamedServices {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+  readonly recorded: readonly string[];
+}
+
 /**
- * why: Every managed label (all categories plus the never-disable labels) mapped to what the overrides
- * file must say: `true` (off) for a label of a configured category, `false` for the rest and for
- * every label of a kept category.
+ * why: Every managed label (all categories, the never-disable labels and the worker's named
+ * services) mapped to what the overrides file must say, last rule wins (ADR 0083 S1): `false`
+ * for all; `true` for a label of a configured category (never-disable labels excepted); `true`
+ * for an `exclude` name; `false` for an `include` name and for every label of a kept category.
  */
 export function overridesFor(
   categories: readonly SlimCategory[],
   keep: readonly SlimCategory[] = [],
+  named: NamedServices = { exclude: [], include: [], recorded: [] },
 ): ReadonlyMap<string, boolean> {
   const wanted = new Map<string, boolean>();
   for (const category of SLIM_CATEGORIES) {
     for (const label of category.labels) wanted.set(label, false);
   }
-  for (const label of NEVER_DISABLE_LABELS) wanted.set(label, false);
+  for (const label of [
+    ...NEVER_DISABLE_LABELS,
+    ...named.recorded,
+    ...named.include,
+    ...named.exclude,
+  ]) {
+    wanted.set(label, false);
+  }
   for (const label of labelsFor(categories)) {
     if (!NEVER_DISABLE_LABELS.includes(label)) wanted.set(label, true);
   }
+  for (const label of named.exclude) wanted.set(label, true);
+  for (const label of named.include) wanted.set(label, false);
   // why: an excepted category wins over a slimmed one that lists the same label (ADR 0066 §2).
   for (const label of labelsFor(keep)) wanted.set(label, false);
   return wanted;

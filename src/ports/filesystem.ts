@@ -9,11 +9,13 @@ import {
   open,
   readdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
   stat,
   statfs,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -81,6 +83,16 @@ export interface Filesystem {
   readFileFrom(path: string, offset: number): Promise<string>;
   writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
   /**
+   * why: replaces a file's contents in the same file (same identity), then sets its mode, so an
+   * existing 0644 file ends at `mode`. `writeFileAtomic` renames over the path, which Windows
+   * refuses with `EPERM` while another process holds the file open (#1662).
+   */
+  writeFileInPlace(
+    path: string,
+    contents: string,
+    options: { readonly mode: number },
+  ): Promise<void>;
+  /**
    * why: Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
    * decides who wins, which is the only way two processes racing to write one file both
    * end up agreeing about what it says. The file appears with its full contents, never
@@ -121,6 +133,12 @@ export interface Filesystem {
   diskFree(path: string): Promise<number>;
   diskSpace(path: string): Promise<{ readonly freeBytes: number; readonly totalBytes: number }>;
   directorySize(path: string): Promise<number>;
+  /** why: what a symbolic link points at, without following it. */
+  readlink(path: string): Promise<string>;
+  /** why: the link at `path` points at `target` from one step to the next, with no moment when it is missing. */
+  replaceSymlink(path: string, target: string): Promise<void>;
+  /** why: `bytes` written into an existing file at `offset`, with no truncation, keeping its mode and modification time. */
+  writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void>;
 }
 
 // why: only the directories that are absent get the mode, so one that is already there keeps its own.
@@ -275,6 +293,15 @@ export class NodeFilesystem implements Filesystem {
     }
   }
 
+  async writeFileInPlace(
+    path: string,
+    contents: string,
+    options: { readonly mode: number },
+  ): Promise<void> {
+    await writeFile(path, contents, { encoding: "utf8", mode: options.mode });
+    await chmod(path, options.mode);
+  }
+
   async writeFileExclusive(
     path: string,
     contents: string,
@@ -403,6 +430,32 @@ export class NodeFilesystem implements Filesystem {
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
       throw error;
+    }
+  }
+
+  async readlink(path: string): Promise<string> {
+    return readlink(path);
+  }
+
+  async replaceSymlink(path: string, target: string): Promise<void> {
+    const staged = `${path}.simlock-swap-${String(process.pid)}`;
+    await symlink(target, staged);
+    try {
+      await rename(staged, path);
+    } catch (error: unknown) {
+      await rm(staged, { force: true });
+      throw error;
+    }
+  }
+
+  async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    const handle = await open(path, "r+");
+    try {
+      const { atime, mtime } = await handle.stat();
+      await handle.write(bytes, 0, bytes.length, offset);
+      await handle.utimes(atime, mtime);
+    } finally {
+      await handle.close();
     }
   }
 
@@ -556,6 +609,25 @@ export class MemoryFilesystem implements Filesystem {
       ...this.#newEntry({ kind: "file", contents }),
       mode: options?.mode ?? DEFAULT_FILE_MODE,
     });
+  }
+
+  async writeFileInPlace(
+    path: string,
+    contents: string,
+    options: { readonly mode: number },
+  ): Promise<void> {
+    this.#failIfDefined(path);
+    path = this.#underResolvedParent(path);
+    const existing = this.#entries.get(path);
+
+    if (existing?.kind === "file") {
+      existing.contents = contents;
+      delete existing.bytes;
+      existing.mode = options.mode & 0o777;
+      return;
+    }
+
+    await this.writeFileAtomic(path, contents, options);
   }
 
   async writeFileExclusive(
@@ -764,6 +836,33 @@ export class MemoryFilesystem implements Filesystem {
       else if (entry.kind === "file") total += fileBytes(entry).byteLength;
     }
     return total;
+  }
+
+  async readlink(path: string): Promise<string> {
+    this.#failIfDefined(path);
+    const entry = this.#rawEntryAt(this.#underResolvedParent(path));
+    if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
+    return entry.target;
+  }
+
+  async replaceSymlink(path: string, target: string): Promise<void> {
+    this.#failIfDefined(path);
+    const at = this.#underResolvedParent(path);
+    const entry = this.#rawEntryAt(at);
+    if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
+    this.#entries.set(at, { ...this.#newEntry({ kind: "symlink", target }), uid: entry.uid });
+  }
+
+  async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    this.#failIfDefined(path);
+    const entry = this.#entryAt(path);
+    if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
+    const old = fileBytes(entry);
+    const next = new Uint8Array(Math.max(old.byteLength, offset + bytes.byteLength));
+    next.set(old);
+    next.set(bytes, offset);
+    entry.bytes = next;
+    entry.contents = Buffer.from(next).toString("utf8");
   }
 
   /**

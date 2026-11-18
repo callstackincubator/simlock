@@ -60,8 +60,7 @@
 // directory, which needs the body's commit. The repo is GH_REPO, else the origin remote.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import {
   bullets,
@@ -78,77 +77,40 @@ import {
   stripComments,
   tables,
 } from "./spec-body.mjs";
+import {
+  CANNOT_SPLIT,
+  CODE_PATH,
+  DESIGN,
+  DOC_PATH,
+  FAILURE_HEADER,
+  FEATURE_H2,
+  HARDWARE,
+  OLD_FEATURE_H2,
+  OLD_TASK_H2,
+  OLD_TASK_H3,
+  OPTIONAL,
+  REFACTOR_H2,
+  ROOT,
+  SCHEMA_STEP,
+  SLOW_TEST,
+  TASK_H2,
+  TASK_H3,
+} from "./spec-lint-patterns.mjs";
+import {
+  bare,
+  isNone,
+  lacksMermaid,
+  namedPaths,
+  overlap,
+  pathRefs,
+  squash,
+  taskNumbers,
+  text,
+  words,
+} from "./spec-lint-text.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TASK_H2 = ["Scope", "Technical spec", "Done when", "Out of scope", "Depends on"];
-const TASK_H3 = ["Rows", "Facts", "Modules touched", "Rules in play", "Retired words", "Tests"];
-// why: tasks and features written before the design tables keep their layout until they close.
-const OLD_TASK_H2 = [
-  "Scope",
-  "In short",
-  "Technical spec",
-  "Done when",
-  "Out of scope",
-  "Depends on",
-];
-const OLD_TASK_H3 = [
-  "Facts",
-  "Modules touched",
-  "Surface and extension points",
-  "Contract and event changes",
-  "Other code on the same state",
-  "Failure modes",
-  "Rules in play",
-  "Retired words",
-  "Tests",
-];
-const OPTIONAL = new Set(["Surface and extension points", "Retired words"]);
-const BUSINESS_H2 = [
-  "Problem",
-  "Who it is for",
-  "Outcome",
-  "How it works for the user",
-  "Examples",
-  "What could go wrong",
-  "Words used",
-  "Non-goals",
-  "Completion conditions",
-  "Open questions",
-  "Decisions",
-];
-const DESIGN = [
-  ["Behaviours", "B"],
-  ["Stored state", "S"],
-  ["Interfaces", "I"],
-  ["Existing code", "X"],
-];
-const FEATURE_H2 = [...BUSINESS_H2, ...DESIGN.map(([name]) => name), "Tasks"];
-const OLD_FEATURE_H2 = [...BUSINESS_H2, "Shared values", "Behaviours", "Tasks"];
-const SCHEMA_STEP = /^([\w-]+) \+(\d+)$/;
-const REFACTOR_H2 = ["Why", "Target shape", "Out of bounds", "Done when"];
-const FAILURE_HEADER = ["Call", "Outcome", "What happens", "Limit, counted from"];
-const CANNOT_SPLIT =
-  /\b(cannot|can't|can not|does not|doesn't|won't) split\b|\bone task, not\b|\bkept? (it )?whole\b/i;
-const HARDWARE = /slow lane|real (simulator|emulator|device|iPhone|phone)|on a Mac with/i;
-const SLOW_TEST = /e2e\/slow-[\w-]+\.test\.ts/g;
-const EXTENSIONS =
-  "ts|tsx|js|mjs|cjs|json|jsonc|md|mdx|yml|yaml|sh|swift|kt|kts|java|toml|txt|html|css|plist|py|xml|gradle";
-const PATH_LINE = new RegExp(
-  `^(v\\d[\\w.-]*:)?([\\w@./-]*[\\w@-]\\.(?:${EXTENSIONS})):(\\d+)(?:-(\\d+))?$`,
-);
-const PLAIN_PATH_LINE = new RegExp(
-  `(?<![\\w/.@-])((?:[\\w@.-]+/)+[\\w@.-]+\\.(?:${EXTENSIONS})):(\\d+)(?:-(\\d+))?`,
-  "g",
-);
-const DOC_PATH = /\.(md|mdx)\b/;
-const CODE_PATH = new RegExp(`\\.(?!md\\b|mdx\\b)(?:${EXTENSIONS})\\b`);
 const trees = new Map();
 const counts = new Map();
-const STOP = new Set(
-  "the a an and or of to in on at by for with from is are be it its as that this then than when one each no not into after before same their them they any all per but if so via while".split(
-    " ",
-  ),
-);
 
 const argv = process.argv.slice(2);
 const flag = (name) => {
@@ -218,10 +180,6 @@ function usage() {
   process.exit(2);
 }
 
-function text(s) {
-  return s === undefined ? "" : prose(s.lines).join("\n").trim();
-}
-
 function h3Within(name) {
   const parent = section(parsed, name, 2);
   if (parent === undefined) return [];
@@ -256,10 +214,6 @@ function templateComments() {
   return out;
 }
 
-function squash(s) {
-  return s.replace(/\s+/g, " ").trim();
-}
-
 function checkTemplateComments() {
   const known = templateComments();
   for (const m of body.matchAll(/<!--([\s\S]*?)-->/g)) {
@@ -285,10 +239,6 @@ function checkLeftovers() {
 function checkFooter() {
   const last = body.replace(/\s+$/, "").split("\n").at(-1)?.trim() ?? "";
   if (!IS_FOOTER.test(last)) add("B", "body", "the last line is not `*Written by an agent.*`");
-}
-
-function lacksMermaid(s) {
-  return s !== undefined && !s.lines.some((l) => /^\s*```mermaid\s*$/.test(l));
 }
 
 function lintRefactor() {
@@ -403,42 +353,6 @@ function checkFacts() {
   }
 }
 
-function ref(path, from, to, tool = false) {
-  return { tool, path, from: +from, to: +(to ?? from) };
-}
-
-function backtickedRef(content, last) {
-  const full = PATH_LINE.exec(content);
-  if (full !== null) {
-    const tool = full[1] !== undefined;
-    return { found: ref(full[2], full[3], full[4], tool), last: tool ? null : full[2] };
-  }
-  const tail = /^:(\d+)(?:-(\d+))?$/.exec(content);
-  if (tail === null || last === null) return { found: null, last };
-  return { found: ref(last, tail[1], tail[2]), last };
-}
-
-function backtickedRefs(line) {
-  const refs = [];
-  let last = null;
-  for (const m of line.matchAll(/`([^`]+)`/g)) {
-    const next = backtickedRef(m[1], last);
-    last = next.last;
-    if (next.found !== null) refs.push(next.found);
-  }
-  return refs;
-}
-
-function plainRefs(line) {
-  return [...line.replace(/`[^`]*`/g, " ").matchAll(PLAIN_PATH_LINE)].map((m) =>
-    ref(m[1], m[2], m[3]),
-  );
-}
-
-function pathRefs(lines) {
-  return prose(lines).flatMap((line) => [...backtickedRefs(line), ...plainRefs(line)]);
-}
-
 function tree(sha) {
   if (!trees.has(sha)) {
     trees.set(sha, new Set(git("ls-tree", "-r", "--name-only", sha).split("\n").filter(Boolean)));
@@ -453,16 +367,6 @@ function resolvePath(sha, path, named = new Set()) {
   const found = [...files].filter((f) => f.endsWith(`/${clean}`));
   const preferred = found.filter((f) => named.has(f));
   return preferred.length === 1 ? preferred : found;
-}
-
-function namedPaths(lines) {
-  return new Set(
-    [
-      ...prose(lines)
-        .join("\n")
-        .matchAll(/`([\w@./-]+\/[\w@.-]+)(?::[\d-]+)?`/g),
-    ].map((m) => m[1]),
-  );
 }
 
 function lineCount(sha, path) {
@@ -636,10 +540,6 @@ function checkOwnBehaviours() {
   checkTaskRows({ number, body }, rows);
 }
 
-function taskNumbers(cell) {
-  return [...(cell ?? "").matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
-}
-
 function designRows(p) {
   const out = [];
   for (const [name, prefix] of DESIGN) {
@@ -705,19 +605,6 @@ function lintFeature() {
   checkBehaviours(subs);
   if (!old) checkHandOffs(subs);
   checkGraph(subs);
-}
-
-// why: Existing code says `none` under its Commit and Searches lines, so the word is looked for
-// on a line of its own, never inside a sentence.
-function isNone(s) {
-  const lines = prose(s.lines).map((l) => l.replaceAll("`", "").trim());
-  return (
-    !tables(s.lines).some((t) => t.header[0] === "Id") && lines.some((l) => /^none\.?$/i.test(l))
-  );
-}
-
-function bare(cell) {
-  return cell.replaceAll("`", "").trim();
 }
 
 function checkIds(s, name, prefix) {
@@ -883,30 +770,6 @@ function behaviourRows(p) {
     words: words(r.filter((_, i) => i !== at && i !== idAt).join(" ")),
     cell: r[at] ?? "",
   }));
-}
-
-function words(s) {
-  return new Set(
-    s
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 2 && !STOP.has(w))
-      .map((w) => w.replace(/(ing|ed|es|s)$/, "")),
-  );
-}
-
-function shared(a, b) {
-  return [...a].filter((w) => b.has(w)).length;
-}
-
-// why: a line may spell out the cases its row only names ("object rows of Examples"), so it
-// passes when it holds most of the row's Behaviour words, or most of the shorter of the two.
-function overlap(line, row) {
-  const byBehaviour =
-    row.behaviour.size === 0 ? 0 : shared(row.behaviour, line) / row.behaviour.size;
-  const shorter = Math.min(line.size, row.words.size);
-  return Math.max(byBehaviour, shorter === 0 ? 0 : shared(line, row.words) / shorter);
 }
 
 function checkTestIds(task, own, lines) {

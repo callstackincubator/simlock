@@ -11,6 +11,7 @@ import type {
   DaemonExit,
   DaemonLauncher,
   Filesystem,
+  HttpStreamClient,
   IpcConnector,
   LaunchedDaemon,
   ParentWatch,
@@ -20,7 +21,7 @@ import { errorMessage } from "./errors.js";
 import { UsageError } from "./usage-error.js";
 import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
-import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
+import type { CliEnvironment, CliEnvironmentPorts, Output } from "./types.js";
 
 const EXIT_GRACE_MS = 2_000;
 // why: a daemon whose start failed is already stopping when it answers, so its stopping refusal is the failed start.
@@ -30,6 +31,25 @@ const STARTING_FAILURE_CODES: ReadonlySet<string> = new Set([
 ]);
 // why: the daemon bounds its own startup read at STARTUP_READ_LIMIT_MS, so the CLI waits past it before it calls a daemon that is still starting stuck.
 const STARTING_WAIT_EXTRA_MS = 30_000;
+
+// why: the adapter loads on the first transfer, so a command that moves no file never loads node:http for it.
+function httpStreamOf(supplied: HttpStreamClient | undefined): HttpStreamClient {
+  return (
+    supplied ?? {
+      request: async (request) => {
+        const { NodeHttpStreamClient } = await import("../ports/index.js");
+        return new NodeHttpStreamClient().request(request);
+      },
+    }
+  );
+}
+
+// why: a real stdout takes the bytes as they are; a stdout a test or a host supplied is a text sink, so the bytes go to it as text.
+function stdoutBytesOf(stdout: Output | undefined): (bytes: Uint8Array) => unknown {
+  return stdout === undefined
+    ? (bytes) => process.stdout.write(bytes)
+    : (bytes) => stdout.write(Buffer.from(bytes).toString("utf8"));
+}
 
 class AutoLaunchAdminConnector {
   private startupDeadline: number | undefined;
@@ -425,6 +445,7 @@ export function buildCliEnvironment(
           },
         }),
     requesterId,
+    requesterIsProcess: resolveRequesterId(env, "") === "",
     homeDirectory: ports.homeDirectory,
     workingDirectory: ports.workingDirectory,
     codexHome: ports.codexHome,
@@ -474,6 +495,7 @@ export function buildCliEnvironment(
         return new FetchHttpJsonClient().get(url, token);
       },
     },
+    httpStream: httpStreamOf(ports.httpStream),
     ...tcpPorts(ports),
     ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
@@ -532,6 +554,7 @@ export function buildCliEnvironment(
     signals: ports.signals ?? process,
     stderr: ports.stderr ?? process.stderr,
     stdout: ports.stdout ?? process.stdout,
+    stdoutBytes: stdoutBytesOf(ports.stdout),
     confirm: ports.confirm ?? confirmTerminal,
   };
 }

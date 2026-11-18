@@ -2,6 +2,7 @@
 // here, and only once the flags are through.
 import { UsageError } from "../errors.js";
 import { isHelp } from "../args.js";
+import { checkedFarm } from "../connect.js";
 import type { CommandContext } from "../tree.js";
 import type { McpStdioLauncher } from "../types.js";
 
@@ -20,7 +21,9 @@ async function run(
   if (argv.length > 0) throw new UsageError("mcp accepts no arguments");
   const runMcpStdio =
     environment.runMcpStdio ?? (await (environment.loadMcpStdio ?? loadDefaultMcpStdio)());
-  await runMcpStdio({ daemonFlag });
+  const remote =
+    environment.remote === undefined ? undefined : await checkedFarm(environment.remote);
+  await runMcpStdio({ daemonFlag, ...(remote === undefined ? {} : { remote }) });
   return 0;
 }
 
