@@ -173,15 +173,17 @@ Give a lease back. The command returns as soon as the lease ends; the device is 
 ```text
 simlock release <lease-id>
 simlock release --all [--yes]
+simlock release --run <id>
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `<lease-id>` | The lease to release. | — |
 | `--all` | Release every lease on the daemon. Needs the admin role. Asks for confirmation. | Off |
+| `--run <id>` | Release every lease that carries this [run id](#simlock-lease) and cancel the lease requests of the run that are still waiting. An agent frees its own; an admin frees every owner's. It asks for no confirmation. Prints `{"leaseIds":[…],"requestIds":[…]}`: the leases it released and the waiting requests it cancelled. A request a worker has already taken is not cancelled: it is released as soon as it is granted, so the caller of that request gets the lease and then a `lease-lost`. Nothing matching is not an error. On a gateway, a worker that cannot be reached fails the command with `WORKER_UNREACHABLE` after the others are released. | — |
 | `--yes` | Skip the confirmation for `--all`. Required when there is no terminal to ask in. | Off |
 
-Releasing a lease taken under a different [requester identity](#requester-identity) needs the admin role. A lease ID and `--all` together are a usage error.
+Releasing a lease taken under a different [requester identity](#requester-identity) needs the admin role. A lease ID, `--all` and `--run` together are a usage error: give only one.
 
 ## simlock simctl
 
