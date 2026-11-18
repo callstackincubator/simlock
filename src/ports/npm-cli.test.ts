@@ -135,7 +135,7 @@ describe("NodeNpmCli", () => {
         ["i", "-g", "simlock@0.4.0"],
         ["root", "-g"],
       ].map((args) => ({
-        match: { command: /node$/, args: [/npm-cli\.js$/, ...args] },
+        match: { command: /node(\.exe)?$/, args: [/npm-cli\.js$/, ...args] },
         result: hung,
       })),
     );

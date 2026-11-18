@@ -304,7 +304,8 @@ describe("WebSocketUplinkConnection binary messages", () => {
     const buffered = worker.unsentBytes;
     await write;
 
-    expect(buffered).toBeGreaterThan(0);
+    // why: on the Windows CI runner the loopback socket takes the whole 16 MiB write at once, so the buffered amount reads 0 right after it.
+    if (process.platform !== "win32") expect(buffered).toBeGreaterThan(0);
     expect(worker.unsentBytes).toBe(0);
     expect(onSent).toHaveBeenCalled();
   });
@@ -386,6 +387,8 @@ describe("WebSocketUplinkConnector liveness", () => {
     ]);
     expect(firstOutcome).toBe("closed");
 
+    // why: the redial's backoff timer is armed when the worker's end sees the close, which can come after the gateway's end on Windows.
+    await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
     clock.advance(1_000);
     await vi.waitFor(() => expect(accepted).toBe(2));
     expect(gateway.peers).toHaveLength(2);
