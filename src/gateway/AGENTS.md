@@ -14,7 +14,7 @@ Trust in a worker:
 - A worker event named like a fact only a gateway authors (`GATEWAY_OWN_EVENTS` in `worker-link.ts`) is dropped; any other name is forwarded, known here or not. An event nested past `MAX_RELAYED_PAYLOAD_DEPTH` or not serializable is dropped.
 - Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id replaces the old. `token.revoke` closes the token's uplinks.
 - A protocol mismatch does not close the link: the view is `incompatible`, and that worker is asked only `daemon.update` with `query`.
-- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch.
+- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch. `runId` is the caller's: it goes to the waiter, the admission command, the worker and the index entry as sent.
 
 Leases:
 
