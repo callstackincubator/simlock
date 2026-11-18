@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   MemoryFilesystem,
   ScriptedProcessRunner,
@@ -93,8 +94,8 @@ export async function provisionedHarness(
 ) {
   const filesystem = await androidFilesystem({}, options.filesystem);
   const ids = options.ids ?? ["one", "two"];
-  const seedHome = `${avdDirectory}/sources/seed_${ids[1] ?? "two"}`;
-  const copyHome = `${avdDirectory}/simlock_${ids[0] ?? "one"}`;
+  const seedHome = join(avdDirectory, "sources", `seed_${ids[1] ?? "two"}`);
+  const copyHome = join(avdDirectory, `simlock_${ids[0] ?? "one"}`);
   await writeSeedFiles(filesystem, seedHome, options.config);
   const tcpProbe = new FakeTcpProbe([adbServerPort]);
   const clock = new FakeClock();
