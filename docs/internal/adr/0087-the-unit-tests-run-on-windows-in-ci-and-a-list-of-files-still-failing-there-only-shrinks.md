@@ -4,8 +4,10 @@
 - **Date:** 2026-11-18
 - **Issue:** [#1693](https://github.com/callstackincubator/simlock/issues/1693) (request [#1070](https://github.com/callstackincubator/simlock/issues/1070))
 - **Narrows:** testing rule 5 in `docs/internal/agent-rules/testing.md`
-  ("never skip, disable, or quarantine a test to get to green"), for the
-  Windows job's list only, while this feature is delivered.
+  ("never skip, disable, or quarantine a test to get to green"): for good,
+  a test of a fact Windows does not have is skipped there (§3); and while
+  this feature is delivered, the Windows job leaves out the files on its
+  list (§4).
 
 ## Context
 
@@ -50,22 +52,27 @@ flowchart LR
 ### 2. The in-memory filesystem reads both path styles
 
 The fake reads `D:\a\b`, `\a\b` and `/a/b` as one entry: it drops a drive
-letter and reads `\` as `/`. Production code keeps the host's `node:path`,
-and no source file is given a path flavour to make a test pass. A test
-that compares a path the code returned builds the expected path with
-`node:path`, the way the code does.
+letter and reads `\` as `/`, for every path it is given and every link
+target it stores. What it returns, such as `realpath`, is the `/` form.
+Production code keeps the host's `node:path`, and no source file is given
+a path flavour or a platform option to make a test pass; a test's fixtures
+follow the host instead (a fake Android SDK holds `emulator.exe` on
+Windows). A test that compares a path the code built builds the expected
+one with `node:path`, the way the code does; one that compares a path the
+fake returned expects the `/` form.
 
 ### 3. A test of a fact Windows does not have runs off Windows only
 
 A test that checks a POSIX mode, a umask, a launchd or systemd file, or a
 tool Windows does not ship is skipped on `win32`, the way the e2e files
-already skip by platform. Every other test runs on both.
+already skip by platform. That is not skipping a test to get to green:
+the fact it checks does not exist there. Every other test runs on both.
 
 ### 4. A list of files still failing on Windows only shrinks
 
 Until every file passes, the Windows job leaves out the files on one list,
 read only on a Windows host. The first task adds the job with every file
-that still fails on it; each later task fixes a group of files and takes
+that fails in any of three runs of it; each later task fixes a group of files and takes
 them off. A file is never added once the job exists: a change that breaks a
 file on Windows is fixed before it merges. The last task deletes the list
 and this exception.
@@ -77,8 +84,10 @@ the task that owns the file fixes the code with it.
 
 ### 6. The repository's tooling runs on Windows too
 
-The agent scripts and their tests are made to run on a Windows host, so a
-contributor on Windows can run every unit test.
+The agent scripts and their tests are made to run on a Windows host from
+Git Bash with Python 3 installed, as the CI job runs them, so a
+contributor on Windows can run every unit test. Running them from
+PowerShell or `cmd.exe` is not supported.
 
 ## Alternatives rejected
 
@@ -101,6 +110,8 @@ contributor on Windows can run every unit test.
 - Every pull request waits for a Windows runner as well.
 - While the list exists, a file on it is not run on Windows, and a defect
   only it would show stays unseen until its task.
-- Windows contributors can run the whole unit suite.
+- Windows contributors can run the whole unit suite, from Git Bash.
+- An agent on a Mac reproduces a Windows-only failure by rerunning the
+  Windows job, not by running it locally.
 - Shapes, task split and the list's file are in
   [#1693](https://github.com/callstackincubator/simlock/issues/1693).
