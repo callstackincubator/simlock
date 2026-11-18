@@ -292,7 +292,7 @@ describe("WebSocketUplinkConnection binary messages", () => {
     await vi.waitFor(() => expect(received).toEqual([[2]]));
   });
 
-  it("unsentBytes follows the socket's buffered amount with onSent firing when a send completes", async () => {
+  it("unsentBytes is 0 again and onSent has fired once a send completes", async () => {
     const { accepted, url } = await startAcceptingGateway();
     const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
     await accepted;
@@ -300,15 +300,27 @@ describe("WebSocketUplinkConnection binary messages", () => {
     worker.onSent(onSent);
     expect(worker.unsentBytes).toBe(0);
 
-    const write = worker.writeBinary(new Uint8Array(16 * 1024 * 1024));
-    const buffered = worker.unsentBytes;
-    await write;
+    await worker.writeBinary(new Uint8Array(16 * 1024 * 1024));
 
-    // why: on the Windows CI runner the loopback socket takes the whole 16 MiB write at once, so the buffered amount reads 0 right after it.
-    if (process.platform !== "win32") expect(buffered).toBeGreaterThan(0);
     expect(worker.unsentBytes).toBe(0);
     expect(onSent).toHaveBeenCalled();
   });
+
+  // why: on the Windows CI runner the loopback socket takes the whole 16 MiB write at once, so the buffered amount reads 0 right after it and there is nothing to follow.
+  it.skipIf(process.platform === "win32")(
+    "unsentBytes counts what the socket still buffers while a send is in flight",
+    async () => {
+      const { accepted, url } = await startAcceptingGateway();
+      const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
+      await accepted;
+
+      const write = worker.writeBinary(new Uint8Array(16 * 1024 * 1024));
+      const buffered = worker.unsentBytes;
+      await write;
+
+      expect(buffered).toBeGreaterThan(0);
+    },
+  );
 
   it("onSent fires when a text send completes", async () => {
     const { accepted, url } = await startAcceptingGateway();

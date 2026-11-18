@@ -25,37 +25,35 @@ import {
 afterEach(stopTestDaemons);
 
 describe("DaemonServer", () => {
-  // why: a stale socket file is a POSIX fact; a Windows pipe leaves nothing behind.
-  it.skipIf(process.platform === "win32")(
-    "recovers a stale socket file and refuses a second live daemon before running any device work",
-    async () => {
-      const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
-      temporaryDirectories.push(directory);
-      const socketPath = resolveDaemonSocketPath(directory);
+  it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
+    temporaryDirectories.push(directory);
+    const socketPath = resolveDaemonSocketPath(directory);
+    // why: a stale socket file is a POSIX fact; a Windows pipe leaves nothing behind.
+    if (process.platform !== "win32")
       await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
-      const first = await createHarness({ socketPath });
-      let convergeCalls = 0;
-      const second = await createHarness({
-        converge: () => {
-          convergeCalls += 1;
-          return Promise.resolve();
-        },
-        socketPath,
-        start: false,
-      });
+    const first = await createHarness({ socketPath });
+    let convergeCalls = 0;
+    const second = await createHarness({
+      converge: () => {
+        convergeCalls += 1;
+        return Promise.resolve();
+      },
+      socketPath,
+      start: false,
+    });
 
-      await expect(second.daemon.start()).rejects.toMatchObject({
-        name: "DaemonAlreadyRunningError",
-      });
-      expect(convergeCalls).toBe(0);
-      await second.daemon.stop("failed-start");
-      const client = await createClient(socketPath);
-      await hello(client);
-      await client.close();
-      const firstDaemon: DaemonServer = first.daemon;
-      expect(firstDaemon.socketPath).toBe(socketPath);
-    },
-  );
+    await expect(second.daemon.start()).rejects.toMatchObject({
+      name: "DaemonAlreadyRunningError",
+    });
+    expect(convergeCalls).toBe(0);
+    await second.daemon.stop("failed-start");
+    const client = await createClient(socketPath);
+    await hello(client);
+    await client.close();
+    const firstDaemon: DaemonServer = first.daemon;
+    expect(firstDaemon.socketPath).toBe(socketPath);
+  });
 
   // why: review finding S1: `AdminSecretManager`'s own doc (`src/auth`) asserts "a daemon
   // that loses the start race never calls `persist()` at all ... so the file an
