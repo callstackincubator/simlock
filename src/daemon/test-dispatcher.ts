@@ -211,6 +211,8 @@ export async function buildDispatcher(
     readonly physicalDevices?: readonly SeededPhysicalDevice[];
     /** why: rows a test writes to `state.db` before the registry loads. */
     readonly seedState?: (state: StateDatabase) => void;
+    /** why: the `state.db` of an earlier build, for a test that restarts the daemon on it. */
+    readonly state?: StateDatabase;
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
     readonly load?: DispatcherOptions["load"];
@@ -226,7 +228,7 @@ export async function buildDispatcher(
     onReading: () => () => undefined,
   };
   const filesystem = new MemoryFilesystem();
-  const state = await openTestState();
+  const state = overrides.state ?? (await openTestState());
   seedPhysicalDevices(state, overrides.physicalDevices ?? []);
   overrides.seedState?.(state);
   const registry = await loadTestRegistry({
