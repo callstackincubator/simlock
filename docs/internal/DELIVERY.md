@@ -179,6 +179,22 @@ One transition stays manual, one click: `bug:new` → `bug:ready`, after
 you read the triage report of a bug the fast track did not pass. Flipping a closed feature's
 ADRs to _Accepted_ (delivery rule 10) is yours too, unless delivery did it.
 
+## Your inbox
+
+`node .agents/scripts/inbox.mjs` lists everything that waits on you, each
+with the one action it needs: triage reports to read, blockers, PRs to
+review or merge, issues with no state label, work that needs a spec
+session, work `deliver` may start, and decisions delivery took that are
+still marked pending. `--save` records the list, and the next run marks
+what is new.
+
+Two scheduled tasks in T3 Code use it, so you do not have to ask. **Inbox**
+runs it every hour in one thread, labels reports that arrived with no
+label `bug:new` or `request:new`, and posts only when the list changed;
+reply there with the numbers to start, and it opens one thread per item.
+**Bug sweep** runs `deliver` every hour on the oldest `bug:new` that has
+no triage report, one bug at a time.
+
 ## Watching the pipeline
 
 `node .agents/scripts/delivery-stats.mjs` prints one row per week for the

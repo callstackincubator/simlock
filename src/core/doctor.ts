@@ -118,7 +118,7 @@ export class Doctor {
       ...(await this.#collectPrerequisites(prerequisites)),
       ...(await this.#serviceFindings()),
       ...(await this.#warmPoolFindings()),
-      ...this.#optionalModuleFindings(),
+      ...(await this.#optionalModuleFindings()),
     ];
 
     const report = { findings: remaining, sources: await this.#sources(purgeOrphans) };
@@ -497,9 +497,9 @@ export class Doctor {
     ];
   }
 
-  #optionalModuleFindings(): readonly OptionalModuleFinding[] {
+  async #optionalModuleFindings(): Promise<readonly OptionalModuleFinding[]> {
     try {
-      return this.options.optionalModules?.() ?? [];
+      return (await this.options.optionalModules?.()) ?? [];
     } catch (error) {
       this.#logger.warn("Could not read optional module findings", {
         error: errorMessage(error),
