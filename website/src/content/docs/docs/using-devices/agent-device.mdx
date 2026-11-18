@@ -125,6 +125,7 @@ Each agent-device session holds one device. To use a second device, open a secon
 - On Android, `--image-tag` names a system image tag, such as `google_apis_playstore`.
 - `--device-baseline` (the `deviceBaseline` key of an allocate) leases a fresh copy of a saved Simlock baseline. It needs the agent-device release that adds the flag. `--target` is ignored beside it; Simlock refuses a baseline that is unknown, stale or doesn't match `--platform`, `--device` or `--os`, and `--physical` with one.
 - `--device-mode` (the `deviceMode` key of an allocate) asks for a `full` or `slim` iOS simulator. It needs the agent-device release that adds the flag. Without it, you get the worker's default. [Slim is best effort](/simlock/docs/using-devices/choosing-a-device#choose-slim-or-full-ios): below iOS 18.5 you get a full simulator.
+- `runId` in an allocate becomes the run id of the Simlock lease, so `simlock release --run <id>` ends it. A `runId` outside the run id rule (1 to 128 letters, digits, `.`, `_` or `-`) still goes to agent-device, and the lease has none.
 - `deviceExcept` (a list of slim category names, like `["store", "other"]`) in an allocate with `deviceMode: "slim"` works as `simlock lease --mode slim --except`: those categories keep running. agent-device's CLI has no flag for it yet; a raw allocate can carry the key. `null` means absent.
 - `--physical` leases an enrolled phone (see [Use a real phone](#use-a-real-phone)).
 

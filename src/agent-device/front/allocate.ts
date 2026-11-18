@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import type { OPERATIONS } from "../../contract/index.js";
+import { RUN_ID_PATTERN, type OPERATIONS } from "../../contract/index.js";
 import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
 import type { Identity } from "../../auth/index.js";
@@ -58,6 +58,7 @@ interface Plan {
   readonly except?: readonly string[];
   readonly physical?: true;
   readonly ttlMs?: number;
+  readonly runId?: string;
 }
 
 // why: connect proxy names the backend that rents the platform (ios-instance, android-instance) on every allocate; any other backend is a different kind of device.
@@ -140,6 +141,10 @@ function chosenDevice(fields: ReturnType<typeof leaseCallFields>) {
   return klass === undefined ? {} : { class: klass };
 }
 
+function runIdOf(value: unknown): { readonly runId?: string } {
+  return typeof value === "string" && RUN_ID_PATTERN.test(value) ? { runId: value } : {};
+}
+
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
   const ttlMs = chosenTtl(fields.ttlMs, cap);
@@ -151,6 +156,7 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
     ...(ttlMs === undefined ? {} : { ttlMs }),
+    ...runIdOf(params["runId"]),
   };
 }
 
