@@ -8,6 +8,7 @@ import {
 } from "../ports/index.js";
 import {
   GATEWAY_PREFIX,
+  GatedRunner,
   RecordingLogger,
   REQUEST,
   connectWorker,
@@ -63,33 +64,6 @@ function admissionFleet(output: Output, command: readonly string[] = COMMAND) {
   const rejected: Array<EventMap["lease.rejected"]> = [];
   fleet.eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
   return { ...fleet, logger, rejected, requested, runner };
-}
-
-/** why: a runner whose commands answer only when the test says, as a slow policy script does. */
-class GatedRunner extends ScriptedProcessRunner {
-  readonly #open: Array<(stdout: string) => void> = [];
-  constructor() {
-    super([]);
-  }
-  override run(
-    command: string,
-    args: readonly string[],
-    options: ProcessRunOptions = {},
-  ): Promise<ProcessResult> {
-    this.calls.push({ args: [...args], command, options });
-    return new Promise((resolve) => {
-      this.#open.push((stdout) => resolve({ code: 0, stderr: "", stdout }));
-      options.signal?.addEventListener(
-        "abort",
-        () =>
-          resolve({ code: null, endedBy: "aborted", signal: "SIGKILL", stderr: "", stdout: "" }),
-        { once: true },
-      );
-    });
-  }
-  answer(index: number, stdout: string): void {
-    this.#open[index]?.(stdout);
-  }
 }
 
 /** why: every command answers `{}` at once; the worker has room, so a request is granted and a refused one never reaches it. */

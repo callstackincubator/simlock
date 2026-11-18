@@ -3,7 +3,7 @@ import { SimlockError } from "../contract/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { leaseFixture, ScriptedWorkerClient } from "./test-support.js";
 import { harness, session } from "./test-dispatcher.js";
-import { connectWorker, saturatedIos, tick } from "./test-fleet.js";
+import { connectWorker, GatedRunner, saturatedIos, tick } from "./test-fleet.js";
 
 describe("GatewayDispatcher: lease.release-run", () => {
   it("releases each index entry of the run on its worker for the caller, every owner's for an admin, keeps a joined worker's own lease, and answers their ids", async () => {
@@ -151,5 +151,53 @@ describe("GatewayDispatcher: lease.release-run", () => {
     );
     expect(await otherRun).toBeInstanceOf(RequestCancelledError);
     expect(await otherOwner).toBeInstanceOf(RequestCancelledError);
+  });
+
+  it("cancels the run's requests still waiting on the admission command, lists none of them, and keeps another owner's and another run's", async () => {
+    const runner = new GatedRunner();
+    const { coordinator, dispatcher, directory, eventBus, workers } = harness({
+      admission: { command: ["bun", "/etc/simlock/policy.ts"], runner, timeoutMs: 5_000 },
+    });
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    const rejected: unknown[] = [];
+    eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+    const ask = (principal: string, runId: string) =>
+      dispatcher
+        .dispatch(
+          "lease.request",
+          { model: "iPhone 17", platform: "ios", requesterId: `${principal}-${runId}`, runId },
+          session({ principal }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+    // why: a request still pending when the test ends must not make it wait, so the ends are read by flag, not awaited.
+    const ended: Record<string, unknown> = {};
+    const track = (name: string, principal: string, runId: string) =>
+      void ask(principal, runId).then((error) => (ended[name] = error));
+    track("mine", "tok_ci", "nightly-7");
+    track("otherRun", "tok_ci", "nightly-8");
+    track("otherOwner", "tok_other", "nightly-7");
+    await tick();
+    expect(runner.calls).toHaveLength(3);
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+
+    expect(result).toEqual({ leaseIds: [], requestIds: [] });
+    await tick();
+    expect(ended.mine).toBeInstanceOf(RequestCancelledError);
+    expect(rejected).toMatchObject([{ reason: "cancelled" }]);
+    runner.answer(1, "{}");
+    runner.answer(2, "{}");
+    await tick();
+    expect(ended).not.toHaveProperty("otherRun");
+    expect(ended).not.toHaveProperty("otherOwner");
+    expect(coordinator.waitingRequests()).toHaveLength(2);
   });
 });
