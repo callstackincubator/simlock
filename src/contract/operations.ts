@@ -102,7 +102,6 @@ export {
   leaseGet,
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
   leaseReleaseAll,
-  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
   leaseReleaseRun,
 } from "./operations-leases.js";
 export {
