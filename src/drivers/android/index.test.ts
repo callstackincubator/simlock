@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
@@ -277,7 +278,7 @@ describe("AndroidDriver ownership", () => {
       filesystem.defineSymlink("/private/home", "/home");
       filesystem.defineSymlink("/unreadable", avdDirectory);
       filesystem.defineFailure("/unreadable/simlock_one.avd", "EACCES");
-      await filesystem.mkdirp(`${avdDirectory}/simlock_two.avd`);
+      await filesystem.mkdirp(join(avdDirectory, "simlock_two.avd"));
 
       for (const result of [ok(`${avdDirectory}/simlock_one.avd\r\nOK\r\n`), answer]) {
         const runner = new EmulatorExitingRunner([
@@ -324,18 +325,18 @@ describe("AndroidDriver ownership", () => {
   it("tells two running copies of one seed apart by each one's own AVD folder, still attributes an old-layout AVD, and lists no seed folder nor attributes its emulator", async () => {
     const filesystem = await androidFilesystem();
     for (const folder of [
-      `${avdDirectory}/simlock_a/simlock.avd`,
-      `${avdDirectory}/simlock_b/simlock.avd`,
-      `${avdDirectory}/simlock_old.avd`,
-      `${avdDirectory}/sources/seed_x/simlock.avd`,
+      join(avdDirectory, "simlock_a", "simlock.avd"),
+      join(avdDirectory, "simlock_b", "simlock.avd"),
+      join(avdDirectory, "simlock_old.avd"),
+      join(avdDirectory, "sources", "seed_x", "simlock.avd"),
     ]) {
       await filesystem.mkdirp(folder);
     }
     const running = [
-      ["emulator-5554", "simlock", `${avdDirectory}/simlock_b/simlock.avd`],
-      ["emulator-5556", "simlock", `${avdDirectory}/simlock_a/simlock.avd`],
-      ["emulator-5558", "simlock_old", `${avdDirectory}/simlock_old.avd`],
-      ["emulator-5560", "simlock", `${avdDirectory}/sources/seed_x/simlock.avd`],
+      ["emulator-5554", "simlock", join(avdDirectory, "simlock_b", "simlock.avd")],
+      ["emulator-5556", "simlock", join(avdDirectory, "simlock_a", "simlock.avd")],
+      ["emulator-5558", "simlock_old", join(avdDirectory, "simlock_old.avd")],
+      ["emulator-5560", "simlock", join(avdDirectory, "sources", "seed_x", "simlock.avd")],
     ] as const;
     const runner = new EmulatorExitingRunner([
       processResult(
@@ -392,7 +393,7 @@ describe("AndroidDriver pre-root devices", () => {
   it("hands the device table its device root, its legacy AVD home, its environment and its avdmanager", async () => {
     const legacyHome = "/legacy/avd";
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_new.avd`);
+    await filesystem.mkdirp(join(avdDirectory, "simlock_new.avd"));
     await filesystem.mkdirp(`${legacyHome}/simlock_old.avd`);
     const runner = new EmulatorExitingRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -408,7 +409,7 @@ describe("AndroidDriver pre-root devices", () => {
     await driver.destroyLegacy(legacy!.device);
 
     expect(reality.devices.map((device) => device.deviceId)).toEqual(["simlock_new"]);
-    expect(legacy?.path).toBe(`${legacyHome}/simlock_old.avd`);
+    expect(legacy?.path).toBe(join(legacyHome, "simlock_old.avd"));
     expect(runner.calls.at(-1)).toMatchObject({
       command: binaries.avdmanager,
       options: {

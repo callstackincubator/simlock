@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import { type Driver } from "../../core/index.js";
 import { MemoryFilesystem } from "../../ports/index.js";
 import { type AndroidDriverDiagnostic, type AndroidEmulatorLaunchOptions } from "./index.js";
@@ -271,7 +272,7 @@ describe("AndroidDriver", () => {
   });
 
   it("rethrows a non-missing-file config.ini read error from the mark write instead of clobbering it as empty", async () => {
-    const configPath = `${avdDirectory}/simlock_one/simlock.avd/config.ini`;
+    const configPath = join(avdDirectory, "simlock_one", "simlock.avd", "config.ini");
     const permissionError = Object.assign(new Error("EACCES: permission denied"), {
       code: "EACCES",
     });

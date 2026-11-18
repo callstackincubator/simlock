@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 
 import { MemoryFilesystem } from "../../ports/index.js";
 
@@ -231,7 +232,7 @@ describe("Seeds", () => {
 
     it("rethrows and runs no `avdmanager delete` when a write after `avdmanager create avd` fails", async () => {
       const filesystem = new WriteFailureFilesystem(
-        `${avdDirectory}/sources/seed_two/simlock.avd/config.ini`,
+        join(avdDirectory, "sources", "seed_two", "simlock.avd", "config.ini"),
         new Error("disk full"),
       );
       const harness = await libraryHarness({ filesystem, listing: pixelDevices });
