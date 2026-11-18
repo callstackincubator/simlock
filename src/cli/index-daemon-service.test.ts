@@ -780,10 +780,15 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     readonly startAfterInstall?: boolean;
     readonly daemonRunning?: boolean;
     readonly state?: ServiceState;
+    readonly files?: readonly string[];
   }): Promise<{ readonly exitCode: number; readonly output: ReturnType<typeof outputCapture> }> {
     const { role, runner, filesystem } = options;
     const dataDirectory = role === "gateway" ? join(root, "gateway") : root;
     const ipcTransport = new MemoryIpcTransport();
+    for (const file of options.files ?? []) {
+      await filesystem.mkdirp(dirname(file));
+      await filesystem.writeFileAtomic(file, "");
+    }
     const startDaemon = async (): Promise<void> => {
       await startInMemoryDaemon({
         adminTokenPath: join(dataDirectory, "admin.token"),
@@ -1071,6 +1076,152 @@ describe("CLI: daemon service on Windows (#1698)", () => {
         code: "SERVICE_FAILED",
         message: `schtasks /delete /tn ${name} /f failed: ERROR: The system cannot find the file.`,
       },
+    });
+  });
+
+  it("daemon status on Windows prints one Service: line from the task and the user's desktop session, and --json carries the same state", async () => {
+    const name = "com.callstack.simlock.worker";
+    const supervisor = "/opt/simlock/dist/daemon/service-main.js";
+    const query = {
+      command: "cmd.exe",
+      args: ["/d", "/c", `chcp 65001 >nul && schtasks /query /tn ${name} /xml`],
+    };
+    const whoami = { command: "whoami", args: ["/user", "/fo", "csv", "/nh"] };
+    const tasklist = {
+      command: "tasklist",
+      args: ["/fi", "USERNAME eq desktop\\me", "/fi", "SESSION ne 0", "/fo", "csv", "/nh"],
+    };
+    const taskXml = (options: {
+      readonly node?: string;
+      readonly supervisor?: string;
+      readonly arguments?: string;
+      readonly enabled?: boolean;
+    }): string => {
+      const args =
+        options.arguments ??
+        `--headless "${options.node ?? nodePath}" "${options.supervisor ?? supervisor}" --task ${name} --install-id 1 --environment e30`;
+      return `<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><Enabled>${String(options.enabled ?? true)}</Enabled></Settings><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`;
+    };
+    const ok = (stdout: string): ProcessResult => ({ code: 0, stdout, stderr: "" });
+    const session = [{ match: whoami, result: ok('"desktop\\me","S-1-5-21-1"\r\n') }];
+    const present = [nodePath, supervisor];
+    const info = "INFO: No tasks are running which match the specified criteria.\r\n";
+    const cases = [
+      {
+        label: "no task",
+        files: [],
+        script: [{ match: query, result: { code: 1, stdout: "", stderr: "ERROR" } }],
+        line: "Service: not installed",
+      },
+      {
+        label: "task, user at the screen",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n') },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
+      },
+      {
+        label: "no desktop session: tasklist prints only its INFO line",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: ok(info) },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "tasklist fails",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: { code: 1, stdout: "", stderr: "ERROR" } },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "tasklist takes more than 10 s",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: { code: null, stdout: "", stderr: "" } },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "task disabled by hand",
+        files: present,
+        script: [{ match: query, result: ok(taskXml({ enabled: false })) }],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "Node path gone",
+        files: [supervisor],
+        script: [{ match: query, result: ok(taskXml({})) }],
+        line: `Service: broken (task-scheduler, ${name}): ${nodePath} is gone; run simlock daemon install`,
+      },
+      {
+        label: "supervisor path gone",
+        files: [nodePath],
+        script: [{ match: query, result: ok(taskXml({})) }],
+        line: `Service: broken (task-scheduler, ${name}): ${supervisor} is gone; run simlock daemon install`,
+      },
+      {
+        label: "arguments without two quoted paths after --headless",
+        files: present,
+        script: [{ match: query, result: ok(taskXml({ arguments: "--headless node" })) }],
+        line: `Service: broken (task-scheduler, ${name}): \\${name} is gone; run simlock daemon install`,
+      },
+      {
+        label: "a path with a non-ASCII character is read whole",
+        files: [nodePath, "/opt/simlock-ü/dist/daemon/service-main.js"],
+        script: [
+          {
+            match: query,
+            result: ok(taskXml({ supervisor: "/opt/simlock-ü/dist/daemon/service-main.js" })),
+          },
+          ...session,
+          { match: tasklist, result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n') },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
+      },
+    ];
+    for (const { label, files, script, line } of cases) {
+      const runner = new ScriptedProcessRunner(script);
+      const { exitCode, output } = await runWindowsCli({
+        argv: ["daemon", "status"],
+        role: "worker",
+        runner,
+        filesystem: new MemoryFilesystem(),
+        files,
+      });
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(output.stdout, label).toBe(`Daemon stopped\n${line}\n`);
+      expect(runner.calls.length, label).toBe(script.length);
+      expect(
+        runner.calls.every((call) => call.options.timeoutMs === 10_000),
+        label,
+      ).toBe(true);
+    }
+
+    const json = await runWindowsCli({
+      argv: ["daemon", "status", "--json"],
+      role: "worker",
+      runner: new ScriptedProcessRunner([
+        { match: query, result: ok(taskXml({ enabled: false })) },
+      ]),
+      filesystem: new MemoryFilesystem(),
+      files: present,
+    });
+    expect(JSON.parse(json.output.stdout)).toEqual({
+      status: "stopped",
+      service: { state: "not-loaded", manager: "task-scheduler", name, path: `\\${name}` },
     });
   });
 });
