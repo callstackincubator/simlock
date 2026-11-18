@@ -27,6 +27,7 @@ import { WaiterOutcomes } from "./waiter-outcomes.js";
 export type { LeaseRequestOptions } from "./wait-queue.js";
 export {
   DaemonUpdatingError,
+  ModeUnavailableError,
   NoCapacityError,
   ProvisionFailedError,
 } from "./acquisition-errors.js";

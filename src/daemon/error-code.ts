@@ -30,6 +30,7 @@ import {
   IdempotencyConflictError,
   LeaseIdTakenError,
   LeaseRequestForbiddenError,
+  ModeUnavailableError,
   NoCapacityError,
   ProvisionFailedError,
   QueueTimeoutError,
@@ -128,6 +129,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof UnknownModelError) {
     return "UNKNOWN_MODEL";
+  }
+  if (error instanceof ModeUnavailableError) {
+    return "MODE_UNAVAILABLE";
   }
   if (error instanceof UnknownBaselineError) {
     return "UNKNOWN_BASELINE";

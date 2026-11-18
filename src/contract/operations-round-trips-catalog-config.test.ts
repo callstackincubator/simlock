@@ -189,7 +189,7 @@ describe("operation input/output round trips", () => {
     ]);
   });
 
-  it("catalog.get bounds every string and list in modelAliases, customModels, images and slimCategories", () => {
+  it("catalog.get bounds every string and list in modelAliases, customModels, images, slimCategories and modes", () => {
     const base = {
       platform: "android",
       models: ["Pixel 8"],
@@ -227,6 +227,9 @@ describe("operation input/output round trips", () => {
       [{ slimCategories: ["a" + "x".repeat(31)] }, { slimCategories: ["a" + "x".repeat(32)] }],
       [{ slimCategories: ["a-1"] }, { slimCategories: ["Store"] }],
       [{ defaultMode: "slim" }, { defaultMode: "lean" }],
+      [{ modes: ["slim", "full"] }, { modes: [] }],
+      [{ modes: ["slim", "full"] }, { modes: ["slim", "full", "slim"] }],
+      [{ modes: ["slim"] }, { modes: ["lean"] }],
       [
         { images: [{ ...image, runtime: "x".repeat(128) }] },
         { images: [{ ...image, runtime: "x".repeat(129) }] },
@@ -486,7 +489,14 @@ describe("operation input/output round trips", () => {
     expect([
       output.safeParse({ ...config, ios: { ...config.ios, defaultMode: "fast" } }).success,
       output.safeParse({ ...config, android: { emulator: config.android.emulator } }).success,
-    ]).toEqual([false, false]);
+      output.safeParse({ ...config, ios: { ...config.ios, modes: [] } }).success,
+      output.safeParse({ ...config, ios: { ...config.ios, modes: ["slim", "full", "slim"] } })
+        .success,
+      output.safeParse({ ...config, ios: { ...config.ios, modes: ["lean"] } }).success,
+    ]).toEqual([false, false, false, false, false]);
+    expect(
+      output.parse({ ...config, ios: { ...config.ios, modes: ["slim", "full"] } }).ios.modes,
+    ).toEqual(["slim", "full"]);
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,

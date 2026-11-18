@@ -346,6 +346,7 @@ export function createCore(options: CoreOptions): Core {
     decisions,
     eventBus: options.eventBus,
     hasDriver: (platform) => drivers.select(platform).length > 0,
+    servedModes: options.config.ios.modes,
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),

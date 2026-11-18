@@ -376,6 +376,7 @@ export async function composeWorker(
     core,
     defaultImageTags: deviceModeWiring(config).defaultImageTags,
     defaultModes: deviceModeWiring(config).defaultModes,
+    servedModes: deviceModeWiring(config).servedModes,
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
@@ -773,6 +774,7 @@ export async function composeWorker(
 export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
   readonly defaultImageTags: Readonly<Partial<Record<"android", string>>>;
   readonly defaultModes: Readonly<Partial<Record<"ios" | "android", DeviceMode>>>;
+  readonly servedModes: Readonly<Partial<Record<"ios", readonly DeviceMode[]>>>;
   readonly slimByDefault: boolean;
 } {
   return {
@@ -781,6 +783,7 @@ export function deviceModeWiring(config: Pick<Config, "android" | "ios">): {
         ? {}
         : { android: config.android.defaultImageTag },
     defaultModes: { ios: config.ios.defaultMode },
+    servedModes: { ios: config.ios.modes },
     slimByDefault: config.ios.defaultMode === "slim",
   };
 }

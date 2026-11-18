@@ -115,10 +115,24 @@ A **slim** simulator has background services that agents rarely need turned off,
 What to expect:
 
 - A full lease never gets a slim device.
+- A worker may serve only one mode. See [Modes a worker serves](#modes-a-worker-serves).
 - Slim is best effort. iOS versions older than 18.5, and all Android devices, can't be slimmed, so you get a full device instead. Check `device.mode` in the grant.
 - A lease only reuses an idle device of the mode it asked for. So your request may wait for a new device even while devices of the other mode sit idle.
 
 If a test fails because a push notification, a Spotlight result, an App Store sheet or a system picker never appears, check `device.mode`. Ask for `--mode full` when your app needs those features.
+
+### Modes a worker serves
+
+An admin can limit a worker to one mode with `ios.modes`. The worker then refuses a lease of the other mode at once with `MODE_UNAVAILABLE` (exit 12), before it downloads or boots anything. The error details carry the `mode` you asked for and the modes the worker `served`:
+
+```json
+{"error":{"code":"MODE_UNAVAILABLE","details":{"platform":"ios","mode":"full","served":["slim"]}}}
+```
+
+- A request with no `--mode` gets the worker's only mode.
+- A `--baseline` is checked by the mode it was saved with.
+- On iOS older than 18.5 a slim request would get a full device, so a worker that serves only slim refuses it instead.
+- `simlock catalog` prints `Modes served` for iOS.
 
 ### Keep a category running
 

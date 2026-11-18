@@ -63,7 +63,7 @@ describe("Doctor: warm pool targets", () => {
       config: {
         ...base,
         android: { virtualDevices: options.virtualDevices?.android ?? true },
-        ios: { virtualDevices: options.virtualDevices?.ios ?? true },
+        ios: { ...base.ios, virtualDevices: options.virtualDevices?.ios ?? true },
         warmPool: {
           ...base.warmPool,
           enabled: options.enabled ?? true,

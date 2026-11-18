@@ -256,6 +256,7 @@ export function configValidators(
       ...driverValidators(driverSections, "ios"),
       defaultMode: stringUnion(["slim", "full"]),
       defaultModels: defaultModelsValidator,
+      modes: modesValidator,
       virtualDevices: booleanValue,
     }),
     android: objectValidator({
@@ -342,6 +343,17 @@ const imageTagValidator: Validator = (value, path) => {
     throw invalidValue(path, "an image tag: 1 to 64 letters, digits, '_', '.' or '-'");
   }
   return value;
+};
+
+/** why: ADR 0082 §1: the iOS modes a worker serves are `slim`, `full` or both, each once; a repeat or an unknown name is refused rather than ignored so the list says what the worker does. */
+const modesValidator: Validator = (value, path) => {
+  const valid =
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((mode) => mode === "slim" || mode === "full") &&
+    new Set(value).size === value.length;
+  if (!valid) throw invalidValue(path, 'a non-empty list of "slim" and "full", each once');
+  return value as readonly ("slim" | "full")[];
 };
 
 /**

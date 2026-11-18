@@ -1,6 +1,6 @@
 import { isSimlockError } from "../contract/index.js";
 import { BaselineMismatchError, BaselineStaleError, UnknownBaselineError } from "../core/index.js";
-import { LeaseIdTakenError } from "../leasing/index.js";
+import { LeaseIdTakenError, ModeUnavailableError } from "../leasing/index.js";
 import { DispatchError } from "./dispatch.js";
 
 /** why: the refusals of a `lease.request` that carry their own details on the wire, in one place so the dispatcher's catch stays short. */
@@ -10,6 +10,13 @@ export function leaseRequestRefusal(error: unknown): DispatchError | undefined {
   }
   if (error instanceof LeaseIdTakenError) {
     return new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+  }
+  if (error instanceof ModeUnavailableError) {
+    return new DispatchError("MODE_UNAVAILABLE", error.message, {
+      mode: error.mode,
+      platform: "ios",
+      served: error.served,
+    });
   }
   if (error instanceof UnknownBaselineError) {
     return new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
