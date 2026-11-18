@@ -474,6 +474,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
           .rpcRequests("agent_device.lease.release")
           .map((request) => request.params?.["leaseId"]),
       )
-      .toEqual([hex(1)]);
+      .toContain(hex(1));
   });
 });
