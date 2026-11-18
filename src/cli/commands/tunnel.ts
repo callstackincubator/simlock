@@ -650,12 +650,11 @@ function serve(
 
 async function run(
   argv: readonly string[],
-  { environment, token }: CommandContext,
+  { environment, token, url }: CommandContext,
 ): Promise<number> {
-  const { help, lease, positionals, url } = commandArgs(argv, {
+  const { help, lease, positionals } = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
     lease: { type: "string" },
-    url: { type: "string" },
   });
   if (help) {
     environment.stdout.write(
@@ -664,7 +663,7 @@ async function run(
     return 0;
   }
   const parsed = parseTunnels(positionals);
-  const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
+  const base = checkedUrl(url);
   const secret = checkedToken(token ?? environment.tunnelToken);
   const named = checkedLease(typeof lease === "string" ? lease : undefined);
   const listeners: TcpListener[] = [];

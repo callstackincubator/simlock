@@ -33,6 +33,18 @@ This page uses the [`e2e` runner](https://www.npmjs.com/package/@e2e-dev/mobile)
 
 </Steps>
 
+## Run simlock commands from a job
+
+A job that is not an `e2e` run can use the `simlock` commands with the same two secrets, from a machine with no daemon. Set `SIMLOCK_AGENT_ID` to a value that is the same for every step of the job, such as the job id, so `simlock adb` and `simlock simctl` find the lease the job took:
+
+```sh
+export SIMLOCK_AGENT_ID="$CI_JOB_ID"
+simlock lease --platform android --detach
+simlock adb shell getprop ro.build.version.release
+```
+
+See [Use the CLI](/simlock/docs/using-devices/remote-agents#use-the-cli).
+
 ## Install the provider
 
 ```sh

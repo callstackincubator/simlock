@@ -425,6 +425,7 @@ export function buildCliEnvironment(
           },
         }),
     requesterId,
+    requesterIsProcess: resolveRequesterId(env, "") === "",
     homeDirectory: ports.homeDirectory,
     workingDirectory: ports.workingDirectory,
     codexHome: ports.codexHome,

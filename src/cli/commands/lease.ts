@@ -99,6 +99,15 @@ async function runLease(
   if (values.class === "") throw new UsageError("lease --class must not be empty");
   if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
   const requesterId = (values["agent-id"] as string | undefined) ?? environment.requesterId;
+  if (
+    environment.remote !== undefined &&
+    values["agent-id"] === undefined &&
+    environment.requesterIsProcess === true
+  ) {
+    environment.stderr.write(
+      `${JSON.stringify({ notice: `no SIMLOCK_AGENT_ID or agent session: this lease's requester is ${requesterId}, this process; set SIMLOCK_AGENT_ID, or pass --lease <lease id>, for later commands to find it` })}\n`,
+    );
+  }
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
   const ttlMs = typeof values.ttl === "string" ? parseDuration(values.ttl) : undefined;

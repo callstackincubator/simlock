@@ -55,11 +55,20 @@ export interface CliServiceAccess {
   readonly definition: () => Promise<ServiceDefinition>;
 }
 
+/** why: set by the router when a command runs against a farm (`--url` or `SIMLOCK_URL`); `token` is `--token` else `SIMLOCK_TOKEN`, and may be missing. */
+export interface RemoteFarm {
+  readonly url: string;
+  readonly token: string | undefined;
+}
+
 export interface CliEnvironment {
+  readonly remote?: RemoteFarm | undefined;
   readonly clock: Clock;
   readonly configPath: string;
   readonly daemonHome: DaemonHome;
   readonly requesterId: string;
+  /** why: with no `SIMLOCK_AGENT_ID` and no agent session the requester is this process, which no later command of a shell can name. */
+  readonly requesterIsProcess?: boolean;
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly codexHome?: string | undefined;
@@ -108,7 +117,7 @@ export interface CliEnvironment {
   readonly processRunner?: ProcessRunner | undefined;
   /** why: the commands that may be the caller's adb, in the order they are tried: `adb` on the PATH, then each Android SDK folder's `platform-tools`. */
   readonly adbCandidates?: readonly string[] | undefined;
-  /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the daemon `simlock tunnel` calls and the credential it sends. */
+  /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the farm every command reaches, and the credential it sends, when no `--url` or `--token` does. */
   readonly tunnelUrl?: string;
   readonly tunnelToken?: string;
   readonly readStdin?: () => Promise<string>;

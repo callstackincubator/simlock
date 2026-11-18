@@ -1,5 +1,6 @@
 import type { SimlockAdminClient } from "../admin/index.js";
-import type { CliEnvironment } from "./types.js";
+import { UsageError } from "./errors.js";
+import type { CliEnvironment, RemoteFarm } from "./types.js";
 
 const ADMIN_TOKEN_FILE_READ_ATTEMPTS = 3;
 const ADMIN_TOKEN_FILE_RETRY_DELAY_MS = 50;
@@ -36,11 +37,37 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
   environment.stderr.write(`${JSON.stringify({ notice })}\n`);
 }
 
+// why: remote mode needs a token and never falls back to an agent session or launches a daemon (ADR 0081 §3): the token decides the role, and there is no local daemon to fall back to.
+async function connectFarm(
+  environment: CliEnvironment,
+  farm: RemoteFarm,
+): Promise<SimlockAdminClient> {
+  const [{ connectSimlockAdmin }, { checkedFarmUrl, FarmUrlError, farmTokenFits }] =
+    await Promise.all([import("../admin/index.js"), import("../simlock-client/farm-url.js")]);
+  let url: string;
+  try {
+    url = checkedFarmUrl(farm.url, "--url");
+  } catch (error: unknown) {
+    if (error instanceof FarmUrlError) throw new UsageError(error.message);
+    throw error;
+  }
+  if (farm.token === undefined || !farmTokenFits(farm.token)) {
+    throw new UsageError("No token: pass --token or set SIMLOCK_TOKEN");
+  }
+  return connectSimlockAdmin({
+    clock: environment.clock,
+    token: farm.token,
+    url,
+    webSocket: environment.webSocket,
+  });
+}
+
 export async function connectDaemonClient(
   environment: CliEnvironment,
   tokenFlag: string | undefined,
   options: { readonly launch?: boolean; readonly untilStarted?: boolean } = {},
 ): Promise<SimlockAdminClient> {
+  if (environment.remote !== undefined) return connectFarm(environment, environment.remote);
   const connect: (
     resolveCredential: () => Promise<string | undefined>,
   ) => Promise<SimlockAdminClient> =
