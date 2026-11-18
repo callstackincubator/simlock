@@ -201,7 +201,7 @@ describe("GatewayDispatcher: lease.release-run", () => {
     expect(coordinator.waitingRequests()).toHaveLength(2);
   });
 
-  it("marks a request already dispatched to a worker to release at its grant: the caller gets the lease, the worker is told to release it, and the id is not listed", async () => {
+  it("marks a request already dispatched to a worker to release at its grant: the caller gets the lease, the worker is told to release it, and the id is listed", async () => {
     const { dispatcher, directory, leaseIndex, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -226,7 +226,8 @@ describe("GatewayDispatcher: lease.release-run", () => {
       { runId: "nightly-7" },
       session({ principal: "tok_ci", role: "agent" }),
     );
-    expect(result).toEqual({ leaseIds: [], requestIds: [] });
+    expect(result.leaseIds).toEqual([]);
+    expect(result.requestIds).toHaveLength(1);
     expect(client.calls.filter((call) => call.startsWith("lease.release"))).toEqual([]);
 
     openGrant();

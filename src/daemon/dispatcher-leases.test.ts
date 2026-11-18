@@ -660,16 +660,20 @@ describe("Dispatcher: lease.release-run", () => {
       { runId: "nightly-9" },
       session({ principal: "tok_ci" }),
     );
-    await dispatcher.dispatch(
+    const otherOwnerRequestId = engine
+      .waitingRequests()
+      .find((request) => request.requesterId === "tok_other-nightly-7")?.id;
+    const byOperator = await dispatcher.dispatch(
       "lease.release-run",
       { runId: "nightly-7" },
-      session({ principal: "tok_other" }),
+      session({ principal: "tok_admin", role: "admin" }),
     );
+    expect(byOperator).toEqual({ leaseIds: [], requestIds: [otherOwnerRequestId] });
     expect(await otherRun).toBeInstanceOf(RequestCancelledError);
     expect(await otherOwner).toBeInstanceOf(RequestCancelledError);
   });
 
-  it("releases the caller's request of the run that is booting a virtual device the moment it is granted, and lists its id", async () => {
+  it("releases another owner's request of the run, which an operator reaches, that is booting a virtual device the moment it is granted, and lists its id", async () => {
     const { dispatcher, driver, eventBus, engine, registry } = await buildDispatcher();
     driver.hangMakeReady();
     const booting = dispatcher.dispatch(
@@ -683,7 +687,7 @@ describe("Dispatcher: lease.release-run", () => {
     const result = await dispatcher.dispatch(
       "lease.release-run",
       { runId: "nightly-7" },
-      session({ principal: "tok_ci" }),
+      session({ principal: "tok_admin", role: "admin" }),
     );
 
     expect(result).toEqual({ leaseIds: [], requestIds: [requestId] });

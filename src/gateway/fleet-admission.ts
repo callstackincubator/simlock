@@ -400,8 +400,9 @@ export class FleetAdmission {
           (ownerId === undefined || waiter.options.ownerId === ownerId);
         if (!matches) continue;
         if (waiter.state === "processing") {
-          // why: a worker has the request, so it is not cancelled: its grant is released once it lands (`FleetGrants.settle`), and its id is not listed.
+          // why: a worker has the request, so it is not cancelled: its grant is released once it lands (`FleetGrants.settle`), and its id is listed like a cancelled one.
           this.options.queue.markReleaseAtGrant(waiter);
+          cancelled.push(waiter.id);
           continue;
         }
         if (this.options.queue.reject(waiter, new RequestCancelledError(waiter.id))) {

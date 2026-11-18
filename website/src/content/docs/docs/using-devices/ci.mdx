@@ -51,7 +51,7 @@ A job that is cancelled or fails can leave leases behind, and they hold devices 
 
 ```yaml
 env:
-  SIMLOCK_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+  SIMLOCK_RUN: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
 steps:
   # ...the steps that lease and test...
   - name: Free the devices
