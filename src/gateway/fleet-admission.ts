@@ -377,6 +377,27 @@ export class FleetAdmission {
     });
   }
 
+  /**
+   * why: a run's cleanup stops every request of the run it owns that no worker has yet (`ownerId`
+   * undefined for an operator), by the rule `cancelPending` applies to one.
+   */
+  async cancelRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
+    return this.#decisions.run(async () => {
+      const cancelled: string[] = [];
+      for (const waiter of this.options.queue.pending()) {
+        const matches =
+          waiter.options.runId === runId &&
+          (ownerId === undefined || waiter.options.ownerId === ownerId);
+        if (!matches || waiter.state === "processing") continue;
+        if (this.options.queue.reject(waiter, new RequestCancelledError(waiter.id))) {
+          this.options.facts.rejected(waiter, "cancelled");
+        }
+        cancelled.push(waiter.id);
+      }
+      return cancelled;
+    });
+  }
+
   stopAsking(): void {
     for (const asking of this.#asking) this.#endAsking(asking, "stopping");
   }

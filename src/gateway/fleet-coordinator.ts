@@ -241,7 +241,9 @@ export class FleetLeaseCoordinator {
     runId: string,
     ownerId: string | undefined,
   ): Promise<{ readonly leaseIds: readonly string[]; readonly requestIds: readonly string[] }> {
-    return { leaseIds: await this.#forwarding.releaseRun(runId, ownerId), requestIds: [] };
+    // why: the run's waiting requests stop first, so a lease freed here is never the room a request of the run is granted.
+    const requestIds = await this.#admission.cancelRun(runId, ownerId);
+    return { leaseIds: await this.#forwarding.releaseRun(runId, ownerId), requestIds };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
