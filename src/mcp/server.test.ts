@@ -158,7 +158,9 @@ describe("MCP server (smoke)", () => {
   });
 
   it("the lease tool's input schema in tools/list lists noWait and physical, and has no fleetRequestId, no metadata, no requires and no runId, and a call naming runId is refused", async () => {
-    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const { mcpClient, close } = await connectedServer(client);
     try {
       const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
       const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
@@ -177,6 +179,7 @@ describe("MCP server (smoke)", () => {
         runId: "123-1",
       });
       expect(tagged.isError).toBe(true);
+      expect(client.calls).toEqual([]);
     } finally {
       await close();
     }
