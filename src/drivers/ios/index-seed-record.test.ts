@@ -8,14 +8,7 @@ import {
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { memorySourceDatabase, plantBytes } from "./testing.js";
-import {
-  deviceRoot,
-  driverData,
-  inPosixForm,
-  sourcesSetPath,
-  plantManagedDevice,
-  simctl,
-} from "./test-slim.js";
+import { deviceRoot, driverData, sourcesSetPath, plantManagedDevice, simctl } from "./test-slim.js";
 import {
   RecordingLogger,
   createDriver,
@@ -36,7 +29,7 @@ afterEach(() => {
 
 const copyUdid = "CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD";
 const lineageUdid = throwawayUdid.toUpperCase();
-const seedFolder = `${sourcesSetPath}/${seedUdid}`;
+const seedFolder = join(sourcesSetPath, seedUdid);
 const SQLITE_HEADER = Buffer.from("SQLite format 3\u0000");
 const MEBIBYTE = 1_048_576;
 
@@ -199,9 +192,9 @@ describe("IosSimctlDriver source records", () => {
     });
 
     expect(seed.error).toBeUndefined();
-    expect(seed.opener.checkpoints.map(inPosixForm).sort()).toEqual([
-      inPosixForm(`${seedFolder}/data/one.db`),
-      inPosixForm(`${seedFolder}/data/two.db`),
+    expect(seed.opener.checkpoints.sort()).toEqual([
+      `${seedFolder}/data/one.db`,
+      `${seedFolder}/data/two.db`,
     ]);
     expect(storedLineage(seed.database)).toEqual({
       lineage: JSON.stringify([lineageUdid]),
@@ -280,7 +273,7 @@ describe("IosSimctlDriver source records", () => {
     expect(walkFails.database.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     expect(recorded(walkFails.database)).toEqual([]);
 
-    const baselineFolder = `${sourcesSetPath}/${baselineUdid}`;
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
     const lease = driverData.udid.toUpperCase();
     const fromUsedLease = await saveBaseline({
       lineage: [lineageUdid],
