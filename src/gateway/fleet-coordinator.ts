@@ -237,6 +237,14 @@ export class FleetLeaseCoordinator {
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  async releaseRun(
+    runId: string,
+    ownerId: string | undefined,
+  ): Promise<{ readonly leaseIds: readonly string[]; readonly requestIds: readonly string[] }> {
+    return { leaseIds: await this.#forwarding.releaseRun(runId, ownerId), requestIds: [] };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   exec(input: FleetExecInput, session: DispatchSession): Promise<{ readonly exitCode: number }> {
     return this.#forwarding.exec(input, session);
   }
