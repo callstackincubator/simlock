@@ -22,6 +22,7 @@ const CANNOT_SERVE_REASONS: Readonly<Record<string, WorkerReason["reason"]>> = {
   UNKNOWN_BASELINE: "no-baseline",
   BASELINE_MISMATCH: "baseline-mismatch",
   BASELINE_STALE: "baseline-stale",
+  MODE_UNAVAILABLE: "mode-unavailable",
 };
 
 export interface FleetRefusalsOptions {
