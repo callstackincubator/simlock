@@ -31,12 +31,11 @@ export interface ProcessRunOptions {
    */
   readonly lineEnd?: LineEnd;
   /**
-   * why: on Windows `kill` ends the child alone, and a program that runs its real work as a child
-   * (`emulator.exe` runs qemu) leaves that child running. With this, `kill` also ends the child's
-   * own children, never theirs: a grandchild can be a process others use (the first emulator's
-   * qemu starts the host's one `netsimd.exe`, and every emulator's network goes through it), and
-   * an `adb` client can start the shared adb server, so no adb command sets this. Elsewhere `kill`
-   * already ends the child's process group, and this changes nothing.
+   * why: `kill` ends the child's whole process group, or on Windows the child alone, and a
+   * grandchild can be a process others use (the first emulator's qemu starts the host's one
+   * `netsimd`, and every emulator's network goes through it), and an `adb` client can start the
+   * shared adb server, so no adb command sets this. With this, `kill` ends the child alone off
+   * Windows, and on Windows also the child's own children (`emulator.exe` runs qemu), never theirs.
    */
   readonly killChildren?: boolean;
 }
