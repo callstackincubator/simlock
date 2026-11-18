@@ -277,9 +277,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         const matches =
           waiter.options.runId === runId &&
           (ownerId === undefined || waiter.options.ownerId === ownerId);
-        if (!matches || (waiter.state === "processing" && waiter.request.physical !== true))
-          continue;
-        this.#cancelWaiter(waiter);
+        if (!matches) continue;
+        if (waiter.state === "processing" && waiter.request.physical !== true) {
+          waiter.releaseAtGrant = true;
+        } else {
+          this.#cancelWaiter(waiter);
+        }
         cancelled.push(waiter.id);
       }
       return cancelled;

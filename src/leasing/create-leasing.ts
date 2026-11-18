@@ -162,6 +162,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
     defaultModes: options.defaultModes ?? {},
     servedModes: options.servedModes ?? {},
     drivers: core.drivers,
+    endLease: (leaseId) => releaseCoordinator.release(leaseId, "explicit"),
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
     leases,

@@ -69,6 +69,8 @@ export interface LeaseAcquisitionCoordinatorOptions {
   /** why: the image tag a worker gives an Android lease that names none (ADR 0078 §1). */
   readonly defaultImageTags: Readonly<Partial<Record<Platform, string>>>;
   readonly drivers: AcquisitionDrivers;
+  /** why: a run release ends a lease its request got at the grant; the release coordinator is built after this one, so the root hands the ending in. */
+  readonly endLease: (leaseId: string) => Promise<void>;
   readonly eventBus: Pick<EventBus, "emit">;
   /** Mints a request's id before admission checks, so a request refused there still has one. */
   readonly idGenerator: IdGenerator;
