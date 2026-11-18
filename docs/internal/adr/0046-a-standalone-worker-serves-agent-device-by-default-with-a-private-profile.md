@@ -1,6 +1,6 @@
 # 0046. A standalone worker serves agent-device by default and hands local agents a private profile
 
-- **Status:** Accepted — not yet implemented; §1 narrowed by [ADR 0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md)
+- **Status:** Accepted; §1 narrowed by [ADR 0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md)
 - **Date:** 2026-10-23
 - **Issue:** [#952](https://github.com/callstackincubator/simlock/issues/952), from request #950
 - **Narrows:** [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
