@@ -46,6 +46,8 @@ export type FleetRequestOptions = LeaseRequestOptions & {
 /** why: a request whose admission command is running: `lease.cancel` and `dispose` end it by aborting `controller`. */
 interface AskingRequest {
   readonly requesterId: string;
+  readonly runId: string | undefined;
+  readonly ownerId: string;
   readonly platform: Platform;
   readonly controller: AbortController;
   end?: "cancelled" | "stopping";
@@ -103,6 +105,8 @@ export class FleetAdmission {
         controller: new AbortController(),
         platform: deviceRequest.platform,
         requesterId: options.requesterId,
+        runId: options.runId,
+        ownerId: options.ownerId,
       };
       this.#asking.add(asking);
       try {
@@ -382,6 +386,12 @@ export class FleetAdmission {
    * undefined for an operator), by the rule `cancelPending` applies to one.
    */
   async cancelRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
+    // why: a request still on the admission command has no id to list yet, so it is ended and not named.
+    for (const asking of this.#asking) {
+      if (asking.runId === runId && (ownerId === undefined || asking.ownerId === ownerId)) {
+        this.#endAsking(asking, "cancelled");
+      }
+    }
     return this.#decisions.run(async () => {
       const cancelled: string[] = [];
       for (const waiter of this.options.queue.pending()) {
