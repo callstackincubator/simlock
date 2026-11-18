@@ -109,12 +109,8 @@ export const faq = [
     a: "No. A worker dials out to the gateway over one WebSocket, with the gateway URL and a join token from `simlock --gateway token create --role worker`, so a Mac behind NAT joins without an inbound port.",
   },
   {
-    q: "Can a Windows machine be a worker?",
-    a: "Yes, for Android. A Windows 11 PC runs Android emulators with the Windows Hypervisor Platform, alone or behind a gateway. iOS simulators need a Mac with Xcode. See the setup page in the docs.",
-  },
-  {
-    q: "Can a Linux machine be a worker?",
-    a: "Yes, for Android. Emulators run headless with `android.emulator.headless`, as on a Linux CI runner. iOS simulators need a Mac with Xcode.",
+    q: "Can a Windows or Linux machine be a worker?",
+    a: "Yes, for Android. A Windows 11 PC runs emulators with the Windows Hypervisor Platform, and a Linux machine runs them headless with `android.emulator.headless`, alone or behind a gateway. iOS simulators need a Mac with Xcode.",
   },
   {
     q: "How do agents on other machines reach it?",
