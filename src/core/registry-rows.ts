@@ -411,7 +411,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       lease.ttlDeadline,
       lease.lastRenewedAt,
       flagValue(lease.idChosenByRequester),
-      lease.runId ?? null,
+      nullable(lease.runId),
       grant.timing.estimatedProvisionMs,
       grant.timing.estimatedBootMs,
       grant.timing.estimatedReclaimMs,
