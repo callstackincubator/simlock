@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { SimlockError } from "../contract/index.js";
+import { RequestCancelledError } from "../leasing/index.js";
 import { leaseFixture, ScriptedWorkerClient } from "./test-support.js";
 import { harness, session } from "./test-dispatcher.js";
-import { connectWorker } from "./test-fleet.js";
+import { connectWorker, saturatedIos, tick } from "./test-fleet.js";
 
 describe("GatewayDispatcher: lease.release-run", () => {
   it("releases each index entry of the run on its worker for the caller, every owner's for an admin, keeps a joined worker's own lease, and answers their ids", async () => {
@@ -98,5 +99,57 @@ describe("GatewayDispatcher: lease.release-run", () => {
       details: { releasedLeaseIds: [zombie, reachable] },
     });
     expect(leaseIndex.all().map((held) => held.gatewayLeaseId)).toEqual(["wrk_c.lse_2"]);
+  });
+
+  it("cancels the run's fleet requests queued in the gateway for the caller and lists their ids, and keeps another owner's and another run's", async () => {
+    const { coordinator, dispatcher, directory, eventBus, workers } = harness();
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    const rejected: unknown[] = [];
+    eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+    const queue = (principal: string, runId: string) =>
+      dispatcher
+        .dispatch(
+          "lease.request",
+          { model: "iPhone 17", platform: "ios", requesterId: `${principal}-${runId}`, runId },
+          session({ principal }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+    const mine = queue("tok_ci", "nightly-7");
+    const otherRun = queue("tok_ci", "nightly-8");
+    const otherOwner = queue("tok_other", "nightly-7");
+    await tick();
+    const waiting = (requesterId: string) =>
+      coordinator.waitingRequests().find((request) => request.requesterId.endsWith(requesterId))
+        ?.id;
+    const myRequestId = waiting("tok_ci-nightly-7");
+    expect(coordinator.waitingRequests()).toHaveLength(3);
+
+    const result = await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_ci", role: "agent" }),
+    );
+
+    expect(result).toEqual({ leaseIds: [], requestIds: [myRequestId] });
+    expect(await mine).toBeInstanceOf(RequestCancelledError);
+    expect(coordinator.waitingRequests().map((request) => request.requesterId)).toHaveLength(2);
+    expect(rejected).toMatchObject([{ reason: "cancelled", requestId: myRequestId }]);
+
+    await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-8" },
+      session({ principal: "tok_ci" }),
+    );
+    await dispatcher.dispatch(
+      "lease.release-run",
+      { runId: "nightly-7" },
+      session({ principal: "tok_other" }),
+    );
+    expect(await otherRun).toBeInstanceOf(RequestCancelledError);
+    expect(await otherOwner).toBeInstanceOf(RequestCancelledError);
   });
 });
