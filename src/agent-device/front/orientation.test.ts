@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { tokenIdentity } from "../../auth/testing.js";
 import { DispatchError } from "../../daemon/dispatch.js";
+import { rotationRefusal } from "../../daemon/rotation-refusal.js";
 import type { HttpDispatch } from "../../http/dispatcher-session.js";
 import { FakeClock, NoopLogger } from "../../ports/index.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
@@ -282,5 +283,31 @@ describe("the agent-device front's orientation command", () => {
     expect(body.result?.data).toEqual(forwardedAnswer);
     expect(adopted.forwarded).toHaveLength(1);
     expect(adopted.rotations).toEqual([]);
+  });
+
+  it("forwards `orientation <name>` on an iPhone Duo simulator lease to agent-device, through a gateway and on a worker, and `device.rotate` refuses that lease `ROTATION_UNSUPPORTED`", async () => {
+    const duo = {
+      model: "iPhone Duo",
+      osVersion: "27.3",
+      physical: false,
+      platform: "ios",
+    } as const;
+    expect(rotationRefusal(leaseId, duo)?.code).toBe("ROTATION_UNSUPPORTED");
+    for (const gateway of [true, false]) {
+      for (const [typed] of rotated) {
+        const { handle, forwarded } = rig({
+          gateway,
+          model: duo.model,
+          rotate: () => {
+            const refused = rotationRefusal(leaseId, duo);
+            return refused === undefined ? Promise.resolve({}) : Promise.reject(refused);
+          },
+        });
+        const body = await answer(await handle("orientation", [typed]));
+        const label = `${gateway ? "gateway" : "worker"} ${typed}`;
+        expect(body.result?.data, label).toEqual(forwardedAnswer);
+        expect(forwarded, label).toHaveLength(1);
+      }
+    }
   });
 });
