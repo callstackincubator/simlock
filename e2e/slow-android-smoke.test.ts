@@ -401,10 +401,10 @@ describe.skipIf(ANDROID_SDK === undefined)(
         }
       },
     );
-    // why: #1690: qemu starts the host's one `netsimd` in the first emulator's group, and every emulator's network goes through it; stopping one emulator must leave it running.
+    // why: #1690: qemu starts the host's one `netsimd` in the first emulator's group, and every emulator's network goes through it; the SIGKILL fallback of `AndroidEmulator.shutdown` (the emulator ignores `emu kill`) must leave it running. A plain `emu kill` ends qemu without a signal, so the case freezes the netsimd-owning qemu to reach the fallback.
     it.skipIf(process.platform === "win32")(
-      "releasing one of two Android emulators leaves the host's netsimd running and the other emulator reaching the host",
-      { timeout: 900_000 },
+      "releasing an Android emulator that ignores emu kill (SIGKILL fallback) leaves the host's netsimd running and the other emulator reaching the host",
+      { timeout: 1_500_000 },
       async () => {
         const env = await withDaemon({
           driver: "real",
@@ -440,24 +440,72 @@ describe.skipIf(ANDROID_SDK === undefined)(
               .filter((line) => line.trim() !== "")
               .map(Number);
           };
+          // why: the qemu process of an emulator is found by the console port on its command line (`emulator-<port>` is the serial).
+          const qemuPidOf = async (grant: { device: { address?: string } }): Promise<number> => {
+            const port = /(\d+)$/.exec(grant.device.address ?? "")?.[1];
+            const { stdout } = await execFileAsync("ps", ["-axo", "pid=,command="]);
+            const match = stdout
+              .split("\n")
+              .map((line) => /^\s*(\d+)\s+(.*)$/.exec(line))
+              .find(
+                (m) =>
+                  m !== null &&
+                  /qemu-system/.test(m[2] ?? "") &&
+                  new RegExp(`-ports? ${port}\\b`).test(m[2] ?? ""),
+              );
+            if (match === undefined || match === null) {
+              throw new Error(`no qemu process found for ${grant.device.address}`);
+            }
+            return Number(match[1]);
+          };
           const [first, second] = await Promise.all([lease("netsimd-one"), lease("netsimd-two")]);
           const before = await netsimdPids();
           expect(before.length, "two running emulators have started a netsimd").toBeGreaterThan(0);
 
-          const release = await env.cli(["release", first.lease.id]);
-          expect(release.code, `release failed: ${release.stderr}`).toBe(0);
-          await waitFor(
-            async () =>
-              !existsSync(join(env.home, "devices", "android", first.device.driverDeviceId)),
-            { timeout: 120_000, interval: 500, label: "released emulator's folder deleted" },
-          );
+          const qemus = new Map([
+            [await qemuPidOf(first), first],
+            [await qemuPidOf(second), second],
+          ]);
+          const owner = (
+            await Promise.all(
+              before.map(async (pid) => {
+                const { stdout } = await execFileAsync("ps", ["-o", "pgid=", "-p", String(pid)]);
+                return Number(stdout.trim());
+              }),
+            )
+          ).find((pgid) => qemus.has(pgid));
+          if (owner === undefined) {
+            throw new Error(
+              `netsimd runs in no leased emulator's group; qemu pids ${[...qemus.keys()].join(",")}`,
+            );
+          }
+          const victim = qemus.get(owner) as typeof first;
+          const survivor = victim === first ? second : first;
+          try {
+            // why: a stopped qemu cannot answer `emu kill`, so the exit wait times out and `shutdown` SIGKILLs.
+            process.kill(owner, "SIGSTOP");
+            const release = await env.cli(["release", victim.lease.id], { timeout: 400_000 });
+            expect(release.code, `release failed: ${release.stderr}`).toBe(0);
+            await waitFor(
+              async () =>
+                !existsSync(join(env.home, "devices", "android", victim.device.driverDeviceId)),
+              // why: the folder goes after the 180 s exit wait of `shutdown` times out.
+              { timeout: 300_000, interval: 500, label: "released emulator's folder deleted" },
+            );
+          } finally {
+            try {
+              process.kill(owner, "SIGKILL");
+            } catch {
+              // why: the release already ended it.
+            }
+          }
 
           const alive = (await netsimdPids()).filter((pid) => before.includes(pid));
           expect(alive, "stopping one emulator ended the host's netsimd").toEqual(before);
           const ping = await env.cli([
             "adb",
             "-s",
-            second.device.address ?? "",
+            survivor.device.address ?? "",
             "shell",
             "ping",
             "-c",
