@@ -30,29 +30,30 @@ type Reading = { readonly bytes: number } | { readonly absent: true } | { readon
 
 const READ_TIMEOUT_MS = 5_000;
 
+type Run = WorkerContext<FseventsdModuleConfig>["processRunner"]["run"];
+type Step = { readonly ok: string } | { readonly failed: string } | { readonly absent: true };
+
+// why: a command that ends badly names itself in the reason; exit 1 of `pgrep` alone means "not running".
+async function step(run: Run, command: string, args: readonly string[]): Promise<Step> {
+  const name = command.split("/").at(-1) ?? command;
+  const result = await run(command, args, { timeoutMs: READ_TIMEOUT_MS });
+  if (result.endedBy === "timeout") return { failed: `${name} timed out after 5 s` };
+  if (name === "pgrep" && result.code === 1) return { absent: true };
+  if (result.code !== 0) return { failed: `${name} exited ${String(result.code)}` };
+  return { ok: result.stdout };
+}
+
 export function createWorker(ctx: WorkerContext<FseventsdModuleConfig>): WorkerModule {
   const read = async (): Promise<Reading> => {
-    const found = await ctx.processRunner.run("/usr/bin/pgrep", ["-x", "fseventsd"], {
-      timeoutMs: READ_TIMEOUT_MS,
-    });
-    if (found.endedBy === "timeout") return { failed: "pgrep timed out after 5 s" };
-    if (found.code === 1) return { absent: true };
-    if (found.code !== 0) return { failed: `pgrep exited ${String(found.code)}` };
-    const first = found.stdout.split("\n")[0]?.trim() ?? "";
-    if (!/^\d+$/.test(first)) return { failed: unexpected(first) };
-    const top = await ctx.processRunner.run(
-      "/usr/bin/top",
-      ["-l", "1", "-pid", first, "-stats", "mem"],
-      { timeoutMs: READ_TIMEOUT_MS },
-    );
-    if (top.endedBy === "timeout") return { failed: "top timed out after 5 s" };
-    if (top.code !== 0) return { failed: `top exited ${String(top.code)}` };
-    const last =
-      top.stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line !== "")
-        .at(-1) ?? "";
+    const run: Run = (command, args, options) => ctx.processRunner.run(command, args, options);
+    const found = await step(run, "/usr/bin/pgrep", ["-x", "fseventsd"]);
+    if (!("ok" in found)) return found;
+    const pid = found.ok.split("\n")[0]?.trim() ?? "";
+    if (!/^\d+$/.test(pid)) return { failed: unexpected(pid) };
+    const top = await step(run, "/usr/bin/top", ["-l", "1", "-pid", pid, "-stats", "mem"]);
+    if (!("ok" in top)) return top;
+    const lines = top.ok.split("\n").map((line) => line.trim());
+    const last = lines.filter((line) => line !== "").at(-1) ?? "";
     const bytes = bytesOf(last);
     return bytes === undefined ? { failed: unexpected(last) } : { bytes };
   };
