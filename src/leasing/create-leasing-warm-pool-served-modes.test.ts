@@ -159,36 +159,48 @@ describe("the warm pool on a worker that does not serve every iOS mode", () => {
     ]).toEqual([true, false]);
   });
 
-  it("doctor reports a warm target the worker cannot meet because it does not serve its mode, naming the mode, the list and the way out, and nothing when the mode is served", async () => {
-    const findings = async (modes: Modes | undefined, mode: "slim" | "full") => {
+  it("doctor reports a warm target the worker cannot meet because it does not serve its mode, naming the refused mode, the list and the way out, and nothing when the mode is served", async () => {
+    const findings = async (
+      modes: Modes | undefined,
+      target: { readonly mode?: "slim" | "full"; readonly osVersion: string },
+    ) => {
       const harness = await createHarness({
         driver: iosDriver(),
         ...(modes === undefined ? {} : { iosModes: modes }),
         limits: LIMITS,
         startPool: true,
-        warmPool: {
-          targets: [{ count: 1, mode, model: "iPhone 16", osVersion: "26.1", platform: "ios" }],
-        },
+        warmPool: { targets: [{ count: 1, model: "iPhone 16", platform: "ios", ...target }] },
       });
       await harness.engine.core.passWarmPool();
       await harness.engine.settle();
       const report = await harness.engine.core.doctor.reconcile();
       return report.findings.filter((finding) => finding.kind === "warm-pool-target-unreachable");
     };
-    const unreachable = (mode: string, list: string) => [
+    const unreachable = (named: string, mode: string, list: string) => [
       {
         kind: "warm-pool-target-unreachable",
-        message: `iPhone 16 / 26.1 / ${mode} cannot be met: this worker does not serve ${mode} iOS simulators (ios.modes is ${list})`,
+        message: `${named} cannot be met: this worker does not serve ${mode} iOS simulators (ios.modes is ${list})`,
         platform: "ios",
         reason: "mode-unavailable",
         remedy: `remove the target from warmPool.targets, or add ${mode} to ios.modes`,
-        target: `iPhone 16 / 26.1 / ${mode}`,
+        target: named,
       },
     ];
 
-    expect(await findings(["slim"], "full")).toEqual(unreachable("full", '["slim"]'));
-    expect(await findings(["full"], "slim")).toEqual(unreachable("slim", '["full"]'));
-    expect(await findings(undefined, "full")).toEqual([]);
-    expect(await findings(undefined, "slim")).toEqual([]);
+    expect(await findings(["slim"], { mode: "full", osVersion: "26.1" })).toEqual(
+      unreachable("iPhone 16 / 26.1 / full", "full", '["slim"]'),
+    );
+    expect(await findings(["full"], { mode: "slim", osVersion: "26.1" })).toEqual(
+      unreachable("iPhone 16 / 26.1 / slim", "slim", '["full"]'),
+    );
+    // why: iOS below 18.5 cannot be slimmed, so a slim ask (asked or default) is refused as the full it falls back to.
+    expect(await findings(["slim"], { osVersion: "17.5" })).toEqual(
+      unreachable("iPhone 16 / 17.5 / slim", "full", '["slim"]'),
+    );
+    expect(await findings(["slim"], { mode: "slim", osVersion: "17.5" })).toEqual(
+      unreachable("iPhone 16 / 17.5 / slim", "full", '["slim"]'),
+    );
+    expect(await findings(undefined, { mode: "full", osVersion: "26.1" })).toEqual([]);
+    expect(await findings(undefined, { mode: "slim", osVersion: "26.1" })).toEqual([]);
   });
 });

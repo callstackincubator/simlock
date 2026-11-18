@@ -222,7 +222,9 @@ export function unreachableTarget(
     ];
   }
   if (short === "mode-unavailable") {
-    const mode = target.mode;
+    // why: the resolver refuses the asked mode if unserved, else the full spec a slim ask falls back to (iOS below 18.5); name the one it refused.
+    const mode =
+      target.mode !== undefined && !servedModes.includes(target.mode) ? target.mode : "full";
     return [
       {
         kind: "warm-pool-target-unreachable",
