@@ -534,6 +534,42 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     },
   );
 
+  // why: off Windows the `emulator` launcher execs qemu, so the spawned pid is qemu, and the
+  // first emulator's qemu starts the host's one `netsimd` as its own child, in its process group.
+  // Every emulator's network goes through that `netsimd`, so killing one emulator must not end it.
+  it.skipIf(process.platform === "win32")(
+    "ends a child spawned with killChildren and leaves the process it started running",
+    async () => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        [
+          "-e",
+          "const { spawn } = require('node:child_process');" +
+            "const shared = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
+            "console.log(String(shared.pid));" +
+            "setInterval(() => {}, 1000);",
+        ],
+        { killChildren: true },
+      );
+      let sharedPid: number | undefined;
+      try {
+        for await (const line of handle.stdout) {
+          sharedPid = Number(line);
+          break;
+        }
+        expect(Number.isInteger(sharedPid)).toBe(true);
+
+        handle.kill("SIGKILL");
+
+        await expect(handle.wait()).resolves.toMatchObject({ code: null });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isAlive(sharedPid ?? 0)).toBe(true);
+      } finally {
+        if (sharedPid !== undefined && isAlive(sharedPid)) process.kill(sharedPid, "SIGKILL");
+      }
+    },
+  );
+
   it("kills the grandchildren too, because the signal goes to the process group", async () => {
     // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
     // `adb`/`emulator` wrapper script, `simctl spawn`) leaves the work in a *grandchild*, and a
