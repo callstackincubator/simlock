@@ -169,7 +169,11 @@ export interface DaemonServerCommonOptions {
    * `lease-lost` facts back at itself, since nothing would ever mark them self-initiated.
    * Optional so a test exercising neither engine nor gateway leases need not supply one.
    */
-  readonly leaseSnapshot?: () => readonly { readonly id: string; readonly ownerId: string }[];
+  readonly leaseSnapshot?: () => readonly {
+    readonly id: string;
+    readonly ownerId: string;
+    readonly runId?: string | undefined;
+  }[];
 }
 
 /**

@@ -601,7 +601,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       logger: logger.child("connection-host"),
     }),
     leaseSnapshot: () =>
-      leaseIndex.all().map((entry) => ({ id: entry.gatewayLeaseId, ownerId: entry.ownerId })),
+      leaseIndex.all().map((entry) => ({
+        id: entry.gatewayLeaseId,
+        ownerId: entry.ownerId,
+        ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+      })),
     logger: logger.child("server"),
     ownerRoutedFacts: gatewayOwnerRoutedFacts,
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
