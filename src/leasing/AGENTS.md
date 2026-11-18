@@ -15,10 +15,6 @@ The lock:
 - Events go out after the commit that made them true.
 - A physical device's presence is read outside the lock and checked again inside it before the grant.
 
-Served modes:
-
-- `servedModes` (from `ios.modes`) is checked in the spec resolver, before any catalog read or download: the asked or default mode, a baseline's mode, and again after the cannot-slim fallback. A miss is `ModeUnavailableError`, and `lease.rejected` keeps reason `unresolvable-spec`.
-
 The queue:
 
 - `LeaseRequestBook.admit` stores the request before it queues it.

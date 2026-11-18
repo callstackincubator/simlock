@@ -69,6 +69,7 @@ const baselineRefusal = (mode: string) =>
 
 const cases: readonly Case[] = [
   { name: "no mode", modes: ["slim"], request: phone, granted: "slim" },
+  { name: "--mode slim", modes: ["slim"], request: { ...phone, mode: "slim" }, granted: "slim" },
   {
     name: "--mode full",
     modes: ["slim"],
