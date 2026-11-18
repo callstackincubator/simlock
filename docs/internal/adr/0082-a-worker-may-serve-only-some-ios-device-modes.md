@@ -8,7 +8,11 @@
   [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) §4 (the table
   gains a row) and §5 (one more "cannot serve" code);
   [ADR 0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md)
-  §1 (the iOS catalog entry gains a field).
+  §1 (the iOS catalog entry gains a field) and §9 (one more config-derived
+  field joins the catalog); [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md)
+  §1 ("The default is `full`" holds only when `full` is served);
+  [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) §2 and §3 (what a
+  worker can serve is also decided by its modes, not only model and runtime).
 - **Depends on:** ADR 0007, 0009, 0065, 0066.
 
 ## Context
@@ -48,10 +52,12 @@ Android gets no key: its driver never slims, so a list could only say
 
 ```mermaid
 flowchart TD
-  R[Request mode, or baseline's, or the default] --> D[Driver resolves the spec]
-  D --> M{Resolved mode in ios.modes?}
-  M -- yes --> P[Plan and boot as today]
-  M -- no --> X[MODE_UNAVAILABLE, nothing created or downloaded]
+  R[Request mode, or baseline's, or the default] --> M1{Asked mode in ios.modes?}
+  M1 -- no --> X[MODE_UNAVAILABLE]
+  M1 -- yes --> D[Driver resolves the spec, may download]
+  D --> M2{Resolved mode in ios.modes?}
+  M2 -- yes --> P[Plan and boot as today]
+  M2 -- no --> X
 ```
 
 ### 2. The check is on the resolved mode, in leasing's one resolve step
@@ -59,7 +65,7 @@ flowchart TD
 Leasing checks the asked, default or baseline mode before it resolves the
 spec, so nothing is downloaded for it, and checks the mode the driver
 resolved after, so a slim request that would fall back to full (§4 of ADR
-0007) is refused on a worker without full instead of being granted full.
+0007) is refused on a worker without full instead of being granted full. That second refusal can come after a download the request allowed.
 Lease requests and warm targets pass that one step, so both are refused
 the same way, and a warm target that cannot be met is reported by doctor.
 Learned kinds are planned from their stored spec, so the warm pool's own
