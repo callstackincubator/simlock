@@ -93,6 +93,10 @@ export interface CliEnvironment {
   readonly adminTokenFromEnv?: string;
   /** why: `SIMLOCK_BASELINE` names the baseline a lease asks for when `--baseline` is absent. */
   readonly baselineFromEnv?: string;
+  /** why: `SIMLOCK_RUN` names the run id a lease carries when `--run` is absent; empty is unset, and the command checks it. */
+  readonly runFromEnv?: string;
+  /** why: on GitHub Actions the run id falls back to `<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT, else 1>`; the command drops a value that fails the run id rule. */
+  readonly githubRunFromEnv?: string;
   readonly readAdminTokenFile: () => Promise<string | undefined>;
   readonly sleep: (milliseconds: number) => Promise<void>;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
