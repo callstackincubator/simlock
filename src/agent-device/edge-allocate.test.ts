@@ -21,6 +21,7 @@ import {
   allocatesReceived,
   simlockMessage,
   refusal,
+  sessionFor,
 } from "./test-support.js";
 import { waiting } from "./test-edge-front.js";
 
@@ -445,5 +446,34 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect((await envelopeOf(released)).result).toMatchObject({ ok: true });
     expect(await leases(rig)).toEqual([]);
     expect(rig.fake.leases.has(hex(1))).toBe(false);
+  });
+
+  it("an allocate's `runId` `123-1` or `simlock-local` is the simlock lease's run id, one outside the rule is forwarded to agent-device and the lease has none, and `lease.release-run` then ends the lease and releases agent-device's", async () => {
+    const rig = await setUp();
+
+    await granted(rig, 1, { runId: "123-1" });
+    await granted(rig, 2, { runId: "simlock-local" });
+    await allocate(rig, 3, { runId: "run 1" });
+
+    const runs = new Map((await leases(rig)).map((lease) => [lease.id, lease.runId]));
+    expect([runs.get(hex(1)), runs.get(hex(2))]).toEqual(["123-1", "simlock-local"]);
+    expect(await requestedSpecs(rig, hex(3))).toEqual([{ platform: "ios" }]);
+    expect(receivedAllocate(rig, 3)["runId"]).toBe("run 1");
+
+    const ended = await rig.daemon.dispatch(
+      "lease.release-run",
+      { runId: "123-1" },
+      sessionFor(principals.one),
+    );
+
+    expect(ended.leaseIds).toEqual([hex(1)]);
+    expect((await leases(rig)).map((lease) => lease.id).sort()).toEqual([hex(2)]);
+    await expect
+      .poll(() =>
+        rig.fake
+          .rpcRequests("agent_device.lease.release")
+          .map((request) => request.params?.["leaseId"]),
+      )
+      .toEqual([hex(1)]);
   });
 });
