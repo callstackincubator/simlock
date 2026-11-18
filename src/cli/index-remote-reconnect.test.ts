@@ -140,6 +140,7 @@ async function reconnectAnswersDecideTheEnd(): Promise<void> {
     expect(line.code).toBe(name);
     expect(line.message, name).toContain("lease lse_env is still yours until");
     held.clock.advance(120_000);
+    await settle();
     expect(held.attempts, name).toHaveLength(2);
     expect(held.stderr(), name).not.toContain("lease-lost");
   }
@@ -389,6 +390,7 @@ async function neverBackBeforeTheDeadline(): Promise<void> {
   expect(await ends(held)).toBe(14);
   expect(held.stderr()).toContain('"push":"lease-lost"');
   held.clock.advance(120_000);
+  await settle();
   expect(held.attempts).toHaveLength(7);
 }
 

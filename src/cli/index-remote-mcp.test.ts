@@ -214,6 +214,7 @@ async function endsWithoutALease(): Promise<void> {
   expect(past.messages()[1]).toBe("Simlock lease ended; this session no longer holds the device.");
   const tried = past.attempts.length;
   past.clock.advance(120_000);
+  await settle();
   expect(past.attempts).toHaveLength(tried);
 
   const refused = await held();
@@ -225,6 +226,7 @@ async function endsWithoutALease(): Promise<void> {
   expect(refused.messages()[1]).toContain(`lease lse_env is still yours until ${DEADLINE}`);
   const triedRefused = refused.attempts.length;
   refused.clock.advance(120_000);
+  await settle();
   expect(refused.attempts).toHaveLength(triedRefused);
   refused.stdin.end();
   await vi.waitFor(() => expect(refused.exitCode()).toBe(0));
