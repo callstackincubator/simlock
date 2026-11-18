@@ -409,7 +409,9 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     ]);
     const android = await run("android.modes", '["full"]');
     expect([android.exitCode, android.written]).toEqual([2, undefined]);
-    expect(android.stderr).toContain('Unknown config key: "android.modes"');
+    expect(JSON.parse(android.stderr).error.message).toContain(
+      'Unknown config key: "android.modes"',
+    );
   });
 
   it("--gateway config set validates against the gateway's rules, not the worker's", async () => {

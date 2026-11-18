@@ -150,7 +150,12 @@ export const configSchema = z.object({
   }),
   // why: a platform's section also holds its driver's own keys, which no client reads: they are carried as the worker's loader validated them, the way a module's `capabilities` section is, so a new driver key changes no wire shape.
   ios: z
-    .object({ defaultMode: deviceModeSchema, defaultModels: defaultModelsSchema })
+    .object({
+      defaultMode: deviceModeSchema,
+      defaultModels: defaultModelsSchema,
+      // why: optional, since a worker from before ADR 0082 sends none and serves both.
+      modes: z.array(deviceModeSchema).min(1).max(2).optional(),
+    })
     .catchall(z.unknown()),
   android: z
     .object({ defaultImageTag: imageTagSchema.optional(), defaultModels: defaultModelsSchema })
