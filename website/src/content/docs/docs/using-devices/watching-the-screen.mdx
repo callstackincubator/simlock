@@ -217,7 +217,7 @@ Errors before the socket opens:
 
 ### Rotate without a socket
 
-A lease's holder can rotate an iPhone or iPad simulator with one HTTP call, on a worker or a gateway. This works whether or not `capabilities.input.enabled` is on. The example uses the variables from [Remote agents](/simlock/docs/using-devices/remote-agents#lease-a-device).
+A lease's holder can rotate an iPhone or iPad simulator (not a foldable iPhone Duo; use `agent-device orientation` there) with one HTTP call, on a worker or a gateway. This works whether or not `capabilities.input.enabled` is on. The example uses the variables from [Remote agents](/simlock/docs/using-devices/remote-agents#lease-a-device).
 
 ```sh
 curl -sS -X POST "$SIMLOCK_URL/v1/leases/$LEASE/rotate" \
@@ -237,7 +237,7 @@ curl -sS -X POST "$SIMLOCK_URL/v1/leases/$LEASE/rotate" \
 | `400 BAD_REQUEST` | Any other `orientation` spelling. |
 | `403` | The lease isn't yours. |
 | `404 UNKNOWN_LEASE` | The lease doesn't exist. |
-| `422 ROTATION_UNSUPPORTED` | The lease isn't on an iPhone or iPad simulator: an Apple TV, Apple Watch or Apple Vision simulator, an Android device, or a physical iPhone or iPad. |
+| `422 ROTATION_UNSUPPORTED` | The lease isn't on an iPhone or iPad simulator: an Apple TV, Apple Watch or Apple Vision simulator, an Android device, or a physical iPhone or iPad, or a foldable iPhone Duo simulator (the message points to `agent-device orientation`). |
 | `503 INPUT_UNAVAILABLE` | The rotation couldn't be sent to the simulator. |
 | `504 EXEC_TIMEOUT` | Through a gateway, the worker didn't answer within `gateway.execTimeoutMs`. |
 

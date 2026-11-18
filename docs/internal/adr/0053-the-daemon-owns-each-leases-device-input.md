@@ -61,12 +61,15 @@ flowchart LR
    operation, role `agent`, authorized as `device.exec` is. It is always on,
    independent of `capabilities.input.enabled`. On a lease of an iOS
    simulator whose model is an iPhone or iPad (its name starts with `iPhone`
-   or `iPad`, the iOS driver's phone and tablet families) it takes the lease's device input,
+   or `iPad`, the iOS driver's phone and tablet families) other than a
+   foldable (`iPhone Duo`, whose guest ignores the rotation) it takes the lease's device input,
    sends `0x07 {orientation}`, awaits the write and answers
    `{leaseId, orientation}`, then lets the input go. It reports no new
    orientation and does not wait for the screen.
 5. Any other lease is refused with `ROTATION_UNSUPPORTED` before a device
-   input is opened. A device input that cannot open, or a write that fails,
+   input is opened. A foldable's refusal names it and points to
+   `agent-device orientation`, which rotates it through its own fold helper;
+   the agent-device front forwards `orientation` on such a lease. A device input that cannot open, or a write that fails,
    is `INPUT_UNAVAILABLE`.
 6. A gateway forwards `device.rotate` to the lease's worker, as it forwards
    `device.exec`, and answers with the caller's own lease id in the output
