@@ -73,7 +73,7 @@ final class FrameSelectionTests: XCTestCase {
         }
     }
 
-    func testADueCompositeIsCopiedOnlyWhenItCarriesANewAppFrame() {
+    func testADueCompositeIsCopiedWhenItCarriesANewAppFrameOrTheTimingFallbacksSayItIsOverdue() {
         var glassOnly = Screen.warmedUp()
         XCTAssertFalse(glassOnly.next(atMs: 100, changing: Screen.glass), "only always-changing tiles, 10 ms after")
         XCTAssertTrue(
@@ -100,7 +100,11 @@ final class FrameSelectionTests: XCTestCase {
 
         var overdue = Screen.warmedUp()
         XCTAssertFalse(overdue.next(atMs: 100, changing: Screen.glass))
-        XCTAssertTrue(overdue.next(atMs: 108, changing: Screen.glass), "only always-changing tiles, 28 ms since the last sent")
+        XCTAssertTrue(overdue.next(atMs: 106, changing: Screen.glass), "only always-changing tiles, 26 ms since the last sent")
+
+        var wellOverdue = Screen.warmedUp()
+        XCTAssertFalse(wellOverdue.next(atMs: 100, changing: Screen.glass))
+        XCTAssertTrue(wellOverdue.next(atMs: 108, changing: Screen.glass), "only always-changing tiles, 28 ms since the last sent")
 
         var nothing = Screen.warmedUp()
         XCTAssertFalse(nothing.next(atMs: 96, changing: []), "no tile changed, 6 ms after")
