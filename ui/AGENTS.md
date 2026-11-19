@@ -34,10 +34,6 @@ Reads:
 - The Inbox is the daemon's: `GET /v1/inbox` answers the items, by the rules in the repo root's `src/contract/inbox.ts`. `['inbox']` is the only key the sidebar's count reads, and events that mark workers, leases or requests stale mark it too. `src/model/inbox.ts` only draws the items.
 - The Inbox drawer and the lease drawer share one list of recent events per tab (`src/data/recent-feed.ts`, held by `LiveProvider`); it is dropped a while after its last user closes (ADR 0044 §1).
 
-Screens:
-
-- The Screens page (`/screens`) reads the shared `['workers']` query through `src/state/screens.ts`; `src/model/screens.ts` builds its tiles. Each tile in view mounts `useDeviceScreen` with the page's capture budget (`SCREEN_CAPTURE_LIMIT`); the others wait and never rotate. A slot is freed only after its reader's cancellation finishes. `src/screens/screen-view.tsx` draws the same picture for a tile and for the streaming page.
-
 Actions and search:
 
 - An action is described once per kind of item in `src/model/actions.ts` (ADR 0037 §3). A screen never builds one.
@@ -74,4 +70,3 @@ Tests:
 ## Known gaps
 
 - **The Events chart counts from the events held.** It reaches back one hour only; the Overview's figures come from `GET /v1/stats` for the range in `?range=`.
-- **The capture budget belongs to one Screens page.** It does not coordinate other tabs or unrelated same-origin traffic, and a finished browser cancellation does not mean the server has closed its request, so a read may still queue briefly.
