@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defaultWorkerLockPath } from "./ports/index.js";
-import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
+import { fakeCommandEnv, scriptCommand, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "slow-e2e.sh");
 const PINNED = "0.21.28";
@@ -53,7 +53,14 @@ function machine() {
     SIMLOCK_E2E_AGENT_DEVICE: "",
   };
   const run = (...args: string[]) =>
-    lf(spawnSync(BASH, [SCRIPT, ...args], { cwd: repo, env, encoding: "utf8", timeout: 60_000 }));
+    lf(
+      spawnSync(...scriptCommand(SCRIPT, args), {
+        cwd: repo,
+        env,
+        encoding: "utf8",
+        timeout: 60_000,
+      }),
+    );
   return { dir, repo, env, run, lock: env.SIMLOCK_SLOW_LOCK, lane: env.SIMLOCK_SLOW_TMP };
 }
 
@@ -171,7 +178,7 @@ describe("scripts/slow-e2e.sh", () => {
     for (const command of ["clean", "stop"]) {
       seedLane();
       writeFileSync(calls, "");
-      const result = spawnSync(BASH, [SCRIPT, command], {
+      const result = spawnSync(...scriptCommand(SCRIPT, [command]), {
         cwd: join(dir, "repo"),
         env: { ...env, ...fakeCommandEnv(bin), SIMLOCK_SLOW_DEVICES: devices },
         encoding: "utf8",
@@ -256,7 +263,7 @@ describe("scripts/slow-e2e.sh", () => {
     const { dir, env, repo } = machine();
 
     const result = lf(
-      spawnSync(BASH, [SCRIPT, "check"], {
+      spawnSync(...scriptCommand(SCRIPT, ["check"]), {
         cwd: repo,
         env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, "0.21.27") },
         encoding: "utf8",
@@ -273,7 +280,7 @@ describe("scripts/slow-e2e.sh", () => {
     const { dir, env, repo } = machine();
 
     const result = lf(
-      spawnSync(BASH, [SCRIPT, "check"], {
+      spawnSync(...scriptCommand(SCRIPT, ["check"]), {
         cwd: repo,
         env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, PINNED) },
         encoding: "utf8",

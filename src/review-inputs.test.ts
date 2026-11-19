@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
+import { fakeCommandEnv, scriptCommand, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -107,12 +107,15 @@ function inputs(
     TMPDIR: root,
   };
   delete env.GH_REPO;
-  const stdout = execFileSync(BASH, [SCRIPT, "7", ...(previous === undefined ? [] : [previous])], {
-    cwd: work,
-    env,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const stdout = execFileSync(
+    ...scriptCommand(SCRIPT, ["7", ...(previous === undefined ? [] : [previous])]),
+    {
+      cwd: work,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   const out = stdout.trim().split("\n").at(-1) ?? "";
   const read = (name: string) =>
     existsSync(join(out, name)) ? readFileSync(join(out, name), "utf8") : null;

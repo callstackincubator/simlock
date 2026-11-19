@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
+import { fakeCommandEnv, scriptCommand, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -47,7 +47,7 @@ function fixture() {
 }
 
 function run(cwd: string, ...args: string[]): string {
-  return execFileSync(BASH, [SCRIPT, ...args], { cwd, encoding: "utf8" })
+  return execFileSync(...scriptCommand(SCRIPT, args), { cwd, encoding: "utf8" })
     .trim()
     .split("\n")
     .at(-1)!;
@@ -108,7 +108,7 @@ describe("worktree.sh", () => {
     git(main, "commit", "-qm", "package.json");
     const head = git(main, "rev-parse", "HEAD");
     const detach = (...args: string[]) =>
-      execFileSync(BASH, [SCRIPT, "--detach", ...args], {
+      execFileSync(...scriptCommand(SCRIPT, ["--detach", ...args]), {
         cwd: main,
         encoding: "utf8",
         env: { ...process.env, ...fakeCommandEnv(bin) },

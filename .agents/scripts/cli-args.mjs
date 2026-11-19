@@ -11,7 +11,8 @@ export function option(name, args = process.argv.slice(2)) {
 export function repository() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
   const url = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
-  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url);
+  // why: a Windows checkout's origin can be a local path with backslashes, as the shell scripts read it.
+  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url.replaceAll("\\", "/"));
   if (match === null) throw new Error(`Cannot read owner/name from origin ${url}; set GH_REPO`);
   return `${match[1]}/${match[2]}`;
 }

@@ -1,13 +1,10 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-
-// @ts-expect-error why: a plain script with no types
-import { awakeMs } from "../.agents/scripts/awake.mjs";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -18,11 +15,22 @@ const SCRIPT = join(
 );
 const MINUTE = 60_000;
 
-// why: the same clock the hook reads, found the way the hook finds Python.
+// why: Python's monotonic clock read here, not through awake.mjs, so a wrong clock in the hook
+// fails a test instead of agreeing with itself; Windows 11 may answer `python3` with the Store alias.
 function awakeNowMs(): number {
-  const now = awakeMs();
-  if (now === null) throw new Error("no Python 3 on this host");
-  return now;
+  const candidates =
+    process.platform === "win32" ? [["python"], ["py", "-3"], ["python3"]] : [["python3"]];
+  for (const [command, ...prefix] of candidates) {
+    try {
+      const out = execFileSync(
+        command!,
+        [...prefix, "-c", "import time; print(time.monotonic())"],
+        { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] },
+      );
+      if (/^\d+(\.\d+)?$/.test(out.trim())) return Number(out) * 1000;
+    } catch {}
+  }
+  throw new Error("no Python 3 on this host");
 }
 
 function call(dir: string, input: object): string {
