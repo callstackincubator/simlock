@@ -305,6 +305,42 @@ describe("AndroidDriver", () => {
       expect((await userHarness.config()).get("hw.ramSize")).toBe("4096");
     });
 
+    it("writes android.emulator.cores into a new seed's config.ini over the profile's own count, from any profile source, and leaves the profile's count when unset", async () => {
+      const launch = { audio: true, bootAnimation: true, gpu: "auto", headless: false };
+      const cases = [
+        { source: "built-in profile", model: "Pixel 9", cores: 2, expected: "2" },
+        { source: "SDK profile", model: "Pixel 5", cores: 2, expected: "2" },
+        {
+          source: "devices.xml profile",
+          model: "Custom A",
+          cores: 2,
+          expected: "2",
+          devicesXml: customDeviceXml("Custom A", 4096),
+        },
+        {
+          source: "built-in profile, cores unset",
+          model: "Pixel 9",
+          cores: undefined,
+          expected: "4",
+        },
+      ];
+
+      for (const { source, model, cores, expected, devicesXml } of cases) {
+        const harness = await libraryHarness({
+          ...(devicesXml === undefined ? {} : { devicesXml }),
+          emulator: { ...launch, ...(cores === undefined ? {} : { cores }) },
+          listing: pixelDevices,
+        });
+
+        await harness.provision(model);
+
+        expect({ source, ncore: (await harness.config()).get("hw.cpu.ncore") }).toEqual({
+          source,
+          ncore: expected,
+        });
+      }
+    });
+
     it("captures the config hash after the library's keys are written", async () => {
       const hashOf = async (profile: LibraryDeviceProfile, seed: string) => {
         const harness = await libraryHarness({ profiles: [profile], seed });

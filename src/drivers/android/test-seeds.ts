@@ -10,6 +10,7 @@ import { AdbTools } from "./adb-tools.js";
 import { AvdConfig } from "./avd-config.js";
 import { Catalog } from "./catalog.js";
 import { ConsolePorts, portAllocatorFor } from "./console-ports.js";
+import type { AndroidEmulatorLaunchOptions } from "./definition.js";
 import type { DeviceProfileSource } from "./device-profile-source.js";
 import { DeviceTable } from "./device-table.js";
 import { Emulator } from "./emulator.js";
@@ -42,10 +43,12 @@ export function createPart(
     readonly clock?: FakeClock;
     readonly database: Awaited<ReturnType<typeof memoryAndroidSourceDatabase>>;
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
+    readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly extraEnv?: Readonly<Record<string, string>>;
     readonly hostAbi?: string;
     readonly ids?: readonly string[];
     readonly seedLaunchInputs?: readonly string[];
+    readonly seedOnlyInputs?: readonly string[];
   },
 ) {
   let nextId = 0;
@@ -68,6 +71,8 @@ export function createPart(
     filesystem,
     idGenerator,
     seedLaunchInputs: options.seedLaunchInputs ?? [],
+    cores: options.emulator?.cores,
+    seedOnlyInputs: options.seedOnlyInputs ?? [],
   });
   const emulator = new Emulator({
     adb: binaries.adb,

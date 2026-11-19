@@ -342,6 +342,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   it.each([
     ["ios.simulator.audio", "false", "loud"],
     ["android.emulator.headless", "true", "yes"],
+    ["android.emulator.cores", "2", "abc"],
   ])(
     "writes a good value of %s, a key its driver declares, and refuses a bad one naming the key",
     async (key, good, bad) => {
