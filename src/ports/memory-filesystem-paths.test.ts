@@ -18,6 +18,7 @@ describe("MemoryFilesystem path styles", () => {
         await filesystem.writeFileAtomic(written, "x");
         expect(await filesystem.readFile(read), `write ${written}, read ${read}`).toBe("x");
         expect(await filesystem.readdir("D:\\a"), `readdir after ${written}`).toEqual(["b"]);
+        expect(filesystem.encodingOf(read), `encoding of ${read} after ${written}`).toBe("utf8");
         await filesystem.rename(read, "C:\\a\\c");
         expect(await filesystem.exists("/a/b"), `rename from ${read}`).toBe(false);
         expect(await filesystem.readFile("/a/c")).toBe("x");
