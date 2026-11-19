@@ -7,6 +7,8 @@ export interface SettleCandidate {
   readonly platform: Platform;
   readonly sourceId: string;
   readonly leases: number;
+  /** why: a failed settle keeps its seed out of the background until this time. */
+  readonly failedUntil?: number;
 }
 
 export interface OperatorWait {
@@ -71,6 +73,7 @@ export function nextSettle(view: SettleView): SettleDecision {
   }
   let best: SettleCandidate | undefined;
   for (const candidate of view.candidates) {
+    if (candidate.failedUntil !== undefined && candidate.failedUntil > view.now) continue;
     if (best === undefined || candidate.leases > best.leases) best = candidate;
   }
   if (best === undefined) return { kind: "wait", reason: "no-candidate" };

@@ -15,6 +15,9 @@ import type {
 /** why: a driver's `listSources` can walk a whole sources folder; a check that waits longer ends and the next one tries again. */
 const LIST_SOURCES_BOUND_MS = 60_000;
 
+/** why: a seed that cannot settle must not boot a device at every check (ADR 0090 §2). */
+const RETRY_AFTER_FAILURE_MS = 60 * 60_000;
+
 class ListSourcesTimeout extends Error {
   constructor() {
     super("listing sources took longer than 60 s");
@@ -39,7 +42,7 @@ interface OperatorEntry {
 interface Target {
   readonly driver: SettlerDriver;
   readonly platform: Platform;
-  readonly spec: Pick<VirtualSpec, "osVersion">;
+  readonly kind: Pick<VirtualSpec, "model" | "osVersion" | "imageTag">;
   readonly sourceId?: string;
   readonly operator?: OperatorEntry;
 }
@@ -70,6 +73,7 @@ class SeedSettlerImpl implements SeedSettler {
   #lastReleasedAt: number | undefined;
   #running: Running | undefined;
   readonly #operators: OperatorEntry[] = [];
+  readonly #failedUntil = new Map<string, number>();
   readonly #cleanups: (() => void)[] = [];
 
   constructor(private readonly options: SeedSettlerOptions) {
@@ -243,8 +247,8 @@ class SeedSettlerImpl implements SeedSettler {
     const started = await this.#begin({
       driver,
       operator: entry,
+      kind: entry.spec,
       platform: entry.spec.platform,
-      spec: entry.spec,
     });
     if (!started) {
       this.#operators.unshift(entry);
@@ -276,16 +280,26 @@ class SeedSettlerImpl implements SeedSettler {
           leases: source.leases ?? 0,
           platform: driver.platform,
           sourceId: source.id,
+          ...this.#failure(driver.platform, source.id),
           target: {
             driver,
+            kind: {
+              model: source.model,
+              osVersion: source.osVersion,
+              ...(source.imageTag === undefined ? {} : { imageTag: source.imageTag }),
+            },
             platform: driver.platform,
             sourceId: source.id,
-            spec: { osVersion: source.osVersion },
           },
         }));
       }),
     );
     return lists.flat();
+  }
+
+  #failure(platform: Platform, sourceId: string): { readonly failedUntil?: number } {
+    const until = this.#failedUntil.get(`${platform}:${sourceId}`);
+    return until === undefined ? {} : { failedUntil: until };
   }
 
   #listBounded(driver: SettlerDriver): Promise<readonly DriverSource[]> {
@@ -311,7 +325,7 @@ class SeedSettlerImpl implements SeedSettler {
       let releaseClaim: () => void;
       try {
         releaseClaim = this.options.components.claimProvision({
-          osVersion: target.spec.osVersion,
+          osVersion: target.kind.osVersion,
           platform: target.platform,
         });
       } catch (error: unknown) {
@@ -370,7 +384,20 @@ class SeedSettlerImpl implements SeedSettler {
         ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
       });
     } catch (error: unknown) {
-      this.#logger.warn("a seed settle failed", { error: stableError(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      this.#logger.warn("a seed settle failed", {
+        message,
+        model: target.kind.model,
+        osVersion: target.kind.osVersion,
+        platform: target.platform,
+        ...(target.kind.imageTag === undefined ? {} : { imageTag: target.kind.imageTag }),
+      });
+      if (target.sourceId !== undefined) {
+        this.#failedUntil.set(
+          `${target.platform}:${target.sourceId}`,
+          this.options.clock.now() + RETRY_AFTER_FAILURE_MS,
+        );
+      }
       operator?.reject(
         new SeedSettleFailedError(
           target.platform,
