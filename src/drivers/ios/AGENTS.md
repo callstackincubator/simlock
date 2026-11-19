@@ -16,8 +16,7 @@ Resolve and boot:
 
 - A slim spec is returned only for a slim request the driver will slim. The registry alone records a device's mode.
 - `RuntimeMissingError` is only for what a download can fix: an OS outside the device type's range, an installed runtime not paired with the type, and anything below iOS 16 are refused instead.
-- A boot is `simctl boot`, `bootstatus -b`, then `listapps` until it succeeds, on one deadline: bootstatus can finish before the installer is ready.
-- A `prepare` boot starts with `simctl rename <udid> <name>`, bounded at 5 s: the lease's label, else the stored `name` (so a label never outlives its lease). A recovery boot renames nothing, and a rename that fails or hangs is logged and the boot goes on.
+- A boot is `simctl rename` first (prepare only: the lease's label, else the stored name; a failure is logged), `simctl boot`, `bootstatus -b`, then `listapps` until it succeeds, on one deadline: bootstatus can finish before the installer is ready.
 - Slim (ADR 0060), on `prepare` of a slim spec only: the managed labels are merged into the simulator's `disabled.plist` before the boot (other entries kept; a failed write is logged, the boot goes on), and `launchctl print-disabled system` is read back after it. A label not as written is `full`; a failed readback is `slim`; both call `onSlimSkipped`, logged only. All as written and the write ok: `slim`, and `onSlimmed` is `device.slimmed`. Nothing written off and no kept category: `full`, no readback.
 - Named services (ADR 0083): `exclude` beats `include` beats a category; `simlock-managed.json` records the names, so one dropped from both is written back on. A baseline saved before it keeps a dropped name off; `include` it.
 - Slim `except` (ADR 0066): an excepted category's labels are written `false`; an unknown name is `BAD_REQUEST`; a kept label not read back throws `KeptCategoriesError`.
