@@ -38,6 +38,8 @@ export interface WriteFileAtomicOptions {
    * which would leave a window where the file exists world-readable. Omitted keeps Node's
    * default (governed by the process umask), unchanged from before this option existed. */
   readonly mode?: number;
+  /** why: Task Scheduler refuses a task file that is not UTF-16. Omitted writes UTF-8. */
+  readonly encoding?: "utf8" | "utf16le";
 }
 
 /** why: Same shape as {@link WriteFileAtomicOptions}: `writeFileExclusive` publishes through a
@@ -282,7 +284,7 @@ export class NodeFilesystem implements Filesystem {
 
     try {
       await writeFile(temporaryPath, contents, {
-        encoding: "utf8",
+        encoding: options?.encoding ?? "utf8",
         flag: "wx",
         ...(options?.mode === undefined ? {} : { mode: options.mode }),
       });
@@ -478,7 +480,7 @@ interface MemoryAttributes {
 }
 
 type MemoryEntryKind =
-  | { readonly kind: "file"; contents: string; bytes?: Uint8Array }
+  | { readonly kind: "file"; contents: string; bytes?: Uint8Array; encoding?: "utf8" | "utf16le" }
   | { readonly kind: "directory" }
   | { readonly kind: "symlink"; readonly target: string };
 
@@ -507,6 +509,12 @@ export class MemoryFilesystem implements Filesystem {
     private readonly uid = process.getuid?.() ?? 0,
   ) {
     this.#entries.set("/", this.#newEntry({ kind: "directory" }));
+  }
+
+  /** why: lets a test read which encoding `writeFileAtomic` was asked to write. */
+  encodingOf(path: string): "utf8" | "utf16le" {
+    const entry = this.#entryAt(path);
+    return entry.kind === "file" ? (entry.encoding ?? "utf8") : "utf8";
   }
 
   async readFile(path: string): Promise<string> {
@@ -605,8 +613,13 @@ export class MemoryFilesystem implements Filesystem {
     this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
     this.#requireDirectory(parentPath(path));
+    const encoding = options?.encoding ?? "utf8";
     this.#entries.set(path, {
-      ...this.#newEntry({ kind: "file", contents }),
+      ...this.#newEntry({
+        kind: "file",
+        contents,
+        ...(encoding === "utf8" ? {} : { bytes: Buffer.from(contents, encoding), encoding }),
+      }),
       mode: options?.mode ?? DEFAULT_FILE_MODE,
     });
   }

@@ -13,7 +13,10 @@ import {
   MemoryFilesystem,
   MemoryIpcTransport,
   serviceDefinition,
+  type ProcessResult,
+  type ServiceManager,
   type ServiceState,
+  TaskSchedulerServiceManager,
   FakeSystemStats,
 } from "../ports/index.js";
 import { SimlockError } from "../contract/index.js";
@@ -286,6 +289,7 @@ describe("CLI: daemon install (#830)", () => {
         manager: serviceManager,
         platform: "darwin",
         user: () => "me",
+        checkConfig: async () => {},
         definition: async () =>
           serviceDefinition({
             role: "worker",
@@ -465,6 +469,102 @@ describe("CLI: daemon install (#830)", () => {
       "Daemon stopping",
       "Service removed: com.callstack.simlock.worker (launchd)",
     ]);
+  });
+});
+
+describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
+  it("daemon install with a config.json the CLI refuses exits 2 with the config error and installs no service, on launchd, systemd and Task Scheduler", async () => {
+    const managers = [
+      { manager: "launchd", platform: "darwin" },
+      { manager: "systemd", platform: "linux" },
+      { manager: "task-scheduler", platform: "win32" },
+    ] as const;
+    const configs = [
+      { label: "accepted", maxDevices: 2, daemonRunning: false },
+      { label: "refused", maxDevices: 0, daemonRunning: false },
+      { label: "refused, a daemon running", maxDevices: 0, daemonRunning: true },
+    ];
+    for (const { manager, platform } of managers) {
+      for (const { label: configLabel, maxDevices, daemonRunning } of configs) {
+        const label = `${manager}, ${configLabel} config`;
+        const root = "/Users/me/.simlock";
+        const filesystem = new MemoryFilesystem();
+        await filesystem.mkdirp(root);
+        await filesystem.writeFileAtomic(
+          join(root, "config.json"),
+          JSON.stringify({ capacity: { config: { limits: { android: { maxDevices } } } } }),
+        );
+        const ipcTransport = new MemoryIpcTransport();
+        if (daemonRunning) {
+          await startInMemoryDaemon({
+            adminTokenPath: join(root, "admin.token"),
+            filesystem,
+            ipcTransport,
+            socketPath: join(root, "daemon.sock"),
+          });
+        }
+        // why: a daemon the service starts on a config it refuses exits at once and never answers.
+        const serviceManager = new FakeServiceManager({
+          manager,
+          onInstall: async () => {
+            if (maxDevices === 0) return;
+            await startInMemoryDaemon({
+              adminTokenPath: join(root, "admin.token"),
+              filesystem,
+              ipcTransport,
+              socketPath: join(root, "daemon.sock"),
+            });
+          },
+        });
+        const output = outputCapture({
+          filesystem,
+          clock: new FakeClock(0),
+          systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+          ipc: ipcTransport,
+          launcher: new FakeDaemonLauncher(),
+          daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+          homeDirectory: "/Users/me",
+          workingDirectory: "/work/project",
+          hostPlatform: "linux",
+          runTool: async () => ({ outcome: "not-found" }),
+          service: {
+            manager: serviceManager,
+            platform,
+            home: "/Users/me",
+            user: () => "me",
+            root,
+            nodePath: "/opt/node/bin/node",
+            mainPath: "/opt/simlock/dist/daemon/main.js",
+          },
+        });
+
+        const exitCode = await runCli(["daemon", "install"], output.environmentWith());
+
+        if (maxDevices === 0) {
+          expect(JSON.parse(output.stderr.trim()), label).toEqual({
+            error: {
+              code: "USAGE",
+              message:
+                'Invalid config value for "capacity.config.limits.android.maxDevices": expected a positive integer',
+            },
+          });
+          expect(exitCode, label).toBe(2);
+          expect(serviceManager.installs, label).toEqual([]);
+          if (daemonRunning) {
+            // why: the config check comes before the stop, so a refused config leaves the daemon running.
+            const status = await runCli(["daemon", "status", "--json"], output.environmentWith());
+            expect(status, label).toBe(0);
+            expect(JSON.parse(output.stdout.trim().split("\n").at(-1) ?? ""), label).toHaveProperty(
+              "leases",
+            );
+          }
+        } else {
+          expect(output.stderr, label).toBe("");
+          expect(exitCode, label).toBe(0);
+          expect(serviceManager.installs, label).toHaveLength(1);
+        }
+      }
+    }
   });
 });
 
@@ -694,11 +794,11 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
 
   it("a failed or stuck launchctl call is SERVICE_FAILED, a failed load removes the plist, and a platform without a service manager is a usage error", async () => {
     for (const command of ["install", "uninstall"]) {
-      const result = await run({ argv: ["daemon", command], platform: "win32" });
-      expect(result.exitCode, `win32 ${command}`).toBe(2);
-      expect(errorOf(result.stderr), `win32 ${command}`).toEqual({
+      const result = await run({ argv: ["daemon", command], platform: "freebsd" });
+      expect(result.exitCode, `freebsd ${command}`).toBe(2);
+      expect(errorOf(result.stderr), `freebsd ${command}`).toEqual({
         code: "USAGE",
-        message: `daemon ${command} is supported on macOS and Linux only`,
+        message: `daemon ${command} is supported on macOS, Linux and Windows only`,
       });
     }
 
@@ -758,6 +858,519 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
     expect(errorOf(failedKickstart.stderr)).toEqual({
       code: "SERVICE_FAILED",
       message: `launchctl kickstart gui/501/${name} failed: Could not find service`,
+    });
+  });
+});
+
+describe("CLI: daemon service on Windows (#1698)", () => {
+  const root = "/Users/me/.simlock";
+  const nodePath = "/opt/node/node.exe";
+  const mainPath = "/opt/simlock/dist/daemon/main.js";
+  const sid = "S-1-5-21-1-2-3-1001";
+  const done = { code: 0, stdout: "", stderr: "" };
+
+  async function runWindowsCli(options: {
+    readonly argv: readonly string[];
+    readonly role: "worker" | "gateway";
+    readonly runner: ScriptedProcessRunner;
+    readonly filesystem: MemoryFilesystem;
+    readonly startAfterInstall?: boolean;
+    readonly daemonRunning?: boolean;
+    readonly state?: ServiceState;
+    readonly files?: readonly string[];
+  }): Promise<{ readonly exitCode: number; readonly output: ReturnType<typeof outputCapture> }> {
+    const { role, runner, filesystem } = options;
+    const dataDirectory = role === "gateway" ? join(root, "gateway") : root;
+    const ipcTransport = new MemoryIpcTransport();
+    for (const file of options.files ?? []) {
+      await filesystem.mkdirp(dirname(file));
+      await filesystem.writeFileAtomic(file, "");
+    }
+    const startDaemon = async (): Promise<void> => {
+      await startInMemoryDaemon({
+        adminTokenPath: join(dataDirectory, "admin.token"),
+        filesystem,
+        ipcTransport,
+        socketPath: join(dataDirectory, "daemon.sock"),
+      });
+    };
+    if (options.daemonRunning === true) await startDaemon();
+    const tasks = new TaskSchedulerServiceManager({
+      runner,
+      filesystem,
+      systemRoot: "C:\\Windows",
+    });
+    const { state } = options;
+    const serviceManager: ServiceManager = {
+      manager: "task-scheduler",
+      state: (definition) =>
+        state === undefined ? tasks.state(definition) : Promise.resolve(state),
+      uninstall: (definition) => tasks.uninstall(definition),
+      start: (definition) => tasks.start(definition),
+      install: async (definition) => {
+        await tasks.install(definition);
+        if (options.startAfterInstall === true) await startDaemon();
+      },
+    };
+    const output = outputCapture(
+      {
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: new FakeDaemonLauncher(),
+        daemonHome: { role, dataDirectory, gatewayPresent: false },
+        homeDirectory: "/Users/me",
+        workingDirectory: "C:\\work",
+        hostPlatform: "linux",
+        runTool: async () => ({ outcome: "not-found" }),
+        service: {
+          manager: serviceManager,
+          platform: "win32",
+          home: "/Users/me",
+          user: () => "me",
+          root,
+          nodePath,
+          mainPath,
+        },
+      },
+      { PATH: "C:\\bin" },
+    );
+    const exitCode = await runCli(options.argv, output.environmentWith());
+    return { exitCode, output };
+  }
+
+  async function installOnWindows(options: {
+    readonly argv: readonly string[];
+    readonly role?: "worker" | "gateway";
+    readonly whoami?: ProcessResult;
+    readonly create?: ProcessResult;
+  }): Promise<{
+    readonly exitCode: number;
+    readonly output: ReturnType<typeof outputCapture>;
+    readonly runner: ScriptedProcessRunner;
+    readonly filesystem: MemoryFilesystem;
+    readonly name: string;
+    readonly xmlPath: string;
+    readonly written: { readonly text: string; readonly encoding: string } | undefined;
+  }> {
+    const role = options.role ?? "worker";
+    const dataDirectory = role === "gateway" ? join(root, "gateway") : root;
+    const name = `com.callstack.simlock.${role}`;
+    const xmlPath = join(dataDirectory, "service-task.xml");
+    const filesystem = new MemoryFilesystem();
+    let written: { readonly text: string; readonly encoding: string } | undefined;
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { command: "whoami", args: ["/user", "/fo", "csv", "/nh"] },
+        result: options.whoami ?? { ...done, stdout: `"desktop\\me","${sid}"\r\n` },
+      },
+      ...(options.whoami === undefined || options.whoami.code === 0
+        ? [
+            {
+              match: { command: "schtasks", args: ["/end", "/tn", name] },
+              result: { code: 1, stdout: "", stderr: "ERROR: There are no running instances." },
+            },
+            {
+              match: {
+                command: "schtasks",
+                args: ["/create", "/tn", name, "/xml", xmlPath, "/f"],
+              },
+              result: options.create ?? done,
+              onSpawn: () => {
+                const encoding = filesystem.encodingOf(xmlPath);
+                void filesystem.readFile(xmlPath).then((text) => {
+                  written = { text, encoding };
+                });
+              },
+            },
+          ]
+        : []),
+    ]);
+    const { exitCode, output } = await runWindowsCli({
+      argv: options.argv,
+      role,
+      runner,
+      filesystem,
+      startAfterInstall: true,
+    });
+    return { exitCode, output, runner, filesystem, name, xmlPath, written };
+  }
+
+  function supervisorArguments(xml: string): RegExpExecArray | null {
+    const args = /<Arguments>(.*)<\/Arguments>/.exec(xml)?.[1] ?? "";
+    return /^--headless "([^"]*)" "([^"]*)"( --gateway)? --task (\S+) --install-id ([0-9a-f-]{36}) --environment (\S+)$/.exec(
+      args,
+    );
+  }
+
+  async function expectGatewayAndJsonInstalls(): Promise<void> {
+    const gateway = await installOnWindows({
+      argv: ["--gateway", "daemon", "install"],
+      role: "gateway",
+    });
+    expect(gateway.output.stderr).toBe("");
+    expect(gateway.output.stdout.split("\n")[0]).toBe(
+      "Service installed: com.callstack.simlock.gateway (task-scheduler)",
+    );
+    const gatewayParts = supervisorArguments(gateway.written?.text ?? "");
+    expect(gatewayParts?.[3], "the supervisor gets --gateway").toBe(" --gateway");
+    expect(gatewayParts?.[4]).toBe("com.callstack.simlock.gateway");
+
+    const json = await installOnWindows({ argv: ["daemon", "install", "--json"] });
+    expect(JSON.parse(json.output.stdout)).toEqual({
+      status: "installed",
+      service: {
+        state: "installed",
+        manager: "task-scheduler",
+        name: "com.callstack.simlock.worker",
+        path: "\\com.callstack.simlock.worker",
+      },
+    });
+  }
+
+  it("an operator runs daemon install on Windows: the user's SID goes into a UTF-16 logon task that runs the supervisor hidden with the saved variables, the daemon answers, and install prints the name, Daemon running and the login hint; --gateway names the gateway task and passes --gateway to the supervisor, and --json answers the task-scheduler manager", async () => {
+    const { exitCode, output, runner, filesystem, name, xmlPath, written } = await installOnWindows(
+      { argv: ["daemon", "install"] },
+    );
+
+    expect(output.stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(runner.calls.map((call) => [call.command, call.args[0]])).toEqual([
+      ["whoami", "/user"],
+      ["schtasks", "/end"],
+      ["schtasks", "/create"],
+    ]);
+    expect(output.stdout.split("\n").slice(0, 2)).toEqual([
+      `Service installed: ${name} (task-scheduler)`,
+      "Daemon running",
+    ]);
+    expect(output.stdout.trimEnd().split("\n").at(-1)).toBe(
+      "To start after a reboot, turn on automatic login for this user.",
+    );
+    expect(written?.encoding).toBe("utf16le");
+    const xml = written?.text ?? "";
+    expect(xml.startsWith('\uFEFF<?xml version="1.0" encoding="UTF-16"?>')).toBe(true);
+    for (const element of [
+      `<LogonTrigger><Enabled>true</Enabled><UserId>${sid}</UserId></LogonTrigger>`,
+      `<UserId>${sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel>`,
+      "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+      "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+      "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+      "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+      "<Priority>5</Priority>",
+      "<Enabled>true</Enabled>",
+      "<Description>simlock worker daemon</Description>",
+      "<Command>C:\\Windows\\System32\\conhost.exe</Command>",
+    ]) {
+      expect(xml, element).toContain(element);
+    }
+    const parts = supervisorArguments(xml);
+    expect(parts?.slice(1, 5)).toEqual([
+      nodePath,
+      "/opt/simlock/dist/daemon/service-main.js",
+      undefined,
+      name,
+    ]);
+    expect(JSON.parse(Buffer.from(parts?.[6] ?? "", "base64url").toString("utf8"))).toEqual({
+      SIMLOCK_HOME: root,
+      PATH: "C:\\bin",
+    });
+    expect(await filesystem.exists(xmlPath), "the XML file is deleted after create").toBe(false);
+    await expectGatewayAndJsonInstalls();
+  });
+
+  it("an install whose registration fails is SERVICE_FAILED with the command's first stderr line, and leaves no task XML", async () => {
+    const name = "com.callstack.simlock.worker";
+    const xmlPath = join(root, "service-task.xml");
+    const cases = [
+      {
+        label: "schtasks /create exits 1",
+        create: { code: 1, stdout: "", stderr: "ERROR: Access is denied.\nsecond line" },
+        message: `schtasks /create /tn ${name} /xml ${xmlPath} /f failed: ERROR: Access is denied.`,
+      },
+      {
+        label: "whoami exits 1",
+        whoami: { code: 1, stdout: "", stderr: "ERROR: no user" },
+        message: "whoami /user /fo csv /nh failed: ERROR: no user",
+      },
+      {
+        label: "whoami prints no SID",
+        whoami: { code: 0, stdout: '"desktop\\me"\r\n', stderr: "" },
+        message: "whoami /user printed no SID",
+      },
+      {
+        label: "a call past 10 s",
+        create: { code: null, stdout: "", stderr: "" },
+        message: `schtasks /create /tn ${name} /xml ${xmlPath} /f did not finish within 10 s`,
+      },
+    ];
+    for (const { label, message, ...results } of cases) {
+      const failed = await installOnWindows({ argv: ["daemon", "install"], ...results });
+      expect(failed.exitCode, label).toBe(1);
+      expect(JSON.parse(failed.output.stderr.trim()), label).toEqual({
+        error: { code: "SERVICE_FAILED", message },
+      });
+      expect(await failed.filesystem.exists(xmlPath), label).toBe(false);
+      expect(
+        failed.runner.calls.every((call) => call.options.timeoutMs === 10_000),
+        label,
+      ).toBe(true);
+    }
+  });
+
+  it("an operator runs daemon uninstall on Windows: the daemon is stopped, the task is deleted, and no task or a failed delete is reported", async () => {
+    const name = "com.callstack.simlock.worker";
+    const taskState: ServiceState = { state: "installed", path: `\\${name}` };
+    const deleteArgs = ["/delete", "/tn", name, "/f"];
+    const cases = [
+      {
+        label: "task installed and daemon running",
+        argv: ["daemon", "uninstall"],
+        state: taskState,
+        daemonRunning: true,
+        script: [{ match: { command: "schtasks", args: deleteArgs }, result: done }],
+        stdout: `Daemon stopping\nService removed: ${name} (task-scheduler)\n`,
+      },
+      {
+        label: "task installed, no daemon",
+        argv: ["daemon", "uninstall"],
+        state: taskState,
+        script: [{ match: { command: "schtasks", args: deleteArgs }, result: done }],
+        stdout: `Service removed: ${name} (task-scheduler)\n`,
+      },
+      {
+        label: "no task: schtasks /delete is not run",
+        argv: ["daemon", "uninstall"],
+        state: { state: "not-installed" } as ServiceState,
+        script: [],
+        stdout: `Service not installed: ${name}\n`,
+      },
+    ];
+    for (const { label, script, stdout, ...rest } of cases) {
+      const runner = new ScriptedProcessRunner(script);
+      const { exitCode, output } = await runWindowsCli({
+        ...rest,
+        role: "worker",
+        runner,
+        filesystem: new MemoryFilesystem(),
+      });
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(output.stdout, label).toBe(stdout);
+      expect(runner.calls.length, label).toBe(script.length);
+    }
+
+    const failed = await runWindowsCli({
+      argv: ["daemon", "uninstall"],
+      role: "worker",
+      runner: new ScriptedProcessRunner([
+        {
+          match: { command: "schtasks", args: deleteArgs },
+          result: { code: 1, stdout: "", stderr: "ERROR: The system cannot find the file." },
+        },
+      ]),
+      filesystem: new MemoryFilesystem(),
+      state: taskState,
+    });
+    expect(failed.exitCode).toBe(1);
+    expect(JSON.parse(failed.output.stderr.trim())).toEqual({
+      error: {
+        code: "SERVICE_FAILED",
+        message: `schtasks /delete /tn ${name} /f failed: ERROR: The system cannot find the file.`,
+      },
+    });
+  });
+
+  it("daemon status on Windows prints one Service: line from the task and the user's desktop session, and --json carries the same state", async () => {
+    const name = "com.callstack.simlock.worker";
+    const supervisor = "/opt/simlock/dist/daemon/service-main.js";
+    const query = {
+      command: "cmd.exe",
+      args: ["/d", "/c", `chcp 65001 >nul && schtasks /query /tn ${name} /xml`],
+    };
+    const whoami = {
+      command: "cmd.exe",
+      args: ["/d", "/c", "chcp 65001 >nul && whoami /user /fo csv /nh"],
+    };
+    const tasklist = {
+      command: "tasklist",
+      args: ["/fi", "USERNAME eq desktop\\me", "/fi", "SESSION ne 0", "/fo", "csv", "/nh"],
+    };
+    const taskXml = (options: {
+      readonly node?: string;
+      readonly supervisor?: string;
+      readonly arguments?: string;
+      readonly enabled?: boolean;
+    }): string => {
+      const args =
+        options.arguments ??
+        `--headless "${options.node ?? nodePath}" "${options.supervisor ?? supervisor}" --task ${name} --install-id 1 --environment e30`;
+      return `<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><Enabled>${String(options.enabled ?? true)}</Enabled></Settings><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`;
+    };
+    const ok = (stdout: string): ProcessResult => ({ code: 0, stdout, stderr: "" });
+    const session = [{ match: whoami, result: ok('"desktop\\me","S-1-5-21-1"\r\n') }];
+    const present = [nodePath, supervisor];
+    const info = "INFO: No tasks are running which match the specified criteria.\r\n";
+    const cases = [
+      {
+        label: "no task",
+        files: [],
+        script: [{ match: query, result: { code: 1, stdout: "", stderr: "ERROR" } }],
+        line: "Service: not installed",
+      },
+      {
+        label: "task, user at the screen",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n') },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
+      },
+      {
+        label: "no desktop session: tasklist prints only its INFO line",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: ok(info) },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "tasklist fails",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: { code: 1, stdout: "", stderr: "ERROR" } },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "tasklist takes more than 10 s",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          ...session,
+          { match: tasklist, result: { code: null, stdout: "", stderr: "" } },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "task disabled by hand",
+        files: present,
+        script: [{ match: query, result: ok(taskXml({ enabled: false })) }],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "Node path gone",
+        files: [supervisor],
+        script: [{ match: query, result: ok(taskXml({})) }],
+        line: `Service: broken (task-scheduler, ${name}): ${nodePath} is gone; run simlock daemon install`,
+      },
+      {
+        label: "supervisor path gone",
+        files: [nodePath],
+        script: [{ match: query, result: ok(taskXml({})) }],
+        line: `Service: broken (task-scheduler, ${name}): ${supervisor} is gone; run simlock daemon install`,
+      },
+      {
+        label: "arguments without two quoted paths after --headless",
+        files: present,
+        script: [{ match: query, result: ok(taskXml({ arguments: "--headless node" })) }],
+        line: `Service: broken (task-scheduler, ${name}): \\${name} is gone; run simlock daemon install`,
+      },
+      {
+        label: "whoami prints no account name",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          { match: whoami, result: ok("\r\n") },
+        ],
+        line: `Service: not loaded (task-scheduler, ${name}): commands start the daemon without it`,
+      },
+      {
+        label: "a non-ASCII account name is read as UTF-8 and filtered by whole",
+        files: present,
+        script: [
+          { match: query, result: ok(taskXml({})) },
+          { match: whoami, result: ok('"desktop\\józef","S-1-5-21-1"\r\n') },
+          {
+            match: {
+              command: "tasklist",
+              args: [
+                "/fi",
+                "USERNAME eq desktop\\józef",
+                "/fi",
+                "SESSION ne 0",
+                "/fo",
+                "csv",
+                "/nh",
+              ],
+            },
+            result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n'),
+          },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
+      },
+      {
+        label: "a path with an ampersand is read as the task XML escapes it",
+        files: [nodePath, supervisor, "/opt/R&D/node.exe"],
+        script: [
+          { match: query, result: ok(taskXml({ node: "/opt/R&amp;D/node.exe" })) },
+          ...session,
+          { match: tasklist, result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n') },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
+      },
+      {
+        label: "a path with a non-ASCII character is read whole",
+        files: [nodePath, "/opt/simlock-ü/dist/daemon/service-main.js"],
+        script: [
+          {
+            match: query,
+            result: ok(taskXml({ supervisor: "/opt/simlock-ü/dist/daemon/service-main.js" })),
+          },
+          ...session,
+          { match: tasklist, result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n') },
+        ],
+        line: `Service: installed (task-scheduler, ${name})`,
+      },
+    ];
+    for (const { label, files, script, line } of cases) {
+      const runner = new ScriptedProcessRunner(script);
+      const { exitCode, output } = await runWindowsCli({
+        argv: ["daemon", "status"],
+        role: "worker",
+        runner,
+        filesystem: new MemoryFilesystem(),
+        files,
+      });
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(output.stdout, label).toBe(`Daemon stopped\n${line}\n`);
+      expect(runner.calls.length, label).toBe(script.length);
+      expect(
+        runner.calls.every((call) => call.options.timeoutMs === 10_000),
+        label,
+      ).toBe(true);
+    }
+
+    const json = await runWindowsCli({
+      argv: ["daemon", "status", "--json"],
+      role: "worker",
+      runner: new ScriptedProcessRunner([
+        { match: query, result: ok(taskXml({ enabled: false })) },
+      ]),
+      filesystem: new MemoryFilesystem(),
+      files: present,
+    });
+    expect(JSON.parse(json.output.stdout)).toEqual({
+      status: "stopped",
+      service: { state: "not-loaded", manager: "task-scheduler", name, path: `\\${name}` },
     });
   });
 });

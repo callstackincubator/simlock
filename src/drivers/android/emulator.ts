@@ -43,6 +43,8 @@ const EMULATOR_LOG_TAIL_BYTES = 8_192;
 const EMULATOR_LOG_TAIL_LINES = 10;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 
+export const WIFI_PER_EMULATOR_FLAGS = ["-feature", "-WiFiPacketStream"] as const;
+
 export const DEFAULT_EMULATOR_LAUNCH = androidDriverConfig.defaults.emulator;
 
 const EMULATOR_HELP_TIMEOUT_MS = 30_000;
@@ -365,6 +367,8 @@ function emulatorLaunchFlags(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
   return [
+    // why: #1586: a copy restores its seed's Wi-Fi MAC from the snapshot, so on netsim's one shared Wi-Fi network every copy but one is dropped; with the packet stream off each emulator has its own Wi-Fi router.
+    ...WIFI_PER_EMULATOR_FLAGS,
     ...(launch.headless ? ["-no-window"] : []),
     ...(launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu ? [] : ["-gpu", launch.gpu]),
     ...(launch.audio ? [] : ["-no-audio"]),

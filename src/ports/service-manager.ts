@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
 import { DATA_DIRECTORY_MODE, type DaemonRole } from "./paths.js";
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
-export type ServiceManagerName = "launchd" | "systemd";
+export type ServiceManagerName = "launchd" | "systemd" | "task-scheduler";
 
 export type ServiceState =
   | { readonly state: "not-installed" }
@@ -55,6 +55,16 @@ function unitDirectory(input: ServiceDefinitionInput): string {
   return join(config, "systemd", "user");
 }
 
+function servicePath(
+  manager: ServiceManagerName,
+  input: ServiceDefinitionInput,
+  name: string,
+): string {
+  if (manager === "task-scheduler") return `\\${name}`;
+  if (manager === "systemd") return join(unitDirectory(input), `${name}.service`);
+  return join(input.home, "Library", "LaunchAgents", `${name}.plist`);
+}
+
 export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinition {
   const environment: Record<string, string> = { SIMLOCK_HOME: input.root };
   for (const variable of SAVED_VARIABLES) {
@@ -68,12 +78,14 @@ export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinit
   return {
     role: input.role,
     name,
-    path:
-      manager === "systemd"
-        ? join(unitDirectory(input), `${name}.service`)
-        : join(input.home, "Library", "LaunchAgents", `${name}.plist`),
+    path: servicePath(manager, input, name),
     command: input.nodePath,
-    args: [input.mainPath, ...(input.role === "gateway" ? ["--gateway"] : [])],
+    args: [
+      manager === "task-scheduler"
+        ? join(dirname(input.mainPath), "service-main.js")
+        : input.mainPath,
+      ...(input.role === "gateway" ? ["--gateway"] : []),
+    ],
     environment,
     logPath: join(input.dataDirectory, "daemon.log"),
   };
@@ -389,6 +401,173 @@ export class SystemdServiceManager implements ServiceManager {
   }
 }
 
+export interface TaskSchedulerServiceManagerOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+  readonly systemRoot?: string;
+}
+
+const WHOAMI_ARGS = ["/user", "/fo", "csv", "/nh"];
+
+function xmlUnescape(value: string): string {
+  return value
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+const TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+function quoted(value: string): string {
+  return `"${value}"`;
+}
+
+function taskXml(input: {
+  readonly definition: ServiceDefinition;
+  readonly sid: string;
+  readonly installId: string;
+  readonly systemRoot: string;
+}): string {
+  const { definition, sid, installId, systemRoot } = input;
+  const [supervisor = "", ...flags] = definition.args;
+  const environment = Buffer.from(JSON.stringify(definition.environment)).toString("base64url");
+  const args = [
+    "--headless",
+    quoted(definition.command),
+    quoted(supervisor),
+    ...flags,
+    "--task",
+    definition.name,
+    "--install-id",
+    installId,
+    "--environment",
+    environment,
+  ].join(" ");
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="${TASK_NAMESPACE}">
+  <RegistrationInfo><Description>simlock ${definition.role} daemon</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xmlText(sid)}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${xmlText(sid)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>5</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>${xmlText(`${systemRoot}\\System32\\conhost.exe`)}</Command><Arguments>${xmlText(args)}</Arguments></Exec></Actions>
+</Task>
+`;
+}
+
+export class TaskSchedulerServiceManager implements ServiceManager {
+  readonly manager = "task-scheduler";
+
+  constructor(private readonly options: TaskSchedulerServiceManagerOptions) {}
+
+  private async run(command: string, args: readonly string[]): Promise<ProcessResult> {
+    const result = await this.options.runner.run(command, args, {
+      timeoutMs: LAUNCHCTL_TIMEOUT_MS,
+    });
+    if (result.code === null) {
+      throw new ServiceFailedError(`${[command, ...args].join(" ")} did not finish within 10 s`);
+    }
+    return result;
+  }
+
+  private async checked(command: string, args: readonly string[]): Promise<ProcessResult> {
+    const result = await this.run(command, args);
+    if (result.code !== 0) failure(command, args, result);
+    return result;
+  }
+
+  private async hasDesktopSession(): Promise<boolean> {
+    try {
+      // why: plain whoami writes the OEM code page, which garbles a non-ASCII account name and makes the tasklist filter match nothing.
+      const user = await this.checked("cmd.exe", [
+        "/d",
+        "/c",
+        `chcp 65001 >nul && whoami ${WHOAMI_ARGS.join(" ")}`,
+      ]);
+      const account = /^"([^"]*)"/.exec(user.stdout.trim())?.[1];
+      if (account === undefined) return false;
+      const listed = await this.checked("tasklist", [
+        "/fi",
+        `USERNAME eq ${account}`,
+        "/fi",
+        "SESSION ne 0",
+        "/fo",
+        "csv",
+        "/nh",
+      ]);
+      return listed.stdout.split(/\r?\n/).some((line) => line.startsWith('"'));
+    } catch (error: unknown) {
+      if (error instanceof ServiceFailedError) return false;
+      throw error;
+    }
+  }
+
+  /** why: a task whose arguments do not hold the two paths is as broken as one whose paths are gone; its own path stands for them, as systemd's unit path does. */
+  private async missingPaths(xml: string, definition: ServiceDefinition): Promise<string[]> {
+    const args = xmlUnescape(/<Arguments>([\s\S]*?)<\/Arguments>/.exec(xml)?.[1] ?? "");
+    const saved = /--headless\s+"([^"]*)"\s+"([^"]*)"/.exec(args);
+    if (saved === null) return [definition.path];
+    const missing: string[] = [];
+    for (const path of saved.slice(1, 3)) {
+      if (!(await this.options.filesystem.exists(path))) missing.push(path);
+    }
+    return missing;
+  }
+
+  async state(definition: ServiceDefinition): Promise<ServiceState> {
+    // why: plain schtasks writes the OEM code page, which garbles a non-ASCII path.
+    const queried = await this.run("cmd.exe", [
+      "/d",
+      "/c",
+      `chcp 65001 >nul && schtasks /query /tn ${definition.name} /xml`,
+    ]);
+    if (queried.code !== 0) return { state: "not-installed" };
+    const missing = await this.missingPaths(queried.stdout, definition);
+    if (missing.length > 0) return { state: "broken", path: definition.path, missing };
+    const disabled = /<Settings>[\s\S]*?<Enabled>\s*false\s*<\/Enabled>/i.test(queried.stdout);
+    const loaded = !disabled && (await this.hasDesktopSession());
+    return { state: loaded ? "installed" : "not-loaded", path: definition.path };
+  }
+
+  async install(definition: ServiceDefinition): Promise<void> {
+    const { filesystem } = this.options;
+    await ensureLog(filesystem, definition.logPath);
+    const user = await this.checked("whoami", WHOAMI_ARGS);
+    const sid = /^"[^"]*","([^"]*)"/.exec(user.stdout.trim())?.[1];
+    if (sid === undefined) throw new ServiceFailedError("whoami /user printed no SID");
+    const xmlPath = join(dirname(definition.logPath), "service-task.xml");
+    const xml = taskXml({
+      definition,
+      sid,
+      installId: randomUUID(),
+      systemRoot: this.options.systemRoot ?? process.env.SystemRoot ?? "C:\\Windows",
+    });
+    await filesystem.writeFileAtomic(xmlPath, `\uFEFF${xml}`, { encoding: "utf16le" });
+    try {
+      await this.run("schtasks", ["/end", "/tn", definition.name]);
+      await this.checked("schtasks", ["/create", "/tn", definition.name, "/xml", xmlPath, "/f"]);
+    } finally {
+      await filesystem.rm(xmlPath);
+    }
+  }
+
+  async uninstall(definition: ServiceDefinition): Promise<void> {
+    await this.checked("schtasks", ["/delete", "/tn", definition.name, "/f"]);
+  }
+
+  async start(definition: ServiceDefinition): Promise<void> {
+    await this.checked("schtasks", ["/run", "/tn", definition.name]);
+  }
+}
+
 export function productionServiceManager(
   platform: NodeJS.Platform,
   dependencies: {
@@ -398,5 +577,6 @@ export function productionServiceManager(
   },
 ): ServiceManager | undefined {
   if (platform === "linux") return new SystemdServiceManager(dependencies);
+  if (platform === "win32") return new TaskSchedulerServiceManager(dependencies);
   return platform === "darwin" ? new LaunchdServiceManager(dependencies) : undefined;
 }

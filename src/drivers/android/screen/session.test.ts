@@ -37,20 +37,12 @@ describe("Android screen capture: open", () => {
         "com.genymobile.scrcpy.Server",
         "5.0.1",
         "scid=1234abcd",
-        "log_level=info",
         "tunnel_forward=true",
-        "video=true",
-        "audio=false",
-        "control=true",
-        "power_on=false",
-        "clipboard_autosync=false",
-        "video_codec=h264",
-        "video_codec_options=i-frame-interval:int=2",
-        "send_device_meta=false",
-        "send_dummy_byte=true",
-        "send_stream_meta=true",
-        "send_frame_meta=true",
-        "cleanup=true",
+        "audio=0",
+        "power_on=0",
+        "clipboard_autosync=0",
+        "video_codec_options=i-frame-interval=2",
+        "send_device_meta=0",
         "max_size=720",
         "max_fps=30",
         "video_bit_rate=1500000",
@@ -88,11 +80,25 @@ describe("Android screen capture: open", () => {
     const serverOf = (log: readonly string[]) => log.find((l) => l.includes("app_process"))!;
     const emulatorOptions = serverOf(emulator.target.log).split(" ");
     expect(emulatorOptions).not.toContain("stay_awake=true");
-    expect(emulatorOptions).toContain("control=true");
     const phoneOptions = serverOf(phone.target.log).split(" ");
     expect(phoneOptions).toContain("stay_awake=true");
-    expect(phoneOptions).toContain("control=true");
     expect(phoneOptions.filter((o) => o !== "stay_awake=true")).toEqual(emulatorOptions);
+  });
+
+  it("keeps a phone's app_process command line under 256 bytes at the largest stream settings with its key frame interval, which some Samsung codecs need", async () => {
+    // why: the server's start is refused, so the line is measured however many arguments it has.
+    const world = await setup({ device: PHONE, expectations: [push(), remove()] });
+    const largest = { bitrateKbps: 40_000, fps: 60, maxDimension: 4096 };
+    const opening = world.capture.open(PHONE, largest, new AbortController().signal);
+    await expect(drive(world.clock, opening)).rejects.toThrow(ScreenUnavailableError);
+    const server = world.target.log.find((l) => l.includes("app_process"))!;
+    // why: the bytes app_process sees in /proc/<pid>/cmdline, from `app_process` on, each argument ending in a NUL.
+    const cmdline = server.slice(server.indexOf("app_process")).split(" ");
+    const bytes = cmdline.reduce((sum, arg) => sum + Buffer.byteLength(arg) + 1, 0);
+    expect(cmdline).toContain("stay_awake=true");
+    expect(cmdline).toContain("max_size=4096");
+    expect(cmdline).toContain("video_codec_options=i-frame-interval=2");
+    expect(bytes).toBeLessThan(256);
   });
 
   it("reads no screen state and sends no wake for an emulator, even when the screen would read asleep", async () => {

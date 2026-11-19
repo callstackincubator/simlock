@@ -58,6 +58,7 @@ export {
   invalidValue,
   nonEmptyString,
   objectValidator,
+  positiveInteger,
   positiveNumber,
   stringArray,
 } from "./validation.js";
