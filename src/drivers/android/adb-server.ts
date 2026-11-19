@@ -317,6 +317,7 @@ export class AdbServerSupervisor {
             ...SCOPED_ENVIRONMENT,
             ANDROID_ADB_SERVER_PORT: String(this.#options.port),
           },
+          outlivesCaller: true,
           stdio: { file: this.#options.logPath },
         },
       );

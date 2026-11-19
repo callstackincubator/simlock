@@ -30,6 +30,7 @@ import { home } from "./test-index.js";
 const emulatorOptions = {
   env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
   killChildren: true,
+  outlivesCaller: true,
   stdio: { file: `${avdDirectory}/simlock_one/simlock.avd/emulator.log` },
 } as const;
 

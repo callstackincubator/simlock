@@ -83,6 +83,7 @@ describe("AdbServerSupervisor.start", () => {
             ANDROID_HOME: "/android-sdk",
             PATH: "/usr/bin",
           },
+          outlivesCaller: true,
           stdio: { file: logPath },
         },
       },

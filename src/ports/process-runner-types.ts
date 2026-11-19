@@ -38,6 +38,14 @@ export interface ProcessRunOptions {
    * Windows, and on Windows also the child's own children (`emulator.exe` runs qemu), never theirs.
    */
   readonly killChildren?: boolean;
+  /**
+   * why: a long-lived child the daemon starts for others to use (the emulator, Simlock's adb
+   * server) must outlive the daemon (ADR 0004, ADR 0019). Off Windows every child is detached
+   * already; on Windows only a detached child leaves Node's kill-on-exit job, which would end it
+   * with the daemon while its own children live on and hold the logon task's console open
+   * (#1759). The supervisor's daemon is not one: ending the supervisor ends it (ADR 0086 section 2).
+   */
+  readonly outlivesCaller?: boolean;
 }
 
 export type LineEnd = "newline" | "carriage-return-too";

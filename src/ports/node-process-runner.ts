@@ -118,9 +118,8 @@ export class NodeProcessRunner implements ProcessRunner {
     const child = spawnChildProcess(launch.command, launch.args, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      // why: a child that logs to a file is a long-lived one (emulator, adb server) that must outlive
-      // the daemon; on Windows only a detached child leaves Node's kill-on-exit job and console.
-      detached: process.platform !== "win32" || typeof options.stdio === "object",
+      // why: on Windows only a detached child leaves Node's kill-on-exit job (see `outlivesCaller`).
+      detached: process.platform !== "win32" || options.outlivesCaller === true,
       stdio: childStdio(options.stdio, logFd),
       // why: the daemon has no console, so on Windows a console program it starts (adb, the
       // emulator, node) would otherwise get a new, visible one.
