@@ -323,6 +323,8 @@ export interface Driver {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
       readonly except?: readonly string[];
+      /** why: the lease's label, given on a `prepare` boot made for a lease; a driver that can name its device by it does. */
+      readonly label?: string;
     },
   ): Promise<DriverDevice>;
   reclaim(

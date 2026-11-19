@@ -198,6 +198,7 @@ export function printDisabled(entries: Readonly<Record<string, string>>): string
 /** why: The calls of one slim boot: the boot, its wait, the installer poll, then the readback. */
 export function slimBootCalls(udid: string, readback: string) {
   return [
+    { match: simctl("rename", udid, driverData.name) },
     { match: simctl("boot", udid) },
     { match: simctl("bootstatus", udid, "-b") },
     { match: simctl("listapps", udid) },
@@ -229,14 +230,14 @@ export async function prepareSlimWith(
   const calls = slimBootCalls(udid, "");
   const readbackCall =
     readback === "hangs"
-      ? { hangs: true, match: calls[3]!.match }
+      ? { hangs: true, match: calls[4]!.match }
       : "stdout" in readback
-        ? { match: calls[3]!.match, result: { code: 0, stderr: "", stdout: readback.stdout } }
+        ? { match: calls[4]!.match, result: { code: 0, stderr: "", stdout: readback.stdout } }
         : {
-            match: calls[3]!.match,
+            match: calls[4]!.match,
             result: { code: readback.code, stderr: readback.stderr, stdout: "" },
           };
-  const runner = new ScriptedProcessRunner([...calls.slice(0, 3), readbackCall]);
+  const runner = new ScriptedProcessRunner([...calls.slice(0, 4), readbackCall]);
   const clock = new FakeClock();
   const onSlimmed = vi.fn<(fact: SlimmedFact) => void>();
   const onSlimSkipped = vi.fn<(fact: SlimSkippedFact) => void>();
@@ -254,7 +255,7 @@ export async function prepareSlimWith(
     prepareSlim,
   );
   if (readback === "hangs") {
-    await waitForCalls(runner, 4);
+    await waitForCalls(runner, 5);
     clock.advance(120_000);
   }
   return { onSlimSkipped, onSlimmed, result: await ready, runner };
