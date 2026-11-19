@@ -94,7 +94,12 @@ async function visitFolder(
   for (const name of names) {
     const path = `${directory}/${name}`;
     const relativePath = relative === "" ? name : `${relative}/${name}`;
-    const details = await options.filesystem.lstat(path);
+    // why: CoreSimulator writes a clone's plists atomically, so a `*.sb-*` temp file is listed and renamed away before this walk reaches it.
+    const details = await options.filesystem.lstat(path).catch((error: unknown) => {
+      if (isMissingPathError(error)) return undefined;
+      throw error;
+    });
+    if (details === undefined) continue;
     if (details.kind === "directory") {
       await visitFolder(options, path, relativePath, files);
       continue;
