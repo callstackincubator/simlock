@@ -3,6 +3,7 @@ import { expect } from "vitest";
 import { FakeSystemStats, JsonLinesLogger, MemoryLogSink } from "../../ports/index.js";
 import { CapacityCoordinator, createCapacityStrategy } from "../capacity/index.js";
 import type { MemoryPressureReader } from "../core-ports.js";
+import type { VirtualSpec } from "../domain.js";
 import type { DriverSettleResult, DriverSource } from "../driver.js";
 import { FakeDriver } from "../fake-driver.js";
 import { SerializedDecision } from "../serialized-decision.js";
@@ -61,7 +62,12 @@ interface DriverRig {
   settleSeed?: (sourceId: string, signal: AbortSignal) => Promise<DriverSettleResult>;
   listSources?: () => Promise<readonly DriverSource[]>;
   listCalls: number;
+  /** why: each call to `ensureSeed`, the verb an operator's make goes through. */
+  readonly ensures: VirtualSpec[];
+  ensureSeed?: (spec: VirtualSpec) => Promise<EnsuredSeed>;
 }
+
+type EnsuredSeed = Awaited<ReturnType<NonNullable<SettlerDriver["ensureSeed"]>>>;
 
 export interface RigOptions {
   readonly pressure?: MemoryPressureReader["current"] extends () => infer Reading ? Reading : never;
@@ -86,8 +92,8 @@ export async function settlerRig(options: RigOptions = {}) {
   );
   const disk = { freeBytes: options.freeBytes ?? THRESHOLD };
   const sink = new MemoryLogSink();
-  const ios: DriverRig = { listCalls: 0, settles: [], sources: [] };
-  const android: DriverRig = { listCalls: 0, settles: [], sources: [] };
+  const ios: DriverRig = { ensures: [], listCalls: 0, settles: [], sources: [] };
+  const android: DriverRig = { ensures: [], listCalls: 0, settles: [], sources: [] };
   const drive = (platform: "ios" | "android", rig: DriverRig, verb: boolean): SettlerDriver => ({
     platform,
     listSources: async () => {
@@ -96,6 +102,12 @@ export async function settlerRig(options: RigOptions = {}) {
     },
     ...(verb
       ? {
+          ensureSeed: async (spec) => {
+            rig.ensures.push(spec);
+            if (rig.ensureSeed !== undefined) return rig.ensureSeed(spec);
+            const sourceId = `${spec.model}-seed`;
+            return { leases: 0, settled: false, sourceId };
+          },
           settleSeed: async (sourceId, { signal }) => {
             rig.settles.push({ signal, sourceId });
             if (rig.settleSeed !== undefined) return rig.settleSeed(sourceId, signal);
@@ -177,3 +189,32 @@ export const settledResult = (sourceId: string): DriverSettleResult => ({
   sizeBytes: 1_800_000_000,
   sourceId: `${sourceId}-settled`,
 });
+
+export const iphoneSpec: VirtualSpec = {
+  model: "iPhone 17",
+  osVersion: "26.5",
+  physical: false,
+  platform: "ios",
+};
+
+/** why: the way a requester asks for a component's removal; a dry run runs every check and removes nothing. */
+export const dryRemove = (rig: SettlerRig) =>
+  rig.harness.installer.remove({
+    dryRun: true,
+    platform: "ios",
+    requesterId: "tok_admin",
+    version: "26.5",
+  });
+
+/** why: the registry record that makes the installer the owner of the preinstalled 26.5, so a removal reaches its in-use check. */
+export const ownIos = (rig: SettlerRig) =>
+  rig.harness.registry.recordComponent({
+    installedAt: 1_000,
+    platform: "ios",
+    receipt: { preinstalled: "26.5" },
+    version: "26.5",
+  });
+
+/** why: the figure core's capacity keeps for creations under way. */
+export const reserved = (rig: SettlerRig): number =>
+  rig.capacity.runningCapacity([]).global.reserved;

@@ -125,6 +125,8 @@ class SeedSettlerImpl implements SeedSettler {
       candidates,
       diskFreeBytes,
       freeBytesThreshold: this.options.diskPressure.freeBytesThreshold,
+      operator: [],
+      running: false,
       now: this.options.clock.now(),
       pressure: this.options.memoryPressure.current()?.step ?? "none",
       underWay: this.#underWay,
