@@ -264,7 +264,7 @@ class ScrcpySession {
       `scid=${this.#scidHex}`,
       // why: some Samsung codecs abort with `stack corruption detected` when app_process's command line
       // reaches about 255 bytes (https://github.com/Genymobile/scrcpy/issues/2841), so the line is kept
-      // short (ADR 0089, proposed): no log_level (the server logs at debug), `0` for false (scrcpy reads
+      // short (ADR 0089): no log_level (the server logs at debug), `0` for false (scrcpy reads
       // a boolean as true only for `true`), a codec option with no type (scrcpy assumes int), and no
       // option that restates a default. Two of those defaults are relied on, and a scrcpy upgrade must check them:
       // `control=true` (the reset below needs the channel) and `cleanup=true` (it puts a phone's

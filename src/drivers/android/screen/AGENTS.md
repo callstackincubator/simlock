@@ -20,7 +20,7 @@ What a stream does to the device:
 
 Start and stop:
 
-- The server's command line has a length budget (ADR 0089, proposed), pinned by `session.test.ts`: a new option must fit it. It relies on two scrcpy defaults it does not pass, `control=true` and `cleanup=true`; a scrcpy upgrade checks both.
+- The server's command line has a length budget (ADR 0089), pinned by `session.test.ts`: a new option must fit it. It relies on two scrcpy defaults it does not pass, `control=true` and `cleanup=true`; a scrcpy upgrade checks both.
 - No `adb forward`: the session speaks adb's host protocol through the target, so a daemon that dies leaves no listening port on the host.
 - `FAIL` on the second request (nothing listening yet), a refused connect, or a socket that closes before the server's zero byte is retried. `FAIL` on the first refuses.
 - The start budget (`START_DEADLINE_MS` in `scrcpy-link.ts`) counts from the moment the server's process started, so a phone's check before the spawn does not spend it. Each step keeps its own limit; there is no overall budget.
