@@ -22,10 +22,13 @@ import {
 } from "./test-slim.js";
 import {
   createDriver,
+  listFixture,
+  listInvocation,
   logsRoot,
   plantLaunchServices,
   seedUdid,
   sourcesSimctl,
+  spec,
 } from "./test-index.js";
 
 const sourcesSet = `${deviceRoot}/sources`;
@@ -297,6 +300,61 @@ describe("IosSimctlDriver settleSeed", () => {
         `${label}: the copy's log folder is deleted`,
       ).toBe(false);
     }
+  });
+
+  it("a settle deletes the quick seed only after a clone of it still in flight has ended", async () => {
+    const database = plantReadySeed(await memorySourceDatabase(), {
+      deviceTypeId: driverData.deviceTypeId,
+      lineage: [lineageUdid],
+      runtimeId: driverData.runtimeId,
+      udid: seedUdid,
+    });
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${copyUdid}`);
+    await plantLaunchServices(filesystem, `${sourcesSet}/${settledUdid}`);
+    const clock = new FakeClock();
+    const clockAtOldDelete: number[] = [];
+    const cloneSeed = sourcesSimctl("clone", seedUdid, "simlock-device-1", deviceRoot);
+    const runner = new ScriptedProcessRunner([
+      { match: cloneSeed, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
+      { match: simctl("boot", copyUdid) },
+      { match: simctl("bootstatus", copyUdid, "-b") },
+      { match: simctl("listapps", copyUdid) },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { hangs: true, match: cloneSeed },
+      { match: simctl("shutdown", copyUdid) },
+      {
+        match: simctl("clone", copyUdid, "simlock-seed-device-1", sourcesSet),
+        result: { code: 0, stderr: "", stdout: `${settledUdid}\n` },
+      },
+      {
+        match: sourcesSimctl("shutdown", seedUdid),
+        onSpawn: () => void clockAtOldDelete.push(clock.now()),
+      },
+      { match: sourcesSimctl("delete", seedUdid) },
+      { match: simctl("delete", copyUdid) },
+    ]);
+    const table = new FakeProcessTable();
+    const driver = await createDriver(runner, clock, filesystem, database, undefined, undefined, {
+      logsRoot,
+      processTable: table,
+    });
+    const settle = driver.settleSeed?.(quickSourceId, { signal: new AbortController().signal });
+    let lease: Promise<unknown> = Promise.resolve();
+
+    await runToEnd(settle as Promise<unknown>, clock, table, (nowMs) => {
+      // why: ten seconds in, a lease's clone of the quick seed starts, hangs, and is given up at its limit.
+      if (nowMs === 10_000) lease = driver.provision(spec).catch(() => undefined);
+      return [launchd(simlockWorld, 100, copyUdid)];
+    });
+
+    await lease;
+    await expect(settle).resolves.toMatchObject({ reason: "idle", settledAfterMs: 180_000 });
+    expect(
+      clockAtOldDelete,
+      "the quick seed was not deleted until the hung clone's process had been killed, 5 min after its 30 s limit",
+    ).toEqual([340_000]);
   });
 
   it("a settle that does not finish, or is asked of a source that is no ready quick seed, throws and leaves the rows and the quick seed as they were, with no copy", async () => {
