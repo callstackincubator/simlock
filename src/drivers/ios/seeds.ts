@@ -2,6 +2,7 @@ import { join } from "node:path";
 import {
   BootTimeoutError,
   type DriverDevice,
+  type DriverSettleResult,
   type DriverSource,
   DriverCrashError,
   type VirtualDriverDevice,
@@ -193,6 +194,13 @@ export class Seeds {
       data.lineage === undefined ? undefined : [data.udid.toUpperCase(), ...data.lineage];
     const files = lineage === undefined ? [] : await this.#recordFiles(cloneUdid, lineage);
     return { files, lineage, savedWithoutLineage: lineage === undefined };
+  }
+
+  settleSeed(
+    _sourceId: string,
+    _options: { readonly signal: AbortSignal },
+  ): Promise<DriverSettleResult> {
+    return Promise.resolve({ reason: "idle", settledAfterMs: 0, sourceId: "" });
   }
 
   async destroySource(sourceId: string): Promise<void> {

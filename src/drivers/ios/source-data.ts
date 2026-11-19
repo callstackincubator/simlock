@@ -40,9 +40,13 @@ export const iosSourceDataOwner: SqliteSchemaOwner = {
        kind TEXT NOT NULL CHECK (kind IN ('link', 'file', 'unreadable')),
        PRIMARY KEY (source_id, relative_path)
      ) STRICT;`,
+    // why: ADR 0090: the plain leases copied from a seed, whether it is a settled copy, and, on the row of a settle or of the quick seed it retires, the seed the settle replaces or was replaced by.
+    `ALTER TABLE ios_source_data ADD COLUMN lease_count INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE ios_source_data ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE ios_source_data ADD COLUMN settle_of TEXT;`,
   ],
   name: "ios-source-data",
-  version: 4,
+  version: 5,
 };
 
 export interface NewSourceRow {

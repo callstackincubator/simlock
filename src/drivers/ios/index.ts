@@ -235,6 +235,10 @@ export class IosSimctlDriver implements Driver {
       (udid) => this.#physical.osVersion(udid),
     );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
+    if (options.processTable !== undefined) {
+      this.settleSeed = (sourceId, settleOptions) =>
+        this.#seeds.settleSeed(sourceId, settleOptions);
+    }
     this.deviceTcp = createIosDeviceTcpFor(options);
   }
 
@@ -253,6 +257,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   readonly screenCapture: ScreenCapture | undefined;
+  readonly settleSeed?: NonNullable<Driver["settleSeed"]>;
   readonly input: DeviceInputFactory | undefined;
   readonly deviceTcp: DeviceTcp | undefined;
 
