@@ -20,6 +20,7 @@ What a stream does to the device:
 
 Start and stop:
 
+- The server's command line has a length budget (ADR 0089), pinned by `session.test.ts`: a new option must fit it. It relies on two scrcpy defaults it does not pass, `control=true` and `cleanup=true`; a scrcpy upgrade checks both.
 - No `adb forward`: the session speaks adb's host protocol through the target, so a daemon that dies leaves no listening port on the host.
 - `FAIL` on the second request (nothing listening yet), a refused connect, or a socket that closes before the server's zero byte is retried. `FAIL` on the first refuses.
 - The start budget (`START_DEADLINE_MS` in `scrcpy-link.ts`) counts from the moment the server's process started, so a phone's check before the spawn does not spend it. Each step keeps its own limit; there is no overall budget.
@@ -39,6 +40,8 @@ The body:
 ## Known gaps
 
 - **A fresh emulator answers its first resets slowly**, so a joiner then waits longer than the ADR's bound for a key frame.
+- **A still screen's server writes a logcat line on every reset** (`RESET_VIDEO_AFTER_MS`): with no `log_level` it logs
+  at debug (ADR 0089), and each reset writes `Display: using DisplayManager API` (tag `scrcpy`) to the device's log.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **A phone that is not charging is woken but not held awake**: stay awake does nothing without power. When its
   screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on
@@ -50,4 +53,4 @@ The body:
   passthrough `adb` while a stream is open has it replaced when the stream ends, since scrcpy writes back the value it found.
 - **A pushed jar can survive on a phone** when the version check closes after the push and stays closed through the
   close and the server never started: the `rm -f` goes through that check and is not sent. A server that started
-  deletes its own jar (`cleanup=true`). The jar's digest is not checked at push either.
+  deletes its own jar (scrcpy's default `cleanup=true`, which the command line relies on). The jar's digest is not checked at push either.
