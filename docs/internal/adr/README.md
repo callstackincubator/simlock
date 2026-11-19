@@ -96,7 +96,7 @@ the status is stale.
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9; §1 and §2 narrowed by 0083 |
-| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4; §5 narrowed by 0062 |
+| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4; §5 narrowed by 0062; §1 and §2 narrowed by 0090 |
 | [0062](0062-the-warm-pool-learns-a-baseline-after-repeated-leases-and-follows-its-newest-version.md) | The warm pool learns a baseline after repeated leases, and follows its newest version | Accepted; narrows 0038 §1, §4, §5, §8, 0050 and 0061 §5 |
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md) | A tunnel reaches an iOS simulator's ports and an emulator's adb port | Accepted; narrows 0054 §2, §5, §6, 0001 §4 and 0005 Non-goals |
@@ -121,4 +121,4 @@ the status is stale.
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
-| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Proposed; narrows 0061 §1 and §2 |
+| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted — not yet implemented; narrows 0061 §1 and §2 |
