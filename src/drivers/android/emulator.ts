@@ -30,6 +30,8 @@ export const COLD_BOOT_ESTIMATE_MS = 70_000;
 const PORT_POLL_INTERVAL_MS = 2_000;
 // why: how long an emulator that was asked to stop may take to exit, whatever the boot deadline is.
 const EMULATOR_EXIT_TIMEOUT_MS = 180_000;
+// why: how long the process Node holds for an emulator may outlive the emulator once adb stopped listing it (see `shutdown`); the `emulator -kill` helpers sleep 20 s.
+const WRAPPER_GRACE_MS = 30_000;
 // why: After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
 // already attached, short enough that a lost announcement costs seconds, not the whole
@@ -145,8 +147,7 @@ export class Emulator {
     const startedAt = this.#options.clock.now();
     let remaining = serials;
     while (remaining.length > 0) {
-      const attached = (await this.#options.adbTools.scanSerials()).settledSerials;
-      remaining = remaining.filter((serial) => attached.includes(serial));
+      remaining = await this.#stillAttached(remaining);
       if (remaining.length === 0) return;
       if (this.#options.clock.now() - startedAt >= EMULATOR_EXIT_TIMEOUT_MS) {
         throw new DriverCrashError(
@@ -155,6 +156,15 @@ export class Emulator {
       }
       await this.#options.adbTools.delay(PORT_POLL_INTERVAL_MS);
     }
+  }
+
+  async #serialLeft(data: AndroidDriverData): Promise<boolean> {
+    return (await this.#stillAttached([data.serial])).length === 0;
+  }
+
+  async #stillAttached(serials: string[]): Promise<string[]> {
+    const attached = (await this.#options.adbTools.scanSerials()).settledSerials;
+    return serials.filter((serial) => attached.includes(serial));
   }
 
   #logPath(data: AndroidDriverData): string {
@@ -326,17 +336,30 @@ export class Emulator {
   }
 
   async shutdown(data: AndroidDriverData, handle: ProcessHandle | undefined): Promise<void> {
+    let killed = false;
     if (data.port > 0 && (await this.#options.ownership.serialIsOwn(data))) {
       await this.#options.processRunner.run(this.#options.adb, ["-s", data.serial, "emu", "kill"], {
         env: this.#options.adbTools.env(),
         timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
+      killed = true;
     }
     if (handle === undefined) {
+      // why: an emulator of an earlier daemon has no handle to wait on, and adb lists its serial for
+      // a moment after the kill. The `destroy` that follows asks every listed serial for its AVD
+      // path, and one that no longer answers refuses the delete (#1759).
+      if (killed) await this.#waitForEmulatorsToExit(data, [data.serial]);
       return;
     }
 
-    const exited = await this.waitForExit(handle, EMULATOR_EXIT_TIMEOUT_MS);
+    // why: on Windows the handle is a `conhost.exe` wrapper (#1759), which lives while any process
+    // on its console does: the `emulator -kill` helpers for 20 s after qemu is gone, and for as long
+    // as another emulator runs, the `netsimd` qemu started. So a handle still running after the
+    // grace, with adb no longer listing the killed emulator, is the wrapper alone, and is ended.
+    let exited = await this.waitForExit(handle, WRAPPER_GRACE_MS);
+    if (!exited && !(killed && (await this.#serialLeft(data)))) {
+      exited = await this.waitForExit(handle, EMULATOR_EXIT_TIMEOUT_MS - WRAPPER_GRACE_MS);
+    }
     if (!exited) {
       handle.kill("SIGKILL");
       await this.waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
