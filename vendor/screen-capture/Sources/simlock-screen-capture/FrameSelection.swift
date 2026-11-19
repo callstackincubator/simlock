@@ -222,7 +222,7 @@ final class CopyStage: @unchecked Sendable {
     }
 }
 
-/// Says whether a seed is news, so the callbacks and `SeedWatch` notice each composite once.
+/// Says whether a seed is news, so the callbacks notice each composite once.
 struct SeedGate {
     private var lastSeeds: [ObjectIdentifier: UInt32] = [:]
 
@@ -236,76 +236,5 @@ struct SeedGate {
     /// Forgets every seed, so the next one of each key is news (the framebuffer was rewired).
     mutating func reset() {
         lastSeeds.removeAll()
-    }
-}
-
-/// Reads the watched surface's seed every millisecond, beside SimulatorKit's frame callback, so a
-/// composite the callback reports late is still noticed and timed when it appeared.
-final class SeedWatch: @unchecked Sendable {
-    private let queue: DispatchQueue
-    private let readSeed: (IOSurface) -> UInt32
-    private let now: () -> UInt64
-    private let onSeed: (IOSurface, UInt32, UInt64) -> Void
-    private let lock = NSLock()
-    private var surface: IOSurface?
-    private var lastRead: UInt32?
-    private var stopped = false
-    private var timer: DispatchSourceTimer?
-
-    init(
-        queue: DispatchQueue,
-        readSeed: @escaping (IOSurface) -> UInt32 = IOSurfaceGetSeed,
-        now: @escaping () -> UInt64,
-        onSeed: @escaping (IOSurface, UInt32, UInt64) -> Void
-    ) {
-        self.queue = queue
-        self.readSeed = readSeed
-        self.now = now
-        self.onSeed = onSeed
-    }
-
-    /// Sets the surface `tick` reads. The same surface again keeps the seed already read.
-    func watch(_ surface: IOSurface?) {
-        lock.lock()
-        defer { lock.unlock() }
-        if surface !== self.surface { lastRead = nil }
-        self.surface = surface
-    }
-
-    func start() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard timer == nil else { return }
-        stopped = false
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(500))
-        timer.setEventHandler { [weak self] in self?.tick() }
-        self.timer = timer
-        timer.resume()
-    }
-
-    func stop() {
-        lock.lock()
-        stopped = true
-        timer?.cancel()
-        timer = nil
-        surface = nil
-        lastRead = nil
-        lock.unlock()
-    }
-
-    /// Calls `onSeed` with the time it read the seed when the watched surface's seed differs from
-    /// the last one read.
-    func tick() {
-        lock.lock()
-        guard !stopped, let surface else {
-            lock.unlock()
-            return
-        }
-        let seed = readSeed(surface)
-        let changed = lastRead != seed
-        lastRead = seed
-        lock.unlock()
-        if changed { onSeed(surface, seed, now()) }
     }
 }
