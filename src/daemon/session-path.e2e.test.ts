@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -145,9 +146,7 @@ describe("the session path", () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
     clearInterval(pump);
     pumped = undefined;
-    await Promise.all(
-      directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
-    );
+    await Promise.all(directories.splice(0).map((directory) => removeDirectory(directory)));
   });
 
   async function keyServer(key: TestKey): Promise<string> {

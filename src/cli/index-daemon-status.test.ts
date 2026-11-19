@@ -477,6 +477,38 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stderr).not.toContain("agent-device");
   });
 
+  it("simlock doctor writes Warning [<module>] <message> <remedy> for a module-advisory finding, escaped, beside a module-unavailable line", async () => {
+    const advisory = {
+      kind: "module-advisory" as const,
+      message: "fseventsd uses 28.0 GB\u001b[31m",
+      module: "fseventsd",
+      remedy: "Restart it.",
+    };
+    const unavailable = {
+      kind: "module-unavailable" as const,
+      message: "needs tmux",
+      module: "other-mod",
+      remedy: "install tmux",
+    };
+    const run = async (findings: readonly unknown[]) => {
+      const output = outputCapture();
+      await runCli(
+        ["doctor"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
+        }),
+      );
+      return output.stderr.split("\n").filter((line) => line !== "" && !line.startsWith("{"));
+    };
+
+    const alone = await run([advisory]);
+    expect(alone).toHaveLength(1);
+    expect(alone[0]).toMatch(/^Warning \[fseventsd\] fseventsd uses 28\.0 GB\S* Restart it\.$/);
+    expect(alone[0]).not.toContain("\u001b");
+    expect(await run([advisory, unavailable])).toHaveLength(2);
+  });
+
   it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];

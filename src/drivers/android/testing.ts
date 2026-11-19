@@ -17,6 +17,7 @@ export {
   answeringAvdPath,
   simlockHome,
   instanceId,
+  privateAliasOf,
   avdDirectory,
   binaries,
   ok,
@@ -66,4 +67,4 @@ export {
   copyPathExpectation,
 } from "./test-emulator-host.js";
 
-export { locateSdk, type AndroidSdkPaths } from "./sdk-paths.js";
+export { locateSdk, withWindowsExtension, type AndroidSdkPaths } from "./sdk-paths.js";

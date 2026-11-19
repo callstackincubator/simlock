@@ -55,7 +55,12 @@ export function importSpecifiers(contents: string): string[] {
  */
 export function normalizeSpecifier(fileDir: string, specifier: string, root = srcDir): string {
   if (!specifier.startsWith(".")) return specifier;
-  return posix.relative(root, posix.normalize(posix.join(fileDir, specifier)));
+  return posix.relative(slashed(root), posix.normalize(posix.join(slashed(fileDir), specifier)));
+}
+
+// why: a path from `node:path` has `\` on Windows, and the `posix` calls here read only `/`.
+function slashed(path: string): string {
+  return path.replaceAll("\\", "/");
 }
 
 /** Whether a normalized specifier names a module inside the top-level directory `dir` of the
@@ -87,7 +92,7 @@ export interface ModuleImport {
 export function importsOf(files: readonly string[], root = srcDir): ModuleImport[] {
   return files.flatMap((filePath) =>
     importSpecifiers(stripComments(readFileSync(filePath, "utf8"))).map((specifier) => ({
-      file: posix.relative(root, filePath),
+      file: posix.relative(slashed(root), slashed(filePath)),
       normalized: normalizeSpecifier(dirname(filePath), specifier, root),
       specifier,
     })),

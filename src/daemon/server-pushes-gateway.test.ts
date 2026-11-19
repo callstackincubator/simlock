@@ -5,7 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { testConfig } from "../core/testing.js";
 import { FleetLeaseIndex, GatewayOwnerRoutedFacts } from "../gateway/index.js";
-import { FakeClock, NodeFilesystem, NodeIpcTransport, NoopLogger } from "../ports/index.js";
+import {
+  FakeClock,
+  NodeFilesystem,
+  NodeIpcTransport,
+  NoopLogger,
+  resolveDaemonSocketPath,
+} from "../ports/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import type { ContractDispatcher } from "./dispatch.js";
 import { DaemonServer } from "./server.js";
@@ -62,7 +68,7 @@ async function gatewayHarness() {
       return { leaseIds: released.map((entry) => entry.gatewayLeaseId), requestIds: [] };
     },
   } as unknown as ContractDispatcher;
-  const socketPath = join(directory, "gateway.sock");
+  const socketPath = resolveDaemonSocketPath(directory);
   const daemon = new DaemonServer({
     clock,
     config: testConfig({}, "gateway"),

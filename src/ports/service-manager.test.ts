@@ -107,84 +107,92 @@ async function installed(
 }
 
 describe("LaunchdServiceManager (#830)", () => {
-  it("launchd reads the plist install wrote: arguments, saved variables, service keys and log paths", async () => {
-    const saved = {
-      SIMLOCK_DRIVERS_MODULE: "/x/drivers.js",
-      PATH: "/usr/bin:/opt/bin&sbin:/odd<dir>",
-      ANDROID_HOME: "/sdk",
-      ANDROID_SDK_ROOT: "/sdk",
-      ANDROID_AVD_HOME: "/avd",
-      ANDROID_USER_HOME: "/auser",
-      ANDROID_PREFS_ROOT: "/aprefs",
-      ANDROID_SDK_HOME: "/ahome",
-      JAVA_HOME: "/jdk",
-      DEVELOPER_DIR: "/Xcode/Developer",
-    };
-    const cases = [
-      {
-        label: "worker, every saved variable set, secrets present in the shell",
-        role: "worker" as const,
-        env: { ...saved, SIMLOCK_ADMIN_TOKEN: "secret", SIMLOCK_AGENT_ID: "agent" },
-        arguments: ["/opt/node/bin/node", "/opt/simlock/dist/daemon/main.js"],
-        variables: { SIMLOCK_HOME: root, ...saved },
-        logPath: `${root}/daemon.log`,
-      },
-      {
-        label: "gateway, no variable set",
-        role: "gateway" as const,
-        env: {},
-        arguments: ["/opt/node/bin/node", "/opt/simlock/dist/daemon/main.js", "--gateway"],
-        variables: { SIMLOCK_HOME: root },
-        logPath: `${root}/gateway/daemon.log`,
-      },
-    ];
+  // why: launchd and systemd are not on Windows, and these files are read back by `/` path.
+  it.skipIf(process.platform === "win32")(
+    "launchd reads the plist install wrote: arguments, saved variables, service keys and log paths",
+    async () => {
+      const saved = {
+        SIMLOCK_DRIVERS_MODULE: "/x/drivers.js",
+        PATH: "/usr/bin:/opt/bin&sbin:/odd<dir>",
+        ANDROID_HOME: "/sdk",
+        ANDROID_SDK_ROOT: "/sdk",
+        ANDROID_AVD_HOME: "/avd",
+        ANDROID_USER_HOME: "/auser",
+        ANDROID_PREFS_ROOT: "/aprefs",
+        ANDROID_SDK_HOME: "/ahome",
+        JAVA_HOME: "/jdk",
+        DEVELOPER_DIR: "/Xcode/Developer",
+      };
+      const cases = [
+        {
+          label: "worker, every saved variable set, secrets present in the shell",
+          role: "worker" as const,
+          env: { ...saved, SIMLOCK_ADMIN_TOKEN: "secret", SIMLOCK_AGENT_ID: "agent" },
+          arguments: ["/opt/node/bin/node", "/opt/simlock/dist/daemon/main.js"],
+          variables: { SIMLOCK_HOME: root, ...saved },
+          logPath: `${root}/daemon.log`,
+        },
+        {
+          label: "gateway, no variable set",
+          role: "gateway" as const,
+          env: {},
+          arguments: ["/opt/node/bin/node", "/opt/simlock/dist/daemon/main.js", "--gateway"],
+          variables: { SIMLOCK_HOME: root },
+          logPath: `${root}/gateway/daemon.log`,
+        },
+      ];
 
-    for (const testCase of cases) {
-      const definition = definitionFor(testCase.role, testCase.env);
-      const { plist, filesystem } = await installed(definition);
-      const raw = await filesystem.readFile(definition.path);
-      if (testCase.role === "worker") {
-        expect(raw, `${testCase.label}: XML-escaped`).toContain(
-          "/usr/bin:/opt/bin&amp;sbin:/odd&lt;dir&gt;",
-        );
+      for (const testCase of cases) {
+        const definition = definitionFor(testCase.role, testCase.env);
+        const { plist, filesystem } = await installed(definition);
+        const raw = await filesystem.readFile(definition.path);
+        if (testCase.role === "worker") {
+          expect(raw, `${testCase.label}: XML-escaped`).toContain(
+            "/usr/bin:/opt/bin&amp;sbin:/odd&lt;dir&gt;",
+          );
+        }
+        expect(plist, testCase.label).toEqual({
+          Label: definition.name,
+          ProgramArguments: testCase.arguments,
+          EnvironmentVariables: testCase.variables,
+          RunAtLoad: true,
+          KeepAlive: { SuccessfulExit: false },
+          AbandonProcessGroup: true,
+          ExitTimeOut: 300,
+          StandardOutPath: testCase.logPath,
+          StandardErrorPath: testCase.logPath,
+        });
       }
-      expect(plist, testCase.label).toEqual({
-        Label: definition.name,
-        ProgramArguments: testCase.arguments,
-        EnvironmentVariables: testCase.variables,
-        RunAtLoad: true,
-        KeepAlive: { SuccessfulExit: false },
-        AbandonProcessGroup: true,
-        ExitTimeOut: 300,
-        StandardOutPath: testCase.logPath,
-        StandardErrorPath: testCase.logPath,
-      });
-    }
-  });
+    },
+  );
 
-  it("install creates daemon.log at 0600 in a data directory it creates owner-only when they are missing, and keeps a log that exists", async () => {
-    // why: a directory the memory filesystem creates without a mode is already 0700, so the
-    // mode install asks for is read from the call it makes, not from the directory.
-    class RecordingFilesystem extends MemoryFilesystem {
-      readonly directories: Array<{ path: string; mode: number | undefined }> = [];
-      override async mkdirp(path: string, options?: { readonly mode?: number }): Promise<void> {
-        this.directories.push({ path, mode: options?.mode });
-        await super.mkdirp(path, options);
+  // why: launchd and systemd are not on Windows, and these files are read back by `/` path.
+  it.skipIf(process.platform === "win32")(
+    "install creates daemon.log at 0600 in a data directory it creates owner-only when they are missing, and keeps a log that exists",
+    async () => {
+      // why: a directory the memory filesystem creates without a mode is already 0700, so the
+      // mode install asks for is read from the call it makes, not from the directory.
+      class RecordingFilesystem extends MemoryFilesystem {
+        readonly directories: Array<{ path: string; mode: number | undefined }> = [];
+        override async mkdirp(path: string, options?: { readonly mode?: number }): Promise<void> {
+          this.directories.push({ path, mode: options?.mode });
+          await super.mkdirp(path, options);
+        }
       }
-    }
-    const definition = definitionFor("worker");
-    const recording = new RecordingFilesystem();
-    const created = await installed(definition, recording);
-    expect((await created.filesystem.stat(definition.logPath)).mode).toBe(0o600);
-    expect(recording.directories).toContainEqual({ path: root, mode: 0o700 });
+      const definition = definitionFor("worker");
+      const recording = new RecordingFilesystem();
+      const created = await installed(definition, recording);
+      expect((await created.filesystem.stat(definition.logPath)).mode).toBe(0o600);
+      expect(recording.directories).toContainEqual({ path: root, mode: 0o700 });
 
-    const existing = new MemoryFilesystem();
-    await existing.mkdirp(root);
-    await existing.writeFileAtomic(definition.logPath, "earlier line\n", { mode: 0o640 });
-    await installed(definition, existing);
-    expect(await existing.readFile(definition.logPath)).toBe("earlier line\n");
-    expect((await existing.stat(definition.logPath)).mode).toBe(0o640);
-  });
+      const existing = new MemoryFilesystem();
+      await existing.mkdirp(root);
+      await existing.writeFileAtomic(definition.logPath, "earlier line\n", { mode: 0o640 });
+      await installed(definition, existing);
+      expect(await existing.readFile(definition.logPath)).toBe("earlier line\n");
+      expect((await existing.stat(definition.logPath)).mode).toBe(0o640);
+    },
+  );
 
   it("daemon install on an installed service rewrites the plist and loads it again", async () => {
     const cases = [
@@ -714,12 +722,16 @@ describe("SystemdServiceManager (#832)", () => {
     expect(await stuck.exists(definition.path)).toBe(true);
   }
 
-  it("an operator on Linux installs, starts and removes a systemd user unit", async () => {
-    await checkUnitText();
-    checkUnitPath();
-    await checkStart();
-    await checkInstallFailures();
-    await checkStates();
-    await checkUninstall();
-  });
+  // why: launchd and systemd are not on Windows, and these files are read back by `/` path.
+  it.skipIf(process.platform === "win32")(
+    "an operator on Linux installs, starts and removes a systemd user unit",
+    async () => {
+      await checkUnitText();
+      checkUnitPath();
+      await checkStart();
+      await checkInstallFailures();
+      await checkStates();
+      await checkUninstall();
+    },
+  );
 });

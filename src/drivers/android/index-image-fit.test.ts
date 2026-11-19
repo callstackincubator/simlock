@@ -96,9 +96,9 @@ live(
 
 describe("AndroidDriver image fit", () => {
   describe("seeds and copies", () => {
-    const sources = `${avdDirectory}/sources`;
-    const copyHome = `${avdDirectory}/simlock_one`;
-    const seedHome = `${sources}/seed_two`;
+    const sources = join(avdDirectory, "sources");
+    const copyHome = join(avdDirectory, "simlock_one");
+    const seedHome = join(sources, "seed_two");
     async function seedHarness(
       expectations: readonly ScriptedProcessExpectation[],
       options: {
@@ -194,11 +194,11 @@ describe("AndroidDriver image fit", () => {
         deviceId: "simlock_one",
         driverData: { avdHome: copyHome, avdName: "simlock" },
       });
-      await expect(harness.filesystem.readFile(`${copyHome}/simlock.avd/config.ini`)).resolves.toBe(
-        "hw.ramSize=2048\nsimlock.mark=three\n",
-      );
-      await expect(harness.filesystem.readFile(`${copyHome}/simlock.ini`)).resolves.toBe(
-        `avd.ini.encoding=UTF-8\npath=${copyHome}/simlock.avd\ntarget=android-34\n`,
+      await expect(
+        harness.filesystem.readFile(join(copyHome, "simlock.avd", "config.ini")),
+      ).resolves.toBe("hw.ramSize=2048\nsimlock.mark=three\n");
+      await expect(harness.filesystem.readFile(join(copyHome, "simlock.ini"))).resolves.toBe(
+        `avd.ini.encoding=UTF-8\npath=${join(copyHome, "simlock.avd")}\ntarget=android-34\n`,
       );
       await expect(harness.driver.listSources()).resolves.toMatchObject([
         {
@@ -264,7 +264,7 @@ describe("AndroidDriver image fit", () => {
     });
 
     describe("saveSource", () => {
-      const savedHome = `${sources}/baseline_four`;
+      const savedHome = join(sources, "baseline_four");
       const serial = "emulator-5586";
       const config =
         "hw.device.name=pixel_5\nimage.sysdir.1=system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize=2048\n";
@@ -292,7 +292,7 @@ describe("AndroidDriver image fit", () => {
       const probe = processResult(
         binaries.adb,
         ["-s", serial, "emu", "avd", "path"],
-        `${copyHome}/simlock.avd\r\nOK\r\n`,
+        `${join(copyHome, "simlock.avd")}\r\nOK\r\n`,
       );
       const savingSteps = [
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
@@ -313,14 +313,19 @@ describe("AndroidDriver image fit", () => {
         );
         const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
         await harness.driver.saveSource({ ...ready, physical: false as const });
-        await harness.filesystem.writeFileAtomic(`${savedHome}/simlock.avd/marker.txt`, "saved");
+        await harness.filesystem.writeFileAtomic(
+          join(savedHome, "simlock.avd", "marker.txt"),
+          "saved",
+        );
         const callsBefore = harness.runner.calls.length;
 
         const copy = await harness.driver.provision(harness.spec, { source: "baseline_four" });
 
         expect(copy.deviceId).toBe("simlock_five");
         await expect(
-          harness.filesystem.readFile(`${avdDirectory}/simlock_five/simlock.avd/marker.txt`),
+          harness.filesystem.readFile(
+            join(avdDirectory, "simlock_five", "simlock.avd", "marker.txt"),
+          ),
         ).resolves.toBe("saved");
         expect(harness.runner.calls).toHaveLength(callsBefore + 1);
 
@@ -330,15 +335,17 @@ describe("AndroidDriver image fit", () => {
         ).rejects.toThrow(
           "source baseline_four is stale: system image system-images;android-34;google_apis;arm64-v8a is not installed",
         );
-        expect(await harness.filesystem.exists(`${avdDirectory}/simlock_six`)).toBe(false);
+        expect(await harness.filesystem.exists(join(avdDirectory, "simlock_six"))).toBe(false);
       });
 
       it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
         const kept = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
-          expect(await harness.filesystem.exists(`${savedHome}/simlock.avd/config.ini`)).toBe(true);
-          await expect(harness.filesystem.readFile(`${savedHome}/simlock.ini`)).resolves.toContain(
-            `path=${savedHome}/simlock.avd`,
-          );
+          expect(
+            await harness.filesystem.exists(join(savedHome, "simlock.avd", "config.ini")),
+          ).toBe(true);
+          await expect(
+            harness.filesystem.readFile(join(savedHome, "simlock.ini")),
+          ).resolves.toContain(`path=${join(savedHome, "simlock.avd")}`);
           expect(await harness.filesystem.exists(copyHome)).toBe(true);
           const listed = await harness.driver.listSources();
           expect(listed.find((source) => source.id === "baseline_four")).toMatchObject({
@@ -399,7 +406,7 @@ describe("AndroidDriver image fit", () => {
             processResult(
               binaries.adb,
               ["-s", serial, "emu", "avd", "path"],
-              `${copyHome}/simlock.avd\r\nOK\r\n`,
+              `${join(copyHome, "simlock.avd")}\r\nOK\r\n`,
             ),
             processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
             ...sourceBoot(),
@@ -489,7 +496,7 @@ describe("AndroidDriver image fit", () => {
     });
 
     describe("saveSource failures", () => {
-      const savedHome = `${sources}/baseline_four`;
+      const savedHome = join(sources, "baseline_four");
       const serial = "emulator-5586";
       const config =
         "hw.device.name=pixel_5\nimage.sysdir.1=system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize=2048\n";
@@ -498,7 +505,7 @@ describe("AndroidDriver image fit", () => {
         ["-version"],
         "Android emulator version 36.1.9",
       );
-      const probe = (path = `${copyHome}/simlock.avd`) =>
+      const probe = (path = join(copyHome, "simlock.avd")) =>
         processResult(binaries.adb, ["-s", serial, "emu", "avd", "path"], `${path}\r\nOK\r\n`);
       const poweredOff = [
         version,
@@ -511,7 +518,7 @@ describe("AndroidDriver image fit", () => {
       it("deletes the source's folder and row and throws when the ownership check fails, the copy fails or the boot snapshot is not saved, leaving the device as it was", async () => {
         const cases = [
           {
-            expectations: [version, probe(`${avdDirectory}/other.avd`)],
+            expectations: [version, probe(join(avdDirectory, "other.avd"))],
             message: "emulator-5586 is not its emulator",
             sent: false,
           },

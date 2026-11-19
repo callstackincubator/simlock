@@ -62,7 +62,7 @@ describe("the shared daemon test rigs", { timeout: 30_000 }, () => {
           vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 10_000 }),
         ),
     );
-  });
+  }, 30_000);
 
   it("start their daemon on another port when another listener takes the port they picked before the daemon binds it", async () => {
     const rigs: Record<string, () => Promise<number>> = {

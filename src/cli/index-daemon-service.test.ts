@@ -595,7 +595,7 @@ describe("CLI: a start through a service that fails (#830)", () => {
           },
         );
         // why: `settle` waits one timer tick, about 15 ms on Windows, so the clock moves in whole seconds to keep the 20 s deadline within a few hundred ticks.
-        for (let tick = 0; tick < 40 && !settled; tick += 1) {
+        for (let tick = 0; tick < 25 && !settled; tick += 1) {
           clock.advance(1_000);
           await settle();
           await settle();

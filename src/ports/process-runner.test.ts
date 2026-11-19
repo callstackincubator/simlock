@@ -724,10 +724,6 @@ describe("NodeProcessRunner", () => {
       }),
       answer: await runner.run(process.execPath, ["-e", echo], { input: '{"a":1}\n' }),
       exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], { input: "{}\n" }),
-      killedFromOutside: await runner.run(process.execPath, [
-        "-e",
-        "process.kill(process.pid, 'SIGKILL')",
-      ]),
       timeout: await runner.run(process.execPath, ["-e", lingers], { timeoutMs: 100 }),
       tooMuchOutput: await runner.run(
         process.execPath,
@@ -742,8 +738,15 @@ describe("NodeProcessRunner", () => {
     expect(outcomes.timeout).toMatchObject({ code: null, endedBy: "timeout" });
     expect(outcomes.tooMuchOutput).toMatchObject({ code: null, endedBy: "output-limit" });
     expect(outcomes.aborted).toMatchObject({ code: null, endedBy: "aborted" });
-    expect(outcomes.killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
-    expect(outcomes.killedFromOutside.endedBy).toBeUndefined();
+    // why: Windows has no signals, so a process that kills itself there exits with code 1.
+    if (process.platform !== "win32") {
+      const killedFromOutside = await runner.run(process.execPath, [
+        "-e",
+        "process.kill(process.pid, 'SIGKILL')",
+      ]);
+      expect(killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
+      expect(killedFromOutside.endedBy).toBeUndefined();
+    }
     await expect(
       runner.run("/nonexistent/simlock-policy", [], { input: "{}\n" }),
     ).rejects.toBeInstanceOf(ProcessSpawnError);
