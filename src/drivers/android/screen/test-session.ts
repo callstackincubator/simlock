@@ -284,10 +284,9 @@ export function push(
   };
 }
 
-// why: a phone's server command carries one more option (stay_awake) than an emulator's 23 arguments.
 export function shell(
   extra: Partial<ScriptedProcessExpectation> = {},
-  options = 23,
+  options = 16,
 ): ScriptedProcessExpectation {
   return {
     hangs: true,
@@ -341,7 +340,8 @@ export async function setup(
   const target = new FakeTarget(
     phone ? PHONE_SERIAL : SERIAL,
     clock,
-    options.expectations ?? [push(), shell({}, phone ? 24 : 23), remove()],
+    // why: the physical launch adds exec -a sl and stay_awake and drops log_level.
+    options.expectations ?? [push(), shell({}, phone ? 19 : 16), remove()],
     server,
   );
   const scripted = { power: options.power, refuses: options.refuses, wake: options.wake };

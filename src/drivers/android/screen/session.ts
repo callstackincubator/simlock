@@ -257,27 +257,24 @@ class ScrcpySession {
     const shell = await this.#target.spawn([
       "shell",
       `CLASSPATH=${this.#devicePath}`,
+      // why: some Samsung devices abort in CCodec on long app_process launches. Keep the
+      // physical-device argv under 256 bytes by giving app_process a shorter name with exec -a.
+      ...(this.#isPhone ? ["exec", "-a", "sl"] : []),
       "app_process",
       "/",
       "com.genymobile.scrcpy.Server",
       SCRCPY_SERVER_VERSION,
       `scid=${this.#scidHex}`,
-      "log_level=info",
+      // why: phones use scrcpy's default debug level to save argument bytes.
+      ...(this.#isPhone ? [] : ["log_level=info"]),
       "tunnel_forward=true",
-      "video=true",
       "audio=false",
-      "control=true",
       // why: with a control channel scrcpy would power the screen on and sync the clipboard; a stream changes no device setting.
       "power_on=false",
       "clipboard_autosync=false",
-      "video_codec=h264",
       // why: a moving screen then rarely needs the reset that bounds a still one's key frames.
-      "video_codec_options=i-frame-interval:int=2",
+      "video_codec_options=i-frame-interval=2",
       "send_device_meta=false",
-      "send_dummy_byte=true",
-      "send_stream_meta=true",
-      "send_frame_meta=true",
-      "cleanup=true",
       // why: scrcpy puts the phone's stay-awake setting back when the server ends (its clean-up
       // process), and needs no controller for it; an emulator's screen is not held.
       ...(this.#isPhone ? ["stay_awake=true"] : []),
@@ -485,7 +482,7 @@ class ScrcpySession {
       await this.#exitsWithin(shell, SHELL_EXIT_GRACE_MS);
     }
     if (this.#pushed) {
-      // why: with cleanup=true the server unlinks its own jar as it starts, so this only matters for
+      // why: scrcpy unlinks its own jar by default as it starts, so this only matters for
       // a server that never got that far; it runs anyway because that case is not visible from here.
       await this.#target
         .run(["shell", "rm", "-f", this.#devicePath], REMOVE_TIMEOUT_MS)

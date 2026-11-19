@@ -245,7 +245,7 @@ class CaptureRoutingRunner implements ProcessRunner {
     if (line.includes("dumpsys power")) {
       return endedHandle(this.#nextPid++, "  mWakefulness=Awake\n");
     }
-    if (/shell CLASSPATH=\S*app_process/.test(line)) {
+    if (rest.includes("shell") && rest.includes("app_process")) {
       return hangingHandle(this.#nextPid++);
     }
     return endedHandle(this.#nextPid++, "");

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SCREEN_FRAME_TAG, ScreenUnavailableError } from "../../../core/index.js";
+import { streamModule } from "../../../stream/index.js";
 
 import { CLOSE_DEADLINE_MS, CONNECT_RETRY_MS, START_DEADLINE_MS } from "./session.js";
 import {
@@ -39,18 +40,11 @@ describe("Android screen capture: open", () => {
         "scid=1234abcd",
         "log_level=info",
         "tunnel_forward=true",
-        "video=true",
         "audio=false",
-        "control=true",
         "power_on=false",
         "clipboard_autosync=false",
-        "video_codec=h264",
-        "video_codec_options=i-frame-interval:int=2",
+        "video_codec_options=i-frame-interval=2",
         "send_device_meta=false",
-        "send_dummy_byte=true",
-        "send_stream_meta=true",
-        "send_frame_meta=true",
-        "cleanup=true",
         "max_size=720",
         "max_fps=30",
         "video_bit_rate=1500000",
@@ -79,20 +73,56 @@ describe("Android screen capture: open", () => {
     expect(world.other.connects).toEqual([]);
   });
 
-  it("adds stay_awake=true to a phone's server options and to nothing of an emulator's", async () => {
+  it("keeps a phone's server arguments below 256 bytes with stay-awake and the two-second encoder interval", async () => {
     const emulator = await setup();
     await opened(emulator);
     const phone = await setup({ device: PHONE });
-    const opening = phone.capture.open(PHONE, SETTINGS, new AbortController().signal);
+    const settings = { bitrateKbps: 40_000, fps: 60, maxDimension: 4096 };
+    // why: the widest configured values exercise the longest argv, so this test must follow the bounds.
+    const validate = streamModule.config.validator;
+    expect(validate(settings, "stream", () => undefined)).toEqual(settings);
+    for (const [key, max] of Object.entries(settings)) {
+      expect(() => validate({ ...settings, [key]: max + 1 }, "stream", () => undefined)).toThrow(
+        `Invalid config value for "stream.${key}"`,
+      );
+    }
+    const opening = phone.capture.open(PHONE, settings, new AbortController().signal);
     await drive(phone.clock, waitThenStart(phone.target, opening));
     const serverOf = (log: readonly string[]) => log.find((l) => l.includes("app_process"))!;
     const emulatorOptions = serverOf(emulator.target.log).split(" ");
     expect(emulatorOptions).not.toContain("stay_awake=true");
-    expect(emulatorOptions).toContain("control=true");
     const phoneOptions = serverOf(phone.target.log).split(" ");
-    expect(phoneOptions).toContain("stay_awake=true");
-    expect(phoneOptions).toContain("control=true");
-    expect(phoneOptions.filter((o) => o !== "stay_awake=true")).toEqual(emulatorOptions);
+    const appProcess = phoneOptions.indexOf("app_process");
+    // why: exec's -a changes the executable name stored in Android's NUL-separated argument list.
+    const argv0 =
+      phoneOptions[appProcess - 2] === "-a" ? phoneOptions[appProcess - 1] : "app_process";
+    const argv = [argv0, ...phoneOptions.slice(appProcess + 1)];
+    expect(
+      Buffer.byteLength(argv.join("\0")) + 1,
+      "physical scrcpy argv must fit in 255 bytes",
+    ).toBeLessThan(256);
+    expect(phoneOptions).toEqual([
+      "shell",
+      `CLASSPATH=${DEVICE_JAR}`,
+      "exec",
+      "-a",
+      "sl",
+      "app_process",
+      "/",
+      "com.genymobile.scrcpy.Server",
+      "5.0.1",
+      "scid=1234abcd",
+      "tunnel_forward=true",
+      "audio=false",
+      "power_on=false",
+      "clipboard_autosync=false",
+      "video_codec_options=i-frame-interval=2",
+      "send_device_meta=false",
+      "stay_awake=true",
+      "max_size=4096",
+      "max_fps=60",
+      "video_bit_rate=40000000",
+    ]);
   });
 
   it("reads no screen state and sends no wake for an emulator, even when the screen would read asleep", async () => {

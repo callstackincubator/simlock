@@ -38,6 +38,10 @@ The body:
 
 ## Known gaps
 
+- **Physical screen capture needs Android's stock shell semantics.** It uses mksh's `exec -a` with a
+  `CLASSPATH` prefix to keep app_process argv under 256 bytes. Some Samsung devices abort in CCodec
+  with [long app_process argument lists](https://github.com/Genymobile/scrcpy/issues/6781#issuecomment-4288448718).
+
 - **A fresh emulator answers its first resets slowly**, so a joiner then waits longer than the ADR's bound for a key frame.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **A phone that is not charging is woken but not held awake**: stay awake does nothing without power. When its
@@ -50,4 +54,4 @@ The body:
   passthrough `adb` while a stream is open has it replaced when the stream ends, since scrcpy writes back the value it found.
 - **A pushed jar can survive on a phone** when the version check closes after the push and stays closed through the
   close and the server never started: the `rm -f` goes through that check and is not sent. A server that started
-  deletes its own jar (`cleanup=true`). The jar's digest is not checked at push either.
+  deletes its own jar by default. The jar's digest is not checked at push either.
