@@ -1,7 +1,5 @@
 import { defineConfig } from "vitest/config";
 
-import { windowsSkipped } from "./src/test-support/windows-skipped.js";
-
 export default defineConfig({
   test: {
     // strictTags (default in vitest 4.1) rejects any tag not declared here or on a
@@ -27,8 +25,6 @@ export default defineConfig({
             "src/**/*.timing.test.ts",
             "packages/*/src/**/*.timing.test.ts",
             "ui/**/*.dom.test.tsx",
-            // why: files that still fail on Windows, read on a Windows host only (ADR 0087).
-            ...windowsSkipped(process.platform),
           ],
           // why: the script tests under src/ spawn node, git and a fake gh per case; under a full
           // parallel run the default five seconds times three of them out (lint-rules, claim,

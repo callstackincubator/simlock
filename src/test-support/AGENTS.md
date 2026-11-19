@@ -10,7 +10,5 @@ Does: test-only helpers shared across modules; excluded from the build.
 - A repo-wide grep over source runs on `blankSource` output: it blanks comments (and with
   `strings`, string and template text) and keeps every newline, so a match is code, at the
   right line.
-- `windows-skipped.ts` is the one list of test files the Windows CI job leaves out (ADR 0087);
-  it is read on a Windows host only and only shrinks.
 - `promiseState` reads whether a promise settled without awaiting it, so a broken timer fails
   on an assertion, not a test timeout.

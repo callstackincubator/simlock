@@ -75,9 +75,7 @@ here and moves into its module's test file.
    change, and one that does not reproduce is yours. Never skip, disable, or
    quarantine a test to get to green. A test of a fact Windows does not have
    (a POSIX mode, a launchd file) is skipped on `win32`: that is not
-   skipping to get to green. Until the Windows feature ends, the files on
-   `src/test-support/windows-skipped.ts` are left out of the Windows job
-   too, and that list only shrinks.
+   skipping to get to green.
    Most flakes are written, not found: an assertion on a deadline, a
    duration, a throughput or a frame time without a fake clock passes on
    an idle machine and fails on a loaded runner. A bound on real time
