@@ -36,6 +36,101 @@ final class FrameSelectionTests: XCTestCase {
         XCTAssertTrue(resized.decide(composite(at: 5 * ms, size: (1398, 2034))), "a new picture size")
     }
 
+    /// A screen of 16 tiles, the first four of them Liquid Glass (changed by every composite).
+    private struct Screen {
+        var selection = FrameSelection(fps: 60)
+        private var values = [UInt64](repeating: 0, count: 16)
+        private let ms: UInt64 = 1_000_000
+        static let glass = [0, 1, 2, 3]
+        static let steady = 8
+
+        /// The screen after ten glass-only composites 10 ms apart, the last at 90 ms.
+        static func warmedUp() -> Screen {
+            var screen = Screen()
+            for step in 0..<10 { _ = screen.next(atMs: UInt64(step) * 10, changing: glass) }
+            return screen
+        }
+
+        static let sometimes = [4, 5, 6, 7]
+
+        /// Like `warmedUp`, with four tiles that changed on every composite but the fourth.
+        static func warmedUpWithSometimesChangingTiles() -> Screen {
+            var screen = Screen()
+            for step in 0..<10 {
+                let moving = step == 3 ? glass : glass + sometimes
+                _ = screen.next(atMs: UInt64(step) * 10, changing: moving)
+            }
+            return screen
+        }
+
+        mutating func next(
+            atMs time: UInt64, changing tiles: [Int], force: Bool = false, size: (Int, Int) = (1179, 2556)
+        ) -> Bool {
+            for tile in tiles { values[tile] &+= 1 }
+            return selection.decide(
+                Composite(seenNanos: time * ms, force: force, width: size.0, height: size.1, tiles: values)
+            )
+        }
+    }
+
+    func testADueCompositeIsCopiedWhenItCarriesANewAppFrameOrTheTimingFallbacksSayItIsOverdue() {
+        var glassOnly = Screen.warmedUp()
+        XCTAssertFalse(glassOnly.next(atMs: 100, changing: Screen.glass), "only always-changing tiles, 10 ms after")
+        XCTAssertTrue(
+            glassOnly.next(atMs: 104, changing: Screen.glass + [Screen.steady]),
+            "the slot stayed open, so a steady change 4 ms later is copied"
+        )
+
+        var steady = Screen.warmedUp()
+        XCTAssertTrue(steady.next(atMs: 100, changing: Screen.glass + [Screen.steady]), "a steady tile changed")
+
+        var half = Screen.warmedUpWithSometimesChangingTiles()
+        XCTAssertTrue(
+            half.next(atMs: 100, changing: Screen.glass + Screen.sometimes.prefix(2)),
+            "half the sometimes-changing tiles changed, none new"
+        )
+        var fewer = Screen.warmedUpWithSometimesChangingTiles()
+        XCTAssertFalse(
+            fewer.next(atMs: 100, changing: Screen.glass + Screen.sometimes.prefix(1)),
+            "under half the sometimes-changing tiles changed"
+        )
+
+        var nearlyDue = Screen.warmedUp()
+        XCTAssertTrue(nearlyDue.next(atMs: 103, changing: Screen.glass), "only always-changing tiles, 13 ms after")
+
+        var overdue = Screen.warmedUp()
+        XCTAssertFalse(overdue.next(atMs: 100, changing: Screen.glass))
+        XCTAssertTrue(overdue.next(atMs: 106, changing: Screen.glass), "only always-changing tiles, 26 ms since the last sent")
+
+        var wellOverdue = Screen.warmedUp()
+        XCTAssertFalse(wellOverdue.next(atMs: 100, changing: Screen.glass))
+        XCTAssertTrue(wellOverdue.next(atMs: 108, changing: Screen.glass), "only always-changing tiles, 28 ms since the last sent")
+
+        var nothing = Screen.warmedUp()
+        XCTAssertFalse(nothing.next(atMs: 96, changing: []), "no tile changed, 6 ms after")
+
+        var first = Screen()
+        XCTAssertTrue(first.next(atMs: 0, changing: []), "the first composite")
+
+        var forced = Screen.warmedUp()
+        XCTAssertTrue(forced.next(atMs: 100, changing: Screen.glass, force: true), "a forced composite")
+
+        var resized = Screen.warmedUp()
+        XCTAssertTrue(resized.next(atMs: 95, changing: Screen.glass, size: (1398, 2034)), "a new picture size")
+        XCTAssertTrue(resized.next(atMs: 100, changing: Screen.glass, size: (1398, 2034)), "and its history starts again")
+
+        var scroll = Screen()
+        var mirror = FrameGrid(fps: 60)
+        for step in 0..<60 {
+            let time = UInt64(step) * 10
+            let blockChanges = step % 5 < 3
+            let due = mirror.isDue(atNanos: time * ms)
+            let copied = scroll.next(atMs: time, changing: Screen.glass + (blockChanges ? Screen.sometimes : []))
+            if copied { mirror.commit(atNanos: time * ms) }
+            if blockChanges, due { XCTAssertTrue(copied, "scroll composite \(step), a due block change") }
+        }
+    }
+
     private func picture() -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         CVPixelBufferCreate(kCFAllocatorDefault, 360, 720, kCVPixelFormatType_32BGRA, nil, &buffer)
@@ -94,6 +189,33 @@ final class FrameSelectionTests: XCTestCase {
         offer(at: 20 * ms)
         stage.stop()
         XCTAssertEqual(seen, [0, 20 * ms], "the 5 ms composite is declined before any copy, the others keep their seen time")
+    }
+
+    func testTheCopyStageHashesTheSurfaceInTilesAndSkipsACompositeWhoseOnlyChangeIsGlass() {
+        let surface = IOSurface(properties: [
+            .width: 64, .height: 64, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
+        ])!
+        nonisolated(unsafe) var seen: [UInt64] = []
+        let stage = CopyStage(fps: 60) { _, nanos in seen.append(nanos) }
+        var counter: UInt32 = 0
+        /// Writes a pixel into the tile at the surface's top-left (the glass) and, when asked, into the
+        /// tile at its bottom-right (an app; hashed rows are every 8th, pixels every 2nd), then offers the composite.
+        func composite(at time: UInt64, appChanged: Bool = false) {
+            counter += 1
+            surface.lock(options: [], seed: nil)
+            let base = surface.baseAddress.assumingMemoryBound(to: UInt32.self)
+            base[0] = counter
+            if appChanged { base[(56 * surface.bytesPerRow + 62 * 4) / 4] = counter }
+            surface.unlock(options: [], seed: nil)
+            stage.offer(Notice(surface: surface, seed: IOSurfaceGetSeed(surface), seenNanos: time, force: false))
+            stage.queue.sync {}
+        }
+        for step in 0..<10 { composite(at: UInt64(step) * 10 * ms) }
+        seen = []
+        composite(at: 100 * ms)
+        composite(at: 104 * ms, appChanged: true)
+        stage.stop()
+        XCTAssertEqual(seen, [104 * ms], "the glass-only composite is not copied, the one with an app change is")
     }
 
     func testASeedIsNewOnlyWhenItChangesOrIsForcedAndAfterAResetTheNextOneIsNews() {
