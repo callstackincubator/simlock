@@ -2,9 +2,6 @@
 
 - **Status:** Proposed
 - **Date:** 2026-11-19
-- **Narrows:** [ADR 0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md)
-  §5 ("scrcpy's own interval is set to 2, so a moving screen rarely needs
-  a reset"). Its 5 s key frame promise and the 4 s reset stay.
 
 ## Context
 
@@ -21,60 +18,84 @@ was in the media codec service's setup of the H.264 encoder
 hardware and the software encoder. Measured on 2026-11-18 and 2026-11-19
 with the same effective settings:
 
-| Command line                                   | Result                    |
-| ---------------------------------------------- | ------------------------- |
-| 211, 237, 254, 256 and 257 bytes               | streamed                  |
-| 265 bytes and above                            | aborted                   |
+| Command line                                             | Result                       |
+| -------------------------------------------------------- | ---------------------------- |
+| 211, 237, 254, 256 and 257 bytes                         | streamed                     |
+| 265 bytes and above                                      | aborted                      |
 | 418 bytes: the 399-byte launch with `--nice-name=scrcpy` | aborted, three runs of three |
 
-scrcpy's maintainer reports the same limit, about 255 characters, on other
-Samsung devices ([scrcpy #6781](https://github.com/Genymobile/scrcpy/issues/6781)).
-`--nice-name` does not help: app_process blanks the old command line and
-writes the name into it, so `/proc/<pid>/cmdline` keeps its full length.
+Upstream knows the limit, about 255 characters from `app_process` on, on
+Samsung devices since 2021
+([scrcpy #2841](https://github.com/Genymobile/scrcpy/issues/2841), open; a
+Galaxy S9 streamed at 254 and aborted at 255, in Samsung's
+`ACodec::reconfigEncoder4OtherApps`). It has no fix: a server config file
+([#5153](https://github.com/Genymobile/scrcpy/pull/5153)) was closed
+unmerged, and options sent over the first socket
+([#6013](https://github.com/Genymobile/scrcpy/pull/6013)) are open,
+unmerged. `--nice-name` does not help: app_process blanks the old command
+line and writes the name into it, so `/proc/<pid>/cmdline` keeps its full
+length.
 
-Seven options Simlock passed equal scrcpy's own defaults: `video`,
-`control`, `video_codec=h264`, `send_dummy_byte`, `send_stream_meta`,
-`send_frame_meta` and `cleanup`. Without them the largest line is still
-about 281 bytes. Only dropping `video_codec_options=i-frame-interval:int=2`
-as well brings it under 256 (238 bytes).
+Read in scrcpy v5.0.1's server (`Options.java`, `CodecOption.java`):
+
+- Seven options Simlock passed equal its defaults: `video`, `control`,
+  `video_codec=h264`, `send_dummy_byte`, `send_stream_meta`,
+  `send_frame_meta` and `cleanup`.
+- A boolean option is `Boolean.parseBoolean`: only `true` (any case) is
+  true, so `0` is false.
+- A codec option with no type is an `int`.
+- With no `log_level` the server logs at debug. Its debug lines a screen
+  stream reaches are written once, at start and stop (the encoder and
+  display API in use, size alignment, each codec option set); none is
+  written per frame or per reset.
+
+Without the seven defaults the largest line is still 281 bytes; with `0`
+for false and the untyped codec option, 261.
 
 ## Decision
 
 1. The server's command line leaves out the options that only restate
-   scrcpy's fixed defaults; the stream settings (size, frame rate, bitrate)
-   are always passed. A phone's line stays under 256 bytes at the largest
-   stream settings. A unit test pins the length; an option that does not
-   fit needs another way in.
-2. No encoder key frame interval is set, so scrcpy asks the encoder for its
-   own default (10 s in v5.0.1). ADR 0079 §5's 4 s reset becomes the main
-   path to a key frame on a moving screen as well as a still one, and its
-   5 s bound (and §4's joiner wait) holds when the reset is answered within
-   the remaining 1 s. A device that answers later goes past it; see below.
+   scrcpy's fixed defaults, and `log_level`. It writes false as `0` and the
+   key frame interval as `i-frame-interval=2`. The stream settings (size,
+   frame rate, bitrate) are always passed. A phone's line stays under 256
+   bytes at the largest stream settings (246 today). A unit test pins the
+   length; an option that does not fit needs another way in.
+2. Two left-out defaults are relied on: `control=true` (the reset video of
+   ADR 0079 §5 needs the control channel, and `power_on` and
+   `clipboard_autosync` are passed only because of it) and `cleanup=true`
+   (it puts a phone's stay-awake setting back and deletes the jar). A
+   scrcpy upgrade checks both, beside the launch.
+3. ADR 0079 §5 is unchanged: scrcpy's interval stays 2, and the 4 s reset
+   still bounds a still screen.
 
 ## Consequences
 
 - Android streams start on devices with the limit.
-- A moving screen gets the encoder's default interval instead of 2, so the
-  4 s reset fires during motion more often. Each reset starts a new scrcpy
-  session: a new meta frame and parameter sets before the next picture, as
-  for a rotation.
-- The Android screen module's known gap, a fresh emulator that answers its
-  first resets slowly
-  ([manual](../../../src/drivers/android/screen/AGENTS.md#known-gaps)), now
-  reaches a moving screen too. Before, the encoder's own key frames usually
-  came first; now they rarely do. On such an emulator a moving screen can
-  go past ADR 0079 §5's bound, and a joiner past §4's wait, as a still
-  screen already could.
-- A new server option has to fit the budget, or replace one.
+- The server logs at debug: a few more lines at start, in the output whose
+  last lines a failure is reported with, and in the device's logcat.
+- `0` reads less plainly than `false`; the launch says why beside it.
+- About 10 bytes are left. A new server option has to fit them, or replace
+  one.
 
 ## Alternatives considered
 
 - **`--nice-name`.** Rejected on the measurement above.
-- **Keep the interval and also drop `log_level=info` and
-  `send_device_meta=false`.** 243 bytes at the largest settings, 13 under
-  the budget. Rejected for now: the server would log at its debug default,
-  and the video parser would have to read and skip scrcpy's 64-byte
-  device-name header, a change to the stream's start for every device.
+- **Leave out the key frame interval and keep `log_level=info`.** 238
+  bytes. Rejected: at scrcpy's own interval a moving screen sends no key
+  frame of its own (ADR 0079's measurement), so the 4 s reset would restart
+  the device's capture and encoder every 4 s for as long as the screen
+  moves.
+- **Also leave out `send_device_meta=false`.** Rejected: the video parser
+  would have to read and skip scrcpy's 64-byte device-name header, a change
+  to the stream's start for every device.
+- **A launcher class of Simlock's own** on the classpath after scrcpy's
+  jar, taking a short command line and calling
+  `com.genymobile.scrcpy.Server.main` with the full options in the process.
+  It removes the budget, but needs a dex build and a second jar to push and
+  remove. Kept for when the budget runs out.
+- **Patch scrcpy's defaults.** Rejected: the jar would no longer be
+  byte-identical to upstream's signed release, and Simlock would build
+  scrcpy.
 - **A shorter interval only on devices that allow it.** Rejected: no
   device property says where the limit is, and a failed start costs the
   whole stream.

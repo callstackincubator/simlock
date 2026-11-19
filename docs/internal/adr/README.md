@@ -113,7 +113,7 @@ the status is stale.
 | [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted; narrows 0061 §1, §2 and §4 |
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
 | [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
-| [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5; §5's encoder interval narrowed by 0089 (proposed) |
+| [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
 | [0080](0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) | An Android worker may enrol phones reached over the network | Accepted; narrows 0022 §6 and §7, and 0073 §2 and §5 |
 | [0081](0081-a-remote-caller-speaks-the-daemon-protocol-over-one-websocket-path-with-its-tokens-identity.md) | A remote caller speaks the daemon protocol over one WebSocket path, with its token's identity | Accepted; narrows 0003 §4, §5 and §10, and 0005 §19c |
 | [0082](0082-a-worker-may-serve-only-some-ios-device-modes.md) | A worker may serve only some iOS device modes | Accepted; narrows 0007 §1, §3 and §4, 0008 §1 and §9, 0009 §2, §3, §4 and §5 |
@@ -121,4 +121,4 @@ the status is stale.
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
-| [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Proposed; narrows 0079 §5 |
+| [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Proposed |

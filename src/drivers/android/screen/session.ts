@@ -262,16 +262,21 @@ class ScrcpySession {
       "com.genymobile.scrcpy.Server",
       SCRCPY_SERVER_VERSION,
       `scid=${this.#scidHex}`,
-      // why: options equal to scrcpy's defaults are left out, and no encoder key frame interval is set:
-      // some Samsung codecs abort with `stack corruption detected` when app_process's command line
-      // passes about 255 bytes (https://github.com/Genymobile/scrcpy/issues/6781).
-      "log_level=info",
+      // why: some Samsung codecs abort with `stack corruption detected` when app_process's command line
+      // reaches about 255 bytes (https://github.com/Genymobile/scrcpy/issues/2841), so the line is kept
+      // short (ADR 0089): no log_level (the server logs at debug), `0` for false (scrcpy reads a boolean
+      // as true only for `true`), a codec option with no type (scrcpy assumes int), and no option that
+      // restates a default. Two of those defaults are relied on, and a scrcpy upgrade must check them:
+      // `control=true` (the reset below needs the channel) and `cleanup=true` (it puts a phone's
+      // stay-awake back and deletes the jar).
       "tunnel_forward=true",
-      "audio=false",
+      "audio=0",
       // why: with a control channel scrcpy would power the screen on and sync the clipboard; a stream changes no device setting.
-      "power_on=false",
-      "clipboard_autosync=false",
-      "send_device_meta=false",
+      "power_on=0",
+      "clipboard_autosync=0",
+      // why: a moving screen then rarely needs the reset that bounds a still one's key frames.
+      "video_codec_options=i-frame-interval=2",
+      "send_device_meta=0",
       // why: scrcpy puts the phone's stay-awake setting back when the server ends (its clean-up
       // process), and needs no controller for it; an emulator's screen is not held.
       ...(this.#isPhone ? ["stay_awake=true"] : []),

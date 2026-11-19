@@ -20,7 +20,7 @@ What a stream does to the device:
 
 Start and stop:
 
-- The server's command line has a length budget (ADR 0089), pinned by `session.test.ts`: a new option must fit it.
+- The server's command line has a length budget (ADR 0089), pinned by `session.test.ts`: a new option must fit it. It relies on two scrcpy defaults it does not pass, `control=true` and `cleanup=true`; a scrcpy upgrade checks both.
 - No `adb forward`: the session speaks adb's host protocol through the target, so a daemon that dies leaves no listening port on the host.
 - `FAIL` on the second request (nothing listening yet), a refused connect, or a socket that closes before the server's zero byte is retried. `FAIL` on the first refuses.
 - The start budget (`START_DEADLINE_MS` in `scrcpy-link.ts`) counts from the moment the server's process started, so a phone's check before the spawn does not spend it. Each step keeps its own limit; there is no overall budget.
@@ -51,4 +51,4 @@ The body:
   passthrough `adb` while a stream is open has it replaced when the stream ends, since scrcpy writes back the value it found.
 - **A pushed jar can survive on a phone** when the version check closes after the push and stays closed through the
   close and the server never started: the `rm -f` goes through that check and is not sent. A server that started
-  deletes its own jar (`cleanup=true`). The jar's digest is not checked at push either.
+  deletes its own jar (scrcpy's default `cleanup=true`, which the command line relies on). The jar's digest is not checked at push either.

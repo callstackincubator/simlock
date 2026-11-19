@@ -37,12 +37,12 @@ describe("Android screen capture: open", () => {
         "com.genymobile.scrcpy.Server",
         "5.0.1",
         "scid=1234abcd",
-        "log_level=info",
         "tunnel_forward=true",
-        "audio=false",
-        "power_on=false",
-        "clipboard_autosync=false",
-        "send_device_meta=false",
+        "audio=0",
+        "power_on=0",
+        "clipboard_autosync=0",
+        "video_codec_options=i-frame-interval=2",
+        "send_device_meta=0",
         "max_size=720",
         "max_fps=30",
         "video_bit_rate=1500000",
@@ -85,7 +85,7 @@ describe("Android screen capture: open", () => {
     expect(phoneOptions.filter((o) => o !== "stay_awake=true")).toEqual(emulatorOptions);
   });
 
-  it("keeps a phone's app_process command line under 256 bytes at the largest stream settings, which some Samsung codecs need", async () => {
+  it("keeps a phone's app_process command line under 256 bytes at the largest stream settings with its key frame interval, which some Samsung codecs need", async () => {
     // why: the server's start is refused, so the line is measured however many arguments it has.
     const world = await setup({ device: PHONE, expectations: [push(), remove()] });
     const largest = { bitrateKbps: 40_000, fps: 60, maxDimension: 4096 };
@@ -97,6 +97,7 @@ describe("Android screen capture: open", () => {
     const bytes = cmdline.reduce((sum, arg) => sum + Buffer.byteLength(arg) + 1, 0);
     expect(cmdline).toContain("stay_awake=true");
     expect(cmdline).toContain("max_size=4096");
+    expect(cmdline).toContain("video_codec_options=i-frame-interval=2");
     expect(bytes).toBeLessThan(256);
   });
 
