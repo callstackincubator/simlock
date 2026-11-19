@@ -104,23 +104,36 @@ describe("NodeProcessSupervisor", () => {
     },
   );
 
-  it("ends the wrapper alone when the PowerShell call that ends its tree fails", async () => {
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const runner = new ScriptedProcessRunner([
-      {
-        match: { args: [/.*/, /.*/, /.*/, /.*/], command: "powershell.exe" },
-        result: { code: 1, stderr: "gone", stdout: "" },
-      },
-    ]);
+  it.each([
+    {
+      name: "never finishes",
+      result: { code: null, stderr: "", stdout: "", endedBy: "timeout" as const },
+      signalled: true,
+    },
+    {
+      name: "exits because the wrapper is already gone",
+      result: { code: 1, stderr: "gone", stdout: "" },
+      signalled: false,
+    },
+  ])(
+    "when the PowerShell call that ends its tree $name, the wrapper is signalled: $signalled",
+    async ({ result, signalled }) => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const runner = new ScriptedProcessRunner([
+        { match: { args: [/.*/, /.*/, /.*/, /.*/], command: "powershell.exe" }, result },
+      ]);
 
-    new NodeProcessSupervisor({ platform: "win32", processRunner: runner }).signal(
-      4242,
-      "SIGTERM",
-      { tree: true },
-    );
+      new NodeProcessSupervisor({ platform: "win32", processRunner: runner }).signal(
+        4242,
+        "SIGTERM",
+        { tree: true },
+      );
 
-    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith(4242, "SIGTERM"));
-  });
+      await vi.waitFor(() => expect(runner.calls).toHaveLength(1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(kill).toHaveBeenCalledTimes(signalled ? 1 : 0);
+    },
+  );
 
   it("treats signalling a process that is already gone as a no-op", async () => {
     const supervisor = nodeSupervisor();

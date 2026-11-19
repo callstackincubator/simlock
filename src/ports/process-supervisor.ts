@@ -102,7 +102,7 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
           stdio: "ignore",
           timeoutMs: TREE_KILL_TIMEOUT_MS,
         });
-        // why: the helper answers later than this call returns, so a failed or errored run ends the wrapper alone, as before.
+        // why: the helper answers later than this call returns, so a run that never finished (spawn error, timeout, killed) ends the wrapper alone, as before. A numeric exit, including the script's exit 1 for a wrapper already gone, sends nothing: that pid may be reused by now.
         const fallBack = () => {
           try {
             this.#signalAlone(pid, signal);
@@ -111,7 +111,7 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
           }
         };
         void killer.wait().then((result) => {
-          if (result.code !== 0) fallBack();
+          if (result.code === null || result.endedBy !== undefined) fallBack();
         }, fallBack);
         return;
       } catch {
