@@ -38,7 +38,7 @@ import {
   type VirtualSpec,
   type ScreenCapture,
 } from "../../core/index.js";
-import type { Clock, ProcessRunner } from "../../ports/index.js";
+import type { Clock, ProcessRunner, ProcessTable } from "../../ports/index.js";
 import { runAfterBoot, type AfterBoot } from "./boot-courtesies.js";
 import { runCommand } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
@@ -235,12 +235,15 @@ export class IosSimctlDriver implements Driver {
       (udid) => this.#physical.osVersion(udid),
     );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
-    const { processTable } = options;
-    if (processTable !== undefined) {
-      this.settleSeed = (sourceId, settleOptions) =>
-        this.#seeds.settleSeed(processTable, sourceId, settleOptions);
-    }
+    this.#offerSettle(options.processTable);
     this.deviceTcp = createIosDeviceTcpFor(options);
+  }
+
+  /** why: a settle judges its copy from the process table; a driver given none offers no `settleSeed`, so core never asks it. */
+  #offerSettle(processTable: ProcessTable | undefined): void {
+    if (processTable === undefined) return;
+    this.settleSeed = (sourceId, settleOptions) =>
+      this.#seeds.settleSeed(processTable, sourceId, settleOptions);
   }
 
   #afterBootFor(options: IosSimctlDriverOptions): AfterBoot {
@@ -258,7 +261,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   readonly screenCapture: ScreenCapture | undefined;
-  readonly settleSeed?: NonNullable<Driver["settleSeed"]>;
+  settleSeed?: NonNullable<Driver["settleSeed"]>;
   readonly input: DeviceInputFactory | undefined;
   readonly deviceTcp: DeviceTcp | undefined;
 

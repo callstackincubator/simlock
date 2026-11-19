@@ -58,10 +58,18 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
       savedWithoutLineage: source.savedWithoutLineage ?? false,
     });
   }
-  if (source.settled === true) {
+  markSettled(database, sourceId, source.settled);
+  return database;
+}
+
+function markSettled(
+  database: SqliteDatabase,
+  sourceId: string,
+  settled: boolean | undefined,
+): void {
+  if (settled === true) {
     database.prepare("UPDATE ios_source_data SET settled = 1 WHERE source_id = ?").run(sourceId);
   }
-  return database;
 }
 
 export function plantReadySeed(

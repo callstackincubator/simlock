@@ -48,6 +48,18 @@ const IDLE_POLL_MS = 2_000;
 const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
 const LAUNCH_SERVICES_PATH = /^data\/var\/db\/lsd\/com\.apple\.LaunchServices-[^/]*\.csstore$/;
 
+type QuickSeed = SourceRow & {
+  readonly lineage: readonly string[];
+  readonly udid: string;
+};
+
+interface SavedSettle {
+  readonly copy: string;
+  readonly reason: "idle" | "cap";
+  readonly settledAfterMs: number;
+  readonly sizeBytes: number | undefined;
+}
+
 interface SeedsOptions {
   readonly boot: SimulatorBoot;
   readonly clock: Clock;
@@ -212,23 +224,7 @@ export class Seeds {
     sourceId: string,
     options: { readonly signal: AbortSignal },
   ): Promise<DriverSettleResult> {
-    const quick = this.#sources.findRow(sourceId);
-    // why: a seed with no lineage is stale and never copied, so it is remade, never settled.
-    if (
-      quick?.kind !== "seed" ||
-      quick.state !== "ready" ||
-      quick.settled ||
-      quick.udid === undefined ||
-      quick.lineage === undefined
-    ) {
-      throw new DriverCrashError(`iOS keeps no ready quick seed ${sourceId}`);
-    }
-    const seed: ReadySeed = {
-      lineage: quick.lineage,
-      runtimeBuild: quick.runtimeBuild,
-      sourceId: quick.sourceId,
-      udid: quick.udid,
-    };
+    const quick = this.#readyQuickSeed(sourceId);
     const settleId = this.#idGenerator.generate();
     this.#sources.insertMaking({
       createdAt: this.#clock.now(),
@@ -244,57 +240,78 @@ export class Seeds {
       sourceId: settleId,
       specKey: quick.specKey,
     });
-    let copy: string | undefined;
-    let settledUdid: string | undefined;
-    let outcome: {
-      reason: "idle" | "cap";
-      settledAfterMs: number;
-      settledCopy: string;
-      sizeBytes: number | undefined;
-    };
+    const made: { copy?: string; settledUdid?: string } = {};
+    let saved: SavedSettle;
     try {
-      copy = await this.#cloneCopy(seed, `simlock-${settleId}`, (udid) => {
-        copy = udid;
-        this.#sources.setThrowaway(settleId, udid);
-      });
-      // why: ADR 0048: in Xcode's set a booted simulator keeps the clipboard sync it booted with, as a throwaway's does.
-      if (!this.#ownsDeviceSet) await this.#deviceHub.disablePasteboardSync(copy);
-      await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
-      const readyAt = this.#clock.now();
-      const reason = await this.#waitUntilIdle(processTable, copy, readyAt, options.signal);
-      const settledAfterMs = this.#clock.now() - readyAt;
-      await this.#simctl.shutdown(copy);
-      const cloned = await this.#simctl.createSimulator(
-        ["clone", copy, `simlock-seed-${settleId}`, this.#sourcesSet],
-        { destination: this.#sourcesSet },
-      );
-      settledUdid = cloned.stdout.trim();
-      this.#sources.setUdid(settleId, settledUdid);
-      await this.#dropLaunchServicesDatabase(this.#sourcesSet, settledUdid);
-      const lineage = [copy.toUpperCase(), ...quick.lineage];
-      const files = await this.#recordFiles(settledUdid, lineage);
-      const sizeBytes = await this.#sizeOf(settledUdid);
-      this.#sources.promoteSettled(settleId, quick.sourceId, sizeBytes, { files, lineage });
-      outcome = { reason, settledAfterMs, settledCopy: copy, sizeBytes };
+      saved = await this.#saveSettled(processTable, quick, settleId, options.signal, made);
     } catch (error: unknown) {
       // why: a settle that ends early gives back what it made and keeps the quick seed as the kind's seed.
-      if (settledUdid !== undefined) {
-        await this.#deleteSeedSimulator(settledUdid).catch(() => undefined);
+      if (made.settledUdid !== undefined) {
+        await this.#deleteSeedSimulator(made.settledUdid).catch(() => undefined);
       }
-      if (copy !== undefined) await this.#deleteThrowaway(copy, true).catch(() => undefined);
+      if (made.copy !== undefined) {
+        await this.#deleteThrowaway(made.copy, true).catch(() => undefined);
+      }
       this.#sources.deleteRow(settleId);
       throw error;
     }
-    await this.#deleteSeedInTurn(seed.udid);
+    await this.#deleteSeedInTurn(quick.udid);
     this.#sources.deleteRow(quick.sourceId);
-    const { reason, settledAfterMs, sizeBytes, settledCopy } = outcome;
-    await this.#deleteThrowaway(settledCopy, false);
+    await this.#deleteThrowaway(saved.copy, false);
     return {
-      reason,
-      settledAfterMs,
+      reason: saved.reason,
+      settledAfterMs: saved.settledAfterMs,
       sourceId: settleId,
-      ...(sizeBytes === undefined ? {} : { sizeBytes }),
+      ...(saved.sizeBytes === undefined ? {} : { sizeBytes: saved.sizeBytes }),
     };
+  }
+
+  /** why: a seed with no lineage is stale and never copied, so it is remade, never settled. */
+  #readyQuickSeed(sourceId: string): QuickSeed {
+    const quick = this.#sources.findRow(sourceId);
+    if (
+      quick?.kind !== "seed" ||
+      quick.state !== "ready" ||
+      quick.settled ||
+      quick.udid === undefined ||
+      quick.lineage === undefined
+    ) {
+      throw new DriverCrashError(`iOS keeps no ready quick seed ${sourceId}`);
+    }
+    return { ...quick, lineage: quick.lineage, udid: quick.udid };
+  }
+
+  async #saveSettled(
+    processTable: ProcessTable,
+    quick: QuickSeed,
+    settleId: string,
+    signal: AbortSignal,
+    made: { copy?: string; settledUdid?: string },
+  ): Promise<SavedSettle> {
+    const copy = await this.#cloneCopy(quick, `simlock-${settleId}`, (udid) => {
+      made.copy = udid;
+      this.#sources.setThrowaway(settleId, udid);
+    });
+    // why: ADR 0048: in Xcode's set a booted simulator keeps the clipboard sync it booted with, as a throwaway's does.
+    if (!this.#ownsDeviceSet) await this.#deviceHub.disablePasteboardSync(copy);
+    await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
+    const readyAt = this.#clock.now();
+    const reason = await this.#waitUntilIdle(processTable, copy, readyAt, signal);
+    const settledAfterMs = this.#clock.now() - readyAt;
+    await this.#simctl.shutdown(copy);
+    const cloned = await this.#simctl.createSimulator(
+      ["clone", copy, `simlock-seed-${settleId}`, this.#sourcesSet],
+      { destination: this.#sourcesSet },
+    );
+    const settledUdid = cloned.stdout.trim();
+    made.settledUdid = settledUdid;
+    this.#sources.setUdid(settleId, settledUdid);
+    await this.#dropLaunchServicesDatabase(this.#sourcesSet, settledUdid);
+    const lineage = [copy.toUpperCase(), ...quick.lineage];
+    const files = await this.#recordFiles(settledUdid, lineage);
+    const sizeBytes = await this.#sizeOf(settledUdid);
+    this.#sources.promoteSettled(settleId, quick.sourceId, sizeBytes, { files, lineage });
+    return { copy, reason, settledAfterMs, sizeBytes };
   }
 
   /** why: ADR 0090 §4: an operator names a kind's seed; it is made as a provision makes it, and no copy is cloned. */
