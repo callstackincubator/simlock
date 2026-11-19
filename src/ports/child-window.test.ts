@@ -114,24 +114,34 @@ describe("a child that outlives its caller is detached on every platform, and on
   });
 
   it.each([
-    ["win32", true, true],
-    ["darwin", true, true],
-    ["linux", true, true],
-    ["win32", false, false],
-    ["darwin", false, true],
-    ["linux", false, true],
+    ["win32", true, true, true],
+    ["darwin", true, true, false],
+    ["linux", true, true, false],
+    ["win32", false, false, false],
+    ["darwin", false, true, false],
+    ["linux", false, true, false],
   ] as const)(
-    "on %s, outlivesCaller %s is started detached: %s",
-    async (platform, outlivesCaller, detached) => {
+    "on %s, outlivesCaller %s is started detached: %s, under conhost --headless: %s",
+    async (platform, outlivesCaller, detached, headless) => {
       directory = await mkdtemp(join(tmpdir(), "simlock-child-detach-"));
       const file = join(directory, "child.log");
       Object.defineProperty(process, "platform", { value: platform });
+      if (headless) {
+        // why: conhost.exe does not exist off Windows; the quiet program stands in for it.
+        const actual =
+          await vi.importActual<typeof import("node:child_process")>("node:child_process");
+        vi.mocked(spawn).mockImplementationOnce(((
+          _command: string,
+          _args: string[],
+          options: object,
+        ) => actual.spawn(...quiet, options)) as unknown as typeof spawn);
+      }
 
       await new NodeProcessRunner().spawn(...quiet, { outlivesCaller, stdio: { file } }).wait();
 
       expect(vi.mocked(spawn)).toHaveBeenCalledWith(
-        process.execPath,
-        ["-e", ""],
+        headless ? expect.stringMatching(/conhost\.exe$/i) : process.execPath,
+        headless ? ["--headless", process.execPath, "-e", ""] : ["-e", ""],
         expect.objectContaining({ detached }),
       );
     },

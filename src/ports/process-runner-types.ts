@@ -43,7 +43,10 @@ export interface ProcessRunOptions {
    * server) must outlive the daemon (ADR 0004, ADR 0019). Off Windows every child is detached
    * already; on Windows only a detached child leaves Node's kill-on-exit job, which would end it
    * with the daemon while its own children live on and hold the logon task's console open
-   * (#1759). The supervisor's daemon is not one: ending the supervisor ends it (ADR 0086 section 2).
+   * (#1759). On Windows it also runs under `conhost.exe --headless` (`headlessLaunch`), so the qemu
+   * of an emulator opens no window; `kill` still ends the wrapper's program and, with
+   * `killChildren`, that program's own children. The supervisor's daemon is not one: ending the
+   * supervisor ends it (ADR 0086 section 2).
    */
   readonly outlivesCaller?: boolean;
 }

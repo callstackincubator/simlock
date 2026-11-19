@@ -14,7 +14,7 @@ export function runLimits({
   };
 }
 
-export type WindowsKill = "child" | "children" | "tree";
+export type WindowsKill = "child" | "children" | "grandchildren" | "tree";
 
 /**
  * why: Windows has no process groups, and a batch file runs under a `cmd.exe` wrapper
@@ -36,19 +36,29 @@ function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS
  * `ParentProcessId`, and pids are reused, so a listed process counts as a child only when it
  * started after the child did. Should PowerShell fail, the child alone is killed.
  */
-function killWindowsProcessAndChildren(
-  child: ChildProcess,
-  pid: number,
-  signal: NodeJS.Signals,
-): void {
-  const script = [
+export function windowsKillScript(pid: number, depth: 1 | 2): string {
+  return [
     "$ErrorActionPreference = 'Stop'",
     `$parent = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'`,
     "if ($null -eq $parent) { exit 1 }",
     `$children = @(Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${pid}' | Where-Object { $_.CreationDate -ge $parent.CreationDate })`,
+    ...(depth === 2
+      ? [
+          '$grandchildren = @(foreach ($c in $children) { Get-CimInstance Win32_Process -Filter "ParentProcessId = $($c.ProcessId)" | Where-Object { $_.CreationDate -ge $c.CreationDate } })',
+        ]
+      : ["$grandchildren = @()"]),
     `Stop-Process -Id ${pid} -Force`,
-    "foreach ($c in $children) { Stop-Process -Id $c.ProcessId -Force -ErrorAction SilentlyContinue }",
+    "foreach ($c in @($children) + @($grandchildren)) { Stop-Process -Id $c.ProcessId -Force -ErrorAction SilentlyContinue }",
   ].join("\n");
+}
+
+function killWindowsProcessAndChildren(
+  child: ChildProcess,
+  pid: number,
+  signal: NodeJS.Signals,
+  depth: 1 | 2,
+): void {
+  const script = windowsKillScript(pid, depth);
   runWindowsKill(child, signal, "powershell.exe", [
     "-NoProfile",
     "-NonInteractive",
@@ -104,7 +114,8 @@ export function killProcessTree(
 
   if (process.platform === "win32") {
     if (windowsKill === "tree") killWindowsProcessTree(child, pid, signal);
-    else if (windowsKill === "children") killWindowsProcessAndChildren(child, pid, signal);
+    else if (windowsKill === "children") killWindowsProcessAndChildren(child, pid, signal, 1);
+    else if (windowsKill === "grandchildren") killWindowsProcessAndChildren(child, pid, signal, 2);
     else child.kill(signal);
     return;
   }

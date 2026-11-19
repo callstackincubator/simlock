@@ -10,7 +10,7 @@ import {
   runLimits,
   type WindowsKill,
 } from "./process-tree-kill.js";
-import { childLaunch } from "./windows-command.js";
+import { childLaunch, headlessLaunch } from "./windows-command.js";
 import {
   InputStreamFailedError,
   ProcessSpawnError,
@@ -112,7 +112,10 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 
   #launch(command: string, args: readonly string[], options: ProcessRunOptions): NodeProcessHandle {
-    const launch = childLaunch(command, args);
+    const launch =
+      options.outlivesCaller === true
+        ? headlessLaunch(childLaunch(command, args))
+        : childLaunch(command, args);
     const logFd =
       typeof options.stdio === "object" ? openSync(options.stdio.file, "a", 0o600) : undefined;
     const child = spawnChildProcess(launch.command, launch.args, {
@@ -149,7 +152,11 @@ export class NodeProcessRunner implements ProcessRunner {
       options.lineEnd ?? "newline",
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      windowsKillOf(launch.windowsVerbatimArguments, options.killChildren === true),
+      windowsKillOf(
+        launch.windowsVerbatimArguments,
+        options.killChildren === true,
+        options.outlivesCaller === true,
+      ),
       runLimits(options),
     );
   }
@@ -183,7 +190,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.onChunk,
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      windowsKillOf(launch.windowsVerbatimArguments, false),
+      windowsKillOf(launch.windowsVerbatimArguments, false, false),
     );
     if (options.input !== undefined) {
       // why: One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
@@ -589,8 +596,11 @@ function childStdio(
 
 // why: a batch file's `cmd.exe` wrapper dies with its whole tree; a `killChildren` child alone
 // off Windows (its process group would end what it started for others) and with its own children
-// on Windows; any other child alone there, and off Windows its whole process group.
-function windowsKillOf(wrapped: boolean, killChildren: boolean): WindowsKill {
+// on Windows; any other child alone there, and off Windows its whole process group. A child that
+// outlives its caller runs under a headless `conhost.exe` (`headlessLaunch`), so there the child
+// Node sees is the wrapper and the wanted unit is one level further down.
+function windowsKillOf(wrapped: boolean, killChildren: boolean, headless: boolean): WindowsKill {
   if (wrapped) return "tree";
+  if (headless && process.platform === "win32") return killChildren ? "grandchildren" : "children";
   return killChildren ? "children" : "child";
 }
