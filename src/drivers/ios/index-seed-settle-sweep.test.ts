@@ -122,8 +122,8 @@ describe("IosSimctlDriver settle leftovers", () => {
       sourceRows(database),
       "a make of the kind six minutes into this process's settle leaves the settle's row",
     ).toEqual([
-      { state: "making", udid: partialUdid },
       { state: "ready", udid: seedUdid },
+      { state: "making", udid: partialUdid },
     ]);
   });
 });
