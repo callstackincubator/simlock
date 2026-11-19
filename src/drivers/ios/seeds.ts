@@ -209,11 +209,19 @@ export class Seeds {
   async settleSeed(
     processTable: ProcessTable,
     sourceId: string,
-    _options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal },
   ): Promise<DriverSettleResult> {
     const quick = this.#sources.findRow(sourceId);
-    if (quick?.udid === undefined)
-      throw new DriverCrashError(`iOS keeps no quick seed ${sourceId}`);
+    // why: a seed with no lineage is stale and never copied, so it is remade, never settled.
+    if (
+      quick?.kind !== "seed" ||
+      quick.state !== "ready" ||
+      quick.settled ||
+      quick.udid === undefined ||
+      quick.lineage === undefined
+    ) {
+      throw new DriverCrashError(`iOS keeps no ready quick seed ${sourceId}`);
+    }
     const seed: ReadySeed = {
       lineage: quick.lineage,
       runtimeBuild: quick.runtimeBuild,
@@ -250,7 +258,7 @@ export class Seeds {
       });
       await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
       const readyAt = this.#clock.now();
-      const reason = await this.#waitUntilIdle(processTable, copy, readyAt);
+      const reason = await this.#waitUntilIdle(processTable, copy, readyAt, options.signal);
       const settledAfterMs = this.#clock.now() - readyAt;
       await this.#simctl.shutdown(copy);
       const cloned = await this.#simctl.createSimulator(
@@ -260,7 +268,7 @@ export class Seeds {
       settledUdid = cloned.stdout.trim();
       this.#sources.setUdid(settleId, settledUdid);
       await this.#dropLaunchServicesDatabase(this.#sourcesSet, settledUdid);
-      const lineage = [copy.toUpperCase(), ...(quick.lineage ?? [])];
+      const lineage = [copy.toUpperCase(), ...quick.lineage];
       const files = await this.#recordFiles(settledUdid, lineage);
       const sizeBytes = await this.#sizeOf(settledUdid);
       this.#sources.promoteSettled(settleId, quick.sourceId, sizeBytes, { files, lineage });
@@ -291,6 +299,7 @@ export class Seeds {
     processTable: ProcessTable,
     copy: string,
     readyAt: number,
+    signal: AbortSignal,
   ): Promise<"idle" | "cap"> {
     const folder = `${join(this.#deviceRoot, copy)}/`;
     const watch = new IdleWatch({
@@ -302,6 +311,7 @@ export class Seeds {
         ),
     });
     for (;;) {
+      signal.throwIfAborted();
       watch.observe(await processTable.list(), this.#clock.now());
       const state = watch.state(this.#clock.now());
       if (state !== "busy") return state;
