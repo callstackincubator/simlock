@@ -16,6 +16,8 @@ export interface AvdConfigOptions {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly seedLaunchInputs: readonly string[];
+  /** why: inputs only a seed's hash takes, so a saved baseline made before one stays usable (#1586). */
+  readonly seedOnlyInputs: readonly string[];
 }
 
 export class AvdConfig {
@@ -65,13 +67,20 @@ export class AvdConfig {
   async currentConfigHash(
     folder: string,
     imageIdentity: string,
+    kind: "seed" | "baseline",
     knownEmulatorVersion?: string,
   ): Promise<string> {
     const [emulatorVersion, config] = await Promise.all([
       knownEmulatorVersion ?? this.#options.adbTools.emulatorVersion(),
       this.#avdConfig(folder),
     ]);
-    return stableHash([imageIdentity, emulatorVersion, config, ...this.#options.seedLaunchInputs]);
+    return stableHash([
+      imageIdentity,
+      emulatorVersion,
+      config,
+      ...this.#options.seedLaunchInputs,
+      ...(kind === "seed" ? this.#options.seedOnlyInputs : []),
+    ]);
   }
 
   async #avdConfig(folder: string): Promise<string> {
