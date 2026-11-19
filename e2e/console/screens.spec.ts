@@ -195,6 +195,7 @@ async function fixture(page: Page) {
         { headers: { "Content-Type": "application/octet-stream" } },
       );
     }
+    // fallow-ignore-next-line complexity -- the fake daemon's router: one branch per route it answers.
     window.fetch = async (input, init) => {
       const path = String(input);
 

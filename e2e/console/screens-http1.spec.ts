@@ -44,6 +44,7 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
     events!.write(
       `event: device.ready\ndata: ${JSON.stringify({ id: "synthetic-change", seq: workerReads, timestamp: Date.now(), event: "device.ready", payload: { deviceId: "four" } })}\n\n`,
     );
+  // fallow-ignore-next-line complexity -- the fake daemon's router: one branch per route it answers.
   const server = createServer(async (req, res) => {
     versions.add(req.httpVersion);
     const path = req.url!;
