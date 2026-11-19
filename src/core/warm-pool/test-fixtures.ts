@@ -150,7 +150,11 @@ export function harness(
     /** why: What a target resolves to; by default the request's own model and OS (26.0 when none). */
     resolve?: (request: DeviceRequest) => TargetResolution | Promise<TargetResolution>;
     /** why: Holds a creation until the test lets it go; the creation fails when this rejects. */
-    provision?: (spec: VirtualSpec, attempt: number) => Promise<void>;
+    provision?: (
+      spec: VirtualSpec,
+      attempt: number,
+      options: Parameters<WarmPoolOptions["provisioner"]["provision"]>[1],
+    ) => Promise<void>;
     refuseProvision?: boolean;
     /** why: The budget allows a creation when asked, then refuses the reservation: a lost race. */
     refuseReservation?: boolean;
@@ -348,7 +352,7 @@ export function harness(
         };
         provisionCalls.push(record);
         try {
-          await options.provision?.(spec, provisionCalls.length);
+          await options.provision?.(spec, provisionCalls.length, provisionOptions);
         } catch (error: unknown) {
           provisionOptions.reservation.release();
           throw error instanceof Error ? error : new BootTimeoutError("new");

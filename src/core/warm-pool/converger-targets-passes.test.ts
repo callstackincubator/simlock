@@ -151,6 +151,33 @@ describe("warm pool targets", () => {
     expect(rig.clock.pendingTimerCount).toBe(0);
   });
 
+  it("aborts a target creation that is running when a drain begins, and ends the drain without waiting for the creation to finish (#1700)", async () => {
+    let signal: AbortSignal | undefined;
+    const rig = harness([], {
+      // why: a creation that only an abort ends, as an Android seed make of several minutes is to a stop.
+      provision: async (_spec, _attempt, options) => {
+        signal =
+          "signal" in options && options.signal instanceof AbortSignal ? options.signal : undefined;
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+      targets: [iphone17],
+    });
+    await rig.pool.pass();
+    await flush();
+    expect(rig.provisionCalls).toHaveLength(1);
+
+    let drained = false;
+    void rig.pool.drain().then(() => {
+      drained = true;
+    });
+    await flush();
+
+    expect(signal?.aborted, "the running creation was aborted").toBe(true);
+    expect(drained, "the drain ended").toBe(true);
+  });
+
   it("logs a boot or creation that throws outside the driver, holds the target back and asks for no immediate retry", async () => {
     const rig = harness([], { reserveThrows: true, targets: [iphone17] });
 

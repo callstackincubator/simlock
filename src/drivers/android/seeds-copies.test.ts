@@ -55,6 +55,20 @@ class CopyFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+/** why: Windows refuses to delete a file a process still holds; a killed emulator's qemu child holds the seed's disks for a moment after the kill (#1700). */
+class BusySeedFilesystem extends MemoryFilesystem {
+  override async rm(path: string): Promise<void> {
+    if (path === seedHome) {
+      const error = new Error(
+        `EBUSY: resource busy or locked, unlink '${seedHome}/simlock.avd/cache.img'`,
+      ) as NodeJS.ErrnoException;
+      error.code = "EBUSY";
+      throw error;
+    }
+    await super.rm(path);
+  }
+}
+
 // why: a part of a decomposed module (ADR 0063) is tested through its own surface: these build
 // `Seeds` directly over a memory filesystem and a scripted runner, with the real parts it takes.
 describe("Seeds", () => {
@@ -274,6 +288,27 @@ describe("Seeds", () => {
         await expect(harness.seeds.listSources()).resolves.toEqual([]);
         expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
       }
+    });
+
+    it("throws the make's own error, not the removal's, when a failed seed's folder cannot be removed (#1700)", async () => {
+      const stage = seedStages();
+      const harness = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          ...stage.firstBoot,
+          stage.sync,
+          stage.powerOff,
+          ...bootingAt(seedHome, ["-no-snapshot-load"], true),
+          { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+        ],
+        { filesystem: new BusySeedFilesystem() },
+      );
+
+      await expect(harness.seeds.provision(harness.spec)).rejects.toThrow(
+        "Android seed seed_two: boot snapshot simlock_boot was not saved",
+      );
     });
 
     it("removes the device's folder and throws when copying the seed fails", async () => {
