@@ -60,7 +60,8 @@ struct TileSelector {
         }
         compared += 1
         if carriesNew || (sometimes > 0 && sometimesChanged * 2 >= sometimes) { return true }
-        return seenNanos &- previousSeenNanos >= intervalNanos * 3 / 4
+        if seenNanos &- previousSeenNanos >= intervalNanos * 3 / 4 { return true }
+        return lastSentNanos.map { seenNanos &- $0 >= intervalNanos * 3 / 2 } ?? true
     }
 
     mutating func reset() {
