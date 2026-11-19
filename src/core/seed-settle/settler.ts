@@ -18,6 +18,9 @@ const LIST_SOURCES_BOUND_MS = 60_000;
 /** why: a seed that cannot settle must not boot a device at every check (ADR 0090 §2). */
 const RETRY_AFTER_FAILURE_MS = 60 * 60_000;
 
+/** why: an operator's run that must give back its reservation and wait: the pressure came while it made the seed. */
+class Requeue extends Error {}
+
 class ListSourcesTimeout extends Error {
   constructor() {
     super("listing sources took longer than 60 s");
@@ -36,6 +39,8 @@ interface OperatorEntry {
   readonly reject: (error: unknown) => void;
   /** why: the kind has no fresh ready seed yet, so the run starts with a make. */
   needsMake: boolean;
+  /** why: the wait reason the caller was last told, so a repeated check does not tell it again. */
+  lastWaiting?: string;
 }
 
 /** why: what one settle works on: the driver, the kind of the quick seed, and who asked. */
@@ -90,7 +95,10 @@ class SeedSettlerImpl implements SeedSettler {
         }
         this.#underWay = underWay;
       }),
-      this.options.memoryPressure.onReading(() => this.#requestCheck()),
+      this.options.memoryPressure.onReading(() => {
+        if (this.#pressureStep() === "new-devices-paused") this.#abort("memory-pressure");
+        this.#requestCheck();
+      }),
     );
     this.#arm(CHECK_INTERVAL_MS);
   }
@@ -172,6 +180,10 @@ class SeedSettlerImpl implements SeedSettler {
     return this.options.drivers.find((driver) => driver.platform === platform);
   }
 
+  #pressureStep() {
+    return this.options.memoryPressure.current()?.step ?? "none";
+  }
+
   #abort(reason: AbortReason): void {
     const running = this.#running;
     if (running === undefined || running.abortReason !== undefined) return;
@@ -238,6 +250,17 @@ class SeedSettlerImpl implements SeedSettler {
     return CHECK_INTERVAL_MS;
   }
 
+  #reportWaiting(reason: string): void {
+    if (reason !== "settle-running" && reason !== "memory-pressure" && reason !== "disk-pressure") {
+      return;
+    }
+    for (const entry of this.#operators) {
+      if (entry.lastWaiting === reason) continue;
+      entry.lastWaiting = reason;
+      entry.onProgress({ reason, stage: "waiting" });
+    }
+  }
+
   async #beginOperator(specKey: string | undefined): Promise<void> {
     const index = this.#operators.findIndex((entry) => entry.specKey === specKey);
     const entry = this.#operators[index];
@@ -258,17 +281,19 @@ class SeedSettlerImpl implements SeedSettler {
 
   async #decide(candidates: readonly SettleCandidate[]) {
     const diskFreeBytes = await this.options.filesystem.diskFree(this.options.diskPath ?? ".");
-    return nextSettle({
+    const decision = nextSettle({
       candidates,
       diskFreeBytes,
       freeBytesThreshold: this.options.diskPressure.freeBytesThreshold,
       now: this.options.clock.now(),
       operator: this.#operators.map(({ spec, specKey }) => ({ platform: spec.platform, specKey })),
-      pressure: this.options.memoryPressure.current()?.step ?? "none",
+      pressure: this.#pressureStep(),
       running: this.#running !== undefined,
       underWay: this.#underWay,
       ...(this.#lastReleasedAt === undefined ? {} : { lastReleasedAt: this.#lastReleasedAt }),
     });
+    if (decision.kind === "wait") this.#reportWaiting(decision.reason);
+    return decision;
   }
 
   async #candidates(): Promise<readonly (SettleCandidate & { readonly target: Target })[]> {
@@ -372,6 +397,9 @@ class SeedSettlerImpl implements SeedSettler {
           });
           return;
         }
+        if (running.abortReason !== undefined || this.#pressureStep() !== "none") {
+          throw new Requeue();
+        }
         sourceId = ensured.sourceId;
         operator.onProgress({ stage: "settling" });
       }
@@ -384,6 +412,14 @@ class SeedSettlerImpl implements SeedSettler {
         ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
       });
     } catch (error: unknown) {
+      if (running.abortReason === "daemon-stopping") {
+        operator?.reject(new SeedSettlerStoppedError());
+        return;
+      }
+      if (running.abortReason !== undefined || error instanceof Requeue) {
+        if (operator !== undefined) this.#operators.unshift(operator);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.#logger.warn("a seed settle failed", {
         message,
