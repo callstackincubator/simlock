@@ -248,6 +248,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
       ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
       ...(options.runId === undefined ? {} : { runId: options.runId }),
+      ...(options.label === undefined ? {} : { label: options.label }),
       ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
       ownerId: options.ownerId,
       request,

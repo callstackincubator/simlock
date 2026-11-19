@@ -22,6 +22,7 @@ export interface LeaseLifecycleRegistry {
     readonly ttlDeadline: number;
     readonly leaseId?: string;
     readonly runId?: string;
+    readonly label?: string;
     readonly except?: readonly string[];
     readonly request?: {
       readonly id: string;
@@ -81,6 +82,7 @@ export class LeaseLifecycle {
      * that is in use. */
     readonly leaseId?: string;
     readonly runId?: string;
+    readonly label?: string;
     /** why: the categories a slim lease keeps running, written to the device in the grant commit (ADR 0066 §4). */
     readonly except?: readonly string[];
     /** ADR 0021: the gateway's request id, when the request is a gateway dispatch, carried on

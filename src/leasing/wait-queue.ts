@@ -37,6 +37,7 @@ export interface LeaseRequestOptions {
    */
   readonly leaseId?: string;
   readonly runId?: string;
+  readonly label?: string;
   /**
    * ADR 0021: the gateway's request id. A request that has one is a probe: its refusals and
    * failures are `lease.declined`, and it is never queued. Set only for the gateway's uplink.
