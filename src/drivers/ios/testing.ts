@@ -60,23 +60,14 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
       savedWithoutLineage: source.savedWithoutLineage ?? false,
     });
   }
-  markSettled(database, sourceId, source.settled);
-  if (source.leases !== undefined) {
-    database
-      .prepare("UPDATE ios_source_data SET lease_count = ? WHERE source_id = ?")
-      .run(source.leases, sourceId);
-  }
+  markUsed(database, sourceId, source);
   return database;
 }
 
-function markSettled(
-  database: SqliteDatabase,
-  sourceId: string,
-  settled: boolean | undefined,
-): void {
-  if (settled === true) {
-    database.prepare("UPDATE ios_source_data SET settled = 1 WHERE source_id = ?").run(sourceId);
-  }
+function markUsed(database: SqliteDatabase, sourceId: string, source: PlantedSource): void {
+  database
+    .prepare("UPDATE ios_source_data SET settled = ?, lease_count = ? WHERE source_id = ?")
+    .run(source.settled === true ? 1 : 0, source.leases ?? 0, sourceId);
 }
 
 export function plantReadySeed(
