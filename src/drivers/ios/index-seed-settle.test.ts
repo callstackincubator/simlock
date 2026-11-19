@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BootTimeoutError } from "../../core/index.js";
+import { BootTimeoutError, DriverCrashError } from "../../core/index.js";
 import {
   FakeClock,
   FakeProcessTable,
@@ -9,7 +9,7 @@ import {
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
-import { plantReadySeed, memorySourceDatabase } from "./testing.js";
+import { plantReadySeed, plantSource, memorySourceDatabase } from "./testing.js";
 import { deviceRoot, driverData, plantManagedDevice, simctl, waitForCalls } from "./test-slim.js";
 import {
   createDriver,
@@ -202,34 +202,67 @@ describe("IosSimctlDriver settleSeed", () => {
       "the copy's log folder is deleted",
     ).toBe(false);
   });
-  it("a settle that does not finish leaves the quick seed ready and deletes the copy and the settle row", async () => {
+  it("a settle that does not finish, or is asked of a source that is no ready quick seed, throws and leaves the rows and the quick seed as they were, with no copy", async () => {
+    class Stopped extends Error {}
+    const quick = {
+      deviceTypeId: driverData.deviceTypeId,
+      lineage: [lineageUdid],
+      runtimeId: driverData.runtimeId,
+      udid: seedUdid,
+    };
     const cloneCopy = {
       match: sourcesSimctl("clone", seedUdid, "simlock-device-1", deviceRoot),
       result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
     };
+    const booted = [
+      cloneCopy,
+      { match: simctl("boot", copyUdid) },
+      { match: simctl("bootstatus", copyUdid, "-b") },
+      { match: simctl("listapps", copyUdid) },
+    ];
+    const copyDeleted = [
+      { match: simctl("shutdown", copyUdid) },
+      { match: simctl("delete", copyUdid) },
+    ];
     const cases = [
       {
         name: "the boot times out",
-        script: [
-          cloneCopy,
-          { hangs: true, match: simctl("boot", copyUdid) },
-          { match: simctl("shutdown", copyUdid) },
-          { match: simctl("delete", copyUdid) },
-        ],
-        run: async (runner: ScriptedProcessRunner, clock: FakeClock) => {
+        script: [cloneCopy, { hangs: true, match: simctl("boot", copyUdid) }, ...copyDeleted],
+        run: async ({ runner, clock }: Context) => {
           await waitForCalls(runner, 2);
           clock.advance(300_000);
         },
         rejects: BootTimeoutError,
       },
+      {
+        name: "it is aborted while the copy is being read",
+        script: [...booted, ...copyDeleted],
+        run: async ({ runner, clock, controller }: Context) => {
+          await waitForCalls(runner, 4);
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          controller.abort(new Stopped("daemon stopping"));
+          clock.advance(2_000);
+        },
+        rejects: Stopped,
+      },
+      ...[
+        { name: "the id names no source", planted: undefined },
+        { name: "it is a baseline", planted: { ...quick, kind: "baseline" as const } },
+        { name: "it is a seed still being made", planted: { ...quick, state: "making" as const } },
+        { name: "it is settled already", planted: { ...quick, settled: true } },
+      ].map(({ name, planted }) => ({
+        name,
+        planted,
+        script: [],
+        run: async () => {},
+        rejects: DriverCrashError,
+      })),
     ];
-    for (const { name, script, run, rejects } of cases) {
-      const database = plantReadySeed(await memorySourceDatabase(), {
-        deviceTypeId: driverData.deviceTypeId,
-        lineage: [lineageUdid],
-        runtimeId: driverData.runtimeId,
-        udid: seedUdid,
-      });
+    for (const { name, script, run, rejects, ...rest } of cases) {
+      const planted = "planted" in rest ? rest.planted : quick;
+      const database = await memorySourceDatabase();
+      if (planted !== undefined) plantSource(database, planted);
+      const before = selectRows(database);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       await plantLaunchServices(filesystem, `${deviceRoot}/${copyUdid}`);
@@ -240,25 +273,18 @@ describe("IosSimctlDriver settleSeed", () => {
         logsRoot,
         processTable: new FakeProcessTable(),
       });
-      const settle = driver.settleSeed?.(quickSourceId, { signal: new AbortController().signal });
+      const controller = new AbortController();
+      const sourceId =
+        planted === undefined ? "no-such-source" : `planted-${planted.udid}-${planted.runtimeId}`;
+      const settle = driver.settleSeed?.(sourceId, { signal: controller.signal });
 
-      await run(runner, clock);
+      const state = promiseState(settle as Promise<unknown>);
+      await run({ runner, clock, controller });
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
+      expect(state.state, `${name}: the settle ended`).toBe("rejected");
       await expect(settle, name).rejects.toBeInstanceOf(rejects);
-      expect(
-        selectRows(database).map((row) => ({ ...(row as object) })),
-        `${name}: only the quick seed's row is left, still ready`,
-      ).toEqual([
-        {
-          lease_count: 0,
-          lineage: JSON.stringify([lineageUdid]),
-          settle_of: null,
-          settled: 0,
-          source_id: quickSourceId,
-          state: "ready",
-          udid: seedUdid,
-        },
-      ]);
+      expect(selectRows(database), `${name}: the rows are as they were`).toEqual(before);
       expect(
         runner.calls.map((call) => call.args.join(" ")),
         `${name}: the copy is deleted`,
@@ -266,7 +292,13 @@ describe("IosSimctlDriver settleSeed", () => {
       expect(
         await filesystem.exists(`${logsRoot}/${copyUdid}`),
         `${name}: the copy's log folder is deleted`,
-      ).toBe(false);
+      ).toBe(script.length === 0);
     }
   });
 });
+
+interface Context {
+  readonly runner: ScriptedProcessRunner;
+  readonly clock: FakeClock;
+  readonly controller: AbortController;
+}

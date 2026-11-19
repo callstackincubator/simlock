@@ -14,6 +14,8 @@ export interface PlantedSource {
   /** why: `null` is a source made before lineages were kept; absent is a lineage of no simulator. */
   readonly lineage?: readonly string[] | null;
   readonly savedWithoutLineage?: boolean;
+  /** why: a seed saved after a copy of it settled (ADR 0090); absent is a quick seed. */
+  readonly settled?: boolean;
   readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
@@ -51,6 +53,9 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
       lineage: source.lineage === null ? undefined : (source.lineage ?? []),
       savedWithoutLineage: source.savedWithoutLineage ?? false,
     });
+  }
+  if (source.settled === true) {
+    database.prepare("UPDATE ios_source_data SET settled = 1 WHERE source_id = ?").run(sourceId);
   }
   return database;
 }
