@@ -506,6 +506,64 @@ describe("AndroidDriver image fit", () => {
         await kept({ ...restarted, driver: adopted.driver });
       });
 
+      it("writes the current android.emulator.cores into a saved baseline's config.ini before its snapshot boot, whatever count the device was made at, and does not read the baseline as stale", async () => {
+        const launch = { audio: true, bootAnimation: true, gpu: "auto", headless: false };
+        const cases = [
+          { made: undefined, saved: 2, expected: "2" },
+          { made: 2, saved: 2, expected: "2" },
+          { made: 2, saved: undefined, expected: "2" },
+        ];
+
+        for (const { made, saved, expected } of cases) {
+          const harness = await seedHarness([...leasing(true)], {
+            config: `${config}hw.cpu.ncore=4\n`,
+            emulator: { ...launch, ...(made === undefined ? {} : { cores: made }) },
+            ids,
+          });
+          const ready = await harness.driver.makeReady(
+            await harness.driver.provision(harness.spec),
+          );
+          const clock = new FakeClock();
+          const restarted = await reopened(
+            harness,
+            [
+              ...savingSteps,
+              processResult(
+                binaries.adb,
+                ["devices"],
+                `List of devices attached\n${serial}\tdevice\n`,
+              ),
+              processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+              ...sourceBoot(),
+              processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+            ],
+            {
+              clock,
+              emulator: { ...launch, ...(saved === undefined ? {} : { cores: saved }) },
+            },
+          );
+
+          const saving = restarted.driver.saveSource({ ...ready, physical: false as const });
+          await vi.waitFor(() =>
+            expect(
+              restarted.runner.calls.filter((call) => call.args[0] === "devices"),
+            ).toHaveLength(1),
+          );
+          clock.advance(1_000);
+          await saving;
+
+          const listed = await restarted.driver.listSources();
+          expect({
+            made,
+            saved,
+            ncore: (await harness.filesystem.readFile(`${savedHome}/simlock.avd/config.ini`))
+              .split("\n")
+              .find((line) => line.startsWith("hw.cpu.ncore=")),
+            stale: listed.find((source) => source.id === "baseline_four")?.staleReason,
+          }).toEqual({ made, saved, ncore: `hw.cpu.ncore=${expected}`, stale: undefined });
+        }
+      });
+
       it("saves a device whose config.ini has spaces around `=`, as avdmanager writes it, with the model and image it names", async () => {
         const spaced =
           "hw.device.name = pixel_6\nimage.sysdir.1 = system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize = 2048\n";
