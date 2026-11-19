@@ -1,4 +1,4 @@
-import { lstat, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +42,20 @@ const implementations: Array<{
 
 afterEach(async () => {
   await new NodeFilesystem().rm(temporaryDirectory);
+});
+
+describe("NodeFilesystem.writeFileAtomic encoding", () => {
+  it("writes UTF-16 little-endian bytes when asked and UTF-8 bytes otherwise", async () => {
+    const filesystem = new NodeFilesystem();
+    await filesystem.mkdirp(temporaryDirectory);
+    const wide = `${temporaryDirectory}/task.xml`;
+    const narrow = `${temporaryDirectory}/plain.txt`;
+    await filesystem.writeFileAtomic(wide, "\uFEFFé", { encoding: "utf16le" });
+    await filesystem.writeFileAtomic(narrow, "é");
+
+    expect([...(await readFile(wide))]).toEqual([0xff, 0xfe, 0xe9, 0x00]);
+    expect([...(await readFile(narrow))]).toEqual([0xc3, 0xa9]);
+  });
 });
 
 describe.each(implementations)("Filesystem contract: $name", ({ create, link }) => {

@@ -7,7 +7,14 @@ import { join } from "node:path";
 
 import { FakeDaemonLauncher, NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
 import { launcherFor } from "./service-launcher.js";
-import { FakeServiceManager, type ServiceState } from "./service-manager.js";
+import {
+  FakeServiceManager,
+  MemoryFilesystem,
+  type ProcessResult,
+  ScriptedProcessRunner,
+  type ServiceState,
+  TaskSchedulerServiceManager,
+} from "./index.js";
 
 // why: lets one test refuse a mkdir of one existing folder, as Windows does for a drive root; every
 // other call goes to the real `mkdir`.
@@ -404,5 +411,123 @@ describe("launcherFor with an installed service", () => {
         `${testCase.path}com.callstack.simlock.worker.${testCase.manager === "systemd" ? "service" : "plist"}`,
       ]);
     }
+  });
+});
+
+describe("launcherFor with the Windows task (#1698)", () => {
+  const name = "com.callstack.simlock.worker";
+  const nodePath = "/opt/node/node.exe";
+  const supervisor = "/opt/simlock/dist/daemon/service-main.js";
+  const ok = (stdout: string): ProcessResult => ({ code: 0, stdout, stderr: "" });
+  const query = {
+    command: "cmd.exe",
+    args: ["/d", "/c", `chcp 65001 >nul && schtasks /query /tn ${name} /xml`],
+  };
+  const run = { command: "schtasks", args: ["/run", "/tn", name] };
+  const taskXml = `<Task><Settings><Enabled>true</Enabled></Settings><Exec><Arguments>--headless "${nodePath}" "${supervisor}" --task ${name}</Arguments></Exec></Task>`;
+  const session = [
+    {
+      match: {
+        command: "cmd.exe",
+        args: ["/d", "/c", "chcp 65001 >nul && whoami /user /fo csv /nh"],
+      },
+      result: ok('"desktop\\me","S-1-5-21-1"\r\n'),
+    },
+    {
+      match: {
+        command: "tasklist",
+        args: ["/fi", "USERNAME eq desktop\\me", "/fi", "SESSION ne 0", "/fo", "csv", "/nh"],
+      },
+      result: ok('"sihost.exe","4242","Console","1","20,000 K"\r\n'),
+    },
+  ];
+
+  async function launchWith(options: {
+    readonly script: ConstructorParameters<typeof ScriptedProcessRunner>[0];
+    readonly files: readonly string[];
+  }): Promise<{
+    readonly spawner: FakeDaemonLauncher;
+    readonly notices: string[];
+    readonly runner: ScriptedProcessRunner;
+    readonly launch: () => Promise<unknown>;
+  }> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/opt/simlock/dist/daemon");
+    await filesystem.mkdirp("/opt/node");
+    for (const file of options.files) await filesystem.writeFileAtomic(file, "");
+    const runner = new ScriptedProcessRunner(options.script);
+    const spawner = new FakeDaemonLauncher();
+    const notices: string[] = [];
+    const launcher = launcherFor({
+      role: "worker",
+      root: "/Users/me/.simlock",
+      dataDirectory: "/Users/me/.simlock",
+      mainPath: "/opt/simlock/dist/daemon/main.js",
+      nodePath,
+      home: "/Users/me",
+      env: {},
+      serviceManager: new TaskSchedulerServiceManager({ runner, filesystem }),
+      notify: (line) => notices.push(line),
+      spawner,
+    });
+    return { spawner, notices, runner, launch: () => launcher.launch() };
+  }
+
+  it("a start runs the task when the service is installed and spawns the daemon, with the notice, when it is not loaded, broken or not installed", async () => {
+    const installed = await launchWith({
+      script: [{ match: query, result: ok(taskXml) }, ...session, { match: run, result: ok("") }],
+      files: [nodePath, supervisor],
+    });
+    await installed.launch();
+    expect(installed.spawner.launches, "installed: no spawn").toBe(0);
+    expect(installed.runner.calls.at(-1)?.args, "installed: /run").toEqual(["/run", "/tn", name]);
+    expect(installed.notices).toEqual([]);
+
+    const notLoaded = await launchWith({
+      script: [
+        { match: query, result: ok(taskXml) },
+        ...session.slice(0, 1),
+        {
+          match: session[1]?.match as never,
+          result: ok("INFO: No tasks are running which match the specified criteria.\r\n"),
+        },
+      ],
+      files: [nodePath, supervisor],
+    });
+    await notLoaded.launch();
+    expect(notLoaded.spawner.launches, "not loaded: spawn").toBe(1);
+    expect(notLoaded.notices).toEqual([
+      `Service ${name} is not loaded; started the daemon without it.`,
+    ]);
+
+    const broken = await launchWith({
+      script: [{ match: query, result: ok(taskXml) }],
+      files: [supervisor],
+    });
+    await broken.launch();
+    expect(broken.spawner.launches, "broken: spawn").toBe(1);
+    expect(broken.notices).toEqual([
+      `Service ${name} is broken (${nodePath} is gone); started the daemon without it. Run simlock daemon install again.`,
+    ]);
+
+    const none = await launchWith({
+      script: [{ match: query, result: { code: 1, stdout: "", stderr: "ERROR" } }],
+      files: [],
+    });
+    await none.launch();
+    expect(none.spawner.launches, "not installed: spawn").toBe(1);
+    expect(none.notices).toEqual([]);
+
+    const refused = await launchWith({
+      script: [
+        { match: query, result: ok(taskXml) },
+        ...session,
+        { match: run, result: { code: 1, stdout: "", stderr: "ERROR: The task is disabled." } },
+      ],
+      files: [nodePath, supervisor],
+    });
+    await expect(refused.launch()).rejects.toThrow(
+      `schtasks /run /tn ${name} failed: ERROR: The task is disabled.`,
+    );
   });
 });
