@@ -262,22 +262,16 @@ class ScrcpySession {
       "com.genymobile.scrcpy.Server",
       SCRCPY_SERVER_VERSION,
       `scid=${this.#scidHex}`,
+      // why: options equal to scrcpy's defaults are left out, and no encoder key frame interval is set:
+      // some Samsung codecs abort with `stack corruption detected` when app_process's command line
+      // passes about 255 bytes (https://github.com/Genymobile/scrcpy/issues/6781).
       "log_level=info",
       "tunnel_forward=true",
-      "video=true",
       "audio=false",
-      "control=true",
       // why: with a control channel scrcpy would power the screen on and sync the clipboard; a stream changes no device setting.
       "power_on=false",
       "clipboard_autosync=false",
-      "video_codec=h264",
-      // why: a moving screen then rarely needs the reset that bounds a still one's key frames.
-      "video_codec_options=i-frame-interval:int=2",
       "send_device_meta=false",
-      "send_dummy_byte=true",
-      "send_stream_meta=true",
-      "send_frame_meta=true",
-      "cleanup=true",
       // why: scrcpy puts the phone's stay-awake setting back when the server ends (its clean-up
       // process), and needs no controller for it; an emulator's screen is not held.
       ...(this.#isPhone ? ["stay_awake=true"] : []),
@@ -371,8 +365,8 @@ class ScrcpySession {
       : `${message}. Its last output:\n${this.#tail.join("\n")}`;
   }
 
-  // why: every key frame the body delivers restarts the 4 s, so a moving screen is never reset and a still one
-  // is reset every 4 s; the timer lives apart from the reads, which a slow viewer stops.
+  // why: every key frame the body delivers restarts the timer, so a reset is sent only when the body delivers
+  // none in time; the timer lives apart from the reads, which a slow viewer stops.
   #armReset(): void {
     if (this.#closing !== undefined) return;
     if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
