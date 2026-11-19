@@ -92,6 +92,8 @@ export const seedEmulatorLine = [
   "-grpc-use-token",
   "-crash-report-mode",
   "never",
+  "-feature",
+  "-WiFiPacketStream",
 ];
 
 export function bootingAt(

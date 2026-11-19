@@ -51,7 +51,7 @@ export function LeasesScreen() {
         />
         <SearchField
           label="Search leases"
-          placeholder="Filter by holder, device, worker"
+          placeholder="Filter by holder, label, device, worker"
           className="lease-search"
           value={query}
           onChange={search}
@@ -92,9 +92,16 @@ const COLUMNS: readonly Column<LeaseRowView>[] = [
     cell: (row) => (
       <span className="lease-holder">
         <AgentChip kind={row.holderKind} />
-        <Link to={row.to} title={row.holderTitle}>
-          {row.holderDisplay}
-        </Link>
+        <span className="lease-holder-text">
+          {row.label === undefined ? null : (
+            <span className="lease-ellipsis lease-holder-label" title={row.label}>
+              {row.label}
+            </span>
+          )}
+          <Link to={row.to} title={row.holderTitle}>
+            {row.holderDisplay}
+          </Link>
+        </span>
       </span>
     ),
     header: "Held by",

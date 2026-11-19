@@ -270,6 +270,8 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         "-grpc-use-token",
         "-crash-report-mode",
         "never",
+        "-feature",
+        "-WiFiPacketStream",
         "-no-window",
         "-gpu",
         "host",
