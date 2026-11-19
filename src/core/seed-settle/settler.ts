@@ -418,104 +418,127 @@ class SeedSettlerImpl implements SeedSettler {
   }
 
   async #execute(target: Target, running: Running, held: Held): Promise<void> {
-    const { driver, operator } = target;
     try {
-      let sourceId = target.sourceId;
-      let leases = target.leases ?? 0;
-      if (operator !== undefined) {
-        if (operator.needsMake) operator.onProgress({ stage: "making" });
-        const ensured = await driver.ensureSeed?.(operator.spec);
-        if (ensured === undefined) throw new Error("the driver cannot make a seed");
-        if (ensured.settled) {
-          operator.resolve({
-            outcome: "already-settled",
-            sourceId: ensured.sourceId,
-            ...(ensured.sizeBytes === undefined ? {} : { sizeBytes: ensured.sizeBytes }),
-          });
-          return;
-        }
-        if (running.abortReason !== undefined || this.#pressureStep() !== "none") {
-          throw new Requeue();
-        }
-        sourceId = ensured.sourceId;
-        leases = ensured.leases;
-        operator.onProgress({ stage: "settling" });
-      }
-      if (sourceId === undefined || driver.settleSeed === undefined) return;
-      const startedAt = this.options.clock.now();
-      this.#emit("seed.settle-started", target, {
-        leases,
-        sourceId,
-        trigger: operator === undefined ? "background" : "operator",
-      });
-      let result;
-      try {
-        result = await driver.settleSeed(sourceId, { signal: running.controller.signal });
-      } catch (error: unknown) {
-        const ended =
-          running.abortReason === undefined
-            ? {
-                message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-                outcome: "failed" as const,
-              }
-            : { outcome: "aborted" as const, reason: running.abortReason };
-        this.#emit("seed.settle-ended", target, {
-          durationMs: this.options.clock.now() - startedAt,
-          sourceId,
-          ...ended,
-        });
-        throw error;
-      }
-      this.#emit("seed.settle-ended", target, {
-        durationMs: this.options.clock.now() - startedAt,
-        newSourceId: result.sourceId,
-        outcome: result.reason === "cap" ? "cap" : "settled",
-        sourceId,
-        ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
-      });
-      operator?.resolve({
-        outcome: "settled",
-        settledAfterMs: result.settledAfterMs,
-        sourceId: result.sourceId,
-        ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
-      });
+      const chosen = await this.#choose(target, running);
+      if (chosen !== undefined) await this.#settle(target, running, chosen);
     } catch (error: unknown) {
-      if (running.abortReason === "daemon-stopping") {
-        operator?.reject(new SeedSettlerStoppedError());
-        return;
-      }
-      if (running.abortReason !== undefined || error instanceof Requeue) {
-        if (operator !== undefined) this.#operators.unshift(operator);
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      this.#logger.warn("a seed settle failed", {
-        message,
-        model: target.kind.model,
-        osVersion: target.kind.osVersion,
-        platform: target.platform,
-        ...(target.kind.imageTag === undefined ? {} : { imageTag: target.kind.imageTag }),
-      });
-      if (target.sourceId !== undefined) {
-        this.#failedUntil.set(
-          `${target.platform}:${target.sourceId}`,
-          this.options.clock.now() + RETRY_AFTER_FAILURE_MS,
-        );
-      }
-      operator?.reject(
-        new SeedSettleFailedError(
-          target.platform,
-          operator.spec.model,
-          "failed",
-          `seed ${operator.spec.model} could not be settled: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      );
+      this.#ended(target, running, error);
     } finally {
       held.release();
       this.#running = undefined;
       this.#requestCheck();
     }
   }
+
+  /** why: an operator's call makes the seed first; it answers at once for a seed already settled and requeues when pressure appeared during the make. */
+  async #choose(
+    target: Target,
+    running: Running,
+  ): Promise<{ readonly sourceId: string; readonly leases: number } | undefined> {
+    const { driver, operator } = target;
+    if (operator === undefined) {
+      if (target.sourceId === undefined || driver.settleSeed === undefined) return undefined;
+      return { leases: target.leases ?? 0, sourceId: target.sourceId };
+    }
+    if (operator.needsMake) operator.onProgress({ stage: "making" });
+    const ensured = await driver.ensureSeed?.(operator.spec);
+    if (ensured === undefined) throw new Error("the driver cannot make a seed");
+    if (ensured.settled) {
+      operator.resolve({
+        outcome: "already-settled",
+        sourceId: ensured.sourceId,
+        ...(ensured.sizeBytes === undefined ? {} : { sizeBytes: ensured.sizeBytes }),
+      });
+      return undefined;
+    }
+    if (running.abortReason !== undefined || this.#pressureStep() !== "none") {
+      throw new Requeue();
+    }
+    operator.onProgress({ stage: "settling" });
+    return { leases: ensured.leases, sourceId: ensured.sourceId };
+  }
+
+  async #settle(
+    target: Target,
+    running: Running,
+    chosen: { readonly sourceId: string; readonly leases: number },
+  ): Promise<void> {
+    const { driver, operator } = target;
+    const { leases, sourceId } = chosen;
+    if (driver.settleSeed === undefined) return;
+    const startedAt = this.options.clock.now();
+    this.#emit("seed.settle-started", target, {
+      leases,
+      sourceId,
+      trigger: operator === undefined ? "background" : "operator",
+    });
+    let result;
+    try {
+      result = await driver.settleSeed(sourceId, { signal: running.controller.signal });
+    } catch (error: unknown) {
+      const ended =
+        running.abortReason === undefined
+          ? { message: errorText(error).slice(0, 500), outcome: "failed" as const }
+          : { outcome: "aborted" as const, reason: running.abortReason };
+      this.#emit("seed.settle-ended", target, {
+        durationMs: this.options.clock.now() - startedAt,
+        sourceId,
+        ...ended,
+      });
+      throw error;
+    }
+    this.#emit("seed.settle-ended", target, {
+      durationMs: this.options.clock.now() - startedAt,
+      newSourceId: result.sourceId,
+      outcome: result.reason === "cap" ? "cap" : "settled",
+      sourceId,
+      ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
+    });
+    operator?.resolve({
+      outcome: "settled",
+      settledAfterMs: result.settledAfterMs,
+      sourceId: result.sourceId,
+      ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
+    });
+  }
+
+  /** why: an abort or a requeue is no failure and sets no delay; a stop refuses the operator; anything else is logged and waits an hour. */
+  #ended(target: Target, running: Running, error: unknown): void {
+    const { operator } = target;
+    if (running.abortReason === "daemon-stopping") {
+      operator?.reject(new SeedSettlerStoppedError());
+      return;
+    }
+    if (running.abortReason !== undefined || error instanceof Requeue) {
+      if (operator !== undefined) this.#operators.unshift(operator);
+      return;
+    }
+    this.#logger.warn("a seed settle failed", {
+      message: errorText(error),
+      model: target.kind.model,
+      osVersion: target.kind.osVersion,
+      platform: target.platform,
+      ...(target.kind.imageTag === undefined ? {} : { imageTag: target.kind.imageTag }),
+    });
+    if (target.sourceId !== undefined) {
+      this.#failedUntil.set(
+        `${target.platform}:${target.sourceId}`,
+        this.options.clock.now() + RETRY_AFTER_FAILURE_MS,
+      );
+    }
+    operator?.reject(
+      new SeedSettleFailedError(
+        target.platform,
+        operator.spec.model,
+        "failed",
+        `seed ${operator.spec.model} could not be settled: ${errorText(error)}`,
+      ),
+    );
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isQuickSeed(source: DriverSource): boolean {

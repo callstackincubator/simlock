@@ -63,6 +63,7 @@ export class CapacityCoordinator {
   ) {}
 
   /** why: ADR 0090 §2: the settler waits for a quiet worker; it hears every take and release of a creation, boot or rewarm reservation. */
+  // fallow-ignore-next-line unused-class-member -- the seed settler reads it through a Pick of this class.
   onBootActivity(listener: (underWay: number) => void): () => void {
     this.#bootActivityListeners.add(listener);
     return () => void this.#bootActivityListeners.delete(listener);

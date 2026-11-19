@@ -13,7 +13,7 @@ export interface ProcessTable {
   list(): Promise<readonly ProcessEntry[]>;
 }
 
-export class ProcessTableReadError extends Error {
+class ProcessTableReadError extends Error {
   constructor(message: string) {
     super(`could not read the process table: ${message}`);
     this.name = "ProcessTableReadError";
@@ -52,21 +52,27 @@ export class NodeProcessTable implements ProcessTable {
     );
     if (result.endedBy !== undefined) throw new ProcessTableReadError(result.endedBy);
     if (result.code !== 0) throw new ProcessTableReadError(`exit ${String(result.code)}`);
-    const entries: ProcessEntry[] = [];
-    for (const line of result.stdout.split(/\r?\n/)) {
-      const match = LINE.exec(line);
-      if (match === null) continue;
-      const cpuSeconds = windows ? windowsSeconds(match[3]) : psSeconds(match[3]);
-      if (cpuSeconds === undefined) continue;
-      entries.push({
-        command: (match[4] ?? "").trim(),
-        cpuSeconds,
-        pid: Number(match[1]),
-        ppid: Number(match[2]),
-      });
-    }
-    return entries;
+    return parseEntries(result.stdout, windows ? windowsSeconds : psSeconds);
   }
+}
+
+function parseEntries(
+  stdout: string,
+  seconds: (text: string | undefined) => number | undefined,
+): ProcessEntry[] {
+  const entries: ProcessEntry[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = LINE.exec(line);
+    const cpuSeconds = match === null ? undefined : seconds(match[3]);
+    if (match === null || cpuSeconds === undefined) continue;
+    entries.push({
+      command: (match[4] ?? "").trim(),
+      cpuSeconds,
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+    });
+  }
+  return entries;
 }
 
 function windowsSeconds(text: string | undefined): number | undefined {
@@ -81,6 +87,7 @@ function psSeconds(text: string | undefined): number | undefined {
   return Number(days) * 86_400 + Number(hours) * 3_600 + Number(minutes) * 60 + Number(seconds);
 }
 
+// fallow-ignore-next-line unused-export -- the drivers' idle checks (ADR 0090) test against it.
 export class FakeProcessTable implements ProcessTable {
   #entries: readonly ProcessEntry[] = [];
   #failure: Error | undefined;
