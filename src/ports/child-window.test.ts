@@ -93,3 +93,36 @@ describe("the children the ports start ask Windows for no console window", () =>
     );
   });
 });
+
+/**
+ * why: Node puts every child it does not start detached on Windows into a job that kills the
+ * child when Node exits, and the child shares Node's console. An emulator or adb server spawned
+ * that way dies with the daemon while its own children live on, holding the logon task's
+ * console open (#1759). Neither the job nor the console can be seen from a test off Windows, so
+ * this checks the option `spawn` hands Node with the platform set.
+ */
+describe("a child NodeProcessRunner.spawn logs to a file outlives the daemon on every platform", () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  let directory: string | undefined;
+
+  afterEach(async () => {
+    if (original !== undefined) Object.defineProperty(process, "platform", original);
+    vi.mocked(spawn).mockClear();
+    if (directory !== undefined) await rm(directory, { force: true, recursive: true });
+    directory = undefined;
+  });
+
+  it.each(["win32", "darwin", "linux"] as const)("is started detached on %s", async (platform) => {
+    directory = await mkdtemp(join(tmpdir(), "simlock-child-detach-"));
+    const file = join(directory, "child.log");
+    Object.defineProperty(process, "platform", { value: platform });
+
+    await new NodeProcessRunner().spawn(...quiet, { stdio: { file } }).wait();
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      process.execPath,
+      ["-e", ""],
+      expect.objectContaining({ detached: true }),
+    );
+  });
+});
