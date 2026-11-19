@@ -14,6 +14,13 @@ export interface PlantedSource {
   /** why: `null` is a source made before lineages were kept; absent is a lineage of no simulator. */
   readonly lineage?: readonly string[] | null;
   readonly savedWithoutLineage?: boolean;
+  /** why: a seed saved after a copy of it settled (ADR 0090); absent is a quick seed. */
+  readonly settled?: boolean;
+  /** why: the plain leases already copied from this seed (ADR 0090). */
+  readonly leases?: number;
+  /** why: the row of a settle, or of the quick seed it retired, names the other seed (ADR 0090). */
+  readonly settleOf?: string;
+  readonly createdAt?: number;
   readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
@@ -31,7 +38,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
   const table = new IosSourceTable(database);
   const sourceId = `planted-${source.udid ?? source.maker ?? "making"}-${source.runtimeId}`;
   table.insertMaking({
-    createdAt: 0,
+    createdAt: source.createdAt ?? 0,
     deviceTypeId: source.deviceTypeId,
     kind: source.kind ?? "seed",
     maker: source.maker ?? "planted",
@@ -39,6 +46,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     osVersion: source.osVersion ?? "26.5",
     runtimeBuild: source.runtimeBuild,
     runtimeId: source.runtimeId,
+    ...(source.settleOf === undefined ? {} : { settleOf: source.settleOf }),
     setPath: "/Devices/sources",
     sourceId,
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
@@ -52,7 +60,14 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
       savedWithoutLineage: source.savedWithoutLineage ?? false,
     });
   }
+  markUsed(database, sourceId, source);
   return database;
+}
+
+function markUsed(database: SqliteDatabase, sourceId: string, source: PlantedSource): void {
+  database
+    .prepare("UPDATE ios_source_data SET settled = ?, lease_count = ? WHERE source_id = ?")
+    .run(source.settled === true ? 1 : 0, source.leases ?? 0, sourceId);
 }
 
 export function plantReadySeed(
