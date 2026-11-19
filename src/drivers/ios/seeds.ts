@@ -256,6 +256,8 @@ export class Seeds {
         copy = udid;
         this.#sources.setThrowaway(settleId, udid);
       });
+      // why: ADR 0048: in Xcode's set a booted simulator keeps the clipboard sync it booted with, as a throwaway's does.
+      if (!this.#ownsDeviceSet) await this.#deviceHub.disablePasteboardSync(copy);
       await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
       const readyAt = this.#clock.now();
       const reason = await this.#waitUntilIdle(processTable, copy, readyAt, options.signal);
