@@ -64,7 +64,8 @@ function hitsUnder(output: string, header: string): string[] {
   return lines.slice(start + 1, end === -1 ? undefined : end).map((l) => l.trim());
 }
 
-describe("stale-refs.sh", () => {
+// why: each test spawns git and sh several times, which takes about 300 ms in all on Linux but past the 20 s default for the first one when the Windows runner has the whole suite running beside it.
+describe("stale-refs.sh", { timeout: 60_000 }, () => {
   it("lists every line that still names a moved file, but not the ADRs that record history", () => {
     const dir = repo(
       {
