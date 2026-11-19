@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { FakeClock, MemoryFilesystem, type ScriptedProcessExpectation } from "../../ports/index.js";
+import {
+  FakeClock,
+  MemoryFilesystem,
+  NoopLogger,
+  type Logger,
+  type ScriptedProcessExpectation,
+} from "../../ports/index.js";
 
 import { createPart, sources, seedHome, seedHarness } from "./test-seeds.js";
 import {
@@ -52,6 +58,20 @@ class CopyFailureFilesystem extends MemoryFilesystem {
 
   override copyTree(): Promise<void> {
     return Promise.reject(new Error(this.#message));
+  }
+}
+
+/** why: Windows refuses to delete a file a process still holds; a killed emulator's qemu child holds the seed's disks for a moment after the kill (#1700). */
+class BusySeedFilesystem extends MemoryFilesystem {
+  override async rm(path: string): Promise<void> {
+    if (path === seedHome) {
+      const error = new Error(
+        `EBUSY: resource busy or locked, unlink '${seedHome}/simlock.avd/cache.img'`,
+      ) as NodeJS.ErrnoException;
+      error.code = "EBUSY";
+      throw error;
+    }
+    await super.rm(path);
   }
 }
 
@@ -274,6 +294,39 @@ describe("Seeds", () => {
         await expect(harness.seeds.listSources()).resolves.toEqual([]);
         expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
       }
+    });
+
+    it("throws the make's own error, not the removal's, when a failed seed's folder cannot be removed (#1700)", async () => {
+      const stage = seedStages();
+      const warnings: { message: string; detail: unknown }[] = [];
+      const logger: Logger = new (class extends NoopLogger {
+        override warn(message: string, detail?: Record<string, unknown>): void {
+          warnings.push({ message, detail });
+        }
+      })();
+      const harness = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          ...stage.firstBoot,
+          stage.sync,
+          stage.powerOff,
+          ...bootingAt(seedHome, ["-no-snapshot-load"], true),
+          { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+        ],
+        { filesystem: new BusySeedFilesystem(), logger },
+      );
+
+      await expect(harness.seeds.provision(harness.spec)).rejects.toThrow(
+        "Android seed seed_two: boot snapshot simlock_boot was not saved",
+      );
+      expect(warnings).toEqual([
+        {
+          message: "android seed folder was not removed after a failed make",
+          detail: expect.objectContaining({ folder: seedHome }),
+        },
+      ]);
     });
 
     it("removes the device's folder and throws when copying the seed fails", async () => {
