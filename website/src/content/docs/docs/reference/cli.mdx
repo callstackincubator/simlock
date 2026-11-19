@@ -119,7 +119,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
-              [--run <id>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
+              [--run <id>] [--label <text>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
 ```
 
 | Flag | Meaning | Default |
@@ -136,6 +136,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
 | `--run <id>` | The run id the lease carries: a name a CI job gives every lease it takes, 1 to 128 letters, digits, `.`, `_` or `-`, such as `123-1`. A gateway passes it to its worker and its admission command. `simlock status` shows it on the lease line. A bad value exits 2, before the command connects. The `SIMLOCK_RUN` environment variable sets it when the flag is absent; an empty value is unset. | `SIMLOCK_RUN`, else on GitHub Actions `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` (`-1` when the attempt is unset), else none |
+| `--label <text>` | A name for the lease, such as `feature-x`: 1 to 64 characters, none of them a control character. It is display-only: nothing routes or limits by it. `simlock status` shows it on the lease line after the run id, and every lease read answers it as `label`. On Android and physical devices it shows on the lease only. A bad value is refused by the daemon with `BAD_REQUEST` (exit 2). | None |
 | `--meta <key=value>` | Repeatable. Context for the gateway's admission command, such as `--meta project=checkout-app --meta role=ci`. The key is the text before the first `=`; the value is everything after it. The same key twice keeps the last. At most 16 keys; a key is 1 to 64 characters, a value 0 to 256, and keys and values together at most 2048. A gateway passes it to its admission command only: it is stored nowhere, in no event, and a worker ignores it. A flag with no `=`, or a bound broken, exits 2. | None |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
@@ -363,6 +364,8 @@ When the daemon has seen a newer Simlock version on npm, the `Simlock:` line say
 While an update runs, the line below `CLI:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
 
 A lease that carries a run id (`simlock lease --run`) shows it on its line: `Lease <id>: <requester> on <worker>, run <run id> since …`. `--json` carries it as the lease's `runId`.
+
+A lease that carries a label (`simlock lease --label`) shows it after the run id: `Lease <id>: <requester> on <worker>, run <run id>, label <label> since …`. `--json` carries it as the lease's `label`.
 
 ```text
 simlock status [--json]

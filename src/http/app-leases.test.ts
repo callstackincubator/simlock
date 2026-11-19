@@ -378,6 +378,51 @@ describe("POST /v1/lease-requests runId", () => {
   });
 });
 
+describe("POST /v1/lease-requests label", () => {
+  it("passes a body's label onto the dispatch input and names it on the granted lease, on GET /v1/leases/{id} and on GET /v1/leases, and refuses a bad one with the contract's words before dispatching", async () => {
+    const { app, dispatcher, registry } = buildHarness();
+    type Reply = { request: { lease: Record<string, unknown> } };
+    const labelled = postLeaseRequest(app, { ...defaultBody, label: "feature-x" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ label: "feature-x" });
+    call.resolve(makeGrant({ lease: { id: "lse_1", label: "feature-x" } }));
+    expect(((await (await labelled).json()) as Reply).request.lease).toMatchObject({
+      label: "feature-x",
+    });
+
+    registry.devices = [makeDevice({ id: "dev_1" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", label: "feature-x" })];
+    const got = await app.request("/v1/leases/lse_1", { headers: agentAuth });
+    expect(((await got.json()) as { lease: Record<string, unknown> }).lease).toMatchObject({
+      label: "feature-x",
+    });
+    const listed = await app.request("/v1/leases", { headers: agentAuth });
+    expect(((await listed.json()) as { leases: Record<string, unknown>[] }).leases).toMatchObject([
+      { id: "lse_1", label: "feature-x" },
+    ]);
+
+    const plain = postLeaseRequest(app, defaultBody, otherAgentAuth);
+    const second = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(second.input).not.toHaveProperty("label");
+    second.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    expect(((await (await plain).json()) as Reply).request.lease).not.toHaveProperty("label");
+
+    const calls = dispatcher.calls.length;
+    for (const [label, message] of [
+      ["", "label must be 1 to 64 characters"],
+      ["a".repeat(65), "label must be 1 to 64 characters"],
+      ["a\nb", "label must not contain control characters"],
+    ] as const) {
+      const refused = await postLeaseRequest(app, { ...defaultBody, label });
+      expect(refused.status, label).toBe(400);
+      expect(await refused.json(), label).toMatchObject({
+        error: { code: "BAD_REQUEST", message: expect.stringContaining(message) },
+      });
+    }
+    expect(dispatcher.calls).toHaveLength(calls);
+  });
+});
+
 describe("POST /v1/lease-requests leaseId", () => {
   it("passes a caller-chosen leaseId onto the dispatch input as sent, and no leaseId key when the body names none", async () => {
     const { app, dispatcher } = buildHarness();

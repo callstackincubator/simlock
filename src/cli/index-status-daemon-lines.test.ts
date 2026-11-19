@@ -444,7 +444,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Install android 35 on wrk_1: waiting for 0s, 3 waiters\n");
   });
 
-  it("prints a lease's run id after its worker on the lease line, and the line as before for a lease with none", async () => {
+  it("prints a lease's run id after its worker and its label after the run id on the lease line, and the line as before for a lease with neither", async () => {
     const output = outputCapture();
     const lease = {
       deviceId: "dev_1",
@@ -461,6 +461,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       leases: [
         { ...lease, id: "lse_run", runId: "123-1", workerId: "w1" },
         { ...lease, id: "lse_local", runId: "123-1" },
+        { ...lease, id: "lse_labelled", label: "feature-x", runId: "123-1", workerId: "w1" },
+        { ...lease, id: "lse_label_only", label: "feature-x" },
+        { ...lease, id: "lse_escaped", label: "a\u001b[31mb" },
         { ...lease, id: "lse_plain" },
       ],
     };
@@ -478,6 +481,16 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain(
       "Lease lse_local: ci-job-42, run 123-1 since 100, last renewed 200\n",
     );
+    expect(output.stdout).toContain(
+      "Lease lse_labelled: ci-job-42 on w1, run 123-1, label feature-x since 100, last renewed 200\n",
+    );
+    expect(output.stdout).toContain(
+      "Lease lse_label_only: ci-job-42, label feature-x since 100, last renewed 200\n",
+    );
+    expect(output.stdout).toContain(
+      "Lease lse_escaped: ci-job-42, label a\\u001b[31mb since 100, last renewed 200\n",
+    );
+    expect(output.stdout).not.toContain("\u001b");
     expect(output.stdout).toContain("Lease lse_plain: ci-job-42 since 100, last renewed 200\n");
   });
 
