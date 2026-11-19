@@ -1,6 +1,6 @@
 import { testLeaseFiles } from "./test-lease-files.js";
 import { testConfig as configWithDefaults } from "../core/testing.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
@@ -40,6 +40,7 @@ import {
   type ProcessStreamOptions,
   type StreamingProcessHandle,
   type StreamingProcessResult,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
@@ -51,6 +52,7 @@ import { createUpdateCoordinator } from "./update-coordinator.js";
 import type { RelayTargets } from "./relay.js";
 import { type PhysicalDeviceWatcher } from "../leasing/index.js";
 import { createTestEngine } from "../leasing/testing.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -86,9 +88,7 @@ const usageRigs: UsageRig[] = [];
 
 export async function stopTestDaemons(): Promise<void> {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
-  await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  await Promise.all(temporaryDirectories.splice(0).map((path) => removeDirectory(path)));
   await Promise.all(usageRigs.splice(0).map((rig) => rig.close()));
   await removeUsageRigs();
 }
@@ -211,7 +211,7 @@ export async function createHarness(
   if (directory !== undefined) {
     temporaryDirectories.push(directory);
   }
-  const socketPath = options.socketPath ?? join(directory as string, "daemon.sock");
+  const socketPath = options.socketPath ?? resolveDaemonSocketPath(directory as string);
   const clock = options.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const state = options.state ?? (await openTestState());
@@ -244,7 +244,7 @@ export async function createHarness(
       ? new MemoryFilesystem()
       : new (class extends MemoryFilesystem {
           override async readFile(...args: Parameters<MemoryFilesystem["readFile"]>) {
-            if (args[0] === "/data/update-result.json") {
+            if (args[0].replaceAll("\\", "/") === "/data/update-result.json") {
               await resultFileGate;
               if (unreadable !== undefined) throw unreadable;
             }
@@ -365,6 +365,7 @@ export async function createHarness(
     clock,
     config,
     daemon,
+    directory,
     driver,
     engine,
     eventBus,

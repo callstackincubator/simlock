@@ -141,7 +141,7 @@ export interface ErrorDetailsMap {
   EXEC_TIMEOUT: Record<string, never>;
   /** why: ADR 0067 §5: the lease file named by `stdinFile` could not be read to its end after `bytesRead` bytes, and the command was stopped. */
   STDIN_FILE_FAILED: { readonly name: string; readonly bytesRead: number };
-  /** why: `device.rotate` on a lease that is not on an iOS phone or tablet simulator; `class` is the physical class, the simulator's model family, or `emulator`. */
+  /** why: `device.rotate` on a lease that is not on an iOS phone or tablet simulator, or on a foldable one; `class` is the physical class, the simulator's model family, or `emulator`. */
   ROTATION_UNSUPPORTED: {
     readonly leaseId: string;
     readonly platform: Platform;

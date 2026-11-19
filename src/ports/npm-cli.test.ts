@@ -17,6 +17,9 @@ if (rest.includes("simlock@noisy")) {
 process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), script: process.argv[1], cwd: process.cwd() }) + "\\n");
 `;
 
+// why: Windows runs a program only by a name that ends in `.exe`.
+const NODE = process.platform === "win32" ? "node.exe" : "node";
+
 const trees: string[] = [];
 
 afterEach(async () => {
@@ -32,7 +35,7 @@ async function stubNpm(
   await mkdir(dataDirectory);
   await mkdir(join(tree, "bin"));
   await mkdir(join(tree, "lib"));
-  await symlink(process.execPath, join(tree, "bin", "node"));
+  await symlink(process.execPath, join(tree, "bin", NODE));
   const script = join(tree, "lib", "npm-cli.js");
   await writeFile(script, STUB_NPM);
   await chmod(script, 0o755);
@@ -41,7 +44,7 @@ async function stubNpm(
     runner,
     filesystem: new NodeFilesystem(),
     dataDirectory,
-    execPath: join(tree, "bin", "node"),
+    execPath: join(tree, "bin", NODE),
   });
   return { npm, dataDirectory, script };
 }
@@ -68,7 +71,7 @@ async function windowsLayoutNpm(): Promise<{
   await mkdir(dataDirectory);
   const nodejs = join(tree, "nodejs");
   await mkdir(join(nodejs, "node_modules", "npm", "bin"), { recursive: true });
-  await symlink(process.execPath, join(nodejs, "node"));
+  await symlink(process.execPath, join(nodejs, NODE));
   await writeFile(join(nodejs, "npm"), WINDOWS_NPM_WRAPPER);
   const script = join(nodejs, "node_modules", "npm", "bin", "npm-cli.js");
   await writeFile(script, STUB_NPM);
@@ -76,7 +79,7 @@ async function windowsLayoutNpm(): Promise<{
     runner: new NodeProcessRunner(),
     filesystem: new NodeFilesystem(),
     dataDirectory,
-    execPath: join(nodejs, "node"),
+    execPath: join(nodejs, NODE),
   });
   return { npm, dataDirectory, script };
 }
@@ -132,7 +135,7 @@ describe("NodeNpmCli", () => {
         ["i", "-g", "simlock@0.4.0"],
         ["root", "-g"],
       ].map((args) => ({
-        match: { command: /node$/, args: [/npm-cli\.js$/, ...args] },
+        match: { command: /node(\.exe)?$/, args: [/npm-cli\.js$/, ...args] },
         result: hung,
       })),
     );

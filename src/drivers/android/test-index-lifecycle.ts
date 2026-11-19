@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { type ScriptedProcessExpectation } from "../../ports/index.js";
 import { avdDirectory, binaries, processResult } from "./testing.js";
 
@@ -9,6 +10,6 @@ export function avdPathExpectation(
   return processResult(
     binaries.adb,
     ["-s", serial, "emu", "avd", "path"],
-    `${avdDirectory}/${avdName}.avd\r\nOK\r\n`,
+    `${join(avdDirectory, `${avdName}.avd`)}\r\nOK\r\n`,
   );
 }

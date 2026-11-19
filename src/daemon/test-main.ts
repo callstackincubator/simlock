@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
@@ -13,14 +13,15 @@ import {
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DaemonServer } from "./server.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 export const runningDaemons: DaemonServer[] = [];
 
 export const temporaryDirectories: string[] = [];
 
-// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test that asks for neither pins them off, and two daemons would clash on port 4701.
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046), and a macOS worker checks fseventsd (ADR 0088); a test that asks for neither pins them off, and two daemons would clash on port 4701.
 export const STANDALONE_OFF = {
-  capabilities: { "agent-device": { enabled: false } },
+  capabilities: { "agent-device": { enabled: false }, fseventsd: { enabled: false } },
   http: { enabled: false },
 } as const;
 
@@ -212,7 +213,5 @@ export async function startGateway(
 
 export async function stopDaemons(): Promise<void> {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
-  await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  await Promise.all(temporaryDirectories.splice(0).map((path) => removeDirectory(path)));
 }

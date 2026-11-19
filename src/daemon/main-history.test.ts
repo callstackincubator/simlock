@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { seedHistory } from "../history/testing.js";
 import { start, stopDaemons, temporaryDirectories, writeModule } from "./test-main.js";
+import { resolveDaemonSocketPath } from "../ports/index.js";
 
 afterEach(stopDaemons);
 
@@ -67,7 +68,7 @@ describe("startDaemon event history", () => {
     temporaryDirectories.push(winner, loser);
     const junk = "this is not a sqlite database ".repeat(20);
     await writeFile(join(loser, "history.db"), junk);
-    const socketPath = join(winner, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(winner);
     await start({ dataDirectory: winner, socketPath });
 
     const outcome = await start({ dataDirectory: loser, socketPath }).then(
