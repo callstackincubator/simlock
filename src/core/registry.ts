@@ -45,6 +45,7 @@ import {
   writeLease,
   writeLeaseRequest,
 } from "./registry-rows.js";
+import { presentFields } from "./present-fields.js";
 import { RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry-errors.js";
 import type {
   ComponentRecord,
@@ -723,8 +724,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       lastRenewedAt: grantedAt,
       ownerId,
       requesterId,
-      ...(runId === undefined ? {} : { runId }),
-      ...(label === undefined ? {} : { label }),
+      ...presentFields({ runId, label }),
       ttlMs,
       ttlDeadline,
     };

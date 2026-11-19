@@ -1,6 +1,7 @@
 import type { IdGenerator } from "../ports/index.js";
 import { isSettled, type LeaseRequestFailure, type LeaseRequestRecord } from "./domain.js";
 import type { DeviceRequest } from "./driver.js";
+import { presentFields } from "./present-fields.js";
 
 /** `lease.requestRetentionMs` and `lease.maxRequestRecords`, as a store applies them. */
 export interface LeaseRequestLimits {
@@ -104,11 +105,13 @@ export function newLeaseRequestRecord<Grant>(
   return {
     createdAt: now,
     id,
-    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-    ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
-    ...(input.runId === undefined ? {} : { runId: input.runId }),
-    ...(input.label === undefined ? {} : { label: input.label }),
-    ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
+    ...presentFields({
+      idempotencyKey: input.idempotencyKey,
+      leaseId: input.leaseId,
+      runId: input.runId,
+      label: input.label,
+      fleetRequestId: input.fleetRequestId,
+    }),
     ownerId: input.ownerId,
     request: { ...input.request },
     requesterId: input.requesterId,

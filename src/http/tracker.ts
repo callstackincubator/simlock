@@ -122,6 +122,12 @@ function requestOptions(body: LeaseRequestInput) {
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
+    ...requestNameOptions(body),
+  };
+}
+
+function requestNameOptions(body: LeaseRequestInput) {
+  return {
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
     ...(body.runId === undefined ? {} : { runId: body.runId }),
