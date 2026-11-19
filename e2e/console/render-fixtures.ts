@@ -53,7 +53,12 @@ const holders = [
   "claude-code:3f2a9c1e-7b44-4d0e-a2f1-0c9d8e7f91c4",
 ];
 
-function lease(index: number, requesterId = holders[index]) {
+function lease(
+  index: number,
+  requesterId = holders[index],
+): Record<string, unknown> & {
+  readonly ttlDeadline: number;
+} {
   return {
     id: `lse_${index + 1}`,
     deviceId: `dev_${index + 1}`,
