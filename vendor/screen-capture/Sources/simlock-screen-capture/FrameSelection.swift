@@ -16,35 +16,85 @@ struct Composite {
     var tiles: [UInt64]? = nil
 }
 
-/// Says whether a composite carries a new app frame, from which tiles of the screen changed.
+/// Says whether a composite carries a new app frame, from which tiles of the screen changed. Liquid
+/// Glass changes some tiles on every composite, so a composite whose only changes are on tiles that
+/// changed on all of the last 8 composites repeats the app frame before it.
 struct TileSelector {
-    init(intervalNanos: UInt64) {}
+    private static let historyLength = 8
 
-    mutating func carriesNewFrame(tiles: [UInt64], seenNanos: UInt64, lastSentNanos: UInt64?) -> Bool {
-        true
+    private let intervalNanos: UInt64
+    private var previous: [UInt64]?
+    private var previousSeenNanos: UInt64 = 0
+    /// Per tile, one bit per composite taken (the newest lowest): set when the tile changed on it.
+    private var history: [UInt8] = []
+    private var compared = 0
+
+    init(intervalNanos: UInt64) {
+        self.intervalNanos = intervalNanos
     }
 
-    mutating func reset() {}
+    /// Takes the composite into the history and says whether it carries a new app frame.
+    mutating func carriesNewFrame(tiles: [UInt64], seenNanos: UInt64, lastSentNanos: UInt64?) -> Bool {
+        defer {
+            previous = tiles
+            previousSeenNanos = seenNanos
+        }
+        guard let before = previous, before.count == tiles.count else {
+            history = [UInt8](repeating: 0, count: tiles.count)
+            compared = 0
+            return true
+        }
+        let full = compared >= Self.historyLength
+        var carriesNew = false
+        for tile in tiles.indices {
+            let changed = tiles[tile] != before[tile]
+            let alwaysChanging = full && history[tile] == UInt8.max
+            if changed, history[tile] & 1 == 0, !alwaysChanging { carriesNew = true }
+            history[tile] = history[tile] << 1 | (changed ? 1 : 0)
+        }
+        compared += 1
+        if carriesNew { return true }
+        return seenNanos &- previousSeenNanos >= intervalNanos * 3 / 4
+    }
+
+    mutating func reset() {
+        previous = nil
+    }
 }
 
 /// Decides, before the copy, whether a composite is copied. Its grid moves only for a copied one,
 /// because a slot spent on a composite that is skipped would drop the app frame right after it.
 struct FrameSelection {
     private var grid: FrameGrid
+    private var tileSelector: TileSelector
     private var size: (width: Int, height: Int)?
+    private var lastSentNanos: UInt64?
 
     init(fps: Int) {
         grid = FrameGrid(fps: fps)
+        tileSelector = TileSelector(intervalNanos: UInt64(1_000_000_000 / Double(fps)))
     }
 
     mutating func decide(_ composite: Composite) -> Bool {
         let resized = size.map { $0 != (composite.width, composite.height) } ?? true
         size = (composite.width, composite.height)
+        if resized { tileSelector.reset() }
+        // why: the history sees every composite taken, so the selector is asked before the grid.
+        let carriesNewFrame = composite.tiles.map {
+            tileSelector.carriesNewFrame(tiles: $0, seenNanos: composite.seenNanos, lastSentNanos: lastSentNanos)
+        } ?? true
         if composite.force || resized {
-            if grid.isDue(atNanos: composite.seenNanos) { grid.commit(atNanos: composite.seenNanos) }
+            if grid.isDue(atNanos: composite.seenNanos) { send(composite) }
             return true
         }
-        return grid.admit(atNanos: composite.seenNanos)
+        guard grid.isDue(atNanos: composite.seenNanos), carriesNewFrame else { return false }
+        send(composite)
+        return true
+    }
+
+    private mutating func send(_ composite: Composite) {
+        grid.commit(atNanos: composite.seenNanos)
+        lastSentNanos = composite.seenNanos
     }
 }
 
