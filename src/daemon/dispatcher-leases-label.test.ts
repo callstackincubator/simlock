@@ -65,4 +65,38 @@ describe("Dispatcher: lease.request with a label", () => {
     const held = (await dispatcher.dispatch("status.get", {}, agent)).leases;
     expect(held).toHaveLength(1);
   });
+
+  it("an idempotent repeat replays when the labels match and is an IDEMPOTENCY_CONFLICT when they differ", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const ask = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const agent = session({ principal: "tok_owner" });
+
+    const cases = [
+      ["same label", "feature-x", "feature-x", "replay"],
+      ["other label", "feature-x", "feature-y", "conflict"],
+      ["label on the repeat only", undefined, "feature-x", "conflict"],
+      ["label on the first only", "feature-x", undefined, "conflict"],
+      ["neither", undefined, undefined, "replay"],
+    ] as const;
+    for (const [name, first, repeat, outcome] of cases) {
+      const base = { ...ask, idempotencyKey: name, requesterId: name };
+      const granted = await dispatcher.dispatch(
+        "lease.request",
+        { ...base, ...(first === undefined ? {} : { label: first }) },
+        agent,
+      );
+      const again = await dispatcher
+        .dispatch(
+          "lease.request",
+          { ...base, ...(repeat === undefined ? {} : { label: repeat }) },
+          agent,
+        )
+        .catch((caught: unknown) => caught);
+      if (outcome === "replay") {
+        expect((again as typeof granted).lease, name).toEqual(granted.lease);
+      } else {
+        expect(classifyError(again), name).toBe("IDEMPOTENCY_CONFLICT");
+      }
+    }
+  });
 });
