@@ -158,7 +158,7 @@ While the daemon is still starting, devices, capacity and the warm pool are left
 
 ## Leases
 
-**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder (**Held by**), the device and its runtime, the worker, and the time left (**Expires in**) as a countdown with a bar. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list, and the box beside them searches by holder, device and worker. Under the table, a line counts the rows shown; a list longer than one page gets a pager.
+**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder (**Held by**), with the lease's label above it when the lease has one (see `simlock lease --label`), the device and its runtime, the worker, and the time left (**Expires in**) as a countdown with a bar. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list, and the box beside them searches by holder, label, device and worker. The search (⌘K) finds a lease by its label too, and shows it as `<label> · <holder> · <device>`. The lease's pane lists the label as **Label**. Under the table, a line counts the rows shown; a list longer than one page gets a pager.
 
 The holder is the identity that took the lease. A lease taken over the HTTP API shows the label of the token that took it, so give each agent's token a label:
 
