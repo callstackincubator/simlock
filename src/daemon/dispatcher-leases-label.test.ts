@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { classifyError } from "./error-code.js";
 import { buildDispatcher, session } from "./test-dispatcher.js";
 
 describe("Dispatcher: lease.request with a label", () => {
@@ -29,5 +30,39 @@ describe("Dispatcher: lease.request with a label", () => {
     expect(status?.find((lease) => lease.id === labelled.lease.id)?.label).toBe("feature-x");
     expect(plain.lease).not.toHaveProperty("label");
     expect(listed.find((lease) => lease.id === plain.lease.id)).not.toHaveProperty("label");
+  });
+
+  it("a bad label is refused BAD_REQUEST with the same words, and grants nothing", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const ask = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const agent = session({ principal: "tok_owner" });
+    const length = "label must be 1 to 64 characters";
+    const control = "label must not contain control characters";
+
+    const refused = [
+      ["empty", "", length],
+      ["65 characters", "a".repeat(65), length],
+      ["a newline", "a\nb", control],
+      ["a tab", "\t", control],
+      ["NUL", "a\u0000b", control],
+      ["U+2028", "a\u2028b", control],
+      ["U+2029", "a\u2029b", control],
+    ] as const;
+    for (const [name, label, message] of refused) {
+      const error = await dispatcher
+        .dispatch("lease.request", { ...ask, label, noWait: true, requesterId: "bad" }, agent)
+        .catch((caught: unknown) => caught);
+      expect(classifyError(error), name).toBe("BAD_REQUEST");
+      expect((error as Error).message, name).toBe(message);
+    }
+
+    const accepted = await dispatcher.dispatch(
+      "lease.request",
+      { ...ask, label: "a".repeat(64), requesterId: "good" },
+      agent,
+    );
+    expect(accepted.lease.label).toBe("a".repeat(64));
+    const held = (await dispatcher.dispatch("status.get", {}, agent)).leases;
+    expect(held).toHaveLength(1);
   });
 });
