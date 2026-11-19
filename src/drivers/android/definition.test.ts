@@ -54,6 +54,18 @@ describe("the Android driver's keys of the android config section", () => {
     );
   });
 
+  it("take android.emulator.cores as a positive integer, refuse anything else naming the key, and load with no cores when unset", async () => {
+    for (const cores of [1, 2]) {
+      expect((await load({ android: { emulator: { cores } } })).section.emulator.cores).toBe(cores);
+    }
+    for (const cores of [0, -1, 2.5, "abc", "2", true]) {
+      await expect(load({ android: { emulator: { cores } } })).rejects.toThrow(
+        'Invalid config value for "android.emulator.cores"',
+      );
+    }
+    expect("cores" in (await load({})).section.emulator).toBe(false);
+  });
+
   it.each([0, -1, "300000"])(
     "refuse a bad android.bootTimeoutMs, naming the key: %j",
     async (bootTimeoutMs) => {

@@ -190,6 +190,80 @@ describe("IosSimctlDriver copy swap", () => {
     }
   });
 
+  it("a copy swaps every file and link its seed recorded even when the seed is destroyed between the clone and the swap", async () => {
+    let reachedSwap!: () => void;
+    const atSwap = new Promise<void>((resolve) => {
+      reachedSwap = resolve;
+    });
+    let releaseSwap!: () => void;
+    const swapReleased = new Promise<void>((resolve) => {
+      releaseSwap = resolve;
+    });
+    const launchServicesFolder = `${deviceRoot}/${copyUdid}/data/var/db/lsd`;
+    class HeldAfterClone extends MemoryFilesystem {
+      override async exists(path: string): Promise<boolean> {
+        if (path === launchServicesFolder) {
+          reachedSwap();
+          await swapReleased;
+        }
+        return super.exists(path);
+      }
+    }
+    const database = await seededDatabase({
+      files: [
+        { kind: "file", relativePath: "data/first.plist" },
+        { kind: "file", relativePath: "data/second.plist" },
+        { kind: "link", relativePath: "data/Logs" },
+      ],
+      lineage: [lineageUdid],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+      },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      { match: sourcesSimctl("delete", seedUdid) },
+    ]);
+    const filesystem = new HeldAfterClone();
+    await plantManagedDevice(filesystem);
+    for (const name of ["first", "second"]) {
+      await plantBytes(
+        filesystem,
+        `${deviceRoot}/${copyUdid}/data/${name}.plist`,
+        Buffer.from(`/Devices/${lineageUdid}/${name}`),
+      );
+    }
+    const linkTarget = (udid: string): string => `/Users/x/Library/Logs/CoreSimulator/${udid}`;
+    filesystem.defineSymlink(`${deviceRoot}/${copyUdid}/data/Logs`, linkTarget(lineageUdid));
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+    const seedSource = database
+      .prepare("SELECT source_id FROM ios_source_data WHERE udid = ?")
+      .get(seedUdid)?.["source_id"] as string;
+
+    const provision = driver.provision(spec);
+    await atSwap;
+    await driver.destroySource(seedSource);
+    releaseSwap();
+    const device = await provision;
+
+    expect(runner.calls.map((call) => call.args.slice(3).join(" "))).toEqual([
+      "list -j devicetypes runtimes",
+      `clone ${seedUdid} ${driverData.name} ${deviceRoot}`,
+      `shutdown ${seedUdid}`,
+      `delete ${seedUdid}`,
+    ]);
+    for (const name of ["first", "second"]) {
+      const bytes = await readBytes(filesystem, `${deviceRoot}/${copyUdid}/data/${name}.plist`);
+      expect(bytes.toString(), name).toBe(`/Devices/${copyUdid}/${name}`);
+    }
+    expect(await filesystem.readlink(`${deviceRoot}/${copyUdid}/data/Logs`)).toBe(
+      linkTarget(copyUdid),
+    );
+    expect(device.driverData).toMatchObject({ lineage: [lineageUdid] });
+  });
+
   it("a LaunchServices database the seed recorded is dropped from the copy and is not swapped", async () => {
     const csstore = "data/var/db/lsd/com.apple.LaunchServices-33554481-v2.csstore";
     const database = await seededDatabase({

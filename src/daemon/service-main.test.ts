@@ -147,6 +147,7 @@ describe("the Windows supervisor (#1698)", () => {
     const first = failed.runner.calls[0];
     expect(first?.options.timeoutMs, "the daemon wait has no limit").toBeUndefined();
     expect(first?.options.stdio).toEqual({ file: join(home, "daemon.log") });
+    expect(first?.options.outlivesCaller, "ending the supervisor ends its daemon").toBeUndefined();
     expect(first?.options.env).toMatchObject({ PATH: "saved", KEEP: "1", SIMLOCK_HOME: home });
     expect(failed.logPaths[0]).toBe(join(home, "daemon.log"));
     expect(

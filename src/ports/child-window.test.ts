@@ -93,3 +93,57 @@ describe("the children the ports start ask Windows for no console window", () =>
     );
   });
 });
+
+/**
+ * why: Node puts every child it does not start detached on Windows into a job that kills the
+ * child when Node exits, and the child shares Node's console. An emulator or adb server spawned
+ * that way dies with the daemon while its own children live on, holding the logon task's
+ * console open (#1759). The supervisor's daemon must stay in that job, so that ending the
+ * supervisor ends it (ADR 0086 section 2). Neither the job nor the console can be seen from a
+ * test off Windows, so this checks the option `spawn` hands Node with the platform set.
+ */
+describe("a child that outlives its caller is detached on every platform, and one that does not is detached off Windows only", () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  let directory: string | undefined;
+
+  afterEach(async () => {
+    if (original !== undefined) Object.defineProperty(process, "platform", original);
+    vi.mocked(spawn).mockClear();
+    if (directory !== undefined) await rm(directory, { force: true, recursive: true });
+    directory = undefined;
+  });
+
+  it.each([
+    ["win32", true, true, true],
+    ["darwin", true, true, false],
+    ["linux", true, true, false],
+    ["win32", false, false, false],
+    ["darwin", false, true, false],
+    ["linux", false, true, false],
+  ] as const)(
+    "on %s, outlivesCaller %s is started detached: %s, under conhost --headless: %s",
+    async (platform, outlivesCaller, detached, headless) => {
+      directory = await mkdtemp(join(tmpdir(), "simlock-child-detach-"));
+      const file = join(directory, "child.log");
+      Object.defineProperty(process, "platform", { value: platform });
+      if (headless) {
+        // why: conhost.exe does not exist off Windows; the quiet program stands in for it.
+        const actual =
+          await vi.importActual<typeof import("node:child_process")>("node:child_process");
+        vi.mocked(spawn).mockImplementationOnce(((
+          _command: string,
+          _args: string[],
+          options: object,
+        ) => actual.spawn(...quiet, options)) as unknown as typeof spawn);
+      }
+
+      await new NodeProcessRunner().spawn(...quiet, { outlivesCaller, stdio: { file } }).wait();
+
+      expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+        headless ? expect.stringMatching(/conhost\.exe$/i) : process.execPath,
+        headless ? ["--headless", process.execPath, "-e", ""] : ["-e", ""],
+        expect.objectContaining({ detached }),
+      );
+    },
+  );
+});
