@@ -1,23 +1,57 @@
 import { type Logger, NoopLogger, type TimerHandle } from "../../ports/index.js";
 import { capacityDevices } from "../capacity/index.js";
+import type { Platform, VirtualSpec } from "../domain.js";
+import { type DriverSource, SeedSettleFailedError } from "../driver.js";
 import { stableError } from "../stable-error.js";
-import type { Driver, DriverSource } from "../driver.js";
 import { CHECK_INTERVAL_MS, QUIET_MS, nextSettle, type SettleCandidate } from "./policy.js";
-import type { SeedSettler, SeedSettlerOptions, SettlerDriver } from "./types.js";
+import type {
+  SeedSettleProgress,
+  SeedSettleResult,
+  SeedSettler,
+  SeedSettlerOptions,
+  SettlerDriver,
+} from "./types.js";
 
 /** why: a driver's `listSources` can walk a whole sources folder; a check that waits longer ends and the next one tries again. */
 const LIST_SOURCES_BOUND_MS = 60_000;
-
-/** why: a candidate remembers the driver that listed it, so the settle calls that driver. */
-interface Chosen extends SettleCandidate {
-  readonly driver: SettlerDriver & Pick<Required<Driver>, "settleSeed">;
-}
 
 class ListSourcesTimeout extends Error {
   constructor() {
     super("listing sources took longer than 60 s");
     this.name = "ListSourcesTimeout";
   }
+}
+
+type AbortReason = "memory-pressure" | "daemon-stopping" | "nuke";
+
+/** why: an operator's `simlock seed` call waiting for its kind's seed to be settled. */
+interface OperatorEntry {
+  readonly spec: VirtualSpec;
+  readonly specKey: string;
+  readonly onProgress: (progress: SeedSettleProgress) => void;
+  readonly resolve: (result: SeedSettleResult) => void;
+  readonly reject: (error: unknown) => void;
+  /** why: the kind has no fresh ready seed yet, so the run starts with a make. */
+  needsMake: boolean;
+}
+
+/** why: what one settle works on: the driver, the kind of the quick seed, and who asked. */
+interface Target {
+  readonly driver: SettlerDriver;
+  readonly platform: Platform;
+  readonly spec: Pick<VirtualSpec, "osVersion">;
+  readonly sourceId?: string;
+  readonly operator?: OperatorEntry;
+}
+
+interface Running {
+  readonly controller: AbortController;
+  abortReason?: AbortReason;
+  done: Promise<void>;
+}
+
+interface Held {
+  release(): void;
 }
 
 export function createSeedSettler(options: SeedSettlerOptions): SeedSettler {
@@ -28,10 +62,13 @@ class SeedSettlerImpl implements SeedSettler {
   readonly #logger: Logger;
   #timer: TimerHandle | undefined;
   #started = false;
+  #stopped = false;
   #checking = false;
   #again = false;
   #underWay = 0;
   #lastReleasedAt: number | undefined;
+  #running: Running | undefined;
+  readonly #operators: OperatorEntry[] = [];
   readonly #cleanups: (() => void)[] = [];
 
   constructor(private readonly options: SeedSettlerOptions) {
@@ -55,17 +92,85 @@ class SeedSettlerImpl implements SeedSettler {
 
   beginStop(): void {}
 
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> {
+    this.#stopped = true;
+    if (this.#timer !== undefined) this.options.clock.cancel(this.#timer);
+    for (const cleanup of this.#cleanups) cleanup();
+    this.#abort("daemon-stopping");
+    await this.#running?.done;
+  }
 
   holdWhile<Result>(work: () => Promise<Result>): Promise<Result> {
     return work();
   }
 
-  settle(): never {
-    throw new Error("not built");
+  settle(
+    spec: VirtualSpec,
+    { onProgress }: { readonly onProgress: (progress: SeedSettleProgress) => void },
+  ): Promise<SeedSettleResult> {
+    return new Promise((resolve, reject) => {
+      const entry: OperatorEntry = {
+        needsMake: true,
+        onProgress,
+        reject,
+        resolve,
+        spec,
+        specKey: [spec.platform, spec.model, spec.osVersion, spec.imageTag ?? ""].join("|"),
+      };
+      this.#admit(entry).catch((error: unknown) => {
+        reject(
+          new SeedSettleFailedError(
+            spec.platform,
+            spec.model,
+            "failed",
+            `seed ${spec.model} could not be settled: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+      });
+    });
+  }
+
+  async #admit(entry: OperatorEntry): Promise<void> {
+    const driver = this.#driverOf(entry.spec.platform);
+    if (driver?.ensureSeed === undefined || driver.settleSeed === undefined) {
+      throw new Error(`no ${entry.spec.platform} driver settles seeds`);
+    }
+    const { spec } = entry;
+    const found = (await this.#listBounded(driver)).find(
+      (source) =>
+        source.kind === "seed" &&
+        source.orphan !== true &&
+        source.staleReason === undefined &&
+        source.model === spec.model &&
+        source.osVersion === spec.osVersion &&
+        (source.imageTag ?? "") === (spec.imageTag ?? ""),
+    );
+    if (found?.settled === true) {
+      entry.resolve({
+        outcome: "already-settled",
+        sourceId: found.id,
+        ...(found.sizeBytes === undefined ? {} : { sizeBytes: found.sizeBytes }),
+      });
+      return;
+    }
+    entry.needsMake = found === undefined;
+    this.#operators.push(entry);
+    this.#requestCheck();
+  }
+
+  #driverOf(platform: Platform): SettlerDriver | undefined {
+    return this.options.drivers.find((driver) => driver.platform === platform);
+  }
+
+  #abort(reason: AbortReason): void {
+    const running = this.#running;
+    if (running === undefined || running.abortReason !== undefined) return;
+    running.abortReason = reason;
+    running.controller.abort(reason);
   }
 
   #arm(delayMs: number): void {
+    if (this.#stopped) return;
     if (this.#timer !== undefined) this.options.clock.cancel(this.#timer);
     this.#timer = this.options.clock.setTimer(Math.max(1, delayMs), () => {
       this.#timer = undefined;
@@ -74,7 +179,7 @@ class SeedSettlerImpl implements SeedSettler {
   }
 
   #requestCheck(): void {
-    if (!this.#started) return;
+    if (!this.#started || this.#stopped) return;
     if (this.#checking) {
       this.#again = true;
       return;
@@ -98,11 +203,15 @@ class SeedSettlerImpl implements SeedSettler {
 
   async #check(): Promise<number> {
     const gate = await this.#decide([]);
-    if (gate.kind === "wait" && gate.reason === "quiet") {
+    if (gate.kind === "settle") {
+      await this.#beginOperator(gate.specKey);
+      return CHECK_INTERVAL_MS;
+    }
+    if (gate.reason === "quiet") {
       return (this.#lastReleasedAt ?? 0) + QUIET_MS - this.options.clock.now();
     }
-    if (gate.kind === "wait" && gate.reason !== "no-candidate") return CHECK_INTERVAL_MS;
-    let candidates: readonly Chosen[];
+    if (gate.reason !== "no-candidate") return CHECK_INTERVAL_MS;
+    let candidates: readonly (SettleCandidate & { readonly target: Target })[];
     try {
       candidates = await this.#candidates();
     } catch (error: unknown) {
@@ -115,8 +224,26 @@ class SeedSettlerImpl implements SeedSettler {
       (candidate) =>
         candidate.platform === decision.platform && candidate.sourceId === decision.sourceId,
     );
-    if (chosen !== undefined) await this.#begin(chosen);
+    if (chosen !== undefined) await this.#begin(chosen.target);
     return CHECK_INTERVAL_MS;
+  }
+
+  async #beginOperator(specKey: string | undefined): Promise<void> {
+    const index = this.#operators.findIndex((entry) => entry.specKey === specKey);
+    const entry = this.#operators[index];
+    const driver = entry === undefined ? undefined : this.#driverOf(entry.spec.platform);
+    if (entry === undefined || driver === undefined) return;
+    this.#operators.splice(index, 1);
+    const started = await this.#begin({
+      driver,
+      operator: entry,
+      platform: entry.spec.platform,
+      spec: entry.spec,
+    });
+    if (!started) {
+      this.#operators.unshift(entry);
+      entry.onProgress({ reason: "capacity", stage: "waiting" });
+    }
   }
 
   async #decide(candidates: readonly SettleCandidate[]) {
@@ -125,26 +252,30 @@ class SeedSettlerImpl implements SeedSettler {
       candidates,
       diskFreeBytes,
       freeBytesThreshold: this.options.diskPressure.freeBytesThreshold,
-      operator: [],
-      running: false,
       now: this.options.clock.now(),
+      operator: this.#operators.map(({ spec, specKey }) => ({ platform: spec.platform, specKey })),
       pressure: this.options.memoryPressure.current()?.step ?? "none",
+      running: this.#running !== undefined,
       underWay: this.#underWay,
       ...(this.#lastReleasedAt === undefined ? {} : { lastReleasedAt: this.#lastReleasedAt }),
     });
   }
 
-  async #candidates(): Promise<readonly Chosen[]> {
+  async #candidates(): Promise<readonly (SettleCandidate & { readonly target: Target })[]> {
     const lists = await Promise.all(
-      this.options.drivers.map(async (driver): Promise<readonly Chosen[]> => {
-        const { settleSeed } = driver;
-        if (settleSeed === undefined) return [];
+      this.options.drivers.map(async (driver) => {
+        if (driver.settleSeed === undefined) return [];
         const sources = await this.#listBounded(driver);
         return sources.filter(isQuickSeed).map((source) => ({
-          driver: { ...driver, settleSeed: settleSeed.bind(driver) },
           leases: source.leases ?? 0,
           platform: driver.platform,
           sourceId: source.id,
+          target: {
+            driver,
+            platform: driver.platform,
+            sourceId: source.id,
+            spec: { osVersion: source.osVersion },
+          },
         }));
       }),
     );
@@ -169,20 +300,83 @@ class SeedSettlerImpl implements SeedSettler {
     });
   }
 
-  async #begin(chosen: Chosen): Promise<void> {
-    const reserved = await this.options.decisions.run(() => {
-      return this.options.capacity.tryReserveProvisioning(
-        { mode: "full", platform: chosen.platform },
+  async #begin(target: Target): Promise<boolean> {
+    const held = await this.options.decisions.run((): Held | undefined => {
+      let releaseClaim: () => void;
+      try {
+        releaseClaim = this.options.components.claimProvision({
+          osVersion: target.spec.osVersion,
+          platform: target.platform,
+        });
+      } catch (error: unknown) {
+        this.#logger.warn("a seed settle could not claim its runtime", {
+          error: stableError(error),
+        });
+        return undefined;
+      }
+      const attempt = this.options.capacity.tryReserveProvisioning(
+        { mode: "full", platform: target.platform },
         capacityDevices(this.options.registry.snapshot.virtualDevices),
       );
+      if (!attempt.ok) {
+        releaseClaim();
+        return undefined;
+      }
+      return {
+        release: () => {
+          attempt.reservation.release();
+          releaseClaim();
+        },
+      };
     });
-    if (!reserved.ok) return;
+    if (held === undefined) return false;
+    const running: Running = { controller: new AbortController(), done: Promise.resolve() };
+    this.#running = running;
+    running.done = this.#execute(target, running, held);
+    return true;
+  }
+
+  async #execute(target: Target, running: Running, held: Held): Promise<void> {
+    const { driver, operator } = target;
     try {
-      await chosen.driver.settleSeed(chosen.sourceId, { signal: new AbortController().signal });
+      let sourceId = target.sourceId;
+      if (operator !== undefined) {
+        if (operator.needsMake) operator.onProgress({ stage: "making" });
+        const ensured = await driver.ensureSeed?.(operator.spec);
+        if (ensured === undefined) throw new Error("the driver cannot make a seed");
+        if (ensured.settled) {
+          operator.resolve({
+            outcome: "already-settled",
+            sourceId: ensured.sourceId,
+            ...(ensured.sizeBytes === undefined ? {} : { sizeBytes: ensured.sizeBytes }),
+          });
+          return;
+        }
+        sourceId = ensured.sourceId;
+        operator.onProgress({ stage: "settling" });
+      }
+      if (sourceId === undefined || driver.settleSeed === undefined) return;
+      const result = await driver.settleSeed(sourceId, { signal: running.controller.signal });
+      operator?.resolve({
+        outcome: "settled",
+        settledAfterMs: result.settledAfterMs,
+        sourceId: result.sourceId,
+        ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
+      });
     } catch (error: unknown) {
       this.#logger.warn("a seed settle failed", { error: stableError(error) });
+      operator?.reject(
+        new SeedSettleFailedError(
+          target.platform,
+          operator.spec.model,
+          "failed",
+          `seed ${operator.spec.model} could not be settled: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
     } finally {
-      reserved.reservation.release();
+      held.release();
+      this.#running = undefined;
+      this.#requestCheck();
     }
   }
 }
