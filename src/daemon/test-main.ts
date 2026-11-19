@@ -167,7 +167,8 @@ function connectClient(socketPath: string): Promise<MinimalClient> {
 
 export async function connectRetrying(
   socketPath: string,
-  timeoutMs = 2_000,
+  // why: a Windows runner under a full parallel run binds the pipe seconds after the start call.
+  timeoutMs = 10_000,
 ): Promise<MinimalClient> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
