@@ -84,6 +84,8 @@ if [ -n "$detach" ]; then
     || { echo "worktree.sh: $rev is not a commit here; fetch it first" >&2; exit 1; }
   tmp=${TMPDIR:-/tmp}
   dir=$(mktemp -d "${tmp%/}/wt-$(echo "$commit" | cut -c1-9).XXXXXX")
+  # why: on Windows mktemp answers with an MSYS path (/tmp/...) that node and git cannot open.
+  ! command -v cygpath >/dev/null 2>&1 || dir=$(cygpath -m "$dir")
   rmdir "$dir"
   git worktree add -q --detach "$dir" "$commit" >&2
   [ "$(git -C "$dir" rev-parse HEAD)" = "$commit" ] \
