@@ -121,5 +121,4 @@ the status is stale.
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
 | [0086](0086-on-windows-the-daemon-service-is-a-logon-task-that-runs-a-simlock-supervisor.md) | On Windows the daemon service is a logon task that runs a Simlock supervisor | Accepted; narrows 0041 §1, §3, §4, §5 and §8 |
-| [0086](0086-on-windows-the-daemon-service-is-a-logon-task-that-runs-a-simlock-supervisor.md) | On Windows the daemon service is a logon task that runs a Simlock supervisor | Accepted — not yet implemented; narrows 0041 §1, §3, §4, §5 and §8 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
