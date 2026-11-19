@@ -5,6 +5,7 @@ import {
   type DriverConfigEntry,
   nonEmptyString,
   objectValidator,
+  positiveInteger,
   positiveNumber,
 } from "../../core/index.js";
 
@@ -56,6 +57,7 @@ export const androidDriverConfig: DriverConfigEntry<AndroidDriverConfig> = {
       gpu: nonEmptyString,
       audio: booleanValue,
       bootAnimation: booleanValue,
+      cores: positiveInteger,
     }),
     networkDevices: booleanValue,
   },
