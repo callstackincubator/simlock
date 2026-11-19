@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   OWNED_ROOT_MARKER_FILE,
@@ -16,10 +17,13 @@ import { memorySourceDatabase } from "./testing.js";
 import {
   driverData,
   deviceRoot,
+  sourcesSetPath,
   simctlArgs,
   deviceHubEdit,
   plantManagedDevice,
   instanceId,
+  simlockDeviceRoot,
+  unownedSourcesSet,
 } from "./test-slim.js";
 import {
   PHYSICAL_DEVICE,
@@ -58,14 +62,14 @@ describe("IosSimctlDriver device set", () => {
   }
 
   it.each([
-    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`, false],
-    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`, false],
+    ["unset", {}, deviceRoot, true, sourcesSetPath, false],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, sourcesSetPath, false],
     [
       "default",
       { deviceSet: "default" },
-      `${coreSimulatorRoot}/Devices`,
+      join(coreSimulatorRoot, "Devices"),
       false,
-      "/home/.simlock/devices/ios-sources",
+      unownedSourcesSet,
       true,
     ],
   ] as const)(
@@ -222,8 +226,8 @@ describe("IosSimctlDriver device set", () => {
   );
 
   it("an operator who switches with leftovers gets device-set-changed, and an unreadable folder gets unreadable", async () => {
-    const ownRoot = "/home/.simlock/devices/ios";
-    const xcodeDevices = `${coreSimulatorRoot}/Devices`;
+    const ownRoot = simlockDeviceRoot;
+    const xcodeDevices = join(coreSimulatorRoot, "Devices");
     const [first, second, third] = [1, 2, 3].map(
       (n) => `00000000-0000-0000-0000-00000000000${String(n)}`,
     );
@@ -243,7 +247,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${join(ownRoot, "sources")} delete <udid>\`.`,
           path: ownRoot,
           reason: "device-set-changed",
         },
@@ -257,7 +261,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${join(ownRoot, "sources")} delete <udid>\`.`,
           path: ownRoot,
           reason: "device-set-changed",
         },
@@ -359,7 +363,7 @@ describe("IosSimctlDriver device set", () => {
 
   it.each([
     ["simlock", { deviceRoot, deviceSet: "simlock" }, deviceRoot],
-    ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`],
+    ["default", { deviceSet: "default" }, join(coreSimulatorRoot, "Devices")],
   ] as const)(
     "a new simulator's marks name this instance under deviceSet %s",
     async (setting, config, devicesDir) => {
@@ -397,7 +401,7 @@ describe("IosSimctlDriver device set", () => {
         [
           "simctl",
           "--set",
-          scoped ? `${deviceRoot}/sources` : "/home/.simlock/devices/ios-sources",
+          scoped ? sourcesSetPath : unownedSourcesSet,
           "clone",
           seedUdid,
           driverData.name,
@@ -433,7 +437,7 @@ describe("IosSimctlDriver device set", () => {
   );
 
   it("under deviceSet default listManaged reports only devices whose durable mark names this instance", async () => {
-    const devicesDir = `${coreSimulatorRoot}/Devices`;
+    const devicesDir = join(coreSimulatorRoot, "Devices");
     const udid = (n: number) => `00000000-0000-0000-0000-00000000010${String(n)}`;
     const mark = (owner?: string) =>
       JSON.stringify({ ...(owner === undefined ? {} : { instanceId: owner }), token: "t" });
@@ -503,7 +507,7 @@ describe("IosSimctlDriver device set", () => {
   });
 
   it("under deviceSet default foreignDevices and the removal's unused count take only devices this instance's mark does not name", async () => {
-    const devicesDir = `${coreSimulatorRoot}/Devices`;
+    const devicesDir = join(coreSimulatorRoot, "Devices");
     const udids = ["A", "B", "C"].map((n) => `0000000${n}-0000-0000-0000-000000000000`);
     const devices = (used: boolean) =>
       JSON.stringify({

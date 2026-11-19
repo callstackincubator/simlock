@@ -1,6 +1,6 @@
 import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,9 +14,10 @@ import type { Platform } from "./domain.js";
 import { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./index.js";
 
 const instanceId = "instance-a";
-const parent = "/home/agent/.simlock/devices";
-const root = `${parent}/ios`;
-const markerPath = `${root}/${OWNED_ROOT_MARKER_FILE}`;
+// why: ensureOwnedRoot returns `resolve(path)`, which puts a drive letter on a Windows host.
+const parent = resolve("/home/agent/.simlock/devices");
+const root = join(parent, "ios");
+const markerPath = join(root, OWNED_ROOT_MARKER_FILE);
 const uid = 501;
 const idGenerator = new CryptoIdGenerator();
 
@@ -111,7 +112,7 @@ describe("ensureOwnedRoot", () => {
       uid,
     });
 
-    expect(staged).toEqual([`${parent}/.ios.4242.id-1.staging`]);
+    expect(staged).toEqual([join(parent, ".ios.4242.id-1.staging")]);
   });
 
   it("publishes a root and its marker in the same instant", async () => {
@@ -149,9 +150,7 @@ describe("ensureOwnedRoot", () => {
   it("returns the resolved path for a root written with relative segments", async () => {
     const filesystem = createFilesystem();
 
-    await expect(
-      ensure(filesystem, { path: "/home/agent/.simlock/devices/android/../ios" }),
-    ).resolves.toBe(root);
+    await expect(ensure(filesystem, { path: `${parent}/android/../ios` })).resolves.toBe(root);
   });
 
   it("reuses a root it already owns without rewriting its marker", async () => {
@@ -265,14 +264,14 @@ describe("ensureOwnedRoot", () => {
   it("refuses an unmarked root that already holds something", async () => {
     const filesystem = createFilesystem();
     await seedRoot(filesystem);
-    await filesystem.writeFileAtomic(`${root}/someone-elses-work.txt`, "");
+    await filesystem.writeFileAtomic(join(root, "someone-elses-work.txt"), "");
 
     await expect(refusal(filesystem)).resolves.toBe("non-empty-unowned-root");
   });
 
   it("refuses a path occupied by something that is not a directory", async () => {
     const filesystem = createFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock/devices");
+    await filesystem.mkdirp(parent);
     await filesystem.writeFileAtomic(root, "not a directory");
 
     await expect(refusal(filesystem)).resolves.toBe("non-empty-unowned-root");

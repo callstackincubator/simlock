@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DriverCrashError } from "../../core/index.js";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
@@ -22,6 +23,10 @@ afterEach(() => {
 
 const lineageUdid = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
 const copyUdid = "CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD";
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 describe("IosSimctlDriver copy swap", () => {
   it("a copy keeps its source's lineage, swaps the lineage's UDIDs in every recorded file and link for its own before its first boot and logs the swap", async () => {
@@ -146,7 +151,9 @@ describe("IosSimctlDriver copy swap", () => {
         label: "a result of another length",
         lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBB"],
         crash: true,
-        error: new RegExp(`${file}.*length`),
+        error: new RegExp(
+          `${escapeRegExp(`${join(deviceRoot, copyUdid)}/data/Library/note.plist`)}.*length`,
+        ),
       },
     ];
     for (const attempt of cases) {

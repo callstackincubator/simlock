@@ -1,3 +1,5 @@
+import { join, resolve } from "node:path";
+
 import { expect, vi, type Mock } from "vitest";
 
 import {
@@ -18,7 +20,19 @@ import { memorySourceDatabase } from "./testing.js";
 
 // why: the slim boot's fixtures, shared by the driver's two test files (index.test.ts is at its size limit).
 
-export const deviceRoot = "/Devices";
+// why: the driver passes `resolve(root)` to simctl, which puts a drive letter on a Windows host.
+export const deviceRoot = resolve("/Devices");
+
+export const sourcesSetPath = join(deviceRoot, "sources");
+
+// why: the driver joins these under `simlockHome` with `join`, so a Windows host spells them with backslashes.
+export const simlockDeviceRoot = join("/home/.simlock", "devices", "ios");
+export const unownedSourcesSet = join("/home/.simlock", "devices", "ios-sources");
+
+/** why: the in-memory filesystem names a path in `/` form without a drive letter, so a test compares in that form. */
+export function inPosixForm(path: string): string {
+  return path.replace(/^[A-Za-z]:(?=[\\/])/, "").replaceAll("\\", "/");
+}
 
 export const instanceId = "instance-1";
 
@@ -115,16 +129,16 @@ export async function createSlimDriver(
 export const overridesRoot = "/private/var/tmp";
 
 export function overridesFolder(udid: string): string {
-  return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}`;
+  return join(overridesRoot, `com.apple.CoreSimulator.SimDevice.${udid}`);
 }
 
 export function overridesPath(udid: string): string {
-  return `${overridesFolder(udid)}/disabled.plist`;
+  return join(overridesFolder(udid), "disabled.plist");
 }
 
 /** why: ADR 0083 S2: the record of named services sits beside the overrides file. */
 export function recordPath(udid: string): string {
-  return `${overridesFolder(udid)}/simlock-managed.json`;
+  return join(overridesFolder(udid), "simlock-managed.json");
 }
 
 export function overridesPlist(entries: Readonly<Record<string, boolean>>): string {
@@ -264,7 +278,7 @@ export const prepareSlim = { mode: "slim", purpose: "prepare" } as const;
 
 // why: DeviceHub's preferences are edited as an export, a PlistBuddy edit of it and an import back
 // through cfprefsd (`defaults`); the export sits in the launchd overrides root.
-const deviceHubStaging = "/private/var/tmp/devicehub-preferences.plist";
+const deviceHubStaging = join(overridesRoot, "devicehub-preferences.plist");
 
 export function deviceHubEdit(command: string) {
   return [

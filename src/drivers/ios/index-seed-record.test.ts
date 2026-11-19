@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FakeClock,
@@ -7,7 +8,7 @@ import {
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { memorySourceDatabase, plantBytes } from "./testing.js";
-import { deviceRoot, driverData, plantManagedDevice, simctl } from "./test-slim.js";
+import { deviceRoot, driverData, sourcesSetPath, plantManagedDevice, simctl } from "./test-slim.js";
 import {
   RecordingLogger,
   createDriver,
@@ -28,8 +29,7 @@ afterEach(() => {
 
 const copyUdid = "CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD";
 const lineageUdid = throwawayUdid.toUpperCase();
-const sourcesSet = `${deviceRoot}/sources`;
-const seedFolder = `${sourcesSet}/${seedUdid}`;
+const seedFolder = join(sourcesSetPath, seedUdid);
 const SQLITE_HEADER = Buffer.from("SQLite format 3\u0000");
 const MEBIBYTE = 1_048_576;
 
@@ -70,7 +70,7 @@ async function provisionNewSeed(options: {
   const database = await memorySourceDatabase();
   const filesystem = new UnreadableFiles();
   await plantManagedDevice(filesystem);
-  await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+  await filesystem.mkdirp(join(logsRoot, throwawayUdid));
   await options.plant(filesystem);
   // why: `simctl clone` gives the copy what the seed holds, and the scripted runner cannot.
   await filesystem.mkdirp(seedFolder);
@@ -128,7 +128,7 @@ async function saveBaseline(options: {
     { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
     { match: simctl("shutdown", driverData.udid) },
     {
-      match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSet),
+      match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSetPath),
       result: { code: 0, stderr: "", stdout: `${baselineUdid}\n` },
     },
   ]);
@@ -187,7 +187,7 @@ describe("IosSimctlDriver source records", () => {
         await plantBytes(filesystem, `${seedFolder}/data/one.db-shm`, Buffer.from("index"));
         await plantBytes(filesystem, `${seedFolder}/data/two.db`, SQLITE_HEADER);
         await plantBytes(filesystem, `${seedFolder}/data/two.db-wal`, naming);
-        filesystem.defineSymlink(`${seedFolder}/data/Logs`, `${logsRoot}/${lineageUdid}`);
+        filesystem.defineSymlink(`${seedFolder}/data/Logs`, join(logsRoot, lineageUdid));
       },
     });
 
@@ -266,14 +266,14 @@ describe("IosSimctlDriver source records", () => {
     expect(walkFails.error).toMatchObject({ code: "EACCES" });
     expect(
       walkFails.runner.calls.some(
-        (call) => call.args.join(" ") === `simctl --set ${sourcesSet} delete ${seedUdid}`,
+        (call) => call.args.join(" ") === `simctl --set ${sourcesSetPath} delete ${seedUdid}`,
       ),
       "the seed's clone is deleted",
     ).toBe(true);
     expect(walkFails.database.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     expect(recorded(walkFails.database)).toEqual([]);
 
-    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
     const lease = driverData.udid.toUpperCase();
     const fromUsedLease = await saveBaseline({
       lineage: [lineageUdid],
