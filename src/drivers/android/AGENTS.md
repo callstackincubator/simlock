@@ -38,6 +38,7 @@ Boot:
 - Never `-wipe-data`, except once for a device made before copies. Always `-no-snapshot-save`. A recovery boot never wipes and never loads a snapshot.
 - `-grpc` always goes with `-port`: without it the emulator opens no gRPC endpoint and writes no `avd/running` discovery file. So a console port claims three ports: itself, the adb port above it and the gRPC port (`GRPC_PORT_OFFSET`).
 - `-crash-report-mode never` (a stale crash dump otherwise opens a modal dialog that blocks the boot) is passed only when `emulator -help` lists it: emulator 36.1.9 exits on it (#1297), so `androidPrerequisites` does not require it. `never` deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root, never the user's shared one.
+- `-feature -WiFiPacketStream` is on every launch (#1586): copies share their seed's Wi-Fi MAC, so on netsim's one Wi-Fi network all but one are dropped. A seed made without it is stale.
 - Ready is more than `sys.boot_completed`: `emu avd path` must name the device's own folder (else `DriverCrashError`), and `pm path android` must answer, since after a snapshot load the boot properties pass before `pm` does.
 - No slim: `resolveSpec` ignores `mode`.
 
