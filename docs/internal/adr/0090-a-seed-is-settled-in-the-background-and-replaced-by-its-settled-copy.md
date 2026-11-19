@@ -47,12 +47,14 @@ seed and when; the driver does the work:
 - At most one settle runs on a worker.
 - A settle starts only when no boot or creation is under way and none
   ended in the last few minutes, memory pressure is `none` (ADR 0068) and
-  free disk is above the disk-pressure threshold.
+  free disk is at or above the disk-pressure threshold.
+- A settle running when memory pressure reaches `new-devices-paused` is
+  stopped, and its quick seed settled again later.
 - The seed with the most leases since it was made goes first.
 - A settle holds a creation reservation and a component claim for its
   whole run, as a provision does. A lease that arrives during a settle
   does not stop it.
-- A daemon stop aborts a running settle. The quick seed stays.
+- A daemon stop and a nuke abort a running settle. The quick seed stays.
 
 ```mermaid
 sequenceDiagram
@@ -88,7 +90,8 @@ copies of it in flight. On Android this needs copies and deletions to
 take turns, as iOS already does. Narrowing §1, a ready seed may be
 deleted because a settled seed replaced it.
 
-Idle is judged from the copy's own process tree, never from host load. A
+Idle is judged from the copy's own process tree, never from host load,
+on every platform a driver runs on (Android on Windows too). A
 settle that reaches its time limit still saves, because its copy is never
 less settled than the quick seed.
 
