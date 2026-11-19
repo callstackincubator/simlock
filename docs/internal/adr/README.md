@@ -110,7 +110,7 @@ the status is stale.
 | [0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md) | A worker may enrol the phones plugged into it | Accepted; narrows 0022 §3, §5 and §6; §2 and §5 narrowed by 0080 |
 | [0074](0074-an-admission-command-ranks-or-refuses-a-gateway-request-and-an-ended-chosen-lease-id-is-remembered.md) | An admission command ranks or refuses a gateway request, and an ended chosen lease id is remembered | Accepted; narrows 0005 items 10 and 11, decision 5 and requirements 14 and 30; supersedes 0020 §1 in part |
 | [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Accepted; narrows 0031's Consequences and 0052 §4 |
-| [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted; narrows 0061 §1, §2 and §4 |
+| [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted; narrows 0061 §1, §2 and §4; §1 and §2 narrowed by 0090 |
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
 | [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
 | [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
@@ -123,4 +123,4 @@ the status is stale.
 | [0086](0086-on-windows-the-daemon-service-is-a-logon-task-that-runs-a-simlock-supervisor.md) | On Windows the daemon service is a logon task that runs a Simlock supervisor | Accepted; narrows 0041 §1, §3, §4, §5 and §8 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
-| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted — not yet implemented; narrows 0061 §1 and §2 |
+| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted — not yet implemented; narrows 0061 §1 and §2 and 0076 §1 and §2 |

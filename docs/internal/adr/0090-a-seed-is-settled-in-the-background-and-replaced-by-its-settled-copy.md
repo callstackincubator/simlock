@@ -7,6 +7,9 @@
   §1 (a ready seed is never booted or erased again, and no command names
   a seed but `doctor`) and §2 (an Android seed's `simlock_boot` is saved
   after one cold boot).
+  [ADR 0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md)
+  §1 (a seed is made by creating a throwaway, booting it once and cloning
+  it unbooted) and §2 (a seed's lineage is its throwaway only).
 
 ## Context
 
