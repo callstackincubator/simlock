@@ -58,10 +58,6 @@ export function useScreens() {
     setSearch(writeWatch(window.location.search, next), { replace: true });
   };
   const view = mapView(all, () => ({
-    counts: {
-      leased: tiles.filter((tile) => tile.state.word === "leased").length,
-      ready: tiles.filter((tile) => tile.state.word === "ready").length,
-    },
     paging,
     rows: shown,
     watched,

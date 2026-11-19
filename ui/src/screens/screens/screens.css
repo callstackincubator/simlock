@@ -51,9 +51,11 @@
   font-weight: 500;
 }
 
-.screens-filters {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
+.screens-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .screens-caption {

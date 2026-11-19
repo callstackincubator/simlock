@@ -56,35 +56,23 @@ export function ScreensScreen() {
                 </div>
               )}
             </Panel>
-            <Panel
-              title="Running devices"
-              lead={
-                <span className="mono muted">
-                  {page.counts.leased} leased · {page.counts.ready} ready
-                </span>
-              }
-              flush
-            >
-              <div className="screens-filters">
-                <ChoiceChips
-                  legend="Show devices"
-                  choices={SCREEN_FILTERS}
-                  value={filter}
-                  onChange={choose}
-                />
-              </div>
-              <DataTable
-                label="Running devices"
-                rows={page.rows}
-                columns={columns(screens)}
-                rowId={(tile) => tile.key}
-                rowClassName={(tile) =>
-                  screens.isWatched(tile) ? "screens-row-watched" : undefined
-                }
-                empty={filter === "all" ? "No running devices." : `No ${filter} devices.`}
-                paging={page.paging}
+            <div className="screens-tools">
+              <ChoiceChips
+                legend="Show devices"
+                choices={SCREEN_FILTERS}
+                value={filter}
+                onChange={choose}
               />
-            </Panel>
+            </div>
+            <DataTable
+              label="Running devices"
+              rows={page.rows}
+              columns={columns(screens)}
+              rowId={(tile) => tile.key}
+              rowClassName={(tile) => (screens.isWatched(tile) ? "screens-row-watched" : undefined)}
+              empty={filter === "all" ? "No running devices." : `No ${filter} devices.`}
+              paging={page.paging}
+            />
           </div>
         )}
       </Loaded>
