@@ -366,6 +366,19 @@ describe("AndroidDriver image fit", () => {
         ).resolves.toBe("saved");
         expect(harness.runner.calls).toHaveLength(callsBefore + 1);
 
+        const coresChanged = await reopened(harness, [version(), version()], {
+          emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: false, cores: 2 },
+        });
+        const listed = await coresChanged.driver.listSources();
+        expect(listed.find((source) => source.id === "baseline_four")?.staleReason).toBe(
+          "android.emulator launch settings changed",
+        );
+        await expect(
+          coresChanged.driver.provision(harness.spec, { source: "baseline_four" }),
+        ).rejects.toThrow(
+          "source baseline_four is stale: android.emulator launch settings changed",
+        );
+
         await harness.filesystem.rm(`${sdk}/system-images/android-34/google_apis/arm64-v8a`);
         await expect(
           harness.driver.provision(harness.spec, { source: "baseline_four" }),
