@@ -562,6 +562,7 @@ export class Seeds {
       if (profile.kind === "library") {
         await this.#avdConfig.applyLibraryProfile(avdFolder, profile, image);
       }
+      await this.#avdConfig.applyCores(avdFolder);
       await this.#bootSeedTwice(sourceId, {
         avdHome: folder,
         avdName: SEED_AVD_NAME,

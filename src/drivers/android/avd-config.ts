@@ -60,6 +60,15 @@ export class AvdConfig {
   }
 
   /**
+   * why: `android.emulator.cores` is written into config.ini rather than passed as `-cores`, since a
+   * snapshot saved under one core count does not load under another flag.
+   */
+  async applyCores(folder: string): Promise<void> {
+    if (this.#options.cores === undefined) return;
+    await this.#mergeConfigIniLines(folder, { "hw.cpu.ncore": String(this.#options.cores) });
+  }
+
+  /**
    * why: What a seed's boot snapshot depends on. A mismatch against the hash stored with the seed
    * makes it stale, so it is made again rather than copied into devices whose snapshot the
    * emulator would refuse.
