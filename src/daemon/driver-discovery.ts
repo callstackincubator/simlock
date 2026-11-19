@@ -40,6 +40,7 @@ import {
   NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   type ProcessRunner,
+  type ProcessTable,
   type ProcessSupervisor,
   type TcpProbe,
   type SqliteDatabase,
@@ -82,6 +83,8 @@ export interface DriverDiscoveryContext {
   readonly instanceId: string;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
+  /** why: the drivers' idle check reads the booted tree's CPU from it (ADR 0090). */
+  readonly processTable?: ProcessTable;
   readonly processSupervisor: ProcessSupervisor;
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;

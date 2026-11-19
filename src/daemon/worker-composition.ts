@@ -62,6 +62,7 @@ import {
   defaultWorkerLockPath,
   NodeWorkerLock,
   type WorkerLockHandle,
+  NodeProcessTable,
 } from "../ports/index.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
@@ -225,6 +226,7 @@ export async function composeWorker(
           logger,
           processRunner,
           processSupervisor,
+          processTable: new NodeProcessTable({ platform: process.platform, processRunner }),
           simlockHome: dataDirectory,
           iosConfig: driverConfig(config, iosDriverConfig),
           slimByDefault: deviceModeWiring(config).slimByDefault,
@@ -288,7 +290,9 @@ export async function composeWorker(
     decisions,
     drivers,
     driverRejections: rejections,
+    diskPath: dataDirectory,
     eventBus,
+    filesystem,
     logger,
     modelPreferences,
     optionalModules: () => moduleHost.findings(),
@@ -505,7 +509,10 @@ export async function composeWorker(
   };
   const daemon = new DaemonServer({
     // why: Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
-    beginStop: () => core.closeWarmPool(),
+    beginStop: () => {
+      core.closeWarmPool();
+      core.seedSettler.beginStop();
+    },
     // why: the source's name is the config key's; the core names no module, so the composition supplies it.
     capabilitySources: [...moduleHost.capabilitySources],
     capacity: core.capacityReader,
@@ -612,6 +619,8 @@ export async function composeWorker(
       // why: Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
+      // why: a running settle boots a device through the driver, so it ends first, as a running install does.
+      await core.seedSettler.stop();
       // why: a lease request still booting a device would otherwise fail against a disposed driver and leave its adb server and device behind (#1200).
       await leasing.settleAcquisitions();
       await moduleHost.beforeDriversDispose();

@@ -123,11 +123,12 @@ describe("createLeasing warm pool", () => {
   it("cancels the pool's tick when the engine is disposed", async () => {
     const harness = await createHarness();
     await harness.engine.convergeRunningCapacity();
-    expect(harness.clock.pendingTimerCount).toBe(1);
+    // why: the pool's tick and the seed settler's first check (ADR 0090); the daemon's stop cancels the settler's, dispose the pool's.
+    expect(harness.clock.pendingTimerCount).toBe(2);
 
     harness.engine.dispose();
 
-    expect(harness.clock.pendingTimerCount).toBe(0);
+    expect(harness.clock.pendingTimerCount).toBe(1);
   });
 
   it("a nuke without --delete-devices leaves the released devices destroyed, not booted back by the pool", async () => {

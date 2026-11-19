@@ -50,6 +50,7 @@ export class CapacityCoordinator {
   readonly #provisioningReservations: ProvisioningEntry[] = [];
   readonly #runningReservations: ReservationEntry[] = [];
   readonly #bootReservations: BootEntry[] = [];
+  readonly #bootActivityListeners = new Set<(underWay: number) => void>();
 
   /**
    * `onReservationsChanged` is called after a reservation is taken and after one is released, so
@@ -60,6 +61,13 @@ export class CapacityCoordinator {
     private readonly onReservationsChanged: () => void = () => undefined,
     private readonly memoryPressure?: MemoryPressureStepReader,
   ) {}
+
+  /** why: ADR 0090 §2: the settler waits for a quiet worker; it hears every take and release of a creation, boot or rewarm reservation. */
+  // fallow-ignore-next-line unused-class-member -- the seed settler reads it through a Pick of this class.
+  onBootActivity(listener: (underWay: number) => void): () => void {
+    this.#bootActivityListeners.add(listener);
+    return () => void this.#bootActivityListeners.delete(listener);
+  }
 
   /** why: checked before the strategy is asked, under every strategy (ADR 0068 §4). */
   newDevicesPaused(): boolean {
@@ -211,16 +219,23 @@ export class CapacityCoordinator {
   /** Wraps an entry already pushed onto `reservations`; reports the taking, and each release. */
   #reservation<Entry>(reservations: Entry[], reservation: Entry): CapacityReservation {
     let released = false;
-    this.onReservationsChanged();
+    this.#changed();
     return {
       release: () => {
         if (released) return;
         released = true;
         const index = reservations.indexOf(reservation);
         if (index !== -1) reservations.splice(index, 1);
-        this.onReservationsChanged();
+        this.#changed();
       },
     };
+  }
+
+  /** why: a creation, boot or rewarm reservation is a device being made or booted; a running-slot entry alone is not one. */
+  #changed(): void {
+    this.onReservationsChanged();
+    const underWay = this.#provisioningReservations.length + this.#bootReservations.length;
+    for (const listener of this.#bootActivityListeners) listener(underWay);
   }
 }
 

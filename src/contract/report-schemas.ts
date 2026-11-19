@@ -123,6 +123,8 @@ const doctorSourceSchema = z.object({
   osVersion: z.string().max(200),
   imageTag: z.string().max(200).optional(),
   sizeBytes: z.number().int().nonnegative().optional(),
+  settled: z.boolean().optional(),
+  leases: z.number().int().nonnegative().optional(),
   staleReason: z.string().max(300).optional(),
   orphan: z.literal(true).optional(),
   baselineName: baselineNameSchema.optional(),
