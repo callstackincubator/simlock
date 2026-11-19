@@ -42,6 +42,15 @@ class SizeFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+class CopyRecordingFilesystem extends MemoryFilesystem {
+  readonly copies: string[] = [];
+
+  override copyTree(from: string, to: string, options: { readonly timeoutMs: number }) {
+    this.copies.push(to);
+    return super.copyTree(from, to, options);
+  }
+}
+
 class CopyFailureFilesystem extends MemoryFilesystem {
   readonly #message: string;
 
@@ -287,6 +296,34 @@ describe("Seeds", () => {
 
       expect(await harness.filesystem.exists(copyHome)).toBe(false);
       expect(await harness.filesystem.exists(seedHome)).toBe(true);
+    });
+
+    it("refuses a copy of the seed that does not fit in the device root's free space before copying, and copies one that fits exactly", async () => {
+      const seedBytes = 4_112;
+      const provisionWith = async (freeBytes: number) => {
+        const filesystem = new CopyRecordingFilesystem(freeBytes);
+        const harness = await seedHarness(makingTheSeed(), { filesystem });
+        await filesystem.mkdirp(`${seedHome}/simlock.avd/snapshots/simlock_boot`);
+        await filesystem.writeFileAtomic(
+          `${seedHome}/simlock.avd/snapshots/simlock_boot/ram.bin`,
+          "x".repeat(4_096),
+        );
+        return { filesystem, provision: harness.seeds.provision(harness.spec) };
+      };
+
+      const fits = await provisionWith(seedBytes);
+      await expect(fits.provision).resolves.toMatchObject({ deviceId: "simlock_one" });
+      expect(fits.filesystem.copies).toEqual([`${copyHome}/simlock.avd`]);
+
+      const short = await provisionWith(seedBytes - 1);
+      await expect(short.provision).rejects.toMatchObject({
+        availableBytes: seedBytes - 1,
+        name: "InsufficientDiskSpaceError",
+        platform: "android",
+        requiredBytes: seedBytes,
+      });
+      expect(short.filesystem.copies).toEqual([]);
+      expect(await short.filesystem.exists(copyHome)).toBe(false);
     });
 
     it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
