@@ -480,11 +480,12 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
       { manager: "task-scheduler", platform: "win32" },
     ] as const;
     const configs = [
-      { label: "accepted", maxDevices: 2 },
-      { label: "refused", maxDevices: 0 },
+      { label: "accepted", maxDevices: 2, daemonRunning: false },
+      { label: "refused", maxDevices: 0, daemonRunning: false },
+      { label: "refused, a daemon running", maxDevices: 0, daemonRunning: true },
     ];
     for (const { manager, platform } of managers) {
-      for (const { label: configLabel, maxDevices } of configs) {
+      for (const { label: configLabel, maxDevices, daemonRunning } of configs) {
         const label = `${manager}, ${configLabel} config`;
         const root = "/Users/me/.simlock";
         const filesystem = new MemoryFilesystem();
@@ -494,6 +495,14 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
           JSON.stringify({ capacity: { config: { limits: { android: { maxDevices } } } } }),
         );
         const ipcTransport = new MemoryIpcTransport();
+        if (daemonRunning) {
+          await startInMemoryDaemon({
+            adminTokenPath: join(root, "admin.token"),
+            filesystem,
+            ipcTransport,
+            socketPath: join(root, "daemon.sock"),
+          });
+        }
         // why: a daemon the service starts on a config it refuses exits at once and never answers.
         const serviceManager = new FakeServiceManager({
           manager,
@@ -541,6 +550,14 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
           });
           expect(exitCode, label).toBe(2);
           expect(serviceManager.installs, label).toEqual([]);
+          if (daemonRunning) {
+            // why: the config check comes before the stop, so a refused config leaves the daemon running.
+            const status = await runCli(["daemon", "status", "--json"], output.environmentWith());
+            expect(status, label).toBe(0);
+            expect(JSON.parse(output.stdout.trim().split("\n").at(-1) ?? ""), label).toHaveProperty(
+              "leases",
+            );
+          }
         } else {
           expect(output.stderr, label).toBe("");
           expect(exitCode, label).toBe(0);
