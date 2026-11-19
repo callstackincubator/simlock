@@ -32,7 +32,7 @@ actor FrameCapture {
     private(set) var capturedHeight: Int = 0
     private var idleTimer: Task<Void, Never>?
     private var lastCaptureTime: ContinuousClock.Instant = .now
-    private var lastSeeds: [ObjectIdentifier: UInt32] = [:]
+    private var seedGate = SeedGate()
     private var rewireTickCount: Int = 0
     /// Interval at which the idle timer re-emits the current frame even when
     /// the simulator isn't rendering anything new. This is load-bearing for two
@@ -108,7 +108,7 @@ actor FrameCapture {
             }
         }
         callbackUUIDs.removeAll()
-        lastSeeds.removeAll()
+        seedGate.reset()
         descriptors = candidates
 
         // Registering screen callbacks is what causes SimulatorKit to wire the
@@ -278,9 +278,8 @@ actor FrameCapture {
         // see the `idleInterval` doc-comment for why that matters.
         let key = ObjectIdentifier(desc)
         let seed = IOSurfaceGetSeed(surface)
-        let seedChanged = lastSeeds[key] != seed
-        if frameCount > 0, !seedChanged, !force { return }
-        lastSeeds[key] = seed
+        let isNew = seedGate.notice(key: key, seed: seed, force: force)
+        if frameCount > 0, !isNew { return }
 
         let w = IOSurfaceGetWidth(surface)
         let h = IOSurfaceGetHeight(surface)
@@ -315,7 +314,7 @@ actor FrameCapture {
         }
         callbackUUIDs.removeAll()
         descriptors.removeAll()
-        lastSeeds.removeAll()
+        seedGate.reset()
         copyStage?.stop()
         copyStage = nil
         frameCount = 0

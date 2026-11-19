@@ -116,3 +116,20 @@ final class CopyStage: @unchecked Sendable {
         emit?(copy, notice.seenNanos)
     }
 }
+
+/// Says whether a seed is news, so a composite is noticed once.
+struct SeedGate {
+    private var lastSeeds: [ObjectIdentifier: UInt32] = [:]
+
+    /// True for a seed other than the last one noticed for `key`, or when `force` is set.
+    mutating func notice(key: ObjectIdentifier, seed: UInt32, force: Bool) -> Bool {
+        let isNew = lastSeeds[key] != seed
+        lastSeeds[key] = seed
+        return isNew || force
+    }
+
+    /// Forgets every seed, so the next one of each key is news (the framebuffer was rewired).
+    mutating func reset() {
+        lastSeeds.removeAll()
+    }
+}

@@ -95,4 +95,15 @@ final class FrameSelectionTests: XCTestCase {
         stage.stop()
         XCTAssertEqual(seen, [0, 20 * ms], "the 5 ms composite is declined before any copy, the others keep their seen time")
     }
+
+    func testASeedIsNewOnlyWhenItChangesOrIsForcedAndAfterAResetTheNextOneIsNews() {
+        var gate = SeedGate()
+        let key = ObjectIdentifier(DispatchQueue(label: "test-seed-key"))
+        XCTAssertTrue(gate.notice(key: key, seed: 5, force: false), "the first seed is news")
+        XCTAssertFalse(gate.notice(key: key, seed: 5, force: false), "an unchanged seed is not")
+        XCTAssertTrue(gate.notice(key: key, seed: 5, force: true), "a forced call with an unchanged seed is")
+        XCTAssertTrue(gate.notice(key: key, seed: 6, force: false), "a changed seed is")
+        gate.reset()
+        XCTAssertTrue(gate.notice(key: key, seed: 6, force: false), "after a reset the next seed is news")
+    }
 }
