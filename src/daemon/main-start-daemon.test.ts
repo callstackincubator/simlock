@@ -624,10 +624,12 @@ describe("startDaemon", () => {
             "abort",
             () => {
               events.push("settle-aborted");
-              void Promise.resolve().then(() => {
+              // why: a timer, not a microtask, so the driver returns after every
+              // await the dispose chain makes unless it waits for the settle.
+              setTimeout(() => {
                 events.push("settle-returned");
                 reject(new Error("aborted"));
-              });
+              }, 50);
             },
             { once: true },
           );
