@@ -417,10 +417,22 @@ describe.skipIf(ANDROID_SDK === undefined)(
           const nproc = await env.cli(["adb", "-s", grant.device.address ?? "", "shell", "nproc"]);
           return { grant, nproc: nproc.stdout.trim() };
         };
-        const nuke = (env: TestEnv) =>
-          env
+        // why: the next daemon of this test cannot start while this one holds the machine's worker lock (ADR 0059), and `nuke` leaves the daemon running; so it stops the daemon and waits for the lock.
+        const nuke = async (env: TestEnv) => {
+          await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);
+          await env.cli(["daemon", "stop"]).catch(() => undefined);
+          const lockFolder = defaultWorkerLockPath(
+            process.platform,
+            process.getuid?.() ?? 0,
+            tmpdir(),
+          );
+          await waitFor(() => !existsSync(lockFolder), {
+            timeout: 60_000,
+            label: "daemon stop left the worker lock behind",
+          });
+        };
 
         const withCores = await withDaemon({
           driver: "real",
