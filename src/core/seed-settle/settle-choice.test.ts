@@ -103,9 +103,9 @@ describe("seed settler: which seed it settles and when", () => {
     await throws.started();
     await throws.advance(5 * minute);
     expect(
-      throws.logs().map(({ level, message }) => ({ level, message })),
+      throws.logs().map(({ level, fields }) => ({ level, fields: JSON.stringify(fields) })),
       "the failure is logged",
-    ).toContainEqual({ level: "warn", message: expect.stringContaining("simctl is gone") });
+    ).toContainEqual({ fields: expect.stringContaining("simctl is gone"), level: "warn" });
     delete throws.ios.listSources;
     await throws.advance(5 * minute);
     expectSettled(throws, ["seed"], "the next check");
