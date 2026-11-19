@@ -10,6 +10,7 @@ const PAGES = [
   { label: "Leases", path: "/leases" },
   { label: "Queue", path: "/queue" },
   { label: "Baselines", path: "/baselines" },
+  { label: "Screens", path: "/screens" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
   { label: "Settings", path: "/settings" },
@@ -17,7 +18,7 @@ const PAGES = [
 
 const GROUPS = [
   { label: "Operate", links: ["Fleet", "Leases", "Queue", "Baselines"] },
-  { label: "Observe", links: ["Activity", "Usage"] },
+  { label: "Observe", links: ["Screens", "Activity", "Usage"] },
   { label: "Settings", links: ["Settings"] },
 ] as const;
 

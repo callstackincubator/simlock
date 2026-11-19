@@ -52,6 +52,7 @@ export {
   serviceDefinition,
   type ServiceManagerName,
   type ServiceState,
+  TaskSchedulerServiceManager,
 } from "./service-manager.js";
 export { type LeaseSocket, type LeaseSocketAccept, MemoryLeaseSocket } from "./lease-socket.js";
 export type { SessionConnection, SessionOutcome } from "./session-socket.js";

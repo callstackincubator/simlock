@@ -22,11 +22,11 @@ Every command here is for PowerShell. The page was written for Windows 11 and Wi
 | Tunnels | `simlock tunnel` with `emulator adb`, `forward` and `reverse`. |
 | agent-device | Through the worker's local profile. |
 | `simlock setup` and `simlock mcp` | The skill file and the MCP server. |
+| Start at login | `simlock daemon install` registers a Task Scheduler task that starts at login and restarts the daemon after a crash. See [Start it at login](/simlock/docs/worker/running-the-daemon#start-it-at-login). |
 
 | Does not work | What you see |
 | --- | --- |
 | iOS simulators and iPhones | A lease for iOS fails with `NO_DRIVER` (exit 12). |
-| Start at login | `simlock daemon install` is a usage error: `daemon install is supported on macOS and Linux only`. See [Run the daemon](/simlock/docs/worker/running-the-daemon). Start the daemon from a terminal. |
 
 | Not checked yet | |
 | --- | --- |
@@ -195,8 +195,8 @@ Read the log with `simlock daemon logs` and run the command it prints. Run Simlo
 
 ## How the daemon lives
 
-The first command that needs the daemon starts it, and it keeps running after the terminal that started it closes. A Windows machine has no start at login yet: after a restart, the next `simlock` command starts the daemon again.
+The first command that needs the daemon starts it, and it keeps running after the terminal that started it closes. Run `simlock daemon install` to start it at login and again 10 seconds after a crash: see [Start it at login](/simlock/docs/worker/running-the-daemon#start-it-at-login).
 
-A daemon started in an SSH session stops when that session ends. To run a worker on a machine you reach over SSH, start the daemon from a session that stays open, such as a remote desktop session.
+Without the service, a daemon started in an SSH session stops when that session ends. With the service installed and the user logged in at the screen, a command over SSH starts the daemon in the desktop session, and it outlives the SSH session. If nobody is logged in at the screen, the command starts the daemon without the service, and it still stops with the SSH session.
 
 A machine runs one worker per user. A second one, started from another `SIMLOCK_HOME`, refuses with `another Simlock worker runs for this user`: stop the first one.
