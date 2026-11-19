@@ -289,6 +289,7 @@ describe("CLI: daemon install (#830)", () => {
         manager: serviceManager,
         platform: "darwin",
         user: () => "me",
+        checkConfig: async () => {},
         definition: async () =>
           serviceDefinition({
             role: "worker",

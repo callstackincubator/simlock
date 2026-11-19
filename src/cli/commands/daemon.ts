@@ -15,12 +15,18 @@ function serviceAccess(
   readonly manager: ServiceManager;
   readonly definition: () => Promise<ServiceDefinition>;
   readonly user: () => string;
+  readonly checkConfig: () => Promise<void>;
 } {
   const { service } = environment;
   if (service?.manager === undefined) {
     throw new UsageError(`daemon ${command} is supported on macOS, Linux and Windows only`);
   }
-  return { manager: service.manager, definition: service.definition, user: service.user };
+  return {
+    manager: service.manager,
+    definition: service.definition,
+    user: service.user,
+    checkConfig: service.checkConfig,
+  };
 }
 
 /** why: a container run with a uid that has no passwd entry makes the lookup throw; the hint is
@@ -135,8 +141,14 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (command === "install") {
-    const { manager, definition, user: lookupUser } = serviceAccess(environment, "install");
+    const {
+      manager,
+      definition,
+      user: lookupUser,
+      checkConfig,
+    } = serviceAccess(environment, "install");
     const service = await definition();
+    await checkConfig();
     const stopped = await stopRunningDaemon(environment, token);
     await manager.install(service);
     const status = await startDaemon(context);
