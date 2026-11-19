@@ -97,7 +97,6 @@ export class FakeProcessTable implements ProcessTable {
     this.#failure = undefined;
   }
 
-  // fallow-ignore-next-line unused-class-member -- the drivers' idle checks (ADR 0090) fail a table read with it.
   failNext(error: Error): void {
     this.#failure = error;
   }
