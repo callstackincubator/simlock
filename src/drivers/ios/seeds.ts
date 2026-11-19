@@ -235,28 +235,49 @@ export class Seeds {
       sourceId: settleId,
       specKey: quick.specKey,
     });
-    const copy = await this.#cloneCopy(seed, `simlock-${settleId}`, (udid) => {
-      this.#sources.setThrowaway(settleId, udid);
-    });
-    await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
-    const readyAt = this.#clock.now();
-    const reason = await this.#waitUntilIdle(processTable, copy, readyAt);
-    const settledAfterMs = this.#clock.now() - readyAt;
-    await this.#simctl.shutdown(copy);
-    const cloned = await this.#simctl.createSimulator(
-      ["clone", copy, `simlock-seed-${settleId}`, this.#sourcesSet],
-      { destination: this.#sourcesSet },
-    );
-    const settledUdid = cloned.stdout.trim();
-    this.#sources.setUdid(settleId, settledUdid);
-    await this.#dropLaunchServicesDatabase(this.#sourcesSet, settledUdid);
-    const lineage = [copy.toUpperCase(), ...(quick.lineage ?? [])];
-    const files = await this.#recordFiles(settledUdid, lineage);
-    const sizeBytes = await this.#sizeOf(settledUdid);
-    this.#sources.promoteSettled(settleId, quick.sourceId, sizeBytes, { files, lineage });
+    let copy: string | undefined;
+    let settledUdid: string | undefined;
+    let outcome: {
+      reason: "idle" | "cap";
+      settledAfterMs: number;
+      settledCopy: string;
+      sizeBytes: number | undefined;
+    };
+    try {
+      copy = await this.#cloneCopy(seed, `simlock-${settleId}`, (udid) => {
+        copy = udid;
+        this.#sources.setThrowaway(settleId, udid);
+      });
+      await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
+      const readyAt = this.#clock.now();
+      const reason = await this.#waitUntilIdle(processTable, copy, readyAt);
+      const settledAfterMs = this.#clock.now() - readyAt;
+      await this.#simctl.shutdown(copy);
+      const cloned = await this.#simctl.createSimulator(
+        ["clone", copy, `simlock-seed-${settleId}`, this.#sourcesSet],
+        { destination: this.#sourcesSet },
+      );
+      settledUdid = cloned.stdout.trim();
+      this.#sources.setUdid(settleId, settledUdid);
+      await this.#dropLaunchServicesDatabase(this.#sourcesSet, settledUdid);
+      const lineage = [copy.toUpperCase(), ...(quick.lineage ?? [])];
+      const files = await this.#recordFiles(settledUdid, lineage);
+      const sizeBytes = await this.#sizeOf(settledUdid);
+      this.#sources.promoteSettled(settleId, quick.sourceId, sizeBytes, { files, lineage });
+      outcome = { reason, settledAfterMs, settledCopy: copy, sizeBytes };
+    } catch (error: unknown) {
+      // why: a settle that ends early gives back what it made and keeps the quick seed as the kind's seed.
+      if (settledUdid !== undefined) {
+        await this.#deleteSeedSimulator(settledUdid).catch(() => undefined);
+      }
+      if (copy !== undefined) await this.#deleteThrowaway(copy, true).catch(() => undefined);
+      this.#sources.deleteRow(settleId);
+      throw error;
+    }
     await this.#deleteSeedInTurn(seed.udid);
     this.#sources.deleteRow(quick.sourceId);
-    await this.#deleteThrowaway(copy, false);
+    const { reason, settledAfterMs, sizeBytes, settledCopy } = outcome;
+    await this.#deleteThrowaway(settledCopy, false);
     return {
       reason,
       settledAfterMs,
