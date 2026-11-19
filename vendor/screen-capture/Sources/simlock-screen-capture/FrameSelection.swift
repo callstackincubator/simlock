@@ -20,14 +20,11 @@ struct Composite {
 /// Glass changes some tiles on every composite, so a composite whose only changes are on tiles that
 /// changed on all of the last 8 composites repeats the app frame before it.
 struct TileSelector {
-    private static let historyLength = 8
-
     private let intervalNanos: UInt64
     private var previous: [UInt64]?
     private var previousSeenNanos: UInt64 = 0
     /// Per tile, one bit per composite taken (the newest lowest): set when the tile changed on it.
     private var history: [UInt8] = []
-    private var compared = 0
 
     init(intervalNanos: UInt64) {
         self.intervalNanos = intervalNanos
@@ -41,16 +38,14 @@ struct TileSelector {
         }
         guard let before = previous, before.count == tiles.count else {
             history = [UInt8](repeating: 0, count: tiles.count)
-            compared = 0
             return true
         }
-        let full = compared >= Self.historyLength
         var carriesNew = false
         var sometimes = 0
         var sometimesChanged = 0
         for tile in tiles.indices {
             let changed = tiles[tile] != before[tile]
-            let alwaysChanging = full && history[tile] == UInt8.max
+            let alwaysChanging = history[tile] == UInt8.max
             if changed, history[tile] & 1 == 0, !alwaysChanging { carriesNew = true }
             if history[tile] != 0, !alwaysChanging {
                 sometimes += 1
@@ -58,7 +53,6 @@ struct TileSelector {
             }
             history[tile] = history[tile] << 1 | (changed ? 1 : 0)
         }
-        compared += 1
         if carriesNew || (sometimes > 0 && sometimesChanged * 2 >= sometimes) { return true }
         if seenNanos &- previousSeenNanos >= intervalNanos * 3 / 4 { return true }
         return lastSentNanos.map { seenNanos &- $0 >= intervalNanos * 3 / 2 } ?? true
