@@ -48,6 +48,7 @@ export function createPart(
     readonly hostAbi?: string;
     readonly ids?: readonly string[];
     readonly seedLaunchInputs?: readonly string[];
+    readonly seedOnlyInputs?: readonly string[];
   },
 ) {
   let nextId = 0;
@@ -71,6 +72,7 @@ export function createPart(
     idGenerator,
     seedLaunchInputs: options.seedLaunchInputs ?? [],
     cores: options.emulator?.cores,
+    seedOnlyInputs: options.seedOnlyInputs ?? [],
   });
   const emulator = new Emulator({
     adb: binaries.adb,

@@ -54,6 +54,7 @@ import {
   COLD_BOOT_ESTIMATE_MS,
   DEFAULT_EMULATOR_LAUNCH,
   Emulator,
+  WIFI_PER_EMULATOR_FLAGS,
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
 import {
@@ -222,6 +223,7 @@ export class AndroidDriver implements Driver {
       idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
       cores: options.config?.emulator?.cores,
+      seedOnlyInputs: seedOnlyInputs(),
     });
     this.#bootTimeoutMs = bootTimeoutFor(options);
     this.#ownership = new Ownership({
@@ -909,6 +911,13 @@ function seedLaunchInputs(
       ? []
       : [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
   return launch.cores === undefined ? graphics : [...graphics, `cores=${launch.cores}`];
+}
+
+/**
+ * why: #1586: a snapshot taken on netsim's shared Wi-Fi joins no network under the per-emulator router for about a minute, so a seed made before the flag is stale. A saved baseline's hash leaves it out: its owner cannot remake it, so it stays usable.
+ */
+function seedOnlyInputs(): string[] {
+  return [`wifi=${WIFI_PER_EMULATOR_FLAGS.join(" ")}`];
 }
 
 export function hostAbiFor(architecture: string): string {

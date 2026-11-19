@@ -51,6 +51,7 @@ function createTable(
       idGenerator: { generate: () => "1" },
       seedLaunchInputs: [],
       cores: undefined,
+      seedOnlyInputs: [],
     }),
     avdmanager: binaries.avdmanager,
     baseEnv: env,
