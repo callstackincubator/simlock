@@ -56,10 +56,12 @@ async function runToEnd<T>(
   table: FakeProcessTable,
   processes: (nowMs: number) => readonly ProcessEntry[],
   ends: "fulfilled" | "rejected" = "fulfilled",
+  readsFail = false,
 ): Promise<void> {
   const state = promiseState(settle);
   for (let step = 0; step < 600 && state.state === "pending"; step += 1) {
     table.set(processes(clock.now()));
+    if (readsFail) table.failNext(new Error("ps unavailable"));
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (state.state === "pending") clock.advance(2_000);
   }
@@ -113,6 +115,8 @@ interface SettleCase {
   readonly copyCpu: (nowMs: number) => number;
   readonly reason: "idle" | "cap";
   readonly settledAfterMs: number;
+  /** why: every read of the process table fails, so nothing is ever observed. */
+  readonly readsFail?: boolean;
 }
 
 const quiet = () => 3;
@@ -145,11 +149,19 @@ const settleCases: readonly SettleCase[] = [
     settledAfterMs: 900_000,
     world: simlockWorld,
   },
+  {
+    copyCpu: quiet,
+    name: "every process-table read fails: skipped, and the 900 s cap still ends the wait",
+    reason: "cap",
+    readsFail: true,
+    settledAfterMs: 900_000,
+    world: simlockWorld,
+  },
 ];
 
 describe("IosSimctlDriver settleSeed", () => {
   it("replaces a quick seed with its settled copy: cloned as a provision clones, booted, read until idle, saved as the new seed, the quick seed deleted in its turn", async () => {
-    for (const { name, world, copyCpu, reason, settledAfterMs } of settleCases) {
+    for (const { name, world, copyCpu, reason, settledAfterMs, readsFail } of settleCases) {
       const hub = (command: string) =>
         world.isDefault ? deviceHubEdit(command).map((match) => ({ match })) : [];
       const inSet = (...args: string[]) => simctlIn(world, undefined, ...args);
@@ -217,11 +229,18 @@ describe("IosSimctlDriver settleSeed", () => {
       const settle = driver.settleSeed?.(quickSourceId, { signal: new AbortController().signal });
       expect(settle, "an iOS driver given a process table settles seeds").toBeDefined();
 
-      await runToEnd(settle as Promise<unknown>, clock, table, (nowMs) => [
-        launchd(world, 100, copyUdid),
-        { command: "backboardd", cpuSeconds: copyCpu(nowMs), pid: 101, ppid: 100 },
-        { ...launchd(world, 200, otherUdid), cpuSeconds: (nowMs / 1_000) * 4 },
-      ]);
+      await runToEnd(
+        settle as Promise<unknown>,
+        clock,
+        table,
+        (nowMs) => [
+          launchd(world, 100, copyUdid),
+          { command: "backboardd", cpuSeconds: copyCpu(nowMs), pid: 101, ppid: 100 },
+          { ...launchd(world, 200, otherUdid), cpuSeconds: (nowMs / 1_000) * 4 },
+        ],
+        "fulfilled",
+        readsFail,
+      );
 
       const label = `${world.label}, ${name}`;
       await expect(settle, label).resolves.toEqual({

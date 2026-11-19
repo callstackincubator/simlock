@@ -100,10 +100,10 @@ describe("IosSimctlDriver listComponents()", () => {
       expect(runner.calls[2]?.args).toEqual(deleteInvocation.args);
     });
 
-    it("deletes the seeds made from the removed runtime before the runtime, logs one it cannot delete and goes on, and keeps the seeds of another runtime", async () => {
-      const [goneSeed, stuckSeed, keptSeed] = [1, 2, 3].map(
+    it("deletes the seeds made from the removed runtime and the rows of its settle before the runtime, logs one it cannot delete and goes on, and keeps the seeds of another runtime", async () => {
+      const [goneSeed, stuckSeed, keptSeed, settlingSeed, retiredSeed] = [1, 2, 3, 4, 5].map(
         (n) => `00000000-0000-0000-0000-0000000002${String(n)}0`,
-      ) as [string, string, string];
+      ) as [string, string, string, string, string];
       const database = await memorySourceDatabase();
       const removed = {
         deviceTypeId: driverData.deviceTypeId,
@@ -120,6 +120,19 @@ describe("IosSimctlDriver listComponents()", () => {
         runtimeId: other.runtime,
         udid: keptSeed,
       });
+      // why: a settle's row and the row of the quick seed it retires are `making` rows no make sweeps (ADR 0090).
+      plantSource(database, {
+        ...removed,
+        settleOf: "settled",
+        state: "making",
+        udid: settlingSeed,
+      });
+      plantSource(database, {
+        ...removed,
+        settleOf: "settling",
+        state: "making",
+        udid: retiredSeed,
+      });
       const runner = new ScriptedProcessRunner([
         imagesListed([target, other]),
         defaultSetListed({}),
@@ -130,6 +143,10 @@ describe("IosSimctlDriver listComponents()", () => {
           match: sourcesSimctl("delete", stuckSeed),
           result: { code: 1, stderr: "busy", stdout: "" },
         },
+        { match: sourcesSimctl("shutdown", settlingSeed) },
+        { match: sourcesSimctl("delete", settlingSeed) },
+        { match: sourcesSimctl("shutdown", retiredSeed) },
+        { match: sourcesSimctl("delete", retiredSeed) },
         deleted,
         imagesListed([other]),
         imagesListed([other]),
@@ -151,13 +168,15 @@ describe("IosSimctlDriver listComponents()", () => {
           ["shutdown", goneSeed],
           ["delete", goneSeed],
           ["delete", stuckSeed],
+          ["delete", settlingSeed],
+          ["delete", retiredSeed],
           ["runtime", "delete"],
         ]),
       );
       expect(runner.calls.some((call) => call.args.includes(keptSeed))).toBe(false);
       expect(
         runner.calls.findIndex((call) => call.args[3] === "runtime" && call.args[4] === "delete"),
-      ).toBeGreaterThan(runner.calls.findIndex((call) => call.args[4] === stuckSeed));
+      ).toBeGreaterThan(runner.calls.findIndex((call) => call.args[4] === retiredSeed));
       expect(logger.warnings).toEqual([
         expect.stringContaining(
           `could not remove seed ${stuckSeed} of removed runtime ${target.runtime}:`,
