@@ -104,6 +104,7 @@ describe("AndroidDriver image fit", () => {
       options: {
         readonly clock?: FakeClock;
         readonly config?: string;
+        readonly emulator?: AndroidEmulatorLaunchOptions;
         readonly filesystem?: MemoryFilesystem;
         readonly ids?: readonly string[];
         readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
@@ -118,6 +119,7 @@ describe("AndroidDriver image fit", () => {
       ]);
       const driver = await createDriver(filesystem, runner, {
         ...(options.clock === undefined ? {} : { clock: options.clock }),
+        ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
         ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
         database,
         ids: options.ids ?? ["one", "two", "three"],
@@ -161,9 +163,16 @@ describe("AndroidDriver image fit", () => {
       ).toEqual([{ created_at: 5_000, folder: seedHome, source_id: "seed_two" }]);
     });
 
-    it("hands the avd config the emulator launch settings, so a seed made under other ones is stale", async () => {
+    it("hands the avd config the emulator launch settings, so a seed made under the same ones is current and one made under other ones is stale", async () => {
       const harness = await seedHarness(makingTheSeed());
       await harness.driver.provision(harness.spec);
+
+      const unchanged = await reopened(harness, [
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      const [current] = await unchanged.driver.listSources();
+      expect(current).toMatchObject({ id: "seed_two" });
+      expect(current?.staleReason).toBeUndefined();
 
       const restarted = await reopened(
         harness,
@@ -175,6 +184,53 @@ describe("AndroidDriver image fit", () => {
         { id: "seed_two", staleReason: "android.emulator launch settings changed" },
       ]);
     });
+
+    it.each([
+      { name: "the default launch", emulator: undefined, flags: [], inputs: [] },
+      {
+        name: "a non-default launch",
+        emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: true },
+        flags: ["-no-window"],
+        inputs: ["headless=true", "gpu=auto"],
+      },
+    ] as const)(
+      "judges a seed made before the per-emulator Wi-Fi flag stale under $name (#1586)",
+      async ({ emulator, flags, inputs }) => {
+        const launch = emulator === undefined ? {} : { emulator };
+        const harness = await seedHarness(
+          makingTheSeed(seedHome, "Android emulator version 36.1.9", flags),
+          launch,
+        );
+        await harness.driver.provision(harness.spec);
+        const row = harness.database
+          .prepare("SELECT image_identity, emulator_version FROM android_source_data")
+          .get() as { image_identity: string; emulator_version: string };
+        // why: the hash a driver before the flag stored, rebuilt here with the same FNV-1a over the same parts minus the Wi-Fi entry, because no public surface writes an old hash.
+        let hash = 0x811c9dc5;
+        for (const character of [
+          row.image_identity,
+          row.emulator_version,
+          "hw.ramSize=2048",
+          ...inputs,
+        ].join("\u0000")) {
+          hash ^= character.charCodeAt(0);
+          hash = Math.imul(hash, 0x01000193);
+        }
+        harness.database
+          .prepare("UPDATE android_source_data SET config_hash = ?")
+          .run((hash >>> 0).toString(16).padStart(8, "0"));
+
+        const restarted = await reopened(
+          harness,
+          [processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9")],
+          launch,
+        );
+
+        await expect(restarted.driver.listSources()).resolves.toMatchObject([
+          { id: "seed_two", staleReason: "android.emulator launch settings changed" },
+        ]);
+      },
+    );
 
     it("leases a plain Android device from a copy of the kind's seed, made first when there is none, booted from the boot snapshot", async () => {
       const harness = await seedHarness([
@@ -336,6 +392,48 @@ describe("AndroidDriver image fit", () => {
           "source baseline_four is stale: system image system-images;android-34;google_apis;arm64-v8a is not installed",
         );
         expect(await harness.filesystem.exists(join(avdDirectory, "simlock_six"))).toBe(false);
+      });
+
+      it("keeps a baseline saved before the per-emulator Wi-Fi flag usable, since only a seed's launch settings hold the Wi-Fi entry (#1586)", async () => {
+        const harness = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
+          config,
+          ids,
+        });
+        const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
+        await harness.driver.saveSource({ ...ready, physical: false as const });
+        const row = harness.database
+          .prepare(
+            "SELECT image_identity, emulator_version FROM android_source_data WHERE kind = 'baseline'",
+          )
+          .get() as { image_identity: string; emulator_version: string };
+        const saved = await harness.filesystem.readFile(`${savedHome}/simlock.avd/config.ini`);
+        // why: the hash a driver before the flag stored, rebuilt here with the same FNV-1a over the same parts, because no public surface writes an old hash.
+        let hash = 0x811c9dc5;
+        for (const character of [
+          row.image_identity,
+          row.emulator_version,
+          saved
+            .split(/\r?\n/)
+            .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
+            .filter((line) => !line.startsWith("hw.device.hash2="))
+            .sort()
+            .join("\n"),
+        ].join("\u0000")) {
+          hash ^= character.charCodeAt(0);
+          hash = Math.imul(hash, 0x01000193);
+        }
+        harness.database
+          .prepare("UPDATE android_source_data SET config_hash = ? WHERE kind = 'baseline'")
+          .run((hash >>> 0).toString(16).padStart(8, "0"));
+
+        const restarted = await reopened(harness, [
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ]);
+
+        const listed = await restarted.driver.listSources();
+        expect(listed.find((source) => source.id === "baseline_four")).not.toHaveProperty(
+          "staleReason",
+        );
       });
 
       it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
