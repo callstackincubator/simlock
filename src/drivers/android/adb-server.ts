@@ -238,10 +238,10 @@ export class AdbServerSupervisor {
       return;
     }
 
-    this.#options.processSupervisor.signal(record.pid, "SIGTERM");
+    this.#options.processSupervisor.signal(record.pid, "SIGTERM", { tree: true });
     if (!(await this.#waitForExit(record.pid))) {
       if ((await this.#identify(record.pid)) === "own-server") {
-        this.#options.processSupervisor.signal(record.pid, "SIGKILL");
+        this.#options.processSupervisor.signal(record.pid, "SIGKILL", { tree: true });
         await this.#waitForExit(record.pid);
       }
     }
@@ -317,6 +317,7 @@ export class AdbServerSupervisor {
             ...SCOPED_ENVIRONMENT,
             ANDROID_ADB_SERVER_PORT: String(this.#options.port),
           },
+          outlivesCaller: true,
           stdio: { file: this.#options.logPath },
         },
       );
