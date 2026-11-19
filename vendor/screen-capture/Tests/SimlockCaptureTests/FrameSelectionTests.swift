@@ -51,6 +51,18 @@ final class FrameSelectionTests: XCTestCase {
             return screen
         }
 
+        static let sometimes = [4, 5, 6, 7]
+
+        /// Like `warmedUp`, with four tiles that changed on every composite but the fourth.
+        static func warmedUpWithSometimesChangingTiles() -> Screen {
+            var screen = Screen()
+            for step in 0..<10 {
+                let moving = step == 3 ? glass : glass + sometimes
+                _ = screen.next(atMs: UInt64(step) * 10, changing: moving)
+            }
+            return screen
+        }
+
         mutating func next(atMs time: UInt64, changing tiles: [Int]) -> Bool {
             for tile in tiles { values[tile] &+= 1 }
             return selection.decide(
@@ -69,6 +81,17 @@ final class FrameSelectionTests: XCTestCase {
 
         var steady = Screen.warmedUp()
         XCTAssertTrue(steady.next(atMs: 100, changing: Screen.glass + [Screen.steady]), "a steady tile changed")
+
+        var half = Screen.warmedUpWithSometimesChangingTiles()
+        XCTAssertTrue(
+            half.next(atMs: 100, changing: Screen.glass + Screen.sometimes.prefix(2)),
+            "half the sometimes-changing tiles changed, none new"
+        )
+        var fewer = Screen.warmedUpWithSometimesChangingTiles()
+        XCTAssertFalse(
+            fewer.next(atMs: 100, changing: Screen.glass + Screen.sometimes.prefix(1)),
+            "under half the sometimes-changing tiles changed"
+        )
     }
 
     private func picture() -> CVPixelBuffer {
