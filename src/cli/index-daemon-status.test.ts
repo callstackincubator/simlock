@@ -31,6 +31,7 @@ async function runDaemonStatus(
       manager,
       platform: manager === undefined ? "linux" : "darwin",
       user: () => "me",
+      checkConfig: async () => {},
       definition: async () =>
         serviceDefinition({
           role: testCase.role,
@@ -223,6 +224,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         } as unknown as ServiceManager,
         platform: "darwin",
         user: () => "me",
+        checkConfig: async () => {},
         definition: async () =>
           serviceDefinition({
             role: "worker",
