@@ -252,6 +252,7 @@ describe("AndroidDriver", () => {
     const adbCalls = harness.runner.calls.filter((call) => call.command === binaries.adb);
     expect(emulatorCalls.length).toBeGreaterThan(0);
     expect(emulatorCalls.filter((call) => call.options.killChildren !== true)).toEqual([]);
+    expect(emulatorCalls.filter((call) => call.options.outlivesCaller !== true)).toEqual([]);
     expect(adbCalls.length).toBeGreaterThan(0);
     expect(adbCalls.filter((call) => call.options.killChildren !== undefined)).toEqual([]);
   });
@@ -461,34 +462,53 @@ describe("AndroidDriver", () => {
     expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
   });
 
-  it("kills an emulator that has not exited 180 s after a shutdown, whatever the boot timeout is", async () => {
-    const harness = await provisionedHarness({
-      afterwards: [
-        copyPathExpectation("emulator-5586"),
-        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
-      ],
-      bootTimeoutMs: 600_000,
-    });
-    const ready = await harness.driver.makeReady(harness.device);
-    const launch = harness.runner.calls.findLastIndex(
-      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
-    );
-    const running = harness.runner.handles[launch];
-    if (running === undefined) throw new Error("no running emulator");
-    const kill = vi.spyOn(running, "kill");
+  it.each([
+    ["adb still lists it", 180_000, "List of devices attached\nemulator-5586\tdevice\n"],
+    ["adb no longer lists it", 30_000, "List of devices attached\n"],
+  ] as const)(
+    "kills an emulator that has not exited after a shutdown, whatever the boot timeout is: %s, at %s ms",
+    async (_listing, killedAfterMs, devices) => {
+      const harness = await provisionedHarness({
+        afterwards: [
+          copyPathExpectation("emulator-5586"),
+          processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+          processResult(binaries.adb, ["devices"], devices),
+        ],
+        bootTimeoutMs: 600_000,
+      });
+      const ready = await harness.driver.makeReady(harness.device);
+      const launch = harness.runner.calls.findLastIndex(
+        (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+      );
+      const running = harness.runner.handles[launch];
+      if (running === undefined) throw new Error("no running emulator");
+      const kill = vi.spyOn(running, "kill");
 
-    // why: The emulator ignores `emu kill`: only the timeout can end the wait.
-    harness.runner.ignoresEmuKill = true;
-    const armedBefore = harness.clock.pendingTimerCount;
-    const shutdown = harness.driver.shutdown(ready);
-    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
-    expect(kill).not.toHaveBeenCalled();
-    harness.clock.advance(180_000);
-    await shutdown;
+      // why: The emulator ignores `emu kill`: only the timeout can end the wait.
+      harness.runner.ignoresEmuKill = true;
+      const armedBefore = harness.clock.pendingTimerCount;
+      const shutdown = harness.driver.shutdown(ready);
+      await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
+      expect(kill).not.toHaveBeenCalled();
+      harness.clock.advance(29_999);
+      await Promise.resolve();
+      expect(kill, "nothing is ended inside the 30 s grace").not.toHaveBeenCalled();
+      harness.clock.advance(1);
+      for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      if (killedAfterMs === 180_000) {
+        expect(kill, "adb still lists the emulator, so it keeps the 180 s").not.toHaveBeenCalled();
+        harness.clock.advance(150_000);
+      } else {
+        expect(kill, "adb lists it no more, so the wrapper alone is ended").toHaveBeenCalledWith(
+          "SIGKILL",
+        );
+      }
+      await shutdown;
 
-    expect(kill).toHaveBeenCalledWith("SIGKILL");
-    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
-  });
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
+      expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+    },
+  );
 
   it("leaves no timer armed when waiting for the emulator to exit fails", async () => {
     const harness = await provisionedHarness({

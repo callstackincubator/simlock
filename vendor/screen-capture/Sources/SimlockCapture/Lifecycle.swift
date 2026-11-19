@@ -63,6 +63,12 @@ struct Pending: @unchecked Sendable {
     let atNanos: UInt64
 }
 
+/// The frame a source handed over, stamped with the time it was seen, not the time this runs: the
+/// grid and the keyframe gap judge every frame by the moment its picture appeared.
+func pending(_ buffer: CVPixelBuffer, seenNanos: UInt64) -> Pending {
+    Pending(buffer: buffer, atNanos: seenNanos)
+}
+
 /// How a `start` call ended: running, or the one line it gave for why it could not start. A clean
 /// refusal to begin because the caller had already asked to stop is `.stopped`, which is not a reason
 /// anyone should be shown — it is the end that caller asked for.
@@ -220,18 +226,14 @@ let maxKeyframeGapNanos: UInt64 = 5_000_000_000
 /// interval early is accepted, and the deadline never trails the clock by more than half an interval, so
 /// a slightly early frame is not lost and a pause does not end in a burst.
 func encodeLoop(_ frames: AsyncStream<Pending>, options: Options, session: Session) async {
-    let intervalNanos = UInt64(1_000_000_000 / Double(options.fps))
-    var deadline: UInt64 = 0
+    var grid = FrameGrid(fps: options.fps)
     var started = false
     var metaSize: Dimensions?
     var lastKeyframe: UInt64 = 0
     let encoder = H264Encoder(fps: options.fps, bitrate: options.bitrate)
     let jpegEncoder = VideoEncoder(quality: 0.7)
     for await frame in frames {
-        if started, frame.atNanos &+ intervalNanos / 4 < deadline { continue }
-        deadline = started
-            ? max(deadline &+ intervalNanos, frame.atNanos &+ intervalNanos / 2)
-            : frame.atNanos &+ intervalNanos
+        if !grid.admit(atNanos: frame.atNanos) { continue }
         let forceKeyframe = !started || frame.atNanos &- lastKeyframe >= maxKeyframeGapNanos
         started = true
 
@@ -407,9 +409,7 @@ public func runCapture(options: Options, source: any ScreenSource) async -> Neve
         do {
             try await source.start(
                 deviceID: options.udid,
-                onFrame: { buffer in
-                    sink.yield(Pending(buffer: buffer, atNanos: DispatchTime.now().uptimeNanoseconds))
-                },
+                onFrame: { buffer, seenNanos in sink.yield(pending(buffer, seenNanos: seenNanos)) },
                 onEnd: { reason in session.exitRequest.set(reason) }
             )
             log("capture started")

@@ -65,6 +65,76 @@ describe("NodeProcessSupervisor", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["win32", true, true],
+    ["win32", false, false],
+    ["linux", true, false],
+  ] as const)(
+    "on %s, a signal with tree %s ends the process and what it started through PowerShell: %s",
+    (platform, tree, throughPowerShell) => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const runner = new ScriptedProcessRunner(
+        throughPowerShell
+          ? [
+              {
+                match: { args: [/.*/, /.*/, /.*/, /.*/], command: "powershell.exe" },
+                result: { code: 0, stderr: "", stdout: "" },
+              },
+            ]
+          : [],
+      );
+
+      new NodeProcessSupervisor({ platform, processRunner: runner }).signal(4242, "SIGTERM", {
+        tree,
+      });
+
+      expect(runner.calls.map((call) => call.command)).toEqual(
+        throughPowerShell ? ["powershell.exe"] : [],
+      );
+      expect(kill).toHaveBeenCalledTimes(throughPowerShell ? 0 : 1);
+      const encoded = runner.calls[0]?.args.at(-1);
+      if (encoded !== undefined) {
+        const script = Buffer.from(encoded, "base64").toString("utf16le");
+        expect(script, "only processes that started after their parent are listed").toContain(
+          "Where-Object { $_.CreationDate -ge $parent.CreationDate }",
+        );
+        expect(script, "grandchildren are ended too").toContain("$grandchildren");
+        expect(script).toContain("ProcessId = 4242");
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "never finishes",
+      result: { code: null, stderr: "", stdout: "", endedBy: "timeout" as const },
+      signalled: true,
+    },
+    {
+      name: "exits because the wrapper is already gone",
+      result: { code: 1, stderr: "gone", stdout: "" },
+      signalled: false,
+    },
+  ])(
+    "when the PowerShell call that ends its tree $name, the wrapper is signalled: $signalled",
+    async ({ result, signalled }) => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const runner = new ScriptedProcessRunner([
+        { match: { args: [/.*/, /.*/, /.*/, /.*/], command: "powershell.exe" }, result },
+      ]);
+
+      new NodeProcessSupervisor({ platform: "win32", processRunner: runner }).signal(
+        4242,
+        "SIGTERM",
+        { tree: true },
+      );
+
+      await vi.waitFor(() => expect(runner.calls).toHaveLength(1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(kill).toHaveBeenCalledTimes(signalled ? 1 : 0);
+    },
+  );
+
   it("treats signalling a process that is already gone as a no-op", async () => {
     const supervisor = nodeSupervisor();
     const pid = await retiredPid();
