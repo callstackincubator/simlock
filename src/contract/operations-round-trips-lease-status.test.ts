@@ -154,6 +154,11 @@ describe("operation input/output round trips", () => {
       findings: [finding],
       sources: [],
     });
+    const onWindows = { ...finding, manager: "task-scheduler", missing: ["C:\\node\\node.exe"] };
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [onWindows], sources: [] })).toEqual({
+      findings: [onWindows],
+      sources: [],
+    });
     expect(() =>
       OPERATIONS["doctor.run"].output.parse({
         findings: [{ ...finding, missing: [] }],
