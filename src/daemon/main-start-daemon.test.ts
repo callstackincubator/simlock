@@ -404,7 +404,8 @@ describe("startDaemon", () => {
       const runner = new ScriptedProcessRunner([{ match: query, result }]);
       const host = {
         manager: new TaskSchedulerServiceManager({ runner, filesystem }),
-        root: "/Users/me/.simlock",
+        // why: the default root is join(home, ".simlock"); on Windows join uses backslashes, and any other root gets a hash suffix on the task name.
+        root: join("/Users/me", ".simlock"),
         home: "/Users/me",
         nodePath: "/gone/node.exe",
         mainPath: "/here/main.js",
