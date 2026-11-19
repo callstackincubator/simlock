@@ -63,10 +63,12 @@ final class FrameSelectionTests: XCTestCase {
             return screen
         }
 
-        mutating func next(atMs time: UInt64, changing tiles: [Int]) -> Bool {
+        mutating func next(
+            atMs time: UInt64, changing tiles: [Int], force: Bool = false, size: (Int, Int) = (1179, 2556)
+        ) -> Bool {
             for tile in tiles { values[tile] &+= 1 }
             return selection.decide(
-                Composite(seenNanos: time * ms, force: false, width: 1179, height: 2556, tiles: values)
+                Composite(seenNanos: time * ms, force: force, width: size.0, height: size.1, tiles: values)
             )
         }
     }
@@ -92,6 +94,37 @@ final class FrameSelectionTests: XCTestCase {
             fewer.next(atMs: 100, changing: Screen.glass + Screen.sometimes.prefix(1)),
             "under half the sometimes-changing tiles changed"
         )
+
+        var nearlyDue = Screen.warmedUp()
+        XCTAssertTrue(nearlyDue.next(atMs: 103, changing: Screen.glass), "only always-changing tiles, 13 ms after")
+
+        var overdue = Screen.warmedUp()
+        XCTAssertFalse(overdue.next(atMs: 100, changing: Screen.glass))
+        XCTAssertTrue(overdue.next(atMs: 108, changing: Screen.glass), "only always-changing tiles, 28 ms since the last sent")
+
+        var nothing = Screen.warmedUp()
+        XCTAssertFalse(nothing.next(atMs: 96, changing: []), "no tile changed, 6 ms after")
+
+        var first = Screen()
+        XCTAssertTrue(first.next(atMs: 0, changing: []), "the first composite")
+
+        var forced = Screen.warmedUp()
+        XCTAssertTrue(forced.next(atMs: 100, changing: Screen.glass, force: true), "a forced composite")
+
+        var resized = Screen.warmedUp()
+        XCTAssertTrue(resized.next(atMs: 95, changing: Screen.glass, size: (1398, 2034)), "a new picture size")
+        XCTAssertTrue(resized.next(atMs: 100, changing: Screen.glass, size: (1398, 2034)), "and its history starts again")
+
+        var scroll = Screen()
+        var mirror = FrameGrid(fps: 60)
+        for step in 0..<60 {
+            let time = UInt64(step) * 10
+            let blockChanges = step % 5 < 3
+            let due = mirror.isDue(atNanos: time * ms)
+            let copied = scroll.next(atMs: time, changing: Screen.glass + (blockChanges ? Screen.sometimes : []))
+            if copied { mirror.commit(atNanos: time * ms) }
+            if blockChanges, due { XCTAssertTrue(copied, "scroll composite \(step), a due block change") }
+        }
     }
 
     private func picture() -> CVPixelBuffer {
