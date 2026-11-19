@@ -21,7 +21,7 @@ Resolve and boot:
 - Named services (ADR 0083): `exclude` beats `include` beats a category; `simlock-managed.json` records the names, so one dropped from both is written back on. A baseline saved before it keeps a dropped name off; `include` it.
 - Slim `except` (ADR 0066): an excepted category's labels are written `false`; an unknown name is `BAD_REQUEST`; a kept label not read back throws `KeptCategoriesError`.
 - A recovery boot writes no slim overrides and reads nothing back. DeviceHub clipboard isolation is configured before preparation and recovery boots; ready default-set simulators reboot under the lease claim before a grant. Active leases at upgrade keep clipboard sync until a later boot or lease end.
-- The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
+- The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it after `simctl delete`.
 - After every boot and before the readback, the volume step runs, then the window step; each only reports its failure.
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached.
@@ -32,7 +32,7 @@ Seeds (ADR 0061):
 - A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder; `saveSource` deletes the saved-from lease's log folder too. A log folder that cannot be deleted is logged and the make or save goes on; a throwaway that cannot be deleted fails the make.
 - A source records its lineage and, in `ios_source_files`, the files and links naming it, after flushing its WALs. A clone keeps its source's lineage and, before its first boot, has its `com.apple.LaunchServices-*.csstore` deleted and those files and links swapped to its own UDID; a failed drop or swap deletes it. No lineage: a seed is remade, a baseline stale.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
-- A settle (ADR 0090) replaces a ready quick seed with its booted, idle copy; a settle that fails first deletes the copy and keeps the quick seed. After the swap the new seed is answered whatever the deletes do, and a simulator that cannot be deleted keeps a `making` row that names it for the next start's sweep.
+- A settle (ADR 0090) swaps a ready quick seed for its idle copy; a simulator it cannot delete keeps a `making` row for the next start's sweep.
 - A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and 5 silent minutes more kills and logs it.
 - A `making` row of another process is swept at the first `listSources`, with its throwaway; one of this process, once older than any make takes, at the next make of its kind, never a settle's (`settle_of`).
 - A seed `simctl delete` calls `Invalid device` is gone: its row is dropped. `removeComponent` deletes the runtime's seeds first, then its settle rows.
@@ -40,7 +40,7 @@ Seeds (ADR 0061):
 Physical, passthrough, screen:
 
 - `devicectl` over `device.exec` is an allow-list (`devicectlExecCommand`): what is not on the reviewed list is refused, and so is every option that names a host path.
-- Screen (`screen-capture.ts`): stdout is the frames, stdin the program's liveness, and closing stdin is the stop. Key frames keep coming on a still screen. The daemon's own `SIMLOCK_IOS_DEVICE_SET` and `SIMLOCK_COREDEVICE_INFO_PLIST` reach neither program; the driver sets the first for a `simlock`-set simulator only.
+- Screen: stdout is the frames, stdin the program's liveness, and closing stdin is the stop. Key frames keep coming on a still screen. The daemon's own `SIMLOCK_IOS_DEVICE_SET` and `SIMLOCK_COREDEVICE_INFO_PLIST` reach neither program; the driver sets the first for a `simlock`-set simulator only.
 - An iPhone below iOS 27 is `ScreenUnavailableError`; an unreadable version goes on. The iPhone program enforces its CoreDevice pin: another major exits 69, a 503 for the viewer.
 
 Tunnels (`device-tcp.ts`):
