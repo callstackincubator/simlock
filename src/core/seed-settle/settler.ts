@@ -1,3 +1,4 @@
+import type { EventMap } from "../../bus/index.js";
 import { type Logger, NoopLogger, type TimerHandle } from "../../ports/index.js";
 import { capacityDevices } from "../capacity/index.js";
 import type { Platform, VirtualSpec } from "../domain.js";
@@ -49,6 +50,8 @@ interface Target {
   readonly platform: Platform;
   readonly kind: Pick<VirtualSpec, "model" | "osVersion" | "imageTag">;
   readonly sourceId?: string;
+  /** why: the plain leases copied from the quick seed, as its driver listed them. */
+  readonly leases?: number;
   readonly operator?: OperatorEntry;
 }
 
@@ -189,6 +192,25 @@ class SeedSettlerImpl implements SeedSettler {
     return this.options.drivers.find((driver) => driver.platform === platform);
   }
 
+  #emit<Name extends "seed.settle-started" | "seed.settle-ended">(
+    name: Name,
+    target: Target,
+    fields: Omit<EventMap[Name], "platform" | "model" | "osVersion" | "imageTag">,
+  ): void {
+    const { imageTag, model, osVersion } = target.kind;
+    this.options.eventBus.emit(
+      name,
+      {
+        model,
+        osVersion,
+        platform: target.platform,
+        ...(imageTag === undefined ? {} : { imageTag }),
+        ...fields,
+      } as EventMap[Name],
+      "seed-settler",
+    );
+  }
+
   #pressureStep() {
     return this.options.memoryPressure.current()?.step ?? "none";
   }
@@ -322,6 +344,7 @@ class SeedSettlerImpl implements SeedSettler {
               osVersion: source.osVersion,
               ...(source.imageTag === undefined ? {} : { imageTag: source.imageTag }),
             },
+            leases: source.leases ?? 0,
             platform: driver.platform,
             sourceId: source.id,
           },
@@ -398,6 +421,7 @@ class SeedSettlerImpl implements SeedSettler {
     const { driver, operator } = target;
     try {
       let sourceId = target.sourceId;
+      let leases = target.leases ?? 0;
       if (operator !== undefined) {
         if (operator.needsMake) operator.onProgress({ stage: "making" });
         const ensured = await driver.ensureSeed?.(operator.spec);
@@ -414,10 +438,41 @@ class SeedSettlerImpl implements SeedSettler {
           throw new Requeue();
         }
         sourceId = ensured.sourceId;
+        leases = ensured.leases;
         operator.onProgress({ stage: "settling" });
       }
       if (sourceId === undefined || driver.settleSeed === undefined) return;
-      const result = await driver.settleSeed(sourceId, { signal: running.controller.signal });
+      const startedAt = this.options.clock.now();
+      this.#emit("seed.settle-started", target, {
+        leases,
+        sourceId,
+        trigger: operator === undefined ? "background" : "operator",
+      });
+      let result;
+      try {
+        result = await driver.settleSeed(sourceId, { signal: running.controller.signal });
+      } catch (error: unknown) {
+        const ended =
+          running.abortReason === undefined
+            ? {
+                message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+                outcome: "failed" as const,
+              }
+            : { outcome: "aborted" as const, reason: running.abortReason };
+        this.#emit("seed.settle-ended", target, {
+          durationMs: this.options.clock.now() - startedAt,
+          sourceId,
+          ...ended,
+        });
+        throw error;
+      }
+      this.#emit("seed.settle-ended", target, {
+        durationMs: this.options.clock.now() - startedAt,
+        newSourceId: result.sourceId,
+        outcome: result.reason === "cap" ? "cap" : "settled",
+        sourceId,
+        ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
+      });
       operator?.resolve({
         outcome: "settled",
         settledAfterMs: result.settledAfterMs,
