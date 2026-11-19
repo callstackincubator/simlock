@@ -18,6 +18,8 @@ import {
   type ServiceManager,
   type ServiceState,
   MemoryFilesystem,
+  ScriptedProcessRunner,
+  TaskSchedulerServiceManager,
 } from "../ports/index.js";
 import { productionServiceCheck } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -371,6 +373,47 @@ describe("startDaemon", () => {
         report.findings.filter((finding) => finding.kind === "service-broken"),
         testCase.label,
       ).toEqual(testCase.expected);
+    }
+  });
+
+  it("productionServiceCheck on Windows reads the task: the path it names that is gone, none when all are there or there is no task, and no check on a gateway", async () => {
+    const name = "com.callstack.simlock.worker";
+    const query = {
+      command: "cmd.exe",
+      args: ["/d", "/c", `chcp 65001 >nul && schtasks /query /tn ${name} /xml`],
+    };
+    const xml = `<Task><Settings><Enabled>true</Enabled></Settings><Exec><Arguments>--headless "/gone/node.exe" "/here/service-main.js" --task ${name}</Arguments></Exec></Task>`;
+    const cases = [
+      {
+        label: "path gone",
+        result: { code: 0, stdout: xml, stderr: "" },
+        files: ["/here/service-main.js"],
+        missing: ["/gone/node.exe"],
+      },
+      {
+        label: "no task",
+        result: { code: 1, stdout: "", stderr: "ERROR" },
+        files: [],
+        missing: [],
+      },
+    ];
+    for (const { label, result, files, missing } of cases) {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/here");
+      for (const file of files) await filesystem.writeFileAtomic(file, "");
+      const runner = new ScriptedProcessRunner([{ match: query, result }]);
+      const host = {
+        manager: new TaskSchedulerServiceManager({ runner, filesystem }),
+        root: "/Users/me/.simlock",
+        home: "/Users/me",
+        nodePath: "/gone/node.exe",
+        mainPath: "/here/main.js",
+        env: {},
+      };
+      const { serviceCheck } = productionServiceCheck("worker", host);
+      expect(serviceCheck?.manager, label).toBe("task-scheduler");
+      expect(await serviceCheck?.check(), label).toEqual(missing);
+      expect(productionServiceCheck("gateway", host), label).toEqual({});
     }
   });
 
