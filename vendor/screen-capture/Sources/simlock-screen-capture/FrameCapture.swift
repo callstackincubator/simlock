@@ -1,10 +1,12 @@
 // MODIFIED FILE — this file is copied from serve-sim (Copyright 2026 Evan Bacon, Apache-2.0;
-// see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's change
-// is `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
-// simlock-owned `simctl --set` root can be found at all, and `nativeScreenSizes` being internal
-// instead of private, so the input mode can report the device's size, and the notice/copy split:
-// the callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
-// pacing grid and copies on a queue of its own; everything else here is upstream's.
+// see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's changes
+// are `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
+// simlock-owned `simctl --set` root can be found at all, `nativeScreenSizes` being internal
+// instead of private, so the input mode can report the device's size, the notice/copy split — the
+// callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
+// pacing grid and copies on a queue of its own — and the callbacks hopping onto this actor
+// instead of asserting they already run on it, which traps the process before it writes a frame;
+// everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -224,8 +226,12 @@ actor FrameCapture {
         desc.registerScreenCallbacks(
             uuid: uuid,
             callbackQueue: queue,
-            frameCallback: { [self] in assumeIsolated { $0.captureFrame() } },
-            surfacesChangedCallback: { [self] in assumeIsolated { $0.captureFrame() } },
+            // why: these callbacks are not entered as a job of this actor, and `assumeIsolated`'s
+            // check is compiled into the binary — the release build traps on the first surface
+            // change while other builds pass. A task created here inherits the actor's isolation,
+            // so its job is enqueued on the actor's executor.
+            frameCallback: { [self] in Task { self.captureFrame() } },
+            surfacesChangedCallback: { [self] in Task { self.captureFrame() } },
             propertiesChangedCallback: {}
         )
     }

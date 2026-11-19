@@ -50,7 +50,7 @@ per row.
 | `simlock-screen-capture/SimFrameworks.swift`                                                       | `Sources/SimNative/`        | theirs, unchanged                                                                                                                                                                                                            |
 | `simlock-screen-capture/FramebufferSurfaceSelector.swift`                                          | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
 | `simlock-screen-capture/DeviceDisplaySizes.swift`                                                  | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
-| `simlock-screen-capture/FrameCapture.swift`                                                        | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the device-set lookup (deviation 1) and the notice/copy split that decides on the grid before it copies (deviation 5)                                       |
+| `simlock-screen-capture/FrameCapture.swift`                                                        | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the device-set lookup (deviation 1), the notice/copy split (deviation 5), and the callbacks' hop onto the actor (deviation 6)                               |
 | `simlock-screen-capture/HIDInjector.swift`                                                         | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the Duo, Device Hub, pose, Home, app switcher and Lock paths are deleted, `sendButtonPlan` is added, and the touch target is `PanelTouch.map` (deviation 3) |
 | `SimlockCapture/H264Encoder.swift`                                                                 | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
 | `SimlockCapture/VideoEncoder.swift`                                                                | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
@@ -113,7 +113,7 @@ from serve-sim: the framebuffer of a device nobody is looking at, encoded.
 
 ## Deviations
 
-Five that change behaviour, all deliberate. Each is here because a later reader
+Six that change behaviour, all deliberate. Each is here because a later reader
 must not "clean up" back to upstream's behaviour and silently break a simlock
 feature. The mechanical consequences of the package layout — the files not taken,
 the import that went away — are named where they show up, not counted here.
@@ -167,6 +167,18 @@ frame count. The 200 ms idle floor and a panel switch are forced: always copied.
 `FrameCapture.start` takes `fps` for it. `SeedGate` (ours, in `FrameSelection.swift`) keeps the
 callbacks from noticing one seed twice. A 1 to 8 ms seed check beside the callbacks was measured
 and dropped: it cost 33 to 71 CPU points against 27 without it.
+
+**6. `FrameCapture`'s frame callbacks hop onto the actor instead of asserting they
+run on it.** serve-sim registers both with `assumeIsolated`, which asserts that the
+callback is already a job of the actor whose executor is `queue`. The framework
+delivers the block on that queue but does not enter it as a job of the actor, and
+the check is compiled into the binary: the release build (the `xcode-27` lane) traps
+with `Incorrect actor executor assumption` before the program writes a frame, while
+a build from another toolchain passes the same check. Each callback now starts a
+`Task` that runs `captureFrame()` on the actor, so nothing depends on which build
+made the binary or on the queue the framework calls from; upstream's file at the
+commit we took still has the assertion. The comment in `FrameCapture.swift` says the
+same, and is the authoritative wording for it.
 
 One mechanical consequence of flattening two upstream targets into one:
 `FrameCapture.swift` and `HIDInjector.swift` no longer say `import SimNativeSupport`, because there is
@@ -249,13 +261,13 @@ curl -sL https://raw.githubusercontent.com/EvanBacon/serve-sim/6d009686ed08f7d8b
   | diff -u - Sources/simlock-screen-capture/FrameCapture.swift
 ```
 
-That prints six things and nothing else — the `MODIFIED FILE` header Apache §4(b)
+That prints seven things and nothing else — the `MODIFIED FILE` header Apache §4(b)
 asks for, the device-set patch, the `private` that became internal on
 `nativeScreenSizes`, the deleted `import SimNativeSupport`, the
-`import SimlockCapture` that replaced it, and the notice/copy split (`CopyStage`, `fps` on
-`start`, the seen time) — which is the whole claim of this notice
-in one screenful. If that diff ever grows past those
-six, either someone edited upstream's capture logic or Apple moved something
+`import SimlockCapture` that replaced it, the notice/copy split (`CopyStage`, `fps` on
+`start`, the seen time), and the callbacks' hop onto the actor — which is the whole
+claim of this notice in one screenful. If that diff ever grows past those
+seven, either someone edited upstream's capture logic or Apple moved something
 upstream, and both deserve to be noticed rather than committed. For any other file
 in the table, substitute its upstream path in both places — for the four rewritten
 ones it prints a whole-file rewrite, which is what their rows say:
