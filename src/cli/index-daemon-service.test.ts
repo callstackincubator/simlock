@@ -289,6 +289,7 @@ describe("CLI: daemon install (#830)", () => {
         manager: serviceManager,
         platform: "darwin",
         user: () => "me",
+        checkConfig: async () => {},
         definition: async () =>
           serviceDefinition({
             role: "worker",
@@ -468,6 +469,102 @@ describe("CLI: daemon install (#830)", () => {
       "Daemon stopping",
       "Service removed: com.callstack.simlock.worker (launchd)",
     ]);
+  });
+});
+
+describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
+  it("daemon install with a config.json the CLI refuses exits 2 with the config error and installs no service, on launchd, systemd and Task Scheduler", async () => {
+    const managers = [
+      { manager: "launchd", platform: "darwin" },
+      { manager: "systemd", platform: "linux" },
+      { manager: "task-scheduler", platform: "win32" },
+    ] as const;
+    const configs = [
+      { label: "accepted", maxDevices: 2, daemonRunning: false },
+      { label: "refused", maxDevices: 0, daemonRunning: false },
+      { label: "refused, a daemon running", maxDevices: 0, daemonRunning: true },
+    ];
+    for (const { manager, platform } of managers) {
+      for (const { label: configLabel, maxDevices, daemonRunning } of configs) {
+        const label = `${manager}, ${configLabel} config`;
+        const root = "/Users/me/.simlock";
+        const filesystem = new MemoryFilesystem();
+        await filesystem.mkdirp(root);
+        await filesystem.writeFileAtomic(
+          join(root, "config.json"),
+          JSON.stringify({ capacity: { config: { limits: { android: { maxDevices } } } } }),
+        );
+        const ipcTransport = new MemoryIpcTransport();
+        if (daemonRunning) {
+          await startInMemoryDaemon({
+            adminTokenPath: join(root, "admin.token"),
+            filesystem,
+            ipcTransport,
+            socketPath: join(root, "daemon.sock"),
+          });
+        }
+        // why: a daemon the service starts on a config it refuses exits at once and never answers.
+        const serviceManager = new FakeServiceManager({
+          manager,
+          onInstall: async () => {
+            if (maxDevices === 0) return;
+            await startInMemoryDaemon({
+              adminTokenPath: join(root, "admin.token"),
+              filesystem,
+              ipcTransport,
+              socketPath: join(root, "daemon.sock"),
+            });
+          },
+        });
+        const output = outputCapture({
+          filesystem,
+          clock: new FakeClock(0),
+          systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+          ipc: ipcTransport,
+          launcher: new FakeDaemonLauncher(),
+          daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+          homeDirectory: "/Users/me",
+          workingDirectory: "/work/project",
+          hostPlatform: "linux",
+          runTool: async () => ({ outcome: "not-found" }),
+          service: {
+            manager: serviceManager,
+            platform,
+            home: "/Users/me",
+            user: () => "me",
+            root,
+            nodePath: "/opt/node/bin/node",
+            mainPath: "/opt/simlock/dist/daemon/main.js",
+          },
+        });
+
+        const exitCode = await runCli(["daemon", "install"], output.environmentWith());
+
+        if (maxDevices === 0) {
+          expect(JSON.parse(output.stderr.trim()), label).toEqual({
+            error: {
+              code: "USAGE",
+              message:
+                'Invalid config value for "capacity.config.limits.android.maxDevices": expected a positive integer',
+            },
+          });
+          expect(exitCode, label).toBe(2);
+          expect(serviceManager.installs, label).toEqual([]);
+          if (daemonRunning) {
+            // why: the config check comes before the stop, so a refused config leaves the daemon running.
+            const status = await runCli(["daemon", "status", "--json"], output.environmentWith());
+            expect(status, label).toBe(0);
+            expect(JSON.parse(output.stdout.trim().split("\n").at(-1) ?? ""), label).toHaveProperty(
+              "leases",
+            );
+          }
+        } else {
+          expect(output.stderr, label).toBe("");
+          expect(exitCode, label).toBe(0);
+          expect(serviceManager.installs, label).toHaveLength(1);
+        }
+      }
+    }
   });
 });
 
