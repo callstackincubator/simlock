@@ -26,7 +26,7 @@ actor FrameCapture {
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private var photocopier = Photocopier()
-    private var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
+    private var onFrame: ((CVPixelBuffer, UInt64) -> Void)?
     private var frameCount: UInt64 = 0
     private(set) var capturedWidth: Int = 0
     private(set) var capturedHeight: Int = 0
@@ -54,7 +54,7 @@ actor FrameCapture {
     private var didLogRejectedPresentationSurface = false
     private var didLogMissingExpectedSurface = false
 
-    func start(deviceUDID: String, onFrame: @escaping @Sendable (CVPixelBuffer, CMTime) -> Void) throws {
+    func start(deviceUDID: String, onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void) throws {
         self.onFrame = onFrame
 
         SimFrameworks.load()
@@ -262,6 +262,9 @@ actor FrameCapture {
     // MARK: - Frame capture
 
     private func captureFrame(force: Bool = false) {
+        // why: the time the composite was noticed, before the copy below, because the copy takes
+        // 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
+        let seenNanos = DispatchTime.now().uptimeNanoseconds
         guard let desc = pickBestDescriptor() else { return }
 
         let surfSel = NSSelectorFromString("framebufferSurface")
@@ -299,9 +302,8 @@ actor FrameCapture {
 
         lastCaptureTime = .now
         frameCount += 1
-        let timestamp = CMTime(value: CMTimeValue(frameCount), timescale: 60)
         guard let copy = photocopier.copy(pb) else { return }
-        onFrame?(copy, timestamp)
+        onFrame?(copy, seenNanos)
     }
 
     func getScreenSize() -> (width: Int, height: Int)? {
