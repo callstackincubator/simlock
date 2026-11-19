@@ -55,13 +55,14 @@ describe("seed settler: nuke", () => {
     const rig = await settlerRig();
     rig.ios.sources = [quick("seed", 3)];
     const order: string[] = [];
+    const returned = deferred<void>();
     rig.ios.settleSeed = (_id, signal) =>
       new Promise((_resolve, reject) => {
         signal.addEventListener(
           "abort",
           () => {
             order.push("settle aborted");
-            void flush().then(() => {
+            void returned.promise.then(() => {
               order.push("settle returned");
               reject(signal.reason);
             });
@@ -75,6 +76,9 @@ describe("seed settler: nuke", () => {
 
     const nuke = nukeOf(rig, order);
     const nuked = nuke.service.nuke(true);
+    await flush();
+    expect(order, "the nuke waits for the settle").toEqual(["settle aborted"]);
+    returned.resolve();
     await flush();
     expect(order, "the settle ended before the nuke began").toEqual([
       "settle aborted",

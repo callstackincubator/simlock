@@ -86,7 +86,7 @@ export class NukeService implements NukeExecutor {
     });
     await previous;
     try {
-      return await this.#runNuke(deleteDevices);
+      return await this.options.seedSettler.holdWhile(() => this.#runNuke(deleteDevices));
     } finally {
       release();
     }

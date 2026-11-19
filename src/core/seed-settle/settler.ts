@@ -72,6 +72,7 @@ class SeedSettlerImpl implements SeedSettler {
   #started = false;
   #stopped = false;
   #stopping = false;
+  #holds = 0;
   #checking = false;
   #again = false;
   #underWay = 0;
@@ -117,8 +118,16 @@ class SeedSettlerImpl implements SeedSettler {
     await this.#running?.done;
   }
 
-  holdWhile<Result>(work: () => Promise<Result>): Promise<Result> {
-    return work();
+  async holdWhile<Result>(work: () => Promise<Result>): Promise<Result> {
+    this.#holds += 1;
+    try {
+      this.#abort("nuke");
+      await this.#running?.done;
+      return await work();
+    } finally {
+      this.#holds -= 1;
+      if (this.#holds === 0) this.#requestCheck();
+    }
   }
 
   settle(
@@ -201,7 +210,7 @@ class SeedSettlerImpl implements SeedSettler {
   }
 
   #requestCheck(): void {
-    if (!this.#started || this.#stopping) return;
+    if (!this.#started || this.#stopping || this.#holds > 0) return;
     if (this.#checking) {
       this.#again = true;
       return;
@@ -375,6 +384,10 @@ class SeedSettlerImpl implements SeedSettler {
       };
     });
     if (held === undefined) return false;
+    if (this.#holds > 0 || this.#stopping) {
+      held.release();
+      return false;
+    }
     const running: Running = { controller: new AbortController(), done: Promise.resolve() };
     this.#running = running;
     running.done = this.#execute(target, running, held);
