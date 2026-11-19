@@ -276,6 +276,56 @@ describe("Seeds", () => {
       }
     });
 
+    it("names the seed and which of its two boots ran out of android.bootTimeoutMs when making a seed times out", async () => {
+      const stage = seedStages();
+      const serial = "emulator-5586";
+      const neverReady = [
+        bootingAt(seedHome, ["-no-snapshot-load"], true)[0],
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "0\n",
+        ),
+      ] as ScriptedProcessExpectation[];
+      const cases = [
+        {
+          boot: "first boot",
+          expectations: [stage.version, stage.create, stage.devices, ...neverReady],
+          probesBeforeHang: 1,
+        },
+        {
+          boot: "second boot",
+          expectations: [
+            stage.version,
+            stage.create,
+            stage.devices,
+            ...stage.firstBoot,
+            stage.sync,
+            stage.powerOff,
+            ...neverReady,
+          ],
+          probesBeforeHang: 2,
+        },
+      ] as const;
+
+      for (const failing of cases) {
+        const clock = new FakeClock();
+        const harness = await seedHarness(failing.expectations, { clock });
+        const failure = harness.seeds.provision(harness.spec).catch((error: unknown) => error);
+        await vi.waitFor(() =>
+          expect(
+            harness.runner.calls.filter((call) => call.args.includes("sys.boot_completed")),
+          ).toHaveLength(failing.probesBeforeHang),
+        );
+        clock.advance(300_000);
+
+        const error = (await failure) as Error;
+        expect(error.name, failing.boot).toBe("BootTimeoutError");
+        expect(error.message, failing.boot).toContain("seed_two");
+        expect(error.message, failing.boot).toContain(failing.boot);
+      }
+    });
+
     it("removes the device's folder and throws when copying the seed fails", async () => {
       const harness = await seedHarness(makingTheSeed(), {
         filesystem: new CopyFailureFilesystem("cp: no space left on device"),
