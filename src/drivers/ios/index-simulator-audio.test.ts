@@ -40,6 +40,13 @@ afterEach(() => {
   }
 });
 
+/** why: only a prepare boot renames the simulator, so only its script holds the rename. */
+function renameStep(purpose: "prepare" | "recover") {
+  return purpose === "prepare"
+    ? [{ match: simctl("rename", driverData.udid, driverData.name) }]
+    : [];
+}
+
 describe("IosSimctlDriver simulator audio", () => {
   const volumeState = "com.apple.springboard.volumestate";
   const udid = driverData.udid;
@@ -103,9 +110,7 @@ describe("IosSimctlDriver simulator audio", () => {
         ...(result === undefined ? {} : { result }),
       });
       const runner = new ScriptedProcessRunner([
-        ...(c.options.purpose === "prepare"
-          ? [{ match: simctl("rename", udid, driverData.name) }]
-          : []),
+        ...renameStep(c.options.purpose),
         { match: simctl("boot", udid) },
         { match: simctl("bootstatus", udid, "-b") },
         { match: simctl("listapps", udid) },
