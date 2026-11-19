@@ -95,4 +95,70 @@ final class FrameSelectionTests: XCTestCase {
         stage.stop()
         XCTAssertEqual(seen, [0, 20 * ms], "the 5 ms composite is declined before any copy, the others keep their seen time")
     }
+
+    func testEachNewSeedIsNoticedOnceWhetherTheCallbackOrTheTickSeesItFirst() {
+        func surface() -> IOSurface {
+            IOSurface(properties: [
+                .width: 8, .height: 8, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
+            ])!
+        }
+        let first = surface()
+        let second = surface()
+        nonisolated(unsafe) var seeds: [ObjectIdentifier: UInt32] = [:]
+        nonisolated(unsafe) var time: UInt64 = 0
+        nonisolated(unsafe) var noticed: [(seed: UInt32, at: UInt64)] = []
+        nonisolated(unsafe) var gate = SeedGate()
+        let watch = SeedWatch(
+            queue: DispatchQueue(label: "test-seed-watch"),
+            readSeed: { seeds[ObjectIdentifier($0)] ?? 0 },
+            now: { time },
+            onSeed: { surface, seed, at in
+                if gate.notice(key: ObjectIdentifier(surface), seed: seed, force: false) {
+                    noticed.append((seed, at))
+                }
+            }
+        )
+        func callback(_ surface: IOSurface, seed: UInt32, force: Bool = false) {
+            if gate.notice(key: ObjectIdentifier(surface), seed: seed, force: force) {
+                noticed.append((seed, time))
+            }
+        }
+        func noticedSeeds() -> [UInt32] { noticed.map(\.seed) }
+
+        watch.watch(first)
+        seeds[ObjectIdentifier(first)] = 5
+        time = 1 * ms
+        watch.tick()
+        seeds[ObjectIdentifier(first)] = 6
+        time = 2 * ms
+        watch.tick()
+        XCTAssertEqual(noticedSeeds(), [5, 6], "two seeds between two callbacks are both noticed")
+        XCTAssertEqual(noticed.map(\.at), [1 * ms, 2 * ms], "each with its own time")
+
+        callback(first, seed: 6)
+        XCTAssertEqual(noticedSeeds(), [5, 6], "the callback on a seed the tick noticed is not a second notice")
+        callback(first, seed: 7)
+        time = 3 * ms
+        seeds[ObjectIdentifier(first)] = 7
+        watch.tick()
+        XCTAssertEqual(noticedSeeds(), [5, 6, 7], "the tick on a seed the callback noticed is not a second notice")
+
+        time = 4 * ms
+        watch.tick()
+        XCTAssertEqual(noticedSeeds(), [5, 6, 7], "an unchanged seed is not noticed")
+        callback(first, seed: 7, force: true)
+        XCTAssertEqual(noticedSeeds(), [5, 6, 7, 7], "a forced call with an unchanged seed is noticed")
+
+        watch.watch(second)
+        seeds[ObjectIdentifier(second)] = 9
+        time = 5 * ms
+        watch.tick()
+        XCTAssertEqual(noticed.last?.seed, 9, "after watch(surface) the next tick reads the new surface")
+        XCTAssertEqual(noticed.count, 5)
+
+        watch.stop()
+        seeds[ObjectIdentifier(second)] = 10
+        watch.tick()
+        XCTAssertEqual(noticed.count, 5, "after stop() the tick does nothing")
+    }
 }

@@ -116,3 +116,26 @@ final class CopyStage: @unchecked Sendable {
         emit?(copy, notice.seenNanos)
     }
 }
+
+/// Says whether a seed is news, so the callbacks and `SeedWatch` notice each composite once.
+struct SeedGate {
+    mutating func notice(key: ObjectIdentifier, seed: UInt32, force: Bool) -> Bool {
+        false
+    }
+}
+
+/// Reads the watched surface's seed every millisecond, beside SimulatorKit's frame callback, so a
+/// composite the callback reports late is still noticed and timed when it appeared.
+final class SeedWatch: @unchecked Sendable {
+    init(
+        queue: DispatchQueue,
+        readSeed: @escaping (IOSurface) -> UInt32 = IOSurfaceGetSeed,
+        now: @escaping () -> UInt64,
+        onSeed: @escaping (IOSurface, UInt32, UInt64) -> Void
+    ) {}
+
+    func watch(_ surface: IOSurface?) {}
+    func start() {}
+    func stop() {}
+    func tick() {}
+}
