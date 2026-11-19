@@ -1,6 +1,6 @@
 # 0087. The unit tests run on Windows in CI, and a list of files still failing there only shrinks
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-18
 - **Issue:** [#1693](https://github.com/callstackincubator/simlock/issues/1693) (request [#1070](https://github.com/callstackincubator/simlock/issues/1070))
 - **Narrows:** testing rule 5 in `docs/internal/agent-rules/testing.md`
