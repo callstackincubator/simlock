@@ -16,6 +16,10 @@ export interface AvdConfigOptions {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly seedLaunchInputs: readonly string[];
+  /** why: `android.emulator.cores`; unset leaves the profile's own count. */
+  readonly cores: number | undefined;
+  /** why: inputs only a seed's hash takes, so a saved baseline made before one stays usable (#1586). */
+  readonly seedOnlyInputs: readonly string[];
 }
 
 export class AvdConfig {
@@ -58,6 +62,15 @@ export class AvdConfig {
   }
 
   /**
+   * why: `android.emulator.cores` is written into config.ini rather than passed as `-cores`, since a
+   * snapshot saved under one core count does not load under another flag.
+   */
+  async applyCores(folder: string): Promise<void> {
+    if (this.#options.cores === undefined) return;
+    await this.#mergeConfigIniLines(folder, { "hw.cpu.ncore": String(this.#options.cores) });
+  }
+
+  /**
    * why: What a seed's boot snapshot depends on. A mismatch against the hash stored with the seed
    * makes it stale, so it is made again rather than copied into devices whose snapshot the
    * emulator would refuse.
@@ -65,13 +78,20 @@ export class AvdConfig {
   async currentConfigHash(
     folder: string,
     imageIdentity: string,
+    kind: "seed" | "baseline",
     knownEmulatorVersion?: string,
   ): Promise<string> {
     const [emulatorVersion, config] = await Promise.all([
       knownEmulatorVersion ?? this.#options.adbTools.emulatorVersion(),
       this.#avdConfig(folder),
     ]);
-    return stableHash([imageIdentity, emulatorVersion, config, ...this.#options.seedLaunchInputs]);
+    return stableHash([
+      imageIdentity,
+      emulatorVersion,
+      config,
+      ...this.#options.seedLaunchInputs,
+      ...(kind === "seed" ? this.#options.seedOnlyInputs : []),
+    ]);
   }
 
   async #avdConfig(folder: string): Promise<string> {
