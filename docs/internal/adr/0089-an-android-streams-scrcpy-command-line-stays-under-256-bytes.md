@@ -44,10 +44,12 @@ Read in scrcpy v5.0.1's server (`Options.java`, `CodecOption.java`):
 - A boolean option is `Boolean.parseBoolean`: only `true` (any case) is
   true, so `0` is false.
 - A codec option with no type is an `int`.
-- With no `log_level` the server logs at debug. Its debug lines a screen
-  stream reaches are written once, at start and stop (the encoder and
-  display API in use, size alignment, each codec option set); none is
-  written per frame or per reset.
+- With no `log_level` the server logs at debug, to its output and to the
+  device's logcat (tag `scrcpy`). The debug lines a screen stream reaches
+  are written at start and stop (the encoder in use, size alignment, each
+  codec option set), and one on every capture start: each reset restarts
+  the capture, and `ScreenCapture.start` writes `Display: using
+  DisplayManager API`. None is written per frame.
 
 Without the seven defaults the largest line is still 281 bytes; with `0`
 for false and the untyped codec option, 261.
@@ -71,8 +73,12 @@ for false and the untyped codec option, 261.
 ## Consequences
 
 - Android streams start on devices with the limit.
-- The server logs at debug: a few more lines at start, in the output whose
-  last lines a failure is reported with, and in the device's logcat.
+- The server logs at debug: a few more lines at start, and one line per
+  reset, so a still screen writes `Display: using DisplayManager API` to
+  the device's logcat every 4 s. A moving screen rarely resets. After a
+  long still stream the 20 last lines a failure is reported with
+  (`LOG_TAIL_LINES`) hold mostly that line before the failure's own lines,
+  which come last.
 - `0` reads less plainly than `false`; the launch says why beside it.
 - About 10 bytes are left. A new server option has to fit them, or replace
   one.
