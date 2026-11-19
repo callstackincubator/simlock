@@ -155,6 +155,13 @@ export {
   PowerShellDirectoryAccessReader,
 } from "./directory-access.js";
 export {
+  FakeProcessTable,
+  NodeProcessTable,
+  type ProcessEntry,
+  ProcessTableReadError,
+  type ProcessTable,
+} from "./process-table.js";
+export {
   type CpuCounters,
   type CpuTimes,
   DarwinHostLoadProbe,

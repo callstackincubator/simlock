@@ -42,6 +42,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | leasing | Every lease rule: admit, queue, plan, grant, renew, end | [leasing](../../src/leasing/AGENTS.md) |
 | core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, baselines, doctor | [core](../../src/core/AGENTS.md) |
 | core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
+| core/seed-settle | When a quick seed is settled in the background | [seed-settle](../../src/core/seed-settle/AGENTS.md) |
 | core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
 | core/usage | Usage figures from the history rows, read on a thread | [usage](../../src/core/usage/AGENTS.md) |
 | drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [android input](../../src/drivers/android/input/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) · [ios input](../../src/drivers/ios/input/AGENTS.md) |

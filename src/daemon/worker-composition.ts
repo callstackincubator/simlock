@@ -62,6 +62,7 @@ import {
   defaultWorkerLockPath,
   NodeWorkerLock,
   type WorkerLockHandle,
+  NodeProcessTable,
 } from "../ports/index.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
@@ -225,6 +226,7 @@ export async function composeWorker(
           logger,
           processRunner,
           processSupervisor,
+          processTable: new NodeProcessTable({ platform: process.platform, processRunner }),
           simlockHome: dataDirectory,
           iosConfig: driverConfig(config, iosDriverConfig),
           slimByDefault: deviceModeWiring(config).slimByDefault,
