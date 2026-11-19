@@ -10,7 +10,16 @@ import {
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
 import { plantReadySeed, plantSource, memorySourceDatabase } from "./testing.js";
-import { deviceRoot, driverData, plantManagedDevice, simctl, waitForCalls } from "./test-slim.js";
+import { IosSimctlDriver } from "./index.js";
+import {
+  deviceHubEdit,
+  deviceRoot,
+  driverData,
+  instanceId,
+  plantManagedDevice,
+  simctl,
+  waitForCalls,
+} from "./test-slim.js";
 import {
   createDriver,
   logsRoot,
@@ -20,6 +29,7 @@ import {
 } from "./test-index.js";
 
 const sourcesSet = `${deviceRoot}/sources`;
+const coreSimulatorRoot = "/CoreSim";
 const lineageUdid = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
 const copyUdid = "00000000-0000-0000-0000-0000000000cc";
 const settledUdid = "00000000-0000-0000-0000-0000000000dd";
@@ -27,22 +37,13 @@ const otherUdid = "00000000-0000-0000-0000-0000000000ee";
 const quickSourceId = `planted-${seedUdid}-${driverData.runtimeId}`;
 
 /** why: a launchd_sim as `ps` prints it: the program, then the bootstrap file inside the simulator's own folder. */
-function launchd(pid: number, udid: string): ProcessEntry {
+function launchd(world: World, pid: number, udid: string): ProcessEntry {
   return {
-    command: `/Runtimes/iOS.simruntime/usr/libexec/launchd_sim ${deviceRoot}/${udid}/data/var/run/launchd_bootstrap.plist`,
+    command: `/Runtimes/iOS.simruntime/usr/libexec/launchd_sim ${world.devicesDir}/${udid}/data/var/run/launchd_bootstrap.plist`,
     cpuSeconds: 1,
     pid,
     ppid: 1,
   };
-}
-
-/** why: the copy's tree is quiet; another simulator's launchd_sim burns four cores, so a root picked by anything but the folder never goes idle. */
-function processesAt(nowMs: number): readonly ProcessEntry[] {
-  return [
-    launchd(100, copyUdid),
-    { command: "backboardd", cpuSeconds: 3, pid: 101, ppid: 100 },
-    { ...launchd(200, otherUdid), cpuSeconds: (nowMs / 1_000) * 4 },
-  ];
 }
 
 /** why: the fake clock never moves by itself; the poll waits on a timer, so the test steps it until the settle ends. */
@@ -70,138 +71,219 @@ function selectRows(database: SqliteDatabase): unknown[] {
     .all();
 }
 
+interface World {
+  readonly label: string;
+  readonly config: Record<string, string>;
+  readonly devicesDir: string;
+  readonly sourcesSet: string;
+  readonly isDefault: boolean;
+}
+
+const simlockWorld: World = {
+  config: { deviceRoot },
+  devicesDir: deviceRoot,
+  isDefault: false,
+  label: "simlock set",
+  sourcesSet,
+};
+
+function simctlIn(world: World, set: string | undefined, ...args: readonly string[]) {
+  const scoped = set ?? (world.isDefault ? undefined : world.devicesDir);
+  return {
+    args: scoped === undefined ? ["simctl", ...args] : ["simctl", "--set", scoped, ...args],
+    command: "xcrun",
+  };
+}
+
+interface SettleCase {
+  readonly name: string;
+  readonly world: World;
+  /** why: the copy's own CPU by time; the other simulator's is always busy. */
+  readonly copyCpu: (nowMs: number) => number;
+  readonly reason: "idle" | "cap";
+  readonly settledAfterMs: number;
+}
+
+const quiet = () => 3;
+const settleCases: readonly SettleCase[] = [
+  {
+    copyCpu: quiet,
+    name: "idle at 180 s",
+    reason: "idle",
+    settledAfterMs: 180_000,
+    world: simlockWorld,
+  },
+  {
+    copyCpu: (nowMs) => (Math.min(nowMs, 600_000) / 1_000) * 2,
+    name: "busy until 600 s, idle once the last two minutes used under 0.15 cores, at 712 s",
+    reason: "idle",
+    settledAfterMs: 712_000,
+    world: simlockWorld,
+  },
+  {
+    copyCpu: (nowMs) => (nowMs / 1_000) * 2,
+    name: "still busy at 900 s: saved all the same",
+    reason: "cap",
+    settledAfterMs: 900_000,
+    world: simlockWorld,
+  },
+];
+
 describe("IosSimctlDriver settleSeed", () => {
   it("replaces a quick seed with its settled copy: cloned as a provision clones, booted, read until idle, saved as the new seed, the quick seed deleted in its turn", async () => {
-    const database = plantReadySeed(await memorySourceDatabase(), {
-      deviceTypeId: driverData.deviceTypeId,
-      lineage: [lineageUdid],
-      runtimeId: driverData.runtimeId,
-      udid: seedUdid,
-    });
-    const filesystem = new MemoryFilesystem();
-    await plantManagedDevice(filesystem);
-    await plantLaunchServices(filesystem, `${deviceRoot}/${copyUdid}`);
-    await plantLaunchServices(filesystem, `${sourcesSet}/${settledUdid}`);
-    await filesystem.writeFileAtomic(`${sourcesSet}/${settledUdid}/data/state`, "12345");
-    await filesystem.mkdirp(`${logsRoot}/${copyUdid}`);
-    const rowsAtBoot: unknown[] = [];
-    const rowsAtOldDelete: unknown[] = [];
-    const runner = new ScriptedProcessRunner([
-      {
-        match: sourcesSimctl("clone", seedUdid, "simlock-device-1", deviceRoot),
-        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
-      },
-      {
-        match: simctl("boot", copyUdid),
-        onSpawn: () => void rowsAtBoot.push(...selectRows(database)),
-      },
-      { match: simctl("bootstatus", copyUdid, "-b") },
-      { match: simctl("listapps", copyUdid) },
-      { match: simctl("shutdown", copyUdid) },
-      {
-        match: simctl("clone", copyUdid, "simlock-seed-device-1", sourcesSet),
-        result: { code: 0, stderr: "", stdout: `${settledUdid}\n` },
-      },
-      {
-        match: sourcesSimctl("shutdown", seedUdid),
-        onSpawn: () => void rowsAtOldDelete.push(...selectRows(database)),
-      },
-      { match: sourcesSimctl("delete", seedUdid) },
-      { match: simctl("delete", copyUdid) },
-    ]);
-    const clock = new FakeClock();
-    const table = new FakeProcessTable();
-    const driver = await createDriver(runner, clock, filesystem, database, undefined, undefined, {
-      logsRoot,
-      processTable: table,
-    });
-    const settle = driver.settleSeed?.(quickSourceId, { signal: new AbortController().signal });
-    expect(settle, "an iOS driver given a process table settles seeds").toBeDefined();
-
-    await runToEnd(settle as Promise<unknown>, clock, table, processesAt);
-
-    await expect(settle).resolves.toEqual({
-      reason: "idle",
-      settledAfterMs: 180_000,
-      sizeBytes: 5,
-      sourceId: "device-1",
-    });
-    expect(rowsAtBoot, "while the copy boots the quick seed is still the ready seed").toEqual([
-      {
-        lease_count: 0,
-        lineage: null,
-        settle_of: quickSourceId,
-        settled: 0,
-        source_id: "device-1",
-        state: "making",
-        udid: null,
-      },
-      {
-        lease_count: 0,
-        lineage: JSON.stringify([lineageUdid]),
-        settle_of: null,
-        settled: 0,
-        source_id: quickSourceId,
-        state: "ready",
+    for (const { name, world, copyCpu, reason, settledAfterMs } of settleCases) {
+      const hub = (command: string) =>
+        world.isDefault ? deviceHubEdit(command).map((match) => ({ match })) : [];
+      const inSet = (...args: string[]) => simctlIn(world, undefined, ...args);
+      const inSources = (...args: string[]) => simctlIn(world, world.sourcesSet, ...args);
+      const database = plantReadySeed(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        lineage: [lineageUdid],
+        runtimeId: driverData.runtimeId,
         udid: seedUdid,
-      },
-    ]);
-    expect(
-      rowsAtOldDelete,
-      "the swap is one step: the new seed is ready, the old one retired",
-    ).toEqual([
-      {
-        lease_count: 0,
-        lineage: JSON.stringify([copyUdid.toUpperCase(), lineageUdid]),
-        settle_of: null,
-        settled: 1,
-        source_id: "device-1",
-        state: "ready",
-        udid: settledUdid,
-      },
-      {
-        lease_count: 0,
-        lineage: JSON.stringify([lineageUdid]),
-        settle_of: "device-1",
-        settled: 0,
-        source_id: quickSourceId,
-        state: "making",
-        udid: seedUdid,
-      },
-    ]);
-    expect(selectRows(database).map((row) => (row as { source_id: string }).source_id)).toEqual([
-      "device-1",
-    ]);
-    expect(runner.calls.map((call) => call.args.join(" "))).toEqual(
-      [
-        sourcesSimctl("clone", seedUdid, "simlock-device-1", deviceRoot),
-        simctl("boot", copyUdid),
-        simctl("bootstatus", copyUdid, "-b"),
-        simctl("listapps", copyUdid),
-        simctl("shutdown", copyUdid),
-        simctl("clone", copyUdid, "simlock-seed-device-1", sourcesSet),
-        sourcesSimctl("shutdown", seedUdid),
-        sourcesSimctl("delete", seedUdid),
-        simctl("delete", copyUdid),
-      ].map((call) => call.args.join(" ")),
-    );
-    expect(
-      await filesystem.exists(
-        `${deviceRoot}/${copyUdid}/data/var/db/lsd/com.apple.LaunchServices-33554481-v2.csstore`,
-      ),
-      "the copy's LaunchServices database was dropped before its boot",
-    ).toBe(false);
-    expect(
-      await filesystem.exists(
-        `${sourcesSet}/${settledUdid}/data/var/db/lsd/com.apple.LaunchServices-33554481-v2.csstore`,
-      ),
-      "the new seed's LaunchServices database was dropped",
-    ).toBe(false);
-    expect(
-      await filesystem.exists(`${logsRoot}/${copyUdid}`),
-      "the copy's log folder is deleted",
-    ).toBe(false);
+      });
+      const filesystem = new MemoryFilesystem();
+      if (!world.isDefault) await plantManagedDevice(filesystem);
+      await plantLaunchServices(filesystem, `${world.devicesDir}/${copyUdid}`);
+      await plantLaunchServices(filesystem, `${world.sourcesSet}/${settledUdid}`);
+      await filesystem.writeFileAtomic(`${world.sourcesSet}/${settledUdid}/data/state`, "12345");
+      await filesystem.mkdirp(`${logsRoot}/${copyUdid}`);
+      const rowsAtBoot: unknown[] = [];
+      const rowsAtOldDelete: unknown[] = [];
+      const markedAtBoot: Promise<boolean>[] = [];
+      const runner = new ScriptedProcessRunner([
+        {
+          match: inSources("clone", seedUdid, "simlock-device-1", world.devicesDir),
+          result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+        },
+        ...hub(`Set :DevicePreferences:${copyUdid}:pasteboardSyncEnabled false`),
+        {
+          match: inSet("boot", copyUdid),
+          onSpawn: () => {
+            rowsAtBoot.push(...selectRows(database));
+            markedAtBoot.push(
+              filesystem.exists(`${world.devicesDir}/${copyUdid}/simlock-mark.json`),
+            );
+          },
+        },
+        { match: inSet("bootstatus", copyUdid, "-b") },
+        { match: inSet("listapps", copyUdid) },
+        { match: inSet("shutdown", copyUdid) },
+        {
+          match: inSet("clone", copyUdid, "simlock-seed-device-1", world.sourcesSet),
+          result: { code: 0, stderr: "", stdout: `${settledUdid}\n` },
+        },
+        {
+          match: inSources("shutdown", seedUdid),
+          onSpawn: () => void rowsAtOldDelete.push(...selectRows(database)),
+        },
+        { match: inSources("delete", seedUdid) },
+        { match: inSet("delete", copyUdid) },
+        ...hub(`Delete :DevicePreferences:${copyUdid}`),
+      ]);
+      const clock = new FakeClock();
+      const table = new FakeProcessTable();
+      const driver = await IosSimctlDriver.create({
+        clock,
+        coreSimulatorRoot,
+        database,
+        driverConfig: world.config,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        logsRoot,
+        processRunner: runner,
+        processTable: table,
+        simlockHome: "/home/.simlock",
+      });
+      const settle = driver.settleSeed?.(quickSourceId, { signal: new AbortController().signal });
+      expect(settle, "an iOS driver given a process table settles seeds").toBeDefined();
+
+      await runToEnd(settle as Promise<unknown>, clock, table, (nowMs) => [
+        launchd(world, 100, copyUdid),
+        { command: "backboardd", cpuSeconds: copyCpu(nowMs), pid: 101, ppid: 100 },
+        { ...launchd(world, 200, otherUdid), cpuSeconds: (nowMs / 1_000) * 4 },
+      ]);
+
+      const label = `${world.label}, ${name}`;
+      await expect(settle, label).resolves.toEqual({
+        reason,
+        settledAfterMs,
+        sizeBytes: 5,
+        sourceId: "device-1",
+      });
+      expect(
+        rowsAtBoot,
+        `${label}: while the copy boots the quick seed is still the ready seed`,
+      ).toEqual([
+        {
+          lease_count: 0,
+          lineage: null,
+          settle_of: quickSourceId,
+          settled: 0,
+          source_id: "device-1",
+          state: "making",
+          udid: null,
+        },
+        {
+          lease_count: 0,
+          lineage: JSON.stringify([lineageUdid]),
+          settle_of: null,
+          settled: 0,
+          source_id: quickSourceId,
+          state: "ready",
+          udid: seedUdid,
+        },
+      ]);
+      expect(
+        rowsAtOldDelete,
+        `${label}: the swap is one step: the new seed is ready, the old one retired`,
+      ).toEqual([
+        {
+          lease_count: 0,
+          lineage: JSON.stringify([copyUdid.toUpperCase(), lineageUdid]),
+          settle_of: null,
+          settled: 1,
+          source_id: "device-1",
+          state: "ready",
+          udid: settledUdid,
+        },
+        {
+          lease_count: 0,
+          lineage: JSON.stringify([lineageUdid]),
+          settle_of: "device-1",
+          settled: 0,
+          source_id: quickSourceId,
+          state: "making",
+          udid: seedUdid,
+        },
+      ]);
+      expect(selectRows(database).map((row) => (row as { source_id: string }).source_id)).toEqual([
+        "device-1",
+      ]);
+      expect(
+        await Promise.all(markedAtBoot),
+        `${label}: the copy is marked before it boots`,
+      ).toEqual([true]);
+      expect(
+        await filesystem.exists(
+          `${world.devicesDir}/${copyUdid}/data/var/db/lsd/com.apple.LaunchServices-33554481-v2.csstore`,
+        ),
+        `${label}: the copy's LaunchServices database was dropped before its boot`,
+      ).toBe(false);
+      expect(
+        await filesystem.exists(
+          `${world.sourcesSet}/${settledUdid}/data/var/db/lsd/com.apple.LaunchServices-33554481-v2.csstore`,
+        ),
+        `${label}: the new seed's LaunchServices database was dropped`,
+      ).toBe(false);
+      expect(
+        await filesystem.exists(`${logsRoot}/${copyUdid}`),
+        `${label}: the copy's log folder is deleted`,
+      ).toBe(false);
+    }
   });
+
   it("a settle that does not finish, or is asked of a source that is no ready quick seed, throws and leaves the rows and the quick seed as they were, with no copy", async () => {
     class Stopped extends Error {}
     const quick = {
