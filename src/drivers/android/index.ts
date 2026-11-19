@@ -54,6 +54,7 @@ import {
   COLD_BOOT_ESTIMATE_MS,
   DEFAULT_EMULATOR_LAUNCH,
   Emulator,
+  WIFI_PER_EMULATOR_FLAGS,
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
 import {
@@ -902,13 +903,15 @@ function bootTimeoutFor(options: AndroidDriverOptions): number {
 function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
+  // why: #1586: a snapshot taken on netsim's shared Wi-Fi joins no network under the per-emulator router for about a minute, so a seed made before the flag is stale.
+  const wifi = `wifi=${WIFI_PER_EMULATOR_FLAGS.join(" ")}`;
   if (
     launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
     launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
   ) {
-    return [];
+    return [wifi];
   }
-  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`, wifi];
 }
 
 export function hostAbiFor(architecture: string): string {
