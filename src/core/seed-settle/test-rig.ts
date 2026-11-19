@@ -159,3 +159,21 @@ export function leaseReservation(rig: SettlerRig) {
   if (!attempt.ok) throw new Error("the test's reservation was refused");
   return attempt.reservation;
 }
+
+/** why: a driver call the test holds open and then ends, as a settle that takes minutes does. */
+export function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<Value>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, reject, resolve };
+}
+
+export const settledResult = (sourceId: string): DriverSettleResult => ({
+  reason: "idle",
+  settledAfterMs: 181_000,
+  sizeBytes: 1_800_000_000,
+  sourceId: `${sourceId}-settled`,
+});
