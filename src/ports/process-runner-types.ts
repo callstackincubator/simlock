@@ -35,9 +35,22 @@ export interface ProcessRunOptions {
    * grandchild can be a process others use (the first emulator's qemu starts the host's one
    * `netsimd`, and every emulator's network goes through it), and an `adb` client can start the
    * shared adb server, so no adb command sets this. With this, `kill` ends the child alone off
-   * Windows, and on Windows also the child's own children (`emulator.exe` runs qemu), never theirs.
+   * Windows, and on Windows also the child's own children (`emulator.exe` runs qemu). Under
+   * `outlivesCaller` the child is a `conhost.exe` wrapper, so that is the program and its children;
+   * the processes qemu starts (`netsimd`) are never ended.
    */
   readonly killChildren?: boolean;
+  /**
+   * why: a long-lived child the daemon starts for others to use (the emulator, Simlock's adb
+   * server) must outlive the daemon (ADR 0004, ADR 0019). Off Windows every child is detached
+   * already; on Windows only a detached child leaves Node's kill-on-exit job, which would end it
+   * with the daemon while its own children live on and hold the logon task's console open
+   * (#1759). On Windows it also runs under `conhost.exe --headless` (`headlessLaunch`), so the qemu
+   * of an emulator opens no window; `kill` still ends the wrapper's program and, with
+   * `killChildren`, that program's own children. The supervisor's daemon is not one: ending the
+   * supervisor ends it (ADR 0086 section 2).
+   */
+  readonly outlivesCaller?: boolean;
 }
 
 export type LineEnd = "newline" | "carriage-return-too";

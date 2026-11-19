@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import type { AndroidSdkPaths } from "../src/drivers/android/testing.js";
 import { defaultWorkerLockPath } from "../src/ports/index.js";
 import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/test-android-sdk.js";
-import { withDaemon } from "./helpers/index.js";
+import { type TestEnv, withDaemon } from "./helpers/index.js";
 import { DEVICE_READY_MS, waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
@@ -398,6 +398,71 @@ describe.skipIf(ANDROID_SDK === undefined)(
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);
+        }
+      },
+    );
+    it(
+      "android.emulator.cores: a Pixel 9 lease made with cores 2 prints 2 for nproc, and so does a lease of a baseline saved after the change, both without a cold-boot fallback",
+      { timeout: 1_800_000 },
+      async () => {
+        const fellBack = "Android snapshot boot fell back to a cold boot";
+        const quiet = { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } };
+        const lease = async (env: TestEnv, agent: string, extra: readonly string[]) => {
+          const granted = await env.cli(
+            ["lease", "--platform", "android", ...extra, "--agent-id", agent, "--detach"],
+            { timeout: DEVICE_READY_MS },
+          );
+          expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
+          const grant = granted.json as { device: { address?: string }; lease: { id: string } };
+          const nproc = await env.cli(["adb", "-s", grant.device.address ?? "", "shell", "nproc"]);
+          return { grant, nproc: nproc.stdout.trim() };
+        };
+        // why: the next daemon of this test cannot start while this one holds the machine's worker lock (ADR 0059), and `nuke` leaves the daemon running; so it stops the daemon and waits for the lock.
+        const nuke = async (env: TestEnv) => {
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
+          await env.cli(["daemon", "stop"]).catch(() => undefined);
+          const lockFolder = defaultWorkerLockPath(
+            process.platform,
+            process.getuid?.() ?? 0,
+            tmpdir(),
+          );
+          await waitFor(() => !existsSync(lockFolder), {
+            timeout: 60_000,
+            label: "daemon stop left the worker lock behind",
+          });
+        };
+
+        const withCores = await withDaemon({
+          driver: "real",
+          configOverrides: { ...quiet, android: { emulator: { cores: 2 } } },
+        });
+        try {
+          const made = await lease(withCores, "cores-new", ["--device", "Pixel 9"]);
+          expect(made.nproc).toBe("2");
+          expect(await readFile(withCores.logPath, "utf8")).not.toContain(fellBack);
+        } finally {
+          await nuke(withCores);
+        }
+
+        // why: a device leased with cores unset has 4 cores; saved as a baseline after the change it must have 2 and still boot from its snapshot.
+        const unset = await withDaemon({ driver: "real", configOverrides: quiet });
+        try {
+          const before = await lease(unset, "cores-before", ["--device", "Pixel 9"]);
+          expect(before.nproc).toBe("4");
+          await unset.withConfig({ android: { emulator: { cores: 2 } } }, async () => {
+            const saved = await unset.cli(
+              ["baseline", "save", "cores-baseline", "--lease", before.grant.lease.id],
+              { timeout: 600_000 },
+            );
+            expect(saved.code, `baseline save failed: ${saved.stderr}`).toBe(0);
+            const copy = await lease(unset, "cores-copy", ["--baseline", "cores-baseline"]);
+            expect(copy.nproc).toBe("2");
+            expect(await readFile(unset.logPath, "utf8")).not.toContain(fellBack);
+          });
+        } finally {
+          await nuke(unset);
         }
       },
     );

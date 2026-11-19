@@ -222,7 +222,7 @@ final class CopyStage: @unchecked Sendable {
     }
 }
 
-/// Says whether a seed is news, so the callbacks notice each composite once.
+/// Says whether a seed is news, so a composite is noticed once.
 struct SeedGate {
     private var lastSeeds: [ObjectIdentifier: UInt32] = [:]
 

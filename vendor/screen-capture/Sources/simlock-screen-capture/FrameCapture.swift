@@ -265,14 +265,10 @@ actor FrameCapture {
         // why: the time the composite was noticed, before the copy below, because the copy takes
         // 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
         let seenNanos = DispatchTime.now().uptimeNanoseconds
-        guard let desc = pickBestDescriptor() else {
-            return
-        }
+        guard let desc = pickBestDescriptor() else { return }
 
         let surfSel = NSSelectorFromString("framebufferSurface")
-        guard let surfObj = desc.perform(surfSel)?.takeUnretainedValue() else {
-            return
-        }
+        guard let surfObj = desc.perform(surfSel)?.takeUnretainedValue() else { return }
         let surface = unsafeBitCast(surfObj, to: IOSurface.self)
 
         // Seed-skip: when the simulator's framebuffer content hasn't changed,

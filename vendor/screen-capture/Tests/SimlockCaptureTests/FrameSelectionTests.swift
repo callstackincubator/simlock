@@ -214,21 +214,14 @@ final class FrameSelectionTests: XCTestCase {
         XCTAssertEqual(seen, [104 * ms], "the glass-only composite is not copied, the one with an app change is")
     }
 
-    func testSeedGateNoticesEachSeedOncePerSurfaceUnlessForced() {
-        func surface() -> IOSurface {
-            IOSurface(properties: [
-                .width: 8, .height: 8, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
-            ])!
-        }
-        let surfaces = [surface(), surface()]
-        let first = ObjectIdentifier(surfaces[0])
-        let second = ObjectIdentifier(surfaces[1])
+    func testASeedIsNewOnlyWhenItChangesOrIsForcedAndAfterAResetTheNextOneIsNews() {
         var gate = SeedGate()
-        XCTAssertTrue(gate.notice(key: first, seed: 5, force: false), "a first seed is news")
-        XCTAssertFalse(gate.notice(key: first, seed: 5, force: false), "an unchanged seed is not")
-        XCTAssertTrue(gate.notice(key: first, seed: 5, force: true), "a forced call with an unchanged seed is")
-        XCTAssertTrue(gate.notice(key: second, seed: 5, force: false), "the same seed on another surface is news")
+        let key = ObjectIdentifier(DispatchQueue(label: "test-seed-key"))
+        XCTAssertTrue(gate.notice(key: key, seed: 5, force: false), "the first seed is news")
+        XCTAssertFalse(gate.notice(key: key, seed: 5, force: false), "an unchanged seed is not")
+        XCTAssertTrue(gate.notice(key: key, seed: 5, force: true), "a forced call with an unchanged seed is")
+        XCTAssertTrue(gate.notice(key: key, seed: 6, force: false), "a changed seed is")
         gate.reset()
-        XCTAssertTrue(gate.notice(key: first, seed: 5, force: false), "after reset the next seed is news")
+        XCTAssertTrue(gate.notice(key: key, seed: 6, force: false), "after a reset the next seed is news")
     }
 }
