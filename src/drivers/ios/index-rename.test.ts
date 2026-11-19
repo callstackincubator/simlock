@@ -49,14 +49,14 @@ describe("IosSimctlDriver naming a simulator at its boot", () => {
       rename: { code: 1, stderr: "Invalid device", stdout: "" },
       options: { mode: "full", purpose: "prepare", label: "feature-x" } as const,
       expected: [simctlArgs("rename", udid, "feature-x"), ...boot],
-      warned: true,
+      warned: `could not rename ${udid} to feature-x: Invalid device`,
     },
     {
       name: "a rename that hangs past 5 s",
       rename: "hangs" as const,
       options: { mode: "full", purpose: "prepare", label: "feature-x" } as const,
       expected: [simctlArgs("rename", udid, "feature-x"), ...boot],
-      warned: true,
+      warned: `could not rename ${udid} to feature-x: timed out after 5000ms`,
     },
   ])("runs simctl rename before simctl boot on a prepare boot: $name", async (c) => {
     const renames = c.expected.length > boot.length;
@@ -105,7 +105,6 @@ describe("IosSimctlDriver naming a simulator at its boot", () => {
 
     expect(device.address).toBe(udid);
     expect(runner.calls.map((call) => call.args)).toEqual(c.expected);
-    expect(logger.warnings).toHaveLength(c.warned === true ? 1 : 0);
-    if (c.warned === true) expect(logger.warnings[0]).toContain(udid);
+    expect(logger.warnings).toEqual(c.warned === undefined ? [] : [c.warned]);
   });
 });

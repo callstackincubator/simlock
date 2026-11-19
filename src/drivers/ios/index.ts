@@ -108,7 +108,7 @@ const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]
   ],
 };
 
-/** why: a rename is cosmetic, so a hung `simctl rename` must not hold a lease's boot for the 30 s other commands get. */
+/** why: a rename is cosmetic, so a hung `simctl rename` must not hold a lease's boot for as long as other commands get. */
 const RENAME_TIMEOUT_MS = 5_000;
 
 export class IosSimctlDriver implements Driver {
@@ -412,17 +412,17 @@ export class IosSimctlDriver implements Driver {
    */
   async #rename(udid: string, name: string): Promise<void> {
     const args = ["rename", udid, name];
+    const warn = (reason: string): void =>
+      this.#logger?.warn(`could not rename ${udid} to ${name}: ${reason}`);
     try {
       const outcome = await this.#simctl.invoke(args, RENAME_TIMEOUT_MS);
       if (outcome.kind === "timed-out") {
-        this.#logger?.warn(
-          `simctl rename of ${udid} timed out after ${String(RENAME_TIMEOUT_MS)}ms`,
-        );
+        warn(`timed out after ${String(RENAME_TIMEOUT_MS)}ms`);
       } else if (outcome.result.code !== 0) {
-        this.#logger?.warn(`simctl rename of ${udid} failed: ${outcome.result.stderr.trim()}`);
+        warn(outcome.result.stderr.trim());
       }
     } catch (error: unknown) {
-      this.#logger?.warn(`simctl rename of ${udid} failed: ${errorMessage(error)}`);
+      warn(errorMessage(error));
     }
   }
 
