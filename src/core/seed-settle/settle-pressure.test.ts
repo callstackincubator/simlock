@@ -80,6 +80,21 @@ describe("seed settler: memory pressure", () => {
     expectSettled(making, [], "the make finished, the settle waits");
     expect(steps).toEqual([{ stage: "making" }, { reason: "memory-pressure", stage: "waiting" }]);
     expect(reserved(making), "nothing is held while it waits").toBe(0);
+    making.ios.settleSeed = (_id, signal) => abortable(signal);
+    making.pressure.reading(none);
+    await flush();
+    expect(steps, "the make is not told again").toEqual([
+      { stage: "making" },
+      { reason: "memory-pressure", stage: "waiting" },
+      { stage: "settling" },
+    ]);
+    making.pressure.reading(newDevicesPaused);
+    await flush();
+    expect(steps.at(-1), "a second wait for the same reason is told again").toEqual({
+      reason: "memory-pressure",
+      stage: "waiting",
+    });
+    making.ios.settleSeed = async (sourceId) => settledResult(sourceId);
     making.pressure.reading(none);
     await flush();
     await expect(answered).resolves.toMatchObject({ outcome: "settled", sourceId: "made-settled" });

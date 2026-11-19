@@ -14,6 +14,8 @@ export interface SettleCandidate {
 export interface OperatorWait {
   readonly platform: Platform;
   readonly specKey: string;
+  /** why: set once the seed is known; a call is matched to the settle running on it. */
+  readonly sourceId?: string;
 }
 
 export interface SettleView {
@@ -65,6 +67,7 @@ export function nextSettle(view: SettleView): SettleDecision {
       operator: true,
       platform: operator.platform,
       specKey: operator.specKey,
+      ...(operator.sourceId === undefined ? {} : { sourceId: operator.sourceId }),
     };
   }
   if (view.underWay > 0) return { kind: "wait", reason: "busy" };

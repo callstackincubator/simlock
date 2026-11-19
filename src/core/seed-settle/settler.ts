@@ -40,8 +40,10 @@ interface OperatorEntry {
   readonly reject: (error: unknown) => void;
   /** why: the kind has no fresh ready seed yet, so the run starts with a make. */
   needsMake: boolean;
+  /** why: once the seed is known (listed or made), the call is matched to the settle running on it (ADR 0090). */
+  sourceId?: string;
   /** why: the wait reason the caller was last told, so a repeated check does not tell it again. */
-  lastWaiting?: string;
+  lastWaiting?: string | undefined;
 }
 
 /** why: what one settle works on: the driver, the kind of the quick seed, and who asked. */
@@ -58,6 +60,8 @@ interface Target {
 interface Running {
   readonly controller: AbortController;
   abortReason?: AbortReason;
+  /** why: the seed the driver was called for, so a call for it joins this run and a failure delays it. */
+  sourceId?: string;
   done: Promise<void>;
 }
 
@@ -184,6 +188,7 @@ class SeedSettlerImpl implements SeedSettler {
       return;
     }
     entry.needsMake = found === undefined;
+    if (found !== undefined) entry.sourceId = found.id;
     this.#operators.push(entry);
     this.#requestCheck();
   }
@@ -298,6 +303,8 @@ class SeedSettlerImpl implements SeedSettler {
     const driver = entry === undefined ? undefined : this.#driverOf(entry.spec.platform);
     if (entry === undefined || driver === undefined) return;
     this.#operators.splice(index, 1);
+    // why: a call that runs again after a wait reports its waits and its make afresh.
+    entry.lastWaiting = undefined;
     const started = await this.#begin({
       driver,
       operator: entry,
@@ -317,7 +324,11 @@ class SeedSettlerImpl implements SeedSettler {
       diskFreeBytes,
       freeBytesThreshold: this.options.diskPressure.freeBytesThreshold,
       now: this.options.clock.now(),
-      operator: this.#operators.map(({ spec, specKey }) => ({ platform: spec.platform, specKey })),
+      operator: this.#operators.map(({ sourceId, spec, specKey }) => ({
+        platform: spec.platform,
+        specKey,
+        ...(sourceId === undefined ? {} : { sourceId }),
+      })),
       pressure: this.#pressureStep(),
       running: this.#running !== undefined,
       underWay: this.#underWay,
@@ -459,6 +470,8 @@ class SeedSettlerImpl implements SeedSettler {
       });
       return undefined;
     }
+    operator.needsMake = false;
+    operator.sourceId = ensured.sourceId;
     if (running.abortReason !== undefined || this.#pressureStep() !== "none") {
       throw new Requeue();
     }
@@ -475,6 +488,7 @@ class SeedSettlerImpl implements SeedSettler {
     const { leases, sourceId } = chosen;
     if (driver.settleSeed === undefined) return;
     const startedAt = this.options.clock.now();
+    running.sourceId = sourceId;
     this.#emit("seed.settle-started", target, {
       leases,
       sourceId,
@@ -502,12 +516,25 @@ class SeedSettlerImpl implements SeedSettler {
       sourceId,
       ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
     });
-    operator?.resolve({
+    const answer: SeedSettleResult = {
       outcome: "settled",
       settledAfterMs: result.settledAfterMs,
       sourceId: result.sourceId,
       ...(result.sizeBytes === undefined ? {} : { sizeBytes: result.sizeBytes }),
-    });
+    };
+    operator?.resolve(answer);
+    for (const joined of this.#joined(running, operator)) joined.resolve(answer);
+  }
+
+  /** why: a call for the kind that settles, or for the seed that settles, takes this run's answer instead of starting another (ADR 0090). */
+  #joined(running: Running, operator: OperatorEntry | undefined): OperatorEntry[] {
+    const joined = this.#operators.filter(
+      (entry) =>
+        (running.sourceId !== undefined && entry.sourceId === running.sourceId) ||
+        (operator !== undefined && entry.specKey === operator.specKey),
+    );
+    for (const entry of joined) this.#operators.splice(this.#operators.indexOf(entry), 1);
+    return joined;
   }
 
   /** why: an abort or a requeue is no failure and sets no delay; a stop refuses the operator; anything else is logged and waits an hour. */
@@ -528,20 +555,26 @@ class SeedSettlerImpl implements SeedSettler {
       platform: target.platform,
       ...(target.kind.imageTag === undefined ? {} : { imageTag: target.kind.imageTag }),
     });
-    if (target.sourceId !== undefined) {
+    const sourceId = target.sourceId ?? running.sourceId;
+    if (sourceId !== undefined) {
       this.#failedUntil.set(
-        `${target.platform}:${target.sourceId}`,
+        `${target.platform}:${sourceId}`,
         this.options.clock.now() + RETRY_AFTER_FAILURE_MS,
       );
     }
-    operator?.reject(
-      new SeedSettleFailedError(
-        target.platform,
-        operator.spec.model,
-        "failed",
-        `seed ${operator.spec.model} could not be settled: ${errorText(error)}`,
-      ),
-    );
+    for (const entry of [
+      ...(operator === undefined ? [] : [operator]),
+      ...this.#joined(running, operator),
+    ]) {
+      entry.reject(
+        new SeedSettleFailedError(
+          target.platform,
+          entry.spec.model,
+          "failed",
+          `seed ${entry.spec.model} could not be settled: ${errorText(error)}`,
+        ),
+      );
+    }
   }
 }
 

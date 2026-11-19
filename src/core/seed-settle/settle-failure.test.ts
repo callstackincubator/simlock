@@ -56,5 +56,22 @@ describe("seed settler: a failed settle", () => {
       operator.settler.settle(iphoneSpec, { onProgress: () => undefined }),
     ).resolves.toMatchObject({ outcome: "settled", sourceId: "broken-settled" });
     expectSettled(operator, ["broken", "broken"], "the operator's call settles it");
+
+    const failed = await settlerRig();
+    failed.ios.sources = [quick("broken", 5)];
+    failed.ios.ensureSeed = async () => ({ leases: 5, settled: false, sourceId: "broken" });
+    failed.ios.settleSeed = async () => {
+      throw new Error("the simulator would not boot");
+    };
+    await failed.started();
+    await expect(
+      failed.settler.settle(iphoneSpec, { onProgress: () => undefined }),
+      "an operator's settle that fails",
+    ).rejects.toMatchObject({ message: expect.stringContaining("the simulator would not boot") });
+    failed.ios.settleSeed = async (sourceId) => settledResult(sourceId);
+    await failed.advance(30 * minute);
+    expectSettled(failed, ["broken"], "an operator's failure delays the background an hour");
+    await failed.advance(30 * minute);
+    expectSettled(failed, ["broken", "broken"], "after the hour the background chooses it");
   });
 });
