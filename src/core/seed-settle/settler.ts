@@ -1,7 +1,7 @@
 import { type Logger, NoopLogger, type TimerHandle } from "../../ports/index.js";
 import { capacityDevices } from "../capacity/index.js";
 import type { Platform, VirtualSpec } from "../domain.js";
-import { type DriverSource, SeedSettleFailedError } from "../driver.js";
+import { type DriverSource, SeedSettleFailedError, SeedSettlerStoppedError } from "../driver.js";
 import { stableError } from "../stable-error.js";
 import { CHECK_INTERVAL_MS, QUIET_MS, nextSettle, type SettleCandidate } from "./policy.js";
 import type {
@@ -63,6 +63,7 @@ class SeedSettlerImpl implements SeedSettler {
   #timer: TimerHandle | undefined;
   #started = false;
   #stopped = false;
+  #stopping = false;
   #checking = false;
   #again = false;
   #underWay = 0;
@@ -90,10 +91,14 @@ class SeedSettlerImpl implements SeedSettler {
     this.#arm(CHECK_INTERVAL_MS);
   }
 
-  beginStop(): void {}
+  beginStop(): void {
+    this.#stopping = true;
+  }
 
   async stop(): Promise<void> {
+    this.#stopping = true;
     this.#stopped = true;
+    for (const entry of this.#operators.splice(0)) entry.reject(new SeedSettlerStoppedError());
     if (this.#timer !== undefined) this.options.clock.cancel(this.#timer);
     for (const cleanup of this.#cleanups) cleanup();
     this.#abort("daemon-stopping");
@@ -108,6 +113,7 @@ class SeedSettlerImpl implements SeedSettler {
     spec: VirtualSpec,
     { onProgress }: { readonly onProgress: (progress: SeedSettleProgress) => void },
   ): Promise<SeedSettleResult> {
+    if (this.#stopping) return Promise.reject(new SeedSettlerStoppedError());
     return new Promise((resolve, reject) => {
       const entry: OperatorEntry = {
         needsMake: true,
@@ -179,7 +185,7 @@ class SeedSettlerImpl implements SeedSettler {
   }
 
   #requestCheck(): void {
-    if (!this.#started || this.#stopped) return;
+    if (!this.#started || this.#stopping) return;
     if (this.#checking) {
       this.#again = true;
       return;
