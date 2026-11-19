@@ -163,9 +163,16 @@ describe("AndroidDriver image fit", () => {
       ).toEqual([{ created_at: 5_000, folder: seedHome, source_id: "seed_two" }]);
     });
 
-    it("hands the avd config the emulator launch settings, so a seed made under other ones is stale", async () => {
+    it("hands the avd config the emulator launch settings, so a seed made under the same ones is current and one made under other ones is stale", async () => {
       const harness = await seedHarness(makingTheSeed());
       await harness.driver.provision(harness.spec);
+
+      const unchanged = await reopened(harness, [
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      const [current] = await unchanged.driver.listSources();
+      expect(current).toMatchObject({ id: "seed_two" });
+      expect(current?.staleReason).toBeUndefined();
 
       const restarted = await reopened(
         harness,
