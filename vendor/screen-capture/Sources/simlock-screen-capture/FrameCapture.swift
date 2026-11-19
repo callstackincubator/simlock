@@ -4,7 +4,8 @@
 // simlock-owned `simctl --set` root can be found at all, and `nativeScreenSizes` being internal
 // instead of private, so the input mode can report the device's size, and the notice/copy split:
 // the callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
-// pacing grid and copies on a queue of its own; everything else here is upstream's.
+// pacing grid and copies on a queue of its own, with `SeedWatch` (ours too) checking the screen
+// surface's seed every millisecond beside the callbacks; everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -32,7 +33,8 @@ actor FrameCapture {
     private(set) var capturedHeight: Int = 0
     private var idleTimer: Task<Void, Never>?
     private var lastCaptureTime: ContinuousClock.Instant = .now
-    private var lastSeeds: [ObjectIdentifier: UInt32] = [:]
+    private var seedGate = SeedGate()
+    private var seedWatch: SeedWatch?
     private var rewireTickCount: Int = 0
     /// Interval at which the idle timer re-emits the current frame even when
     /// the simulator isn't rendering anything new. This is load-bearing for two
@@ -79,6 +81,7 @@ actor FrameCapture {
 
         try wireUpFramebuffer()
         startIdleTimer()
+        startSeedWatch()
         print("[capture] Frame callbacks registered (event-driven) + 5fps idle floor")
     }
 
@@ -108,7 +111,7 @@ actor FrameCapture {
             }
         }
         callbackUUIDs.removeAll()
-        lastSeeds.removeAll()
+        seedGate.reset()
         descriptors = candidates
 
         // Registering screen callbacks is what causes SimulatorKit to wire the
@@ -230,6 +233,21 @@ actor FrameCapture {
         )
     }
 
+    /// Checks the picked surface's seed every millisecond, so a composite the frame callback reports
+    /// late is still noticed, and timed from when the check saw it.
+    private func startSeedWatch() {
+        let watch = SeedWatch(
+            queue: queue,
+            now: { DispatchTime.now().uptimeNanoseconds },
+            onSeed: { [weak self] _, _, seenNanos in
+                // why: the watch ticks on this actor's own queue, so this is not a hop.
+                self?.assumeIsolated { $0.captureFrame(seenNanos: seenNanos) }
+            }
+        )
+        seedWatch = watch
+        watch.start()
+    }
+
     private func startIdleTimer() {
         self.idleTimer = Task { [weak self] in
             while !Task.isCancelled {
@@ -261,15 +279,22 @@ actor FrameCapture {
 
     // MARK: - Frame capture
 
-    private func captureFrame(force: Bool = false) {
+    private func captureFrame(force: Bool = false, seenNanos noticedAt: UInt64? = nil) {
         // why: the time the composite was noticed, before the copy below, because the copy takes
         // 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
-        let seenNanos = DispatchTime.now().uptimeNanoseconds
-        guard let desc = pickBestDescriptor() else { return }
+        let seenNanos = noticedAt ?? DispatchTime.now().uptimeNanoseconds
+        guard let desc = pickBestDescriptor() else {
+            seedWatch?.watch(nil)
+            return
+        }
 
         let surfSel = NSSelectorFromString("framebufferSurface")
-        guard let surfObj = desc.perform(surfSel)?.takeUnretainedValue() else { return }
+        guard let surfObj = desc.perform(surfSel)?.takeUnretainedValue() else {
+            seedWatch?.watch(nil)
+            return
+        }
         let surface = unsafeBitCast(surfObj, to: IOSurface.self)
+        seedWatch?.watch(surface)
 
         // Seed-skip: when the simulator's framebuffer content hasn't changed,
         // don't spend cycles re-encoding the same pixels back-to-back from the
@@ -278,9 +303,8 @@ actor FrameCapture {
         // see the `idleInterval` doc-comment for why that matters.
         let key = ObjectIdentifier(desc)
         let seed = IOSurfaceGetSeed(surface)
-        let seedChanged = lastSeeds[key] != seed
-        if frameCount > 0, !seedChanged, !force { return }
-        lastSeeds[key] = seed
+        let isNew = seedGate.notice(key: key, seed: seed, force: force)
+        if frameCount > 0, !isNew { return }
 
         let w = IOSurfaceGetWidth(surface)
         let h = IOSurfaceGetHeight(surface)
@@ -315,7 +339,9 @@ actor FrameCapture {
         }
         callbackUUIDs.removeAll()
         descriptors.removeAll()
-        lastSeeds.removeAll()
+        seedGate.reset()
+        seedWatch?.stop()
+        seedWatch = nil
         copyStage?.stop()
         copyStage = nil
         frameCount = 0

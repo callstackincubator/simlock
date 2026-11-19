@@ -50,7 +50,7 @@ per row.
 | `simlock-screen-capture/SimFrameworks.swift`                                                       | `Sources/SimNative/`        | theirs, unchanged                                                                                                                                                                                                            |
 | `simlock-screen-capture/FramebufferSurfaceSelector.swift`                                          | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
 | `simlock-screen-capture/DeviceDisplaySizes.swift`                                                  | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
-| `simlock-screen-capture/FrameCapture.swift`                                                        | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the device-set lookup (deviation 1) and the notice/copy split that decides on the grid before it copies (deviation 5)                                       |
+| `simlock-screen-capture/FrameCapture.swift`                                                        | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the device-set lookup (deviation 1) and the notice/copy split that decides on the grid before it copies, and `SeedWatch` (deviation 5)                      |
 | `simlock-screen-capture/HIDInjector.swift`                                                         | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the Duo, Device Hub, pose, Home, app switcher and Lock paths are deleted, `sendButtonPlan` is added, and the touch target is `PanelTouch.map` (deviation 3) |
 | `SimlockCapture/H264Encoder.swift`                                                                 | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
 | `SimlockCapture/VideoEncoder.swift`                                                                | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
@@ -59,7 +59,7 @@ per row.
 | `simlock-screen-capture/ButtonPlan.swift`                                                          | —                           | ours, entirely: the Indigo presses behind `lock` and `app_switcher` (ADR 0085)                                                                                                                                               |
 | `simlock-screen-capture/InputMode.swift`                                                           | —                           | ours, entirely: the `--input` mode that drives `HIDInjector` from stdin                                                                                                                                                      |
 | `SimlockCapture/Lifecycle.swift`, `SimlockCapture/Options.swift`, `SimlockCapture/FrameGrid.swift` | —                           | ours, entirely: the option parser, the envelope, the lifecycle, the scaler, the encode loop, the pacing grid (MIT)                                                                                                           |
-| `simlock-screen-capture/FrameSelection.swift`                                                      | —                           | ours, entirely (MIT): which composites the simulator capture copies, and the copy queue                                                                                                                                      |
+| `simlock-screen-capture/FrameSelection.swift`                                                      | —                           | ours, entirely (MIT): which composites the simulator capture copies, the copy queue, and `SeedWatch`                                                                                                                         |
 | `simlock-screen-capture/main.swift`, `simlock-screen-capture/SimulatorSource.swift`                | —                           | ours, entirely: the simulator program and its framebuffer as a `ScreenSource`                                                                                                                                                |
 | `simlock-screen-capture/Panels.swift`                                                              | —                           | ours, entirely: which panel of a foldable simulator to stream, the follower of SpringBoard's panel moves, the watchdog for its `log` children, and the upright turn of the inner panel (ADR 0075)                            |
 | `simlock-screen-capture/PanelTouch.swift`                                                          | —                           | ours, entirely: where a tap on the upright picture lands on a panel's digitizer, the inner Duo panel's turned (ADR 0075 §4)                                                                                                  |
@@ -162,7 +162,10 @@ it to the `frame-copy` queue through a one-slot hand-off; that queue asks
 `FrameSelection` (ours) whether the grid wants it, and copies only if so. Every
 frame leaves with its seen time (`DispatchTime.now().uptimeNanoseconds`), not a
 frame count. The 200 ms idle floor and a panel switch are forced: always copied.
-`FrameCapture.start` takes `fps` for it.
+`FrameCapture.start` takes `fps` for it. `SeedWatch` (ours, in `FrameSelection.swift`) also checks
+the picked surface's seed every millisecond on the callback queue, so a composite the frame callback
+reports late is still noticed and timed when it appeared; `SeedGate` keeps the callback and the
+check from noticing one seed twice.
 
 One mechanical consequence of flattening two upstream targets into one:
 `FrameCapture.swift` and `HIDInjector.swift` no longer say `import SimNativeSupport`, because there is
@@ -248,7 +251,7 @@ curl -sL https://raw.githubusercontent.com/EvanBacon/serve-sim/6d009686ed08f7d8b
 That prints six things and nothing else — the `MODIFIED FILE` header Apache §4(b)
 asks for, the device-set patch, the `private` that became internal on
 `nativeScreenSizes`, the deleted `import SimNativeSupport`, the
-`import SimlockCapture` that replaced it, and the notice/copy split (`CopyStage`, `fps` on
+`import SimlockCapture` that replaced it, and the notice/copy split (`CopyStage`, `SeedWatch`, `fps` on
 `start`, the seen time) — which is the whole claim of this notice
 in one screenful. If that diff ever grows past those
 six, either someone edited upstream's capture logic or Apple moved something
