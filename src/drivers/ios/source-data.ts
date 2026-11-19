@@ -61,11 +61,15 @@ export interface NewSourceRow {
   readonly osVersion: string;
   readonly maker: string;
   readonly createdAt: number;
+  /** why: the quick seed a settle replaces; set on the row of a settle only. */
+  readonly settleOf?: string;
 }
 
 export interface SourceRow {
   readonly sourceId: string;
   readonly kind: "seed" | "baseline";
+  readonly specKey: string;
+  readonly settled: boolean;
   readonly udid: string | undefined;
   readonly throwawayUdid: string | undefined;
   readonly deviceTypeId: string;
@@ -111,8 +115,8 @@ export class IosSourceTable {
     this.#database
       .prepare(
         `INSERT INTO ios_source_data (source_id, kind, spec_key, set_path, device_type_id, runtime_id,
-           runtime_build, model, os_version, state, maker, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'making', ?, ?)`,
+           runtime_build, model, os_version, state, maker, created_at, settle_of)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'making', ?, ?, ?)`,
       )
       .run(
         row.sourceId,
@@ -126,6 +130,7 @@ export class IosSourceTable {
         row.osVersion,
         row.maker,
         row.createdAt,
+        row.settleOf ?? null,
       );
   }
 
@@ -143,22 +148,26 @@ export class IosSourceTable {
 
   markReady(sourceId: string, sizeBytes: number | undefined, record: SourceRecord): void {
     inTransaction(this.#database, () => {
-      this.#database
-        .prepare(
-          `UPDATE ios_source_data SET state = 'ready', size_bytes = ?, lineage = ?, saved_without_lineage = ?
-           WHERE source_id = ?`,
-        )
-        .run(
-          sizeBytes ?? null,
-          record.lineage === undefined ? null : JSON.stringify(record.lineage),
-          record.savedWithoutLineage === true ? 1 : 0,
-          sourceId,
-        );
-      const insert = this.#database.prepare(
-        "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES (?, ?, ?)",
-      );
-      for (const file of record.files) insert.run(sourceId, file.relativePath, file.kind);
+      this.#writeReady(sourceId, sizeBytes, record);
     });
+  }
+
+  #writeReady(sourceId: string, sizeBytes: number | undefined, record: SourceRecord): void {
+    this.#database
+      .prepare(
+        `UPDATE ios_source_data SET state = 'ready', size_bytes = ?, lineage = ?, saved_without_lineage = ?
+         WHERE source_id = ?`,
+      )
+      .run(
+        sizeBytes ?? null,
+        record.lineage === undefined ? null : JSON.stringify(record.lineage),
+        record.savedWithoutLineage === true ? 1 : 0,
+        sourceId,
+      );
+    const insert = this.#database.prepare(
+      "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES (?, ?, ?)",
+    );
+    for (const file of record.files) insert.run(sourceId, file.relativePath, file.kind);
   }
 
   filesOf(sourceId: string): readonly SourceFile[] {
@@ -169,6 +178,24 @@ export class IosSourceTable {
         relativePath: row["relative_path"] as string,
         kind: row["kind"] as SourceFile["kind"],
       }));
+  }
+
+  /** why: ADR 0090 §3: one transaction, so a reader sees the quick seed or the settled one as the kind's ready seed, never both and never neither. */
+  promoteSettled(
+    settleId: string,
+    retiredId: string,
+    sizeBytes: number | undefined,
+    record: SourceRecord,
+  ): void {
+    inTransaction(this.#database, () => {
+      this.#database
+        .prepare("UPDATE ios_source_data SET state = 'making', settle_of = ? WHERE source_id = ?")
+        .run(settleId, retiredId);
+      this.#database
+        .prepare("UPDATE ios_source_data SET settled = 1, settle_of = NULL WHERE source_id = ?")
+        .run(settleId);
+      this.#writeReady(settleId, sizeBytes, record);
+    });
   }
 
   deleteRow(sourceId: string): void {
@@ -236,13 +263,15 @@ export class IosSourceTable {
   #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
-        `SELECT source_id, kind, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
+        `SELECT source_id, kind, spec_key, settled, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
            state, maker, size_bytes, lineage, saved_without_lineage FROM ios_source_data ${where}`,
       )
       .all(...parameters)
       .map((row) => ({
         sourceId: row["source_id"] as string,
         kind: row["kind"] as "seed" | "baseline",
+        specKey: row["spec_key"] as string,
+        settled: row["settled"] === 1,
         udid: (row["udid"] as string | null) ?? undefined,
         throwawayUdid: (row["throwaway_udid"] as string | null) ?? undefined,
         deviceTypeId: row["device_type_id"] as string,

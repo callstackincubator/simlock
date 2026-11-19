@@ -6,9 +6,10 @@ import {
   type DriverSource,
   DriverCrashError,
   type VirtualDriverDevice,
+  IdleWatch,
   ensureOwnedRoot,
 } from "../../core/index.js";
-import type { Clock, Filesystem, IdGenerator, Logger } from "../../ports/index.js";
+import type { Clock, Filesystem, IdGenerator, Logger, ProcessTable } from "../../ports/index.js";
 
 import { errorMessage } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
@@ -39,6 +40,10 @@ import type { SqliteDatabase, SqliteOpener } from "../../ports/index.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
+
+/** why: ADR 0090 §3: the cores a copy's whole tree may use over two minutes and still count as quiet, and how often the tree is read. */
+const IOS_IDLE_CORES = 0.15;
+const IDLE_POLL_MS = 2_000;
 
 const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
 const LAUNCH_SERVICES_PATH = /^data\/var\/db\/lsd\/com\.apple\.LaunchServices-[^/]*\.csstore$/;
@@ -196,11 +201,93 @@ export class Seeds {
     return { files, lineage, savedWithoutLineage: lineage === undefined };
   }
 
-  settleSeed(
-    _sourceId: string,
+  /**
+   * why: ADR 0090 §3: the quick seed is copied as a provision copies it, the copy boots (never the
+   * seed) and is read until its own processes are idle, then it is saved as the kind's seed through
+   * a baseline save's steps, with the lineage `[copy, ...seed lineage]`.
+   */
+  async settleSeed(
+    processTable: ProcessTable,
+    sourceId: string,
     _options: { readonly signal: AbortSignal },
   ): Promise<DriverSettleResult> {
-    return Promise.resolve({ reason: "idle", settledAfterMs: 0, sourceId: "" });
+    const quick = this.#sources.findRow(sourceId);
+    if (quick?.udid === undefined)
+      throw new DriverCrashError(`iOS keeps no quick seed ${sourceId}`);
+    const seed: ReadySeed = {
+      lineage: quick.lineage,
+      runtimeBuild: quick.runtimeBuild,
+      sourceId: quick.sourceId,
+      udid: quick.udid,
+    };
+    const settleId = this.#idGenerator.generate();
+    this.#sources.insertMaking({
+      createdAt: this.#clock.now(),
+      deviceTypeId: quick.deviceTypeId,
+      kind: "seed",
+      maker: this.#maker(),
+      model: quick.model,
+      osVersion: quick.osVersion,
+      runtimeBuild: quick.runtimeBuild,
+      runtimeId: quick.runtimeId,
+      settleOf: quick.sourceId,
+      setPath: this.#sourcesSet,
+      sourceId: settleId,
+      specKey: quick.specKey,
+    });
+    const copy = await this.#cloneCopy(seed, `simlock-${settleId}`, (udid) => {
+      this.#sources.setThrowaway(settleId, udid);
+    });
+    await this.#boot.bootAndWait(copy, settleId, this.#fullBootTimeoutMs);
+    const readyAt = this.#clock.now();
+    const reason = await this.#waitUntilIdle(processTable, copy, readyAt);
+    const settledAfterMs = this.#clock.now() - readyAt;
+    await this.#simctl.shutdown(copy);
+    const cloned = await this.#simctl.createSimulator(
+      ["clone", copy, `simlock-seed-${settleId}`, this.#sourcesSet],
+      { destination: this.#sourcesSet },
+    );
+    const settledUdid = cloned.stdout.trim();
+    this.#sources.setUdid(settleId, settledUdid);
+    await this.#dropLaunchServicesDatabase(this.#sourcesSet, settledUdid);
+    const lineage = [copy.toUpperCase(), ...(quick.lineage ?? [])];
+    const files = await this.#recordFiles(settledUdid, lineage);
+    const sizeBytes = await this.#sizeOf(settledUdid);
+    this.#sources.promoteSettled(settleId, quick.sourceId, sizeBytes, { files, lineage });
+    await this.#deleteSeedInTurn(seed.udid);
+    this.#sources.deleteRow(quick.sourceId);
+    await this.#deleteThrowaway(copy, false);
+    return {
+      reason,
+      settledAfterMs,
+      sourceId: settleId,
+      ...(sizeBytes === undefined ? {} : { sizeBytes }),
+    };
+  }
+
+  /** why: ADR 0090 §3: idle is judged from the copy's own processes, never host load; the tree's root is the `launchd_sim` whose command line names the copy's folder. */
+  async #waitUntilIdle(
+    processTable: ProcessTable,
+    copy: string,
+    readyAt: number,
+  ): Promise<"idle" | "cap"> {
+    const folder = `${join(this.#deviceRoot, copy)}/`;
+    const watch = new IdleWatch({
+      idleCores: IOS_IDLE_CORES,
+      readyAt,
+      root: (processes) =>
+        processes.find(
+          (entry) => entry.command.includes("launchd_sim") && entry.command.includes(folder),
+        ),
+    });
+    for (;;) {
+      watch.observe(await processTable.list(), this.#clock.now());
+      const state = watch.state(this.#clock.now());
+      if (state !== "busy") return state;
+      await new Promise<void>((resolve) => {
+        this.#clock.setTimer(IDLE_POLL_MS, resolve);
+      });
+    }
   }
 
   async destroySource(sourceId: string): Promise<void> {
@@ -233,30 +320,7 @@ export class Seeds {
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
-    const cloned = await this.#seedTurns.take(seed.udid, async () => ({
-      result: await this.#simctl.createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
-        seedUdid: seed.udid,
-        source: this.#sourcesSet,
-      }),
-      // why: the seed's deletion drops its file rows once the turn ends, so a copy reads them before leaving it.
-      files: seed.lineage === undefined ? [] : this.#sources.filesOf(seed.sourceId),
-    }));
-    const udid = cloned.result.stdout.trim();
-
-    if (udid === "") {
-      throw new DriverCrashError("simctl clone returned no device UDID");
-    }
-
-    try {
-      await this.#marks.writeMark(udid);
-      await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
-      if (seed.lineage !== undefined) await this.#swapLineage(cloned.files, seed.lineage, udid);
-    } catch (error: unknown) {
-      // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
-      // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
-      await this.#simctl.invoke(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
-      throw error;
-    }
+    const udid = await this.#cloneCopy(seed, name);
     await this.#slimBoot.copyOverrides(seed.udid, udid);
 
     return {
@@ -270,6 +334,40 @@ export class Seeds {
         ...(seed.lineage === undefined ? {} : { lineage: seed.lineage }),
       } satisfies IosDriverData,
     };
+  }
+
+  /** why: a provision and a settle copy a seed the same way: in the seed's turn, marked, with its LaunchServices database dropped and its lineage swapped to its own UDID before its first boot. */
+  async #cloneCopy(
+    seed: ReadySeed,
+    name: string,
+    onCloned?: (udid: string) => void,
+  ): Promise<string> {
+    const cloned = await this.#seedTurns.take(seed.udid, async () => ({
+      result: await this.#simctl.createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
+        seedUdid: seed.udid,
+        source: this.#sourcesSet,
+      }),
+      // why: the seed's deletion drops its file rows once the turn ends, so a copy reads them before leaving it.
+      files: seed.lineage === undefined ? [] : this.#sources.filesOf(seed.sourceId),
+    }));
+    const udid = cloned.result.stdout.trim();
+
+    if (udid === "") {
+      throw new DriverCrashError("simctl clone returned no device UDID");
+    }
+    onCloned?.(udid);
+
+    try {
+      await this.#marks.writeMark(udid);
+      await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
+      if (seed.lineage !== undefined) await this.#swapLineage(cloned.files, seed.lineage, udid);
+    } catch (error: unknown) {
+      // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
+      // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
+      await this.#simctl.invoke(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      throw error;
+    }
+    return udid;
   }
 
   /** why: a simulator in the sources set that no row names is a leftover of a crash; `doctor` reports it and only `--purge-orphans` deletes it. */

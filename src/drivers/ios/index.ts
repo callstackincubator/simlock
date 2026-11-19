@@ -235,9 +235,10 @@ export class IosSimctlDriver implements Driver {
       (udid) => this.#physical.osVersion(udid),
     );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
-    if (options.processTable !== undefined) {
+    const { processTable } = options;
+    if (processTable !== undefined) {
       this.settleSeed = (sourceId, settleOptions) =>
-        this.#seeds.settleSeed(sourceId, settleOptions);
+        this.#seeds.settleSeed(processTable, sourceId, settleOptions);
     }
     this.deviceTcp = createIosDeviceTcpFor(options);
   }

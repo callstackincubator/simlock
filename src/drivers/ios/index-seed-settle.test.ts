@@ -128,21 +128,21 @@ describe("IosSimctlDriver settleSeed", () => {
     expect(rowsAtBoot, "while the copy boots the quick seed is still the ready seed").toEqual([
       {
         lease_count: 0,
-        lineage: JSON.stringify([lineageUdid]),
-        settle_of: null,
-        settled: 0,
-        source_id: quickSourceId,
-        state: "ready",
-        udid: seedUdid,
-      },
-      {
-        lease_count: 0,
         lineage: null,
         settle_of: quickSourceId,
         settled: 0,
         source_id: "device-1",
         state: "making",
         udid: null,
+      },
+      {
+        lease_count: 0,
+        lineage: JSON.stringify([lineageUdid]),
+        settle_of: null,
+        settled: 0,
+        source_id: quickSourceId,
+        state: "ready",
+        udid: seedUdid,
       },
     ]);
     expect(
