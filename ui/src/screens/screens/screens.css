@@ -83,8 +83,10 @@
   white-space: nowrap;
 }
 
-.screens-row-watched td {
-  background: var(--surface-2);
+/* why: the tint goes on the row, as the table's own row tints do: on a phone a row is a padded
+ * card, and a tint on its cells would draw a box inside it. */
+.table .screens-row-watched {
+  background: var(--row-selected);
 }
 
 @media (max-width: 767px) {
