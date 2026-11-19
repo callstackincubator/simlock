@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +31,8 @@ function scratchRepo(server: string, digest: string): string {
   mkdirSync(join(root, "scripts"));
   mkdirSync(join(root, "vendor", "scrcpy"), { recursive: true });
   cpSync(SCRIPT, join(root, "scripts", "build-capture.mjs"));
+  mkdirSync(join(root, "src", "drivers", "ios", "jail"), { recursive: true });
+  writeFileSync(join(root, "src", "drivers", "ios", "jail", "profile.sb"), "the jail's profile");
   writeFileSync(join(root, "vendor", "scrcpy", "scrcpy-server-v5.0.1"), server);
   writeFileSync(
     join(root, "vendor", "scrcpy", "SHA256SUMS.txt"),
@@ -82,6 +85,40 @@ function fakeSwift(repo: string): string {
     ].join("\n"),
   );
   chmodSync(join(bin, "swift"), 0o755);
+  return bin;
+}
+
+// why: an `xcrun` that writes what `swiftc` and `lipo` would, so the claim about the slices is
+// checked without Xcode: a slice holds its target and SDK, and `lipo` joins the slices it is given.
+// It fails the outputs and the targets named in SIMLOCK_FAKE_XCRUN_FAIL, so a test can lose one
+// artifact or one slice.
+function fakeXcrun(repo: string): string {
+  const bin = join(repo, "fake-xcrun");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    join(bin, "xcrun"),
+    [
+      "#!/bin/sh",
+      'sdk=""; target=""; out=""; tool=""; slices=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  case "$1" in',
+      '    --sdk) shift; sdk="$1" ;;',
+      '    -target) shift; target="$1" ;;',
+      '    -o|-output) shift; out="$1" ;;',
+      '    swiftc|lipo) tool="$1" ;;',
+      '    */arm64/*|*/x86_64/*) slices="$slices $1" ;;',
+      "  esac",
+      "  shift",
+      "done",
+      'name="$(/usr/bin/basename "$out")"',
+      'case ",$SIMLOCK_FAKE_XCRUN_FAIL," in *",$name,"*) exit 1 ;; esac',
+      'if [ -n "$target" ]; then',
+      '  case ",$SIMLOCK_FAKE_XCRUN_FAIL," in *",$target,"*) exit 1 ;; esac',
+      "fi",
+      'if [ "$tool" = swiftc ]; then echo "$target on $sdk" > "$out"; else /bin/cat $slices > "$out"; fi',
+    ].join("\n"),
+  );
+  chmodSync(join(bin, "xcrun"), 0o755);
   return bin;
 }
 
@@ -163,6 +200,53 @@ describe("scripts/build-capture.mjs", () => {
       expect(existsSync(simulatorProgram)).toBe(false);
       expect(existsSync(deviceProgram)).toBe(true);
       expect(existsSync(join(shipped, "NOTICE.md"))).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "builds the simulator jail's library for the iOS Simulator and its `simlock-jail` program for the Mac, each from an arm64 and an x86_64 slice, ships the profile only beside both, and ships neither a lone slice nor a program that did not build",
+    () => {
+      const repo = scratchRepo("the real server", sha256("the real server"));
+      const run = (path: string, fail = "") =>
+        spawnSync(process.execPath, [join(repo, "scripts", "build-capture.mjs")], {
+          encoding: "utf8",
+          env: { ...process.env, PATH: path, SIMLOCK_FAKE_XCRUN_FAIL: fail },
+        });
+      const library = join(repo, "dist", "jail", "libsimlock-jail.dylib");
+      const compiler = join(repo, "dist", "jail", "simlock-jail");
+      const profile = join(repo, "dist", "jail", "profile.sb");
+
+      run("");
+      expect(existsSync(library)).toBe(false);
+      expect(existsSync(compiler)).toBe(false);
+      expect(existsSync(profile)).toBe(false);
+
+      run(fakeXcrun(repo));
+      expect(readFileSync(library, "utf8")).toBe(
+        "arm64-apple-ios16.0-simulator on iphonesimulator\nx86_64-apple-ios16.0-simulator on iphonesimulator\n",
+      );
+      expect(readFileSync(compiler, "utf8")).toBe(
+        "arm64-apple-macos14.0 on macosx\nx86_64-apple-macos14.0 on macosx\n",
+      );
+      expect(statSync(compiler).mode & 0o777).toBe(0o755);
+      expect(readFileSync(profile, "utf8")).toBe("the jail's profile");
+
+      rmSync(join(repo, "dist"), { force: true, recursive: true });
+      const libraryFailed = run(fakeXcrun(repo), "libsimlock-jail.dylib");
+      expect(existsSync(library)).toBe(false);
+      expect(existsSync(compiler)).toBe(true);
+      expect(existsSync(profile)).toBe(false);
+      expect(libraryFailed.stdout + libraryFailed.stderr).toMatch(
+        /the simulator jail will be unavailable/iu,
+      );
+
+      rmSync(join(repo, "dist"), { force: true, recursive: true });
+      const intelSliceFailed = run(fakeXcrun(repo), "x86_64-apple-macos14.0");
+      expect(existsSync(library)).toBe(true);
+      expect(existsSync(compiler)).toBe(false);
+      expect(intelSliceFailed.stdout + intelSliceFailed.stderr).toMatch(
+        /the simulator jail's profile compiler will be unavailable/iu,
+      );
     },
   );
 });
