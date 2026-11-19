@@ -105,6 +105,40 @@ struct FrameSelection {
     }
 }
 
+/// Tells which parts of a composite changed, without copying it.
+enum TileHasher {
+    static let tileWidth = 16
+    static let tileHeight = 32
+
+    /// One FNV-1a hash per 16x32-pixel tile over every 4th row of the surface (32-bit pixels),
+    /// row-major, the tiles on the right and bottom edges partial.
+    static func hashes(of surface: IOSurface) -> [UInt64] {
+        let width = IOSurfaceGetWidth(surface)
+        let height = IOSurfaceGetHeight(surface)
+        let columns = (width + tileWidth - 1) / tileWidth
+        let rows = (height + tileHeight - 1) / tileHeight
+        guard columns > 0, rows > 0 else { return [] }
+        guard IOSurfaceLock(surface, .readOnly, nil) == kIOReturnSuccess else { return [] }
+        defer { IOSurfaceUnlock(surface, .readOnly, nil) }
+        let base = IOSurfaceGetBaseAddress(surface)
+        let bytesPerRow = IOSurfaceGetBytesPerRow(surface)
+        var hashes = [UInt64](repeating: 0xcbf2_9ce4_8422_2325, count: columns * rows)
+        for y in stride(from: 0, to: height, by: 4) {
+            let row = (base + y * bytesPerRow).assumingMemoryBound(to: UInt32.self)
+            let tileRow = y / tileHeight
+            for column in 0..<columns {
+                let from = column * tileWidth
+                var hash = hashes[tileRow * columns + column]
+                for x in from..<min(from + tileWidth, width) {
+                    hash = (hash ^ UInt64(row[x])) &* 0x0000_0100_0000_01b3
+                }
+                hashes[tileRow * columns + column] = hash
+            }
+        }
+        return hashes
+    }
+}
+
 /// A composite the capture noticed and has not copied yet.
 struct Notice {
     let surface: IOSurface
@@ -169,7 +203,8 @@ final class CopyStage: @unchecked Sendable {
             seenNanos: notice.seenNanos,
             force: notice.force,
             width: IOSurfaceGetWidth(notice.surface),
-            height: IOSurfaceGetHeight(notice.surface)
+            height: IOSurfaceGetHeight(notice.surface),
+            tiles: TileHasher.hashes(of: notice.surface)
         )
         guard selection.decide(composite) else { return }
         var pixelBuffer: Unmanaged<CVPixelBuffer>?

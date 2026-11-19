@@ -195,13 +195,13 @@ final class FrameSelectionTests: XCTestCase {
         let stage = CopyStage(fps: 60) { _, nanos in seen.append(nanos) }
         var counter: UInt32 = 0
         /// Writes a pixel into the tile at the surface's top-left (the glass) and, when asked, into the
-        /// tile at its bottom-right (an app), then offers the composite.
+        /// tile at its bottom-right (an app; hashed rows are every 4th), then offers the composite.
         func composite(at time: UInt64, appChanged: Bool = false) {
             counter += 1
             surface.lock(options: [], seed: nil)
             let base = surface.baseAddress.assumingMemoryBound(to: UInt32.self)
             base[0] = counter
-            if appChanged { base[(63 * surface.bytesPerRow + 63 * 4) / 4] = counter }
+            if appChanged { base[(60 * surface.bytesPerRow + 63 * 4) / 4] = counter }
             surface.unlock(options: [], seed: nil)
             stage.offer(Notice(surface: surface, seed: IOSurfaceGetSeed(surface), seenNanos: time, force: false))
             stage.queue.sync {}
