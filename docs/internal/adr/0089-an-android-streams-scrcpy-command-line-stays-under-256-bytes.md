@@ -1,6 +1,6 @@
 # 0089. An Android stream's scrcpy command line stays under 256 bytes
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-19
 
 ## Context
