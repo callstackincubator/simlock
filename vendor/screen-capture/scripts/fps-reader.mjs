@@ -36,7 +36,7 @@ function parseArguments(args) {
   const values = { seconds: "20" };
   for (let i = 0; i < args.length; i += 2) values[args[i].replace(/^--/, "")] = args[i + 1];
   const { udid, scenario, bin, seconds } = values;
-  if (!udid || !bin || !["scroll", "animation"].includes(scenario)) {
+  if (!(udid && bin && ["scroll", "animation"].includes(scenario))) {
     console.error(
       "usage: node scripts/fps-reader.mjs --udid <UDID> --scenario scroll|animation --bin <path> [--seconds 20]",
     );
@@ -71,6 +71,15 @@ function buildApp(directory) {
   return join(directory, "build", "Build", "Products", "Release-iphonesimulator", "FpsCounter.app");
 }
 
+/** why: the envelope is a 4-byte length (counting the tag byte) and a tag; tags 2 and 3 are frames. Returns the first whole envelope of `buffer`, or null when it holds none yet. */
+function takeEnvelope(buffer) {
+  if (buffer.length < 5 || buffer.length < 4 + buffer.readUInt32BE(0)) return null;
+  return {
+    isFrame: buffer[4] === 2 || buffer[4] === 3,
+    rest: buffer.subarray(4 + buffer.readUInt32BE(0)),
+  };
+}
+
 /** why: the frame arrival times and CPU samples come from one run of the capture. Runs it for `seconds`, keeps its framed output in `file`, and returns the arrival time (ms) of each video frame and the program's CPU samples. */
 function runCapture(file) {
   return new Promise((resolve) => {
@@ -83,11 +92,9 @@ function runCapture(file) {
       const now = performance.now();
       chunks.push(chunk);
       pending = Buffer.concat([pending, chunk]);
-      // why: the envelope is a 4-byte length (counting the tag byte) and a tag; tags 2 and 3 are frames.
-      while (pending.length >= 5 && pending.length >= 4 + pending.readUInt32BE(0)) {
-        const length = pending.readUInt32BE(0);
-        if (pending[4] === 2 || pending[4] === 3) arrivals.push(now);
-        pending = pending.subarray(4 + length);
+      for (let next = takeEnvelope(pending); next; next = takeEnvelope(pending)) {
+        if (next.isFrame) arrivals.push(now);
+        pending = next.rest;
       }
     });
     const cpu = [];
