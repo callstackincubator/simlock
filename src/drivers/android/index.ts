@@ -221,6 +221,7 @@ export class AndroidDriver implements Driver {
       filesystem: options.filesystem,
       idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
+      cores: options.config?.emulator?.cores,
     });
     this.#bootTimeoutMs = bootTimeoutFor(options);
     this.#ownership = new Ownership({

@@ -20,6 +20,8 @@ export interface AndroidEmulatorLaunchOptions {
   readonly gpu: string;
   readonly audio: boolean;
   readonly bootAnimation: boolean;
+  /** why: the CPU cores of every emulator made from now on; unset leaves the profile's own count. */
+  readonly cores?: number;
 }
 
 export interface AndroidDriverConfig {

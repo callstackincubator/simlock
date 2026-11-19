@@ -16,6 +16,8 @@ export interface AvdConfigOptions {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly seedLaunchInputs: readonly string[];
+  /** why: `android.emulator.cores`; unset leaves the profile's own count. */
+  readonly cores: number | undefined;
 }
 
 export class AvdConfig {

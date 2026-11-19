@@ -15,6 +15,7 @@ import {
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
 import { type DeviceProfileSource } from "./device-profile-source.js";
+import type { AndroidEmulatorLaunchOptions } from "./definition.js";
 import { type LibraryDeviceProfile } from "./profiles/index.js";
 import {
   ANDROID_SDK_ROOT,
@@ -367,6 +368,7 @@ export type BuildProvisioner = (
   processRunner: ProcessRunner,
   options: {
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
+    readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly extraEnv?: Readonly<Record<string, string>>;
     readonly hostAbi?: string;
     readonly ids: readonly string[];
@@ -454,6 +456,7 @@ export async function libraryHarness(
   build: BuildProvisioner,
   options: {
     readonly devicesXml?: string;
+    readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly extraImages?: readonly (readonly [string, string, string])[];
     readonly filesystem?: MemoryFilesystem;
     readonly imageProperties?: string;
@@ -501,6 +504,7 @@ export async function libraryHarness(
       : [{ profiles: async () => options.profiles ?? [] }];
   const driver = await build(filesystem, runner, {
     ids: ["one", "two"],
+    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
     ...(sources === undefined ? {} : { deviceProfileSources: sources }),
   });
   const resolve = (model: string) =>
