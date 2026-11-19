@@ -262,22 +262,21 @@ class ScrcpySession {
       "com.genymobile.scrcpy.Server",
       SCRCPY_SERVER_VERSION,
       `scid=${this.#scidHex}`,
-      "log_level=info",
+      // why: some Samsung codecs abort with `stack corruption detected` when app_process's command line
+      // reaches about 255 bytes (https://github.com/Genymobile/scrcpy/issues/2841), so the line is kept
+      // short (ADR 0089): no log_level (the server logs at debug), `0` for false (scrcpy reads
+      // a boolean as true only for `true`), a codec option with no type (scrcpy assumes int), and no
+      // option that restates a default. Two of those defaults are relied on, and a scrcpy upgrade must check them:
+      // `control=true` (the reset below needs the channel) and `cleanup=true` (it puts a phone's
+      // stay-awake back and deletes the jar).
       "tunnel_forward=true",
-      "video=true",
-      "audio=false",
-      "control=true",
+      "audio=0",
       // why: with a control channel scrcpy would power the screen on and sync the clipboard; a stream changes no device setting.
-      "power_on=false",
-      "clipboard_autosync=false",
-      "video_codec=h264",
+      "power_on=0",
+      "clipboard_autosync=0",
       // why: a moving screen then rarely needs the reset that bounds a still one's key frames.
-      "video_codec_options=i-frame-interval:int=2",
-      "send_device_meta=false",
-      "send_dummy_byte=true",
-      "send_stream_meta=true",
-      "send_frame_meta=true",
-      "cleanup=true",
+      "video_codec_options=i-frame-interval=2",
+      "send_device_meta=0",
       // why: scrcpy puts the phone's stay-awake setting back when the server ends (its clean-up
       // process), and needs no controller for it; an emulator's screen is not held.
       ...(this.#isPhone ? ["stay_awake=true"] : []),
@@ -371,8 +370,8 @@ class ScrcpySession {
       : `${message}. Its last output:\n${this.#tail.join("\n")}`;
   }
 
-  // why: every key frame the body delivers restarts the 4 s, so a moving screen is never reset and a still one
-  // is reset every 4 s; the timer lives apart from the reads, which a slow viewer stops.
+  // why: every key frame the body delivers restarts the timer, so a reset is sent only when the body delivers
+  // none in time; the timer lives apart from the reads, which a slow viewer stops.
   #armReset(): void {
     if (this.#closing !== undefined) return;
     if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
