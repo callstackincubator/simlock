@@ -1,11 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-
-import { windowsSkipped } from "./test-support/windows-skipped.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -232,21 +230,14 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
   });
 });
 
-describe("the files the Windows job leaves out (src/test-support/windows-skipped.ts)", () => {
-  it("`windowsSkipped` is the list on win32 and empty on linux and darwin, holds sorted tracked test files once each, and `vitest.config.ts` gives it to the `unit` project only", () => {
-    const tracked = new Set(
-      spawnSync("git", ["ls-files"], { cwd: REPO_ROOT, encoding: "utf8" }).stdout.split("\n"),
-    );
-    const list = windowsSkipped("win32");
+describe("the Windows job runs every unit test file", () => {
+  it("no list of Windows-skipped files exists, `vitest.config.ts` gives the `unit` project the same excludes on every host, and `testing.md` holds no list exception", () => {
     const config = readFileSync(join(REPO_ROOT, "vitest.config.ts"), "utf8");
+    const testing = readFileSync(join(REPO_ROOT, "docs/internal/agent-rules/testing.md"), "utf8");
     const unitProject = /name:\s*"unit"[\s\S]*?name:\s*"ui-dom"/.exec(config)?.[0] ?? "";
 
-    expect(windowsSkipped("linux")).toEqual([]);
-    expect(windowsSkipped("darwin")).toEqual([]);
-    expect(list).toEqual([...new Set(list)].sort());
-    expect(list.filter((path) => !tracked.has(path))).toEqual([]);
-    expect(list.filter((path) => !/\.test\.tsx?$/.test(path))).toEqual([]);
-    expect(unitProject).toContain("...windowsSkipped(process.platform)");
-    expect(config.match(/windowsSkipped\(/g)).toHaveLength(1);
+    expect(existsSync(join(REPO_ROOT, "src/test-support/windows-skipped.ts"))).toBe(false);
+    expect(unitProject).not.toMatch(/win32|windows|platform/i);
+    expect(testing).not.toContain("windows-skipped");
   });
 });
