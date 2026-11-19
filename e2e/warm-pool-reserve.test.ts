@@ -112,8 +112,9 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       driverScript: { ios: IOS },
     });
     // why: the first lease's kind is learned, so the pool boots a spare while it is held (ADR 0069);
-    // the slow boot is set first so that spare is still booting when the five leases arrive.
-    await env.driverScript.merge({ ios: { latencyMs: { makeReady: 4_000 } } });
+    // the slow boot is set first so that spare is still booting when the five leases arrive, with
+    // room for a slow runner to reach the check before that boot ends and frees a slot.
+    await env.driverScript.merge({ ios: { latencyMs: { makeReady: 10_000 } } });
     const warm = await lease(env, "warm", ["--timeout", "60s"]);
     await waitFor(async () => (await makeReadyCalls(env)) === 2, {
       label: "the warm pool's boot of the spare for the held lease has started",
@@ -130,6 +131,8 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(await makeReadyCalls(env)).toBe(4);
 
+    // why: the check is made; later boots run at full speed.
+    await env.driverScript.merge({ ios: { latencyMs: { makeReady: 0 } } });
     const granted = await Promise.all(grants);
     await untilQuiet(env);
 
@@ -137,7 +140,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     // why: five held copies leave one spare ready, the seventh boot (ADR 0069).
     expect(await makeReadyCalls(env)).toBe(7);
     expect((await deviceStates(env)).filter((state) => state === "leased")).toHaveLength(5);
-    // why: the boots are still slow, so the spare may still be booting when the pool goes quiet.
+    // why: the spare may still be booting when the pool goes quiet.
     await waitFor(
       async () => (await deviceStates(env)).filter((state) => state === "ready").length === 1,
       { label: "the one spare is ready" },
