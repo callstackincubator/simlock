@@ -237,11 +237,11 @@ export class IosSourceTable {
     specKey: string,
     createdBefore: number,
   ): readonly SourceRow[] {
-    return this.#rows("WHERE state = 'making' AND maker = ? AND spec_key = ? AND created_at < ?", [
-      maker,
-      specKey,
-      createdBefore,
-    ]);
+    // why: a settle, or the quick seed it retires, runs far longer than a make; only a restart sweeps it.
+    return this.#rows(
+      "WHERE state = 'making' AND settle_of IS NULL AND maker = ? AND spec_key = ? AND created_at < ?",
+      [maker, specKey, createdBefore],
+    );
   }
 
   makingThrowaways(): readonly string[] {
