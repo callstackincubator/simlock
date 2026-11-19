@@ -515,11 +515,12 @@ function defineSuite(target: Target): void {
   );
 
   leasingCase(
-    "after the simlock daemon is killed and started again, the old agent-device daemon's pid is gone within 60 s; the agent's next command fails with lease ended by simlock, and its old simlock lease is released",
+    "after the simlock daemon is killed and started again, the old agent-device daemon's pid is gone within 60 s; the agent opens the installed Appduct fixture app again and takes a snapshot, and its simlock lease stays, on the same device",
     { timeout: 900_000 },
     async () => {
       const a = await agent("a");
       ok(await open(a));
+      ok(await a.run(["install", "Appduct", target.app]));
       const [lease] = await listLeases(env);
       const old = await readPidRecord(env);
       onTestFinished(() => killIfStillAgentDevice(old));
@@ -533,14 +534,12 @@ function defineSuite(target: Target): void {
         interval: 500,
         label: "the old agent-device daemon is gone",
       });
-      const next = await a.run(["snapshot"]);
-      expect(next.code).not.toBe(0);
-      expect(failureText(next)).toContain("lease ended by simlock");
-      await waitFor(async () => !(await listLeases(env)).some((row) => row.id === lease?.id), {
-        timeout: 60_000,
-        interval: 500,
-        label: "the old lease released",
-      });
+      ok(await a.run(["open", target.bundleId]));
+      ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
+      const leases = await listLeases(env);
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.id).toBe(lease?.id);
+      expect(leases[0]?.deviceId).toBe(lease?.deviceId);
     },
   );
 
