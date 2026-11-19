@@ -87,6 +87,14 @@ const simlockWorld: World = {
   sourcesSet,
 };
 
+const defaultWorld: World = {
+  config: { deviceSet: "default" },
+  devicesDir: `${coreSimulatorRoot}/Devices`,
+  isDefault: true,
+  label: "default set",
+  sourcesSet: "/home/.simlock/devices/ios-sources",
+};
+
 function simctlIn(world: World, set: string | undefined, ...args: readonly string[]) {
   const scoped = set ?? (world.isDefault ? undefined : world.devicesDir);
   return {
@@ -105,6 +113,9 @@ interface SettleCase {
 }
 
 const quiet = () => 3;
+function quietCase(name: string): Omit<SettleCase, "world"> {
+  return { copyCpu: quiet, name, reason: "idle", settledAfterMs: 180_000 };
+}
 const settleCases: readonly SettleCase[] = [
   {
     copyCpu: quiet,
@@ -112,6 +123,10 @@ const settleCases: readonly SettleCase[] = [
     reason: "idle",
     settledAfterMs: 180_000,
     world: simlockWorld,
+  },
+  {
+    ...quietCase("idle at 180 s, the copy marked and its clipboard sync off"),
+    world: defaultWorld,
   },
   {
     copyCpu: (nowMs) => (Math.min(nowMs, 600_000) / 1_000) * 2,
