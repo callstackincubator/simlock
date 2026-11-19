@@ -32,6 +32,11 @@ describe("seed settler: which seed it settles and when", () => {
     await skipped.started();
     await skipped.advance(5 * minute);
     expectSettled(skipped, ["real"], "only the quick seed a lease used");
+    const unused = await settlerRig();
+    unused.ios.sources = [quick("unused", 0)];
+    await unused.started();
+    await unused.advance(5 * minute);
+    expectSettled(unused, [], "a quick seed no lease used");
     const noVerb = await settlerRig({ androidWithoutVerb: true });
     noVerb.android.sources = [quick("android-seed", 9)];
     await noVerb.started();
@@ -61,6 +66,19 @@ describe("seed settler: which seed it settles and when", () => {
     expectSettled(brief, [], "the check at 5 min is 4 min after the release");
     await brief.advance(minute);
     expectSettled(brief, ["seed"], "the next check");
+    const booting = await settlerRig();
+    booting.ios.sources = [quick("seed", 3)];
+    await booting.started();
+    const starting = booting.capacity.tryReserveBoot(
+      { id: "d1", mode: "full", platform: "ios", state: "shutdown" },
+      [],
+    );
+    if (!starting.ok) throw new Error("the test's boot reservation was refused");
+    await booting.advance(5 * minute);
+    expectSettled(booting, [], "a boot under way");
+    starting.reservation.release();
+    await booting.advance(5 * minute);
+    expectSettled(booting, ["seed"], "the boot ended 5 min ago");
     const pressure = await settlerRig({ pressure: warmingPaused });
     pressure.ios.sources = [quick("seed", 3)];
     await pressure.started();

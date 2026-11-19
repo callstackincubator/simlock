@@ -53,6 +53,11 @@ describe("IdleWatch", () => {
       360: "idle",
       480: "idle",
     });
+    const deep = watch();
+    for (let at = 0; at <= 240 * SECOND; at += 30 * SECOND) {
+      deep.observe([proc(100, 1, 0), proc(101, 100, 0), proc(102, 101, at / SECOND)], at);
+    }
+    expect(deep.state(240 * SECOND), "a grandchild's CPU counts").toBe("busy");
   });
 
   it("counts the CPU of a process that exited, so its work leaves the window only with time", () => {

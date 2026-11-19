@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SeedSettlerStoppedError } from "../driver.js";
+import { type DriverSource, SeedSettlerStoppedError } from "../driver.js";
 import {
   deferred,
   expectSettled,
@@ -13,7 +13,7 @@ import {
 } from "./test-rig.js";
 
 describe("seed settler: daemon stop", () => {
-  it("starts no settle after beginStop, aborts a running settle on stop and resolves once the driver returns, and fails an operator's wait", async () => {
+  it("starts no settle after beginStop, aborts a running settle on stop and resolves once the driver returns, and fails an operator's wait, and starts none for a check that was under way when the stop began", async () => {
     const running = await settlerRig();
     running.ios.sources = [quick("seed", 3)];
     const returned = deferred<void>();
@@ -57,6 +57,16 @@ describe("seed settler: daemon stop", () => {
       idle.settler.settle(iphoneSpec, { onProgress: () => undefined }),
       "an operator's call after stop",
     ).rejects.toBeInstanceOf(SeedSettlerStoppedError);
+
+    const racing = await settlerRig();
+    const listing = deferred<DriverSource[]>();
+    racing.ios.listSources = () => listing.promise;
+    await racing.started();
+    await racing.advance(5 * minute);
+    racing.settler.beginStop();
+    listing.resolve([quick("seed", 3)]);
+    await flush();
+    expectSettled(racing, [], "a stop began while the check listed seeds");
 
     const waiting = await settlerRig({ pressure: warmingPaused });
     await waiting.started();

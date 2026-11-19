@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { type DriverSource } from "../driver.js";
 import { NukeService } from "../nuke-service.js";
 import {
   deferred,
@@ -51,7 +52,7 @@ function nukeOf(rig: SettlerRig, order: string[]) {
 }
 
 describe("seed settler: nuke", () => {
-  it("is held by a nuke: a running settle is aborted and awaited before nuke deletes seeds, none starts during it, and checks resume after it", async () => {
+  it("is held by a nuke: a running settle is aborted and awaited before nuke deletes seeds, none starts during it, and checks resume after it, and none starts for a check that was under way when it began", async () => {
     const rig = await settlerRig();
     rig.ios.sources = [quick("seed", 3)];
     const order: string[] = [];
@@ -105,6 +106,20 @@ describe("seed settler: nuke", () => {
       sourceId: "another-settled",
     });
     expectSettled(rig, ["seed", "another"], "checks resume");
+
+    const racing = await settlerRig();
+    const listing = deferred<DriverSource[]>();
+    racing.ios.listSources = () => listing.promise;
+    await racing.started();
+    await racing.advance(5 * minute);
+    const raced = nukeOf(racing, []);
+    const racedNuke = raced.service.nuke(false);
+    await flush();
+    listing.resolve([quick("seed", 3)]);
+    await flush();
+    expectSettled(racing, [], "a nuke began while the check listed seeds");
+    raced.finish();
+    await racedNuke;
 
     const idle = await settlerRig();
     const quiet: string[] = [];

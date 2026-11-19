@@ -111,6 +111,8 @@ export async function settlerRig(options: RigOptions = {}) {
           settleSeed: async (sourceId, { signal }) => {
             rig.settles.push({ signal, sourceId });
             if (rig.settleSeed !== undefined) return rig.settleSeed(sourceId, signal);
+            // why: a driver that settles replaces the quick seed, so the same seed is never listed again.
+            rig.sources = rig.sources.filter((source) => source.id !== sourceId);
             return { reason: "idle", settledAfterMs: 181_000, sourceId: `${sourceId}-settled` };
           },
         }

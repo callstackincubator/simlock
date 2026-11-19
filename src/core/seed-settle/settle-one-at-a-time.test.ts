@@ -4,6 +4,7 @@ import {
   deferred,
   expectSettled,
   flush,
+  iphoneSpec,
   leaseReservation,
   minute,
   quick,
@@ -12,7 +13,7 @@ import {
 } from "./test-rig.js";
 
 describe("seed settler: one settle at a time", () => {
-  it("runs one settle at a time on a worker, whatever else arrives, and does not stop it for a lease that boots", async () => {
+  it("runs one settle at a time on a worker, whatever else arrives (a second candidate, a lease's boot, an operator's call), and does not stop it for a lease that boots", async () => {
     const rig = await settlerRig();
     rig.ios.sources = [quick("first", 5), quick("second", 3)];
     rig.android.sources = [{ ...quick("android", 2), model: "Pixel 8", osVersion: "36" }];
@@ -41,5 +42,18 @@ describe("seed settler: one settle at a time", () => {
     expectSettled(rig, ["first", "second"], "the next one, once the worker is quiet again");
     await rig.advance(5 * minute);
     expectSettled(rig, ["first", "second", "android"], "then the other platform's");
+
+    const operator = await settlerRig();
+    operator.ios.sources = [quick("first", 5)];
+    operator.ios.settleSeed = () => deferred<ReturnType<typeof settledResult>>().promise;
+    await operator.started();
+    await operator.advance(5 * minute);
+    const progress: unknown[] = [];
+    void operator.settler.settle(iphoneSpec, { onProgress: (next) => progress.push(next) });
+    await flush();
+    expect(progress, "an operator's call waits for the running settle").toEqual([
+      { reason: "settle-running", stage: "waiting" },
+    ]);
+    expectSettled(operator, ["first"], "and starts none beside it");
   });
 });

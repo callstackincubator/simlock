@@ -98,6 +98,15 @@ describe("seed settler: events", () => {
       outcome: "failed",
     });
 
+    const long = await ended(
+      () => undefined,
+      async (_rig, end) => end.reject(new Error("x".repeat(600))),
+    );
+    expect(
+      long.seen.at(-1)?.payload,
+      "the driver's message is cut at 500 characters",
+    ).toMatchObject({ message: "x".repeat(500) });
+
     const aborts = {
       "daemon-stopping": (rig: SettlerRig) => rig.settler.stop(),
       "memory-pressure": async (rig: SettlerRig) => rig.pressure.reading(newDevicesPaused),

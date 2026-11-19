@@ -30,6 +30,7 @@ describe("NodeProcessTable", () => {
           "  300   200 01:02:03 sim",
           "  400   300 2-01:02:03 long",
           "garbage line",
+          "  500   1 notatime broken",
           "",
         ].join("\n"),
       ),
