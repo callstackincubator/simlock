@@ -440,8 +440,16 @@ class SeedSettlerImpl implements SeedSettler {
       if (target.sourceId === undefined || driver.settleSeed === undefined) return undefined;
       return { leases: target.leases ?? 0, sourceId: target.sourceId };
     }
+    return this.#ensure(target, running, operator);
+  }
+
+  async #ensure(
+    target: Target,
+    running: Running,
+    operator: OperatorEntry,
+  ): Promise<{ readonly sourceId: string; readonly leases: number } | undefined> {
     if (operator.needsMake) operator.onProgress({ stage: "making" });
-    const ensured = await driver.ensureSeed?.(operator.spec);
+    const ensured = await target.driver.ensureSeed?.(operator.spec);
     if (ensured === undefined) throw new Error("the driver cannot make a seed");
     if (ensured.settled) {
       operator.resolve({
