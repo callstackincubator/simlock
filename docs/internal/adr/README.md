@@ -122,5 +122,5 @@ the status is stale.
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
 | [0086](0086-on-windows-the-daemon-service-is-a-logon-task-that-runs-a-simlock-supervisor.md) | On Windows the daemon service is a logon task that runs a Simlock supervisor | Accepted; narrows 0041 §1, §3, §4, §5 and §8 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
-| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted — not yet implemented; narrows 0061 §1 and §2 |
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
+| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted — not yet implemented; narrows 0061 §1 and §2 |
