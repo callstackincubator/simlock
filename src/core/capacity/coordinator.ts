@@ -61,6 +61,11 @@ export class CapacityCoordinator {
     private readonly memoryPressure?: MemoryPressureStepReader,
   ) {}
 
+  /** why: ADR 0090 §2: the settler waits for a quiet worker; it hears every take and release of a creation, boot or rewarm reservation. */
+  onBootActivity(_listener: (underWay: number) => void): () => void {
+    return () => undefined;
+  }
+
   /** why: checked before the strategy is asked, under every strategy (ADR 0068 §4). */
   newDevicesPaused(): boolean {
     return this.memoryPressure?.current()?.step === "new-devices-paused";
