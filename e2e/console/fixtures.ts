@@ -779,6 +779,7 @@ export const NAV = [
   { label: "Leases", path: "/leases" },
   { label: "Queue", path: "/queue" },
   { label: "Baselines", path: "/baselines" },
+  { label: "Screens", path: "/screens" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
   { label: "Settings", path: "/settings" },
