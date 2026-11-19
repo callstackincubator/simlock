@@ -46,14 +46,20 @@ struct TileSelector {
         }
         let full = compared >= Self.historyLength
         var carriesNew = false
+        var sometimes = 0
+        var sometimesChanged = 0
         for tile in tiles.indices {
             let changed = tiles[tile] != before[tile]
             let alwaysChanging = full && history[tile] == UInt8.max
             if changed, history[tile] & 1 == 0, !alwaysChanging { carriesNew = true }
+            if history[tile] != 0, !alwaysChanging {
+                sometimes += 1
+                if changed { sometimesChanged += 1 }
+            }
             history[tile] = history[tile] << 1 | (changed ? 1 : 0)
         }
         compared += 1
-        if carriesNew { return true }
+        if carriesNew || (sometimes > 0 && sometimesChanged * 2 >= sometimes) { return true }
         return seenNanos &- previousSeenNanos >= intervalNanos * 3 / 4
     }
 
