@@ -222,7 +222,8 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
     if (
       !sameDeviceRequest(record.request, request) ||
       record.leaseId !== options.leaseId ||
-      record.runId !== options.runId
+      record.runId !== options.runId ||
+      record.label !== options.label
     ) {
       throw new IdempotencyConflictError(options.requesterId, key);
     }

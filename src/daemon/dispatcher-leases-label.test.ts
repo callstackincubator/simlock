@@ -97,6 +97,7 @@ describe("Dispatcher: lease.request with a label", () => {
       } else {
         expect(classifyError(again), name).toBe("IDEMPOTENCY_CONFLICT");
       }
+      await dispatcher.dispatch("lease.release", { leaseId: granted.lease.id }, agent);
     }
   });
 });
