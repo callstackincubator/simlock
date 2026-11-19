@@ -9,7 +9,7 @@ The console can show the live screen of any running device, leased or not: an iO
 
 Your own tools can do more over HTTP: [stream a lease's screen](#stream-from-your-own-tool) and [send it taps and keys](#send-input-to-your-own-lease).
 
-Nothing is captured until someone opens a device's streaming page. Capture stops when they select **Stop watching**, leave the page, or the device stops running.
+Nothing is captured until someone opens a device's streaming page or selects **Watch** on it in **Screens**. Capture stops when they select **Stop watching**, leave the page, or the device stops running.
 
 ## Before you start
 
@@ -240,6 +240,10 @@ curl -sS -X POST "$SIMLOCK_URL/v1/leases/$LEASE/rotate" \
 | `422 ROTATION_UNSUPPORTED` | The lease isn't on an iPhone or iPad simulator: an Apple TV, Apple Watch or Apple Vision simulator, an Android device, or a physical iPhone or iPad, or a foldable iPhone Duo simulator (the message points to `agent-device orientation`). |
 | `503 INPUT_UNAVAILABLE` | The rotation couldn't be sent to the simulator. |
 | `504 EXEC_TIMEOUT` | Through a gateway, the worker didn't answer within `gateway.execTimeoutMs`. |
+
+## Watch devices side by side
+
+Select **Screens** under **Observe** in the console to see running devices across workers, with who holds each one. It opens on leased devices; **Ready** and **All** show the others. Select **Watch** on up to four of them to see their screens side by side. Only watched devices stream. Watched screens pause while the browser tab is hidden. This view never boots or leases a device. See [Console](/simlock/docs/worker/console#screens).
 
 ## Related
 
