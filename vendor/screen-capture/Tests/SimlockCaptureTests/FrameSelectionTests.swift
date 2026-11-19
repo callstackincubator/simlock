@@ -36,6 +36,41 @@ final class FrameSelectionTests: XCTestCase {
         XCTAssertTrue(resized.decide(composite(at: 5 * ms, size: (1398, 2034))), "a new picture size")
     }
 
+    /// A screen of 16 tiles, the first four of them Liquid Glass (changed by every composite).
+    private struct Screen {
+        var selection = FrameSelection(fps: 60)
+        private var values = [UInt64](repeating: 0, count: 16)
+        private let ms: UInt64 = 1_000_000
+        static let glass = [0, 1, 2, 3]
+        static let steady = 8
+
+        /// The screen after ten glass-only composites 10 ms apart, the last at 90 ms.
+        static func warmedUp() -> Screen {
+            var screen = Screen()
+            for step in 0..<10 { _ = screen.next(atMs: UInt64(step) * 10, changing: glass) }
+            return screen
+        }
+
+        mutating func next(atMs time: UInt64, changing tiles: [Int]) -> Bool {
+            for tile in tiles { values[tile] &+= 1 }
+            return selection.decide(
+                Composite(seenNanos: time * ms, force: false, width: 1179, height: 2556, tiles: values)
+            )
+        }
+    }
+
+    func testADueCompositeIsCopiedOnlyWhenItCarriesANewAppFrame() {
+        var glassOnly = Screen.warmedUp()
+        XCTAssertFalse(glassOnly.next(atMs: 100, changing: Screen.glass), "only always-changing tiles, 10 ms after")
+        XCTAssertTrue(
+            glassOnly.next(atMs: 104, changing: Screen.glass + [Screen.steady]),
+            "the slot stayed open, so a steady change 4 ms later is copied"
+        )
+
+        var steady = Screen.warmedUp()
+        XCTAssertTrue(steady.next(atMs: 100, changing: Screen.glass + [Screen.steady]), "a steady tile changed")
+    }
+
     private func picture() -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         CVPixelBufferCreate(kCFAllocatorDefault, 360, 720, kCVPixelFormatType_32BGRA, nil, &buffer)

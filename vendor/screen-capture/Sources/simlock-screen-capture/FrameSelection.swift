@@ -12,6 +12,19 @@ struct Composite {
     let force: Bool
     let width: Int
     let height: Int
+    /// `TileHasher.hashes(of:)` of the composite; nil when the caller does not tell tiles apart.
+    var tiles: [UInt64]? = nil
+}
+
+/// Says whether a composite carries a new app frame, from which tiles of the screen changed.
+struct TileSelector {
+    init(intervalNanos: UInt64) {}
+
+    mutating func carriesNewFrame(tiles: [UInt64], seenNanos: UInt64, lastSentNanos: UInt64?) -> Bool {
+        true
+    }
+
+    mutating func reset() {}
 }
 
 /// Decides, before the copy, whether a composite is copied. Its grid moves only for a copied one,
