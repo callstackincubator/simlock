@@ -168,8 +168,9 @@ function leasesBody(scenario: Scenario, onOverview: boolean): unknown {
       if (record !== undefined) records[index] = { ...record, ttlDeadline: NOW + left };
     }
   }
-  const first = records[0];
-  if (first !== undefined) records[0] = { ...first, label: "feature-checkout-flow" };
+  const [oldest, third] = [13, 11].map((index) => records[index]);
+  if (oldest !== undefined) records[13] = { ...oldest, label: "feature-checkout-flow" };
+  if (third !== undefined) records[11] = { ...third, label: "fix-push-retries" };
   return { leases: scenario === "long" ? [lease(0, "x".repeat(256))] : records };
 }
 

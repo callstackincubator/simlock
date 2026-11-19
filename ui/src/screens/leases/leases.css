@@ -92,7 +92,7 @@
   min-width: 0;
 }
 
-.lease-label {
+.lease-holder-label {
   color: var(--text-muted);
   font-size: 11.5px;
 }

@@ -94,7 +94,7 @@ const COLUMNS: readonly Column<LeaseRowView>[] = [
         <AgentChip kind={row.holderKind} />
         <span className="lease-holder-text">
           {row.label === undefined ? null : (
-            <span className="lease-ellipsis lease-label" title={row.label}>
+            <span className="lease-ellipsis lease-holder-label" title={row.label}>
               {row.label}
             </span>
           )}
