@@ -64,8 +64,8 @@ export function childLaunch(
  * of its own, and its qemu then opens a visible Windows Terminal window titled with the qemu path
  * (#1759). Under `conhost.exe --headless` the child and everything it starts inherit a console
  * that has no window, as the logon task's do (ADR 0086). The wrapper is the child Node sees; it
- * exits when the program it runs exits. A batch-file launch is left as it is: none outlives its
- * caller.
+ * lives while any process on its console does, so it can outlive the program it runs (the
+ * emulator's `netsimd` holds it). A batch-file launch is left as it is: none outlives its caller.
  */
 export function headlessLaunch(
   launch: ChildLaunch,

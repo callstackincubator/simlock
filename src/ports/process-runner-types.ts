@@ -35,7 +35,9 @@ export interface ProcessRunOptions {
    * grandchild can be a process others use (the first emulator's qemu starts the host's one
    * `netsimd`, and every emulator's network goes through it), and an `adb` client can start the
    * shared adb server, so no adb command sets this. With this, `kill` ends the child alone off
-   * Windows, and on Windows also the child's own children (`emulator.exe` runs qemu), never theirs.
+   * Windows, and on Windows also the child's own children (`emulator.exe` runs qemu). Under
+   * `outlivesCaller` the child is a `conhost.exe` wrapper, so that is the program and its children;
+   * the processes qemu starts (`netsimd`) are never ended.
    */
   readonly killChildren?: boolean;
   /**

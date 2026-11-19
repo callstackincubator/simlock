@@ -31,10 +31,11 @@ function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS
 }
 
 /**
- * why: `killChildren` (`ProcessRunOptions`): the child and the processes it started, never
- * theirs, so `taskkill /T` does not fit. Windows keeps a dead parent's pid in its children's
- * `ParentProcessId`, and pids are reused, so a listed process counts as a child only when it
- * started after the child did. Should PowerShell fail, the child alone is killed.
+ * why: `killChildren` (`ProcessRunOptions`): the child and the processes it started, and with
+ * depth 2 theirs too, so `taskkill /T`, which follows parent pids to any depth, does not fit.
+ * Windows keeps a dead parent's pid in its children's `ParentProcessId`, and pids are reused, so
+ * a listed process counts as a child only when it started after its parent did. Should
+ * PowerShell fail, the child alone is killed.
  */
 export function windowsKillScript(pid: number, depth: 1 | 2): string {
   return [
@@ -52,19 +53,30 @@ export function windowsKillScript(pid: number, depth: 1 | 2): string {
   ].join("\n");
 }
 
+/** why: the PowerShell call that runs `windowsKillScript`, for this module's kills and for the supervisor's, so both apply the same creation-time guard. */
+export function windowsKillCommand(
+  pid: number,
+  depth: 1 | 2,
+): { readonly command: string; readonly args: readonly string[] } {
+  return {
+    command: "powershell.exe",
+    args: [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(windowsKillScript(pid, depth), "utf16le").toString("base64"),
+    ],
+  };
+}
+
 function killWindowsProcessAndChildren(
   child: ChildProcess,
   pid: number,
   signal: NodeJS.Signals,
   depth: 1 | 2,
 ): void {
-  const script = windowsKillScript(pid, depth);
-  runWindowsKill(child, signal, "powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-EncodedCommand",
-    Buffer.from(script, "utf16le").toString("base64"),
-  ]);
+  const { command, args } = windowsKillCommand(pid, depth);
+  runWindowsKill(child, signal, command, args);
 }
 
 function runWindowsKill(

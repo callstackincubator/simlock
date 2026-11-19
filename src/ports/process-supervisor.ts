@@ -1,4 +1,5 @@
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
+import { windowsKillCommand } from "./process-tree-kill.js";
 
 /**
  * Liveness and signalling for a process addressed by pid rather than by a handle.
@@ -94,15 +95,34 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
 
     if (options?.tree === true && this.#options.platform === "win32") {
       try {
-        this.#options.processRunner.spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        // why: depth 2 is the wrapper, its program and the program's children (the emulator's
+        // qemu), each only if it started after its parent did, as `windowsKillScript` checks.
+        const { command, args } = windowsKillCommand(pid, 2);
+        const killer = this.#options.processRunner.spawn(command, args, {
           stdio: "ignore",
+          timeoutMs: TREE_KILL_TIMEOUT_MS,
         });
+        // why: the helper answers later than this call returns, so a failed or errored run ends the wrapper alone, as before.
+        const fallBack = () => {
+          try {
+            this.#signalAlone(pid, signal);
+          } catch {
+            // why: best effort, and nobody is waiting on this call any more.
+          }
+        };
+        void killer.wait().then((result) => {
+          if (result.code !== 0) fallBack();
+        }, fallBack);
         return;
       } catch {
-        // why: without taskkill the wrapper alone is ended, as before.
+        // why: without PowerShell the wrapper alone is ended, as before.
       }
     }
 
+    this.#signalAlone(pid, signal);
+  }
+
+  #signalAlone(pid: number, signal: NodeJS.Signals): void {
     try {
       process.kill(pid, signal);
     } catch (error: unknown) {
@@ -171,6 +191,7 @@ export class FakeProcessSupervisor implements ProcessSupervisor {
 
 /** why: PowerShell's first start on a cold host takes seconds, and `ps` answers in milliseconds; one bound covers both. */
 const COMMAND_LINE_TIMEOUT_MS = 5_000;
+const TREE_KILL_TIMEOUT_MS = 10_000;
 
 /**
  * why: Windows has no `ps`; `Win32_Process` holds the command line as the parent passed it.
