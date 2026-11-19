@@ -74,7 +74,8 @@ function buildApp(directory) {
 /** why: the frame arrival times and CPU samples come from one run of the capture. Runs it for `seconds`, keeps its framed output in `file`, and returns the arrival time (ms) of each video frame and the program's CPU samples. */
 function runCapture(file) {
   return new Promise((resolve) => {
-    const child = spawn(bin, [udid, "--fps", "60"], { stdio: ["ignore", "pipe", "inherit"] });
+    const child = spawn(bin, [udid, "--fps", "60"], { stdio: ["pipe", "pipe", "ignore"] });
+    // why: the capture stops when its stdin closes, so the pipe is held open until the run ends.
     const chunks = [];
     const arrivals = [];
     let pending = Buffer.alloc(0);
