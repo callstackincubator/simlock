@@ -39,7 +39,7 @@ Boot:
 - `-grpc` always goes with `-port`: without it the emulator opens no gRPC endpoint and writes no `avd/running` discovery file. So a console port claims three ports: itself, the adb port above it and the gRPC port (`GRPC_PORT_OFFSET`).
 - `-crash-report-mode never` (a stale crash dump otherwise opens a modal dialog that blocks the boot) is passed only when `emulator -help` lists it: emulator 36.1.9 exits on it (#1297), so `androidPrerequisites` does not require it. `never` deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root, never the user's shared one.
 - Ready is more than `sys.boot_completed`: `emu avd path` must name the device's own folder (else `DriverCrashError`), and `pm path android` must answer, since after a snapshot load the boot properties pass before `pm` does.
-- `android.emulator.cores` is written as `hw.cpu.ncore` into a new seed's and a saved baseline's `config.ini`, never passed as `-cores` (a snapshot saved under one count does not load under another). It joins the launch settings that make a seed or baseline stale.
+- `android.emulator.cores` goes into a new seed's and a saved baseline's `config.ini`, never `-cores`: a snapshot does not load under another count.
 - No slim: `resolveSpec` ignores `mode`.
 
 Physical phones:
