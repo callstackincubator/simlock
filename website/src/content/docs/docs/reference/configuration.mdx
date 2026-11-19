@@ -329,7 +329,7 @@ and delivery.
 
 ## Optional modules
 
-Each optional module has a block under `capabilities.<name>`. A module is off until you turn it on, except agent-device on a standalone worker, which is on until you turn it off.
+Each optional module has a block under `capabilities.<name>`. A module is off until you turn it on, except agent-device on a standalone worker and fseventsd on a macOS worker, which are on until you turn them off.
 A name Simlock does not know is warned about and ignored.
 
 | Key                                         | Type                                 | Default          | Meaning                                                                                                     | Applies to |
@@ -341,6 +341,7 @@ A name Simlock does not know is warned about and ignored.
 | `capabilities.agent-device.ios.bundleId`    | non-empty string                     | not set          | Bundle ID of agent-device's iPhone runner. Passed to the phone daemon.                                       | Worker     |
 | `capabilities.agent-device.ios.provisioningProfile` | non-empty string             | not set          | Provisioning profile for manual signing of the iPhone runner. Setting it switches agent-device to manual signing. Passed to the phone daemon. | Worker     |
 | `capabilities.agent-device.ios.signingIdentity` | non-empty string                 | not set          | Code-signing identity for manual signing of the iPhone runner. Passed to the phone daemon.                  | Worker     |
+| `capabilities.fseventsd.enabled` | boolean | `true` on a macOS worker, joined to a gateway or not; `false` on any other OS and on a gateway | When `simlock doctor` runs, read the memory the macOS service `fseventsd` uses, and warn when it is over 2 GB. Turned on for another OS, the capability reads `unavailable` and doctor says so. | Worker     |
 | `capabilities.input.enabled`                | boolean                              | `false`          | Let a lease's holder send taps and keys to its device over `WS /v1/leases/{id}/input`. On a gateway: pass each input socket through to the lease's worker, which needs it on too. | Both       |
 | `capabilities.tunnel.enabled` | boolean | `false` | Let a lease's holder open `WS /v1/leases/{id}/tunnel` and reverse device ports to its own machine. A gateway relays the socket to the lease's worker, so turn it on at both. The worker reserves loopback ports 47000-47999 for tunnels on Android, and a rule that `adb reverse` points into that range is removed when the worker starts, or, on a device that is leased then, when its lease ends, so keep your own rules out of it. A phone's rules are never removed that way; see [Tunnels](/simlock/docs/using-devices/remote-agents#tunnels) for what a tunnel's port is open to. | Both |
 | `capabilities.stream.enabled`               | boolean                              | `false`          | Let people watch a running device's screen. On a gateway: pass each stream through from the worker.           | Both       |

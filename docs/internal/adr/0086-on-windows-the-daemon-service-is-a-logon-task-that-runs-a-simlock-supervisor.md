@@ -6,7 +6,11 @@
 - **Narrows:** [ADR 0041](0041-the-daemon-can-run-under-the-users-service-manager.md)
   §1 (Windows is no longer a usage error), §3 (how the saved
   environment reaches the daemon), §4 (who restarts it), §5 (no SIGTERM
-  on Windows) and §8 (the reboot hint).
+  on Windows), §6 (what "not loaded" means, and the 10 s limit on
+  launchctl and systemctl calls, which Windows does not use), §8 (the
+  reboot hint) and §9 (on Windows "broken" checks the Node path and the
+  supervisor entry, because the service runs a supervisor, not
+  `main.js`).
 
 ## Context
 
@@ -104,8 +108,10 @@ flowchart LR
   manager name `task-scheduler`, a contract shape change that bumps the
   protocol by one.
 - `conhost.exe --headless` is undocumented. If a Windows release drops
-  it, install still succeeds but the task fails to start and `daemon
-  status` and the startup deadline show it.
+  it, install registers the task but the task fails to start, so
+  `daemon install` waits out the startup deadline and fails with
+  `DAEMON_STARTUP_FAILED` after 20 s; `daemon status` shows the broken
+  start.
 
 ## Alternatives considered
 
