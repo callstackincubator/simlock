@@ -57,6 +57,8 @@ export interface CliServiceAccess {
   /** why: read only where the linger hint needs it; the lookup throws for a uid with no passwd entry. */
   readonly user: () => string;
   readonly definition: () => Promise<ServiceDefinition>;
+  /** why: install checks the config the daemon will load before it registers a service that would restart a daemon refusing it. */
+  readonly checkConfig: () => Promise<void>;
 }
 
 /** why: set by the router when a command runs against a farm (`--url` or `SIMLOCK_URL`); `token` is `--token` else `SIMLOCK_TOKEN`, and may be missing. */
