@@ -1080,7 +1080,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     const parts = supervisorArguments(xml);
     expect(parts?.slice(1, 5)).toEqual([
       nodePath,
-      "/opt/simlock/dist/daemon/service-main.js",
+      join(dirname(mainPath), "service-main.js"),
       undefined,
       name,
     ]);
