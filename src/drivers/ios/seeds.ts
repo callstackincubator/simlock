@@ -128,6 +128,7 @@ export class Seeds {
           kind: row.kind,
           model: row.model,
           osVersion: row.osVersion,
+          ...(row.kind === "seed" ? { leases: row.leaseCount, settled: row.settled } : {}),
           ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
           ...(staleReason === undefined ? {} : { staleReason }),
         };
@@ -354,6 +355,7 @@ export class Seeds {
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
     const udid = await this.#cloneCopy(seed, name);
+    if (options?.source === undefined) this.#sources.addLease(seed.sourceId);
     await this.#slimBoot.copyOverrides(seed.udid, udid);
 
     return {

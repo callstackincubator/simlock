@@ -84,7 +84,7 @@ describe("IosSimctlDriver seed lease count", () => {
         database: async () => memorySourceDatabase(),
         script: [listed, ...throwawaySeedSteps(), copySeed(seedUdid), listed],
         provision: undefined,
-        expected: [{ ...seedEntry({ leases: 1, settled: false }), id: "device-1" }],
+        expected: [{ ...seedEntry({ leases: 1, settled: false }), id: "device-1", sizeBytes: 0 }],
       },
     ];
     for (const { name, database, script, provision, expected, ...rest } of cases) {

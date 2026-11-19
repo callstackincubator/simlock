@@ -70,6 +70,7 @@ export interface SourceRow {
   readonly kind: "seed" | "baseline";
   readonly specKey: string;
   readonly settled: boolean;
+  readonly leaseCount: number;
   readonly udid: string | undefined;
   readonly throwawayUdid: string | undefined;
   readonly deviceTypeId: string;
@@ -138,6 +139,13 @@ export class IosSourceTable {
     this.#database
       .prepare("UPDATE ios_source_data SET udid = ? WHERE source_id = ?")
       .run(udid, sourceId);
+  }
+
+  /** why: one statement, so two leases at once both count. */
+  addLease(sourceId: string): void {
+    this.#database
+      .prepare("UPDATE ios_source_data SET lease_count = lease_count + 1 WHERE source_id = ?")
+      .run(sourceId);
   }
 
   setThrowaway(sourceId: string, udid: string): void {
@@ -263,7 +271,7 @@ export class IosSourceTable {
   #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
-        `SELECT source_id, kind, spec_key, settled, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
+        `SELECT source_id, kind, spec_key, settled, lease_count, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
            state, maker, size_bytes, lineage, saved_without_lineage FROM ios_source_data ${where}`,
       )
       .all(...parameters)
@@ -272,6 +280,7 @@ export class IosSourceTable {
         kind: row["kind"] as "seed" | "baseline",
         specKey: row["spec_key"] as string,
         settled: row["settled"] === 1,
+        leaseCount: row["lease_count"] as number,
         udid: (row["udid"] as string | null) ?? undefined,
         throwawayUdid: (row["throwaway_udid"] as string | null) ?? undefined,
         deviceTypeId: row["device_type_id"] as string,
