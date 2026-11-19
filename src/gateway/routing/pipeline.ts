@@ -12,11 +12,13 @@ export interface RoutableRequest {
   readonly physical?: boolean;
   readonly baseline?: string;
   readonly requires?: readonly string[];
+  readonly except?: readonly string[];
 }
 
 export type CapacityReason =
   | "device-limit"
   | "ram-budget"
+  | "memory-pressure"
   | "global-running-limit"
   | "platform-running-limit";
 
@@ -29,12 +31,14 @@ export type WorkerReasonCode =
   | "updating"
   | "busy"
   | "no-driver"
+  | "mode-unavailable"
   | "unknown-model"
   | "runtime-missing"
   | "no-baseline"
   | "baseline-mismatch"
   | "baseline-stale"
   | "capability-missing"
+  | "cannot-keep-except"
   | "full"
   | "no-free-physical"
   | "not-chosen";

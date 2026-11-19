@@ -1,22 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/index.js";
 
 const LEASE_ARGS = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
 const ROOM = { limits: { maxRunning: 4, ios: { maxDevices: 4, maxRunning: 4 } } };
 
-async function startWith(maxPerRequester?: number, extra: Record<string, unknown> = {}) {
-  const env = await withDaemon({
-    configOverrides: {
-      ...ROOM,
-      ...(maxPerRequester === undefined ? {} : { lease: { maxPerRequester } }),
-      ...extra,
-    },
-  });
+function configWith(maxPerRequester?: number, extra: Record<string, unknown> = {}) {
+  return {
+    ...ROOM,
+    ...(maxPerRequester === undefined ? {} : { lease: { maxPerRequester } }),
+    ...extra,
+  };
+}
+
+async function scriptIos(env: TestEnv) {
   await env.driverScript.set({
     ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
   });
+}
+
+async function startWith(maxPerRequester?: number) {
+  const env = await withDaemon({ configOverrides: configWith(maxPerRequester) });
+  await scriptIos(env);
   return env;
 }
 
@@ -88,8 +94,10 @@ describe("a requester may hold up to lease.maxPerRequester leases", () => {
   });
 
   it("HTTP answers 409 REQUESTER_ALREADY_LEASED to the third lease request of one token at lease.maxPerRequester 2", async () => {
-    const port = await freeLoopbackPort();
-    const env = await startWith(2, { http: { enabled: true, host: "127.0.0.1", port } });
+    const { env, port } = await withHttpDaemon((port) => ({
+      configOverrides: configWith(2, { http: { enabled: true, host: "127.0.0.1", port } }),
+    }));
+    await scriptIos(env);
     const baseUrl = `http://127.0.0.1:${port}`;
     const minted = await env.cli(["token", "create", "--role", "agent"]);
     const headers = {

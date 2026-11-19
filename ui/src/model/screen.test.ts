@@ -21,6 +21,27 @@ describe("the screen readout", () => {
     ]);
   });
 
+  it("fills the overlay pills from the stream's own figures, and only once a frame is painted", () => {
+    const stats = { dropped: 0, framesPerSecond: 29.6, kilobitsPerSecond: 1432, painted: 9 };
+    const h264 = { codec: "h264", height: 1560, width: 720 };
+
+    expect(readout({ failed: false, meta: h264, phase: "live", stats: NONE }).overlay).toBe(
+      undefined,
+    );
+    expect(readout({ failed: false, meta: h264, phase: "live", stats }).overlay).toEqual({
+      rate: "30 fps",
+      summary: "h264 · 720×1560 · 1.4 Mb/s",
+    });
+    expect(
+      readout({
+        failed: false,
+        meta: META,
+        phase: "live",
+        stats: { ...stats, kilobitsPerSecond: 812 },
+      }).overlay?.summary,
+    ).toBe("mjpeg · 120×240 · 812 kb/s");
+  });
+
   it("shows the picture's size once known, and the figures once a frame is painted", () => {
     const stats = { dropped: 2, framesPerSecond: 4.96, kilobitsPerSecond: 812.4, painted: 31 };
 

@@ -8,12 +8,12 @@ let server: Server | undefined;
 const accepted = new Set<Socket>();
 
 /** Listens on an ephemeral loopback port and reports which one it got. */
-async function listen(): Promise<number> {
+async function listen(host: "127.0.0.1" | "::1" = "127.0.0.1"): Promise<number> {
   server = createServer();
   server.on("connection", (socket) => accepted.add(socket));
 
   return new Promise<number>((resolve) => {
-    server?.listen(0, "127.0.0.1", () => {
+    server?.listen(0, host, () => {
       const address = server?.address();
       resolve(typeof address === "object" && address !== null ? address.port : 0);
     });
@@ -44,6 +44,13 @@ describe("NodeTcpProbe", () => {
     const port = await listen();
 
     await expect(new NodeTcpProbe().isListening(port)).resolves.toBe(true);
+  });
+
+  it("asks the loopback address it is given: a ::1 listener is taken on ::1 and free on 127.0.0.1", async () => {
+    const port = await listen("::1");
+
+    await expect(new NodeTcpProbe().isListening(port, undefined, "::1")).resolves.toBe(true);
+    await expect(new NodeTcpProbe().isListening(port, undefined, "127.0.0.1")).resolves.toBe(false);
   });
 
   it("reports a port nothing answers on as free", async () => {

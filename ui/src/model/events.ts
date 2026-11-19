@@ -170,6 +170,11 @@ export function timeOfDay(timestamp: number): string {
     .join(":");
 }
 
+// why: the minute a lease was granted or a device got ready: a tile has no room for seconds.
+export function clockTime(timestamp: number): string {
+  return timeOfDay(timestamp).slice(0, 5);
+}
+
 export function textField(payload: unknown, key: string): string | undefined {
   if (typeof payload !== "object" || payload === null) return undefined;
   const value = (payload as Record<string, unknown>)[key];

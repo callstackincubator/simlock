@@ -54,6 +54,7 @@ export {
   type ServiceState,
 } from "./service-manager.js";
 export { type LeaseSocket, type LeaseSocketAccept, MemoryLeaseSocket } from "./lease-socket.js";
+export type { SessionConnection, SessionOutcome } from "./session-socket.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
  * why: ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
@@ -116,6 +117,7 @@ export {
   FakeTcpPeer,
   FakeTcpStreamConnector,
   NodeTcpStreamConnector,
+  type LoopbackHost,
   type TcpStream,
   type TcpStreamConnector,
 } from "./tcp-stream.js";
@@ -133,6 +135,7 @@ export { LoggingProcessRunner } from "./logging-process-runner.js";
 export {
   exitCodeOf,
   ExecOutputDeliveryStalledError,
+  InputStreamFailedError,
   NodeProcessRunner,
   type ProcessHandle,
   ProcessSpawnError,
@@ -145,6 +148,12 @@ export {
   type StreamingProcessHandle,
   type StreamingProcessResult,
 } from "./process-runner.js";
+export {
+  type AccessEntry,
+  type DirectoryAccessReader,
+  FakeDirectoryAccessReader,
+  PowerShellDirectoryAccessReader,
+} from "./directory-access.js";
 export {
   type CpuCounters,
   type CpuTimes,
@@ -159,6 +168,7 @@ export {
   WindowsHostLoadProbe,
 } from "./host-load.js";
 export {
+  FakeSqliteOpener,
   filterSqliteExperimentalWarning,
   inTransaction,
   isLockError,
@@ -189,6 +199,13 @@ export {
   type WebSocketClientConnector,
 } from "./websocket-client.js";
 export { FakeHttpJsonClient, FetchHttpJsonClient, type HttpJsonClient } from "./http-json.js";
+export {
+  FakeHttpStreamClient,
+  NodeHttpStreamClient,
+  type HttpStreamAnswer,
+  type HttpStreamClient,
+  type HttpStreamRequest,
+} from "./http-stream.js";
 export {
   defaultWorkerLockPath,
   NodeWorkerLock,

@@ -232,6 +232,67 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     expect(seen.join("").length).toBe(64 * 16 * 1024);
   });
 
+  it("rejects inputFailed with the bytes written when the input stream cannot be read to its end, and not when the child closes its stdin early", async () => {
+    const runner = new NodeProcessRunner();
+    const oneMiB = 1024 * 1024;
+    const failingAfter = (bytes: number): ReadableStream<Uint8Array> => {
+      let sent = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent >= bytes) {
+            controller.error(new Error("disk went away"));
+            return;
+          }
+          controller.enqueue(new Uint8Array(Math.min(64 * 1024, bytes - sent)));
+          sent += 64 * 1024;
+        },
+      });
+    };
+    const drainingChild = [
+      "-e",
+      "process.stdin.on('data', () => {}); setInterval(() => {}, 1_000)",
+    ];
+
+    for (const bytes of [oneMiB, 0]) {
+      const handle = runner.spawnStreaming(process.execPath, drainingChild, {
+        inputStream: failingAfter(bytes),
+        onChunk: () => {},
+      });
+      const outcome = await Promise.race([
+        handle.inputFailed?.catch((error: unknown) => error),
+        new Promise((resolve) => setTimeout(() => resolve("no failure"), 1_000)),
+      ]);
+      handle.kill("SIGKILL");
+      await handle.wait();
+      expect(outcome).toMatchObject({ bytesWritten: bytes });
+    }
+
+    let cancelled = false;
+    let chunks = 0;
+    const early = runner.spawnStreaming(process.execPath, ["-e", "process.exit(0)"], {
+      inputStream: new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+        },
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          chunks += 1;
+          controller.enqueue(new Uint8Array(64 * 1024));
+        },
+      }),
+      onChunk: () => {},
+    });
+    let failed = false;
+    early.inputFailed?.catch(() => {
+      failed = true;
+    });
+    expect((await early.wait()).code).toBe(0);
+    await waitUntil(() => cancelled);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(failed).toBe(false);
+    expect(chunks).toBeGreaterThan(0);
+  });
+
   it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, even though a real pipe already delivered what the child wrote after it", async () => {
     // The defect this guards: a paused readable never emits `close`, so the exit-to-close
     // grace window used to treat "quiet because we paused it" the same as "quiet because the
@@ -361,14 +422,10 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   }, 6_000);
 
   it("does not crash the process when onChunk throws synchronously -- treated as a failed delivery instead", async () => {
-    // `onChunk` is typed `void | Promise<void>`, but nothing stops a transport's own
-    // implementation from throwing synchronously. Called bare inside a `data` listener (round
-    // 4 hardening), that throw becomes an uncaughtException that takes the whole daemon down
-    // over one bad chunk -- latent today because both real callers (`daemon/server.ts`,
-    // `http/app.ts`) happen to be `async`, but nothing enforces that. A `process.on
-    // ("uncaughtException", ...)` listener is the only way to observe the pre-fix crash from
-    // inside a test without actually taking this process down, so this registers one, asserts
-    // it never fires, and removes it again in `finally` regardless of outcome.
+    // why: nothing stops a transport's `onChunk` from throwing synchronously, and inside a `data`
+    // listener that is an uncaughtException that takes the daemon down; a `process.on
+    // ("uncaughtException", ...)` listener is the only way to see it without taking this process
+    // down, so it is registered here and removed in `finally` whatever the outcome.
     const uncaught: unknown[] = [];
     const onUncaughtException = (error: unknown): void => {
       uncaught.push(error);
@@ -455,6 +512,63 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       killSpy.mockRestore();
     }
   });
+
+  // why: off Windows a `killChildren` kill signals the child's pid alone (process-tree-kill.ts:112),
+  // so a child that answers SIGTERM with its own exit code keeps reporting it.
+  it.skipIf(process.platform === "win32")(
+    "reports the exit code of a killChildren child that exits on SIGTERM",
+    async () => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => process.exit(7)); console.log('ready'); setInterval(() => {}, 1_000)",
+        ],
+        { killChildren: true },
+      );
+      for await (const line of handle.stdout) if (line === "ready") break;
+
+      handle.kill("SIGTERM");
+
+      await expect(handle.wait()).resolves.toMatchObject({ code: 7 });
+    },
+  );
+
+  // why: off Windows the `emulator` launcher execs qemu, so the spawned pid is qemu, and the
+  // first emulator's qemu starts the host's one `netsimd` as its own child, in its process group.
+  // Every emulator's network goes through that `netsimd`, so killing one emulator must not end it.
+  it.skipIf(process.platform === "win32")(
+    "ends a child spawned with killChildren and leaves the process it started running",
+    async () => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        [
+          "-e",
+          "const { spawn } = require('node:child_process');" +
+            "const shared = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
+            "console.log(String(shared.pid));" +
+            "setInterval(() => {}, 1000);",
+        ],
+        { killChildren: true },
+      );
+      let sharedPid: number | undefined;
+      try {
+        for await (const line of handle.stdout) {
+          sharedPid = Number(line);
+          break;
+        }
+        expect(Number.isInteger(sharedPid)).toBe(true);
+
+        handle.kill("SIGKILL");
+
+        await expect(handle.wait()).resolves.toMatchObject({ code: null });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isAlive(sharedPid ?? 0)).toBe(true);
+      } finally {
+        if (sharedPid !== undefined && isAlive(sharedPid)) process.kill(sharedPid, "SIGKILL");
+      }
+    },
+  );
 
   it("kills the grandchildren too, because the signal goes to the process group", async () => {
     // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
@@ -596,6 +710,45 @@ describe("NodeProcessRunner", () => {
     );
   });
 
+  it("the admission command runs as a real child process with the request on stdin", async () => {
+    const runner = new NodeProcessRunner();
+    const echo = "process.stdin.pipe(process.stdout)";
+    // why: a child that is not killed leaves on its own after 3 s, so a missing kill fails an assertion instead of the test timing out.
+    const lingers = "setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 3_000)";
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+
+    const outcomes = {
+      aborted: await runner.run(process.execPath, ["-e", lingers], {
+        signal: controller.signal,
+      }),
+      answer: await runner.run(process.execPath, ["-e", echo], { input: '{"a":1}\n' }),
+      exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], { input: "{}\n" }),
+      killedFromOutside: await runner.run(process.execPath, [
+        "-e",
+        "process.kill(process.pid, 'SIGKILL')",
+      ]),
+      timeout: await runner.run(process.execPath, ["-e", lingers], { timeoutMs: 100 }),
+      tooMuchOutput: await runner.run(
+        process.execPath,
+        ["-e", `process.stdout.write('x'.repeat(70_000)); ${lingers}`],
+        { maxStdoutBytes: 65_536 },
+      ),
+    };
+
+    expect(outcomes.answer).toEqual({ code: 0, stderr: "", stdout: '{"a":1}\n' });
+    expect(outcomes.exit1).toMatchObject({ code: 1 });
+    expect(outcomes.exit1.endedBy).toBeUndefined();
+    expect(outcomes.timeout).toMatchObject({ code: null, endedBy: "timeout" });
+    expect(outcomes.tooMuchOutput).toMatchObject({ code: null, endedBy: "output-limit" });
+    expect(outcomes.aborted).toMatchObject({ code: null, endedBy: "aborted" });
+    expect(outcomes.killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
+    expect(outcomes.killedFromOutside.endedBy).toBeUndefined();
+    await expect(
+      runner.run("/nonexistent/simlock-policy", [], { input: "{}\n" }),
+    ).rejects.toBeInstanceOf(ProcessSpawnError);
+  });
+
   it("kills a process that exceeds its timeout", async () => {
     const runner = new NodeProcessRunner();
 
@@ -603,7 +756,7 @@ describe("NodeProcessRunner", () => {
       runner.run(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
         timeoutMs: 100,
       }),
-    ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
+    ).resolves.toMatchObject({ code: null, stderr: "", stdout: "" });
   });
 
   // why: real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
@@ -630,7 +783,7 @@ describe("NodeProcessRunner", () => {
       }),
     ]);
 
-    expect(outcome).toEqual({ code: null, stderr: "", stdout: "" });
+    expect(outcome).toMatchObject({ code: null, stderr: "", stdout: "" });
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   }, 15_000);
 

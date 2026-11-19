@@ -1,12 +1,7 @@
-/**
- * The typed client's wire layer (ADR 0003 §10). One connection, one frame-id space, no
- * reconnect and no retry -- see the module comment on `client.ts` for the policy this
- * implements. This file owns only framing, push routing, and connection-death handling; every
- * typed method surface lives in `client.ts`.
- */
 import type { IpcConnection } from "../ports/index.js";
 import {
   fromWireError,
+  isSimlockError,
   mapLegacyProtocolMismatch,
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
@@ -88,10 +83,8 @@ export type LeaseScopedPush =
     };
 
 /**
- * Everything below `client.ts`'s typed method surface: frame ids, pending-call bookkeeping,
- * push routing and de-duplication, and connection-death fan-out. Deliberately has no idea what
- * a "lease" or a "grant" is beyond the push correlation keys the contract declares -- that
- * vocabulary lives in `client.ts`.
+ * why: knows nothing of a "lease" or a "grant" beyond the push correlation keys the contract
+ * declares, so the typed client above it owns that vocabulary.
  */
 export class SimlockWire {
   readonly #connection: IpcConnection;
@@ -99,7 +92,7 @@ export class SimlockWire {
   readonly #leaseScopedListeners = new Set<(push: LeaseScopedPush) => void>();
   readonly #eventListeners = new Set<(payload: unknown) => void>();
   readonly #closeListeners = new Set<(error: AnySimlockError) => void>();
-  /** Lease ids for which a `lease-lost` push has already been delivered -- kept forever
+  /** why: Lease ids for which a `lease-lost` push has already been delivered -- kept forever
    * because loss is terminal (ADR §8): a lease id is never reused, and the owner-routed
    * fan-out can in principle reach this connection twice for the same fact.
    *
@@ -107,12 +100,12 @@ export class SimlockWire {
    * "never fires onLeaseLost for a release the same client asked for") is the daemon's job,
    * not this class's: `DaemonServer` marks the lease id in its own per-connection
    * `selfInitiatedReleases` set right before dispatching `lease.release`/`lease.release-all`
-   * and clears it in a `finally` regardless of outcome (`daemon/server.ts` around
-   * `#notifyLeaseLost`), so the push is never sent to the releasing connection in the first
-   * place. Mirroring that bookkeeping here too was redundant on a successful release and
-   * actively harmful on a failed one: marked before the call and never rolled back, it
-   * permanently muted the real `lease-lost` push that arrives when the lease later expires
-   * for real. */
+   * and clears it in a `finally` regardless of outcome (`daemon/server-requests.ts`;
+   * `daemon/server-pushes.ts`'s `notifyLeaseLost` reads it), so the push is never sent to the
+   * releasing connection in the first place. Mirroring that bookkeeping here too was redundant
+   * on a successful release and actively harmful on a failed one: marked before the call and
+   * never rolled back, it permanently muted the real `lease-lost` push that arrives when the
+   * lease later expires for real. */
   readonly #deliveredLeaseLost = new Set<string>();
   /** Last lease-scoped health kind delivered per lease id, so `device-unhealthy` and
    * `device-recovered` toggle: delivering one clears the other's suppression, so an
@@ -130,9 +123,17 @@ export class SimlockWire {
     this.#connection = connection;
     this.#maxLineChars = maxLineChars;
     connection.onData((chunk) => this.#read(chunk));
-    connection.onError(() =>
+    // why: a connection that knows why it ended (a remote session closed for a revoked token) hands the wire that typed error to reject the calls with.
+    connection.onError((error) =>
       this.#die(
-        new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Daemon connection is closed", {}),
+        isSimlockError(error)
+          ? error
+          : new SimlockError(
+              "DAEMON_CONNECTION_LOST",
+              "transport",
+              "Daemon connection is closed",
+              {},
+            ),
       ),
     );
     connection.onClose(() =>
@@ -212,9 +213,8 @@ export class SimlockWire {
     return fromWireError(error.code, error.message, error.details);
   }
 
-  /** One request/response round trip for an already role/shape-agnostic operation name.
-   * `client.ts` is responsible for input/output schema validation; this only moves bytes and
-   * correlates frame ids. */
+  /** why: role- and shape-agnostic: the typed client validates input and output, so this only
+   * moves bytes and correlates frame ids. */
   call(type: string, payload: unknown, hooks: CallHooks = {}): Promise<unknown> {
     return this.#send(type, payload, hooks);
   }
@@ -441,9 +441,8 @@ export class SimlockWire {
   }
 }
 
-/** Internal wire-level rejection: `{code, message, details}` straight off the wire, not yet
- * mapped through the contract's error table. `client.ts`/`hello()` do that mapping -- kept
- * separate from `SimlockError` so a mid-mapping bug cannot masquerade as a real contract error. */
+/** why: kept apart from `SimlockError` until it is mapped through the contract's error table, so a
+ * mid-mapping bug cannot masquerade as a real contract error. */
 export class WireCallError extends Error {
   constructor(
     readonly code: string,

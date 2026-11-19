@@ -17,6 +17,9 @@ export function iosDeviceSet(home: string): string {
   return join(home, "devices", "ios");
 }
 
+/** why: a simctl call that never answers would otherwise hold its test until the test's own timeout, which names nothing; the driver gives its own slowest call, the slim readback, the same 120 s. */
+const SIMCTL_CALL_TIMEOUT_MS = 120_000;
+
 /**
  * `xcrun simctl --set <deviceSet> ...args`. Every simctl call against a Simlock device carries
  * `--set`, exactly as the driver's do: a device in a custom set is not addressable, or even
@@ -28,7 +31,7 @@ export async function simctlInSet(
   options: { readonly timeoutMs?: number } = {},
 ): Promise<{ readonly stdout: string }> {
   return execFileAsync("xcrun", ["simctl", "--set", deviceSet, ...args], {
-    timeout: options.timeoutMs ?? 0,
+    timeout: options.timeoutMs ?? SIMCTL_CALL_TIMEOUT_MS,
   });
 }
 
@@ -96,6 +99,17 @@ export async function sweepStaleDeviceSets(): Promise<void> {
     await emptyDeviceSet(deviceSet);
     await rm(deviceSet, { force: true, recursive: true });
   }
+}
+
+// why: a simulator's daemons run from the runtime's own root, not from the device set, so a service
+// is found by its binary's name under a `RuntimeRoot`.
+export async function runtimeRootProcesses(binary: string): Promise<string[]> {
+  const { stdout } = await execFileAsync("ps", ["-axo", "command="], {
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return stdout
+    .split("\n")
+    .filter((line) => line.includes("RuntimeRoot") && line.includes(`/usr/libexec/${binary}`));
 }
 
 /**

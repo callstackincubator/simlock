@@ -38,7 +38,6 @@ function pageOf(requests: readonly WaitingRequest[], id?: string): WaitingPage {
   const table = waitingTable(requests, [], NOW);
   return {
     ...chooseWaiting(table.rows, id),
-    meta: table.meta,
     paging: { ...PAGING, total: table.rows.length },
     rows: table.rows,
     urlId: id,
@@ -164,7 +163,6 @@ describe("the Queue drawer on a gateway", () => {
     );
     const page: WaitingPage = {
       ...chooseWaiting(table.rows, queued.id),
-      meta: table.meta,
       paging: PAGING,
       rows: table.rows,
       urlId: queued.id,

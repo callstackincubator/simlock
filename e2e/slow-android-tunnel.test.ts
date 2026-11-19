@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -16,13 +16,7 @@ import {
   withSharedDaemon,
   type SharedTestEnv,
 } from "./helpers/index.js";
-
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
+import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
 
 const BODY = "simlock-tunnel-ok";
 
@@ -62,7 +56,7 @@ async function waitForWorkerJoined(gateway: SharedTestEnv): Promise<void> {
 }
 
 // why: only a real emulator proves that `adb reverse` reaches the caller's loopback listener through the tunnel socket; the fast end-to-end test fakes the device side.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "simlock tunnel reverse on a real emulator against a lone worker",
   { tags: ["slow", "android"] },
   () => {
@@ -156,12 +150,12 @@ describe.skipIf(!hasAndroidSdk)(
 const FORWARD_IN = "/data/local/tmp/simlock-forward-in";
 
 // why: through a gateway the holder's socket is relayed to the worker, and only a real emulator proves both directions of the device side there: `adb reverse` reaching the caller, and the host protocol reaching a device server.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "simlock tunnel reverse and forward on a real emulator through a gateway",
   { tags: ["slow", "android"] },
   () => {
     it(
-      "serves the caller's page to the emulator through reverse, and a device server's bytes to the caller's loopback port through forward, with the caller's bytes arriving",
+      "serves the caller's page to the emulator through reverse, and a device server's bytes to the caller's loopback port through forward, with the caller's bytes arriving, and lets the caller's own separate adb server list the emulator and run a shell command on it through emulator adb while Simlock's own adb still lists it",
       { timeout: 480_000 },
       async () => {
         const gatewayPort = await freeLoopbackPort();
@@ -193,6 +187,7 @@ describe.skipIf(!hasAndroidSdk)(
               warmPool: { learn: false },
             },
             driver: "real",
+            keepSeeds: true,
           });
           const reversePort = await freeLoopbackPort();
           const forwardPort = await freeLoopbackPort();
@@ -206,6 +201,9 @@ describe.skipIf(!hasAndroidSdk)(
               "android",
               "--device",
               "Pixel 9",
+              // why: the caller's adb has its own key, which a Play Store image (`ro.adb.secure` 1) answers `unauthorized`; a `google_apis` image takes any key, and the newest image Pixel 9 fits may be a Play Store one.
+              "--image-tag",
+              "google_apis",
               "--agent-id",
               "tunnel",
               "--detach",
@@ -313,14 +311,76 @@ describe.skipIf(!hasAndroidSdk)(
           );
           server.kill("SIGINT");
 
+          const callerServerPort = await freeLoopbackPort();
+          const callerHome = mkdtempSync(join(tmpdir(), "simlock-caller-adb-"));
+          const callerAdb = (args: readonly string[]) =>
+            workerAdb(callerServerPort, args, { HOME: callerHome });
+          const driven = gateway.cliBackground(
+            [
+              "--token",
+              secret,
+              "tunnel",
+              "emulator",
+              "adb",
+              "--url",
+              `http://127.0.0.1:${String(gatewayPort)}`,
+              "--lease",
+              leaseId,
+            ],
+            {
+              env: {
+                ANDROID_ADB_SERVER_PORT: String(callerServerPort),
+                ANDROID_HOME: ANDROID_SDK?.root,
+                HOME: callerHome,
+              },
+            },
+          );
+          try {
+            const line = await driven.firstStdoutLine(60_000);
+            const callerPort = /localhost:(\d+) -> emulator:adb/.exec(line)?.[1] ?? "";
+            expect(line).toBe(
+              `emulator localhost:${callerPort} -> emulator:adb (lease ${leaseId})`,
+            );
+            const device = `127.0.0.1:${callerPort}`;
+            await waitFor(
+              async () => driven.stdoutSoFar().includes(`adb: connected to ${device}`),
+              {
+                interval: 500,
+                label: () =>
+                  `the command connecting the caller's adb, its stderr: ${driven.stderrSoFar()}`,
+                timeout: 30_000,
+              },
+            );
+            let listed = "";
+            await waitFor(
+              async () => {
+                listed = (await callerAdb(["devices"])).stdout;
+                return new RegExp(`^${device}\\s+device$`, "m").test(listed);
+              },
+              {
+                interval: 1_000,
+                label: () =>
+                  `the caller's adb listing the emulator as a device, last list: ${listed}`,
+                timeout: 30_000,
+              },
+            );
+            expect((await callerAdb(["-s", device, "shell", "echo", "ok"])).stdout.trim()).toBe(
+              "ok",
+            );
+          } finally {
+            driven.kill("SIGINT");
+            expect((await driven.waitForExit(10_000)).code).toBe(0);
+            await callerAdb(["kill-server"]);
+          }
+          const own = await leaseAdb(gateway, { agentId: "tunnel", leaseId }, ["get-state"]);
+          expect(own.stdout.trim()).toBe("device");
+
           tunnel.kill("SIGINT");
           expect((await tunnel.waitForExit(10_000)).code).toBe(0);
         } finally {
           await new Promise<void>((resolve) => page.close(() => resolve()));
           // why: a gateway refuses `nuke` (UNSUPPORTED_IN_GATEWAY_MODE); the worker owns the emulator, and one left running starves the next suite's boot.
-          await worker
-            ?.cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
-            .catch(() => undefined);
+          await worker?.cli(["nuke", "--yes"], { timeout: 120_000 }).catch(() => undefined);
           await Promise.allSettled([worker?.teardown(), gateway.teardown()]);
         }
       },
@@ -328,20 +388,26 @@ describe.skipIf(!hasAndroidSdk)(
   },
 );
 
-const ADB = join(ANDROID_HOME, "platform-tools", "adb");
+const ADB = ANDROID_SDK?.adb ?? "adb";
 
 // why: the worker runs its own adb server (`adbServerPort`), which the user's default server cannot see; the rules a tunnel set live there.
 function workerAdb(
   serverPort: number,
   args: readonly string[],
+  env: NodeJS.ProcessEnv = {},
 ): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(ADB, ["-P", String(serverPort), ...args], (error, stdout) => {
-      resolve({
-        code: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
-        stdout,
-      });
-    });
+    execFile(
+      ADB,
+      ["-P", String(serverPort), ...args],
+      { env: { ...process.env, ...env } },
+      (error, stdout) => {
+        resolve({
+          code: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
+          stdout,
+        });
+      },
+    );
   });
 }
 
@@ -354,7 +420,7 @@ onclick="fetch('/tapped?'+Date.now()).catch(function(){})">tap</button>
 const CHROME = "com.android.chrome";
 
 // why: a gateway relays a lease's input socket and tunnel socket to its worker side by side, and only a real emulator proves a relayed tap moves its screen and that a request it causes comes back through the relayed tunnel.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "input and tunnel together on a real emulator through a gateway",
   { tags: ["slow", "android"] },
   () => {
@@ -412,6 +478,7 @@ describe.skipIf(!hasAndroidSdk)(
           warmPool: { learn: false },
         },
         driver: "real",
+        keepSeeds: true,
       });
       await waitForWorkerJoined(gateway);
       const granted = await gateway.cli(
@@ -444,9 +511,7 @@ describe.skipIf(!hasAndroidSdk)(
     }, DEVICE_READY_MS + 120_000);
 
     afterAll(async () => {
-      await worker
-        ?.cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
-        .catch(() => undefined);
+      await worker?.cli(["nuke", "--yes"], { timeout: 120_000 }).catch(() => undefined);
       await Promise.allSettled([worker?.teardown(), gateway?.teardown()]);
     }, 240_000);
 

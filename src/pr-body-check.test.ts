@@ -421,6 +421,34 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
     });
   });
 
+  it("holds a refactor to no Spec review, no test lost and no mutant alive, and to nothing more", () => {
+    const ran = "0 blocking, 0 fixed, 0 notes";
+    const refactor = (tests: string, mutation: string, spec = "skipped") =>
+      valid
+        .replace(COUNTS, `Spec review: ${spec}. Code review: ${ran}. Claims review: ${ran}.`)
+        .replace("## Assumptions", `${tests}\n${mutation}\n\n## Assumptions`);
+    const evidence = [
+      "Tests: 141 before, 141 after.",
+      "Mutation: 12 mutants on 3 changed ranges; 0 alive.",
+    ] as const;
+    const at = (body: string) => check(body, "--branch", "refactor/12", "--kind", "full");
+
+    expect(at(refactor(...evidence))).toEqual({ status: 0, lines: [] });
+    expect(at(refactor("Tests: 141 before, 142 after.", evidence[1])).status).toBe(0);
+    expect(at(refactor(...evidence, ran)).lines).toEqual([
+      "pr-body: a refactor gets no Spec review (delivery rule 18)",
+    ]);
+    expect(at(refactor("Tests: 141 before, 140 after.", evidence[1])).lines).toEqual([
+      "pr-body: the refactor lost tests: 141 before, 140 after (delivery rule 18)",
+    ]);
+    expect(
+      at(refactor(evidence[0], "Mutation: 12 mutants on 3 changed ranges; 1 alive.")).lines,
+    ).toEqual(["pr-body: no `Mutation: ... 0 alive.` line on a refactor (delivery rule 18)"]);
+    expect(at(refactor("", evidence[1])).lines).toEqual([
+      "pr-body: no `Tests: <n> before, <m> after.` line on a refactor (delivery rule 18)",
+    ]);
+  });
+
   it("holds a routine's PR to its kind of change, reading the diff from git", () => {
     const repo = mkdtempSync(join(tmpdir(), "pr-body-git-"));
     const git = (...a: string[]) =>
@@ -430,14 +458,11 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
       }).trim();
     git("init", "-q");
     mkdirSync(join(repo, "src"));
-    mkdirSync(join(repo, ".agents", "briefs"), { recursive: true });
     writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n");
-    writeFileSync(join(repo, ".agents", "briefs", "calibration.md"), "x\n");
     git("add", ".");
     git("commit", "-qm", "base");
     const base = git("rev-parse", "HEAD");
     writeFileSync(join(repo, "src", "a.ts"), "export const a = 2;\n");
-    writeFileSync(join(repo, ".agents", "briefs", "calibration.md"), "y\n");
     git("commit", "-qam", "change");
     const head = git("rev-parse", "HEAD");
     const routine = (branch: string) => {
@@ -465,9 +490,6 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
     ]);
     expect(routine("chore/audit-tests-2026-10-25")).toContainEqual(
       expect.stringContaining("must be tests-only"),
-    );
-    expect(routine("chore/calibrate-reviews-2026-10-25")).toContainEqual(
-      expect.stringContaining("it also changes src/a.ts"),
     );
   });
 

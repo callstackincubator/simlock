@@ -45,7 +45,8 @@ Choose risk from semantics before choosing models; record the reason.
 Ownership, destruction, persistence/recovery, concurrency, trust boundaries
 and uncertain blast radius require Opus/high code review, regardless of LOC.
 Code review otherwise remains Opus/high by default. Explicit `pilot: sonnet`
-permits Sonnet/medium only for routine changes under the evaluation below.
+permits Sonnet/medium only for routine changes under the evaluation in
+`REVIEW-EVALUATION.md`.
 Haiku is not a semantic reviewer or a prerequisite exploration stage.
 
 Spec review uses Sonnet/medium for ordinary acceptance checks; use Opus/high
@@ -57,6 +58,7 @@ without that assessment leave the finding unresolved, never rejected.
 Select independent lenses by work, not size alone. ADR-only: spec. Docs or
 comments: spec and claims. Tests: spec, code/tests and affected claims.
 Other changes: spec and code/both, plus affected claims. No issue: skip spec.
+Refactor: code/behaviour and claims; no spec (delivery rule 18).
 Add a separate code/tests lens for complex fixtures or high-risk coverage;
 split behavior and tests responsibilities explicitly.
 A large mechanical diff alone does not warrant two code reviewers. Record
@@ -115,7 +117,7 @@ not a defect and not F0/pass. Stop, preserve findings and escalate the
 missing assessment. The coordinator and PR body also carry Assessment;
 no incomplete assessment may be marked ready or merged.
 
-## Measurement and cheaper-model evaluation
+## Measurement
 
 Nobody writes usage by hand. Every agent prompt a delivery writes starts
 with the ledger tag line (`toolchain.md`, "Review measurement"), and
@@ -139,40 +141,6 @@ later (`replay-freeze.mjs`). The
 weekly `recurring-findings` routine reads these comments. Record escaped
 defects after merge. Do not call raised-minus-fixed a false-positive rate.
 
-Before promoting Sonnet code review, freeze at least 20 representative
-historical PR snapshots: at least 10 known-bug and 10 clean, covering ordinary
-features, test-only, documentation, stacks, tiny risky and large mechanical
-changes. Preserve pre-fix commits and ground-truth defects separately from
-reviewer inputs. Run Opus and Sonnet on the same inputs, blind to labels and
-each other's outputs. Have a maintainer adjudicate disputed ground truth.
-Score canonical findings: critical miss weight 10, major 3, minor 1; report
-false positives on clean PRs, incomplete runs, elapsed wall time, total
-invocations, cost including verification and fixes, and unknown-data share.
-Do not compare only per-call model prices.
-
-Then shadow at least 20 routine live PRs: Opus remains authoritative, Sonnet
-runs independently; track escaped defects for 30 days after merge. Proposed
-promotion thresholds (maintainer approves): zero critical misses, no higher
-weighted miss score than Opus, no higher clean-PR false-positive rate,
-and at least 20% lower median total cost with no increase in median review
-wall time. Unknown cost/quality data cannot establish promotion. High-risk
-work stays Opus. Roll back the routine downgrade on any critical escape or
-a weekly increase in weighted misses/false positives versus the baseline.
-No pilot has been completed by adding this protocol. The replay harness
-runs it: `replay-freeze.mjs` pins a round's head and base and the ledger
-as `refs/replay/<PR>/...` on origin, `review-replay.sh` builds the blind
-inputs for that snapshot and prints the reviewer's prompt (tagged
-`stage=replay`, or one lens with `--lens`), and `review-score.mjs` scores
-the findings against the ledger and appends to `.agents/replay/results.jsonl`.
-A change to the review is judged by replaying each variant on every
-snapshot, three runs each. It is adopted when, against the current agents
-on the same snapshots, recall over fixed findings does not drop, unmatched
-findings (after adjudication) do not rise, and the number it targets
-(minutes, USD, open rate, rule-cited findings) moves by the amount it
-claims. Unknown data does not count as improvement.
-
-The design follows [Anthropic's review convergence findings](https://claude.dev/blog/solving-code-review-at-anthropic/),
-[Addy Osmani's risk-focused review](https://addyosmani.com/blog/agentic-code-review/),
-and [OpenAI's verification research](https://alignment.openai.com/scaling-code-verification/).
-These motivate bounded verification and evaluation, not an assumption that
-small models can safely replace every reviewer.
+How a cheaper reviewer model is evaluated and promoted, the replay harness
+and the sources of this design: [REVIEW-EVALUATION.md](REVIEW-EVALUATION.md).
+No reviewer needs it to run a review.

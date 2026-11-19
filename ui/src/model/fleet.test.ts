@@ -80,6 +80,28 @@ describe("a worker's health square", () => {
   });
 });
 
+describe("a worker's memory-pressure step", () => {
+  it("shows on the square as its own word, ahead of the pressure it comes with", () => {
+    const stepped = (step: string, pressure?: "warn" | "critical") =>
+      worker({
+        capacity: {
+          ...capacity(4, 4),
+          memoryPressure: { step },
+        } as unknown as NonNullable<WorkerView["capacity"]>,
+        ...(pressure === undefined ? {} : { load: load(30, 40, pressure) }),
+      });
+    const cases: readonly [WorkerView, string, string][] = [
+      [stepped("new-devices-paused"), "error", "new devices paused"],
+      [stepped("warming-paused"), "warn", "warming paused"],
+      [stepped("warming-paused", "warn"), "warn", "warming paused"],
+      [stepped("new-devices-paused", "critical"), "error", "new devices paused"],
+      [stepped("none"), "ok", "connected"],
+      [{ ...stepped("new-devices-paused"), connection: "disconnected" }, "error", "disconnected"],
+    ];
+    for (const [w, tone, word] of cases) expect(workerHealth(w), word).toEqual({ tone, word });
+  });
+});
+
 describe("a worker with an issue", () => {
   it("is one that is lost, failed, drained, starting, over its RAM budget, under memory pressure, or at 85% of CPU, disk or memory", () => {
     const budget = { ...capacity(4, 4), ramBudget: { overLimit: true } };

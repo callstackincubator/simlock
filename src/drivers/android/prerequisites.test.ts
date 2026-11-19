@@ -116,7 +116,7 @@ describe("androidPrerequisites", () => {
       await sdkFilesystem(),
       new ScriptedProcessRunner([
         SDKMANAGER_RUNS,
-        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-crash-report-mode")),
+        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-grpc-use-token")),
       ]),
     ).check();
     const complete = await check(
@@ -126,12 +126,24 @@ describe("androidPrerequisites", () => {
 
     expect(lacking).toEqual([
       expect.objectContaining({
-        message: expect.stringContaining("-crash-report-mode") as unknown,
+        message: expect.stringContaining("-grpc-use-token") as unknown,
         prerequisite: "android-emulator",
         remedy: expect.stringContaining("sdkmanager --install emulator") as unknown,
       }),
     ]);
     expect(complete).toEqual([]);
+  });
+
+  it("reports nothing missing for an emulator whose -help lists every launch flag but -crash-report-mode, which Simlock passes only to an emulator that accepts it (#1297)", async () => {
+    const missing = await check(
+      await sdkFilesystem(),
+      new ScriptedProcessRunner([
+        SDKMANAGER_RUNS,
+        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-crash-report-mode")),
+      ]),
+    ).check();
+
+    expect(missing).toEqual([]);
   });
 
   it("stops reporting a package on the next check once it is installed", async () => {
@@ -321,6 +333,8 @@ describe("androidPrerequisites on Windows", () => {
   it.each([
     ["ANDROID_HOME", { ANDROID_HOME: winSdk }, winSdk],
     ["Android Studio's %LOCALAPPDATA% default", { LOCALAPPDATA: "/Volumes/Data/Local" }, localSdk],
+    ["<home>/AppData/Local when LOCALAPPDATA is unset", {}, winSdk],
+    ["<home>/AppData/Local when LOCALAPPDATA is empty", { LOCALAPPDATA: "" }, winSdk],
   ])(
     "finds a complete SDK of .exe and .bat tools through %s and runs its sdkmanager.bat",
     async (_source, env, root) => {

@@ -42,13 +42,22 @@ async function runList(
     const listed = await client.listBaselines();
     if (values.json) writeResult((value) => environment.stdout.write(value), listed);
     else {
-      const gateway = environment.daemonHome.role === "gateway";
+      const gateway = await farmIsGateway(client, environment);
       environment.stdout.write(baselineTable(listed.baselines, { gateway }));
     }
     return 0;
   } finally {
     await client.close();
   }
+}
+
+// why: the folder of this machine decides locally, but through a farm the farm's own mode does, since the machine may run no daemon at all or the other kind.
+async function farmIsGateway(
+  client: SimlockAdminClient,
+  environment: CommandContext["environment"],
+): Promise<boolean> {
+  if (environment.remote === undefined) return environment.daemonHome.role === "gateway";
+  return (await client.getStatus()).daemon.mode === "gateway";
 }
 
 async function runRemove(
@@ -70,10 +79,10 @@ async function runRemove(
     throw new UsageError(withHelpHint("baseline remove takes one <name>"));
   }
   const workerId = typeof values.worker === "string" ? values.worker : undefined;
-  // why: a gateway needs the worker that holds the baseline; without one the CLI asks nothing and sends the remove, so the gateway's BAD_REQUEST is the answer.
-  const unnamedOnGateway = environment.daemonHome.role === "gateway" && workerId === undefined;
   const client = await connectDaemonClient(environment, token);
   try {
+    // why: a gateway needs the worker that holds the baseline; without one the CLI asks nothing and sends the remove, so the gateway's BAD_REQUEST is the answer.
+    const unnamedOnGateway = workerId === undefined && (await farmIsGateway(client, environment));
     if (values.yes !== true && !unnamedOnGateway) {
       await confirmRemoval(client, environment, name, workerId);
     }

@@ -19,8 +19,9 @@ import {
   type Clock,
   type DaemonFlag,
   type ServiceManager,
+  type WebSocketClientConnector,
 } from "../ports/index.js";
-import { connectToRunningDaemon, connectWithAutoLaunch } from "./connect.js";
+import { connectToFarm, connectToRunningDaemon, connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
 import { createMcpServer } from "./server.js";
 
@@ -56,6 +57,8 @@ export interface McpStdioEnvironment {
   readonly env?: NodeJS.ProcessEnv;
   readonly daemonFlag?: DaemonFlag;
   readonly requesterId?: string;
+  readonly remote?: { readonly url: string; readonly token: string };
+  readonly webSocket?: WebSocketClientConnector;
   readonly serviceManager?: ServiceManager;
   readonly signals?: Signals;
   /** The stdio transport currently does not surface stdin EOF as onclose. */
@@ -85,14 +88,14 @@ export async function startMcpStdio(
   // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
   // loop must not be able to disagree about what time it is (architecture rule 9).
   const clock = environment.clock ?? new SystemClock();
-  const defaults = defaultEnvironment(
-    requesterId,
-    clock,
-    environment.daemonFlag,
-    environment.serviceManager,
-  );
+  const remote = environment.remote;
+  const defaults =
+    remote === undefined
+      ? defaultEnvironment(requesterId, clock, environment.daemonFlag, environment.serviceManager)
+      : farmEnvironment(remote, clock, environment.webSocket);
   const session = new McpSession({
     clock,
+    ...(remote === undefined ? {} : { farm: { origin: remote.url, requesterId } }),
     connect: environment.connect ?? defaults.connect,
     // Never falls back to `connect`: that one may auto-launch a daemon, and ADR 0004 §2 is
     // explicit that the renew timer must not -- an embedder supplying only `connect` gets the
@@ -166,6 +169,16 @@ export async function startMcpStdio(
   }
 
   return { finished, shutdown };
+}
+
+// why: against a farm both triggers connect the same way and nothing launches, so a tool call and a renewal cannot differ in power (ADR 0081 §3).
+function farmEnvironment(
+  remote: { readonly url: string; readonly token: string },
+  clock: Clock,
+  webSocket: WebSocketClientConnector | undefined,
+): Required<Pick<McpStdioEnvironment, "connect" | "connectForRenew" | "createTransport">> {
+  const connect = () => connectToFarm({ clock, token: remote.token, url: remote.url, webSocket });
+  return { connect, connectForRenew: connect, createTransport: () => new StdioServerTransport() };
 }
 
 function defaultEnvironment(

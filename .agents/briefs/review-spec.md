@@ -11,12 +11,12 @@ every change made to a test file after a `test:` commit first wrote it
 failing, but the next cycle's added test. Assumptions: `assumptions.md`, each line a small gap the
 specification left open, closed by the implementer. `spec/always-in-scope.md`
 lists what every change includes without its specification asking; treat
-each item as asked for. `briefs/calibration.md`, when it exists, lists findings
-like yours that were rejected lately: read it first.
+each item as asked for.
 
 Answer four questions, and only these:
 
-1. Is every line of Scope and Done when (for a bug: the Simplest fix; for a
+1. Is every line of Scope and Done when, and every row of `feature.md` the
+   task names under Rows (for a bug: the Simplest fix; for a
    feature: every Completion condition) delivered by the diff? One line
    each, by position: `Done when 3: <hunk path:line>`, `Done when 3: not
    delivered`, or `Done when 3: differently: <how, at most 15 words>`.

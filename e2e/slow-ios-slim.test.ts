@@ -7,6 +7,7 @@ import type { TestEnv } from "./helpers/env.js";
 import {
   iosDeviceSet,
   processesInDeviceSet,
+  runtimeRootProcesses,
   setDevices,
   simctlInSet,
   sweepStaleDeviceSets,
@@ -17,6 +18,8 @@ interface LeaseGrant {
   readonly lease: string;
   readonly udid: string;
   readonly mode: "slim" | "full";
+  /** why: the categories the grant says the lease kept running; absent for a lease with no `--except`. */
+  readonly except?: readonly string[];
   /** The device set the grant says the device lives in; no simctl call reaches it without. */
   readonly deviceSet: string;
 }
@@ -36,7 +39,7 @@ const usedDeviceSets: string[] = [];
 
 /** Starts the real-driver daemon for one test and records its device set. */
 async function withRealDaemon(configOverrides: Record<string, unknown> = {}): Promise<TestEnv> {
-  const env = await withDaemon({ driver: "real", configOverrides });
+  const env = await withDaemon({ driver: "real", configOverrides, keepSeeds: true });
   usedDeviceSets.push(iosDeviceSet(env.home));
   return env;
 }
@@ -103,6 +106,23 @@ async function catalogModelAndOs(env: TestEnv): Promise<{ model: string; os: str
   return { model: model as string, os: os as string };
 }
 
+/** why: a runtime is picked by version, not by being the newest installed (ADR 0066): the first model the catalog pairs with a runtime `pick` accepts. */
+async function catalogModelWithOs(
+  env: TestEnv,
+  pick: (versions: readonly string[]) => string | undefined,
+): Promise<{ model: string; os: string }> {
+  const catalog = await env.cli(["catalog", "--json", "--platform", "ios"]);
+  expect(catalog.code, `catalog failed: ${catalog.stderr}`).toBe(0);
+  const iosCatalog = (catalog.json as { platforms: CatalogPlatform[] }).platforms.find(
+    (platform) => platform.platform === "ios",
+  );
+  for (const model of iosCatalog?.models ?? []) {
+    const os = pick([...(iosCatalog?.modelRuntimes[model] ?? [])].sort(compareVersionsDescending));
+    if (os !== undefined) return { model, os };
+  }
+  throw new Error("simlock catalog pairs no iOS model with the runtime this case needs");
+}
+
 async function leaseDetached(
   env: TestEnv,
   model: string,
@@ -128,7 +148,7 @@ async function leaseDetached(
   );
   expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
   const grant = lease.json as {
-    device: { driverDeviceId: string; mode: "slim" | "full" };
+    device: { driverDeviceId: string; except?: readonly string[]; mode: "slim" | "full" };
     environment: Record<string, string>;
     lease: { id: string };
   };
@@ -136,6 +156,7 @@ async function leaseDetached(
   expect(deviceSet, "an iOS grant must name the device set its device lives in").toBeDefined();
   return {
     deviceSet: deviceSet as string,
+    ...(grant.device.except === undefined ? {} : { except: grant.device.except }),
     lease: grant.lease.id,
     mode: grant.device.mode,
     udid: grant.device.driverDeviceId,
@@ -166,7 +187,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "on a default-slim worker, a cold lease naming no mode boots slim with every label disabled, and runs at least 30% fewer launchd jobs than a --mode full device beside it",
+      "on a default-slim worker, a cold lease naming no mode boots slim with every label disabled, and runs at least 30% fewer launchd jobs than a --mode full device beside it; a slim simulator leased after its release is a new one, slim with every label disabled after one boot",
       { timeout: 900_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -233,19 +254,7 @@ describe.skipIf(process.platform !== "darwin")(
             `${(reduction * 100).toFixed(1)}% reduction`,
         ).toBeGreaterThanOrEqual(0.3);
 
-        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
-      },
-    );
-
-    it(
-      "a slim simulator leased after a release is a new one, slim with every label disabled after one boot",
-      { timeout: 900_000 },
-      async () => {
-        const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
-        const { model, os } = await catalogModelAndOs(env);
-        const first = await leaseDetached(env, model, os, "slim-first");
-        await expectSlim(env, first.mode, "a default-slim lease must be slim");
-        await env.cli(["release", first.lease]);
+        await env.cli(["release", slimGrant.lease]);
         // why: the release deletes the simulator, and a lease landing while it is still going provisions a second device.
         await waitFor(
           async () => {
@@ -253,14 +262,16 @@ describe.skipIf(process.platform !== "darwin")(
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === first.udid && row.state === "deleted");
+            return rows.some(
+              (row) => row.driverDeviceId === slimGrant.udid && row.state === "deleted",
+            );
           },
           { timeout: 60_000, label: "device is deleted after release" },
         );
 
         const second = await leaseDetached(env, model, os, "slim-second");
 
-        expect(second.udid, "a released simulator is never leased again").not.toBe(first.udid);
+        expect(second.udid, "a released simulator is never leased again").not.toBe(slimGrant.udid);
         await expectSlim(
           env,
           second.mode,
@@ -268,7 +279,7 @@ describe.skipIf(process.platform !== "darwin")(
         );
         const disabled = await printDisabled(second);
         expect([...ALL_LABELS].filter((label) => !disabled.has(label))).toEqual([]);
-        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        await env.cli(["nuke", "--yes"], { timeout: 180_000 });
       },
     );
 
@@ -317,7 +328,157 @@ describe.skipIf(process.platform !== "darwin")(
         ).toBe(slimmedBefore);
 
         await env.cli(["release", grant.lease]).catch(() => undefined);
+        await env.cli(["nuke", "--yes"], { timeout: 180_000 });
+      },
+    );
+
+    it.each([
+      ["iOS 18.5", (versions: readonly string[]) => versions.find((v) => v === "18.5")],
+      [
+        "the newest iOS 26.x",
+        (versions: readonly string[]) => versions.find((v) => v.startsWith("26.")),
+      ],
+    ])(
+      "a lease of --mode slim --except store,other on %s finds every store and other label enabled",
+      { timeout: 900_000 },
+      async (_label, pick) => {
+        const env = await withRealDaemon();
+        const { model, os } = await catalogModelWithOs(env, pick);
+        const except = ["store", "other"];
+
+        const grant = await leaseDetached(env, model, os, "slim-except", [
+          "--mode",
+          "slim",
+          "--except",
+          except.join(","),
+        ]);
+
+        await expectSlim(env, grant.mode, "a --mode slim lease with --except must be slim");
+        expect(grant.except).toEqual(except);
+        const disabled = await printDisabled(grant);
+        const kept = labelsFor(
+          SLIM_CATEGORIES.filter((category) => except.includes(category.name)),
+        );
+        expect(
+          kept.filter((label) => disabled.has(label)),
+          "a label of an excepted category is still disabled",
+        ).toEqual([]);
         await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+      },
+    );
+
+    it(
+      "on the newest iOS 26.x, excepting each category in turn finds its labels enabled",
+      { timeout: 7_200_000 },
+      async () => {
+        const env = await withRealDaemon();
+        const { model, os } = await catalogModelWithOs(env, (versions) =>
+          versions.find((version) => version.startsWith("26.")),
+        );
+        for (const category of SLIM_CATEGORIES) {
+          const grant = await leaseDetached(env, model, os, `slim-except-${category.name}`, [
+            "--mode",
+            "slim",
+            "--except",
+            category.name,
+          ]);
+          await expectSlim(
+            env,
+            grant.mode,
+            `a --mode slim lease excepting ${category.name} must be slim`,
+          );
+          expect(grant.except).toEqual([category.name]);
+          const disabled = await printDisabled(grant);
+          expect(
+            labelsFor([category]).filter((label) => disabled.has(label)),
+            `a label of the excepted category ${category.name} is still disabled`,
+          ).toEqual([]);
+          await env.cli(["release", grant.lease]);
+        }
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+      },
+    );
+
+    it(
+      "a warm slim device is rebooted with the smaller list and granted",
+      { timeout: 1_200_000 },
+      async () => {
+        const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
+        const { model, os } = await catalogModelWithOs(env, (versions) =>
+          versions.find((version) => version.startsWith("26.")),
+        );
+        // why: the pool learns the kind of a lease and boots a warm replacement once it is released.
+        const taught = await leaseDetached(env, model, os, "slim-teach");
+        await env.cli(["release", taught.lease]);
+        let warmUdid: string | undefined;
+        await waitFor(
+          async () => {
+            const rows = (await env.cli(["list", "--devices"])).json as {
+              driverDeviceId: string;
+              mode: string;
+              state: string;
+            }[];
+            warmUdid = rows.find(
+              (row) => row.state === "ready" && row.mode === "slim",
+            )?.driverDeviceId;
+            return warmUdid !== undefined;
+          },
+          { timeout: 600_000, label: "a warm slim device is ready" },
+        );
+
+        const grant = await leaseDetached(env, model, os, "slim-warm-except", [
+          "--except",
+          "store",
+        ]);
+
+        expect(grant.udid, "the warm device is the one granted").toBe(warmUdid);
+        expect(grant.except).toEqual(["store"]);
+        const disabled = await printDisabled(grant);
+        expect(
+          labelsFor(SLIM_CATEGORIES.filter((category) => category.name === "store")).filter(
+            (label) => disabled.has(label),
+          ),
+        ).toEqual([]);
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+      },
+    );
+
+    it(
+      "a worker's exclude turns off a service no category holds, and its include keeps a category's service running",
+      { timeout: 1_800_000 },
+      async () => {
+        const diagnosticd = "com.apple.diagnosticd";
+        const apsd = "com.apple.apsd";
+        // why: one lane home serves one env at a time (keepSeeds), so one daemon runs both configs in turn.
+        const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
+        const { model, os } = await catalogModelWithOs(env, (versions) =>
+          versions.find((version) => Number(version.split(".")[0]) >= 26),
+        );
+        await env.withConfig(
+          { ios: { slim: { categories: [], exclude: [diagnosticd] } } },
+          async () => {
+            const excluded = await leaseDetached(env, model, os, "slim-exclude");
+            await expectSlim(env, excluded.mode, "a worker with only an exclude must grant slim");
+            expect((await printDisabled(excluded)).has(diagnosticd)).toBe(true);
+            expect(
+              await runtimeRootProcesses("diagnosticd"),
+              "no diagnosticd runs while the excluding worker's device is booted",
+            ).toEqual([]);
+            await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+          },
+        );
+
+        await env.withConfig({ ios: { slim: { include: [apsd] } } }, async () => {
+          const included = await leaseDetached(env, model, os, "slim-include");
+          await expectSlim(env, included.mode, "a worker with only an include must grant slim");
+          const disabled = await printDisabled(included);
+          expect(disabled.has(apsd), "apsd is kept running by include").toBe(false);
+          expect(
+            [...ALL_LABELS].filter((label) => label !== apsd && !disabled.has(label)),
+            "every other category label is disabled",
+          ).toEqual([]);
+          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        });
       },
     );
 

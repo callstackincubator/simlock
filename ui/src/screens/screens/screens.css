@@ -26,10 +26,7 @@
 }
 
 .screens-tile .screen-panel {
-  border: 0;
+  position: relative;
+  padding: var(--space-4);
   border-top: 1px solid var(--border);
-}
-
-.screens-placeholder .screen-head {
-  min-height: 40px;
 }

@@ -5,13 +5,48 @@
 // `$VAR` the guard cannot read, `stdin` is a heredoc or here-string body (null when none), and
 // `redirects` are `{ op, target }` pairs. The words of a `$(…)` or backtick substitution become
 // commands of their own. A `$(cat <<'EOF' … EOF)` inside a word is read as its heredoc body. It
-// never throws: input it cannot follow ends the command it is in. `commandWords(cmd)` is a
+// never throws: input it cannot follow ends the command it is in. A `$VAR` or `${VAR}` reads as
+// its value when the call sets VAR once, to a literal, in a command of its own before the use
+// (`F=/tmp/body.md; gh pr comment 5 --body-file "$F"`). `commandWords(cmd)` is a
 // command's words from the program name on, without leading `VAR=value` assignments, wrappers
 // (`env`, `time`, ...) or a `timeout <n>`.
 export function parseShell(command) {
-  const commands = [];
-  parseInto(String(command ?? ""), commands);
-  return commands;
+  const src = String(command ?? "");
+  const scan = { commands: [], once: new Set(), vars: new Map() };
+  parseInto(src, scan);
+  const ctx = { commands: [], once: setOnce(scan.commands), vars: new Map() };
+  parseInto(src, ctx);
+  return ctx.commands;
+}
+
+const NAME_SETTERS = new Set([
+  "for",
+  "select",
+  "read",
+  "local",
+  "declare",
+  "typeset",
+  "readonly",
+  "getopts",
+  "mapfile",
+  "readarray",
+  "unset",
+]);
+
+// why: a name the call sets twice, or through `read`, a loop or a declaration, has a value only
+// the shell knows; one set once has the value its assignment shows.
+function setOnce(commands) {
+  const count = new Map();
+  const bump = (name, by) => count.set(name, (count.get(name) ?? 0) + by);
+  for (const { words } of commands) {
+    const declares = words.some((w) => NAME_SETTERS.has(w));
+    for (const word of words) {
+      const name = /^(\w+)\+?=/.exec(word)?.[1];
+      if (name !== undefined) bump(name, 1);
+      else if (declares && /^\w+$/.test(word)) bump(word, 2);
+    }
+  }
+  return new Set([...count].filter(([, n]) => n === 1).map(([name]) => name));
 }
 
 const WRAPPERS = new Set(["time", "nice", "env", "command", "exec", "nohup"]);
@@ -33,15 +68,15 @@ const SCANNERS = [
   { at: (p) => p.src[p.i] === "'", scan: singleQuoted },
   {
     at: (p) => p.src[p.i] === '"',
-    scan: (p) => (p.i = readDoubleQuoted(p.src, p.i + 1, current(p), p.commands)),
+    scan: (p) => (p.i = readDoubleQuoted(p.src, p.i + 1, current(p), p.ctx)),
   },
   {
     at: (p) => p.src[p.i] === "$",
-    scan: (p) => (p.i = readDollar(p.src, p.i, current(p), p.commands)),
+    scan: (p) => (p.i = readDollar(p.src, p.i, current(p), p.ctx)),
   },
   {
     at: (p) => p.src[p.i] === "`",
-    scan: (p) => (p.i = readBacktick(p.src, p.i, current(p), p.commands)),
+    scan: (p) => (p.i = readBacktick(p.src, p.i, current(p), p.ctx)),
   },
   { at: (p) => p.src.startsWith("<<<", p.i), scan: hereString },
   { at: (p) => p.src.startsWith("<<", p.i), scan: heredoc },
@@ -49,8 +84,8 @@ const SCANNERS = [
   { at: (p) => ";|&()".includes(p.src[p.i]), scan: separator },
 ];
 
-function parseInto(src, commands) {
-  const p = { src, commands, i: 0, cmd: newCommand(), word: null, redirectOp: null, pending: [] };
+function parseInto(src, ctx) {
+  const p = { src, ctx, i: 0, cmd: newCommand(), word: null, redirectOp: null, pending: [] };
   while (p.i < src.length) {
     const scanner = SCANNERS.find((s) => s.at(p));
     if (scanner === undefined) current(p).text += src[p.i++];
@@ -80,8 +115,21 @@ function endCommand(p) {
   endWord(p);
   p.redirectOp = null;
   const { cmd } = p;
-  if (cmd.words.length > 0 || cmd.redirects.length > 0 || cmd.stdin !== null) p.commands.push(cmd);
+  rememberAssignments(p.ctx, cmd);
+  if (cmd.words.length > 0 || cmd.redirects.length > 0 || cmd.stdin !== null)
+    p.ctx.commands.push(cmd);
   p.cmd = newCommand();
+}
+
+// why: `F=x` alone on a command sets a shell variable; before a program it sets only that
+// program's environment, after the shell has expanded the command's own `$F`.
+function rememberAssignments(ctx, cmd) {
+  const from = cmd.words[0] === "export" ? 1 : 0;
+  const assigned = cmd.words.slice(from).map((word) => /^(\w+)=([\s\S]*)$/.exec(word));
+  if (assigned.includes(null)) return;
+  assigned.forEach((found, i) => {
+    if (ctx.once.has(found[1]) && !cmd.dynamic[from + i]) ctx.vars.set(found[1], found[2]);
+  });
 }
 
 function newline(p) {
@@ -184,16 +232,16 @@ function newCommand() {
   return { words: [], dynamic: [], stdin: null, stdinDynamic: false, redirects: [] };
 }
 
-function readDoubleQuoted(src, i, word, commands) {
+function readDoubleQuoted(src, i, word, ctx) {
   while (i < src.length && src[i] !== '"') {
     const c = src[i];
     if (c === "\\" && /[$`"\\\n]/.test(src[i + 1] ?? "")) {
       if (src[i + 1] !== "\n") word.text += src[i + 1];
       i += 2;
     } else if (c === "$") {
-      i = readDollar(src, i, word, commands);
+      i = readDollar(src, i, word, ctx);
     } else if (c === "`") {
-      i = readBacktick(src, i, word, commands);
+      i = readBacktick(src, i, word, ctx);
     } else {
       word.text += c;
       i++;
@@ -213,15 +261,15 @@ const DOLLARS = [
   { at: (next) => /[\w@*#?$!-]/.test(next), read: dollarName },
 ];
 
-function readDollar(src, i, word, commands) {
+function readDollar(src, i, word, ctx) {
   const next = src[i + 1] ?? "";
   const reader = DOLLARS.find((d) => d.at(next));
-  if (reader !== undefined) return reader.read(src, i, word, commands);
+  if (reader !== undefined) return reader.read(src, i, word, ctx);
   word.text += "$";
   return i + 1;
 }
 
-function dollarParen(src, i, word, commands) {
+function dollarParen(src, i, word, ctx) {
   const doc = CAT_HEREDOC.exec(src.slice(i));
   if (doc !== null) {
     word.text += doc[3];
@@ -229,7 +277,7 @@ function dollarParen(src, i, word, commands) {
     return i + doc[0].length;
   }
   const end = matchingParen(src, i + 2);
-  parseInto(src.slice(i + 2, end), commands);
+  parseInto(src.slice(i + 2, end), ctx);
   word.dynamic = true;
   return end + 1;
 }
@@ -247,22 +295,27 @@ function ansiQuoted(src, i, word) {
   return j + 1;
 }
 
-function dollarBrace(src, i, word) {
+function dollarBrace(src, i, word, ctx) {
   const end = src.indexOf("}", i);
-  word.dynamic = true;
+  expand(word, ctx, end === -1 ? "" : src.slice(i + 2, end));
   return end === -1 ? src.length : end + 1;
 }
 
-function dollarName(src, i, word) {
+function dollarName(src, i, word, ctx) {
   let j = i + 2;
   if (/\w/.test(src[i + 1])) while (/\w/.test(src[j] ?? "")) j++;
-  word.dynamic = true;
+  expand(word, ctx, src.slice(i + 1, j));
   return j;
 }
 
-function readBacktick(src, i, word, commands) {
+function expand(word, ctx, name) {
+  if (ctx.vars.has(name)) word.text += ctx.vars.get(name);
+  else word.dynamic = true;
+}
+
+function readBacktick(src, i, word, ctx) {
   const end = src.indexOf("`", i + 1);
-  parseInto(src.slice(i + 1, end === -1 ? src.length : end), commands);
+  parseInto(src.slice(i + 1, end === -1 ? src.length : end), ctx);
   word.dynamic = true;
   return end === -1 ? src.length : end + 1;
 }

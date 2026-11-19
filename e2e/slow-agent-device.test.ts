@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,6 +20,7 @@ import {
   freeLoopbackPort,
   makeAgent,
   makeProfileAgent,
+  leaseClient,
   openInputSocket,
   newAgentToken,
   waitForAgentDevice,
@@ -163,6 +165,9 @@ function defineSuite(target: Target): void {
     return result;
   };
 
+  // why: these cases prove how simlock ends, queues and expires a lease behind agent-device, which the device's platform does not change, so one platform proves them: Android, where a case takes half as long, or iOS on a machine with no Android SDK.
+  const leasingCase = it.runIf(platform === "android" || !androidAvailable);
+
   async function awaitAgentDevice(): Promise<void> {
     const probe = await newAgentToken(env);
     await waitForAgentDevice(env, probe.secret);
@@ -172,6 +177,7 @@ function defineSuite(target: Target): void {
     const pinned = await assertPinnedAgentDevice(platform);
     env = await withSharedDaemon({
       driver: "real",
+      keepSeeds: true,
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         capabilities: {
@@ -280,7 +286,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "an agent with no token in its environment connects with the worker's profile file, opens a device, installs the fixture app as an upload and closes; the lease's owner is the profile token",
     { timeout: 600_000 },
     async () => {
@@ -294,7 +300,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with this working agent-device, simlock doctor reports no module-unavailable finding and no finding whose message names agent-device",
     { timeout: 600_000 },
     async () => {
@@ -305,7 +311,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "close releases the simlock lease before the CLI exits, and a following open works",
     { timeout: 900_000 },
     async () => {
@@ -320,7 +326,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "after an accepted upload install and snapshot, install from a remote: path, boot, shutdown and snapshot --ios-simulator-device-set <dir> (on Android also --android-device-allowlist <serial>) are refused, and the device is still leased and answers snapshot",
+    "after an accepted upload install and snapshot, install from a remote: path, shutdown and snapshot --ios-simulator-device-set <dir> (on Android also --android-device-allowlist <serial>) are refused, boot is answered, and the device is still leased and answers snapshot",
     { timeout: 600_000 },
     async () => {
       const a = await agent("a");
@@ -336,7 +342,10 @@ function defineSuite(target: Target): void {
       onTestFinished(() => rm(dir, { force: true, recursive: true }));
 
       refused(await a.run(["install", "Appduct", "remote:/data/local/tmp/Appduct"]));
-      for (const command of ["boot", "shutdown"]) {
+      const boot = await a.run(["boot"]);
+      ok(boot);
+      expect((boot.data as { id?: string }).id).toBe(address);
+      for (const command of ["shutdown"]) {
         const denied = await a.run([command]);
         expect(denied.code, `${command} was accepted`).not.toBe(0);
         expect(denied.error?.code).toBe("UNAUTHORIZED");
@@ -402,7 +411,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "a wait 20000 running when simlock release --all is called exits 0 after at least 20 s, and the device is deleted after it exits",
     { timeout: 600_000 },
     async () => {
@@ -437,7 +446,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with the only device leased, a second agent's open waits in simlock list --requests; killing its CLI empties the queue, and once the device is free no lease.granted names that request's requester while a third agent's open gets the device",
     { timeout: 900_000 },
     async () => {
@@ -477,12 +486,14 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
-    "when the agent-device daemon is killed, a new one with a new pid runs; the agent's next command fails with lease ended by simlock, and its simlock lease is released",
+  leasingCase(
+    "when the agent-device daemon is killed, a new one with a new pid runs; the agent opens the installed Appduct fixture app again and takes a snapshot, and its simlock lease stays, on the same device",
     { timeout: 900_000 },
     async () => {
       const a = await agent("a");
       ok(await open(a));
+      ok(await a.run(["install", "Appduct", target.app]));
+      const [lease] = await listLeases(env);
       const old = await readPidRecord(env);
       process.kill(old.pid, "SIGKILL");
       await waitFor(
@@ -494,18 +505,16 @@ function defineSuite(target: Target): void {
       );
       await awaitAgentDevice();
 
-      const next = await a.run(["snapshot"]);
-      expect(next.code).not.toBe(0);
-      expect(failureText(next)).toContain("lease ended by simlock");
-      await waitFor(async () => (await listLeases(env)).length === 0, {
-        timeout: 60_000,
-        interval: 500,
-        label: "a's simlock lease released",
-      });
+      ok(await a.run(["open", target.bundleId]));
+      ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
+      const leases = await listLeases(env);
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.id).toBe(lease?.id);
+      expect(leases[0]?.deviceId).toBe(lease?.deviceId);
     },
   );
 
-  it(
+  leasingCase(
     "after the simlock daemon is killed and started again, the old agent-device daemon's pid is gone within 60 s; the agent's next command fails with lease ended by simlock, and its old simlock lease is released",
     { timeout: 900_000 },
     async () => {
@@ -535,7 +544,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with capabilities.agent-device.leaseTtlCapMs 20000, an agent that sends no more commands gets lease.expired at most 25 s after its last command, and another agent's open then gets the device",
     { timeout: 900_000 },
     async () => {
@@ -571,7 +580,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with capabilities.agent-device.leaseTtlCapMs 20000, after a graceful simlock daemon restart an old simlock lease whose agent sends nothing gets lease.expired at most 5 s after the later of its last renewal + 20 s and the moment the restarted daemon answers simlock status",
     { timeout: 900_000 },
     async () => {
@@ -611,7 +620,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with capabilities.agent-device.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports module-unavailable with found 0.9.2, need 0.21.28 or later",
     { timeout: 900_000 },
     async () => {
@@ -723,6 +732,74 @@ function defineSuite(target: Target): void {
         refused(await b.run(["snapshot", target.deviceFlag, addressOf(a)]));
         ok(await b.run(["close"]));
         ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
+      },
+    );
+
+    it.runIf(target === IOS)(
+      "keeps two same-named sessions apart: a runner's lease boots, survives closes, serves a new session and ends on release",
+      { timeout: 900_000 },
+      async () => {
+        const token = await newAgentToken(env);
+        const client = await leaseClient(env, token.secret);
+        const allocate = (runId: string) =>
+          client.allocate({
+            leaseId: randomUUID().replaceAll("-", ""),
+            leaseBackend: "ios-instance",
+            platform: "ios",
+            retainOnClose: true,
+            runId,
+          });
+        const first = await allocate("run-one");
+        const second = await allocate("run-two");
+        expect(first.retainOnClose, "the daemon keeps the lease through close").toBe(true);
+        const one = await makeAgent(env, "run-one", { direct: true, token });
+        const two = await makeAgent(env, "run-two", { direct: true, token });
+        const devices = await listDevices(env);
+        const leases = await listLeases(env);
+        const addressOf = (lease: { leaseId: string }): string | undefined => {
+          const held = leases.find((row) => row.id === lease.leaseId);
+          return devices.find((device) => device.id === held?.deviceId)?.address;
+        };
+        expect(new Set([addressOf(first), addressOf(second)]).size).toBe(2);
+        // why: a runner names its lease, its backend and its device on every command; agent-device refuses a command whose backend is not the lease's, and with one token holding both leases a command naming no device is ambiguous.
+        const on = (lease: { leaseId: string; runId: string }, session: string) => [
+          "--session",
+          session,
+          "--run-id",
+          lease.runId,
+          "--lease-id",
+          lease.leaseId,
+          "--lease-backend",
+          "ios-instance",
+          "--udid",
+          addressOf(lease) as string,
+        ];
+
+        for (const [who, lease] of [
+          [one, first],
+          [two, second],
+        ] as const) {
+          const session = on(lease, "e2e-ios-0");
+          const booted = await who.run(["boot", ...session], { timeout: 300_000 });
+          ok(booted);
+          expect((booted.data as { id?: string } | undefined)?.id).toBe(addressOf(lease));
+          ok(await who.run(["install", "Appduct", target.app, ...session], { timeout: 300_000 }));
+          ok(await who.run(["open", target.bundleId, ...session]));
+          ok(await who.run(["snapshot", ...session], FIRST_SNAPSHOT));
+        }
+
+        const session = on(first, "e2e-ios-0");
+        ok(await one.run(["close", ...session]));
+        ok(await one.run(["close", target.bundleId, ...session]));
+        const next = on(first, "e2e-ios-1");
+        ok(await one.run(["open", target.bundleId, ...next]));
+        ok(await one.run(["snapshot", ...next], FIRST_SNAPSHOT));
+        ok(await two.run(["snapshot", ...on(second, "e2e-ios-0")], FIRST_SNAPSHOT));
+
+        await client.release({ leaseId: first.leaseId, runId: first.runId });
+        await client.release({ leaseId: second.leaseId, runId: second.runId });
+        await waitForFree(env);
+        expect(await listLeases(env)).toEqual([]);
       },
     );
 

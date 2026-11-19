@@ -1,197 +1,53 @@
-import type { EventBus } from "../bus/index.js";
-import { boundDriverSummary, DRIVER_DETAIL_MAX, parseOsConstraint } from "../contract/index.js";
-import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
-import type { Config } from "./config.js";
-import {
-  type DeviceRecord,
-  type DeviceSpec,
-  type DeviceState,
-  mayBeGranted,
-  type Platform,
-  transitionEnteredAt,
-  type VirtualDevice,
-} from "./domain.js";
-import type { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { StartupRead } from "./startup-read.js";
+import { type Logger, NoopLogger } from "../ports/index.js";
+import { mayBeGranted, type DeviceRecord, type Platform, type VirtualDevice } from "./domain.js";
 import {
   type Driver,
   type DriverCatalogEntry,
-  type DriverDevice,
-  type DriverRejection,
   type DriverReality,
   type DriverSource,
-  type DriverRejectionReason,
   type MissingPrerequisite,
   type ObservedDevice,
-  type ObservedMark,
-  type PrerequisiteCheck,
   virtualDriverDevice,
 } from "./driver.js";
-import type { CapacityReader, LeaseExpirer, WarmPoolReader } from "./core-ports.js";
-import { reservedRunning, type WarmTargetFigures } from "./warm-pool/index.js";
-import type { Registry } from "./registry.js";
-import type { SerializedDecision } from "./serialized-decision.js";
+import {
+  type DoctorFinding,
+  type DoctorOptions,
+  type DoctorReconcileOptions,
+  type DoctorReport,
+  type DoctorSource,
+  errorMessage,
+  key,
+  type OptionalModuleFinding,
+  type OrphanDeviceFinding,
+} from "./doctor-types.js";
+import { isDrift, registryDriftFindings } from "./doctor-drift.js";
+import {
+  driverUnavailableFindings,
+  expiredLeaseFindings,
+  orphanFindings,
+  overLimit,
+  prerequisiteFindings,
+  stalledTransitionFinding,
+  unreachableTarget,
+} from "./doctor-findings.js";
+import {
+  reservedRunning,
+  reserveOnVirtualPlatforms,
+  type WarmTargetFigures,
+} from "./warm-pool/index.js";
+import type { StartupRead } from "./startup-read.js";
 
-export type DoctorFinding =
-  | {
-      readonly kind: "registry-device-missing";
-      readonly deviceId: string;
-      readonly platform: Platform;
-    }
-  | { readonly kind: "orphan-device"; readonly device: DriverDevice; readonly platform: Platform }
-  | { readonly kind: "orphan-process"; readonly device: DriverDevice; readonly platform: Platform }
-  | { readonly kind: "expired-live-lease"; readonly leaseId: string; readonly deviceId: string }
-  | {
-      readonly kind: "foreign-state-change";
-      readonly deviceId: string;
-      readonly platform: Platform;
-      readonly expected: "running" | "stopped";
-      readonly observed: "running" | "stopped";
-    }
-  | {
-      readonly kind: "foreign-provenance-change";
-      readonly deviceId: string;
-      readonly platform: Platform;
-      readonly detail: ProvenanceDrift;
-    }
-  | {
-      readonly kind: "driver-unavailable";
-      readonly platform: Platform;
-      readonly reason: DriverRejectionReason;
-      readonly detail: string;
-    }
-  | {
-      readonly kind: "legacy-device";
-      readonly deviceId: string;
-      readonly platform: Platform;
-      readonly device: DriverDevice;
-      readonly path?: string;
-    }
-  | {
-      readonly kind: "stalled-transition";
-      readonly deviceId: string;
-      readonly platform: Platform;
-      readonly state: "provisioning" | "reclaiming";
-      readonly enteredAt: number;
-      readonly ageMs: number;
-      readonly thresholdMs: number;
-    }
-  | {
-      readonly kind: "driver-advisory";
-      readonly platform: Platform;
-      readonly code: string;
-      readonly message: string;
-    }
-  | {
-      readonly kind: "prerequisite-missing";
-      readonly platform: Platform;
-      readonly prerequisite: string;
-      readonly message: string;
-      readonly remedy: string;
-    }
-  | {
-      /**
-       * why: the worker's login service names a Node or `main.js` that is gone. Like
-       * `driver-advisory` it is not drift: `--fix` never acts on it, and `doctor.reconciled` does not carry it.
-       */
-      readonly kind: "service-broken";
-      readonly manager: "launchd" | "systemd";
-      readonly name: string;
-      readonly missing: readonly string[];
-      readonly remedy: string;
-    }
-  | {
-      readonly kind: "warm-pool-target-unreachable";
-      readonly platform?: Platform;
-      readonly target: string;
-      readonly reason: "runtime-missing" | "unknown-model" | "over-limit";
-      readonly message: string;
-      readonly remedy: string;
-    }
-  | {
-      readonly kind: "module-unavailable";
-      readonly module: string;
-      readonly message: string;
-      readonly remedy: string;
-    };
-
-/**
- * why: the service manager's answer for this role's service, injected so the core checks no path
- * itself; `check` returns the paths the service names that are gone, none when whole or absent.
- */
-export interface ServiceCheck {
-  readonly manager: "launchd" | "systemd";
-  readonly name: string;
-  readonly check: () => Promise<readonly string[]>;
-}
-
-export type OptionalModuleFinding = Extract<DoctorFinding, { readonly kind: "module-unavailable" }>;
-
-export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
-
-type OrphanDeviceFinding = Extract<DoctorFinding, { readonly kind: "orphan-device" }>;
-
-export interface DoctorReport {
-  readonly findings: readonly DoctorFinding[];
-  readonly sources: readonly DoctorSource[];
-}
-
-export interface DoctorSource extends Omit<DriverSource, "id"> {
-  readonly platform: Platform;
-  readonly baselineName?: string;
-  readonly baselineVersion?: number;
-}
-
-/** why: the baselines the worker holds name their sources and are checked for staleness before a report. */
-export interface DoctorBaselines {
-  checkStale(): Promise<void>;
-  nameSources(sources: readonly DriverSource[]): readonly (DriverSource & {
-    readonly baselineName?: string;
-    readonly baselineVersion?: number;
-  })[];
-}
-
-export interface DoctorQuarantine {
-  enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean>;
-}
-
-export interface DoctorOptions {
-  readonly clock: Clock;
-  readonly config: Config;
-  /**
-   * why: The decision section every registry write of this daemon is made in. A write made outside it
-   * can land on top of a concurrent one that read the registry before it, and undo it.
-   */
-  readonly baselines?: DoctorBaselines;
-  readonly decisions: Pick<SerializedDecision, "run">;
-  readonly drivers: readonly Driver[];
-  readonly eventBus: EventBus;
-  readonly leaseExpirer?: LeaseExpirer;
-  readonly quarantine?: DoctorQuarantine;
-  readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
-  readonly driverRejections?: readonly DriverRejection[];
-  readonly logger?: Logger;
-  readonly optionalModules?: () => readonly OptionalModuleFinding[];
-  readonly warmPool?: {
-    readonly figures: WarmPoolReader["figures"];
-    readonly runningCapacity: () => CapacityReader["runningCapacity"];
-  };
-  readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
-  readonly serviceCheck?: ServiceCheck;
-  readonly runningPlatforms?: () => readonly Platform[];
-  readonly registry: Registry;
-}
-
-export interface DoctorReconcileOptions {
-  readonly fix?: boolean;
-  readonly read?: StartupRead;
-  /**
-   * why: deliberately not part of `fix`: someone already running `doctor --fix` unattended in
-   * CI must not acquire a destructive behaviour by upgrading (ADR 0001, decision 6).
-   */
-  readonly purgeOrphans?: boolean;
-  readonly prerequisites?: boolean;
-}
+export type {
+  DoctorConfig,
+  DoctorFinding,
+  DoctorOptions,
+  DoctorReconcileOptions,
+  DoctorReport,
+  OptionalModuleFinding,
+  ServiceCheck,
+} from "./doctor-types.js";
+export { isStalledTransition } from "./doctor-findings.js";
+export type { StallInput } from "./doctor-findings.js";
 
 export class Doctor {
   readonly #logger: Logger;
@@ -262,7 +118,7 @@ export class Doctor {
       ...(await this.#collectPrerequisites(prerequisites)),
       ...(await this.#serviceFindings()),
       ...(await this.#warmPoolFindings()),
-      ...this.#optionalModuleFindings(),
+      ...(await this.#optionalModuleFindings()),
     ];
 
     const report = { findings: remaining, sources: await this.#sources(purgeOrphans) };
@@ -641,9 +497,9 @@ export class Doctor {
     ];
   }
 
-  #optionalModuleFindings(): readonly OptionalModuleFinding[] {
+  async #optionalModuleFindings(): Promise<readonly OptionalModuleFinding[]> {
     try {
-      return this.options.optionalModules?.() ?? [];
+      return (await this.options.optionalModules?.()) ?? [];
     } catch (error) {
       this.#logger.warn("Could not read optional module findings", {
         error: errorMessage(error),
@@ -687,10 +543,26 @@ export class Doctor {
     const limits = warmPool.runningCapacity();
     const figures = warmPool.figures().targets.filter((target) => target.origin === "configured");
     const catalogs = await this.#catalogsOfMissingRuntimes(figures);
+    const { android, ios } = this.options.config;
     const findings = figures.flatMap((target) =>
-      unreachableTarget(target, catalogs.get(target.platform)),
+      unreachableTarget(
+        target,
+        catalogs.get(target.platform),
+        this.options.config[target.platform].virtualDevices,
+        ios.modes,
+      ),
     );
-    const reserves = reservedRunning(this.options.config.warmPool, limits);
+    const reserves = reservedRunning(
+      {
+        reserveRunning: reserveOnVirtualPlatforms(
+          this.options.config.warmPool.reserveRunning,
+          (platform) =>
+            (platform === "ios" ? ios : android).virtualDevices &&
+            this.options.drivers.some((driver) => driver.platform === platform),
+        ),
+      },
+      limits,
+    );
     let wanted = 0;
     for (const platform of ["ios", "android"] as const) {
       const sum = targets
@@ -929,424 +801,4 @@ export class Doctor {
     }
     await this.options.quarantine.enterFromStalledTransition(finding.deviceId, finding.state);
   }
-}
-
-function registryDriftFindings(
-  device: DeviceRecord,
-  realDeviceKeys: ReadonlySet<string>,
-  observedDevices: ReadonlyMap<string, ObservedDevice>,
-  claims?: Pick<DeviceOperationClaims, "isClaimed">,
-): DoctorFinding[] {
-  const findings: DoctorFinding[] = [];
-  const deviceKey = key(device.spec.platform, device.driverDeviceId);
-
-  const missing = missingDeviceFinding(device, deviceKey, realDeviceKeys);
-  if (missing !== undefined) {
-    findings.push(missing);
-  }
-
-  // why: `expected === undefined` means the registry is mid-transition: simlock is acting on the device
-  // itself, so neither run state nor marks are compared.
-  //
-  // A device this daemon holds an operation claim on is excluded too: a lease-path boot from
-  // `shutdown` runs `makeReady` while the record still says `shutdown`, and a concurrent
-  // `doctor --fix` would read that as foreign drift, "fix" the record, and make the boot's own
-  // commit drop its `address`/`driverData`/`mode`.
-  const expected = expectedRunState(device.state);
-  const observed = observedDevices.get(deviceKey);
-  const claimed = claims?.isClaimed(device.id) === true;
-  if (expected !== undefined && observed !== undefined && !claimed) {
-    findings.push(...liveDriftFindings(device, expected, observed));
-  }
-
-  return findings;
-}
-
-function missingDeviceFinding(
-  device: DeviceRecord,
-  deviceKey: string,
-  realDeviceKeys: ReadonlySet<string>,
-): DoctorFinding | undefined {
-  if (device.state === "deleted" || realDeviceKeys.has(deviceKey)) {
-    return undefined;
-  }
-  return { deviceId: device.id, kind: "registry-device-missing", platform: device.spec.platform };
-}
-
-function liveDriftFindings(
-  device: DeviceRecord,
-  expected: "running" | "stopped",
-  observed: ObservedDevice,
-): DoctorFinding[] {
-  const findings: DoctorFinding[] = [];
-
-  if (observed.runState !== "transitioning" && observed.runState !== expected) {
-    findings.push({
-      deviceId: device.id,
-      expected,
-      kind: "foreign-state-change",
-      observed: observed.runState,
-      platform: device.spec.platform,
-    });
-  }
-
-  const detail = observed.mark === undefined ? undefined : provenanceDrift(observed.mark);
-  if (detail !== undefined) {
-    findings.push({
-      detail,
-      deviceId: device.id,
-      kind: "foreign-provenance-change",
-      platform: device.spec.platform,
-    });
-  }
-
-  return findings;
-}
-
-/**
- * why: A `reclaiming` record does not say which level started it -- every production path
- * asks for `standard`, but that is the caller's choice, not an invariant this finding can
- * depend on -- and the two errors are not symmetric: an estimate that is too tight turns a
- * healthy reclaim into a false stall finding, while one that is too loose only delays a real
- * one. So this takes the slower branch rather than assuming.
- */
-function slowestReclaimEstimateMs(driver: Pick<Driver, "estimate">, spec: DeviceSpec): number {
-  return Math.max(
-    driver.estimate({ clean: "standard", operation: "reclaim" }, spec),
-    driver.estimate({ clean: "full", operation: "reclaim" }, spec),
-  );
-}
-
-/**
- * why: A `provisioning` / `reclaiming` device is normally in-flight work Simlock itself is
- * driving (see `expectedRunState`), not drift -- but only up to a point. Past a
- * driver-derived threshold it stops being "still working" and becomes a stall: the
- * driver call that was supposed to resolve it never did. This is a documented failure
- * mode, not a hypothetical one -- `DeviceProvisioner` deliberately leaves a device
- * `provisioning` when a boot-timeout's own cleanup `destroy` also fails ("The
- * registered record remains for reconcile when the driver cannot destroy it").
- *
- * The threshold is `driver.estimate(...) * thresholdMultiplier`, floored at
- * `minimumThresholdMs` (see `stallThresholdMs`): not `estimate` itself, because the
- * estimate is tuned for a routine run and real-world variance (a cold Android boot, a
- * loaded host) can legitimately run well past it without anything having stalled. No
- * driver for the device's platform, or no recorded entry time (defensive; see
- * `transitionEnteredAt`), means there is nothing to compare against, so no stall rather
- * than a guess.
- *
- * A device this daemon holds an operation claim on is excluded outright, before any
- * of that arithmetic: the claim *is* the statement that work is in progress, so a
- * live operation can never be read as a stall no matter how long it legitimately
- * runs. This is the same live-versus-orphaned test `StartupConverger
- * #recoverInterruptedReclaims` already makes, and it is load-bearing rather than
- * belt-and-braces -- every release now backgrounds its reclaim, holding the device in
- * `reclaiming` for a full erase, measured at ~34s, and several such erases run at once
- * and contend for the same disk. The estimate the threshold is built from now reflects
- * that erase rather than the 1s it used to claim (#56), but tuning a threshold against
- * contended disk speed would still be guessing; the claim answers it exactly. A reclaim
- * orphaned by a crash has no claim in the new process, so the case this test exists to
- * catch is untouched.
- */
-export function isStalledTransition(input: StallInput): boolean {
-  const { claims, config, device, driver, now } = input;
-  if (device.state !== "provisioning" && device.state !== "reclaiming") {
-    return false;
-  }
-  if (claims?.isClaimed(device.id) === true) {
-    return false;
-  }
-  const enteredAt = transitionEnteredAt(device);
-  if (enteredAt === undefined || driver === undefined) {
-    return false;
-  }
-  return now - enteredAt > stallThresholdMs(device, driver, config);
-}
-
-export interface StallInput {
-  readonly device: DeviceRecord;
-  readonly driver: Pick<Driver, "estimate"> | undefined;
-  readonly config: Config["stalledTransition"];
-  readonly claims: Pick<DeviceOperationClaims, "isClaimed"> | undefined;
-  readonly now: number;
-}
-
-function stallThresholdMs(
-  device: DeviceRecord,
-  driver: Pick<Driver, "estimate">,
-  config: Config["stalledTransition"],
-): number {
-  const estimateMs =
-    device.state === "provisioning"
-      ? driver.estimate({ operation: "provision" }, device.spec) +
-        driver.estimate({ operation: "boot" }, device.spec)
-      : slowestReclaimEstimateMs(driver, device.spec);
-  return Math.max(estimateMs * config.thresholdMultiplier, config.minimumThresholdMs);
-}
-
-function stalledTransitionFinding(
-  device: DeviceRecord,
-  driversByPlatform: ReadonlyMap<Platform, Driver>,
-  config: Config["stalledTransition"],
-  now: number,
-  claims?: Pick<DeviceOperationClaims, "isClaimed">,
-): DoctorFinding | undefined {
-  const driver = driversByPlatform.get(device.spec.platform);
-  if (!isStalledTransition({ claims, config, device, driver, now })) {
-    return undefined;
-  }
-  const enteredAt = transitionEnteredAt(device);
-  if (
-    driver === undefined ||
-    enteredAt === undefined ||
-    (device.state !== "provisioning" && device.state !== "reclaiming")
-  ) {
-    return undefined;
-  }
-  return {
-    ageMs: now - enteredAt,
-    deviceId: device.id,
-    enteredAt,
-    kind: "stalled-transition",
-    platform: device.spec.platform,
-    state: device.state,
-    thresholdMs: stallThresholdMs(device, driver, config),
-  };
-}
-
-/**
- * why: Report-only by design. Re-marking would overwrite the only evidence that the
- * device was tampered with, and a fresh mark cannot be written to a leased
- * device without disturbing its holder -- so the core never repairs a mark.
- */
-function provenanceDrift(mark: ObservedMark): ProvenanceDrift | undefined {
-  if (mark.durable === undefined) {
-    return "durable-mark-missing";
-  }
-  if (!mark.erasableReadable) {
-    return undefined;
-  }
-  if (mark.erasable === undefined) {
-    return "erased";
-  }
-  return mark.erasable === mark.durable ? undefined : "mark-mismatch";
-}
-
-/**
- * why: Discovery runs once, at daemon start, so a refusal is a frozen snapshot: repairing the
- * root and running `doctor` again reports the identical finding, because nothing has
- * looked at the root since. The finding therefore has to name the step that actually
- * retries the platform, or it reads as a repair that did not work.
- */
-const DRIVER_RETRY_REMEDY =
-  "Driver discovery runs once, at daemon startup: restart the daemon (`simlock daemon stop`, then any command relaunches it) once this is fixed, or the platform stays unavailable.";
-
-function driverUnavailableFindings(rejections: readonly DriverRejection[]): DoctorFinding[] {
-  return rejections.map((rejection) => ({
-    // why: a driver's summary is an error message of any length; the remedy is kept whole.
-    detail: `${boundDriverSummary(rejection.summary, DRIVER_DETAIL_MAX - DRIVER_RETRY_REMEDY.length - 2)}. ${DRIVER_RETRY_REMEDY}`,
-    kind: "driver-unavailable" as const,
-    platform: rejection.platform,
-    reason: rejection.reason,
-  }));
-}
-
-const PLATFORM_NAMES: Readonly<Record<Platform, string>> = { android: "Android", ios: "iOS" };
-
-function isRange(osVersion: string): boolean {
-  const parsed = parseOsConstraint(osVersion);
-  return parsed.ok && parsed.constraint.kind === "range";
-}
-
-// fallow-ignore-next-line complexity -- one finding per short reason, each a fixed message.
-function unreachableTarget(
-  target: WarmTargetFigures,
-  catalog: DriverCatalogEntry | undefined,
-): DoctorFinding[] {
-  const { model, osVersion, platform, short } = target;
-  const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
-  const name = PLATFORM_NAMES[platform];
-  if (short === "runtime-missing") {
-    if (osVersion !== undefined && isRange(osVersion)) {
-      return [
-        {
-          kind: "warm-pool-target-unreachable",
-          message: `no installed ${name} runtime satisfies ${osVersion}`,
-          platform,
-          reason: short,
-          remedy: `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version> for one inside ${osVersion}`,
-          target: named,
-        },
-      ];
-    }
-    if (
-      model !== undefined &&
-      osVersion !== undefined &&
-      catalog?.runtimes.includes(osVersion) === true &&
-      catalog.modelRuntimes[model] !== undefined &&
-      !catalog.modelRuntimes[model].includes(osVersion)
-    ) {
-      return [
-        {
-          kind: "warm-pool-target-unreachable",
-          message: `${model} does not pair with ${name} ${osVersion}`,
-          platform,
-          reason: short,
-          remedy: `run simlock catalog --platform ${platform}`,
-          target: named,
-        },
-      ];
-    }
-    return [
-      {
-        kind: "warm-pool-target-unreachable",
-        message: `${name} ${osVersion ?? "runtime"} is not installed`,
-        platform,
-        reason: short,
-        remedy:
-          osVersion === undefined
-            ? `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version>`
-            : `run simlock component install ${platform} ${osVersion}`,
-        target: named,
-      },
-    ];
-  }
-  if (short === "unknown-model") {
-    return [
-      {
-        kind: "warm-pool-target-unreachable",
-        message: `${model} is not a known ${name} model`,
-        platform,
-        reason: short,
-        remedy: `run simlock catalog --platform ${platform} to list the models`,
-        target: named,
-      },
-    ];
-  }
-  return [];
-}
-
-function overLimit(input: {
-  readonly target: string;
-  readonly sum: number;
-  readonly limit: number;
-  readonly reserve: number;
-  readonly room: number;
-  readonly scope: string;
-  readonly platform?: Platform;
-}): DoctorFinding {
-  const { limit, platform, reserve, room, scope, sum, target } = input;
-  const held = reserve > 0 ? `, of which warmPool.reserveRunning holds ${reserve}` : "";
-  return {
-    kind: "warm-pool-target-unreachable",
-    message: `the ${scope}targets want ${sum} running devices, and the ${scope}running limit is ${limit}${held}, leaving room for ${room}`,
-    reason: "over-limit",
-    remedy: `lower the counts of the ${scope}warmPool.targets, ${reserve > 0 ? "" : "or "}raise the ${scope}running limit${reserve > 0 ? ", or lower warmPool.reserveRunning" : ""}`,
-    target,
-    ...(platform === undefined ? {} : { platform }),
-  };
-}
-
-function isDrift(finding: DoctorFinding): boolean {
-  return (
-    finding.kind !== "driver-advisory" &&
-    finding.kind !== "prerequisite-missing" &&
-    finding.kind !== "service-broken" &&
-    finding.kind !== "warm-pool-target-unreachable" &&
-    finding.kind !== "module-unavailable"
-  );
-}
-
-function prerequisiteFindings(
-  platform: Platform,
-  missing: readonly MissingPrerequisite[],
-  running: boolean,
-  rejected: boolean,
-): DoctorFinding[] {
-  if (missing.length === 0) {
-    return running || rejected
-      ? []
-      : [
-          {
-            kind: "prerequisite-missing",
-            message: "Every prerequisite is present, but the daemon started without this platform.",
-            platform,
-            prerequisite: "daemon-restart",
-            remedy: DRIVER_RETRY_REMEDY,
-          },
-        ];
-  }
-  return missing.map((found) => ({
-    kind: "prerequisite-missing" as const,
-    message: found.message,
-    platform,
-    prerequisite: found.prerequisite,
-    remedy: running ? found.remedy : `${found.remedy} ${DRIVER_RETRY_REMEDY}`,
-  }));
-}
-
-function orphanFindings(
-  realities: readonly {
-    readonly driver: Driver;
-    readonly reality: {
-      readonly devices: readonly DriverDevice[];
-      readonly processes: readonly DriverDevice[];
-    };
-  }[],
-  registryDeviceKeys: ReadonlySet<string>,
-): DoctorFinding[] {
-  const findings: DoctorFinding[] = [];
-  for (const { driver, reality } of realities) {
-    for (const device of reality.devices) {
-      if (!registryDeviceKeys.has(key(driver.platform, device.deviceId))) {
-        findings.push({ device, kind: "orphan-device", platform: driver.platform });
-      }
-    }
-    for (const device of reality.processes) {
-      if (!registryDeviceKeys.has(key(driver.platform, device.deviceId))) {
-        findings.push({ device, kind: "orphan-process", platform: driver.platform });
-      }
-    }
-  }
-  return findings;
-}
-
-function expiredLeaseFindings(
-  leases: readonly {
-    readonly id: string;
-    readonly deviceId: string;
-    readonly ttlDeadline: number;
-  }[],
-  now: number,
-): DoctorFinding[] {
-  return leases
-    .filter((lease) => lease.ttlDeadline <= now)
-    .map((lease) => ({
-      deviceId: lease.deviceId,
-      kind: "expired-live-lease" as const,
-      leaseId: lease.id,
-    }));
-}
-
-function expectedRunState(state: DeviceState): "running" | "stopped" | undefined {
-  switch (state) {
-    case "ready":
-    case "leased":
-      return "running";
-    case "shutdown":
-      return "stopped";
-    case "provisioning":
-    case "reclaiming":
-    case "quarantined":
-    case "absent":
-    case "deleted":
-      return undefined;
-  }
-}
-
-function key(platform: string, deviceId: string): string {
-  return `${platform}:${deviceId}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

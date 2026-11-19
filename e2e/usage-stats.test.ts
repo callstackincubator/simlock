@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, mintJoinToken, waitFor, withDaemon } from "./helpers/index.js";
+import { mintJoinToken, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
 const LEASE_ARGS = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -122,12 +122,11 @@ describe("simlock stats", () => {
   });
 
   it("on a gateway with two workers, simlock stats --json has fleet totals and one entry per worker, and each worker's own covers itself only", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port } },
       role: "gateway",
       driver: "none",
-    });
+    }));
     const oneAtATime = { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } };
     const joinWith = async (label: string) =>
       withDaemon({

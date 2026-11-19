@@ -1,6 +1,7 @@
 # Module registry
 
 Does: lists the optional modules (`optionalModules`), agent-device is its first.
-Entry: `index.ts` → `optionalModules`.
-Uses: `src/modules` types. A module's entry here is its definition file, which loads no module code (dependency rule `definition-is-light`).
-Imported by: `daemon/main.ts`, and `cli/environment.ts` on demand, for each module's config.
+
+## Rules
+
+- An entry here is a module's definition, re-exported by that module's index. A definition loads no module code (dependency rule `definition-is-light`): the CLI reads the registry only for each module's config.

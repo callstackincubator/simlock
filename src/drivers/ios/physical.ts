@@ -293,6 +293,19 @@ export class IosPhysicalHandler {
     return Promise.all(enrolledIds.map((udid) => this.#presence(udid, listed.entries)));
   }
 
+  async listAttached(): Promise<readonly string[]> {
+    const listed = await this.#list();
+    if (!listed.ok) throw new Error(`could not read the device list (devicectl): ${listed.why}`);
+    const udids = listed.entries
+      .filter(
+        (entry) =>
+          fieldOf(entry, "transportType") === "wired" && fieldOf(entry, "reality") !== "simulated",
+      )
+      .map((entry) => stringField(entry, "udid"))
+      .filter((udid) => udid !== undefined);
+    return [...new Set(udids)].sort();
+  }
+
   async reclaim(device: PhysicalDriverDevice): Promise<ReclaimResult> {
     const apps = await this.#appsRead(device.deviceId);
     if (!apps.ok) {

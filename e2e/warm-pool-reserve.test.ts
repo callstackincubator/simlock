@@ -103,7 +103,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     expect(status.json).toMatchObject({ capacity: { ios: { warm: 2 } } });
   });
 
-  it("five detached leases of one kind queued behind a booting device, with maxConcurrentBoots 3, start three makeReady calls at once, not four, then the fourth once one is ready, and every lease is granted with no device left idle", async () => {
+  it("five detached leases of one kind queued behind a booting device, with maxConcurrentBoots 3, start three makeReady calls at once, not four, then the fourth once one is ready, and every lease is granted, leaving one spare ready", async () => {
     const env = await withDaemon({
       configOverrides: {
         limits: { maxRunning: 10, ios: { maxDevices: 10, maxRunning: 10 } },
@@ -111,17 +111,19 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       },
       driverScript: { ios: IOS },
     });
-    const warm = await lease(env, "warm");
+    // why: the first lease's kind is learned, so the pool boots a spare while it is held (ADR 0069);
+    // the slow boot is set first so that spare is still booting when the five leases arrive.
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 4_000 } } });
-    expect((await env.cli(["release", warm.lease.id])).code).toBe(0);
+    const warm = await lease(env, "warm", ["--timeout", "60s"]);
     await waitFor(async () => (await makeReadyCalls(env)) === 2, {
-      label: "the warm pool's boot of the device that replaces the released one has started",
+      label: "the warm pool's boot of the spare for the held lease has started",
     });
+    expect((await env.cli(["release", warm.lease.id])).code).toBe(0);
 
     const grants = ["a1", "a2", "a3", "a4", "a5"].map((agent) =>
       lease(env, agent, ["--timeout", "60s"]),
     );
-    // why: the warm pool's boot of the replacement counts among the three.
+    // why: the warm pool's boot of the spare counts among the three.
     await waitFor(async () => (await makeReadyCalls(env)) === 4, {
       label: "two more boots are running beside the warm pool's",
     });
@@ -132,26 +134,30 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     await untilQuiet(env);
 
     expect(new Set(granted.map((grant) => grant.device.id)).size).toBe(5);
-    expect(await makeReadyCalls(env)).toBe(6);
+    // why: five held copies leave one spare ready, the seventh boot (ADR 0069).
+    expect(await makeReadyCalls(env)).toBe(7);
     expect((await deviceStates(env)).filter((state) => state === "leased")).toHaveLength(5);
-    expect((await deviceStates(env)).filter((state) => state === "ready")).toHaveLength(0);
+    // why: the boots are still slow, so the spare may still be booting when the pool goes quiet.
+    await waitFor(
+      async () => (await deviceStates(env)).filter((state) => state === "ready").length === 1,
+      { label: "the one spare is ready" },
+    );
   });
 
-  describe("while the warm pool boots the device that replaces a released one", () => {
+  describe("while the warm pool boots the spare of a released lease's kind", () => {
     async function releasedAndReplacing(env: TestEnv): Promise<Grant> {
-      const first = await lease(env, "holder");
+      // why: the holder's kind is learned, so the pool boots a spare while it is held (ADR 0069);
+      // the slow boot is set first so the spare is still booting when the holder is released.
       await env.driverScript.merge({ ios: { latencyMs: { makeReady: 3_000 } } });
+      const first = await lease(env, "holder", ["--timeout", "20s"]);
+      await waitFor(async () => (await makeReadyCalls(env)) === 2, {
+        label: "the warm pool's boot of the spare has started",
+      });
       expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-      await waitFor(
-        async () =>
-          (await env.driverLog.calls()).filter((call) => call.operation === "makeReady").length ===
-          2,
-        { label: "the warm pool's boot has started" },
-      );
       return first;
     }
 
-    it("a lease for that replacement is granted it when it is ready, with no device.provisioned beyond the first lease's and the pool's", async () => {
+    it("a lease for that spare is granted it when it is ready, and the spare is the second device provisioned, not one the lease provisioned itself", async () => {
       const env = await withDaemon({
         driverScript: { ios: IOS },
       });
@@ -160,11 +166,12 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       // A bound shorter than the test timeout: a request nobody woke fails here, on QUEUE_TIMEOUT.
       const second = await lease(env, "waiter", ["--timeout", "20s"]);
 
+      // why: the pool's next spare, made once the waiter holds the first, may be provisioned too; the
+      // waiter's own provision would be the second row instead of the pool's spare.
       const provisioned = await eventsNamed(env, "device.provisioned");
       expect(second.device.id).not.toBe(first.device.id);
-      expect(provisioned).toHaveLength(2);
+      expect(provisioned[0]?.payload).toMatchObject({ deviceId: first.device.id });
       expect(provisioned[1]?.payload).toMatchObject({ deviceId: second.device.id });
-      expect(await eventsNamed(env, "device.ready")).toHaveLength(2);
     });
 
     it("the same lease with --no-wait provisions its own device", async () => {

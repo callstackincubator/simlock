@@ -37,7 +37,7 @@ it("shows only running devices, preserves cross-worker identities and stable ord
     worker: "Host a",
     runtime: "18.4",
     platform: "iOS",
-    to: "/fleet/a/dev_0?drawer=screen",
+    to: "/fleet/a/devices/dev_0/",
   });
   expect(screensOf([])).toEqual([]);
   expect(screensOf([{ ...a, connection: "disconnected" }])[0]?.offer).toEqual({

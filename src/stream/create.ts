@@ -64,6 +64,7 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
     }),
     clock: options.clock,
     logger: options.logger,
+    promisesKeyframes: true,
   };
   // why: a device that stops with no lease end (the warm pool's shutdown, the reaper, a phone unplugged,
   // quarantine, a delete) runs no reclaim hook, and a capture does not end by itself when its device

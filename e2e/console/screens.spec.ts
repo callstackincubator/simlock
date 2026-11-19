@@ -288,9 +288,9 @@ test("four screens wrap at narrow widths and each links to its existing device S
     ).toBeVisible();
   }
 
-  await expect(page.getByRole("link", { name: "Open device Screen" }).first()).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Open streaming page" }).first()).toHaveAttribute(
     "href",
-    "/fleet/synthetic/four?drawer=screen",
+    "/fleet/synthetic/devices/four/",
   );
   const boxes = await page
     .locator(".screens-tile")
@@ -316,12 +316,12 @@ test("four screens wrap at narrow widths and each links to its existing device S
   await expect(page.locator(".screens-tile")).toHaveCount(2);
   for (const id of ["other", "synthetic"]) {
     const link = page.getByRole("link", {
-      name: `Open device Screen: Synthetic worker (${id}), iPhone 16 (one)`,
+      name: `Open streaming page: Synthetic worker (${id}), iPhone 16 (one)`,
       exact: true,
     });
     expect(await link.count()).toBe(1);
-    await expect(link).toHaveText("Open device Screen");
-    await expect(link).toHaveAttribute("href", `/fleet/${id}/one?drawer=screen`);
+    await expect(link).toHaveText("Open streaming page");
+    await expect(link).toHaveAttribute("href", `/fleet/${id}/devices/one/`);
   }
 });
 
@@ -447,7 +447,7 @@ test("adds a running device without page reload after an event, a poll, or retur
         (window as unknown as { wallTest: Controls }).wallTest.hidden(false),
       );
     await expect(page.locator(".screens-tile")).toHaveCount(5);
-    await expect(page.locator('a[href="/fleet/synthetic/five?drawer=screen"]')).toBeVisible();
+    await expect(page.locator('a[href="/fleet/synthetic/devices/five/"]')).toBeVisible();
     await expect.poll(() => active(page)).toHaveLength(4);
     await expect(
       page.getByText("Paused: 4 screens are already capturing.", { exact: true }),

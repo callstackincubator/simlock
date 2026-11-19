@@ -35,10 +35,12 @@ import { LeaseStartup } from "./lease-startup.js";
 import { PhysicalDeviceWatcher } from "./physical-device-watcher.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
 
+export type LeasingConfig = Pick<Config, "health" | "lease">;
+
 export interface LeasingOptions {
   readonly clock: Clock;
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: LeasingConfig;
   readonly core: Core;
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
@@ -53,6 +55,10 @@ export interface LeasingOptions {
    * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
    */
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
+  /** why: the device modes the worker serves per platform, built from config by the composition root (ADR 0082 §2). Omitted, or silent on a platform, means every mode. */
+  readonly servedModes?: Readonly<Partial<Record<Platform, readonly DeviceMode[]>>> | undefined;
+  /** why: the worker's default image tag per platform, built from config by the composition root (ADR 0078 §1). */
+  readonly defaultImageTags?: Readonly<Partial<Record<Platform, string>>> | undefined;
   readonly modelPreferences?: ModelPreferences | undefined;
   /** why: not started on build: a health probe would shell out while startup convergence does. */
   readonly healthMonitor?: boolean | undefined;
@@ -84,6 +90,8 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader, 
    * timer, and cancelling first would strand it armed.
    */
   settle(): Promise<void>;
+  /** why: waits for every request provisioning or booting now; called in `dispose` after the components close and before any driver is disposed (#1200). */
+  settleAcquisitions(): Promise<void>;
   /**
    * why: cancelling expires nothing and releases nothing: `ttlDeadline` is persisted and
    * re-armed on the next start. Without this a lease's TTL timer keeps the process alive after
@@ -150,8 +158,11 @@ export function createLeasing(options: LeasingOptions): Leasing {
     claims: core.claims,
     components: options.components,
     decisions,
+    defaultImageTags: options.defaultImageTags ?? {},
     defaultModes: options.defaultModes ?? {},
+    servedModes: options.servedModes ?? {},
     drivers: core.drivers,
+    endLease: (leaseId) => releaseCoordinator.release(leaseId, "explicit"),
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
     leases,
@@ -257,6 +268,11 @@ export function createLeasing(options: LeasingOptions): Leasing {
       await releaseCoordinator.release(leaseId, reason);
     },
     releaseAll: async (reason: ClientReleaseReason) => releaseCoordinator.releaseAll(reason),
+    releaseRun: async (runId: string, ownerId: string | undefined) => {
+      // why: the run's waiting requests stop first, so a device a released lease frees is never granted to one of them.
+      const requestIds = await acquisition.cancelRun(runId, ownerId);
+      return { leaseIds: await releaseCoordinator.releaseRun(runId, ownerId), requestIds };
+    },
     renew: async (leaseId: string, ttlMs?: number): Promise<LeaseRecord> =>
       releaseCoordinator.renew(leaseId, ttlMs),
     expire: async (leaseId: string) => {
@@ -276,6 +292,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
       await physicalDeviceWatcher.settle();
       await releaseCoordinator.settleBackgroundReclaims();
     },
+    settleAcquisitions: () => acquisition.settleAcquisitions(),
     dispose: () => {
       releaseCoordinator.dispose();
       physicalDeviceWatcher.dispose();

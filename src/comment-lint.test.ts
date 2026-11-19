@@ -89,6 +89,52 @@ describe("comment-lint.mjs", () => {
     expect(result.lines).toEqual([`scripts/run.mjs:4: ${REASON}`, `src/a.ts:5: ${REASON}`]);
   });
 
+  it("accepts a tool directive added under an unchanged comment, and still judges a comment added with one", () => {
+    const dir = repo(
+      { "src/a.ts": "/** Says what a is. */\nconst a = 1;\n" },
+      {
+        "src/a.ts": [
+          "/** Says what a is. */",
+          "// fallow-ignore-next-line unused-export -- read through a registry.",
+          "const a = 1;",
+          "// Says what b is.",
+          "// fallow-ignore-next-line unused-export -- read through a registry.",
+          "const b = 2;",
+          "",
+        ].join("\n"),
+      },
+    );
+
+    const result = lint(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.lines).toEqual([`src/a.ts:4: ${REASON}`]);
+  });
+
+  it("accepts a block moved unchanged from another file, and rejects one whose moved text was edited", () => {
+    const dir = repo(
+      {
+        "src/big.ts": [
+          "// Says what a is.",
+          "const a = 1;",
+          "// Says what b is.",
+          "const b = 2;",
+          "",
+        ].join("\n"),
+      },
+      {
+        "src/big.ts": "",
+        "src/a.ts": "  // Says what a is.\nconst a = 1;\n",
+        "src/b.ts": "// Says what b was.\nconst b = 2;\n",
+      },
+    );
+
+    const result = lint(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.lines).toEqual([`src/b.ts:1: ${REASON}`]);
+  });
+
   it("accepts a doc comment on an export the client or admin entry point re-exports, and rejects one elsewhere", () => {
     const dir = repo(
       {},

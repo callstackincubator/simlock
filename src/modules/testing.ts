@@ -34,7 +34,7 @@ export interface FakeModuleOptions {
   readonly capabilityName?: string;
   readonly state?: string;
   readonly hooks?: WorkerHooks;
-  readonly findings?: () => readonly ModuleFinding[];
+  readonly findings?: () => readonly ModuleFinding[] | Promise<readonly ModuleFinding[]>;
   readonly relayTarget?: WorkerModule["relayTarget"];
   readonly mount?: WorkerModule["mount"];
   readonly loadError?: Error;
@@ -195,6 +195,8 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
         connect: () => Promise.reject(new Error("no device port in a fake context")),
         reverse: () => Promise.reject(new Error("no device port in a fake context")),
         supports: () => false,
+        supportsEmulatorPort: () => false,
+        connectEmulatorPort: () => Promise.reject(new Error("no device port in a fake context")),
       },
       inputs: {
         leaseInput: () =>

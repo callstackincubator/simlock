@@ -1,6 +1,6 @@
 # 0023. agent-device is served by an optional edge module, and the simlock lease is the only clock
 
-- **Status:** Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md); §1, §3 and §4 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) for a standalone worker
+- **Status:** Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md); §1, §3 and §4 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) for a standalone worker; §2 and §4 narrowed by [ADR 0070](0070-test-runners-drive-a-lease-through-the-agent-device-front.md); §3 superseded in part by [ADR 0071](0071-a-restart-re-allocates-a-live-agent-device-lease.md)
 - **Date:** 2026-10-12
 - **Issue:** [#466](https://github.com/callstackincubator/simlock/issues/466)
 - **Supersedes:** nothing. Builds on [ADR 0020](0020-a-requester-may-choose-its-lease-id.md)
@@ -71,7 +71,7 @@ An agent-device lease and its simlock lease share one id (the CLI chooses
 it; ADR 0020 lets simlock keep it) and one lifetime.
 
 - `allocate` becomes `lease.request` as the agent's principal, with the
-  CLI's selectors mapped to `platform`, `model` or `class`, `osVersion` and `imageTag`. A request
+  CLI's selectors mapped to `platform`, `model` or `class`, `osVersion`, `imageTag` and `baseline` (its `deviceBaseline`). A request
   that waits in simlock's queue holds the CLI's request open. When the CLI
   hangs up, the front cancels it; a grant that lands after that is released
   at once.

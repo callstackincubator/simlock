@@ -16,7 +16,24 @@ describe("SLIM_CATEGORIES", () => {
     }
   });
 
-  it("matches simslim v0.13.0: navd is in widgets, and the never-disable labels are in no category", () => {
+  it("matches simslim v0.14.0: an unset slim set has 16 categories and 173 labels, and a set naming mdm has exactly its 3", () => {
+    const all = resolveSlimCategories(undefined).categories;
+    const other = SLIM_CATEGORIES.find((c) => c.name === "other");
+    const mdm = resolveSlimCategories(["mdm"]);
+
+    expect(all).toHaveLength(16);
+    expect(labelsFor(all)).toHaveLength(173);
+    expect(mdm.unknown).toEqual([]);
+    expect(labelsFor(mdm.categories)).toEqual([
+      "com.apple.RemoteManagementAgent",
+      "com.apple.managedassetsd",
+      "com.apple.remotemanagementd",
+    ]);
+    expect(other?.labels).toContain("com.apple.accessibility.axassetsd");
+    expect(other?.labels).toContain("com.apple.ClipServices.clipserviced");
+  });
+
+  it("matches simslim v0.14.0: navd is in widgets, and the never-disable labels are in no category", () => {
     const widgets = SLIM_CATEGORIES.find((c) => c.name === "widgets");
     const slimmable = new Set(SLIM_CATEGORIES.flatMap((c) => c.labels));
 

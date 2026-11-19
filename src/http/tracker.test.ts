@@ -33,6 +33,7 @@ async function createTracked(
     readonly platform: "ios" | "android";
     readonly ttlMs?: number;
     readonly mode?: "slim" | "full";
+    readonly except?: readonly string[];
     readonly imageTag?: string;
     readonly baseline?: string;
     readonly physical?: boolean;
@@ -319,6 +320,7 @@ describe("LeaseRequestTracker.submit with allowDownload on a gateway", () => {
 describe("LeaseRequestTracker.submit with an optional request field", () => {
   it.each([
     ["mode", { mode: "slim" }],
+    ["except", { except: ["store", "other"] }],
     ["imageTag", { imageTag: "google_apis_playstore" }],
     ["baseline", { baseline: "checkout" }],
     ["physical", { physical: true }],
@@ -348,10 +350,24 @@ describe("LeaseRequestTracker granted lease payload", () => {
       const state = tracker.get(view.id)?.state;
       if (state?.stage !== "granted") throw new Error("expected granted");
       expect(state.lease.mode).toBe(mode);
+      expect(state.lease).not.toHaveProperty("except");
       expect(state.lease).not.toHaveProperty("slim");
       expect(state.lease).not.toHaveProperty("featureProfile");
     },
   );
+
+  it("reports the granted device's except list beside its mode", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    const { view, callIndex } = await createTracked(tracker, dispatcher);
+    dispatcher.calls[callIndex]?.resolve(
+      makeGrant({ device: { except: ["store", "other"], mode: "slim" } }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    const state = tracker.get(view.id)?.state;
+    if (state?.stage !== "granted") throw new Error("expected granted");
+    expect(state.lease).toMatchObject({ except: ["store", "other"], mode: "slim" });
+  });
 
   it("leaves mode off the lease for a granted physical device, which has none", async () => {
     const { dispatcher, tracker } = buildTracker();

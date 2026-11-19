@@ -29,9 +29,12 @@ export interface ExactDeviceRequest {
   readonly osVersion?: string;
   readonly mode?: DeviceMode;
   readonly imageTag?: string;
+  readonly except?: readonly string[];
+  /** why: set only by leasing's attempt with a worker's default image tag, never from the wire; the Android driver then counts only images built for its host CPU (ADR 0078 §2). */
+  readonly defaultTag?: true;
 }
 
-export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
+export interface DeviceRequest extends Omit<ExactDeviceRequest, "defaultTag" | "model"> {
   /** why: the name of the baseline the request wants a copy of; the coordinator checks it against the baseline and resolves the spec from it. */
   readonly baseline?: string;
   readonly model?: string;
@@ -51,10 +54,18 @@ export type VirtualDriverDevice = DriverDevice & { readonly physical: false };
 export type PhysicalDriverDevice = DriverDevice & {
   readonly physical: true;
   readonly enrolledApps: readonly string[];
+  /** why: set for a network phone only, so the driver checks it still reaches that phone (ADR 0080 §2). */
+  readonly hardwareSerial?: string;
 };
 
 export function isPhysicalDriverDevice(device: DriverDevice): device is PhysicalDriverDevice {
   return (device as Partial<PhysicalDriverDevice>).physical === true;
+}
+
+/** why: what a presence read asks about one enrolled phone; the hardware serial lets a driver tell a phone from another one at the same network address (ADR 0080 §2). */
+export interface EnrolledPhysical {
+  readonly driverDeviceId: string;
+  readonly hardwareSerial?: string;
 }
 
 export interface PresentPhysical {
@@ -74,7 +85,12 @@ export function toDriverDevice(device: DeviceRecord): VirtualDriverDevice | Phys
     driverData: device.driverData,
   };
   return device.physical
-    ? { ...base, enrolledApps: device.enrolledApps, physical: true }
+    ? {
+        ...base,
+        enrolledApps: device.enrolledApps,
+        ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
+        physical: true,
+      }
     : { ...base, physical: false };
 }
 
@@ -168,6 +184,8 @@ export interface DriverCatalogEntry {
   readonly modelClasses: Readonly<Record<string, DeviceClass>>;
   readonly images?: readonly DriverCatalogImage[];
   readonly customModels?: readonly string[];
+  /** why: ADR 0066 §5: the iOS driver names the categories it slims, so a gateway routes an `except` lease by them. */
+  readonly slimCategories?: readonly string[];
 }
 
 export interface DriverCatalogImage {
@@ -223,6 +241,8 @@ export type PhysicalInspection =
       readonly osVersion: string;
       readonly class: PhysicalClass;
       readonly apps: readonly string[];
+      /** why: a network phone's `ro.serialno`, so one phone keeps one record whatever address it is reached at (ADR 0080 §2); absent for USB phones. */
+      readonly hardwareSerial?: string;
     }
   | {
       readonly enrollable: false;
@@ -246,6 +266,7 @@ export interface DriverSource {
 }
 
 export interface Driver {
+  readonly rebootReadyBeforeGrant?: boolean;
   readonly platform: Platform;
   readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
   readonly deviceRoot: string;
@@ -301,6 +322,7 @@ export interface Driver {
     options: {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
+      readonly except?: readonly string[];
     },
   ): Promise<DriverDevice>;
   reclaim(
@@ -315,7 +337,9 @@ export interface Driver {
   destroy(device: VirtualDriverDevice): Promise<void>;
   listManaged(): Promise<DriverReality>;
   inspectPhysical(id: string): Promise<PhysicalInspection>;
-  listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]>;
+  listPresentPhysical(enrolled: readonly EnrolledPhysical[]): Promise<readonly PresentPhysical[]>;
+  /** why: a read made beyond enrolled IDs; canonical IDs of the phones on USB in any state, sorted, no duplicates, and a throw (never an empty list) when the platform cannot be read. */
+  listAttachedPhysical(): Promise<readonly string[]>;
   listCatalog(): Promise<DriverCatalogEntry>;
   estimate(
     estimate: DriverEstimate & { readonly operation: "boot"; readonly device: DriverDevice },
@@ -598,6 +622,22 @@ export class UnsupportedRequestOptionError extends Error {
   }
 }
 
+/** why: A refusal that carries its own message, where `UnsupportedRequestOptionError` builds a fixed one. */
+export class BadDeviceRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BadDeviceRequestError";
+  }
+}
+
+/** why: A device booted with a lease's except list but a kept category's service is not running, or that could not be shown (ADR 0066 §2): the driver refuses the device rather than tell the lease it is on. */
+export class KeptCategoriesError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KeptCategoriesError";
+  }
+}
+
 export class UnknownModelError extends Error {
   readonly class: DeviceClass | undefined;
   readonly model: string | undefined;
@@ -705,7 +745,7 @@ export class LicenseNotAcceptedError extends Error {
  * disk at the instant it runs: two installs racing the same preflight (an iOS runtime download
  * and an Android system-image install, or two of either) can each observe enough free space and
  * both proceed, jointly overfilling the volume neither alone would have. A single shared
- * `DiskSpaceGuard` instance, held by `ComponentInstaller` (wired once in `src/daemon/main.ts`;
+ * `DiskSpaceGuard` instance, held by `ComponentInstaller` (wired once in `src/daemon/worker-composition.ts`;
  * drivers never see it), fixes that by tracking bytes reserved but not yet released, keyed per
  * path, and checking free space *minus* those outstanding reservations rather than free space
  * alone.

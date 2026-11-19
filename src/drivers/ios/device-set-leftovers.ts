@@ -42,7 +42,7 @@ export async function refuseDefaultSourcesLeftovers(
   if (udids.length === 0) return;
 
   throw new OwnedRootError(
-    `Refusing the ios device set: Simlock's sources set at ${sourcesSet} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${sourcesSet} delete <udid>\`.`,
+    `Refusing the ios device set: Simlock's sources set at ${sourcesSet} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${sourcesSet} delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
     "device-set-changed",
     sourcesSet,
     "ios",
@@ -106,4 +106,14 @@ async function marksInstance(
 
 function errorCode(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+/** why: the simlock set has no DeviceHub, so `ios.simulator.headless: false` has no window to open there. */
+export function headlessNeedsDefaultSet(root: string): OwnedRootError {
+  return new OwnedRootError(
+    'Refusing the ios device set: ios.simulator.headless is false, which needs drivers.ios.deviceSet "default". Set drivers.ios.deviceSet to "default", or ios.simulator.headless to true.',
+    "invalid-device-set",
+    root,
+    "ios",
+  );
 }

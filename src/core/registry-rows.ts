@@ -137,6 +137,7 @@ const DEVICE_OPTIONAL_NUMBERS = [
   ["lastLeaseEndedAt", "last_lease_ended_at"],
   ["readyAt", "ready_at"],
   ["shutdownAt", "shutdown_at"],
+  ["deletedAt", "deleted_at"],
   ["foreignStateDetectedAt", "foreign_state_detected_at"],
   ["foreignProvenanceDetectedAt", "foreign_provenance_detected_at"],
   ["recoveringSince", "recovering_since"],
@@ -170,6 +171,8 @@ const DEVICE_COLUMNS = [
   "absent_reason",
   "baseline_name",
   "baseline_version",
+  "except_categories",
+  "hardware_serial",
 ] as const;
 
 const LEASE_COLUMNS = [
@@ -182,6 +185,7 @@ const LEASE_COLUMNS = [
   "ttl_deadline",
   "last_renewed_at",
   "id_chosen_by_requester",
+  "run_id",
 ] as const;
 
 const REQUEST_COLUMNS = [
@@ -191,12 +195,14 @@ const REQUEST_COLUMNS = [
   "idempotency_key",
   "lease_id",
   "fleet_request_id",
+  "run_id",
   "platform",
   "model",
   "os_version",
   "mode",
   "image_tag",
   "baseline",
+  "except_categories",
   "class",
   "physical",
   "created_at",
@@ -217,6 +223,7 @@ const GRANT_COLUMNS = [
   "ttl_deadline",
   "last_renewed_at",
   "id_chosen_by_requester",
+  "run_id",
   "estimated_provision_ms",
   "estimated_boot_ms",
   "estimated_reclaim_ms",
@@ -230,6 +237,10 @@ function upsertSql(table: string, columns: readonly string[], key: string): stri
     .join(", ");
   return `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})
     ON CONFLICT (${key}) DO UPDATE SET ${updates}`;
+}
+
+function nullable(value: string | undefined): string | null {
+  return value ?? null;
 }
 
 function flagValue(value: boolean | undefined): number | null {
@@ -274,6 +285,8 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     device.address ?? null,
     ...physicalColumns(device),
     ...baselineColumns(device),
+    device.except === undefined ? null : device.except.join(","),
+    device.physical ? (device.hardwareSerial ?? null) : null,
   ];
 }
 
@@ -315,11 +328,40 @@ function leaseValues(lease: LeaseRecord): SqliteValue[] {
     lease.ttlDeadline,
     lease.lastRenewedAt,
     flagValue(lease.idChosenByRequester),
+    lease.runId ?? null,
   ];
+}
+
+/** why: a purged device record leaves no row behind; the driver's own data table is not the registry's to clear. */
+export function deleteDevice(database: SqliteDatabase, id: string): void {
+  database.prepare("DELETE FROM device_enrolled_apps WHERE device_id = ?").run(id);
+  database.prepare("DELETE FROM devices WHERE id = ?").run(id);
 }
 
 export function writeLease(database: SqliteDatabase, lease: LeaseRecord): void {
   database.prepare(UPSERT_LEASE).run(...leaseValues(lease));
+}
+
+/** why: ADR 0074 §4: the newer end of a reused id replaces the older. */
+export function writeEndedLeaseId(
+  database: SqliteDatabase,
+  leaseId: string,
+  endedAt: number,
+): void {
+  database
+    .prepare("INSERT OR REPLACE INTO ended_lease_ids (lease_id, ended_at) VALUES (?, ?)")
+    .run(leaseId, endedAt);
+}
+
+export function pruneEndedLeaseIds(database: SqliteDatabase, endedBefore: number): void {
+  database.prepare("DELETE FROM ended_lease_ids WHERE ended_at < ?").run(endedBefore);
+}
+
+export function readEndedLeaseId(database: SqliteDatabase, leaseId: string): number | undefined {
+  const row = database
+    .prepare("SELECT ended_at FROM ended_lease_ids WHERE lease_id = ?")
+    .get(leaseId);
+  return row === undefined ? undefined : Number(row["ended_at"]);
 }
 
 export function deleteLease(database: SqliteDatabase, id: string): void {
@@ -337,12 +379,14 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       record.idempotencyKey ?? null,
       record.leaseId ?? null,
       record.fleetRequestId ?? null,
+      nullable(record.runId),
       request.platform,
       request.model ?? null,
       request.osVersion ?? null,
       request.mode ?? null,
       request.imageTag ?? null,
       request.baseline ?? null,
+      request.except === undefined ? null : request.except.join(","),
       request.class ?? null,
       flagValue(request.physical),
       record.createdAt,
@@ -367,6 +411,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       lease.ttlDeadline,
       lease.lastRenewedAt,
       flagValue(lease.idChosenByRequester),
+      nullable(lease.runId),
       grant.timing.estimatedProvisionMs,
       grant.timing.estimatedBootMs,
       grant.timing.estimatedReclaimMs,
@@ -480,6 +525,7 @@ function deviceFromRow(
       driverData: {},
       enrolledApps: appsByDevice.get(id) ?? [],
       physical: true,
+      ...present("hardwareSerial", reader.optText("hardware_serial")),
       ...present("reclaimingSince", reader.optInt("reclaiming_since")),
       ...present("absentReason", reader.optOneOf("absent_reason", ABSENT_REASONS)),
       spec: {
@@ -496,6 +542,7 @@ function deviceFromRow(
     ...shared,
     driverData: readDeviceData(database, deviceData, platform, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
+    ...present("except", exceptOf(reader)),
     mode: reader.oneOf("mode", DEVICE_MODES),
     physical: false,
     spec: {
@@ -510,6 +557,10 @@ function deviceFromRow(
     state: reader.oneOf("state", VIRTUAL_STATES),
   };
   return virtual;
+}
+
+function exceptOf(reader: RowReader): readonly string[] | undefined {
+  return reader.optText("except_categories")?.split(",");
 }
 
 function baselineOf(reader: RowReader): { baseline?: { name: string; version: number } } {
@@ -557,6 +608,7 @@ function leaseFromRow(table: string, key: string, row: Row, idColumn: string): L
     lastRenewedAt: reader.int("last_renewed_at"),
     ownerId: reader.text("owner_id"),
     requesterId: reader.text("requester_id"),
+    ...present("runId", reader.optText("run_id")),
     ttlDeadline: reader.int("ttl_deadline"),
     ttlMs: reader.int("ttl_ms"),
   };
@@ -597,6 +649,7 @@ function loadLeaseRequests(
         ...present("idempotencyKey", reader.optText("idempotency_key")),
         ...present("leaseId", reader.optText("lease_id")),
         ...present("fleetRequestId", reader.optText("fleet_request_id")),
+        ...present("runId", reader.optText("run_id")),
         ownerId: reader.text("owner_id"),
         request: requestFromRow(reader),
         requesterId: reader.text("requester_id"),
@@ -620,6 +673,7 @@ function requestFromRow(reader: RowReader): DeviceRequest {
     ...present("mode", reader.optOneOf("mode", DEVICE_MODES)),
     ...present("imageTag", reader.optText("image_tag")),
     ...present("baseline", reader.optText("baseline")),
+    ...present("except", exceptOf(reader)),
     ...present("class", reader.optOneOf<DeviceClass>("class", DEVICE_CLASSES)),
     ...present("physical", reader.optFlag("physical")),
   };

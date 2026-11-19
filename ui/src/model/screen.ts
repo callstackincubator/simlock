@@ -13,6 +13,13 @@ export interface ScreenFact {
 export interface Readout {
   readonly state: Toned;
   readonly facts: readonly ScreenFact[];
+  // why: the two pills over the picture say what the stream is doing now, from the decoder's own
+  // counts; until a frame is painted they are missing rather than a made-up rate.
+  readonly overlay: { readonly rate: string; readonly summary: string } | undefined;
+}
+
+function bitrate(kilobits: number): string {
+  return kilobits >= 1000 ? `${(kilobits / 1000).toFixed(1)} Mb/s` : `${Math.round(kilobits)} kb/s`;
 }
 
 function stateOf(phase: ScreenPhase, failed: boolean): Toned {
@@ -60,6 +67,13 @@ export function readout(input: {
       { label: "Bandwidth", value: counted(`${Math.round(stats.kilobitsPerSecond)} kbit/s`) },
       { label: "Dropped", value: counted(String(stats.dropped)) },
     ],
+    overlay:
+      meta === undefined || stats.painted === 0
+        ? undefined
+        : {
+            rate: `${Math.round(stats.framesPerSecond)} fps`,
+            summary: `${meta.codec} · ${meta.width}×${meta.height} · ${bitrate(stats.kilobitsPerSecond)}`,
+          },
     state: stateOf(phase, failed),
   };
 }
@@ -88,6 +102,12 @@ export function screenView(input: {
     waiting: live && stats.painted === 0 ? waitingNote : undefined,
     width: meta?.width ?? 0,
   };
+}
+
+// why: a reader needs the sentence, not the transport that carried it: "The daemon answered 404 A stream
+// is only offered ..." reads as "A stream is only offered ...".
+export function plainSentence(text: string): string {
+  return text.replace(/^The daemon answered \d{3}\.?\s*/, "").trim();
 }
 
 export interface StreamOffer {
@@ -140,14 +160,16 @@ export function deviceScreen(input: {
   readonly queued?: boolean;
 }): DeviceScreen {
   const { conflict, offer, state } = input;
-  if (!offer.offered) return { kind: "sentence", text: offer.reason ?? "" };
+  if (!offer.offered) return { kind: "sentence", text: plainSentence(offer.reason ?? "") };
   if (STREAMING_STATES.has(state)) {
     if (input.queued)
       return {
         kind: "sentence",
         text: `Paused: ${SCREEN_CAPTURE_LIMIT} screens are already capturing.`,
       };
-    return conflict === undefined ? { kind: "picture" } : { kind: "sentence", text: conflict };
+    return conflict === undefined
+      ? { kind: "picture" }
+      : { kind: "sentence", text: plainSentence(conflict) };
   }
   return {
     kind: "sentence",

@@ -761,4 +761,133 @@ describe("gateway fleet", () => {
     expect(generated.code, generated.stderr).toBe(0);
     expect((generated.json as { lease: { id: string } }).lease.id).toMatch(/^[^.]+\.lse_/);
   });
+
+  it("through a gateway, a caller re-sending a chosen lease ID after its lease ended gets LEASE_ENDED", async () => {
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
+      driver: "none",
+    }));
+    const url = `ws://127.0.0.1:${port}`;
+    const driverScript = { ios: { availableOsVersions: ["26.0"], knownModels: ["iPhone 16 Pro"] } };
+    const workerA = await withDaemon({
+      configOverrides: { gateway: { label: "worker-a", token: await mintJoinToken(gateway), url } },
+      driverScript,
+    });
+    const workerB = await withDaemon({
+      configOverrides: { gateway: { label: "worker-b", token: await mintJoinToken(gateway), url } },
+      driverScript,
+    });
+    const bothConnected = () =>
+      waitForWorkers(
+        gateway,
+        (views) =>
+          views.length === 2 &&
+          views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+        "both workers connected with their catalogs",
+      );
+    await bothConnected();
+    const lease = (agentId: string, leaseId: string, ttl = "1h") =>
+      gateway.cli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16 Pro",
+          "--agent-id",
+          agentId,
+          "--detach",
+          "--lease-id",
+          leaseId,
+          "--ttl",
+          ttl,
+        ],
+        { timeout: 30_000 },
+      );
+    // why: only the gateway's own rejections: a worker's are relayed with its `workerId`.
+    const rejections = async () =>
+      (await gateway.events())
+        .filter(
+          (event) => event.event === "lease.rejected" && !("workerId" in (event.payload as object)),
+        )
+        .map((event) => (event.payload as { reason: string }).reason);
+    const ended =
+      /^Lease (\S+) ended at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z; choose a new lease id$/;
+    const expectEnded = async (agentId: string, leaseId: string) => {
+      const retry = await lease(agentId, leaseId);
+      expect(retry.code, leaseId).toBe(13);
+      expect(retry.error, leaseId).toMatchObject({
+        code: "LEASE_ENDED",
+        message: expect.stringMatching(ended),
+      });
+      expect(retry.error?.message.match(ended)?.[1], leaseId).toBe(leaseId);
+    };
+    const waitForEnded = async (leaseId: string) => {
+      await waitFor(async () => (await lease("agent-b", leaseId)).error?.code === "LEASE_ENDED", {
+        label: `a retry of ${leaseId} is refused with LEASE_ENDED`,
+        timeout: 90_000,
+      });
+      expect((await rejections()).at(-1), leaseId).toBe("lease-ended");
+    };
+
+    expect((await lease("agent-a", "end-released")).code).toBe(0);
+    expect((await gateway.cli(["release", "end-released"], { timeout: 30_000 })).code).toBe(0);
+    await expectEnded("agent-b", "end-released");
+    expect(await rejections()).toEqual(["lease-ended"]);
+
+    expect((await lease("agent-a", "end-expired", "2s")).code).toBe(0);
+    await waitForEnded("end-expired");
+
+    expect((await lease("agent-a", "end-missing", "2s")).code).toBe(0);
+    await workerA.killDaemon();
+    await workerB.killDaemon();
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await workerA.startDaemon();
+    await workerB.startDaemon();
+    await waitForEnded("end-missing");
+
+    expect((await lease("agent-a", "end-rebuilt")).code).toBe(0);
+    await gateway.restartDaemon();
+    await expectEnded("agent-b", "end-released");
+    await bothConnected();
+    await waitFor(async () => (await gateway.cli(["release", "end-rebuilt"])).code === 0, {
+      label: "the restarted gateway releases a lease it rebuilt from its workers' views",
+      timeout: 60_000,
+    });
+    await expectEnded("agent-b", "end-rebuilt");
+    expect((await rejections()).at(-1), "end-rebuilt").toBe("lease-ended");
+
+    expect((await lease("agent-a", "end-gap", "2s")).code).toBe(0);
+    const holder = (await gateway.events()).find(
+      (event) =>
+        event.event === "lease.granted" &&
+        (event.payload as { leaseId?: string }).leaseId === "end-gap",
+    )?.payload as { workerId: string };
+    await gateway.killDaemon();
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await gateway.startDaemon();
+    const views = await bothConnected();
+    const other = views.find((view) => view.id !== holder.workerId)?.id ?? "";
+    expect((await gateway.cli(["worker", "drain", other])).code).toBe(0);
+    const refused = await lease("agent-b", "end-gap");
+    expect(refused.code).toBe(13);
+    expect(refused.error).toMatchObject({ code: "LEASE_ENDED" });
+    expect((await rejections()).at(-1)).toBe("worker-failed");
+    expect((await gateway.cli(["worker", "undrain", other])).code).toBe(0);
+    expect((await gateway.cli(["worker", "drain", holder.workerId])).code).toBe(0);
+    const granted = await lease("agent-b", "end-gap");
+    expect(granted.code, granted.stderr).toBe(0);
+    expect((granted.json as { lease: { id: string } }).lease.id).toBe("end-gap");
+
+    await workerA.withConfig({ lease: { endedIdRetentionMs: 1 } }, () =>
+      workerB.withConfig({ lease: { endedIdRetentionMs: 1 } }, () =>
+        gateway.withConfig({ lease: { endedIdRetentionMs: 1 } }, async () => {
+          await bothConnected();
+          const again = await lease("agent-c", "end-released");
+          expect(again.code, again.stderr).toBe(0);
+        }),
+      ),
+    );
+  }, 300_000);
 });

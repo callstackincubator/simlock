@@ -29,6 +29,13 @@ function deviceName(
 // why: a row has one line for an event, so it names who, what and where from whichever payload
 // fields the event carries; the payload itself stays whole on the event's own page.
 export function eventSummary(event: ConsoleEvent, workers: readonly WorkerView[]): string {
+  const parts = summaryParts(event, workers);
+  return parts.length === 0 ? event.event : parts.join(" · ");
+}
+
+// why: a log row has a column for who or what an event is about and one for the rest, so the
+// summary's parts are split after the first.
+export function summaryParts(event: ConsoleEvent, workers: readonly WorkerView[]): string[] {
   const { payload } = event;
   const workerId = workerIdOf(event);
   const worker = workers.find((entry) => entry.id === workerId);
@@ -39,7 +46,7 @@ export function eventSummary(event: ConsoleEvent, workers: readonly WorkerView[]
     worker === undefined ? field(payload, "label") : workerName(worker),
     field(payload, "reason"),
   ].filter((part): part is string => part !== undefined);
-  return parts.length === 0 ? event.event : parts.join(" · ");
+  return parts;
 }
 
 const ERROR_EVENT = /(quarantined|disconnected|failed|rejected|crash|stranded)/;
@@ -50,4 +57,12 @@ export function eventTone(name: string): Tone | undefined {
   if (ERROR_EVENT.test(name)) return "error";
   if (WARN_EVENT.test(name)) return "warn";
   return undefined;
+}
+
+const OK_EVENT = /(granted|ready|connected|completed)/;
+
+// why: a log row has a square for every event, so a quiet one is neutral and a good one green, where an
+// event's name takes a colour only for trouble.
+export function squareTone(name: string): Tone {
+  return eventTone(name) ?? (OK_EVENT.test(name) ? "ok" : "idle");
 }

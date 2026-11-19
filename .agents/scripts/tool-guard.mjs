@@ -20,23 +20,32 @@
 //   prompt     a stage or lens agent (`implementer`, `reviewer`, `hardware-verifier`,
 //              `spec-reviewer`, `code-reviewer`, `claims-reviewer`) is started without the ledger
 //              tag as its prompt's first line (toolchain.md, "Review measurement"); an
-//              `implementer` without `brief:` and its mode's brief text, a `reviewer` without
-//              `protocol:` and REVIEW.md's text; a stage agent with a `model`; a `code-reviewer`
+//              `implementer` without a `mode:` line; a stage agent with a `model`; a `code-reviewer`
 //              off Opus on a diff that touches a strict area (REVIEW.md, "Routing"), outside a
 //              replay; or a sub-agent starts a helper that is not `run_in_background: false`.
-//   git        a sub-agent runs `git stash`, `git rebase` (or `pull --rebase`), or a push that
+//   git        a sub-agent runs `git stash` (but `list` or `show`), `git rebase` (or `pull
+//              --rebase`), or a push that
 //              rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force`, `--delete`).
 //   gh         a sub-agent opens a PR without `--draft` (or a REST create without
 //              `draft=true`), opens one from a `-repro` branch, runs `gh pr ready`, or adds
-//              `bug:ready`, `task:ready` or `feature:planned`; any session assigns an issue by
-//              hand instead of through `claim.mjs`.
+//              `bug:ready`, `task:ready`, `refactor:ready` or `feature:planned`, or removes
+//              `fast-track`; a
+//              `bug-triager` or an `implementer` runs `fast-track.mjs` (delivery rule 17); any
+//              session assigns an issue by hand instead of through `claim.mjs`.
 //   body       any session posts a body or comment (`gh issue|pr comment|create|edit|close`,
 //              `gh api ... body=`) that `body-rules.mjs` rejects, or one the guard cannot read
-//              (built by `$(...)`, a backtick or a variable: use `--body-file`).
+//              (built by `$(...)`, a backtick or a variable the call does not set once to a
+//              literal: use `--body-file`).
 //   slow lane  any session runs vitest on an `e2e/slow-*` file, or the e2e project without a
 //              `!slow` tags filter; a sub-agent runs `pnpm test:e2e:slow` (or a physical lane);
 //              an agent other than `hardware-verifier` and `implementer` runs `slow-e2e.sh`
 //              for anything but `status` (delivery rule 16).
+//
+//   inject     not a refusal: the guard appends to the prompt the text the agent would otherwise
+//              open or its caller paste: an `implementer`'s mode brief under `brief:`, a
+//              `reviewer`'s `docs/internal/REVIEW.md` under `protocol:` (both from this checkout),
+//              and a lens's brief from `<inputs>/briefs/`, after `review-later-round.md` when the
+//              round is not 1. A prompt that already carries the text is left alone.
 //
 // A refusal exits 2 with the reason on stderr, which the agent reads.
 import { execFileSync } from "node:child_process";
@@ -53,7 +62,6 @@ const SCRIPTS = new Set([
   "check",
   "test",
   "test:timing",
-  "typecheck",
   "typecheck:e2e",
   "typecheck:e2e:types",
   "lint",
@@ -79,8 +87,10 @@ const STRICT_AREAS = [
   /^src\/core\/cleanup\//,
   /^src\/core\/(?:registry|serialized-decision|device-operation-claims|reclaim-coordinator|quarantine-coordinator|reaper|cleanup-executor|nuke|nuke-service|managed-device-lifecycle|device-root|physical-enrollment|startup-converger)\.ts$/,
 ];
-const WORK_LABELS = new Set(["bug:ready", "task:ready", "feature:planned"]);
+const WORK_LABELS = new Set(["bug:ready", "task:ready", "refactor:ready", "feature:planned"]);
 const SLOW_LANE_AGENTS = new Set(["hardware-verifier", "implementer"]);
+// why: the fast track checks their report and their fix, so they never run it on themselves.
+const FAST_TRACK_AUTHORS = new Set(["bug-triager", "implementer"]);
 const SLOW_LANE_SCRIPTS = new Set([
   "test:e2e:slow",
   "test:e2e:physical",
@@ -157,56 +167,77 @@ const AGENT_RULES = [
       "lens=<lens>`, `-` for a key that does not apply yet. Start the agent again with it.",
   },
 ];
-const PROMPT_CHECKS = {
-  implementer: briefCheck,
-  reviewer: protocolCheck,
-  "code-reviewer": strictAreaCheck,
+// why: a model that pastes a brief pays for it twice and paraphrases it; the hook adds the file's
+// own bytes to the prompt the agent receives, and the caller's context keeps the short one.
+const PROMPT_TEXT = {
+  implementer: briefText,
+  reviewer: protocolText,
+  "spec-reviewer": (prompt) => lensText(prompt, "review-spec.md"),
+  "code-reviewer": (prompt) => lensText(prompt, "review-code.md"),
+  "claims-reviewer": (prompt) => lensText(prompt, "review-claims.md"),
 };
 
 function agentRules() {
   const ctx = { type: args.subagent_type, prompt: String(args.prompt ?? "") };
   refuseFirst(AGENT_RULES, ctx);
-  PROMPT_CHECKS[ctx.type]?.(ctx.prompt);
+  if (ctx.type === "code-reviewer") strictAreaCheck(ctx.prompt);
+  const text = PROMPT_TEXT[ctx.type]?.(ctx.prompt) ?? "";
+  if (text === "") return;
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        updatedInput: { ...args, prompt: `${ctx.prompt.trimEnd()}\n${text}` },
+      },
+    }),
+  );
 }
 
 function firstLine(prompt) {
   return prompt.replace(/^\s+/, "").split("\n")[0];
 }
 
-function briefCheck(prompt) {
+function carries(prompt, text) {
+  return squash(prompt).includes(squash(text).slice(0, 200));
+}
+
+function briefText(prompt) {
   const mode = /^mode:\s*`?([\w-]+)/m.exec(prompt)?.[1];
   const file = path.join(ROOT, ".agents", "briefs", `implement-${mode}.md`);
   if (mode === undefined || !fs.existsSync(file)) {
     refuse(
-      "Refused: an implementer's prompt names its mode on a `mode:` line: build, audit, fix or " +
-        "hardware-fix. Start the agent again with it.",
+      "Refused: an implementer's prompt names its mode on a `mode:` line: build, audit, fix, " +
+        "hardware-fix or refactor. Start the agent again with it.",
     );
   }
-  const at = prompt.search(/^brief:/m);
-  const want = squash(fs.readFileSync(file, "utf8")).slice(0, 200);
-  if (at === -1 || !squash(prompt.slice(at)).includes(want)) {
-    refuse(
-      `Refused: an implementer's prompt carries \`brief:\` and then the full text of ` +
-        `\`.agents/briefs/implement-${mode}.md\` from this checkout, so the agent opens no file ` +
-        "to learn its mode. Paste it and start the agent again.",
-    );
-  }
+  const brief = fs.readFileSync(file, "utf8");
+  return carries(prompt, brief) ? "" : `brief:\n${brief}`;
 }
 
-function protocolCheck(prompt) {
-  const heading =
-    fs
-      .readFileSync(path.join(ROOT, "docs", "internal", "REVIEW.md"), "utf8")
-      .split("\n")
-      .find((l) => l.startsWith("# ")) ?? "";
-  const at = prompt.search(/^protocol:/m);
-  const lines = at === -1 ? [] : prompt.slice(at).split("\n");
-  if (!lines.some((l) => l.trim() === heading.trim())) {
-    refuse(
-      "Refused: a reviewer's prompt carries `protocol:` and then the full text of " +
-        "`docs/internal/REVIEW.md` from this checkout. Paste it and start the agent again.",
-    );
+function protocolText(prompt) {
+  const protocol = fs.readFileSync(path.join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
+  return carries(prompt, protocol) ? "" : `protocol:\n${protocol}`;
+}
+
+// why: a lens is judged by the pinned base's briefs, which the inputs directory holds; a
+// directory the guard cannot read leaves the prompt alone, and the lens reads the files itself.
+function lensText(prompt, name) {
+  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
+  if (dir === undefined) return "";
+  const round =
+    /^round:\s*`?([\w-]+)/m.exec(prompt)?.[1] ?? /\bround=(\S+)/.exec(firstLine(prompt))?.[1];
+  const names = round === "1" ? [name] : ["review-later-round.md", name];
+  let text = "";
+  for (const n of names) {
+    let brief;
+    try {
+      brief = fs.readFileSync(path.resolve(cwd, dir, "briefs", n), "utf8");
+    } catch {
+      return "";
+    }
+    if (!carries(prompt, brief)) text += `=== briefs/${n} ===\n${brief}\n`;
   }
+  return text;
 }
 
 function strictAreaCheck(prompt) {
@@ -256,6 +287,20 @@ function commandStep(state, cmd, words, dynamic) {
   if (name === "git" && subAgent) gitRules(words);
   if (name === "gh") ghRules({ words, dynamic, cmd, ...state, group: words[1], verb: words[2] });
   slowLaneRules(words);
+  if (FAST_TRACK_AUTHORS.has(input.agent_type ?? "") && runsScript(words, "fast-track.mjs")) {
+    refuse(
+      "Refused: the fast track checks your report or your fix, so you never run it yourself " +
+        "(delivery rule 17). The orchestrator runs `fast-track.mjs`; leave the label as it is.",
+    );
+  }
+}
+
+// why: the script as the program, or as node's script; `git add` or `cat` on the file is no run.
+function runsScript(words, script) {
+  const at = words.findIndex((w) => path.basename(w) === script);
+  if (at === -1) return false;
+  const before = words.slice(0, at).filter((w) => !WRAPPERS.has(path.basename(w)));
+  return before.every((w, i) => (i === 0 && path.basename(w) === "node") || w.startsWith("-"));
 }
 
 // why: a body file written by a heredoc earlier in the same command is not on disk yet.
@@ -266,12 +311,14 @@ function trackWrites(state, cmd) {
   }
 }
 
+const STASH_READS = new Set(["list", "show"]);
 const GIT_RULES = [
   {
-    when: (g) => g.sub === "stash",
+    when: (g) => g.sub === "stash" && !STASH_READS.has(g.rest.find((w) => !w.startsWith("-"))),
     reason:
       "Refused: never `git stash` in a delivery stage: every worktree shares one stash list, so " +
-      "a pop can take another agent's changes. Commit the work instead.",
+      "a pop can take another agent's changes. Commit the work instead. `git stash list` and " +
+      "`git stash show` only read, and pass.",
   },
   {
     when: (g) =>
@@ -326,6 +373,12 @@ const GH_RULES = [
       "report what should change.",
   },
   {
+    when: (c) => subAgent && removesFastTrack(c),
+    reason:
+      "Refused: only the maintainer takes a bug off the fast track by removing `fast-track` " +
+      "(delivery rule 17). Leave the label and report why the PR is held.",
+  },
+  {
     when: (c) => subAgent && c.group === "pr" && c.verb === "ready",
     reason:
       "Refused: only the orchestrator marks a PR ready, after its review (delivery rule 14). " +
@@ -363,6 +416,21 @@ function ghRules(c) {
 
 function workLabel(c) {
   return addedLabels(c.words, c.group, c.verb).find((l) => WORK_LABELS.has(l));
+}
+
+// why: without the label the exit check has nothing to check, so removing it is the bypass:
+// `--remove-label`, or a REST call that deletes the label or replaces the issue's labels.
+function removesFastTrack(c) {
+  if ((c.group === "issue" || c.group === "pr") && c.verb === "edit") {
+    return flagValues(c.words, ["--remove-label"])
+      .flatMap((v) => v.split(","))
+      .some((v) => v.trim() === "fast-track");
+  }
+  return (
+    c.group === "api" &&
+    c.words.some((w) => /\/issues\/\d+\/labels(?:\/fast-track)?$/.test(w)) &&
+    c.words.some((w) => /(?:^|=|^-X)(?:DELETE|PUT)$/i.test(w))
+  );
 }
 
 function prCreate(c) {
@@ -440,7 +508,8 @@ function unreadable() {
   refuse(
     "Refused: the guard cannot read a body built by `$(...)`, a backtick or a variable, so it " +
       "cannot check its shape (delivery rule 12). Write the body to a file and pass " +
-      "`--body-file <file>` (`-F body=@<file>` for `gh api`).",
+      "`--body-file <file>` (`-F body=@<file>` for `gh api`). A variable reads fine when this " +
+      "call sets it once, to a literal path, in a command of its own before the use.",
   );
 }
 
@@ -633,6 +702,8 @@ function isForbiddenPnpm(args) {
   // why: the whole lane is CI's; a stage runs only the spec files its diff touched.
   if (sub === "test:console")
     return !args.includes("--project=chromium") || !after.some((w) => w.endsWith(".spec.ts"));
+  // why: a refactor's implementer mutates the lines its draft touches (delivery rule 18).
+  if (sub === "mutate") return !args.includes("--touched-by");
   return SCRIPTS.has(sub);
 }
 
@@ -711,7 +782,7 @@ if (tool === "Bash" && subAgent) {
       `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
         "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
         "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
-        'the commands under "Tests agents run".',
+        'the commands under "Tests agents run"; for types that is `pnpm typecheck`.',
     );
   }
 }

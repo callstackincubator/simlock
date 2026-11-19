@@ -5,9 +5,13 @@ import {
   deviceRecordSchema,
   baselineNameSchema,
   imageTagSchema,
+  exceptCategoriesSchema,
+  EXEC_STDIN_MAX_LENGTH,
+  LEASE_FILE_NAME_PATTERN,
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
+  refuseBadRunId,
   refuseModelWithClass,
   requesterIdSchema,
   waitingRequestSchema,
@@ -28,9 +32,11 @@ const leasePayloadSchema = z.object({
   baseline: z.object({ name: z.string(), version: z.number().int() }).optional(),
   imageTag: z.string().optional(),
   mode: z.enum(["slim", "full"]).optional(),
+  except: exceptCategoriesSchema.optional(),
   os: z.string(),
   platform: z.string(),
   requestId: z.string().optional(),
+  runId: z.string().max(128).optional(),
   ttlMs: z.number(),
   udid: z.string(),
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
@@ -137,6 +143,12 @@ const execBodySchema = z
     args: z.array(z.string()),
     stdin: z
       .string()
+      .max(EXEC_STDIN_MAX_LENGTH)
+      .nullish()
+      .transform((value) => value ?? undefined),
+    stdinFile: z
+      .string()
+      .regex(LEASE_FILE_NAME_PATTERN)
       .nullish()
       .transform((value) => value ?? undefined),
     requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
@@ -159,7 +171,11 @@ export const leaseExecRoute = declareRoute({
     "Answers a stream of messages: output, then exit or error. A failure before the command starts is a plain JSON error.",
   request: { params: leaseParamsSchema, json: execBodySchema },
   stream: execMessageSchema,
-  errors: { 404: ["UNKNOWN_LEASE"], 501: ["UNSUPPORTED_IN_GATEWAY_MODE"], 504: ["EXEC_TIMEOUT"] },
+  errors: {
+    404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+    504: ["EXEC_TIMEOUT"],
+  },
 });
 
 const rotateBodySchema = z.object({ orientation: z.enum(INPUT_ORIENTATIONS) }).strict();
@@ -171,7 +187,7 @@ export const leaseRotateRoute = declareRoute({
   summary: "Rotate the lease's iOS simulator",
   role: "agent",
   notes:
-    "Turns an iPhone or iPad simulator, whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
+    "Turns an iPhone or iPad simulator (not a foldable iPhone Duo), whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
   request: { params: leaseParamsSchema, json: rotateBodySchema },
   reply: OPERATIONS["device.rotate"].output,
   errors: {
@@ -203,19 +219,26 @@ export const leaseRequestBodySchema = z
     imageTag: imageTagSchema.optional(),
     leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    // why: a plain record of plain strings; `lease.request`'s own check bounds it and words the refusal (keys, characters), as for the CLI.
+    metadata: z.record(z.string(), z.string()).optional(),
+    // why: a coarse bound only; `lease.request`'s own check words the refusal (count, characters, repeats), as for the CLI and MCP.
+    except: z.array(z.string().max(64)).max(64).optional(),
     noWait: z.boolean().optional(),
     // why: forwarded, not dropped: the dispatcher's `lease.request` handler alone decides whether this token may set it.
     owner: z.string().min(1).optional(),
     os: z.string().min(1).optional(),
     physical: z.boolean().optional(),
     platform: z.enum(["ios", "android"]),
+    // why: A plain string, bounded by `refuseBadRunId` below as the one check, like `lease.request`'s: the same words on every transport.
+    runId: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((body, context) =>
     refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
-  );
+  )
+  .superRefine(refuseBadRunId());
 
 export const leaseRequestCreateRoute = declareRoute({
   method: "post",
@@ -237,17 +260,24 @@ export const leaseRequestCreateRoute = declareRoute({
   replyHeaders: z.object({ Location: z.string().openapi({ description: "The request's URL." }) }),
   status: 201,
   errors: {
-    409: ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+    409: ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
+    403: ["ADMISSION_DENIED"],
     404: ["UNKNOWN_BASELINE"],
-    422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
-    503: ["NO_CAPACITY"],
+    422: ["UNKNOWN_MODEL", "MODE_UNAVAILABLE", "BASELINE_MISMATCH", "BASELINE_STALE"],
+    503: ["NO_CAPACITY", "ADMISSION_FAILED"],
   },
   errorExtras: {
     409: { fields: { existingLeaseId: z.string().optional() } },
     503: {
       fields: {
         capacityReason: z
-          .enum(["device-limit", "ram-budget", "global-running-limit", "platform-running-limit"])
+          .enum([
+            "device-limit",
+            "ram-budget",
+            "memory-pressure",
+            "global-running-limit",
+            "platform-running-limit",
+          ])
           .optional(),
       },
       headers: {
@@ -359,6 +389,67 @@ export const leaseReleaseRoute = declareRoute({
   errors: { 404: ["UNKNOWN_LEASE"] },
 });
 
+const leaseFileParamsSchema = z.object({ id: z.string(), name: z.string() });
+
+const leaseFileSchema = z.object({ name: z.string(), size: z.number().int() });
+
+export const leaseFilePutRoute = declareRoute({
+  method: "put",
+  path: "/v1/leases/{id}/files/{name}",
+  tag: "Leases",
+  summary: "Upload a file to the lease's folder",
+  role: "agent",
+  notes:
+    "The body is the file's raw bytes: up to 2 GiB a file and 4 GiB a lease, streamed to disk. The same name again replaces the file; names match ignoring case. An upload is cut only after 330 s with no byte.",
+  request: { params: leaseFileParamsSchema, octetBody: true },
+  reply: leaseFileSchema,
+  status: 201,
+  errors: {
+    404: ["UNKNOWN_LEASE"],
+    408: ["UPLOAD_STALLED"],
+    409: ["FILE_BUSY"],
+    413: ["FILE_TOO_LARGE", "LEASE_FILES_FULL"],
+    422: ["INSUFFICIENT_DISK_SPACE"],
+    503: ["WORKER_UNREACHABLE"],
+  },
+});
+
+export const leaseFileGetRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases/{id}/files/{name}",
+  tag: "Leases",
+  summary: "Download a file from the lease's folder",
+  role: "agent",
+  notes:
+    "Answers the whole file, or one byte range of it (`Range: bytes=a-b`, `a-` or `-n`) as 206. A start past the end answers 416 with `Content-Range: bytes */<size>`.",
+  request: { params: leaseFileParamsSchema },
+  binaryReply: true,
+  alsoStatus: 206,
+  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"], 503: ["WORKER_UNREACHABLE"] },
+});
+
+export const leaseFileDeleteRoute = declareRoute({
+  method: "delete",
+  path: "/v1/leases/{id}/files/{name}",
+  tag: "Leases",
+  summary: "Delete a file from the lease's folder",
+  role: "agent",
+  request: { params: leaseFileParamsSchema },
+  status: 204,
+  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"], 503: ["WORKER_UNREACHABLE"] },
+});
+
+export const leaseFileListRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases/{id}/files",
+  tag: "Leases",
+  summary: "List the files in the lease's folder",
+  role: "agent",
+  request: { params: leaseParamsSchema },
+  reply: z.object({ files: z.array(leaseFileSchema) }),
+  errors: { 404: ["UNKNOWN_LEASE"], 503: ["WORKER_UNREACHABLE"] },
+});
+
 export const LEASE_ROUTES = [
   leaseRequestCreateRoute,
   leaseRequestListRoute,
@@ -370,6 +461,10 @@ export const LEASE_ROUTES = [
   leaseRenewRoute,
   leaseExecRoute,
   leaseRotateRoute,
+  leaseFilePutRoute,
+  leaseFileGetRoute,
+  leaseFileDeleteRoute,
+  leaseFileListRoute,
   leaseEventsRoute,
   leaseReleaseRoute,
 ] as const;

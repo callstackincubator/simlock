@@ -17,7 +17,8 @@ unless the maintainer explicitly authorizes its amendment. See
    the public surface updates in the same change (documentation rule 9) —
    the maintainer docs under `docs/internal/`, and the manual
    (`src/<module>/AGENTS.md`) of every module the change touches
-   (documentation rule 7).
+   (documentation rule 7). A manual gains a line only for what the code
+   cannot say; a line that restates code is deleted, not fixed.
 2. **What the tool prints.** Help text, usage banners, error messages and
    HTTP error bodies the change makes false are fixed in the same change
    (architecture rule 13), and none of them names a file path in this repo
@@ -63,7 +64,7 @@ unless the maintainer explicitly authorizes its amendment. See
    and `vendor/README.md`'s index in the same change
    (vendor-and-third-party-code rule 11). A new first-level `vendor/`
    directory carries its license text under `LICENSES/` and a `NOTICE.md`;
-   `src/source-hygiene.test.ts` enforces that shape, and counts a vendored
+   `src/source-hygiene.repo.test.ts` enforces that shape, and counts a vendored
    binary as excluded from the text scan only where a `SHA256SUMS.txt` pins
    its digest (vendor-and-third-party-code rules 2, 3, 7).
 

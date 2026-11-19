@@ -1,6 +1,6 @@
 import { platformName } from "../../../src/contract/inbox";
 
-import { devicePath } from "./paths";
+import { streamPath } from "./paths";
 import { SCREEN_CAPTURE_LIMIT, streamOffer, streamsDevice, type StreamOffer } from "./screen";
 import { type WorkerView, workerName } from "./workers";
 
@@ -38,7 +38,7 @@ export function screensOf(workers: readonly WorkerView[]): ScreenTile[] {
                   offered: false,
                   reason: `${workerName(worker)} is ${worker.connection}.`,
                 },
-          to: `${devicePath(worker.id, device.id)}?drawer=screen` as const,
+          to: streamPath(worker.id, device.id),
         })),
     )
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));

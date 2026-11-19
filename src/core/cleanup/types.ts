@@ -3,8 +3,10 @@ import type { VirtualDevice, LeaseRecord } from "../domain.js";
 
 export type CleanupAction = "shutdown" | "destroy";
 
+export type CleanupConfig = Pick<Config, "diskPressure" | "idle">;
+
 export interface RegistryView {
-  readonly config: Config;
+  readonly config: CleanupConfig;
   readonly devices: readonly VirtualDevice[];
   readonly diskFreeBytes: number;
   readonly leases: readonly LeaseRecord[];

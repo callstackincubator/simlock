@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { tokenIdentity } from "../../auth/testing.js";
 import { DispatchError } from "../../daemon/dispatch.js";
+import { rotationRefusal } from "../../daemon/rotation-refusal.js";
 import type { HttpDispatch } from "../../http/dispatcher-session.js";
 import { FakeClock, NoopLogger } from "../../ports/index.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
@@ -168,6 +169,8 @@ async function expectInvalid(typed: readonly string[]) {
   expect(body.error?.data).toEqual({
     code: "INVALID_ARGS",
     message: unknownMessage(typed[0] ?? ""),
+    details: { reason: "REFUSED_BY_SIMLOCK" },
+    retriable: false,
   });
   expect(rotations).toEqual([]);
   expect(forwarded).toEqual([]);
@@ -223,7 +226,11 @@ async function expectFailure({ error, expected }: Failure) {
   const body = await answer(response);
   const { status, ...data } = expected;
   expect(response.status, data.message).toBe(status);
-  expect(body.error?.data, data.message).toEqual(data);
+  expect(body.error?.data, data.message).toEqual({
+    ...data,
+    details: data.details ?? { reason: "SIMLOCK_FAILED" },
+    retriable: status === 503,
+  });
   expect(forwarded, data.message).toEqual([]);
   expect(clock.pendingTimerCount, data.message).toBe(0);
 }
@@ -276,5 +283,35 @@ describe("the agent-device front's orientation command", () => {
     expect(body.result?.data).toEqual(forwardedAnswer);
     expect(adopted.forwarded).toHaveLength(1);
     expect(adopted.rotations).toEqual([]);
+  });
+
+  it("forwards `orientation <name>` on an iPhone Duo simulator lease to agent-device, through a gateway and on a worker, and `device.rotate` refuses that lease `ROTATION_UNSUPPORTED`", async () => {
+    const duo = {
+      model: "iPhone Duo",
+      osVersion: "27.3",
+      physical: false,
+      platform: "ios",
+    } as const;
+    const refusal = rotationRefusal(leaseId, duo);
+    expect(refusal?.code).toBe("ROTATION_UNSUPPORTED");
+    expect(refusal?.message).toBe(
+      `Lease ${leaseId} is on a foldable iPhone Duo simulator; Simlock cannot rotate it, use \`agent-device orientation\``,
+    );
+    for (const gateway of [true, false]) {
+      for (const [typed] of rotated) {
+        const { handle, forwarded } = rig({
+          gateway,
+          model: duo.model,
+          rotate: () => {
+            const refused = rotationRefusal(leaseId, duo);
+            return refused === undefined ? Promise.resolve({}) : Promise.reject(refused);
+          },
+        });
+        const body = await answer(await handle("orientation", [typed]));
+        const label = `${gateway ? "gateway" : "worker"} ${typed}`;
+        expect(body.result?.data, label).toEqual(forwardedAnswer);
+        expect(forwarded, label).toHaveLength(1);
+      }
+    }
   });
 });

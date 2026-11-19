@@ -37,6 +37,8 @@ export interface GatewayUplinkOptions {
   readonly token: string;
   /** `gateway.label`, display-only (ADR 0005 §3a). */
   readonly label?: string;
+  /** why: `gateway.headers` is sent on every dial, not only the first. */
+  readonly headers?: Readonly<Record<string, string>> | undefined;
   /** This worker's instance id (`instance.json`) -- its fleet identity (§3a). */
   readonly workerId: string;
   /** Hands an established uplink to whoever serves it (`DaemonServer#acceptUplink`). */
@@ -125,6 +127,7 @@ export class GatewayUplink {
         token: this.options.token,
         workerId: this.options.workerId,
         ...(this.options.label === undefined ? {} : { label: this.options.label }),
+        headers: this.options.headers,
       });
       if (this.#stopped) {
         // A stop that landed while the dial was in flight: close what we just opened rather

@@ -1,4 +1,10 @@
-import { type DeviceRecord, type LeaseRecord, mayBeGranted, type VirtualDevice } from "./domain.js";
+import {
+  type DeviceRecord,
+  type LeaseRecord,
+  mayBeGranted,
+  type Platform,
+  type VirtualDevice,
+} from "./domain.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import type { StartupRead } from "./startup-read.js";
 
@@ -17,6 +23,12 @@ export interface SpentDeviceDeletion {
   deleteSpent(device: VirtualDevice): Promise<void>;
 }
 
+/** why: deletes an idle virtual device of a platform whose `<platform>.virtualDevices` is false (ADR 0084 §2). */
+export interface IdleDeviceDeletion {
+  readonly platforms: readonly Platform[];
+  deleteIdle(device: VirtualDevice): Promise<void>;
+}
+
 export interface QuarantineRestorer {
   restore(include: (device: DeviceRecord) => boolean): void;
 }
@@ -28,6 +40,7 @@ export interface DeviceClaimReader {
 export interface StartupConvergerOptions {
   readonly claims: DeviceClaimReader;
   readonly decisions: SerializedDecision;
+  readonly idleDeletion: IdleDeviceDeletion;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
@@ -50,6 +63,20 @@ export class StartupConverger {
     // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
     // down there, and is deleted here along with any the previous process left `shutdown`.
     await this.#deleteSpentDevices(read);
+    await this.#deleteIdleDevicesOfOffPlatforms(read);
+  }
+
+  async #deleteIdleDevicesOfOffPlatforms(read: StartupRead): Promise<void> {
+    const { platforms } = this.options.idleDeletion;
+    if (platforms.length === 0) return;
+    const idle = await this.options.decisions.run(() =>
+      (["ready", "shutdown"] as const)
+        .flatMap((state) => this.#actionableDevices(state, read))
+        .filter((device) => platforms.includes(device.spec.platform)),
+    );
+    for (const device of idle) {
+      await this.options.idleDeletion.deleteIdle(device);
+    }
   }
 
   async #recoverInterruptedReclaims(read: StartupRead): Promise<void> {

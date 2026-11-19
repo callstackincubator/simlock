@@ -10,8 +10,10 @@ import {
 } from "../../../src/contract/inbox";
 import { defined } from "./defined";
 import { type ConsoleEvent, textField, workerIdOf } from "./events";
-import { formatDuration } from "./time";
-import { devicePath } from "./paths";
+import { agentKind, shortHolder, type AgentKind } from "./holder";
+import { streamOffer, streamsDevice } from "./screen";
+import { formatCountdown, formatAgo, formatDuration } from "./time";
+import { devicePath, streamPath } from "./paths";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
 export type LeaseRecord = z.infer<typeof statusLeaseSchema>;
@@ -114,14 +116,23 @@ export interface LeaseRowView {
   readonly id: string;
   readonly to: string;
   readonly holder: string;
+  readonly holderTitle: string;
+  readonly holderDisplay: string;
+  readonly holderKind: AgentKind;
   readonly remaining: string;
   readonly expiring: boolean;
   readonly percent: number;
   readonly model: string;
   readonly worker?: string;
   readonly sub: string;
+  // why: the OS the device runs, as the table's second line names it ("iOS 18.4").
+  readonly runtime?: string;
   readonly platform?: string;
   readonly deviceTo?: `/${string}`;
+  readonly remainingMs: number;
+  readonly heldMs: number;
+  readonly held: string;
+  readonly renewedAgo: string;
 }
 
 export function leaseRows(input: {
@@ -137,21 +148,39 @@ export function leaseRows(input: {
     const worker = workerNameOfLease(lease, workers);
     const sub = [model, worker].filter((part) => part !== undefined).join(" · ");
     const owner = workerOfLease(lease, workers);
+    const holder = holderName(lease.requesterId, tokens);
     return {
       expiring: isExpiring(lease.ttlDeadline, now),
-      holder: holderName(lease.requesterId, tokens),
+      holder,
+      holderDisplay: shortHolder(holder),
+      holderKind: agentKind(lease.requesterId),
+      holderTitle: lease.requesterId,
       id: lease.id,
       key: `${lease.workerId ?? ""} ${lease.id}`,
       model,
+      held: formatDuration(now - lease.grantedAt),
+      heldMs: Math.max(0, now - lease.grantedAt),
       percent: percentLeft(lease.ttlDeadline, now, lease.ttlMs),
-      remaining: formatDuration(lease.ttlDeadline - now),
+      remaining: formatCountdown(lease.ttlDeadline - now),
+      remainingMs: lease.ttlDeadline - now,
+      renewedAgo: `${formatAgo(now - lease.lastRenewedAt)}`,
       sub,
       to: leasePath(lease.id),
       ...(worker === undefined ? {} : { worker }),
       ...(device === undefined ? {} : { platform: device.spec.platform }),
+      ...runtimeOf(device),
       ...(owner === undefined ? {} : { deviceTo: devicePath(owner.id, lease.deviceId) }),
     };
   });
+}
+
+const PLATFORM_LABEL: Readonly<Record<string, string>> = { android: "Android", ios: "iOS" };
+
+function runtimeOf(device: WorkerDevice | undefined): { readonly runtime?: string } {
+  if (device === undefined) return {};
+  const { osVersion, platform } = device.spec;
+  const label = PLATFORM_LABEL[platform] ?? platform;
+  return { runtime: osVersion === undefined ? label : `${label} ${osVersion}` };
 }
 
 export function filterLeaseRows(
@@ -179,6 +208,12 @@ export function searchLeaseRows(
 export interface LeaseInspection {
   readonly id: string;
   readonly title: string;
+  readonly kind: AgentKind;
+  // why: the streaming page of the lease's own device, offered only where its worker streams it.
+  readonly watchTo?: `/${string}`;
+  // why: the TTL the countdown ring is drawn against, as the card's sentence says it ("of 15 min").
+  readonly ttl?: string;
+  readonly token?: string;
   readonly expiring: boolean;
   readonly model: string;
   readonly runtime?: string;
@@ -192,6 +227,7 @@ export interface LeaseInspection {
     readonly mode?: string;
     readonly imageTag?: string;
     readonly kind?: string;
+    readonly baseline?: string;
     readonly deviceId: string;
     readonly udid: string;
   };
@@ -222,11 +258,17 @@ export function leaseInspection(input: {
     heldFor: formatDuration(now - grantedAt),
     id: lease.id,
     model: lease.device,
-    remaining: formatDuration(deadline - now),
+    remaining: formatCountdown(deadline - now),
     ...recordFacts(record, tokens, deadline, now, lease.id),
     ...defined({
       requestId: lease.requestId,
-      runtime: device?.spec.osVersion,
+      watchTo:
+        worker !== undefined &&
+        device !== undefined &&
+        streamsDevice(device.state, streamOffer(worker))
+          ? streamPath(worker.id, lease.deviceId)
+          : undefined,
+      runtime: runtimeOf(device).runtime,
       worker: leaseWorker(named, worker, workers),
     }),
   };
@@ -240,6 +282,10 @@ function leaseDevice(
     deviceId: lease.deviceId,
     udid: lease.udid,
     ...defined({
+      baseline:
+        device?.spec.baseline === undefined
+          ? undefined
+          : `${device.spec.baseline.name} v${String(device.spec.baseline.version)}`,
       imageTag: lease.imageTag ?? device?.spec.imageTag,
       kind: device === undefined ? undefined : device.physical ? "Physical" : "Virtual",
       mode: lease.mode,
@@ -255,13 +301,19 @@ function recordFacts(
   deadline: number,
   now: number,
   id: string,
-): Pick<LeaseInspection, "renewed" | "title" | "percent" | "holder" | "ownerId"> {
-  if (record === undefined) return { renewed: "—", title: id };
+): Pick<
+  LeaseInspection,
+  "renewed" | "title" | "kind" | "percent" | "holder" | "ownerId" | "ttl" | "token"
+> {
+  if (record === undefined) return { kind: "unknown", renewed: "—", title: id };
   const holder = holderOf(record.requesterId, tokens);
   return {
     holder,
+    kind: agentKind(record.requesterId),
     percent: percentLeft(deadline, now, record.ttlMs),
-    renewed: `${formatDuration(now - record.lastRenewedAt)} ago`,
+    token: record.ownerId,
+    ttl: formatDuration(record.ttlMs),
+    renewed: `${formatAgo(now - record.lastRenewedAt)}`,
     title: holderName(record.requesterId, tokens),
     ...(record.ownerId === record.requesterId ? {} : { ownerId: record.ownerId }),
   };
@@ -292,4 +344,93 @@ export function eventsOfLease(
       return named === leaseId || (workerId !== undefined && `${workerId}.${named}` === leaseId);
     })
     .toSorted((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
+}
+
+export interface HolderShare {
+  // why: the complete requester id: two holders whose shortened names read alike stay two.
+  readonly id: string;
+  readonly name: string;
+  readonly display: string;
+  readonly kind: AgentKind;
+  readonly count: number;
+  readonly percent: number;
+}
+
+export interface PlatformShare {
+  readonly platform: string;
+  readonly label: string;
+  readonly held: number;
+  readonly slots?: number;
+  readonly percent: number;
+}
+
+export interface LeaseSummary {
+  readonly total: number;
+  readonly holders: readonly HolderShare[];
+  readonly platforms: readonly PlatformShare[];
+  readonly endingCount: number;
+  readonly ending: readonly LeaseRowView[];
+  readonly longest: readonly LeaseRowView[];
+}
+
+const SUMMARY_HOLDERS = 5;
+const SUMMARY_ENDING = 5;
+const SUMMARY_LONGEST = 3;
+
+function slotsOf(workers: readonly WorkerView[], platform: string): number {
+  return workers.reduce((sum, worker) => {
+    const capacity = worker.capacity?.[platform === "ios" ? "ios" : "android"];
+    return sum + (capacity?.limit ?? 0);
+  }, 0);
+}
+
+// why: the summary counts every lease the console holds, not the page of the table the filter and the
+// search leave, so it reads the same however the table is narrowed. A lease whose device is not known
+// has no platform and is left out of the platform figures rather than guessed.
+export function leaseSummary(
+  rows: readonly LeaseRowView[],
+  workers: readonly WorkerView[],
+): LeaseSummary {
+  const byHolder = new Map<string, { row: LeaseRowView; count: number }>();
+  for (const row of rows) {
+    const entry = byHolder.get(row.holderTitle);
+    if (entry === undefined) byHolder.set(row.holderTitle, { count: 1, row });
+    else entry.count += 1;
+  }
+  const holders = [...byHolder.entries()]
+    .map(([id, { count, row }]) => ({
+      count,
+      display: row.holderDisplay,
+      id,
+      kind: row.holderKind,
+      name: row.holder,
+      percent: Math.round((count / rows.length) * 100),
+    }))
+    .sort((a, b) => b.count - a.count || compare(a.id, b.id))
+    .slice(0, SUMMARY_HOLDERS);
+  const platforms = ["ios", "android"].flatMap((platform) => {
+    const held = rows.filter((row) => row.platform === platform).length;
+    const slots = slotsOf(workers, platform);
+    if (held === 0 && slots === 0) return [];
+    return [
+      {
+        held,
+        label: PLATFORM_LABEL[platform] ?? platform,
+        percent: slots === 0 ? 100 : Math.min(100, Math.round((held / slots) * 100)),
+        platform,
+        ...(slots === 0 ? {} : { slots }),
+      },
+    ];
+  });
+  const expiring = rows
+    .filter((row) => row.expiring)
+    .toSorted((a, b) => a.remainingMs - b.remainingMs);
+  return {
+    ending: expiring.slice(0, SUMMARY_ENDING),
+    endingCount: expiring.length,
+    holders,
+    longest: rows.toSorted((a, b) => b.heldMs - a.heldMs).slice(0, SUMMARY_LONGEST),
+    platforms,
+    total: rows.length,
+  };
 }

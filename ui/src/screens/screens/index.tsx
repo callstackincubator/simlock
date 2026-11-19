@@ -8,7 +8,7 @@ import {
   useScreenTile,
 } from "../../state/screens";
 import { useDeviceScreen } from "../../state/screen";
-import { ScreenView } from "../screen-view";
+import { ScreenNotice, ScreenView } from "../screen-view";
 
 export function ScreensScreen() {
   const { view, connected, acquire } = useScreens();
@@ -58,9 +58,9 @@ function Tile({
         </p>
         <Link
           to={tile.to}
-          aria-label={`Open device Screen: ${tile.worker} (${tile.workerId}), ${tile.label} (${tile.deviceId})`}
+          aria-label={`Open streaming page: ${tile.worker} (${tile.workerId}), ${tile.label} (${tile.deviceId})`}
         >
-          Open device Screen
+          Open streaming page
         </Link>
       </header>
       {notice !== undefined ? (
@@ -87,18 +87,5 @@ function Picture({
     />
   ) : (
     <ScreenNotice text={shown.text} />
-  );
-}
-
-function ScreenNotice({ text }: { readonly text: string }) {
-  return (
-    <div className="screen-panel screens-placeholder">
-      <div className="screen-head">
-        <h3 className="lease-card-title">Screen</h3>
-      </div>
-      <div className="phone">
-        <p className="phone-off">{text}</p>
-      </div>
-    </div>
   );
 }

@@ -29,6 +29,7 @@ describe("the console's routes", () => {
       "/screens",
       "/activity",
       "/usage",
+      "/settings",
     ]);
   });
 });

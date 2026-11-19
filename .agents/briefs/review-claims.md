@@ -6,9 +6,8 @@ have no other context and have not seen the issue the diff implements.
 In the inputs directory: `rules/`, every rule file but `delivery.md`;
 `diff.patch`; `stale-refs.txt`, lines anywhere in the repository that still
 name a path, declaration or quoted string the diff removed, or a word the
-spec's Retired words section names; `briefs/calibration.md`,
-when it exists, findings like yours that were rejected lately: read it
-first. Repository: the worktree you were given, checked out at the reviewed
+spec's Retired words section names. Repository: the worktree you were
+given, checked out at the reviewed
 commit. Read and search it; edit nothing and run no tests.
 
 A claim is any statement of fact in a comment, a doc, a test title, help
@@ -29,6 +28,12 @@ unrelated debt is separate. Accepted future-state ADRs remain targets;
 current implementation gaps do not make those target statements false.
 Whether a comment may exist at all is the commit hook's (rule 17 in
 `architecture.md`): judge only whether it is true.
+
+A module manual is the exception: no hook judges its prose. A line the
+diff adds to a manual, or edits, that restates what the code says (a
+file's role, an import, a list of commands, fields or components, a
+default, steps that follow one function) is blocking under rule 7 in
+`documentation.md`, true or not: it is to be deleted.
 
 A claim is false when the code at this commit contradicts it: a name or
 path that no longer exists, a behaviour, order, owner, default or limit that
@@ -55,4 +60,5 @@ defect, in this form and no other:
 F<n> B|N <path:line> <the claim and what the code does instead, at most 25 words> [architecture 13] ev: <path:line, ...>
 ```
 
+For a manual line that restates code the tag is `[documentation 7]`.
 B is blocking, N a note. Do not suggest fixes. No findings after complete assessment: `F0`. Append the Assessment line.

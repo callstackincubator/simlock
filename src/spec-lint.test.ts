@@ -1,16 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SCRIPT = join(ROOT, ".agents", "scripts", "spec-lint.mjs");
-const SHA = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
-const FOOTER = "*Written by an agent.*";
-const FENCE = "```";
+import { FENCE, FOOTER, SHA, lint, lintTask, swap, write } from "./test-spec-lint.js";
 
 const TASK = `Part of #50.
 
@@ -79,52 +69,8 @@ Seam: \`loadConfig\`, modelled on \`src/diff-kind.test.ts\`.
 ${FOOTER}
 `;
 
-const PARENT = `Request: none
-
-## Behaviours
-
-| Behaviour (invoker, action, what it sees) | Seam | Cases | Task |
-| --- | --- | --- | --- |
-| An operator's config is read: number or object accepted, bad value refused | \`loadConfig\` | \`2\`; \`{}\`; \`0\` refused | #100 |
-
-${FOOTER}
-`;
-
-function write(name: string, text: string): string {
-  const file = join(mkdtempSync(join(tmpdir(), "spec-lint-")), name);
-  writeFileSync(file, text);
-  return file;
-}
-
-function lint(args: string[]) {
-  try {
-    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
-      cwd: ROOT,
-      encoding: "utf8",
-    });
-    return { status: 0, lines: stdout.split("\n").filter((l) => l !== "") };
-  } catch (error) {
-    const failed = error as { status: number; stdout: string };
-    return { status: failed.status, lines: failed.stdout.split("\n").filter((l) => l !== "") };
-  }
-}
-
-function lintTask(body: string, parent: string | null = PARENT) {
-  return lint([
-    "100",
-    "--body-file",
-    write("task.md", body),
-    ...(parent === null ? [] : ["--parent-file", write("parent.md", parent)]),
-    "--world",
-    write("world.json", JSON.stringify({ 100: { parent: 50 } })),
-  ]);
-}
-
-const swap = (from: string, to: string) => (body: string) => {
-  expect(body).toContain(from);
-  return body.replace(from, to);
-};
 const LINE = "- An operator's config is read: a number or an object accepted, a bad value refused.";
+
 const tests = (n: number) =>
   Array.from({ length: n }, (_, i) => `- An operator's config is read, case ${i}.`).join("\n");
 
@@ -181,9 +127,9 @@ describe("spec-lint.mjs on a task", () => {
       "a template comment",
       swap(
         "## Out of scope\n",
-        "## Out of scope\n\n<!-- One issue per line. Leave empty if none. -->\n",
+        "## Out of scope\n\n<!-- One issue per line: the task of every Stored state or Interfaces row\nthis task uses. Leave empty if none. -->\n",
       ),
-      'B 100 body: template comment "One issue per line. Leave empty if none.…" is still there; delete it',
+      'B 100 body: template comment "One issue per line: the task of every St…" is still there; delete it',
     ],
     [
       "no footer",
@@ -398,198 +344,5 @@ describe("spec-lint.mjs on a task", () => {
     const result = lint(["--body-file", write("draft.md", TASK)]);
 
     expect(result).toEqual({ status: 0, lines: ["spec-lint: 0 blocking, 0 notes"] });
-  });
-});
-
-const FEATURE = `Request: none
-
-## Problem
-
-Agents wait.
-
-## Who it is for
-
-An operator.
-
-## Outcome
-
-They do not wait.
-
-## How it works for the user
-
-${FENCE}mermaid
-flowchart LR
-  A --> B
-${FENCE}
-
-## Examples
-
-## What could go wrong
-
-## Words used
-
-- profile: a file, e.g. \`p.json\`.
-
-## Non-goals
-
-## Completion conditions
-
-- The worker keeps the profile.
-
-## Open questions
-
-## Decisions
-
-- ADR 0001 — one: two.
-
-## Shared values
-
-none
-
-## Behaviours
-
-| Behaviour (invoker, action, what it sees) | Seam | Cases | Task |
-| --- | --- | --- | --- |
-| A worker restarts and keeps the profile | \`startDaemon\` | same bytes; new port | #101 |
-| A caller cancels a waiting request by platform | dispatcher | given; absent | #102 |
-
-## Tasks
-
-- #101 Keep the profile.
-- #102 Cancel by platform.
-
-${FOOTER}
-`;
-
-const task = (line: string, depends: string[] = []) => `### Tests
-
-Seam line.
-
-- ${line}
-
-## Depends on
-
-${depends.map((d) => `- ${d}`).join("\n")}
-`;
-
-const WORLD = {
-  200: { labels: ["feature:planned"], subIssues: [101, 102] },
-  101: {
-    body: task("A worker restarts and keeps the profile: same bytes, new port."),
-    labels: ["task:ready"],
-  },
-  102: {
-    body: task("A caller cancels a waiting request by platform: given, absent.", ["#101"]),
-    labels: ["task:ready"],
-  },
-};
-
-function lintFeature(body: string, world: Record<string, unknown> = WORLD) {
-  return lint([
-    "200",
-    "--feature",
-    "--body-file",
-    write("feature.md", body),
-    "--world",
-    write("world.json", JSON.stringify(world)),
-  ]);
-}
-
-describe("spec-lint.mjs on a feature", () => {
-  it("passes a feature whose rows match its tasks, and prints the Depends on chain", () => {
-    expect(lintFeature(FEATURE)).toEqual({
-      status: 0,
-      lines: ["N 200 Depends on: chain 2 of 2 tasks", "spec-lint: 0 blocking, 1 notes"],
-    });
-  });
-
-  it.each([
-    [
-      "no Request line",
-      FEATURE.replace("Request: none", "From the inbox."),
-      WORLD,
-      "B 200 body: the first line is not `Request: #<n>` or `Request: none`",
-    ],
-    [
-      "open questions on a planned feature",
-      FEATURE.replace("## Open questions\n", "## Open questions\n\n- Which port?\n"),
-      WORLD,
-      "B 200 Open questions: not empty on a planned feature; settle them, or move the feature back to feature:spec",
-    ],
-    [
-      "empty Words used",
-      FEATURE.replace("- profile: a file, e.g. `p.json`.", ""),
-      WORLD,
-      "B 200 Words used: empty; list the terms, or write `none`",
-    ],
-    [
-      "no mermaid in How it works",
-      FEATURE.replace(`${FENCE}mermaid`, FENCE),
-      WORLD,
-      "B 200 How it works for the user: no ```mermaid block; add the user's flow",
-    ],
-    [
-      "a task with more Tests lines than rows",
-      FEATURE,
-      {
-        ...WORLD,
-        101: {
-          body: task("A worker restarts and keeps the profile: same bytes.\n- A second line."),
-        },
-      },
-      "B 101 Behaviours: #101 has 2 Tests lines and 1 Behaviours rows; one line per row",
-    ],
-    [
-      "a row naming no sub-issue",
-      FEATURE.replace("| given; absent | #102 |", "| given; absent | #103 |"),
-      WORLD,
-      'B 200 Behaviours: a row\'s Task cell "#103" names no sub-issue; name one',
-    ],
-    [
-      "a sub-issue with no row",
-      FEATURE.replace("| given; absent | #102 |", "| given; absent | #101 |"),
-      WORLD,
-      "B 200 Behaviours: #102 has no row; add its behaviours",
-    ],
-    [
-      "a Depends on number that does not exist",
-      FEATURE,
-      {
-        ...WORLD,
-        102: { body: task("A caller cancels a waiting request by platform.", ["#999"]) },
-      },
-      "B 102 Depends on: #999 does not exist; fix the line",
-    ],
-    [
-      "a cycle",
-      FEATURE,
-      { ...WORLD, 101: { body: task("A worker restarts and keeps the profile.", ["#102"]) } },
-      "B 101 Depends on: a cycle: #101 → #102 → #101; drop one of its lines",
-    ],
-    [
-      "a closed dependency",
-      FEATURE,
-      {
-        ...WORLD,
-        102: { body: task("A caller cancels a waiting request by platform.", ["#300"]) },
-        300: { state: "closed" },
-      },
-      "N 102 Depends on: #300 is closed, so the line orders nothing; drop it",
-    ],
-    [
-      "an open dependency of another feature",
-      FEATURE,
-      {
-        ...WORLD,
-        102: { body: task("A caller cancels a waiting request by platform.", ["#301"]) },
-        301: { parent: 400 },
-      },
-      "N 102 Depends on: depends-outside #301 (open, feature #400)",
-    ],
-  ])("reports %s", (_name, body, world, expected) => {
-    const result = lintFeature(body, world);
-
-    expect(result.lines).toContain(expected);
-    expect(result.status).toBe(expected.startsWith("B") ? 1 : 0);
   });
 });

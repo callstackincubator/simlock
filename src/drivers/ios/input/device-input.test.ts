@@ -8,7 +8,12 @@ import {
   type InputScreenConfig,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
-import { FakeBytePipeLauncher, FakeClock, ScriptedProcessRunner } from "../../../ports/index.js";
+import {
+  FakeBytePipeLauncher,
+  FakeClock,
+  ScriptedProcessRunner,
+  type Logger,
+} from "../../../ports/index.js";
 import { createIosDeviceInput } from "./index.js";
 
 const COMMAND = "/opt/simlock/simlock-screen-capture";
@@ -28,7 +33,21 @@ function simulator(runtimeId?: string): VirtualDriverDevice {
   };
 }
 
+class RecordingLogger implements Logger {
+  readonly warnings: string[] = [];
+  debug(): void {}
+  info(): void {}
+  error(): void {}
+  warn(message: string): void {
+    this.warnings.push(message);
+  }
+  child(): Logger {
+    return this;
+  }
+}
+
 function setup(inOwnSet = true) {
+  const logger = new RecordingLogger();
   const launcher = new FakeBytePipeLauncher();
   const clock = new FakeClock();
   const processRunner = new ScriptedProcessRunner([
@@ -46,9 +65,10 @@ function setup(inOwnSet = true) {
     command: COMMAND,
     ...(inOwnSet ? { deviceSet: DEVICE_SET } : {}),
     launcher,
+    logger,
     processRunner,
   });
-  return { clock, factory, launcher, processRunner };
+  return { clock, factory, launcher, logger, processRunner };
 }
 
 function envelope(tag: number, body: unknown): Uint8Array {
@@ -63,8 +83,35 @@ function decoded(writes: readonly Uint8Array[]): { tag: number; body: unknown }[
 }
 
 describe("iOS device input", () => {
-  it("touches, buttons, scrolls, keys and rotations on an iOS simulator reach the HID helper", async () => {
+  it("a socket client presses a button on an iOS simulator: app_switcher and lock reach the helper, home launches SpringBoard, back is dropped", async () => {
     const { factory, launcher, processRunner } = setup();
+    const opening = factory.open(simulator(), new AbortController().signal);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+    const input = (await opening) as DeviceInput;
+
+    for (const button of ["app_switcher", "lock"] as const) {
+      input.send({ button, kind: "button" });
+    }
+    expect(decoded(launcher.last.stdinWrites)).toEqual([
+      { body: { button: "app_switcher" }, tag: INPUT_TAG.button },
+      { body: { button: "lock" }, tag: INPUT_TAG.button },
+    ]);
+    expect(processRunner.calls).toEqual([]);
+
+    input.send({ button: "home", kind: "button" });
+    input.send({ button: "back", kind: "button" });
+    expect(decoded(launcher.last.stdinWrites)).toHaveLength(2);
+    expect(processRunner.calls).toEqual([
+      {
+        args: ["simctl", "--set", DEVICE_SET, "launch", "UDID-1", "com.apple.springboard"],
+        command: "xcrun",
+        options: { timeoutMs: 10_000 },
+      },
+    ]);
+  });
+
+  it("touches, scrolls, keys and rotations on an iOS simulator reach the HID helper", async () => {
+    const { factory, launcher } = setup();
     const opening = factory.open(simulator(), new AbortController().signal);
     expect(launcher.starts).toEqual([
       {
@@ -88,21 +135,6 @@ describe("iOS device input", () => {
       { body: { type: "end", x: 0.5, y: 0.5 }, tag: INPUT_TAG.touch },
     ]);
     const writtenBefore = launcher.last.stdinWrites.length;
-
-    input.send({ button: "app_switcher", kind: "button" });
-    input.send({ button: "lock", kind: "button" });
-    input.send({ button: "back", kind: "button" });
-    expect(processRunner.calls).toEqual([]);
-    expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
-    input.send({ button: "home", kind: "button" });
-    expect(processRunner.calls).toEqual([
-      {
-        args: ["simctl", "--set", DEVICE_SET, "launch", "UDID-1", "com.apple.springboard"],
-        command: "xcrun",
-        options: { timeoutMs: 10_000 },
-      },
-    ]);
-    expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
 
     input.send({ dx: 0, dy: 0.5, kind: "scroll", x: 0.5, y: 0.25 });
     input.send({ dx: -0.25, dy: 0, kind: "scroll" });
@@ -134,29 +166,91 @@ describe("iOS device input", () => {
     expect(inXcodeSet.launcher.starts.map((start) => start.env)).toEqual([{ PATH: "/usr/bin" }]);
     inXcodeSet.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
     await xcodeOpen;
+  });
 
+  it("a socket client sends a key on an iOS simulator of any runtime, and the config never says keyboardUnavailable", async () => {
     for (const runtimeId of [
+      "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
       "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
       "com.apple.CoreSimulator.SimRuntime.iOS-28-1",
       "garbage",
     ]) {
-      const other = setup();
-      const opened = other.factory.open(simulator(runtimeId), new AbortController().signal);
-      other.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
-      const limited = (await opened) as DeviceInput;
-      const limitedConfigs: InputScreenConfig[] = [];
-      limited.onConfig((config) => limitedConfigs.push(config));
-      expect(limitedConfigs).toEqual([
-        { height: 2556, keyboardUnavailable: true, orientation: "portrait", width: 1179 },
+      const { factory, launcher } = setup();
+      const opening = factory.open(simulator(runtimeId), new AbortController().signal);
+      launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+      const input = (await opening) as DeviceInput;
+      const configs: InputScreenConfig[] = [];
+      input.onConfig((config) => configs.push(config));
+      input.send({ kind: "key", type: "down", usage: 0x04 });
+      input.send({ kind: "key", type: "up", usage: 0x04 });
+      expect(decoded(launcher.last.stdinWrites), runtimeId).toEqual([
+        { body: { type: "down", usage: 0x04 }, tag: INPUT_TAG.key },
+        { body: { type: "up", usage: 0x04 }, tag: INPUT_TAG.key },
       ]);
-      limited.send({ kind: "key", type: "down", usage: 0x04 });
-      limited.send({ kind: "touch", type: "begin", x: 0.5, y: 0.25 });
-      limited.send({ kind: "orientation", orientation: "landscape_left" });
-      expect(decoded(other.launcher.last.stdinWrites)).toEqual([
-        { body: { type: "begin", x: 0.5, y: 0.25 }, tag: INPUT_TAG.touch },
-        { body: { orientation: "landscape_left" }, tag: 0x07 },
+
+      launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(configs, runtimeId).toEqual([
+        { height: 2000, orientation: "portrait", width: 1000 },
+        { height: 2000, orientation: "portrait", width: 3000 },
       ]);
     }
+  });
+
+  it("a socket left open across a fold tells every listener the new panel's size, a late listener the latest, and a repeated or malformed frame nothing", async () => {
+    const { factory, launcher, logger } = setup();
+    const opening = factory.open(simulator(), new AbortController().signal);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+    const input = (await opening) as DeviceInput;
+    const early: InputScreenConfig[] = [];
+    input.onConfig((config) => early.push(config));
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+    await flush();
+    const unfolded = { height: 2000, orientation: "portrait", width: 3000 };
+    expect(early).toEqual([{ height: 2000, orientation: "portrait", width: 1000 }, unfolded]);
+
+    const late: InputScreenConfig[] = [];
+    input.onConfig((config) => late.push(config));
+    expect(late).toEqual([unfolded]);
+
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 3000 }));
+    await flush();
+    expect(logger.warnings).toEqual([]);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2500, width: 3000 }));
+    await flush();
+    const taller = { height: 2500, orientation: "portrait", width: 3000 };
+    expect(early).toEqual([
+      { height: 2000, orientation: "portrait", width: 1000 },
+      unfolded,
+      taller,
+    ]);
+    launcher.last.write(envelope(INPUT_TAG.config, { height: "tall" }));
+    await flush();
+    const parseWarning = "The input helper sent a screen size that did not parse";
+    expect(logger.warnings).toEqual([parseWarning]);
+    for (const bad of [
+      { height: 2000, width: 0 },
+      { height: 2000, width: 1.5 },
+      { height: 2000, width: 100_001 },
+    ]) {
+      launcher.last.write(envelope(INPUT_TAG.config, bad));
+      await flush();
+    }
+    expect(logger.warnings).toEqual([parseWarning, parseWarning, parseWarning, parseWarning]);
+    const gone: InputScreenConfig[] = [];
+    input.onConfig((config) => gone.push(config))();
+    launcher.last.write(envelope(INPUT_TAG.config, { height: 2000, width: 1000 }));
+    await flush();
+    expect(gone).toEqual([taller]);
+    expect(early).toHaveLength(4);
+    expect(late).toEqual([
+      unfolded,
+      taller,
+      { height: 2000, orientation: "portrait", width: 1000 },
+    ]);
+    expect(logger.warnings).toHaveLength(4);
   });
 
   it("an open rejects when the helper is missing, exits first or reports no size within 10 s, and a helper that exits later fails the input", async () => {

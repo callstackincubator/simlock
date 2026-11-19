@@ -27,6 +27,8 @@ import {
   type IdentityOutput,
   type LeaseReleaseInput,
   type LeaseReleaseOutput,
+  type LeaseReleaseRunInput,
+  type LeaseReleaseRunOutput,
   type LeaseRenewInput,
   type LeaseRecord,
   type LeaseRequestInput,
@@ -74,6 +76,8 @@ export class FakeSimlockClient implements SimlockClient {
   renewLeaseImpl: (input: LeaseRenewInput) => Promise<LeaseRecord> = notStubbed("renewLease");
   releaseLeaseImpl: (input: LeaseReleaseInput) => Promise<LeaseReleaseOutput> =
     notStubbed("releaseLease");
+  releaseRunLeasesImpl: (input: LeaseReleaseRunInput) => Promise<LeaseReleaseRunOutput> =
+    notStubbed("releaseRunLeases");
   listLeasesImpl: () => Promise<LeaseListOutput> = notStubbed("listLeases");
   runDoctorImpl: (input: DoctorRunInput) => Promise<DoctorReport> = notStubbed("runDoctor");
   resolvePassthroughImpl: (input: DriverPassthroughInput) => Promise<PassthroughCommand> =
@@ -131,6 +135,11 @@ export class FakeSimlockClient implements SimlockClient {
   releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
     this.calls.push({ input, method: "releaseLease" });
     return this.#dead ? this.#deadConnection() : this.releaseLeaseImpl(input);
+  }
+
+  releaseRunLeases(input: LeaseReleaseRunInput): Promise<LeaseReleaseRunOutput> {
+    this.calls.push({ input, method: "releaseRunLeases" });
+    return this.#dead ? this.#deadConnection() : this.releaseRunLeasesImpl(input);
   }
 
   listLeases(): Promise<LeaseListOutput> {

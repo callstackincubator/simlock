@@ -184,6 +184,7 @@ describe("why a request waits", () => {
     ["behind-earlier-request", "ios", "Behind an earlier request"],
     ["device-limit", "ios", "Full: device limit"],
     ["ram-budget", "ios", "Full: RAM budget"],
+    ["memory-pressure", "ios", "Full: host memory pressure"],
     ["global-running-limit", "ios", "Full: running limit"],
     ["platform-running-limit", "ios", "Full: running limit for iOS"],
     ["platform-running-limit", "android", "Full: running limit for Android"],
@@ -203,7 +204,7 @@ describe("why a request waits", () => {
     expect(field).toBeDefined();
     const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
 
-    expect(listed).toHaveLength(7);
+    expect(listed).toHaveLength(8);
     for (const reason of listed) {
       const why = whyOf(withReason(reason));
       expect(why).toBeDefined();
@@ -261,9 +262,11 @@ describe("the waiting table on a gateway", () => {
     ["full", undefined, "Full"],
     ["full", "device-limit", "Full: device limit"],
     ["full", "ram-budget", "Full: RAM budget"],
+    ["full", "memory-pressure", "Full: host memory pressure"],
     ["full", "global-running-limit", "Full: running limit"],
     ["no-free-physical", undefined, "Every matching device is leased or absent"],
     ["not-chosen", undefined, "Not chosen this time"],
+    ["cannot-keep-except", undefined, "Cannot keep these slim categories"],
     ["no-baseline", undefined, "Does not hold the baseline"],
     ["baseline-stale", undefined, "Baseline is stale"],
     ["baseline-mismatch", undefined, "Baseline is for another device"],
@@ -282,7 +285,7 @@ describe("the waiting table on a gateway", () => {
       field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
     ).unwrap().element.shape.reason.options;
 
-    expect(listed).toHaveLength(17);
+    expect(listed).toHaveLength(19);
     for (const reason of listed) {
       const text = rowOf({ workers: [{ reason, workerId: "wrk_1" } as never] }).workers?.[0]?.text;
       expect(text).toMatch(/^[A-Z]/);

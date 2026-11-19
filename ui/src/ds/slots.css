@@ -1,29 +1,51 @@
-/* Slots: one square per device a worker can run, shaded by what the device is doing. */
-
 .slots {
   display: flex;
   min-width: 0;
 }
 
+.slots-meter {
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.slots-meter .load-bar {
+  flex: 1 1 4rem;
+}
+
+.slots-meter > :last-child {
+  white-space: nowrap;
+}
+
 .slots-sm {
-  gap: 2px;
+  gap: 3px;
 }
 
 .slots-sm .slot {
-  flex: 1 1 0;
-  min-width: 4px;
-  max-width: 9px;
-  height: 9px;
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.slots-md {
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+}
+
+.slots-md .slot {
+  flex: none;
+  width: 16px;
+  height: 16px;
 }
 
 .slots-lg {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(8, 16px);
   gap: var(--space-1);
 }
 
 .slots-lg .slot {
-  height: 22px;
+  width: 16px;
+  height: 16px;
 }
 
 .slot {
@@ -52,7 +74,7 @@
 }
 
 .slot-drained {
-  background: repeating-linear-gradient(135deg, var(--status-ok) 0 3px, var(--field) 3px 6px);
+  background: repeating-linear-gradient(135deg, var(--status-ok) 0 3px, var(--surface-2) 3px 6px);
 }
 
 .slot-shutdown {
@@ -60,51 +82,23 @@
 }
 
 .slot-offline {
-  background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, var(--field) 3px 6px);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--border-strong) 0 3px,
+    var(--surface-2) 3px 6px
+  );
 }
 
 .slot-free {
   border: 1px dashed var(--border-strong);
 }
 
-.slot-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.slots-fraction {
   color: var(--text-muted);
   font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
-.slot-legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.slot-legend .slot {
-  width: 8px;
-  height: 8px;
-}
-
-.share-bar {
-  display: flex;
-  gap: 2px;
-  height: 10px;
-  background: var(--field);
-}
-
-.share {
-  display: block;
-  flex: none;
-  width: var(--share, 0%);
-  transition: width var(--duration-move) var(--ease);
-}
-
-/* Free room is the bar's own field showing through, not a dashed box. */
-.share.slot-free {
-  border: 0;
-  background: transparent;
+.slots-meter .slots-fraction {
+  color: inherit;
 }

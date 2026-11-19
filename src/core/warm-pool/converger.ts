@@ -7,6 +7,7 @@ import {
   type CapacityCoordinator,
   plannedCapacityDevice,
 } from "../capacity/index.js";
+import type { MemoryPressureReader } from "../core-ports.js";
 import type { DeviceOperationClaims } from "../device-operation-claims.js";
 import type { DeviceProvisioner } from "../device-provisioner.js";
 import {
@@ -24,12 +25,14 @@ import type { DriverCatalog } from "../driver-catalog.js";
 import type { ManagedDeviceLifecycle } from "../managed-device-lifecycle.js";
 import type { SerializedDecision } from "../serialized-decision.js";
 import { stableError } from "../stable-error.js";
-import type { WarmPoolConfig, WarmTarget } from "./config.js";
+import type { CurrentBaseline } from "../baselines.js";
+import { DEFAULT_BASELINE_LEARN_AFTER, type WarmPoolConfig, type WarmTarget } from "./config.js";
 import {
   describeTarget,
   evaluate,
   type ResolvedTarget,
   readyCount,
+  reserveOnVirtualPlatforms,
   targetedDevices,
   type TargetKind,
   type TargetReport,
@@ -41,9 +44,18 @@ import { type LearnedKind, type LearnedKindMatch, LearnedKinds } from "./learned
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
+  /** why: the iOS modes the worker serves (ADR 0082); absent means both. */
+  readonly servedModes?: readonly DeviceMode[] | undefined;
   /** why: a learned baseline kind is warmed from the baseline's newest version, and goes when the baseline is removed or stale. */
   readonly baselines: {
-    current(name: string): { readonly version: number; readonly staleReason?: string } | undefined;
+    current(
+      name: string,
+    ):
+      | Pick<
+          CurrentBaseline,
+          "imageTag" | "mode" | "model" | "osVersion" | "platform" | "staleReason" | "version"
+        >
+      | undefined;
   };
   readonly acquisition: {
     kick(): void;
@@ -70,9 +82,11 @@ export interface WarmPoolOptions {
   readonly hasDriver: (platform: Platform) => boolean;
   readonly idle: { readonly shutdownAfterMs: number };
   /** why: the pool reads the catalog of a platform with a learned kind, to forget a kind whose model or runtime is gone. */
-  readonly catalog: Pick<DriverCatalog, "listCatalog">;
+  readonly catalog: Pick<DriverCatalog, "listCatalog" | "virtualDevices">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
+  /** why: ADR 0068 §3: the pool starts nothing at `warming-paused` and sheds one idle device per reading. */
+  readonly memoryPressure: MemoryPressureReader;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly state: StateDatabase;
   readonly registry: {
@@ -127,6 +141,8 @@ export class WarmPool {
   /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
   #draining = false;
   #started = false;
+  /** why: the `readingAt` of the reading the last shed was proposed for: a reading sheds once, however many passes run on it. */
+  #shedAt: number | undefined;
   /** Devices shut down under an operator reset that have not left `shutdown` since. */
   readonly #reset = new Set<string>();
   /** The targets the last pass planned for: their counts and specs, which `targeted()` also reads. */
@@ -166,6 +182,7 @@ export class WarmPool {
       clock: options.clock,
       hasDriver: options.hasDriver,
       logger: this.#logger,
+      servedModes: options.servedModes,
       onAnswer: () => this.#trigger(),
     });
   }
@@ -176,6 +193,12 @@ export class WarmPool {
     for (const event of TRIGGERS) {
       this.#unsubscribe.push(this.options.eventBus.subscribe(event, () => this.#trigger()));
     }
+    this.#unsubscribe.push(
+      this.options.memoryPressure.onReading(() => {
+        const step = this.options.memoryPressure.current()?.step ?? "none";
+        if (step !== "none") this.#trigger();
+      }),
+    );
     this.#subscribeLearning();
     this.#closeOpenRows();
     this.#armTick();
@@ -193,7 +216,7 @@ export class WarmPool {
    * Answers the kinds forgotten.
    */
   forgetKinds(match: LearnedKindMatch): VirtualSpec[] {
-    const forgotten = this.#learned.forgetMatching(match);
+    const forgotten = this.#learned.forgetMatching(match, (spec) => this.#newestVersion(spec));
     for (const spec of forgotten) {
       if (!this.#resolved.some((configured) => sameSpec(configured.spec, spec)))
         this.#schedule.succeeded(spec);
@@ -214,7 +237,12 @@ export class WarmPool {
         );
         if (device === undefined) return;
         this.#recording("learn a lease", () =>
-          this.#learned.learn(device.spec, payload.leaseId, clock.now()),
+          this.#learned.learn(
+            device.spec,
+            payload.leaseId,
+            clock.now(),
+            this.options.config.baselineLearnAfter ?? DEFAULT_BASELINE_LEARN_AFTER,
+          ),
         );
       }),
     );
@@ -246,14 +274,19 @@ export class WarmPool {
     });
   }
 
-  /** why: a learned baseline kind stores only the name, so each pass gives its spec the version the baseline has now, and a copy of an older one matches no kind. */
-  #atCurrentVersion(kind: LearnedKind): LearnedKind {
-    const named = kind.spec.baseline;
+  /** why: a learned baseline kind stores only the name, so each pass warms it as the baseline's newest version; a baseline no longer there leaves the stored spec for the catalog check to forget. */
+  #newestVersion(spec: VirtualSpec): VirtualSpec {
+    const named = spec.baseline;
     const current = named === undefined ? undefined : this.options.baselines.current(named.name);
-    if (named === undefined || current === undefined) return kind;
+    if (named === undefined || current === undefined) return spec;
     return {
-      ...kind,
-      spec: { ...kind.spec, baseline: { name: named.name, version: current.version } },
+      model: current.model,
+      osVersion: current.osVersion,
+      physical: false,
+      platform: current.platform,
+      ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+      ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+      baseline: { name: named.name, version: current.version },
     };
   }
 
@@ -263,7 +296,7 @@ export class WarmPool {
     try {
       return this.#learned
         .kinds(this.options.clock.now())
-        .map((kind) => this.#atCurrentVersion(kind));
+        .map((kind) => ({ ...kind, spec: this.#newestVersion(kind.spec) }));
     } catch (error: unknown) {
       if (!this.#readLogged) {
         this.#logger.warn("the warm pool's record could not be read", {
@@ -343,13 +376,23 @@ export class WarmPool {
     return this.#reports;
   }
 
+  /** why: a platform with virtual devices off or no driver on this host holds no running slot for idle devices (ADR 0084 §2, #1689). */
+  #reserveOnServedPlatforms(): { readonly ios: number; readonly android: number } {
+    return reserveOnVirtualPlatforms(
+      this.options.config.reserveRunning,
+      (platform) =>
+        this.options.catalog.virtualDevices(platform) && this.options.hasDriver(platform),
+    );
+  }
+
   /**
    * What `status`, `doctor` and the console read: the pool as the last pass left it. With the
    * pool off, or before a pass has run, every configured target as the operator wrote it: short
    * `disabled` with the pool off, and with no reason before the first pass.
    */
   figures(): WarmPoolFigures {
-    const { enabled, reserveRunning, targets } = this.options.config;
+    const { enabled, targets } = this.options.config;
+    const reserveRunning = this.#reserveOnServedPlatforms();
     const reports =
       enabled && this.#passed
         ? this.#figured
@@ -431,7 +474,9 @@ export class WarmPool {
     this.#closeOpenRows();
     try {
       const refused = await this.#resolveEnabled();
-      const plan = await this.options.decisions.run(() => evaluate(this.#view()));
+      const reading = this.options.memoryPressure.current();
+      const plan = await this.options.decisions.run(() => evaluate(this.#view(reading)));
+      if (reading !== undefined && plan.proposals.some(isShed)) this.#shedAt = reading.readingAt;
       const everyReport = [...refused, ...plan.targets];
       const reports = configuredOnly(everyReport);
       this.#figured = everyReport;
@@ -452,7 +497,10 @@ export class WarmPool {
     const kinds = this.#learnedKinds();
     for (const kind of this.#catalogCheck.gone(kinds)) {
       this.#recording("forget a kind", () => this.#learned.forget(kind.spec));
-      this.#logger.info("a warm pool learned kind was forgotten: its model or runtime is gone", {
+      const why = this.#catalogCheck.modeNotServed(kind)
+        ? "its mode is not served"
+        : "its model or runtime is gone";
+      this.#logger.info(`a warm pool learned kind was forgotten: ${why}`, {
         model: kind.spec.model,
         osVersion: kind.spec.osVersion,
         platform: kind.spec.platform,
@@ -599,7 +647,7 @@ export class WarmPool {
     };
   }
 
-  #view(): Parameters<typeof evaluate>[0] {
+  #view(reading: ReturnType<MemoryPressureReader["current"]>): Parameters<typeof evaluate>[0] {
     const { leases, virtualDevices: all } = this.options.registry.snapshot;
     for (const id of this.#reset) {
       if (all.find((device) => device.id === id)?.state !== "shutdown") this.#reset.delete(id);
@@ -631,7 +679,7 @@ export class WarmPool {
       config: {
         enabled: this.options.config.enabled,
         maxConcurrentBoots: this.options.config.maxConcurrentBoots,
-        reserveRunning: this.options.config.reserveRunning,
+        reserveRunning: this.#reserveOnServedPlatforms(),
         shutdownAfterMs: this.options.idle.shutdownAfterMs,
       },
       devices,
@@ -646,6 +694,12 @@ export class WarmPool {
       leases,
       now: this.options.clock.now(),
       onItsWay: this.#onItsWay(devices),
+      pressure: {
+        mayShed:
+          reading !== undefined && reading.readingAt > (this.#shedAt ?? Number.NEGATIVE_INFINITY),
+        shedFailed: this.#recentShutdownFailures(),
+        step: reading?.step ?? "none",
+      },
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
       spared: this.#spared,
@@ -839,6 +893,14 @@ export class WarmPool {
     });
   }
 
+  /** why: the devices whose shutdown failed less than a tick ago, which a shed skips so the next reading takes the next device. */
+  #recentShutdownFailures(): ReadonlySet<string> {
+    const now = this.options.clock.now();
+    return new Set(
+      [...this.#retryAfter].flatMap(([deviceId, after]) => (after > now ? [deviceId] : [])),
+    );
+  }
+
   /** The device, when it is still in `state`, has no lease and no operation claim on it. */
   #unleased(deviceId: string, state: VirtualDevice["state"]): VirtualDevice | undefined {
     const { leases, virtualDevices: devices } = this.options.registry.snapshot;
@@ -863,6 +925,10 @@ export class WarmPool {
       error: stableError(error),
     });
   }
+}
+
+function isShed(proposal: WarmProposal): boolean {
+  return proposal.action === "shutdown" && proposal.reason === "memory-pressure";
 }
 
 /** why: `devices` with the ones in `down` as they are once shut down, for a capacity question about the plan so far. */
@@ -922,6 +988,7 @@ const TRIGGERS = [
   "cleanup.executed",
   "capacity.changed",
   "lease.queued",
+  "memory.pressure-changed",
 ] as const;
 
 function kindFields(spec: VirtualSpec): Record<string, string> {

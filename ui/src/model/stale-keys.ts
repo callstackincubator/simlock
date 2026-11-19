@@ -28,6 +28,7 @@ export function staleKeys(name: string, payload: unknown): readonly StaleKey[] {
     case "queue.changed":
       return REQUESTS;
     case "capacity.changed":
+    case "memory.pressure-changed":
       return WORKERS;
     case "baseline.saved":
     case "baseline.removed":

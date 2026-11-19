@@ -7,8 +7,7 @@ the code.
 In the inputs directory: the specification (`issue.md`, `feature.md`,
 `triage.md` and `spec/`, those that exist), so you know what the code is
 meant to do; `rules/`, every rule file but `delivery.md`, and the ADR index;
-`diff.patch`; `briefs/calibration.md`, when it exists, findings like yours that were
-rejected lately: read it first. Repository: the worktree you were given,
+`diff.patch`. Repository: the worktree you were given,
 checked out at the reviewed commit.
 
 A conflict between the specification and a rule is a finding of class
@@ -76,6 +75,38 @@ Then answer:
 
 Blocking: a test that cannot fail for the reason its title gives, or a
 breach of a rule or an accepted ADR.
+
+## A refactor (`refactor/<n>` branch, delivery rule 18)
+
+The specification is the refactor issue: Why, Target shape, Out of
+bounds, Done when. Behaviour must not change at all, bugs included, so
+the only question is: what does this code now do that it did not do
+before? `refactor-check.mjs` already compares test titles, module
+surfaces, pins and mutants; look for what it cannot see. Check each moved
+or reshaped function for these, each a blocking finding when it holds:
+
+- a side effect (a write, a log line, an event, a call to another tool)
+  that runs in a different order, more or fewer times, or under another
+  condition;
+- code that now runs when a module is imported, or no longer does: a
+  top-level statement, a registry filled at import, an import cycle
+  that changes which module initialises first;
+- an `await` added or removed, a promise no longer awaited, or work moved
+  across a `setImmediate`, timer or microtask boundary;
+- evaluation moved from eager to lazy or back: a default built once
+  instead of per call, a getter, a memoised value;
+- a default parameter or option value that changed, or one now applied
+  where it was not;
+- another error type, code or message, or an error caught or rethrown at
+  another level;
+- `this` bound differently, or a closure capturing another variable;
+- a re-export that hides, renames or adds a name;
+- a timer or lock held over a different span, or released on fewer paths.
+
+A test file line the check listed as changed, not moved, is yours to
+judge: it may only follow an import or a helper's new path. A pin left at
+the head, or one promoted without meeting testing.md, is a finding. A bug
+the refactor fixed on the way is a behaviour change: blocking.
 
 ## Assessment
 

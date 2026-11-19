@@ -28,6 +28,7 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   uninstallPlan,
   PassthroughRefusedError,
@@ -55,6 +56,7 @@ type VirtualDriverDevice = DriverDevice & { readonly physical: false };
 export interface FakeDriverClock {
   now(): number;
   setTimer(delayMs: number, callback: () => void): unknown;
+  cancel(handle: unknown): void;
 }
 
 export interface OutOfProcessFakeDriverOptions {
@@ -192,8 +194,13 @@ const PASSTHROUGH_PROGRAM =
   // running while the route has to decide what to answer.
   "const sleepMs = Number(flag('--fake-exec-sleep') ?? 0);" +
   "if (sleepMs > 0) setTimeout(() => {}, sleepMs);" +
+  // why: `device.exec` runs every command in the lease's folder: `cwd` shows where, and
+  // `--fake-exec-read-file=<name>` shows that a relative name finds a file stored there.
+  "const readFile = flag('--fake-exec-read-file');" +
   "const report = (stdin) => process.stdout.write(JSON.stringify({" +
   "argv," +
+  "cwd: process.cwd()," +
+  "...(readFile === undefined ? {} : { fileSize: require('node:fs').readFileSync(readFile).length })," +
   "platform: process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM ?? null," +
   "...(stdin === undefined ? {} : { stdin })," +
   "}));" +
@@ -379,7 +386,7 @@ export class OutOfProcessFakeDriver implements Driver {
       readonly signal: AbortSignal;
     },
   ): Promise<ComponentInstallResult> {
-    const script = await this.#beforeCall("installComponent", [component]);
+    const script = await this.#beforeCall("installComponent", [component], options.signal);
     for (const percent of script.installProgress ?? []) {
       options.onProgress({ percent, stage: "downloading" });
     }
@@ -411,7 +418,7 @@ export class OutOfProcessFakeDriver implements Driver {
     receipt: ComponentReceipt,
     options: { readonly signal: AbortSignal },
   ): Promise<ComponentRemoval> {
-    const script = await this.#beforeCall("removeComponent", [receipt]);
+    const script = await this.#beforeCall("removeComponent", [receipt], options.signal);
     if (options.signal.aborted) throw new DriverCrashError("Fake removal aborted");
     return removeListedComponent({
       list: async () => this.#listed(script),
@@ -598,9 +605,11 @@ export class OutOfProcessFakeDriver implements Driver {
     };
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    const script = await this.#beforeCall("listPresentPhysical", [enrolledIds]);
-    return enrolledIds.map((driverDeviceId) => {
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    const script = await this.#beforeCall("listPresentPhysical", [enrolled]);
+    return enrolled.map(({ driverDeviceId }) => {
       const scripted = script.physicalDevices?.find((candidate) =>
         candidate.ids.includes(driverDeviceId),
       );
@@ -609,6 +618,20 @@ export class OutOfProcessFakeDriver implements Driver {
       }
       return { driverDeviceId, present: false, reason: scripted?.absentReason ?? "not-present" };
     });
+  }
+
+  async listAttachedPhysical(): Promise<readonly string[]> {
+    const script = await this.#beforeCall("listAttachedPhysical", []);
+    const attached = (script.physicalDevices ?? [])
+      .filter(
+        (device) =>
+          device.present !== false ||
+          device.absentReason === "locked" ||
+          device.absentReason === "untrusted",
+      )
+      .map((device) => device.ids[0])
+      .filter((id) => id !== undefined);
+    return [...new Set(attached)].sort();
   }
 
   async inspectPhysical(id: string): Promise<PhysicalInspection> {
@@ -626,10 +649,12 @@ export class OutOfProcessFakeDriver implements Driver {
       enrollable: true,
       model: device.model ?? "Fake Phone",
       osVersion: device.osVersion ?? "1.0",
+      ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
     };
   }
 
   /** Not through `#beforeCall`, so a test's call log holds only what the test caused. */
+  // fallow-ignore-next-line unused-class-member -- called through the Driver interface, and by its tests through a test-* harness.
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     return (await this.#readScript()).toolVersions ?? [];
   }
@@ -709,6 +734,7 @@ export class OutOfProcessFakeDriver implements Driver {
   async #beforeCall(
     operation: FakeDriverOperation,
     arguments_: readonly unknown[],
+    signal?: AbortSignal,
   ): Promise<FakeDriverPlatformScript> {
     const script = await this.#readScript();
     this.#lastKnownEstimateMs = script.estimateMs;
@@ -716,9 +742,19 @@ export class OutOfProcessFakeDriver implements Driver {
     await this.#appendLog(operation, arguments_);
 
     const latency = script.latencyMs?.[operation] ?? 0;
-    if (latency > 0) {
+    // why: an install's or removal's latency stands for a download or delete, which a stopping
+    // daemon aborts; a wait that ignored the signal would hold `daemon stop` for the whole latency.
+    if (latency > 0 && signal?.aborted !== true) {
       await new Promise<void>((resolve) => {
-        this.#clock.setTimer(latency, resolve);
+        const timer = this.#clock.setTimer(latency, resolve);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            this.#clock.cancel(timer);
+            resolve();
+          },
+          { once: true },
+        );
       });
     }
 

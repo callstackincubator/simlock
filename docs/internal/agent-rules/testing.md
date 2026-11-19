@@ -10,6 +10,12 @@ reads it, and may have to edit it. So the suite holds the fewest tests that
 prove the behaviour, each at the cheapest level that can prove it
 (rules 6 to 9).
 
+A pin (`*.pin.test.ts`) is the one exception. It records what code does
+today so a refactor can show it changed nothing, and the refactor's PR
+deletes it before merge (delivery rule 18). Only rule 2 binds a pin, and
+the test lint skips pin files. A pin the review promotes meets every rule
+here and moves into its module's test file.
+
 1. **A test's title is a claim, and the body must prove that claim.** A title
    that promises more than the body asserts is a defect, not a wording
    problem: it tells every later reader the case is covered when it is not,
@@ -84,7 +90,8 @@ prove the behaviour, each at the cheapest level that can prove it
    what its entry point exports, or through a host surface above it (a
    command, an HTTP route, a tool call). A test of an internal file earns
    its place only for pure logic with many cases (a planner, a parser) or
-   for an ordering the surface cannot force, and says which in a `why:`
+   for an ordering the surface cannot force, or when the file is a part of a
+   decomposed module (ADR 0063 §2), and says which in a `why:`
    comment above its `describe`; any other goes through the surface, or is
    deleted when a surface test already proves its claim. What the module does to a port
    (a driver call, a download, a write) is output, and a fake port's record
@@ -93,7 +100,9 @@ prove the behaviour, each at the cheapest level that can prove it
    private field or method) is proven by what happens next: "the slot is
    freed" is "a later request at the limit is granted". A change that keeps
    behaviour and only moves code edits no test; one that has to shows the
-   tests pin structure, not behaviour.
+   tests pin structure, not behaviour. The exception is a decomposition
+   that keeps behaviour: it may move a test to the part's interface, the
+   claim and its cases staying, only the seam moving down (ADR 0063 §2).
 
 7. **Prove each claim once, at the cheapest level that can prove it.**
    Before you add a test, search for one that already proves the claim or

@@ -21,7 +21,7 @@
 //     other tool it runs.
 //
 // Its input mode (`simlock-screen-capture <UDID> --input`) also carries serve-sim's `HIDInjector.swift`,
-// without the Duo, Device Hub, pose, Home, app switcher and Lock paths (NOTICE.md, deviations 3 and 4).
+// without the Duo, Device Hub, pose and Home paths; its app switcher and Lock are `ButtonPlan`'s (NOTICE.md, deviations 3 and 4).
 //
 // The encoders are serve-sim's files rewritten here: `H264Encoder.swift`, `VideoEncoder.swift`,
 // `PixelBufferUtils.swift` and `Xcode.swift` now use public VideoToolbox, CoreVideo, CoreMedia and
@@ -43,6 +43,14 @@ let package = Package(
             name: "simlock-screen-capture",
             dependencies: ["SimlockCapture"],
             path: "Sources/simlock-screen-capture",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // The Swift tests (`swift test --package-path vendor/screen-capture`): the lifecycle's wire
+        // output and the simulator program's panel follower.
+        .testTarget(
+            name: "SimlockCaptureTests",
+            dependencies: ["SimlockCapture", "simlock-screen-capture"],
+            path: "Tests/SimlockCaptureTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         // The one piece of Objective-C in the package, and the only reason it has two languages:

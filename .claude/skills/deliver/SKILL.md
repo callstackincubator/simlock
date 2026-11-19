@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Deliver a ready task, bug or planned feature end to end, unattended — claim, delegate implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
+description: Deliver a ready task, a bug (new or ready), a ready refactor or planned feature end to end, unattended — claim, delegate triage, implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
 model: opus
 effort: medium
 ---
@@ -10,7 +10,7 @@ effort: medium
 You are the orchestrator. Never write code, run tests or review a diff
 yourself. Read issues, decide the next step, delegate it, and reason over
 the report block that comes back. Rules: `docs/internal/agent-rules/delivery.md`
-rules 1, 2, 3, 9, 14, 15 and 16.
+rules 1, 2, 3, 9, 14, 15, 16, 17 and 18.
 
 **Delegating.** Start each stage with the Agent tool, in the background:
 `subagent_type` `implementer`, `reviewer` or `hardware-verifier`; a short
@@ -19,11 +19,9 @@ whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
 then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
 report (`remaining`, `fixes`, the reviewer's arguments). Include `base-sha`, `merge-base` and `head`, copied from the `base`, `merge-base` and `head` lines of `.agents/scripts/pr-shas.sh <M>` run just before the stage starts (never a SHA typed from memory or `git rev-parse`), and, after review,
-`previous` plus the resolution ledger. Last, the text the agent would
-otherwise have to open: for an `implementer`, `brief:` and the full text of
-`.agents/briefs/implement-<mode>.md`; for a `reviewer`, `protocol:` and the
-full text of `docs/internal/REVIEW.md`, both from this checkout. No other
-prose. Never pass a model or `isolation`: every stage of a task works in
+`previous` plus the resolution ledger. No other prose: a hook adds the
+mode's brief or the review protocol to the prompt, so never open or paste
+either. Never pass a model or `isolation`: every stage of a task works in
 the task's one worktree, one after another. Never invoke the stage skills
 from here: a skill waits for an earlier run of itself.
 
@@ -119,9 +117,8 @@ session loaded the old ones. Stop and tell the maintainer to run
 git status --porcelain -- .claude .agents docs/internal/agent-rules
 ```
 
-Any output: someone is editing the rules in this checkout, and every agent
-of the run would read their unfinished edits (the hooks come from this
-checkout too). Stop and tell the maintainer to start the run from a
+Any output: the rules are being edited in this checkout, and every agent
+of the run would read the unfinished edits. Stop and tell the maintainer to start the run from a
 checkout nobody edits, such as `git worktree add ../simlock-delivery
 origin/main`.
 
@@ -129,16 +126,30 @@ origin/main`.
 gh issue view <N> --json number,title,labels,assignees,body
 ```
 
-- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`: one
-  issue; go to step 2.
+- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`,
+  `refactor:ready`: one issue; go to step 2.
 - `feature:planned`: walk its open sub-issues (step 3).
-- `bug:new`, unassigned: triage is the only work (delivery rules 1 and 8).
-  A triage report already on the thread with no newer reply: stop, it
-  waits on the maintainer's `bug:ready`. Otherwise run the `triage-bug`
-  procedure: start one `bug-triager` in the background with the issue
-  number, wait for its report, print it, and stop. Never add `bug:ready`:
-  it is the maintainer's call after reading the report.
+- `bug:new`, unassigned: triage, then the fast track (delivery rules 8
+  and 17). With no triage report on the thread, or a person's reply newer
+  than the last one, run the `triage-bug` procedure: start one
+  `bug-triager` in the background with the issue number and wait for its
+  report. Then, unless the run was started with `no-fast-track`:
+
+  ```bash
+  node .agents/scripts/fast-track.mjs <N>
+  ```
+
+  Exit 0: the script set `bug:ready`; go to step 2 in this same run. Exit
+  1: print the report and the script's `held:` line, and stop; the bug
+  waits for the maintainer. Never add `bug:ready` yourself, and never
+  argue with a `no` line.
+
 - Anything else, or assigned to someone else: stop and say why (rule 1).
+
+When a Done when line of an issue in the run needs the slow lane, and the
+run has no `no-hardware`: run the lane script's `check` (`toolchain.md`)
+once, now. What it prints as unfit does not stop the run: say it in one
+line, so the machine can be fixed while the first build runs.
 
 ## 2. Deliver one issue
 
@@ -150,29 +161,34 @@ in the stack instead of the gate. If it already has a PR, read the PR body's `##
 section and the latest `## Handoff` comment, and go on from the next stage
 they name; never build again or restart review at round 1.
 
-1. **Implement**, one fresh `implementer` per mode, in the **Order**
-   `implementer.md` gives. An audit run takes no `fixes`, so a CI failure
+1. **Implement**, one fresh `implementer` per mode: `build`, again with
+   the last `remaining` while a report lists `remaining` and built a cycle
+   since the last; then `audit`. `fix` applies findings, `hardware-fix`
+   failing slow-lane tests. A refactor runs `mode: refactor` alone, and its
+   review has no spec lens (`--skipped spec` in item 4; rule 18). An audit run takes no `fixes`, so a CI failure
    waits for the fix run after the audit (item 2). `spec needs` under
    `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number; it picks the lenses
-   (`docs/internal/REVIEW.md`). Before every review round
-   and every fix run, run `.agents/scripts/pr-shas.sh <M>` and
+   (`docs/internal/REVIEW.md`). Before every review round and every fix
+   run, run `.agents/scripts/pr-shas.sh <M>` and
    `node .agents/scripts/ci-triage.mjs <M>` once. The triage reads the
-   newest finished CI run; exit 3 with a `stale:` line first means that
-   run is older than the head and the lines after it describe an older
-   commit: act on none of them. With `pending`, triage again before the
-   next fix run or the gate; with `missing`, the head's run was
-   cancelled, and the gate re-runs cancelled jobs once. A current run's
-   failed tests are sorted: `flaky` and `unknown` get its
-   `rerun <id>` lines run as `gh run rerun <id> --failed`, no fix run;
-   `base` means the branch inherited the failure: run
-   `.agents/scripts/stack-sync.sh <top PR>` and let CI run again; only
-   `reach`, and `unknown` red a second time, joins the fix run's `fixes`
-   as `ci: <its line> run <id>`; a `job <name>` line's indented lines
-   are the log's errors and join the same way, never read by hand.
-   `mergeable false` from pr-shas joins as `stack: merge
-   origin/<base-ref>`. With no fix run due, they get one before the
-   round.
+   newest finished CI run; act on its lines:
+   - `stale:` first (exit 3): the lines after it describe an older
+     commit; act on none of them. With `pending`, triage again before the
+     next fix run or the gate; with `missing`, the head's run was
+     cancelled, and the gate re-runs cancelled jobs once.
+   - `flaky`, `unknown`: run its `rerun <id>` lines as
+     `gh run rerun <id> --failed`; no fix run.
+   - `base` (the branch inherited the failure):
+     `.agents/scripts/stack-sync.sh <top PR>`, and let CI run again.
+   - `reach`, and `unknown` red a second time: joins the fix run's `fixes`
+     as `ci: <its line> run <id>`. A `job <name>` line's indented lines
+     are the log's errors and join the same way, never read by hand.
+   - `mergeable false` from pr-shas: joins as `stack: merge
+     origin/<base-ref>`.
+
+   With no fix run due, they get one before the round.
+
 3. **Decide** on the review report:
    - Incomplete assessment: preserve findings and missing scope; park. It
      is neither a defect nor a pass.
@@ -215,44 +231,32 @@ they name; never build again or restart review at round 1.
 4. **Finish the PR body.** Walk every Done when line: a ticked checklist
    line that keeps the issue's words and adds `— <how it was checked>`
    (`pr-body-check.mjs` matches it by its words); for the last open sub-issue of
-   a feature, the parent's Completion conditions too (rule 9). Keep `## Assumptions` as it is. Add:
+   a feature, the parent's Completion conditions too (rule 9). Keep
+   `## Assumptions` as it is. Then one command writes the rest:
 
-   ```markdown
-   ## Review
-
-   Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes.
-   Rounds: <n>. Tokens: <t>M.
-   <the first line review-metrics.mjs prints: Runs: … Cost USD: … Agent seconds: …>
-
-   Rejected:
-
-   - spec|code|claims: <claim> — <reason>
+   ```bash
+   node .agents/scripts/review-ledger.mjs <M> --issue <N> --findings <file> \
+     --round <r>:<Commit> ... [--skipped <roles>] [--notes <file>] \
+     [--rejected <file>] [--incomplete <why>]
    ```
 
-   `<b>` counts the blocking findings that review raised over all checks,
-   `<m>` those confirmed and fixed, `<k>` its notes; `skipped` in place of
-   the counts for a review the diff's kind left out (for an ADR-only diff:
-   `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
-   legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
-   with `node .agents/scripts/review-ledger.mjs <M> --issue <N> --findings
-   <file> --round <r>:<Commit> ...`, one `--round` per check in order,
-   fix-checks included, each SHA the `Commit` its report gave; it posts or
-   updates the comment as `docs/internal/REVIEW.md` "Measurement" says and
-   then runs `pr-body-check.mjs <M>`, exiting with its code. Add
-   `Assessment: complete` only when coverage is complete and no finding is
-   open; otherwise `Assessment: incomplete` and park. `<t>` is
-   `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
-   far (legacy session total, not per-PR cost; use `n/a` when unavailable).
-   Keep duplicate outcomes in the ledger, not Rejected. Tag rejections
-   `[incorrect]`, `[intentional]` or `[nonblocking]`. Every blocking finding
-   not fixed or open has its disposition recorded; omit
-   "Rejected:" when there is none. The body check `review-ledger.mjs`
-   ends with (`node .agents/scripts/pr-body-check.mjs <M>`; never run it
-   before the ledger is posted) checks the shape
-   `.agents/scripts/delivery-stats.mjs` parses, the footer
-   `*Written by an agent.*`, and the rule 12 budget of 200 words outside
-   the checklist, Status, Assumptions and Review. Fix what it fails on; cut
-   what it says is over budget.
+   - `--round`: one per check in order, `<r>` being `1`, `2` or `fix-check`,
+     each SHA the
+     `Commit` its report gave.
+   - `--skipped`: the reviews the diff's kind left out, such as `spec` for
+     a refactor or `code,claims` for an ADR-only diff.
+   - `--notes`: a file of every Notes line of the reports, each
+     `- spec|code|claims: <path:line claim>`.
+   - `--rejected`: a file of every Rejected line, each `- spec|code|claims:
+     <claim> [incorrect|intentional|nonblocking] — <reason>`. Duplicates
+     stay in the ledger, not here.
+   - `--incomplete <why>`: when a report's coverage was incomplete.
+
+   It posts the `## Review ledger` comment, writes the body's `## Review`
+   (counts, rounds, tokens, cost, Rejected, Assessment) and runs
+   `pr-body-check.mjs <M>`, exiting with its code: fix what it fails on,
+   cut what it says is over budget. `Assessment: incomplete`: park. Never
+   count, write the final `## Review` or run the body check by hand.
 
 5. **Notes: one comment.** If the reports carried Notes lines, post them
    once, after the last round, and remove `Notes so far:` from the PR body:
@@ -279,13 +283,13 @@ they name; never build again or restart review at round 1.
    .agents/scripts/merge-pr.sh <M>
    ```
 
-   While it waits it prints one `merge-pr: #<M> pending <n> check(s) ...,
-   <m> min waited` line per poll and one `re-running ... run <id>` line
-   per re-run; nothing to act on. Exit 0: merged. A conflict: an `implementer` fix run that merges the
+   Its `pending` and `re-running` lines need no action. Exit 0: merged. A conflict: an `implementer` fix run that merges the
    base branch. Red CI: one `implementer` fix run with the failing test
    titles and the run id. Either way, the `fix-check` review in item 3
    (none for a fix to tests outside the PR's diff), then the gate again. Any other exit, or red CI a second time: park with the
-   line it printed.
+   line it printed. `held by the fast track` (rule 17) parks like any
+   refusal: Blocked on is the script's `held:` line and "the maintainer
+   merges the PR, or removes `fast-track`"; the PR stays ready.
 
 After every stage, update the PR body's `### Status` section (`issue-body.mjs
 <M> --pr set-section Status <file>`) so any session can resume from GitHub
@@ -300,73 +304,10 @@ Next: implement fix, then review round 2
 
 ## 3. Walk a feature's tasks
 
-```bash
-read -r OWNER REPO < <(gh repo view --json owner,name -q '"\(.owner.login) \(.name)"')
-gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number=<N> -f query='
-  query($owner:String!,$repo:String!,$number:Int!){
-    repository(owner:$owner,name:$repo){ issue(number:$number){
-      subIssues(first:50){nodes{number title state
-        labels(first:5){nodes{name}} assignees(first:3){nodes{login}}}}}}}'
-```
-
-**One stack per feature** (rule 15). The feature's PRs stay open and merge
-together at the end, so `main` never holds part of a feature. Bottom to top:
-the feature's open ADR PRs (branches `feature/<N>-adr*`, oldest first), then
-each task's PR in the order its review passed.
-
-Runnable: open, `task:ready`, unassigned, and every issue under its Depends
-on closed or a task of this feature whose PR passed review (open, not a
-draft). Read it from `node .agents/scripts/runnable.mjs <N>`: its last line
-lists the runnable tasks; no workflow promotes tasks. Each `depends-outside
-#<d>` line on an open issue is a `Waiting:` line of the run summary (step 4),
-and a `B` line (a missing number, a cycle) parks the feature.
-
-- **Before the first build**: the feature's ADR branches fork from an old
-  `main`, so run `.agents/scripts/stack-sync.sh <the top ADR PR>` to merge
-  `main` forward into them, then start `reviewer` on each open ADR PR
-  (round 1, in the background) while the first task builds. An ADR PR
-  passes review the way a task's does (step 2, items 3 to 5, ADR-only
-  counts) and must be ready before the stack merges; its review never
-  waits for the gate to refuse.
-- A task's build stage gets `base: <branch of the stack's top PR>`; with no
-  PR yet, no `base` (it starts from `main`). As soon as the build reports
-  its draft PR, `gh stack link <PR below> <M>` (PR numbers, bottom to top;
-  none below yet: nothing to link): the stack is linked at build time, so
-  every later sync sees the whole chain.
-- Its review passed (step 2, item 6): `gh pr ready <M>`. When its branch
-  did not start from the stack's top (another task joined meanwhile), run
-  `.agents/scripts/stack-sync.sh <top PR>` yourself: it merges forward,
-  bottom to top, in temporary worktrees, and never rebases. It stops on
-  the first conflict (`conflict <branch> <parent> <files>`): send that
-  task's branch one `implementer` fix run with `fixes: stack: merge
-  origin/<parent>`, then a fix check on that PR, then the script again.
-  PR body Status: `Gate: waiting for the stack`.
-- Deliver up to two runnable tasks at once, each in its own worktree. Start
-  a stage for one as soon as the other's agent is running; never wait on one
-  task to move the other.
-- Both at the hardware check: the second `hardware-verifier` waits for the
-  lane's lock (rule 16).
-- After each `gh pr ready`, run `runnable.mjs` again.
-- A task parks: keep delivering the tasks that do not depend on it. The
-  stack stays open and nothing merges; the maintainer decides.
-
-**Merging the stack.** When every task has joined the stack and nothing is
-in flight: first the feature's ADRs. Each ADR under its Decisions is
-_Accepted — not yet implemented_; send the top PR's branch one
-`implementer` fix run with `fixes: adr: <nnnn> to Accepted` per ADR (a
-status line and the index row, nothing else; rule 10), then the
-coordinator's mechanical fix-check: `node .agents/scripts/adr-flip-check.mjs
-<commit>` on each fix commit, `verified by: coordinator` only on exit 0,
-another fix run otherwise. Then run
-`.agents/scripts/stack-sync.sh <top>` once more (another feature may have
-merged meanwhile), resolve a conflict as above, then the gate on the top
-PR: `merge-pr.sh <top>` gates every PR in the stack and merges them all,
-bottom to top. Red CI: the fix run goes to the lowest red PR, then the
-same sync carries it up. The feature closes itself: the issue-state
-workflow closes a `feature:planned` issue when its last sub-issue closes
-(rule 9), so post the run summary (step 4) on it and leave it.
-
-Stop when nothing is runnable and nothing is in flight.
+Read `feature.md`, next to this file, before the first step on a
+`feature:planned` issue and before the build of any stacked issue: the
+stack, which tasks are runnable, two tasks at once, merging the stack. A
+single issue that is not stacked never needs it.
 
 ## 4. End of the run
 
@@ -385,8 +326,7 @@ _Written by an agent._
 ```
 
 `Asleep` is the session total the clock hook last gave; leave the line out
-when it never said the computer slept. A closed lid sleeps a laptop, and
-nothing runs until it wakes.
+when it never said the computer slept.
 
 Then send the maintainer a push notification with the same three counts, if
 a tool for it exists.

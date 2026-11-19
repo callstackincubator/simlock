@@ -83,9 +83,12 @@ describe("tool-guard.mjs", () => {
 
   it.each([
     "pnpm test:changed",
+    "pnpm typecheck",
+    "pnpm run typecheck",
     "pnpm exec vitest run --project unit src/a.test.ts",
     "pnpm test:e2e e2e/http-api.test.ts",
-    "pnpm test:console --project=chromium e2e/console/leases.spec.ts",
+    "pnpm test:console --project=chromium e2e/console/sign-in.spec.ts",
+    "pnpm mutate --touched-by refactor-draft-12",
     'git commit -qm "run pnpm check in CI"',
     'git commit -m "chore(fallow): remove four stale suppressions"',
     'gh pr edit 5 --title "chore(fallow): x"',
@@ -182,6 +185,10 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("timeout: 600000");
   });
 
+  it("names the typecheck command when it refuses a sub-agent's tsc", () => {
+    expect(bash("pnpm exec tsc --noEmit").stderr).toContain("for types that is `pnpm typecheck`");
+  });
+
   it.each([
     ["git stash push -u", "never `git stash`"],
     ["git stash", "never `git stash`"],
@@ -204,6 +211,8 @@ describe("tool-guard.mjs", () => {
     "git push -u origin task/1",
     "git push origin HEAD:task/1",
     "git merge origin/main",
+    "git stash list",
+    "git -C ../x stash show -p stash@{0}",
     'git commit -m "test: never git stash or git rebase (#1)"',
   ])("lets a sub-agent run %s", (command) => {
     expect(bash(command, "a1", "implementer")).toEqual(OK);
@@ -248,6 +257,7 @@ describe("tool-guard.mjs", () => {
     "gh issue edit 9 --add-label bug:ready --remove-label bug:new",
     "gh issue edit 9 --add-label=task:ready",
     "gh issue edit 9 --add-label x,feature:planned",
+    "gh issue edit 9 --add-label refactor:ready --remove-label refactor:new",
     "gh issue create --title x --label task:ready --body-file b.md",
     "gh api -X POST repos/o/r/issues/9/labels -f 'labels[]=bug:ready'",
   ])("refuses a sub-agent's label into work: %s", (command) => {
@@ -288,6 +298,40 @@ describe("tool-guard.mjs", () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("runs only through `scripts/slow-e2e.sh");
+  });
+
+  it("refuses fast-track.mjs to the agents whose report or fix it checks, and lets the others run it", () => {
+    const command = "node .agents/scripts/fast-track.mjs 5";
+
+    expect(bash(command, "a1", "bug-triager").stderr).toContain("you never run it yourself");
+    expect(bash(`${command} --pr 9`, "a1", "implementer").status).toBe(2);
+    expect(
+      bash("env GH_REPO=o/r .agents/scripts/fast-track.mjs 5", "a1", "implementer").status,
+    ).toBe(2);
+    expect(bash("git add .agents/scripts/fast-track.mjs", "a1", "implementer")).toEqual(OK);
+    expect(bash("cat .agents/scripts/fast-track.mjs", "a1", "bug-triager")).toEqual(OK);
+    expect(bash(command, "a1", "general-purpose")).toEqual(OK);
+    expect(bash(command, null)).toEqual(OK);
+  });
+
+  it.each([
+    "gh issue edit 5 --remove-label fast-track",
+    "gh issue edit 5 --add-label bug:blocked --remove-label bug:ready,fast-track",
+    "gh api -X DELETE repos/o/r/issues/5/labels/fast-track",
+    "gh api --method PUT repos/o/r/issues/5/labels -f labels[]=bug:blocked",
+  ])("refuses a sub-agent that takes a bug off the fast track: %s", (command) => {
+    const result = bash(command, "a1", "implementer");
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("only the maintainer takes a bug off the fast track");
+  });
+
+  it("lets the main session remove fast-track, and a sub-agent remove another label", () => {
+    expect(bash("gh issue edit 5 --remove-label fast-track", null)).toEqual(OK);
+    expect(bash("gh issue edit 5 --remove-label bug:new", "a1", "bug-triager")).toEqual(OK);
+    expect(bash("gh api -X DELETE repos/o/r/issues/5/labels/bug:new", "a1", "reviewer")).toEqual(
+      OK,
+    );
   });
 
   it("refuses the slow lane's pnpm scripts in a sub-agent, and slow-e2e.sh outside its two agents", () => {
@@ -357,21 +401,48 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("first line is the ledger tag");
   });
 
-  it("requires an implementer's brief and a reviewer's protocol in the prompt, from this checkout", () => {
+  it("adds an implementer's brief, a reviewer's protocol and a lens's pinned briefs to the prompt the agent receives", () => {
     const build = readFileSync(join(ROOT, ".agents", "briefs", "implement-build.md"), "utf8");
-    const fix = readFileSync(join(ROOT, ".agents", "briefs", "implement-fix.md"), "utf8");
     const protocol = readFileSync(join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
-    const implementer = (prompt: string) => agent({ subagent_type: "implementer", prompt });
-    const reviewer = (prompt: string) => agent({ subagent_type: "reviewer", prompt });
+    const inputs = mkdtempSync(join(tmpdir(), "tool-guard-briefs-"));
+    mkdirSync(join(inputs, "briefs"));
+    writeFileSync(join(inputs, "briefs", "review-later-round.md"), "LATER pinned\n");
+    writeFileSync(join(inputs, "briefs", "review-claims.md"), "CLAIMS pinned\n");
+    const sent = (type: string, prompt: string, agentId?: string) => {
+      const result = spawnSync("node", [SCRIPT], {
+        input: JSON.stringify({
+          tool_name: "Agent",
+          tool_input: { subagent_type: type, prompt, run_in_background: false },
+          ...(agentId !== undefined && { agent_id: agentId }),
+        }),
+        encoding: "utf8",
+      });
+      if (result.stdout === "") return { status: result.status, stderr: result.stderr };
+      return JSON.parse(result.stdout).hookSpecificOutput.updatedInput.prompt as string;
+    };
+    const lensTag = "ledger: pr=975 issue=966 stage=review round=2 role=claims lens=-";
 
-    expect(implementer(`${LEDGER}\nissue: 966\nmode: build\nbrief:\n${build}`)).toEqual(OK);
-    expect(implementer(`${LEDGER}\nissue: 966\nmode: build`).stderr).toContain(
-      "`.agents/briefs/implement-build.md`",
+    expect(sent("implementer", `${LEDGER}\nissue: 966\nmode: build`)).toBe(
+      `${LEDGER}\nissue: 966\nmode: build\nbrief:\n${build}`,
     );
-    expect(implementer(`${LEDGER}\nissue: 966\nmode: build\nbrief:\n${fix}`).status).toBe(2);
-    expect(implementer(`${LEDGER}\nissue: 966\nbrief:\n${build}`).stderr).toContain("`mode:` line");
-    expect(reviewer(`${LEDGER}\npr: 975\nprotocol:\n${protocol}`)).toEqual(OK);
-    expect(reviewer(`${LEDGER}\npr: 975`).stderr).toContain("carries `protocol:`");
+    expect(sent("implementer", `${LEDGER}\nissue: 966\nmode: build\nbrief:\n${build}`)).toEqual(OK);
+    expect(sent("implementer", `${LEDGER}\nissue: 966`)).toMatchObject({
+      status: 2,
+      stderr: expect.stringContaining("`mode:` line"),
+    });
+    expect(sent("reviewer", `${LEDGER}\npr: 975`)).toBe(
+      `${LEDGER}\npr: 975\nprotocol:\n${protocol}`,
+    );
+    expect(sent("reviewer", `${LEDGER}\npr: 975\nprotocol:\n${protocol}`)).toEqual(OK);
+    expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}\nround: 2`, "a1")).toBe(
+      `${lensTag}\ninputs: ${inputs}\nround: 2\n=== briefs/review-later-round.md ===\nLATER pinned\n\n=== briefs/review-claims.md ===\nCLAIMS pinned\n\n`,
+    );
+    expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}\nround: 1`, "a1")).toBe(
+      `${lensTag}\ninputs: ${inputs}\nround: 1\n=== briefs/review-claims.md ===\nCLAIMS pinned\n\n`,
+    );
+    expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}/gone\nround: 1`, "a1")).toEqual(
+      OK,
+    );
   });
 
   it("refuses a code review off Opus on a diff that touches a strict area, outside a replay", () => {
@@ -416,6 +487,12 @@ describe("tool-guard.mjs", () => {
     "- a — no",
     "## Risk",
     "- b",
+    "## Fast track",
+    "- Defect: yes",
+    "- Fix tried: yes",
+    "- Nothing public added or broken: yes",
+    "- No ADR or rule changed: yes",
+    "- One fix: no — agent-device could carry the fix",
     "",
     FOOTER,
   ].join("\n");
@@ -453,6 +530,21 @@ describe("tool-guard.mjs", () => {
       "the budget is 300",
     ],
     [
+      "a triage report without Fast track",
+      triage.replace(/## Fast track\n(?:- .*\n)+/, ""),
+      "a triage report has the sections",
+    ],
+    [
+      "a Fast track line missing",
+      triage.replace("- Fix tried: yes\n", ""),
+      "holds these five lines",
+    ],
+    [
+      "a Fast track no without its reason",
+      triage.replace("no — agent-device could carry the fix", "no"),
+      "holds these five lines",
+    ],
+    [
       "a two-line Spec updated",
       `Spec updated: Scope.\nAnd Tests.\n\n${FOOTER}`,
       "one line and the footer",
@@ -472,6 +564,12 @@ describe("tool-guard.mjs", () => {
   it.each([
     ["a handoff", handoff("the maintainer's answer on the timeout")],
     ["a triage report", triage],
+    [
+      "a triage report whose Fast track reasons take it past 300 words",
+      triage
+        .replace("Keep it.", "word ".repeat(290))
+        .replace("could carry the fix", "word ".repeat(40)),
+    ],
     ["a superseding triage report", `Supersedes the report above.\n\n${triage}`],
     ["a Spec updated line", `Spec updated: Scope and Tests.\n\n${FOOTER}`],
     [
@@ -506,5 +604,54 @@ describe("tool-guard.mjs", () => {
     ]) {
       expect(bash(command, null).stderr).toContain("pass `--body-file <file>`");
     }
+  });
+
+  it("reads a body file named through a variable the call sets once, to a literal, before the use", () => {
+    const good = `Done.\n\n${FOOTER}`;
+    const file = bodyFile(good);
+    const scratch = join(mkdtempSync(join(tmpdir(), "tool-guard-")), "new.md");
+
+    expect(bash(`F=${file}; gh issue comment 9 --body-file "$F"`, null)).toEqual(OK);
+    expect(bash(`export F="${file}"\ngh issue comment 9 --body-file \${F}`, null)).toEqual(OK);
+    expect(
+      bash(`D=${dirname(file)} && F="$D/body.md" && gh pr edit 9 --body-file "$F"`, null),
+    ).toEqual(OK);
+    expect(
+      bash(`F=${scratch}; cat > "$F" <<'EOF'\n${good}\nEOF\ngh pr edit 9 --body-file "$F"`, null),
+    ).toEqual(OK);
+    expect(
+      bash(`F=${bodyFile("Done.\n")}; gh issue comment 9 --body-file "$F"`, null).stderr,
+    ).not.toContain("pass `--body-file <file>`");
+  });
+
+  it.each([
+    [
+      "sets twice",
+      (file: string) => `F=/tmp/other.md; F=${file}; gh issue comment 9 --body-file "$F"`,
+    ],
+    ["sets from a command", () => 'F=$(mktemp); gh issue comment 9 --body-file "$F"'],
+    [
+      "sets only for the program",
+      (file: string) => `F=${file} true; gh issue comment 9 --body-file "$F"`,
+    ],
+    ["sets after the use", (file: string) => `gh issue comment 9 --body-file "$F"; F=${file}`],
+    [
+      "sets in a loop",
+      (file: string) =>
+        `F=${file}; for F in /tmp/other.md; do :; done; gh issue comment 9 --body-file "$F"`,
+    ],
+    [
+      "reads from input",
+      (file: string) => `F=${file}; read -r F; gh issue comment 9 --body-file "$F"`,
+    ],
+    [
+      "expands with a default",
+      (file: string) => `F=${file}; gh issue comment 9 --body-file "\${F:-x}"`,
+    ],
+  ])("refuses a body file named through a variable the call %s", (_what, command) => {
+    const result = bash(command(bodyFile(`Done.\n\n${FOOTER}`)), null);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("pass `--body-file <file>`");
   });
 });

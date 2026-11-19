@@ -1,0 +1,12 @@
+.not-found {
+  display: flex;
+  max-width: 28rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.not-found p {
+  margin: 0;
+}

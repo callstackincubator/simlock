@@ -1,9 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createConnection, createServer } from "node:net";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  freeLoopbackPort,
+  startOnFreePort,
+  startUnlessPortLost,
+} from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
@@ -29,22 +34,13 @@ const adminSession = {
   role: "admin",
 } as const;
 
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
 interface Rig {
   readonly daemon: DaemonServer;
   readonly filesystem: MemoryFilesystem;
   readonly logs: MemoryLogSink;
   readonly profilePath: string;
   readonly port: number;
-  readonly restart: (options?: Switches & { readonly port?: number }) => Promise<Rig>;
+  readonly restart: (options?: Switches & { readonly anotherPort?: true }) => Promise<Rig>;
 }
 
 interface Switches {
@@ -59,12 +55,16 @@ interface LaunchOptions extends Switches {
   readonly host?: string;
   readonly seed?: Parameters<typeof seedTokensDatabase>[1];
   readonly port?: number;
-  readonly resume?: { readonly directory: string; readonly filesystem: MemoryFilesystem };
+  readonly resume?: {
+    readonly directory: string;
+    readonly filesystem: MemoryFilesystem;
+    readonly driver?: FakeDriver;
+  };
 }
 
 async function dataDirectoryFor(
   options: LaunchOptions,
-): Promise<{ directory: string; filesystem: MemoryFilesystem }> {
+): Promise<{ directory: string; filesystem: MemoryFilesystem; driver?: FakeDriver }> {
   if (options.resume !== undefined) return options.resume;
   const directory = await mkdtemp(join(tmpdir(), "simlock-local-profile-"));
   temporaryDirectories.push(directory);
@@ -72,53 +72,70 @@ async function dataDirectoryFor(
   return { directory, filesystem: new MemoryFilesystem() };
 }
 
+// why: a simulator outlives a daemon restart; state.db names the devices this driver made.
+function fakeIosDriver(clock: FakeClock): FakeDriver {
+  return new FakeDriver({
+    availableOsVersions: ["26.5"],
+    clock,
+    defaultModels: { phone: ["iPhone 16"] },
+    knownModels: ["iPhone 16"],
+    modelClasses: { "iPhone 16": "phone" },
+    platform: "ios",
+  });
+}
+
+// why: a lease outlives a daemon restart and keeps its device, and the default limits follow the host's memory, so a small CI runner would queue the restart test's third allocate.
+const roomForLeases = { strategy: "fixed", config: { maxRunning: 10 } } as const;
+
 async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const host = options.host ?? "127.0.0.1";
-  const { directory, filesystem } = await dataDirectoryFor(options);
+  const { directory, filesystem, driver: resumed } = await dataDirectoryFor(options);
   const clock = new FakeClock(1_000);
-  const logs = new MemoryLogSink();
-  const port = options.port ?? (await freeLoopbackPort());
+  const driver = resumed ?? fakeIosDriver(clock);
   if (options.refuseWrite === true) {
     filesystem.defineFailure(join(directory, "agent-device-profile.json"), "EACCES");
   }
-  const daemon = await startDaemon({
-    clock,
-    configOverrides:
-      options.defaults === undefined
-        ? {
-            capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
-            http: { enabled: options.http ?? true, host, port },
-          }
-        : {
-            capabilities: { "agent-device": { command: "fake-agent-device" } },
-            ...(options.defaults === "joined"
-              ? {
-                  gateway: {
-                    token: "slk_join",
-                    url: `ws://127.0.0.1:${String(await freeLoopbackPort())}`,
-                  },
-                }
-              : {}),
-            http: { port },
-          },
-    ...(options.role === undefined ? {} : { role: options.role }),
-    dataDirectory: directory,
-    deviceDataTables: fakeDeviceDataTables,
-    drivers: [
-      new FakeDriver({
-        availableOsVersions: ["26.5"],
-        clock,
-        defaultModels: { phone: ["iPhone 16"] },
-        knownModels: ["iPhone 16"],
-        modelClasses: { "iPhone 16": "phone" },
-        platform: "ios",
-      }),
-    ],
-    filesystem,
-    logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
-    optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
-    version: "1.2.3",
-  } as StartDaemonOptions);
+  // why: each attempt logs into its own sink, so a start that lost its port leaves no line in the rig's logs.
+  const start = async (port: number) => {
+    const logs = new MemoryLogSink();
+    const starting = startDaemon({
+      clock,
+      configOverrides:
+        options.defaults === undefined
+          ? {
+              capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
+              capacity: roomForLeases,
+              http: { enabled: options.http ?? true, host, port },
+            }
+          : {
+              capabilities: { "agent-device": { command: "fake-agent-device" } },
+              capacity: roomForLeases,
+              ...(options.defaults === "joined"
+                ? {
+                    gateway: {
+                      token: "slk_join",
+                      url: `ws://127.0.0.1:${String(await freeLoopbackPort())}`,
+                    },
+                  }
+                : {}),
+              http: { port },
+            },
+      ...(options.role === undefined ? {} : { role: options.role }),
+      dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [driver],
+      filesystem,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
+      optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    return { daemon: await startUnlessPortLost(logs, starting), logs };
+  };
+  const { port, started } =
+    options.port === undefined
+      ? await startOnFreePort(start)
+      : { port: options.port, started: await start(options.port) };
+  const { daemon, logs } = started;
   runningDaemons.push(daemon);
   return {
     daemon,
@@ -131,8 +148,9 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
       return launch({
         host,
         ...restartOptions,
-        port: restartOptions.port ?? port,
-        resume: { directory, filesystem },
+        // why: a start with no port picks a free one, and retries on another when it is taken.
+        ...(restartOptions.anotherPort === true ? {} : { port }),
+        resume: { directory, driver, filesystem },
       });
     },
   };
@@ -316,10 +334,9 @@ describe("the local agent-device profile", () => {
     expect((await same.filesystem.stat(same.profilePath)).identity).toBe(identity);
     expect(await labelledIds(same)).toEqual([tokenId]);
 
-    const port = await freeLoopbackPort();
-    const moved = await same.restart({ port });
+    const moved = await same.restart({ anotherPort: true });
     const after = await readProfile(moved);
-    expect(after.profile.daemonBaseUrl).toBe(`http://127.0.0.1:${port}/v1/agent-device`);
+    expect(after.profile.daemonBaseUrl).toBe(`http://127.0.0.1:${moved.port}/v1/agent-device`);
     expect(after.profile.daemonAuthToken).toBe(before.profile.daemonAuthToken);
     expect(await labelledIds(moved)).toEqual([tokenId]);
 
@@ -344,7 +361,7 @@ describe("the local agent-device profile", () => {
       ],
     ];
     let current = moved;
-    for (const [name, breakIt] of breakers) {
+    for (const [index, [name, breakIt]] of breakers.entries()) {
       const lastToken = (await readProfile(current)).profile.daemonAuthToken;
       await current.daemon.dispatch("token.create", { label: LABEL, role: "agent" }, adminSession);
       await breakIt(current);
@@ -354,9 +371,10 @@ describe("the local agent-device profile", () => {
       expect(ids, name).toHaveLength(1);
       expect(replaced.profile.daemonAuthToken, name).not.toBe(lastToken);
       expect(ids[0], name).not.toBe(tokenId);
-      expect((await allocateWith(current, replaced.profile.daemonAuthToken, 2)).status, name).toBe(
-        200,
-      );
+      expect(
+        (await allocateWith(current, replaced.profile.daemonAuthToken, 2 + index)).status,
+        name,
+      ).toBe(200);
     }
   });
 

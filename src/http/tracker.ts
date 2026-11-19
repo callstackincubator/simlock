@@ -16,12 +16,15 @@ export interface LeaseRequestInput {
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly mode?: "slim" | "full";
+  readonly except?: readonly string[];
   readonly imageTag?: string;
   readonly baseline?: string;
   readonly physical?: boolean;
   /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
   readonly leaseId?: string;
+  readonly runId?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface LeasePayload {
@@ -78,8 +81,10 @@ export function buildLeasePayload(
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
     ttlMs: lease.ttlMs,
+    ...(lease.runId === undefined ? {} : { runId: lease.runId }),
     dataPlane: null,
     ...(device.mode === undefined ? {} : { mode: device.mode }),
+    ...(device.except === undefined ? {} : { except: device.except }),
     ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
     ...(device.spec.baseline === undefined ? {} : { baseline: device.spec.baseline }),
     // `workerId` derives from `worker` so the two never disagree.
@@ -94,11 +99,18 @@ function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: stri
     platform: body.platform,
     ...(body.os === undefined ? {} : { osVersion: body.os }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
+    ...(body.except === undefined ? {} : { except: body.except }),
+    ...requestImageFields(body),
+    ...requestOptions(body),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
+function requestImageFields(body: LeaseRequestInput) {
+  return {
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
-    ...requestOptions(body),
-    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   };
 }
 
@@ -110,6 +122,8 @@ function requestOptions(body: LeaseRequestInput) {
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
+    ...(body.runId === undefined ? {} : { runId: body.runId }),
+    ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
   };
 }
 
@@ -353,6 +367,7 @@ export class LeaseRequestTracker {
     return { kind: "not-cancellable" };
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the app's tracker, and by its tests through a test-* harness.
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.requests.requestIdForLease(leaseId);
   }
@@ -395,6 +410,8 @@ export interface HttpLeaseDevice {
   };
   /** Absent only for a physical device, which has no mode. */
   readonly mode?: "slim" | "full" | undefined;
+  /** why: absent when the lease keeps no category running. */
+  readonly except?: readonly string[] | undefined;
 }
 
 interface HttpLeaseRecord {
@@ -402,6 +419,7 @@ interface HttpLeaseRecord {
   readonly grantedAt: number;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  readonly runId?: string | undefined;
   /** ADR 0005 §18: set on a lease a gateway issued, naming the worker it lives on. */
   readonly worker?: { readonly id: string; readonly label?: string | undefined } | undefined;
 }

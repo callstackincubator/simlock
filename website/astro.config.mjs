@@ -103,6 +103,7 @@ export default defineConfig({
             doc("using-devices/watching-the-screen", "Watch the screen"),
             doc("using-devices/agent-device", "agent-device"),
             doc("using-devices/remote-agents", "Remote agents over HTTP"),
+            doc("using-devices/ci", "Run tests from CI"),
             doc("using-devices/programmatic-client", "Programmatic client"),
             doc("using-devices/errors", "When a lease fails"),
           ],
@@ -111,6 +112,7 @@ export default defineConfig({
           label: "Worker",
           items: [
             doc("worker/running-the-daemon", "Run the daemon"),
+            doc("worker/windows", "Set up a Windows worker"),
             doc("worker/configuration", "Configuration"),
             doc("worker/capacity", "Capacity and warm pool"),
             doc("worker/runtimes-and-images", "Runtimes and system images"),
@@ -127,7 +129,7 @@ export default defineConfig({
           items: [
             doc("gateway", "When you need a gateway"),
             doc("gateway/setup", "Set up a gateway"),
-            doc("gateway/joining-workers", "Join workers"),
+            doc("gateway/joining-workers", "Add a worker"),
             doc("gateway/routing", "How requests are routed"),
             doc("gateway/managing-workers", "Manage workers"),
             doc("gateway/access-control", "Access control"),

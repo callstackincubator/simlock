@@ -124,8 +124,43 @@ const REGISTRY_V3 = `
 ALTER TABLE lease_requests ADD COLUMN baseline TEXT;
 `;
 
+const REGISTRY_V4 = `
+ALTER TABLE devices ADD COLUMN except_categories TEXT;
+ALTER TABLE lease_requests ADD COLUMN except_categories TEXT;
+`;
+
+const REGISTRY_V5 = `
+ALTER TABLE devices ADD COLUMN deleted_at INTEGER;
+`;
+
+const REGISTRY_V6 = `
+CREATE TABLE ended_lease_ids (
+  lease_id TEXT PRIMARY KEY,
+  ended_at INTEGER NOT NULL
+) STRICT;
+`;
+
+const REGISTRY_V7 = `
+ALTER TABLE devices ADD COLUMN hardware_serial TEXT;
+`;
+
+const REGISTRY_V8 = `
+ALTER TABLE leases ADD COLUMN run_id TEXT;
+ALTER TABLE lease_requests ADD COLUMN run_id TEXT;
+ALTER TABLE lease_grants ADD COLUMN run_id TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3],
+  migrations: [
+    REGISTRY_V1,
+    REGISTRY_V2,
+    REGISTRY_V3,
+    REGISTRY_V4,
+    REGISTRY_V5,
+    REGISTRY_V6,
+    REGISTRY_V7,
+    REGISTRY_V8,
+  ],
   name: "registry",
-  version: 3,
+  version: 8,
 };

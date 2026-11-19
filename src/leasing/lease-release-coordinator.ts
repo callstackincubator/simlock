@@ -131,6 +131,23 @@ export class LeaseReleaseCoordinator
     return this.#runNormal(() => this.#releaseAll(reason, "background"));
   }
 
+  /** why: a run's cleanup frees the leases of one run; `ownerId` narrows it to one principal's, `undefined` is every owner's. */
+  async releaseRun(runId: string, ownerId: string | undefined): Promise<readonly string[]> {
+    return this.#runNormal(async () => {
+      const leaseIds = this.options.registry.snapshot.leases
+        .filter(
+          (lease) => lease.runId === runId && (ownerId === undefined || lease.ownerId === ownerId),
+        )
+        .map((lease) => lease.id);
+      await Promise.all(
+        leaseIds.map(async (leaseId) =>
+          this.#release(leaseId, "explicit", { reclaim: "background" }),
+        ),
+      );
+      return leaseIds;
+    });
+  }
+
   /**
    * Gives up a lease whose device could not be brought back. Internally
    * originated only -- no client can ask for it -- but it is an ordinary
@@ -398,6 +415,7 @@ export class LeaseReleaseCoordinator
     const { clock, endWaitMs, participants } = leaseEnd;
     const ended: EndedLease = {
       deviceId: released.device.id,
+      grantedAt: released.lease.grantedAt,
       leaseId: released.lease.id,
       ownerId: released.lease.ownerId,
       platform: released.device.spec.platform,

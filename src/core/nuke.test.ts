@@ -3,10 +3,9 @@ import { loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats } from "../ports/index.js";
-import type { Config } from "./config.js";
 import { FakeDriver } from "./fake-driver.js";
 import { Nuke } from "./nuke.js";
-import { createTestEngine } from "../leasing/testing.js";
+import { createTestEngine, type TestEngineConfig } from "../leasing/testing.js";
 
 describe("Nuke", () => {
   it("destroys every registry device and never targets a foreign device", async () => {
@@ -74,6 +73,147 @@ describe("Nuke", () => {
     expect(driver.calls.flatMap((call) => call.arguments)).not.toContainEqual(
       expect.objectContaining({ deviceId: "foreign" }),
     );
+  });
+
+  it("with delete, deletes a device an earlier process left provisioning, reports it, and frees its slot for the next lease", async () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({
+      clock,
+      eventBus,
+      idGenerator: sequence(),
+    });
+    const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "android" });
+    driver.setManagedReality({
+      devices: [
+        {
+          address: "stalled-address",
+          deviceId: "stalled",
+          driverData: { fakeDeviceId: "stalled" },
+          runState: "stopped",
+        },
+      ],
+      processes: [],
+    });
+    const stalled = await registry.registerDevice({
+      driverData: { fakeDeviceId: "stalled" },
+      driverDeviceId: "stalled",
+      provisionDuration: 0,
+      spec: { physical: false, model: "Phone", osVersion: "1", platform: "android" },
+    });
+    expect(registry.snapshot.devices).toMatchObject([{ id: stalled.id, state: "provisioning" }]);
+    const engine = createTestEngine({
+      ...testComponentWiring({
+        clock: clock,
+        drivers: [driver],
+        eventBus: eventBus,
+        registry: registry,
+      }),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      idGenerator: sequence(),
+      registry,
+      state: testStateOf(registry),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        totalRamBytes: 32 * 1024 ** 3,
+      }),
+    });
+
+    const report = await new Nuke({ executor: engine, registry }).run({ deleteDevices: true });
+
+    expect(registry.snapshot.devices.find((device) => device.id === stalled.id)?.state).toBe(
+      "deleted",
+    );
+    expect(report.deletedDevices).toEqual([stalled.id]);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toEqual([
+      expect.objectContaining({ arguments: [expect.objectContaining({ deviceId: "stalled" })] }),
+    ]);
+    const grant = await engine.request(
+      { model: "Phone", osVersion: "1", platform: "android" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+    expect(grant.device.id).not.toBe(stalled.id);
+    expect(registry.snapshot.devices.find((device) => device.id === grant.device.id)?.state).toBe(
+      "leased",
+    );
+  });
+
+  it("with --delete-devices deletes quarantined virtual devices, one waiting for a retry and one stranded", async () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({
+      clock,
+      eventBus,
+      idGenerator: sequence(),
+    });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({
+      devices: ["waiting", "stranded"].map((deviceId) => ({
+        address: `${deviceId}-address`,
+        deviceId,
+        driverData: { fakeDeviceId: deviceId },
+        runState: "running" as const,
+      })),
+      processes: [],
+    });
+    const quarantined = [];
+    for (const deviceId of ["waiting", "stranded"]) {
+      const device = await registry.registerDevice({
+        driverData: { fakeDeviceId: deviceId },
+        driverDeviceId: deviceId,
+        provisionDuration: 0,
+        spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      await registry.enterQuarantine(device.id, 31_000, { kind: "delete-failed" });
+      quarantined.push(device.id);
+    }
+    const [waitingId, strandedId] = quarantined;
+    await registry.strandQuarantine(strandedId!, 3);
+    const engine = createTestEngine({
+      ...testComponentWiring({
+        clock: clock,
+        drivers: [driver],
+        eventBus: eventBus,
+        registry: registry,
+      }),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      idGenerator: sequence(),
+      registry,
+      state: testStateOf(registry),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        totalRamBytes: 32 * 1024 ** 3,
+      }),
+    });
+    expect(registry.snapshot.devices).toMatchObject([
+      { id: waitingId, state: "quarantined", quarantineNextRetryAt: 31_000 },
+      { id: strandedId, state: "quarantined", quarantineAttempts: 3 },
+    ]);
+
+    const result = await new Nuke({ executor: engine, registry }).run({ deleteDevices: true });
+
+    expect(result.deletedDevices).toEqual([waitingId, strandedId]);
+    expect(registry.snapshot.devices).toMatchObject([
+      { id: waitingId, state: "deleted" },
+      { id: strandedId, state: "deleted" },
+    ]);
+    for (const device of registry.snapshot.devices) {
+      expect(device).not.toHaveProperty("quarantineAttempts");
+      expect(device).not.toHaveProperty("quarantineNextRetryAt");
+      expect(device).not.toHaveProperty("quarantinedAt");
+    }
+    expect(
+      driver.calls.filter((call) => call.operation === "destroy").flatMap((call) => call.arguments),
+    ).toEqual([
+      expect.objectContaining({ deviceId: "waiting" }),
+      expect.objectContaining({ deviceId: "stranded" }),
+    ]);
   });
 
   it("waits for a blocked release shutdown before deleting the registry-owned device", async () => {
@@ -151,21 +291,11 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function config(): Config {
+function config(): TestEngineConfig {
   return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 1 },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    eventBuffer: { capacity: 10 },
+    android: { virtualDevices: true },
+    devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    ios: { modes: ["slim", "full"], virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -175,20 +305,13 @@ function config(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
+      endedIdRetentionMs: 600_000,
       maxRequestRecords: 10_000,
       maxPerRequester: 1,
       endWaitMs: 600_000,
@@ -204,12 +327,6 @@ function config(): Config {
         ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,

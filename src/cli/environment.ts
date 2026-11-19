@@ -5,12 +5,13 @@ import { join } from "node:path";
 
 import { resolveRequesterId } from "../agent-identity/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
-import type { ConfigOverrides, ModuleConfigEntry } from "../core/index.js";
+import type { ConfigOverrides, DriverConfigEntry, ModuleConfigEntry } from "../core/index.js";
 import type {
   Clock,
   DaemonExit,
   DaemonLauncher,
   Filesystem,
+  HttpStreamClient,
   IpcConnector,
   LaunchedDaemon,
   ParentWatch,
@@ -20,7 +21,7 @@ import { errorMessage } from "./errors.js";
 import { UsageError } from "./usage-error.js";
 import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
-import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
+import type { CliEnvironment, CliEnvironmentPorts, Output } from "./types.js";
 
 const EXIT_GRACE_MS = 2_000;
 // why: a daemon whose start failed is already stopping when it answers, so its stopping refusal is the failed start.
@@ -30,6 +31,25 @@ const STARTING_FAILURE_CODES: ReadonlySet<string> = new Set([
 ]);
 // why: the daemon bounds its own startup read at STARTUP_READ_LIMIT_MS, so the CLI waits past it before it calls a daemon that is still starting stuck.
 const STARTING_WAIT_EXTRA_MS = 30_000;
+
+// why: the adapter loads on the first transfer, so a command that moves no file never loads node:http for it.
+function httpStreamOf(supplied: HttpStreamClient | undefined): HttpStreamClient {
+  return (
+    supplied ?? {
+      request: async (request) => {
+        const { NodeHttpStreamClient } = await import("../ports/index.js");
+        return new NodeHttpStreamClient().request(request);
+      },
+    }
+  );
+}
+
+// why: a real stdout takes the bytes as they are; a stdout a test or a host supplied is a text sink, so the bytes go to it as text.
+function stdoutBytesOf(stdout: Output | undefined): (bytes: Uint8Array) => unknown {
+  return stdout === undefined
+    ? (bytes) => process.stdout.write(bytes)
+    : (bytes) => stdout.write(Buffer.from(bytes).toString("utf8"));
+}
 
 class AutoLaunchAdminConnector {
   private startupDeadline: number | undefined;
@@ -225,13 +245,23 @@ async function isUnavailable(error: unknown): Promise<boolean> {
   return isEndpointAbsent(error);
 }
 
-async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
-  const { optionalModules } = await import("../module-registry/index.js");
-  return optionalModules.map(({ config, enabledByDefault, name }) => ({
-    name,
-    ...config,
-    ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
-  }));
+// why: the same module and driver sections the daemon loads its config with, so the CLI accepts and refuses the same keys.
+async function configSections(): Promise<{
+  readonly driverSections: readonly DriverConfigEntry[];
+  readonly modules: readonly ModuleConfigEntry[];
+}> {
+  const [{ optionalModules }, { driverConfigEntries }] = await Promise.all([
+    import("../module-registry/index.js"),
+    import("../driver-registry/index.js"),
+  ]);
+  return {
+    driverSections: driverConfigEntries,
+    modules: optionalModules.map(({ config, enabledByDefault, name }) => ({
+      name,
+      ...config,
+      ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
+    })),
+  };
 }
 
 async function readAdminTokenFile(
@@ -300,6 +330,33 @@ function tcpPorts(ports: CliEnvironmentPorts): Pick<CliEnvironment, "tcpListener
   };
 }
 
+// why: the commands that may be the caller's adb, in the order they are tried: the one on the PATH, then the `platform-tools` of each SDK folder Simlock's own Android driver looks in.
+function adbCandidatesFor(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  platform: NodeJS.Platform | undefined,
+): readonly string[] {
+  const windows = platform === "win32";
+  const adb = windows ? "adb.exe" : "adb";
+  const fallback = windows
+    ? join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "Android", "Sdk")
+    : join(home, "Library", "Android", "sdk");
+  const roots = [env.ANDROID_HOME, env.ANDROID_SDK_ROOT, fallback].filter(
+    (root): root is string => root !== undefined && root !== "",
+  );
+  return [adb, ...roots.map((root) => join(root, "platform-tools", adb))];
+}
+
+function callerAdbPorts(
+  ports: CliEnvironmentPorts,
+  env: NodeJS.ProcessEnv,
+): Pick<CliEnvironment, "adbCandidates" | "processRunner"> {
+  return {
+    adbCandidates: adbCandidatesFor(env, ports.homeDirectory, ports.hostPlatform),
+    processRunner: ports.processRunner,
+  };
+}
+
 export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
@@ -318,7 +375,7 @@ export function buildCliEnvironment(
       await loadConfig({
         configPath,
         filesystem,
-        modules: await moduleConfigEntries(),
+        ...(await configSections()),
         role: daemonHome.role,
         systemStats,
       });
@@ -388,6 +445,7 @@ export function buildCliEnvironment(
           },
         }),
     requesterId,
+    requesterIsProcess: resolveRequesterId(env, "") === "",
     homeDirectory: ports.homeDirectory,
     workingDirectory: ports.workingDirectory,
     codexHome: ports.codexHome,
@@ -437,8 +495,11 @@ export function buildCliEnvironment(
         return new FetchHttpJsonClient().get(url, token);
       },
     },
+    httpStream: httpStreamOf(ports.httpStream),
     ...tcpPorts(ports),
+    ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
+    ...runFieldsFromEnv(env),
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
     writeConfigFile: async (contents) => {
@@ -459,7 +520,7 @@ export function buildCliEnvironment(
       await loadConfig({
         configPath: "/config-set-validation.json",
         filesystem: new MemoryFilesystem(),
-        modules: await moduleConfigEntries(),
+        ...(await configSections()),
         overrides: merged as ConfigOverrides,
         role: daemonHome.role,
         systemStats,
@@ -494,6 +555,7 @@ export function buildCliEnvironment(
     signals: ports.signals ?? process,
     stderr: ports.stderr ?? process.stderr,
     stdout: ports.stdout ?? process.stdout,
+    stdoutBytes: stdoutBytesOf(ports.stdout),
     confirm: ports.confirm ?? confirmTerminal,
   };
 }
@@ -507,4 +569,17 @@ async function confirmTerminal(question: string): Promise<boolean> {
   } finally {
     prompt.close();
   }
+}
+
+function runFieldsFromEnv(env: NodeJS.ProcessEnv): {
+  readonly runFromEnv?: string;
+  readonly githubRunFromEnv?: string;
+} {
+  const runId = env.GITHUB_RUN_ID;
+  // why: GitHub Actions sets the same run id and attempt for every job of a workflow run; an unset or empty attempt is the first.
+  const github =
+    env.GITHUB_ACTIONS === "true" && runId !== undefined && runId !== ""
+      ? { githubRunFromEnv: `${runId}-${env.GITHUB_RUN_ATTEMPT || "1"}` }
+      : {};
+  return { ...(env.SIMLOCK_RUN === undefined ? {} : { runFromEnv: env.SIMLOCK_RUN }), ...github };
 }

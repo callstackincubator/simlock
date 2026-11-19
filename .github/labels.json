@@ -7,7 +7,7 @@
   {
     "name": "bug:new",
     "color": "d73a4a",
-    "description": "Reported. An agent may triage it (rule 8), and nothing more."
+    "description": "Reported. An agent may triage it (rule 8); the fast track may set it ready (rule 17)."
   },
   {
     "name": "bug:needs-info",
@@ -55,6 +55,21 @@
     "description": "Agent stopped on a blocker in its handoff. Maintainer re-adds the label it came from."
   },
   {
+    "name": "refactor:new",
+    "color": "5319e7",
+    "description": "A proposed refactor (delivery rule 18). Nothing is built from it."
+  },
+  {
+    "name": "refactor:ready",
+    "color": "5319e7",
+    "description": "An agent may build it; a refactor needs no spec (rule 18)."
+  },
+  {
+    "name": "refactor:blocked",
+    "color": "5319e7",
+    "description": "Agent stopped on a blocker in its handoff. Maintainer re-adds the label it came from."
+  },
+  {
     "name": "documentation",
     "color": "0075ca",
     "description": "Improvements or additions to documentation"
@@ -78,5 +93,20 @@
     "name": "needs-hardware",
     "color": "5319e7",
     "description": "PR parked: a Done when line needs a real simulator or emulator run."
+  },
+  {
+    "name": "fast-track",
+    "color": "0e8a16",
+    "description": "Bug set ready by the fast-track check, not the maintainer (rule 17)."
+  },
+  {
+    "name": "auto-refactor",
+    "color": "d4c5f9",
+    "description": "A refactor PR the refactor routine started, not the maintainer (rule 18)."
+  },
+  {
+    "name": "upstream",
+    "color": "fbca04",
+    "description": "Blocked on a dependency's issue, linked in a ## Waiting on upstream comment. Checked weekly."
   }
 ]

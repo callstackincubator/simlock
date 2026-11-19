@@ -54,6 +54,7 @@ const WAITING_REASON_TEXT: Readonly<Record<WaitingReasonWord, (platform: string)
   "no-free-physical": () => "Every matching device is leased or absent",
   "platform-running-limit": (platform) =>
     `Full: running limit for ${platform === "ios" ? "iOS" : "Android"}`,
+  "memory-pressure": () => "Full: host memory pressure",
   "ram-budget": () => "Full: RAM budget",
   "waiting-for-device": () => "A matching device is starting",
 };
@@ -64,6 +65,7 @@ const GATEWAY_REASON_TEXT: Readonly<
   Record<Exclude<GatewayWaitingReason, "full">, (platform: string) => string>
 > = {
   busy: () => "Busy with its own queue",
+  "cannot-keep-except": () => "Cannot keep these slim categories",
   "capability-missing": () => "Missing capability",
   disconnected: () => "Not connected",
   drained: () => "Drained",
@@ -71,6 +73,7 @@ const GATEWAY_REASON_TEXT: Readonly<
   "baseline-mismatch": () => "Baseline is for another device",
   "baseline-stale": () => "Baseline is stale",
   "no-baseline": () => "Does not hold the baseline",
+  "mode-unavailable": () => "Mode not served",
   "no-driver": (platform) => `No ${platform === "ios" ? "iOS" : "Android"} support`,
   "no-free-physical": () => WAITING_REASON_TEXT["no-free-physical"](""),
   "not-chosen": () => "Not chosen this time",

@@ -30,7 +30,9 @@ export async function renewLease(
     }
     if (context.clock.now() + ttlMs > listed.ttlDeadline) {
       await context.dispatch("lease.renew", { leaseId, ttlMs }, session);
-    }
+      // why: the map's deadline is what a restore reads when the gateway's list leaves a lease out, so a renewal moves it.
+      context.map.setDeadline(leaseId, context.clock.now() + ttlMs);
+    } else context.map.setDeadline(leaseId, listed.ttlDeadline);
     return { kind: "renewed" };
   } catch (error) {
     if (mapError(error).code === "UNKNOWN_LEASE") return { kind: "gone" };

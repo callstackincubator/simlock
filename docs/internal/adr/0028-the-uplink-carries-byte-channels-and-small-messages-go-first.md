@@ -1,6 +1,6 @@
 # 0028. The uplink carries byte channels beside its messages, and small messages go first
 
-- **Status:** Accepted; §4 narrowed by [ADR 0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md)
+- **Status:** Accepted; §4 narrowed by [ADR 0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) and, for a file PUT's deadline, [ADR 0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md)
 - **Date:** 2026-10-14
 - **Issue:** [#552](https://github.com/callstackincubator/simlock/issues/552)
 - **Narrows:** [ADR 0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md)

@@ -1,3 +1,6 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { LinkChannelError, type LinkChannel } from "../link/index.js";
@@ -22,6 +25,16 @@ const logger: Logger = {
 };
 
 type Input = Parameters<RelayConnection["request"]>[0];
+
+// why: a leak is an object nothing can reach that a full collection still keeps; a timer turn between collections lets FinalizationRegistry callbacks run.
+async function collectGarbage(): Promise<void> {
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  for (let round = 0; round < 3; round += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    gc();
+  }
+}
 
 async function acceptedChannel() {
   const pair = linkPair();
@@ -206,5 +219,33 @@ describe("a worker's relay connection", () => {
     const read = await settleWithin(opened.readable.getReader().read());
 
     expect(read.state).toBe("rejected");
+  });
+
+  it("lets every Request it handed a target be collected once the relay has answered, a GET with no body and a PUT with one", async () => {
+    const handed: WeakRef<Request>[] = [];
+    const target: RelayTarget = async (request) => {
+      handed.push(new WeakRef(request));
+      await request.arrayBuffer();
+      return new Response("ok");
+    };
+    const relays = new RelayConnection({ echo: target }, logger);
+    const push: RelayPush = { head: () => Promise.resolve() };
+    const outcomes = [];
+    for (const input of [relayInput(), relayInput({ hasBody: true, method: "PUT" })]) {
+      const pair = linkPair();
+      const opened = await pair.gateway.openChannel({ signal: new AbortController().signal });
+      const answered = relays.request(input as Input, push, pair.worker.acceptChannel(opened.id));
+      await opened.writable.getWriter().close();
+      void opened.readable.pipeTo(new WritableStream()).catch(() => undefined);
+      outcomes.push(await settleWithin(answered));
+    }
+
+    await collectGarbage();
+
+    expect(outcomes).toEqual([
+      { state: "fulfilled", value: {} },
+      { state: "fulfilled", value: {} },
+    ]);
+    expect(handed.map((ref) => ref.deref() === undefined)).toEqual([true, true]);
   });
 });

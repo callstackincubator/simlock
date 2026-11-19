@@ -49,7 +49,7 @@ export interface AuthorizeContext {
  * Builds an `authorize` hook that requires the calling session to either be `admin` (ADR §4:
  * "admin bypasses") or own the resource identified by `getId(input)`. This is the one
  * `authorize` hook this contract declares -- `lease.renew` and `lease.release` both use it (see
- * `operations.ts`); `lease.list`'s ownership is a filter over many records, not a single-id
+ * `operations-leases.ts`); `lease.list`'s ownership is a filter over many records, not a single-id
  * check, so it is not a candidate for this helper and is handled entirely in its handler.
  */
 export function ownsLease<Input>(

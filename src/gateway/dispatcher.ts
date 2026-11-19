@@ -126,6 +126,8 @@ export interface GatewayDispatcherOptions {
   readonly directory: WorkerDirectory;
   readonly tokens?: TokenOperations;
   readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
+  // why: ADR 0081 §2: a revoked token's open sessions close at once, as its uplinks do.
+  readonly closeSessionsForToken?: (tokenId: string) => void;
   readonly clock: Clock;
   readonly logger?: Logger;
   /** why: Classifies a thrown error for the `operation` log line (`classifyError` in production),
@@ -147,6 +149,7 @@ export interface GatewayDispatcherOptions {
     | "release"
     | "saveBaseline"
     | "releaseAll"
+    | "releaseRun"
     | "exec"
     | "rotate"
     | "queueDepth"
@@ -292,6 +295,7 @@ export class GatewayDispatcher {
       "lease.release": this.#leaseRelease,
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
+      "lease.release-run": this.#leaseReleaseRun,
       "device.exec": this.#deviceExec,
       "device.rotate": this.#deviceRotate,
       "relay.request": relayRefused,
@@ -430,7 +434,10 @@ export class GatewayDispatcher {
 
   #tokenRevoke: Handler<"token.revoke"> = async (input) => {
     const revoked = await this.#requireTokens().revoke(input.id);
-    if (revoked) await this.options.closeUplinksForToken?.(input.id);
+    if (revoked) {
+      this.options.closeSessionsForToken?.(input.id);
+      await this.options.closeUplinksForToken?.(input.id);
+    }
     return { revoked };
   };
 
@@ -681,8 +688,8 @@ export class GatewayDispatcher {
    * and its `lease.maxTtlMs` caps what its own clients may ask for, both before anything is
    * dispatched". `owner` (§27a, narrowed round 3 review H3) is read only from `session.
    * isGatewayUplink` -- never merely `role === "admin"`, which HTTP's `operator` token also maps
-   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher.ts`'s own
-   * `#leaseRequest` used to share with this one.
+   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher-leases.ts`'s
+   * `leaseRequest` used to share with this one.
    *
    * Unlike the worker, nothing ever forwards *into* a gateway's own front door the way this
    * gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005, so no
@@ -715,6 +722,9 @@ export class GatewayDispatcher {
       {
         // why: `input.allowDownload` stays accepted and is not passed on: only installed runtimes
         // count through a gateway (ADR 0009 §3).
+        // why: ADR 0074 §1: the admission command reads the request as the caller sent it, without what is not the device's ask.
+        admissionRequest: withoutCallerIdentity(input),
+        ...(input.metadata === undefined ? {} : { admissionMetadata: input.metadata }),
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
         requesterId: input.requesterId ?? principalAsRequester(session.principal),
@@ -724,6 +734,7 @@ export class GatewayDispatcher {
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
         ...(input.requires === undefined ? {} : { requires: input.requires }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         // why: Always explicit past this point (§15): a request that named none is filled in here,
@@ -786,6 +797,14 @@ export class GatewayDispatcher {
     return { leaseIds: [...leaseIds] };
   };
 
+  #leaseReleaseRun: Handler<"lease.release-run"> = async (input, session) => {
+    const released = await this.options.coordinator.releaseRun(
+      input.runId,
+      session.role === "admin" ? undefined : session.principal,
+    );
+    return { leaseIds: [...released.leaseIds], requestIds: [...released.requestIds] };
+  };
+
   #deviceRotate: Handler<"device.rotate"> = async (input, session) =>
     this.options.coordinator.rotate(
       { leaseId: input.leaseId, orientation: input.orientation },
@@ -799,6 +818,7 @@ export class GatewayDispatcher {
         tool: input.tool,
         args: input.args,
         ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+        ...(input.stdinFile === undefined ? {} : { stdinFile: input.stdinFile }),
       },
       session,
     );
@@ -850,4 +870,15 @@ function relayedUpdateError(error: unknown, workerId: string): unknown {
     });
   }
   return new DispatchError(error.code, error.message, error.details);
+}
+
+/** why: the admission command is told who asks in its own fields, so `request` leaves out `requesterId`, `idempotencyKey` and `metadata`. */
+function withoutCallerIdentity(input: object): Record<string, unknown> {
+  const {
+    idempotencyKey: _key,
+    metadata: _metadata,
+    requesterId: _requester,
+    ...request
+  } = input as Record<string, unknown>;
+  return request;
 }

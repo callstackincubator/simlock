@@ -11,8 +11,9 @@ How one lease request becomes one concrete device, virtual or physical.
 | Source | Where | Read when |
 |---|---|---|
 | Request: `model` or `class`, `osVersion` (exact or range), `mode`, `imageTag`, `physical`, `allowDownload`, `noWait` | `contract/operations.ts` → `DeviceRequest` | Per request |
-| Download permission | `downloads.policy` (`on-request`), `daemon/dispatcher.ts` | Per request, before leasing |
-| Default mode | `ios.defaultMode` (`full`); Android always `full` | Per request with no `mode` |
+| Download permission | `downloads.policy` (`on-request`), `daemon/dispatcher-leases.ts` | Per request, before leasing |
+| Default mode | `ios.defaultMode` (`full`, or the only mode `ios.modes` lists); Android always `full` | Per request with no `mode` |
+| Served modes | `ios.modes` (both) | A worker refuses a lease, target or learned kind of an unlisted iOS mode, `MODE_UNAVAILABLE` |
 | Operator preference lists | `ios.defaultModels`, `android.defaultModels` | Merged once at start |
 | Built-in preference lists | `Driver.defaultModels` of each driver | Merged once at start, after the operator's |
 | Catalog | `DriverCatalog.listCatalog` → `Driver.listCatalog` | Per class or range request; built on every read (Android keeps only its `avdmanager list device` answer, below) |
@@ -26,15 +27,16 @@ How one lease request becomes one concrete device, virtual or physical.
 | Enrolled physical devices | registry snapshot; presence from `Driver.listPresentPhysical` | Each physical plan; presence before each grant |
 | Warm targets | `warmPool.targets` (`core/warm-pool/config.ts`), and the kinds the pool learned from leases (`core/warm-pool/learned.ts`, `state.db`) | Every warm-pool pass, downloads off |
 
-Never read: the sdkmanager catalog. A preference list is merged in `daemon/main.ts`
+Never read: the sdkmanager catalog. A preference list is merged in `daemon/worker-composition.ts`
 `modelPreferenceWiring`; nothing else builds it.
 
 ## Virtual: request → spec
 
-In `LeaseAcquisitionCoordinator` (`leasing/lease-acquisition-coordinator.ts`), no lock held:
+In `AcquisitionSpecResolver` (`leasing/acquisition-spec-resolver.ts`), a part of `LeaseAcquisitionCoordinator`, no lock held. A `virtualDevices: false` platform is refused first (`VirtualDevicesOffError`), before any catalog read or download:
 
 1. `physical: true` → skip to the physical branch.
-2. Mode = request's, else the platform default.
+   A virtual Android request with no `imageTag` on a worker with `android.defaultImageTag` is tried first as if it named that tag, with downloads off and `defaultTag` set so only host-CPU images count; a `RuntimeMissingError` runs steps 2 to 9 again on the request as it came (ADR 0078).
+2. Mode = request's, else the platform default. An iOS mode `ios.modes` leaves out is refused (`ModeUnavailableError`) here, before step 3 reads or downloads anything; a baseline's mode is checked the same way, and the slim-to-full fallback of step 8 is checked once more (ADR 0082).
 3. Shape of the request:
    - exact model, no range → used as is; no catalog read.
    - no model, no range → class (none named = `phone`).
@@ -80,7 +82,7 @@ when `mayBeGranted`, same pool mode, and `fits(requirement, spec, classOf)` (`co
 same platform, same image tag, model equal or `classOf(model)` equal to the class, OS satisfied.
 `classOf` reads the catalog entry read during resolution; a device record stores no class.
 
-1. A `ready`, unclaimed device that serves → grant.
+1. A `ready`, unclaimed device that serves → grant, unless `except` or the driver requires a reboot before grant. That reboot waits under memory pressure, or returns `NO_CAPACITY` if the request cannot wait.
 2. Unless `noWait`: one the warm pool is booting or creating under an ownerless claim (for a target or learned kind, a released device or a request queued behind) → wait.
 3. A `shutdown` device that serves → boot it.
 4. Else provision the spec, evict an idle device, wait, or `NO_CAPACITY`.
@@ -99,6 +101,10 @@ Android `provision`:
    keys and `boot.prop`, are written over it.
 
 iOS `provision`: `simctl create` with the cached device type and runtime.
+
+## Through a gateway
+
+The gateway reads no catalog entry but the worker's own: a request whose mode is named, or a baseline's, goes only to a worker whose iOS entry does not list `modes` without it, and fails `MODE_UNAVAILABLE` when none does (ADR 0082 §4).
 
 ## Physical branch
 

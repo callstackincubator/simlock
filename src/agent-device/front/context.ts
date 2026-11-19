@@ -89,6 +89,7 @@ export function leaseCall(
   method: "agent_device.lease.allocate" | "agent_device.lease.release",
   params: Record<string, unknown>,
   id: unknown,
+  signal?: AbortSignal,
 ): Request {
   const headers = new Headers(origin.headers);
   headers.delete("content-length");
@@ -97,6 +98,7 @@ export function leaseCall(
     body: JSON.stringify({ id, jsonrpc: "2.0", method, params }),
     headers,
     method: "POST",
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 

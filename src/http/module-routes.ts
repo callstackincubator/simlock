@@ -18,7 +18,15 @@ const AUTH_STATUSES: Readonly<Record<number, ModuleHttpResponse>> = {
 };
 
 function responseOf(response: ModuleHttpResponse) {
-  const { description, contentTypes, errorCodes, headers } = response;
+  const { description, contentTypes, errorCodes, headers, optionalHeaders } = response;
+  const declared = [
+    ...Object.entries(headers ?? {}).map(
+      ([name, text]) => [name, z.string().describe(text)] as const,
+    ),
+    ...Object.entries(optionalHeaders ?? {}).map(
+      ([name, text]) => [name, z.string().describe(text).optional()] as const,
+    ),
+  ];
   const content =
     errorCodes === undefined
       ? Object.fromEntries(
@@ -31,15 +39,7 @@ function responseOf(response: ModuleHttpResponse) {
   return {
     description,
     ...(Object.keys(content).length === 0 ? {} : { content }),
-    ...(headers === undefined
-      ? {}
-      : {
-          headers: z.object(
-            Object.fromEntries(
-              Object.entries(headers).map(([name, text]) => [name, z.string().describe(text)]),
-            ),
-          ),
-        }),
+    ...(declared.length === 0 ? {} : { headers: z.object(Object.fromEntries(declared)) }),
   };
 }
 

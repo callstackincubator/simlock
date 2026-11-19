@@ -31,7 +31,7 @@ export interface DeviceLostReleaser {
 
 export interface LeaseHealthMonitorOptions {
   readonly clock: Clock;
-  readonly config: Config;
+  readonly config: Pick<Config, "health">;
   /** Each registry write runs in it, so it neither undoes nor is undone by another writer's commit. */
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: DriverCatalog;

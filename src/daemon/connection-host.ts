@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 
 import type {
+  DirectoryAccessReader,
   Filesystem,
   IpcConnection,
   IpcConnector,
@@ -42,20 +43,55 @@ export async function refuseWhenDaemonAnswers(options: {
   throw new DaemonAlreadyRunningError(options.endpoint);
 }
 
+// why: SYSTEM, Administrators and CREATOR OWNER open every folder anyway; the user is the owner.
+const TRUSTED_SIDS = new Set(["S-1-5-18", "S-1-5-32-544", "S-1-3-0"]);
+// why: list, read, write and append data, delete, and change the ACL or owner, as bits and as the generic rights.
+const READ_OR_CHANGE = 0x1 | 0x2 | 0x4 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000;
+const GENERIC_READ = 0x80000000;
+
+export interface DataDirectoryOptions {
+  readonly platform: NodeJS.Platform;
+  readonly directoryAccess: DirectoryAccessReader;
+}
+
 /**
  * why: the daemon makes its data directory owner-only before anything writes into it (the log,
  * `state.db`, the socket). One that already exists is never chmod'ed, since the user chose its
- * mode: this only returns the warning the daemon logs when the group or others can reach it.
+ * mode: this only returns the warning the daemon logs when others can reach it. On Windows Node
+ * makes the mode bits up from the read-only attribute, so the folder's ACL is read instead; an
+ * ACL that cannot be read warns nothing.
  */
 export async function prepareDataDirectory(
   filesystem: Filesystem,
   path: string,
+  options: DataDirectoryOptions,
 ): Promise<string | undefined> {
   await filesystem.mkdirp(path, { mode: DATA_DIRECTORY_MODE });
+  if (options.platform === "win32") return windowsWarning(path, options.directoryAccess);
   const mode = ((await filesystem.stat(path)).mode ?? DATA_DIRECTORY_MODE) & 0o777;
   if ((mode & 0o077) === 0) return undefined;
   const octal = mode.toString(8).padStart(3, "0");
   return `data directory ${path} is accessible to other users (mode ${octal}); run chmod 700 ${path}`;
+}
+
+async function windowsWarning(
+  path: string,
+  reader: DirectoryAccessReader,
+): Promise<string | undefined> {
+  const access = await reader.read(path).catch(() => undefined);
+  if (access === undefined) return undefined;
+  const names = new Set<string>();
+  for (const entry of access.entries) {
+    if (!entry.allow || entry.sid === access.user || TRUSTED_SIDS.has(entry.sid)) continue;
+    if ((entry.rights & READ_OR_CHANGE) !== 0 || (entry.rights & GENERIC_READ) !== 0) {
+      names.add(entry.name);
+    }
+  }
+  if (names.size === 0) return undefined;
+  const grants = [access.user, "S-1-5-18", "S-1-5-32-544"]
+    .map((sid) => `"*${sid}:(OI)(CI)F"`)
+    .join(" ");
+  return `data directory ${path} is accessible to other users (${[...names].join(", ")}); run icacls "${path}" /inheritance:r /grant:r ${grants}`;
 }
 
 export interface DaemonEndpointHostOptions {
