@@ -458,7 +458,8 @@ describe("startDaemon memory pressure", () => {
         .poll(async () => (await statusOf(daemon)).capacity?.memoryPressure)
         .toEqual(expected);
     }
-  });
+    // why: the table starts one daemon per case, which took 22 s on the Windows runner against the 20 s default.
+  }, 90_000);
 });
 
 describe("startDaemon memory pressure hold", () => {
