@@ -10,8 +10,12 @@ import type { ProcessResult, ProcessRunner } from "./process-runner.js";
 export interface ProcessSupervisor {
   /** True when a process with this pid exists and this user may signal it. */
   isAlive(pid: number): boolean;
-  /** Best effort; a pid that is already gone is not an error. */
-  signal(pid: number, signal: NodeJS.Signals): void;
+  /**
+   * why: best effort; a pid that is already gone is not an error. With `tree`, on Windows the
+   * process and what it started end together: a detached child there runs under a `conhost.exe`
+   * wrapper (`headlessLaunch`), and a recorded pid is the wrapper's, which ends alone otherwise.
+   */
+  signal(pid: number, signal: NodeJS.Signals, options?: { readonly tree?: boolean }): void;
   /**
    * why: a recorded pid may since have been handed to another process, so a caller proves what
    * it is from its arguments before signalling it. They come back unquoted and joined by single
@@ -83,9 +87,20 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
     }
   }
 
-  signal(pid: number, signal: NodeJS.Signals): void {
+  signal(pid: number, signal: NodeJS.Signals, options?: { readonly tree?: boolean }): void {
     if (!isAddressablePid(pid)) {
       return;
+    }
+
+    if (options?.tree === true && this.#options.platform === "win32") {
+      try {
+        this.#options.processRunner.spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+        });
+        return;
+      } catch {
+        // why: without taskkill the wrapper alone is ended, as before.
+      }
     }
 
     try {
@@ -113,6 +128,8 @@ export interface SignalRecord {
  */
 export class FakeProcessSupervisor implements ProcessSupervisor {
   readonly signals: SignalRecord[] = [];
+  /** why: the pids signalled with `tree`, kept apart so `signals` keeps one shape for every caller. */
+  readonly treeSignals: number[] = [];
   readonly commandLineReads: number[] = [];
   readonly #live = new Set<number>();
   readonly #commandLines = new Map<number, (string | undefined)[]>();
@@ -127,8 +144,9 @@ export class FakeProcessSupervisor implements ProcessSupervisor {
     return this.#live.has(pid);
   }
 
-  signal(pid: number, signal: NodeJS.Signals): void {
+  signal(pid: number, signal: NodeJS.Signals, options?: { readonly tree?: boolean }): void {
     this.signals.push({ pid, signal });
+    if (options?.tree === true) this.treeSignals.push(pid);
   }
 
   markAlive(pid: number): void {

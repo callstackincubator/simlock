@@ -140,6 +140,8 @@ describe("AdbServerSupervisor.start", () => {
       await harness.started;
 
       expect(harness.supervisor.signals).toEqual([{ pid: recordedPid, signal: "SIGTERM" }]);
+      // why: on Windows the recorded pid is the conhost wrapper's; its adb must end with it.
+      expect(harness.supervisor.treeSignals).toEqual([recordedPid]);
       expect(harness.runner.calls.map((call) => call.command)).toEqual([adb]);
     },
   );
@@ -490,8 +492,12 @@ const ownServerCommand = `${adb} -P 5038 nodaemon server`;
 class SignallingSupervisor extends FakeProcessSupervisor {
   onSignal: ((pid: number, signal: NodeJS.Signals) => void) | undefined;
 
-  override signal(pid: number, signal: NodeJS.Signals): void {
-    super.signal(pid, signal);
+  override signal(
+    pid: number,
+    signal: NodeJS.Signals,
+    options?: { readonly tree?: boolean },
+  ): void {
+    super.signal(pid, signal, options);
     this.onSignal?.(pid, signal);
   }
 }

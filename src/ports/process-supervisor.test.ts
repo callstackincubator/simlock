@@ -65,6 +65,32 @@ describe("NodeProcessSupervisor", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["win32", true, ["/pid", "4242", "/T", "/F"]],
+    ["win32", false, undefined],
+    ["linux", true, undefined],
+  ] as const)(
+    "on %s, a signal with tree %s ends the process and what it started through taskkill: %j",
+    (platform, tree, taskkillArgs) => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const runner = new ScriptedProcessRunner([
+        {
+          match: { args: [/.*/, /.*/, /.*/, /.*/], command: "taskkill" },
+          result: { code: 0, stderr: "", stdout: "" },
+        },
+      ]);
+
+      new NodeProcessSupervisor({ platform, processRunner: runner }).signal(4242, "SIGTERM", {
+        tree,
+      });
+
+      expect(runner.calls.map((call) => call.args)).toEqual(
+        taskkillArgs === undefined ? [] : [taskkillArgs],
+      );
+      expect(kill).toHaveBeenCalledTimes(taskkillArgs === undefined ? 1 : 0);
+    },
+  );
+
   it("treats signalling a process that is already gone as a no-op", async () => {
     const supervisor = nodeSupervisor();
     const pid = await retiredPid();
