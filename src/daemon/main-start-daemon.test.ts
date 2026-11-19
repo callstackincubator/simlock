@@ -600,6 +600,54 @@ describe("startDaemon", () => {
     await expect(lease).resolves.toBeInstanceOf(Error);
   });
 
+  it("ends a running seed settle on shutdown and waits for the driver to return, before the drivers are disposed", async () => {
+    const clock = new FakeClock(1_000);
+    const events: string[] = [];
+    class SettlingDriver extends FakeDriver {
+      override async listSources() {
+        return [
+          {
+            id: "quick",
+            kind: "seed" as const,
+            leases: 2,
+            model: "iPhone 17",
+            osVersion: "26.5",
+            settled: false,
+          },
+        ];
+      }
+
+      settleSeed(_sourceId: string, options: { readonly signal: AbortSignal }) {
+        events.push("settle-started");
+        return new Promise<never>((_resolve, reject) => {
+          options.signal.addEventListener(
+            "abort",
+            () => {
+              events.push("settle-aborted");
+              void Promise.resolve().then(() => {
+                events.push("settle-returned");
+                reject(new Error("aborted"));
+              });
+            },
+            { once: true },
+          );
+        });
+      }
+
+      async dispose(): Promise<void> {
+        events.push("disposed");
+      }
+    }
+    const driver = new SettlingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon } = await start({ clock, drivers: [driver] });
+
+    clock.advance(5 * 60_000);
+    await expect.poll(() => events).toEqual(["settle-started"]);
+    await daemon.stop("test");
+
+    expect(events).toEqual(["settle-started", "settle-aborted", "settle-returned", "disposed"]);
+  });
+
   it("starts and reports no entry for a driver whose tool read fails, and every other tool", async () => {
     const clock = new FakeClock(1_000);
     const { daemon } = await start({
