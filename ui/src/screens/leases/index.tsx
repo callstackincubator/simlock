@@ -51,7 +51,7 @@ export function LeasesScreen() {
         />
         <SearchField
           label="Search leases"
-          placeholder="Filter by holder, device, worker"
+          placeholder="Filter by holder, label, device, worker"
           className="lease-search"
           value={query}
           onChange={search}
