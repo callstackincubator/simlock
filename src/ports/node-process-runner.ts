@@ -10,7 +10,7 @@ import {
   runLimits,
   type WindowsKill,
 } from "./process-tree-kill.js";
-import { childLaunch, headlessLaunch } from "./windows-command.js";
+import { childLaunch, headlessLaunch, type ChildLaunch } from "./windows-command.js";
 import {
   InputStreamFailedError,
   ProcessSpawnError,
@@ -112,10 +112,7 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 
   #launch(command: string, args: readonly string[], options: ProcessRunOptions): NodeProcessHandle {
-    const launch =
-      options.outlivesCaller === true
-        ? headlessLaunch(childLaunch(command, args))
-        : childLaunch(command, args);
+    const launch = launchOf(command, args, options);
     const logFd =
       typeof options.stdio === "object" ? openSync(options.stdio.file, "a", 0o600) : undefined;
     const child = spawnChildProcess(launch.command, launch.args, {
@@ -584,6 +581,15 @@ class NodeProcessHandle implements ProcessHandle {
   wait(): Promise<ProcessResult> {
     return this.#result;
   }
+}
+
+function launchOf(
+  command: string,
+  args: readonly string[],
+  options: ProcessRunOptions,
+): ChildLaunch {
+  const launch = childLaunch(command, args);
+  return options.outlivesCaller === true ? headlessLaunch(launch) : launch;
 }
 
 function childStdio(
