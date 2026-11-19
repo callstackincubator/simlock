@@ -49,7 +49,7 @@ The command returns once the daemon has exited. That can take a while, because t
 
 ## Start it at login
 
-On macOS and Linux, install the daemon as a service:
+On macOS, Linux and Windows, install the daemon as a service:
 
 ```sh
 simlock daemon install
@@ -71,11 +71,20 @@ Daemon running
 To start after a reboot without logging in, run: loginctl enable-linger <user>
 ```
 
+On Windows:
+
+```text
+Service installed: com.callstack.simlock.worker (task-scheduler)
+Daemon running
+To start after a reboot, turn on automatic login for this user.
+```
+
 The service starts the daemon when you log in, and starts it again 10 seconds after it crashes. If a daemon was already running, the command first stops it; leases are kept.
 
 Before you rely on it, know what it needs:
 
 - **macOS:** the service runs only while your user is logged in at the screen. For the machine to come back after a reboot, turn on automatic login for this user.
+- **Windows:** the service is a Task Scheduler task that starts when you log in, and it runs only while you are logged in at the screen. For the machine to come back after a reboot, turn on automatic login for this user. If nobody is logged in at the screen, `daemon install` still succeeds and the daemon is started without the service, with a notice; it stops with an SSH session. Ending the task in Task Scheduler does not stop the daemon: use `simlock daemon stop`. The task runs a small Simlock program that starts the daemon again 10 seconds after a failure; it shows no window, and `daemon.log` holds a line for each restart.
 - **Linux:** without linger, logging out of your last session stops the daemon and its emulators. Run `loginctl enable-linger <user>` to keep them running. Simlock does not turn linger on for you.
 - **Environment:** the service remembers `SIMLOCK_HOME`, `PATH`, `JAVA_HOME`, `DEVELOPER_DIR` and the Android SDK variables (such as `ANDROID_HOME`) as they are when you run `daemon install`.
 
@@ -89,7 +98,7 @@ To remove the service:
 simlock daemon uninstall
 ```
 
-This stops the daemon and removes the service. On Windows, `daemon install` and `daemon uninstall` are not available.
+This stops the daemon and removes the service.
 
 ### When the service cannot run
 
@@ -117,13 +126,13 @@ Daemon: running (worker)
 
 `starting` means the daemon is still reading the machine's devices. Devices, leases and capacity appear once it finishes. [Monitoring](/simlock/docs/worker/monitoring) explains the rest of the report.
 
-On macOS and Linux the last line shows the service:
+The last line shows the service:
 
 | Line | What it means |
 | --- | --- |
 | `Service: not installed` | You have not run `simlock daemon install`. |
 | `Service: installed (launchd, com.callstack.simlock.worker)` | The service is set up and working. |
-| `Service: not loaded (...)` | Nobody is logged in at the screen, or there is no Linux user session. Commands start the daemon without the service. |
+| `Service: not loaded (...)` | Nobody is logged in at the screen, there is no Linux user session, or on Windows the task is disabled. Commands start the daemon without the service. |
 | `Service: broken (...): <path> is gone; run simlock daemon install` | The Node or Simlock the service starts has moved, for example after an nvm or Homebrew upgrade. Run `simlock daemon install` again. |
 
 Add `--json` for a machine-readable answer, such as `{"status":"stopped"}`.

@@ -18,7 +18,7 @@ function serviceAccess(
 } {
   const { service } = environment;
   if (service?.manager === undefined) {
-    throw new UsageError(`daemon ${command} is supported on macOS and Linux only`);
+    throw new UsageError(`daemon ${command} is supported on macOS, Linux and Windows only`);
   }
   return { manager: service.manager, definition: service.definition, user: service.user };
 }
