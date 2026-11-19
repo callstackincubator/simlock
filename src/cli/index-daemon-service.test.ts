@@ -873,7 +873,8 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
 });
 
 describe("CLI: daemon service on Windows (#1698)", () => {
-  const root = "/Users/me/.simlock";
+  // why: `serviceDefinition` compares the root with `join(home, ".simlock")`, which uses `\` on Windows, so a literal POSIX root would give the task name a hash suffix there.
+  const root = join("/Users/me", ".simlock");
   const nodePath = "/opt/node/node.exe";
   const mainPath = "/opt/simlock/dist/daemon/main.js";
   const sid = "S-1-5-21-1-2-3-1001";

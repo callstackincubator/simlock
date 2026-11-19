@@ -375,7 +375,8 @@ describe("the local agent-device profile", () => {
         name,
       ).toBe(200);
     }
-  });
+    // why: the test restarts the worker ten times and a start takes about 2 s on a Windows runner, which ran past the 20 s default.
+  }, 60_000);
 
   it("is withdrawn where it does not apply: HTTP off, agent-device off, a gateway", async () => {
     const withdrawals: [string, Switches][] = [
