@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { FakeClock, FakeHttpStreamClient, MemoryFilesystem } from "../ports/index.js";
@@ -69,7 +70,7 @@ async function files(
     const pieces = options.pieces;
     const opened = filesystem.openFile.bind(filesystem);
     filesystem.openFile = async (path) =>
-      path.endsWith("/big.bin")
+      basename(path) === "big.bin"
         ? {
             close: async () => undefined,
             read: () => {

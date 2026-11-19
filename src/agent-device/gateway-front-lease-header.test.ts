@@ -399,9 +399,11 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     for (const member of rig.members) member.fake.holdCommand();
     const hangUp = new AbortController();
     const held = track(command(rig, "devices", undefined, { signal: hangUp.signal }));
+    // why: the default 1 s poll is shorter than a loaded Windows runner needs to relay a call to two workers and back.
     await expect
-      .poll(() =>
-        rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),
+      .poll(
+        () => rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),
+        { timeout: 10_000 },
       )
       .toEqual([1, 1]);
 
@@ -409,7 +411,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     await held.promise.catch(() => undefined);
 
     await expect
-      .poll(() => rig.members.map((member) => member.fake.abortedCommands))
+      .poll(() => rig.members.map((member) => member.fake.abortedCommands), { timeout: 10_000 })
       .toEqual([["devices"], ["devices"]]);
   });
 

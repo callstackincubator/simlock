@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FakeDaemonLauncher, MemoryFilesystem } from "../ports/index.js";
 import { SimlockError } from "../contract/index.js";
@@ -521,7 +522,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       );
       expect(exitCode).toBe(0);
       expect(output.stdout).toBe(
-        "Updated http.enabled in /simlock/config.json; takes effect on daemon restart.\n",
+        `Updated http.enabled in ${join("/simlock", "config.json")}; takes effect on daemon restart.\n`,
       );
       expect(JSON.parse(await filesystem.readFile("/simlock/config.json"))).toMatchObject({
         http: { enabled: false },
@@ -610,7 +611,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       const stored = await set("ABCDE12345");
       expect(stored.exitCode).toBe(0);
       expect(stored.output.stdout).toBe(
-        `Updated ${path} in /simlock/config.json; takes effect on daemon restart.\n`,
+        `Updated ${path} in ${join("/simlock", "config.json")}; takes effect on daemon restart.\n`,
       );
       expect(stored.written).toEqual({
         capabilities: { "agent-device": { ios: { [key]: "ABCDE12345" } } },
