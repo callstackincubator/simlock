@@ -10,6 +10,7 @@ import {
   FakeUpdaterLauncher,
   NodeFilesystem,
   NodeIpcTransport,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
@@ -638,7 +639,7 @@ describe("DaemonServer failed start release", () => {
   it("closes a connection opened after the connections were closed, while the endpoint release still holds", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-daemon-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
+    const socketPath = resolveDaemonSocketPath(directory);
     const real = new DaemonEndpointHost({
       connector: new NodeIpcTransport(),
       endpoint: socketPath,

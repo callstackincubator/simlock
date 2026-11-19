@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
@@ -13,6 +13,7 @@ import {
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DaemonServer } from "./server.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 export const runningDaemons: DaemonServer[] = [];
 
@@ -166,7 +167,8 @@ function connectClient(socketPath: string): Promise<MinimalClient> {
 
 export async function connectRetrying(
   socketPath: string,
-  timeoutMs = 2_000,
+  // why: a Windows runner under a full parallel run binds the pipe seconds after the start call.
+  timeoutMs = 10_000,
 ): Promise<MinimalClient> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -212,7 +214,5 @@ export async function startGateway(
 
 export async function stopDaemons(): Promise<void> {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
-  await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  await Promise.all(temporaryDirectories.splice(0).map((path) => removeDirectory(path)));
 }

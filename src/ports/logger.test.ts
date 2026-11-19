@@ -122,28 +122,32 @@ async function tempDir(): Promise<string> {
 }
 
 describe("NodeFileLogSink", () => {
-  it("creates the file it holds owner-only, the current file and the rotated generation alike", async () => {
-    // why: #685: a rotated generation is a file this class creates too (`openSync(path, "a")`
-    // after each rename). A restrictive umask in the test environment would mask what the code
-    // actually asks for, so pin the one every real host starts from.
-    const previousUmask = process.umask(0o022);
-    try {
-      const directory = await tempDir();
-      const path = join(directory, "daemon.log");
-      // why: the second write passes the 12-byte cap — that rotation is part of what this asserts.
-      const sink = new NodeFileLogSink({ maxBytes: 12, path });
-      sink.write("first");
-      sink.write("second");
-      sink.close();
+  // why: Windows has no owner-only file mode.
+  it.skipIf(process.platform === "win32")(
+    "creates the file it holds owner-only, the current file and the rotated generation alike",
+    async () => {
+      // why: #685: a rotated generation is a file this class creates too (`openSync(path, "a")`
+      // after each rename). A restrictive umask in the test environment would mask what the code
+      // actually asks for, so pin the one every real host starts from.
+      const previousUmask = process.umask(0o022);
+      try {
+        const directory = await tempDir();
+        const path = join(directory, "daemon.log");
+        // why: the second write passes the 12-byte cap — that rotation is part of what this asserts.
+        const sink = new NodeFileLogSink({ maxBytes: 12, path });
+        sink.write("first");
+        sink.write("second");
+        sink.close();
 
-      expect({
-        current: (await stat(path)).mode & 0o777,
-        rotated: (await stat(`${path}.1`)).mode & 0o777,
-      }).toEqual({ current: 0o600, rotated: 0o600 });
-    } finally {
-      process.umask(previousUmask);
-    }
-  });
+        expect({
+          current: (await stat(path)).mode & 0o777,
+          rotated: (await stat(`${path}.1`)).mode & 0o777,
+        }).toEqual({ current: 0o600, rotated: 0o600 });
+      } finally {
+        process.umask(previousUmask);
+      }
+    },
+  );
 
   it("appends one line per write to the target file", async () => {
     const directory = await tempDir();

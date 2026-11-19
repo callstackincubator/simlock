@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startOnFreePort } from "../test-support/loopback-port.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
@@ -40,10 +41,15 @@ describe("lease.request requires, through a gateway", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
+    // why: Windows keeps a stopped daemon's directory busy for a few seconds, longer than `removeDirectory` waits, so the removal is tried again until it goes through, for less than the hook's own 30 s so a handle that stays held fails with the removal's own error.
     await Promise.all(
-      directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
+      directories
+        .splice(0)
+        .map((directory) =>
+          vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 25_000 }),
+        ),
     );
-  });
+  }, 30_000);
 
   async function startGateway() {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-requires-gateway-"));
