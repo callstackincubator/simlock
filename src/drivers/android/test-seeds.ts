@@ -179,15 +179,20 @@ export async function seedHarness(
     readonly config?: string;
     readonly filesystem?: MemoryFilesystem;
     readonly ids?: readonly string[];
+    /** why: a test whose emulator answers a call outside the script brings its own runner. */
+    readonly runnerFor?: (
+      expectations: readonly ScriptedProcessExpectation[],
+    ) => EmulatorExitingRunner;
   } = {},
 ) {
   const filesystem = await androidFilesystem({}, options.filesystem);
   await writeSeedFiles(filesystem, seedHome, options.config);
   const database = await memoryAndroidSourceDatabase();
-  const runner = new EmulatorExitingRunner([
+  const script = [
     processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ...expectations,
-  ]);
+  ];
+  const runner = options.runnerFor?.(script) ?? new EmulatorExitingRunner(script);
   const part = createPart(filesystem, runner, {
     ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),

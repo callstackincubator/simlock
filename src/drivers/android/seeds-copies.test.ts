@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { FakeClock, MemoryFilesystem, type ScriptedProcessExpectation } from "../../ports/index.js";
+import {
+  FakeClock,
+  MemoryFilesystem,
+  type ProcessResult,
+  type ProcessRunOptions,
+  type ScriptedProcessExpectation,
+} from "../../ports/index.js";
+import { promiseState } from "../../test-support/promise-state.js";
 
 import { createPart, sources, seedHome, seedHarness } from "./test-seeds.js";
 import {
@@ -12,6 +19,7 @@ import {
   EmulatorExitingRunner,
   makingASeedFrom,
   makingTheSeed,
+  ok,
   pixelDevices,
   processResult,
   seedEmulatorLine,
@@ -34,6 +42,35 @@ function reopened(
     ids: ["four", "five", "six"],
   });
   return { ...part, runner };
+}
+
+/**
+ * why: a cold-booted guest brings its cellular data call up a while after boot completes (#1631):
+ * `dumpsys connectivity` reports no default network twice, then network 100. It notes the default
+ * network the guest last reported when the boot snapshot was saved.
+ */
+class DataCallRunner extends EmulatorExitingRunner {
+  readonly #answers = ["none", "none", "100"];
+  #reported: string | undefined;
+  defaultNetworkAtSave: string | undefined;
+
+  override run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    const line = args.join(" ");
+    if (command === binaries.adb && line.endsWith("shell dumpsys connectivity")) {
+      this.#reported = this.#answers.length > 1 ? this.#answers.shift() : this.#answers[0];
+      return Promise.resolve(
+        ok(`NetworkProviders for:\n  Telephony\n\nActive default network: ${this.#reported}\n`),
+      );
+    }
+    if (line.endsWith("emu avd snapshot save simlock_boot")) {
+      this.defaultNetworkAtSave = this.#reported ?? "never read";
+    }
+    return super.run(command, args, options);
+  }
 }
 
 class SizeFailureFilesystem extends MemoryFilesystem {
@@ -80,6 +117,28 @@ describe("Seeds", () => {
       ).resolves.toBe(true);
       const listed = await harness.seeds.listSources();
       expect(listed.filter((source) => source.orphan !== true)).toHaveLength(1);
+    });
+
+    it("saves a seed's boot snapshot only once the guest reports a default network", async () => {
+      const clock = new FakeClock();
+      const harness = await seedHarness(
+        [
+          ...makingTheSeed(),
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ],
+        { clock, runnerFor: (script) => new DataCallRunner(script) },
+      );
+
+      const making = harness.seeds.provision(harness.spec);
+      const made = promiseState(making);
+      for (let tick = 0; tick < 300 && made.state === "pending"; tick += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        clock.advance(1_000);
+      }
+
+      expect(made.state).toBe("fulfilled");
+      await making;
+      expect((harness.runner as DataCallRunner).defaultNetworkAtSave).toBe("100");
     });
 
     it("tells why a seed is stale, cut to 300 characters, and clears the reason when the image and emulator match again", async () => {
