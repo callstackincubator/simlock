@@ -165,7 +165,7 @@ export function deviceScreen(input: {
     if (input.queued)
       return {
         kind: "sentence",
-        text: `Paused: ${SCREEN_CAPTURE_LIMIT} screens are already capturing.`,
+        text: "Starting once another screen has closed.",
       };
     return conflict === undefined
       ? { kind: "picture" }

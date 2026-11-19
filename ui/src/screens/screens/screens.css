@@ -1,32 +1,99 @@
-.screens-grid {
+.screens-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Four places for a watched screen; two on a phone. */
+.screens-watching {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
   align-items: start;
 }
 
-.screens-tile {
+.screens-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   min-width: 0;
-  border: 1px solid var(--border);
-  background: var(--surface);
 }
 
-.screens-tile-head {
-  padding: var(--space-6);
-  overflow-wrap: anywhere;
-}
-
-.screens-tile-head h2 {
-  font-size: var(--text-md);
-  margin: 0 0 var(--space-2);
-}
-
-.screens-tile-head p {
-  margin: 0 0 var(--space-2);
-}
-
-.screens-tile .screen-panel {
+.screens-slot .screen-panel {
   position: relative;
-  padding: var(--space-4);
-  border-top: 1px solid var(--border);
+}
+
+.screens-slot .phone {
+  width: 100%;
+}
+
+.screens-slot .screen-pills {
+  inset: 12px 12px auto;
+}
+
+.screens-slot-empty {
+  aspect-ratio: 300 / 650;
+  border: 1px dashed var(--border);
+  border-radius: 34px;
+}
+
+.screens-none {
+  margin: 0;
+  padding: 24px 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.screens-none b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.screens-filters {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.screens-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.screens-caption b {
+  font-weight: 500;
+}
+
+.screens-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.screens-cut {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screens-row-watched td {
+  background: var(--surface-2);
+}
+
+@media (max-width: 767px) {
+  .screens-watching {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* On a phone the empty places would only push the list down. */
+  .screens-slot-empty {
+    display: none;
+  }
 }

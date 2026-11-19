@@ -4,7 +4,7 @@ import { extname, resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-test("keeps HTTP/1 reads moving with excess screens and promotes waiting captures after cleanup", async ({
+test("keeps HTTP/1 reads moving while four watched screens capture, and closes them on removal, hiding, navigation and sign-out", async ({
   page,
 }, testInfo) => {
   const devices = new Map([
@@ -140,17 +140,22 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
     );
     await page.setViewportSize({ width: 1900, height: 1900 });
     await page.clock.install();
-    await page.goto(`${origin}/screens`);
-    await expect(page.locator(".screens-tile")).toHaveCount(6);
-    await expect.poll(() => captures.size).toBeGreaterThanOrEqual(4);
+    const watch = new URLSearchParams();
+    for (const key of [
+      ["a", "one"],
+      ["a", "two"],
+      ["b", "one"],
+      ["b", "two"],
+    ])
+      watch.append("watch", JSON.stringify(key));
+    const screens = `${origin}/screens?${watch}`;
+    await page.goto(screens);
+    await expect(page.locator(".screens-slot")).toHaveCount(4);
+    await expect.poll(() => captures.size).toBe(4);
     const beforePoll = workerReads;
     await page.clock.runFor(15_001);
     await expect.poll(() => workerReads).toBeGreaterThan(beforePoll);
     expect([...versions]).toEqual(["1.1"]);
-    await expect(
-      page.getByText("Paused: 4 screens are already capturing.", { exact: true }),
-    ).toHaveCount(2);
-    await expect.poll(() => captures.size).toBe(4);
     expect(await page.locator("canvas").count()).toBe(4);
     await expect
       .poll(() =>
@@ -168,18 +173,20 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
     devices.get("a")!.push("four");
     emit();
     await page.clock.runFor(350);
-    await expect(page.locator(".screens-tile")).toHaveCount(7);
+    await page.getByRole("radio", { name: "All" }).check({ force: true });
+    await expect(page.getByRole("button", { name: /^Watch .*\(four\)$/ })).toBeDisabled();
     expect(await page.evaluate(async () => (await fetch("/v1/healthz")).status)).toBe(200);
-    const first = captures.keys().next().value!;
-    const [worker, device] = first.split("/");
     devices.set(
-      worker!,
-      devices.get(worker!)!.filter((id) => id !== device),
+      "a",
+      devices.get("a")!.filter((id) => id !== "one"),
     );
     emit();
     await page.clock.runFor(350);
-    await expect(page.locator(".screens-tile")).toHaveCount(6);
-    await expect.poll(() => captures.has(first)).toBe(false);
+    await expect(page.locator(".screens-slot")).toHaveCount(3);
+    await expect.poll(() => captures.has("a/one")).toBe(false);
+    await expect.poll(() => captures.size).toBe(3);
+    await page.getByRole("button", { name: /^Watch .*\(four\)$/ }).click();
+    await expect(page.locator(".screens-slot")).toHaveCount(4);
     await expect.poll(() => captures.size).toBe(4);
     const failed = captures.keys().next().value!;
     captures.get(failed)!.write(Buffer.from([255, 255, 255, 255, 1]));
@@ -187,8 +194,8 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
       page.getByText("The stream is not a frame envelope", { exact: true }),
     ).toBeVisible();
     await expect.poll(() => captures.has(failed)).toBe(false);
-    await expect.poll(() => captures.size).toBe(4);
-    expect(await page.locator("canvas").count()).toBe(4);
+    await expect.poll(() => captures.size).toBe(3);
+    expect(await page.locator("canvas").count()).toBe(3);
     await page.evaluate(() => {
       Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
       document.dispatchEvent(new Event("visibilitychange"));
@@ -206,8 +213,9 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
     await expect.poll(() => captures.size).toBe(4);
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect.poll(() => captures.size).toBe(0);
-    await page.goto(`${origin}/screens`);
-    await expect.poll(() => captures.size).toBe(4);
+    // why: the first address named a/one, which is gone, and not a/four.
+    await page.goto(screens);
+    await expect.poll(() => captures.size).toBe(3);
     unauthorized = true;
     emit();
     await page.clock.runFor(350);
