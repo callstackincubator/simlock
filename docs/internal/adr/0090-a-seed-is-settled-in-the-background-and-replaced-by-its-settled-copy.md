@@ -98,8 +98,9 @@ less settled than the quick seed.
 ### 4. An operator may name a kind's seed to settle it now
 
 `simlock seed` makes the kind's seed if it is missing, settles it if it is
-quick, and waits. It skips only the quiet period: it still waits behind a
-running settle and under memory and disk pressure. It is worker-only.
+quick, and waits. It skips the quiet rule and an earlier failure's delay,
+but still waits behind a running settle and under memory and disk
+pressure. It is worker-only.
 This narrows §1's "no command lists or names it except `doctor`".
 
 The shapes, limits, messages and state are in #1732's design tables.
