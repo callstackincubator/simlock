@@ -9,10 +9,15 @@ import Foundation
 import SimlockCapture
 
 final class SimulatorSource: ScreenSource {
+    private let fps: Int
     private let capture = FrameCapture()
     private let rotator = PanelRotator()
     private var follower: PanelFollower?
     private var stopped = false
+
+    init(fps: Int) {
+        self.fps = fps
+    }
 
     func start(
         deviceID: String,
@@ -27,7 +32,7 @@ final class SimulatorSource: ScreenSource {
         let panels = FrameCapture.findSimDevice(udid: deviceID).map { Panels.read(for: $0, udid: deviceID) } ?? []
         if panels.count > 1 { try await follow(panels, udid: deviceID) }
         let rotator = self.rotator
-        try await capture.start(deviceUDID: deviceID) { pixelBuffer, seenNanos in
+        try await capture.start(deviceUDID: deviceID, fps: fps) { pixelBuffer, seenNanos in
             let width = CVPixelBufferGetWidth(pixelBuffer)
             let height = CVPixelBufferGetHeight(pixelBuffer)
             // why: by size, not by the panel in use, because a picture of the panel just left can still

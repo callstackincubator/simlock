@@ -53,4 +53,4 @@ guard let options = parseOptions(arguments) else {
     exit(64)
 }
 
-await runCapture(options: options, source: SimulatorSource())
+await runCapture(options: options, source: SimulatorSource(fps: options.fps))

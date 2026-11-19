@@ -28,8 +28,8 @@ this notice. The license text in `LICENSES/` is upstream's root `LICENSE`, byte 
 byte; it is named for the project it covers rather than plain `LICENSE` because
 this directory also holds code of ours that the file does not license.
 
-The four files this directory carries as upstream wrote them — unchanged, or with
-one patch — are 586 lines as of that commit (`FrameCapture` 436, `FramebufferSurfaceSelector` 77, `DeviceDisplaySizes`
+The four files this directory carries as upstream wrote them — unchanged, or
+modified by us in `FrameCapture.swift` — are 586 lines as of that commit (`FrameCapture` 436, `FramebufferSurfaceSelector` 77, `DeviceDisplaySizes`
 48, `SimFrameworks` 25) — a figure that cannot drift, because it is a property of an
 immutable commit. Origin is per file, below, and the exact command to measure it is
 under "The diff against upstream is the early warning". This notice deliberately
@@ -37,7 +37,7 @@ carries no count of our _own_ lines: a stale count still reads as a fact.
 
 ## Where every file came from
 
-The four files serve-sim wrote as they are — unchanged or with one patch — and
+The four files serve-sim wrote as they are — unchanged or modified by us — and
 the four it wrote that we rewrote all live in two directories: the simulator
 source files under `Sources/simlock-screen-capture/`, and the four encoders under
 `Sources/SimlockCapture/` (the shared library both programs build on, which is
@@ -45,29 +45,30 @@ otherwise all ours). Upstream keeps the same files in two targets,
 `Sources/SimNative/` and `Sources/SimNativeSupport/`, and their paths are given
 per row.
 
-| File                                                                                | Upstream path               | Origin                                                                                                                                                                                                                       |
-| ----------------------------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `simlock-screen-capture/SimFrameworks.swift`                                        | `Sources/SimNative/`        | theirs, unchanged                                                                                                                                                                                                            |
-| `simlock-screen-capture/FramebufferSurfaceSelector.swift`                           | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
-| `simlock-screen-capture/DeviceDisplaySizes.swift`                                   | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
-| `simlock-screen-capture/FrameCapture.swift`                                         | `Sources/SimNative/`        | theirs, **one patch** (deviation 1)                                                                                                                                                                                          |
-| `simlock-screen-capture/HIDInjector.swift`                                          | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the Duo, Device Hub, pose, Home, app switcher and Lock paths are deleted, `sendButtonPlan` is added, and the touch target is `PanelTouch.map` (deviation 3) |
-| `SimlockCapture/H264Encoder.swift`                                                  | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
-| `SimlockCapture/VideoEncoder.swift`                                                 | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
-| `SimlockCapture/PixelBufferUtils.swift`                                             | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
-| `SimlockCapture/Xcode.swift`                                                        | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
-| `simlock-screen-capture/ButtonPlan.swift`                                           | —                           | ours, entirely: the Indigo presses behind `lock` and `app_switcher` (ADR 0085)                                                                                                                                               |
-| `simlock-screen-capture/InputMode.swift`                                            | —                           | ours, entirely: the `--input` mode that drives `HIDInjector` from stdin                                                                                                                                                      |
-| `SimlockCapture/Lifecycle.swift`, `SimlockCapture/Options.swift`                    | —                           | ours, entirely: the option parser, the envelope, the lifecycle, the scaler, the encode loop                                                                                                                                  |
-| `simlock-screen-capture/main.swift`, `simlock-screen-capture/SimulatorSource.swift` | —                           | ours, entirely: the simulator program and its framebuffer as a `ScreenSource`                                                                                                                                                |
-| `simlock-screen-capture/Panels.swift`                                               | —                           | ours, entirely: which panel of a foldable simulator to stream, the follower of SpringBoard's panel moves, the watchdog for its `log` children, and the upright turn of the inner panel (ADR 0075)                            |
-| `simlock-screen-capture/PanelTouch.swift`                                           | —                           | ours, entirely: where a tap on the upright picture lands on a panel's digitizer, the inner Duo panel's turned (ADR 0075 §4)                                                                                                  |
-| `Tests/SimlockCaptureTests/*`                                                       | —                           | ours, entirely: the Swift tests (`swift test --package-path vendor/screen-capture`)                                                                                                                                          |
-| `simlock-device-capture/*` (five files)                                             | —                           | ours, entirely: the iPhone program — the version gate, the CoreDevice source, the RTP receiver, the decoder — rewritten from this repo's own PoC (ADR 0031)                                                                  |
-| `SimlockMediaBridge/*`                                                              | —                           | ours, entirely: the negotiator bridge; it carries the `idevice` HEVC feature string below                                                                                                                                    |
-| `Stubs/*` (three interfaces)                                                        | —                           | ours, entirely: hand-written declarations for the parts of CoreDevice we call                                                                                                                                                |
-| `scripts/unframe.mjs`                                                               | —                           | ours, entirely: a hand-run diagnostic                                                                                                                                                                                        |
-| `Package.swift`                                                                     | —                           | ours, entirely                                                                                                                                                                                                               |
+| File                                                                                               | Upstream path               | Origin                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `simlock-screen-capture/SimFrameworks.swift`                                                       | `Sources/SimNative/`        | theirs, unchanged                                                                                                                                                                                                            |
+| `simlock-screen-capture/FramebufferSurfaceSelector.swift`                                          | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
+| `simlock-screen-capture/DeviceDisplaySizes.swift`                                                  | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                                                                                            |
+| `simlock-screen-capture/FrameCapture.swift`                                                        | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the device-set lookup (deviation 1) and the notice/copy split that decides on the grid before it copies (deviation 5)                                       |
+| `simlock-screen-capture/HIDInjector.swift`                                                         | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the Duo, Device Hub, pose, Home, app switcher and Lock paths are deleted, `sendButtonPlan` is added, and the touch target is `PanelTouch.map` (deviation 3) |
+| `SimlockCapture/H264Encoder.swift`                                                                 | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
+| `SimlockCapture/VideoEncoder.swift`                                                                | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
+| `SimlockCapture/PixelBufferUtils.swift`                                                            | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
+| `SimlockCapture/Xcode.swift`                                                                       | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                                                                                            |
+| `simlock-screen-capture/ButtonPlan.swift`                                                          | —                           | ours, entirely: the Indigo presses behind `lock` and `app_switcher` (ADR 0085)                                                                                                                                               |
+| `simlock-screen-capture/InputMode.swift`                                                           | —                           | ours, entirely: the `--input` mode that drives `HIDInjector` from stdin                                                                                                                                                      |
+| `SimlockCapture/Lifecycle.swift`, `SimlockCapture/Options.swift`, `SimlockCapture/FrameGrid.swift` | —                           | ours, entirely: the option parser, the envelope, the lifecycle, the scaler, the encode loop, the pacing grid (MIT)                                                                                                           |
+| `simlock-screen-capture/FrameSelection.swift`                                                      | —                           | ours, entirely (MIT): which composites the simulator capture copies, and the copy queue                                                                                                                                      |
+| `simlock-screen-capture/main.swift`, `simlock-screen-capture/SimulatorSource.swift`                | —                           | ours, entirely: the simulator program and its framebuffer as a `ScreenSource`                                                                                                                                                |
+| `simlock-screen-capture/Panels.swift`                                                              | —                           | ours, entirely: which panel of a foldable simulator to stream, the follower of SpringBoard's panel moves, the watchdog for its `log` children, and the upright turn of the inner panel (ADR 0075)                            |
+| `simlock-screen-capture/PanelTouch.swift`                                                          | —                           | ours, entirely: where a tap on the upright picture lands on a panel's digitizer, the inner Duo panel's turned (ADR 0075 §4)                                                                                                  |
+| `Tests/SimlockCaptureTests/*`                                                                      | —                           | ours, entirely: the Swift tests (`swift test --package-path vendor/screen-capture`)                                                                                                                                          |
+| `simlock-device-capture/*` (five files)                                                            | —                           | ours, entirely: the iPhone program — the version gate, the CoreDevice source, the RTP receiver, the decoder — rewritten from this repo's own PoC (ADR 0031)                                                                  |
+| `SimlockMediaBridge/*`                                                                             | —                           | ours, entirely: the negotiator bridge; it carries the `idevice` HEVC feature string below                                                                                                                                    |
+| `Stubs/*` (three interfaces)                                                                       | —                           | ours, entirely: hand-written declarations for the parts of CoreDevice we call                                                                                                                                                |
+| `scripts/unframe.mjs`                                                                              | —                           | ours, entirely: a hand-run diagnostic                                                                                                                                                                                        |
+| `Package.swift`                                                                                    | —                           | ours, entirely                                                                                                                                                                                                               |
 
 To diff any of the nine serve-sim files, use the command at the end with the
 upstream path from its row and the file's path under `Sources/`.
@@ -110,7 +111,7 @@ from serve-sim: the framebuffer of a device nobody is looking at, encoded.
 
 ## Deviations
 
-Four that change behaviour, all deliberate. Each is here because a later reader
+Five that change behaviour, all deliberate. Each is here because a later reader
 must not "clean up" back to upstream's behaviour and silently break a simlock
 feature. The mechanical consequences of the package layout — the files not taken,
 the import that went away — are named where they show up, not counted here.
@@ -152,6 +153,16 @@ upstream's. The file's own `MODIFIED FILE` header is the authoritative wording.
 **4. `FrameCapture.nativeScreenSizes(for:)` is internal, not private.** The input
 mode reads the device type's native pixel size from it, because
 `getScreenSize` answers only once frames arrive and the input mode captures none.
+
+**5. `FrameCapture` decides on the 60 fps grid before it copies, and on a queue of
+its own.** serve-sim copies every new composite on the callback queue, and the
+stream then throws away about four in ten of the copies. Here the callbacks and
+the idle timer only notice a composite (the seed check, its seen time) and hand
+it to the `frame-copy` queue through a one-slot hand-off; that queue asks
+`FrameSelection` (ours) whether the grid wants it, and copies only if so. Every
+frame leaves with its seen time (`DispatchTime.now().uptimeNanoseconds`), not a
+frame count. The 200 ms idle floor and a panel switch are forced: always copied.
+`FrameCapture.start` takes `fps` for it.
 
 One mechanical consequence of flattening two upstream targets into one:
 `FrameCapture.swift` and `HIDInjector.swift` no longer say `import SimNativeSupport`, because there is
@@ -277,13 +288,15 @@ URL either returns that commit's bytes or fails.
 
 `Package.swift`, `NOTICE.md` and the `LICENSES/` entries' file names,
 `scripts/unframe.mjs`, the whole of `Sources/SimlockCapture/` but for the four
-encoder files (`Lifecycle.swift` and `Options.swift`: the option parser, the
-envelope, the lifecycle, the scaler, the encode loop), both programs'
-`main.swift`, `Sources/simlock-screen-capture/SimulatorSource.swift` and
+encoder files (`Lifecycle.swift`, `Options.swift` and `FrameGrid.swift`: the option
+parser, the envelope, the lifecycle, the scaler, the encode loop, the pacing grid),
+both programs'
+`main.swift`, `Sources/simlock-screen-capture/SimulatorSource.swift`,
+`Sources/simlock-screen-capture/FrameSelection.swift` and
 `Sources/simlock-screen-capture/InputMode.swift`, the
 whole of `Sources/simlock-device-capture/` and `Sources/SimlockMediaBridge/`,
 and the three interfaces under `Stubs/`. Everything else is serve-sim's: three
-files unchanged, `FrameCapture.swift` with the patches above, `HIDInjector.swift`
+files unchanged, `FrameCapture.swift` as modified above, `HIDInjector.swift`
 with its deletions, and the four rewritten files, which are serve-sim's files modified by us and are Apache-2.0
 like the rest of serve-sim's code here.
 
