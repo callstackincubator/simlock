@@ -339,6 +339,10 @@ test("lists running devices with their holders, streams only the ones watched, a
 
   await page.reload();
   await expect.poll(() => active(page)).toEqual(["four", "one", "three", "two"]);
+  await page.getByRole("link", { name: "Screens", exact: true }).click();
+  await expect(page).toHaveURL(/watch=/);
+  await expect(page.locator(".screens-slot")).toHaveCount(4);
+  await expect.poll(() => active(page)).toEqual(["four", "one", "three", "two"]);
   await page
     .getByRole("button", { name: /^Stop watching .*\(two\)$/ })
     .first()

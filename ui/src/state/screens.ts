@@ -26,7 +26,8 @@ export type { AcquireCapture } from "./screen";
 export const WATCH_LIMIT = SCREEN_CAPTURE_LIMIT;
 
 // why: the sidebar's link to Screens carries no list, so the tab remembers the last one and puts it
-// back in the address when the page opens without one.
+// back whenever the address on this page has none, whether the page just opened or was already
+// open when the link was followed.
 let remembered: readonly string[] = [];
 
 export function useScreens() {
@@ -45,11 +46,11 @@ export function useScreens() {
   const search = useSearch();
   const keys = readWatch(search);
   useEffect(() => {
-    const opened = readWatch(window.location.search);
+    const opened = readWatch(search);
     if (opened.length > 0) remembered = opened;
     else if (remembered.length > 0)
       setSearch(writeWatch(window.location.search, remembered), { replace: true });
-  }, []);
+  }, [search]);
   // why: a watched device that stopped running leaves the list, so it frees its place at once.
   const watched = all.kind === "ready" ? watchedOf(tiles, keys) : [];
   const watching = new Set(watched.map((tile) => tile.key));

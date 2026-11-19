@@ -172,7 +172,10 @@ function Watched({ tile, screens }: { readonly tile: ScreenTile; readonly screen
         <b className="screens-cut" title={tile.holder?.full ?? "Not leased"}>
           {tile.holder?.short ?? "Not leased"}
         </b>
-        <span className="screens-cut mono muted" title={`${tile.label} · ${tile.worker}`}>
+        <span
+          className="screens-cut mono muted"
+          title={`${tile.label} · ${tile.platform} ${tile.runtime} · ${tile.worker}`}
+        >
           {tile.label} · {tile.platform} {tile.runtime} · {tile.worker}
         </span>
         <span className="screens-actions">
