@@ -248,6 +248,7 @@ async function composeDaemon(
       ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
     })),
     driverSections: driverConfigEntries,
+    hostPlatform: process.platform,
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     role,
     systemStats,

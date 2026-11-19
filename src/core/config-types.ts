@@ -287,7 +287,7 @@ export interface ModuleConfigEntry {
   readonly validator: Validator;
   readonly defaults: unknown;
   readonly gatewayKeys: readonly string[];
-  readonly enabledByDefault?: "standalone-worker";
+  readonly enabledByDefault?: "standalone-worker" | "macos-worker";
   readonly check?: (section: never, config: Config) => void;
 }
 
@@ -298,6 +298,8 @@ export interface ConfigLayerOptions {
   readonly systemStats: SystemStats;
   readonly overrides?: ConfigOverrides;
   readonly role?: DaemonMode;
+  // why: a module on by default on a macOS worker (ADR 0088 §1) reads the host OS from here; left out, the host is not macOS.
+  readonly hostPlatform?: NodeJS.Platform;
   readonly warn?: Warn;
 }
 
