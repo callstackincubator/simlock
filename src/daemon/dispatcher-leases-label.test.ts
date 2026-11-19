@@ -1,35 +1,72 @@
 import { describe, expect, it } from "vitest";
 
+import { FakeDriver } from "../core/testing.js";
+import { FakeClock } from "../ports/index.js";
 import { classifyError } from "./error-code.js";
 import { buildDispatcher, session } from "./test-dispatcher.js";
 
 describe("Dispatcher: lease.request with a label", () => {
   it("a lease requested with a label carries it in the grant and in every later read, and a request without one carries none", async () => {
-    const { dispatcher } = await buildDispatcher();
-    const ask = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const { dispatcher, driver, engine } = await buildDispatcher({
+      extraDrivers: [
+        new FakeDriver({
+          availableOsVersions: ["36"],
+          clock: new FakeClock(1_000),
+          platform: "android",
+        }),
+      ],
+      physicalDevices: [
+        {
+          createdAt: 1,
+          driverDeviceId: "00008110-001A2B3C4D5E",
+          enrolledApps: [],
+          id: "dev_phys",
+          spec: { class: "phone", model: "iPhone 15", osVersion: "18.4" },
+          state: "ready",
+        },
+      ],
+    });
+    await engine.convergeRunningCapacity();
+    driver.setPhysicalPresence("00008110-001A2B3C4D5E", true);
     const agent = session({ principal: "tok_owner" });
+    const ios = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const android = { model: "Pixel 8", osVersion: "36", platform: "android" } as const;
+    const phone = { model: "iPhone 15", physical: true, platform: "ios" } as const;
 
-    const labelled = await dispatcher.dispatch(
-      "lease.request",
-      { ...ask, label: "feature-x", requesterId: "labelled" },
-      agent,
-    );
-    const plain = await dispatcher.dispatch(
-      "lease.request",
-      { ...ask, requesterId: "plain" },
-      agent,
-    );
-
-    const listed = (await dispatcher.dispatch("lease.list", {}, agent)).leases;
-    const status = (await dispatcher.dispatch("status.get", {}, agent)).leases;
-    const got = (await dispatcher.dispatch("lease.get", { leaseId: labelled.lease.id }, agent))
-      .lease;
-    expect(labelled.lease.label).toBe("feature-x");
-    expect(got.label).toBe("feature-x");
-    expect(listed.find((lease) => lease.id === labelled.lease.id)?.label).toBe("feature-x");
-    expect(status?.find((lease) => lease.id === labelled.lease.id)?.label).toBe("feature-x");
-    expect(plain.lease).not.toHaveProperty("label");
-    expect(listed.find((lease) => lease.id === plain.lease.id)).not.toHaveProperty("label");
+    const cases = [
+      ["an iOS simulator", ios, "feature-x"],
+      ["an Android emulator", android, "feature-x"],
+      ["a physical phone", phone, "feature-x"],
+      ["64 characters", ios, "a".repeat(64)],
+      ["non-ASCII text", ios, "café 🚀"],
+      ["a slash and a space", ios, "fix/login sheet"],
+      ["no label", ios, undefined],
+    ] as const;
+    for (const [name, ask, label] of cases) {
+      const granted = await dispatcher.dispatch(
+        "lease.request",
+        { ...ask, ...(label === undefined ? {} : { label }), requesterId: name },
+        agent,
+      );
+      const id = granted.lease.id;
+      const listed = (await dispatcher.dispatch("lease.list", {}, agent)).leases;
+      const status = (await dispatcher.dispatch("status.get", {}, agent)).leases;
+      const got = (await dispatcher.dispatch("lease.get", { leaseId: id }, agent)).lease;
+      const reads = [
+        granted.lease,
+        got,
+        listed.find((lease) => lease.id === id),
+        status?.find((lease) => lease.id === id),
+      ];
+      for (const read of reads) {
+        if (label === undefined) {
+          expect(read, name).not.toHaveProperty("label");
+        } else {
+          expect(read?.label, name).toBe(label);
+        }
+      }
+      await dispatcher.dispatch("lease.release", { leaseId: id }, agent);
+    }
   });
 
   it("a bad label is refused BAD_REQUEST with the same words, and grants nothing", async () => {
