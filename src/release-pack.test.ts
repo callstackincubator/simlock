@@ -103,7 +103,7 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
   }
 
   // why: NTFS has no executable bit, so a Windows host cannot make the tarball's modes; the
-  // Release workflow packs on Linux.
+  // Release workflow packs on a macOS runner.
   it.skipIf(process.platform === "win32")(
     "keeps both iOS capture programs executable in the tarball, as it keeps the CLI entry",
     () => {

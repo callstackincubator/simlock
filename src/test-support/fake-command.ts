@@ -52,6 +52,12 @@ function gitBash(): string {
   return existsSync(candidate) ? candidate : "bash";
 }
 
+// why: production starts a `.sh` script through its `#!/usr/bin/env sh` line, which is dash on
+// Linux; Windows has no shebang, so there Git Bash starts it.
+export function scriptCommand(script: string, args: readonly string[]): [string, string[]] {
+  return WINDOWS ? [BASH, [script, ...args]] : [script, [...args]];
+}
+
 export function writeFakeCommand(dir: string, name: string, source: string): void {
   const file = join(dir, name);
   writeFileSync(file, source);

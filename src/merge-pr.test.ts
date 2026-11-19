@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
+import { fakeCommandEnv, scriptCommand, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -42,7 +42,7 @@ interface Fleet {
   readonly statusReadsPending?: number;
   readonly flakyIssues?: readonly { title: string; body: string; pull_request?: object }[];
   readonly failedJobLog?: string;
-  readonly repoFromOrigin?: boolean;
+  readonly repoFromOrigin?: string;
   readonly refusedAsStacked?: boolean;
   readonly stacks?: readonly {
     open: boolean;
@@ -236,7 +236,7 @@ function fleetFile(fleet: Fleet) {
 
 function runScript(target: number, env: NodeJS.ProcessEnv, cwd: string | undefined) {
   try {
-    const output = execFileSync(BASH, [SCRIPT, String(target)], {
+    const output = execFileSync(...scriptCommand(SCRIPT, [String(target)]), {
       cwd,
       env,
       encoding: "utf8",
@@ -261,11 +261,11 @@ function gate(fleet: Fleet = {}) {
     GH_REPO: "o/r",
   };
   let cwd: string | undefined;
-  if (fleet.repoFromOrigin === true) {
+  if (fleet.repoFromOrigin !== undefined) {
     delete env.GH_REPO;
     cwd = join(dir, "clone");
     execFileSync("git", ["init", "-q", cwd]);
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:o/r.git"], { cwd });
+    execFileSync("git", ["remote", "add", "origin", fleet.repoFromOrigin], { cwd });
   }
   const { status, output } = runScript(fleet.target ?? 7, env, cwd);
   const read = (name: string) =>
@@ -301,8 +301,12 @@ describe("merge-pr.sh gates on the PR", { timeout: TIMEOUT }, () => {
     expect(result.status).toBe(0);
   });
 
-  it("takes the repo from the origin remote when GH_REPO is unset", () => {
-    const result = gate({ repoFromOrigin: true });
+  it.each([
+    ["an ssh URL", "git@github.com:o/r.git"],
+    ["an https URL", "https://github.com/o/r.git"],
+    ["a path with backslashes", "C:\\work\\o\\r.git"],
+  ])("takes the repo from the origin remote when GH_REPO is unset, from %s", (_, origin) => {
+    const result = gate({ repoFromOrigin: origin });
     expect(result.merged).toBe(true);
   });
 
