@@ -16,6 +16,9 @@ export interface PlantedSource {
   readonly savedWithoutLineage?: boolean;
   /** why: a seed saved after a copy of it settled (ADR 0090); absent is a quick seed. */
   readonly settled?: boolean;
+  /** why: the row of a settle, or of the quick seed it retired, names the other seed (ADR 0090). */
+  readonly settleOf?: string;
+  readonly createdAt?: number;
   readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
@@ -33,7 +36,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
   const table = new IosSourceTable(database);
   const sourceId = `planted-${source.udid ?? source.maker ?? "making"}-${source.runtimeId}`;
   table.insertMaking({
-    createdAt: 0,
+    createdAt: source.createdAt ?? 0,
     deviceTypeId: source.deviceTypeId,
     kind: source.kind ?? "seed",
     maker: source.maker ?? "planted",
@@ -41,6 +44,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     osVersion: source.osVersion ?? "26.5",
     runtimeBuild: source.runtimeBuild,
     runtimeId: source.runtimeId,
+    ...(source.settleOf === undefined ? {} : { settleOf: source.settleOf }),
     setPath: "/Devices/sources",
     sourceId,
     specKey: `${source.deviceTypeId}\u0000${source.runtimeId}`,
