@@ -382,6 +382,48 @@ describe("AndroidDriver image fit", () => {
         expect(await harness.filesystem.exists(`${avdDirectory}/simlock_six`)).toBe(false);
       });
 
+      it("keeps a baseline saved before the per-emulator Wi-Fi flag usable, since only a seed's launch settings hold the Wi-Fi entry (#1586)", async () => {
+        const harness = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
+          config,
+          ids,
+        });
+        const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
+        await harness.driver.saveSource({ ...ready, physical: false as const });
+        const row = harness.database
+          .prepare(
+            "SELECT image_identity, emulator_version FROM android_source_data WHERE kind = 'baseline'",
+          )
+          .get() as { image_identity: string; emulator_version: string };
+        const saved = await harness.filesystem.readFile(`${savedHome}/simlock.avd/config.ini`);
+        // why: the hash a driver before the flag stored, rebuilt here with the same FNV-1a over the same parts, because no public surface writes an old hash.
+        let hash = 0x811c9dc5;
+        for (const character of [
+          row.image_identity,
+          row.emulator_version,
+          saved
+            .split(/\r?\n/)
+            .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
+            .filter((line) => !line.startsWith("hw.device.hash2="))
+            .sort()
+            .join("\n"),
+        ].join("\u0000")) {
+          hash ^= character.charCodeAt(0);
+          hash = Math.imul(hash, 0x01000193);
+        }
+        harness.database
+          .prepare("UPDATE android_source_data SET config_hash = ? WHERE kind = 'baseline'")
+          .run((hash >>> 0).toString(16).padStart(8, "0"));
+
+        const restarted = await reopened(harness, [
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ]);
+
+        const listed = await restarted.driver.listSources();
+        expect(listed.find((source) => source.id === "baseline_four")).not.toHaveProperty(
+          "staleReason",
+        );
+      });
+
       it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
         const kept = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
           expect(await harness.filesystem.exists(`${savedHome}/simlock.avd/config.ini`)).toBe(true);

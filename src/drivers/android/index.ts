@@ -222,6 +222,7 @@ export class AndroidDriver implements Driver {
       filesystem: options.filesystem,
       idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
+      seedOnlyInputs: seedOnlyInputs(),
     });
     this.#bootTimeoutMs = bootTimeoutFor(options);
     this.#ownership = new Ownership({
@@ -903,15 +904,20 @@ function bootTimeoutFor(options: AndroidDriverOptions): number {
 function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
-  // why: #1586: a snapshot taken on netsim's shared Wi-Fi joins no network under the per-emulator router for about a minute, so a seed made before the flag is stale.
-  const wifi = `wifi=${WIFI_PER_EMULATOR_FLAGS.join(" ")}`;
   if (
     launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
     launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
   ) {
-    return [wifi];
+    return [];
   }
-  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`, wifi];
+  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+}
+
+/**
+ * why: #1586: a snapshot taken on netsim's shared Wi-Fi joins no network under the per-emulator router for about a minute, so a seed made before the flag is stale. A saved baseline's hash leaves it out: its owner cannot remake it, so it stays usable.
+ */
+function seedOnlyInputs(): string[] {
+  return [`wifi=${WIFI_PER_EMULATOR_FLAGS.join(" ")}`];
 }
 
 export function hostAbiFor(architecture: string): string {
