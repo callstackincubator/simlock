@@ -253,11 +253,22 @@ export function refuseBadRunId(): <T extends { readonly runId?: string | undefin
   };
 }
 
+const LABEL_LENGTH_REFUSAL = "label must be 1 to 64 characters";
+const LABEL_CONTROL_REFUSAL = "label must not contain control characters";
+
 export function refuseBadLabel(): <T extends { readonly label?: string | undefined }>(
-  _input: T,
-  _context: z.RefinementCtx,
+  input: T,
+  context: z.RefinementCtx,
 ) => void {
-  return () => undefined;
+  return (input, context) => {
+    const { label } = input;
+    if (label === undefined) return;
+    if (label.length < 1 || label.length > 64) {
+      context.addIssue({ code: "custom", message: LABEL_LENGTH_REFUSAL });
+    } else if (/[\p{Cc}\u2028\u2029]/u.test(label)) {
+      context.addIssue({ code: "custom", message: LABEL_CONTROL_REFUSAL });
+    }
+  };
 }
 
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
