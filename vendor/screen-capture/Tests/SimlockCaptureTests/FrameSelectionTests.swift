@@ -108,11 +108,13 @@ final class FrameSelectionTests: XCTestCase {
         nonisolated(unsafe) var time: UInt64 = 0
         nonisolated(unsafe) var noticed: [(seed: UInt32, at: UInt64)] = []
         nonisolated(unsafe) var gate = SeedGate()
+        nonisolated(unsafe) var reports: [(seed: UInt32, at: UInt64)] = []
         let watch = SeedWatch(
             queue: DispatchQueue(label: "test-seed-watch"),
             readSeed: { seeds[ObjectIdentifier($0)] ?? 0 },
             now: { time },
             onSeed: { surface, seed, at in
+                reports.append((seed, at))
                 if gate.notice(key: ObjectIdentifier(surface), seed: seed, force: false) {
                     noticed.append((seed, at))
                 }
@@ -146,6 +148,7 @@ final class FrameSelectionTests: XCTestCase {
         time = 4 * ms
         watch.tick()
         XCTAssertEqual(noticedSeeds(), [5, 6, 7], "an unchanged seed is not noticed")
+        XCTAssertEqual(reports.map(\.seed), [5, 6, 7], "the tick does not even report an unchanged seed")
         callback(first, seed: 7, force: true)
         XCTAssertEqual(noticedSeeds(), [5, 6, 7, 7], "a forced call with an unchanged seed is noticed")
 
@@ -155,10 +158,13 @@ final class FrameSelectionTests: XCTestCase {
         watch.tick()
         XCTAssertEqual(noticed.last?.seed, 9, "after watch(surface) the next tick reads the new surface")
         XCTAssertEqual(noticed.count, 5)
+        XCTAssertEqual(reports.map(\.at), [1 * ms, 2 * ms, 3 * ms, 5 * ms], "each report carries the time the tick read it")
 
         watch.stop()
         seeds[ObjectIdentifier(second)] = 10
         watch.tick()
-        XCTAssertEqual(noticed.count, 5, "after stop() the tick does nothing")
+        watch.watch(second)
+        watch.tick()
+        XCTAssertEqual(reports.count, 4, "after stop() the tick does nothing, even for a surface watched afterwards")
     }
 }
