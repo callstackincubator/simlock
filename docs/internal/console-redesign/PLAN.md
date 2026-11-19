@@ -87,7 +87,7 @@ One agent; everything else waits for it.
   of DESIGN.md. Rename or add tokens; delete `--chip` and `--field` (an
   input's fill is `--bg`). Foundation also owns mechanical substitutions in
   `ui/src/screens/sign-in.css`, `inbox/inbox.css`,
-  `overview/overview.css` and `fleet/screen-panel.css`; no other changes to
+  `overview/overview.css` and `screen-view.css` (then `fleet/screen-panel.css`); no other changes to
   those screens before their page stages. Verify no retired-token consumers
   remain and existing pages render in both themes. (decided in delivery, pending the maintainer)
 - Restyle the `ds` primitives every page shares, to the renders' sidebar,

@@ -86,6 +86,9 @@ export async function readStream(
   now: () => number = () => performance.now(),
 ): Promise<void> {
   const reader = body.getReader();
+  let cancellation: Promise<void> | undefined;
+  const cancel = (reason?: string) =>
+    (cancellation ??= reader.cancel(reason).catch(() => undefined));
   const clock = new Stopwatch(now);
   const paintedRecently = new RecentRate(now);
   const bytesRecently = new RecentRate(now);
@@ -134,12 +137,12 @@ export async function readStream(
     ended = true;
     report();
     sink.onEnd(endedText(payload));
-    void reader.cancel().catch(() => undefined);
+    void cancel();
   };
 
   const fail = (reason: string) => {
     end(reason);
-    void reader.cancel(reason).catch(() => undefined);
+    void cancel(reason);
   };
 
   const configure = (bytes: Uint8Array): void => {
@@ -272,9 +275,11 @@ export async function readStream(
 
   // why: closing the reader is what closes the request, and closing the request is the only
   // off-command this surface has.
-  signal.addEventListener("abort", () => void reader.cancel().catch(() => undefined), {
-    once: true,
-  });
+  const abort = () => {
+    void cancel();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
 
   // why: a still screen sends nothing to report on, and the rate it shows must fall to zero while it
   // is still rather than keep the figure of the last swipe until the next frame arrives.
@@ -300,7 +305,9 @@ export async function readStream(
       // why: a decoder that failed has closed itself, and a browser refuses the second close; nothing
       // is left running either way.
     }
-    if (!ended) void reader.cancel().catch(() => undefined);
+    signal.removeEventListener("abort", abort);
+    await cancel();
+    reader.releaseLock();
   }
 }
 

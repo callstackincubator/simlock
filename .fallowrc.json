@@ -30,6 +30,7 @@
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
+    "src/daemon/service-main.ts",
     "src/updater/main.ts",
     "src/daemon/openapi.ts",
     "src/core/usage/read-thread.ts",
