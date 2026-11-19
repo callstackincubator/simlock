@@ -334,7 +334,9 @@ export class Seeds {
         `Android device ${deviceId} cannot be saved: it has no copy folder or image`,
       );
     }
-    const config = await this.#filesystem.readFile(`${this.#adbTools.avdFolder(data)}/config.ini`);
+    const config = await this.#filesystem.readFile(
+      join(this.#adbTools.avdFolder(data), "config.ini"),
+    );
     const kind = savedKindOf(config);
     if (kind === undefined) {
       throw new DriverCrashError(
