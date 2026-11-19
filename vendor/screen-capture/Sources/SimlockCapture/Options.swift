@@ -76,7 +76,7 @@ public protocol ScreenSource: AnyObject {
     /// Throws a `CaptureError` when it cannot start.
     func start(
         deviceID: String,
-        onFrame: @escaping @Sendable (CVPixelBuffer) -> Void,
+        onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
         onEnd: @escaping @Sendable (_ reason: String?) -> Void
     ) async throws
 

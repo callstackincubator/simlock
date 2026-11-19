@@ -94,7 +94,7 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
 
     func start(
         deviceID: String,
-        onFrame: @escaping @Sendable (CVPixelBuffer) -> Void,
+        onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
         onEnd: @escaping @Sendable (_ reason: String?) -> Void
     ) async throws {
         setOnEnd(onEnd)
@@ -330,7 +330,7 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
         remoteSSRC: UInt32,
         answer response: DeviceMediaStream.StartResponse,
         localAddress: String,
-        onFrame: @escaping @Sendable (CVPixelBuffer) -> Void,
+        onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
         deviceID: String
     ) async throws {
         // The port this program bound for the tunnel route only ever named the address `startMediaStream`
@@ -576,7 +576,7 @@ private func nap(until moment: TimeInterval) async throws {
 /// exactly as the decoder saw it.
 private final class ReceiveLoop: @unchecked Sendable {
     private let remoteSSRC: UInt32
-    private let onFrame: @Sendable (CVPixelBuffer) -> Void
+    private let onFrame: @Sendable (CVPixelBuffer, UInt64) -> Void
     private unowned let source: DeviceScreenSource
 
     private let parser = HEVCRTPReceiver()
@@ -592,7 +592,7 @@ private final class ReceiveLoop: @unchecked Sendable {
 
     init(
         remoteSSRC: UInt32,
-        onFrame: @escaping @Sendable (CVPixelBuffer) -> Void,
+        onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
         source: DeviceScreenSource
     ) {
         self.remoteSSRC = remoteSSRC
@@ -649,7 +649,7 @@ private final class ReceiveLoop: @unchecked Sendable {
         let now = uptime()
         if now - lastEmitted >= 0.2, let lastPicture {
             lastEmitted = now
-            onFrame(lastPicture)
+            onFrame(lastPicture, DispatchTime.now().uptimeNanoseconds)
         }
         return !source.isStopping
     }
@@ -681,7 +681,7 @@ private final class ReceiveLoop: @unchecked Sendable {
         decoded += 1
         lastPicture = pixel
         lastEmitted = uptime()
-        onFrame(pixel)
+        onFrame(pixel, DispatchTime.now().uptimeNanoseconds)
     }
 }
 

@@ -185,6 +185,46 @@ describe("AndroidDriver image fit", () => {
       ]);
     });
 
+    it("judges a seed made under another android.emulator.cores stale, and one made under the same, or with cores unset on both sides, not", async () => {
+      const launch = { audio: true, bootAnimation: true, gpu: "auto", headless: false };
+      const cases = [
+        { made: undefined, now: undefined, stale: false },
+        { made: { headless: true }, now: { headless: true }, stale: false },
+        { made: undefined, now: { cores: 2 }, stale: true },
+        { made: { cores: 2 }, now: { cores: 2 }, stale: false },
+        { made: { cores: 2 }, now: { cores: 3 }, stale: true },
+        { made: { cores: 2 }, now: undefined, stale: true },
+      ];
+
+      for (const { made, now, stale } of cases) {
+        const harness = await seedHarness(
+          makingTheSeed(
+            seedHome,
+            "Android emulator version 36.1.9",
+            made?.headless === true ? ["-no-window"] : [],
+          ),
+          { emulator: { ...launch, ...made } },
+        );
+        await harness.driver.provision(harness.spec);
+
+        const restarted = await reopened(
+          harness,
+          [processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9")],
+          { emulator: { ...launch, ...now } },
+        );
+
+        expect({
+          made,
+          now,
+          staleReason: (await restarted.driver.listSources())[0]?.staleReason,
+        }).toEqual({
+          made,
+          now,
+          staleReason: stale ? "android.emulator launch settings changed" : undefined,
+        });
+      }
+    });
+
     it.each([
       { name: "the default launch", emulator: undefined, flags: [], inputs: [] },
       {
@@ -380,6 +420,19 @@ describe("AndroidDriver image fit", () => {
         ).resolves.toBe("saved");
         expect(harness.runner.calls).toHaveLength(callsBefore + 1);
 
+        const coresChanged = await reopened(harness, [version(), version()], {
+          emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: false, cores: 2 },
+        });
+        const listed = await coresChanged.driver.listSources();
+        expect(listed.find((source) => source.id === "baseline_four")?.staleReason).toBe(
+          "android.emulator launch settings changed",
+        );
+        await expect(
+          coresChanged.driver.provision(harness.spec, { source: "baseline_four" }),
+        ).rejects.toThrow(
+          "source baseline_four is stale: android.emulator launch settings changed",
+        );
+
         await harness.filesystem.rm(`${sdk}/system-images/android-34/google_apis/arm64-v8a`);
         await expect(
           harness.driver.provision(harness.spec, { source: "baseline_four" }),
@@ -560,6 +613,64 @@ describe("AndroidDriver image fit", () => {
         clockAfter.advance(1_000);
         await expect(adoptedSaving).resolves.toMatchObject({ sourceId: "baseline_four" });
         await kept({ ...restarted, driver: adopted.driver });
+      });
+
+      it("writes the current android.emulator.cores into a saved baseline's config.ini before its snapshot boot, whatever count the device was made at, and does not read the baseline as stale", async () => {
+        const launch = { audio: true, bootAnimation: true, gpu: "auto", headless: false };
+        const cases = [
+          { made: undefined, saved: 2, expected: "2" },
+          { made: 2, saved: 2, expected: "2" },
+          { made: 2, saved: undefined, expected: "2" },
+        ];
+
+        for (const { made, saved, expected } of cases) {
+          const harness = await seedHarness([...leasing(true)], {
+            config: `${config}hw.cpu.ncore=4\n`,
+            emulator: { ...launch, ...(made === undefined ? {} : { cores: made }) },
+            ids,
+          });
+          const ready = await harness.driver.makeReady(
+            await harness.driver.provision(harness.spec),
+          );
+          const clock = new FakeClock();
+          const restarted = await reopened(
+            harness,
+            [
+              ...savingSteps,
+              processResult(
+                binaries.adb,
+                ["devices"],
+                `List of devices attached\n${serial}\tdevice\n`,
+              ),
+              processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+              ...sourceBoot(),
+              processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+            ],
+            {
+              clock,
+              emulator: { ...launch, ...(saved === undefined ? {} : { cores: saved }) },
+            },
+          );
+
+          const saving = restarted.driver.saveSource({ ...ready, physical: false as const });
+          await vi.waitFor(() =>
+            expect(
+              restarted.runner.calls.filter((call) => call.args[0] === "devices"),
+            ).toHaveLength(1),
+          );
+          clock.advance(1_000);
+          await saving;
+
+          const listed = await restarted.driver.listSources();
+          expect({
+            made,
+            saved,
+            ncore: (await harness.filesystem.readFile(`${savedHome}/simlock.avd/config.ini`))
+              .split("\n")
+              .find((line) => line.startsWith("hw.cpu.ncore=")),
+            stale: listed.find((source) => source.id === "baseline_four")?.staleReason,
+          }).toEqual({ made, saved, ncore: `hw.cpu.ncore=${expected}`, stale: undefined });
+        }
       });
 
       it("saves a device whose config.ini has spaces around `=`, as avdmanager writes it, with the model and image it names", async () => {

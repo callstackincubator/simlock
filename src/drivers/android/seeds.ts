@@ -292,6 +292,7 @@ export class Seeds {
           `copying Android device ${device.deviceId} to source ${sourceId} failed`,
         );
         const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
+        await this.#avdConfig.applyCores(avdFolder);
         await this.#snapshotSource(sourceId, {
           avdHome: folder,
           avdName: SEED_AVD_NAME,
@@ -564,6 +565,7 @@ export class Seeds {
       if (profile.kind === "library") {
         await this.#avdConfig.applyLibraryProfile(avdFolder, profile, image);
       }
+      await this.#avdConfig.applyCores(avdFolder);
       await this.#bootSeedTwice(sourceId, {
         avdHome: folder,
         avdName: SEED_AVD_NAME,
