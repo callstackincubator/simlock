@@ -16,6 +16,8 @@ export interface AvdConfigOptions {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly seedLaunchInputs: readonly string[];
+  /** why: `android.emulator.cores`; unset leaves the profile's own count. */
+  readonly cores: number | undefined;
   /** why: inputs only a seed's hash takes, so a saved baseline made before one stays usable (#1586). */
   readonly seedOnlyInputs: readonly string[];
 }
@@ -57,6 +59,15 @@ export class AvdConfig {
     properties: Readonly<Record<string, string>>,
   ): Promise<void> {
     await this.#mergeConfigIniLines(folder, properties);
+  }
+
+  /**
+   * why: `android.emulator.cores` is written into config.ini rather than passed as `-cores`, since a
+   * snapshot saved under one core count does not load under another flag.
+   */
+  async applyCores(folder: string): Promise<void> {
+    if (this.#options.cores === undefined) return;
+    await this.#mergeConfigIniLines(folder, { "hw.cpu.ncore": String(this.#options.cores) });
   }
 
   /**

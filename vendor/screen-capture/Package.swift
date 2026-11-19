@@ -8,7 +8,7 @@
 // Both write the same envelope, take the same arguments and exit the same codes; only the
 // `ScreenSource` behind them differs. See NOTICE.md for the per-file record, and LICENSES/ for the
 // license text of the parts that are not ours. The simulator capture pipeline and the encoders came
-// from serve-sim (Apache-2.0), copied from Sources/SimNative and Sources/SimNativeSupport with two
+// from serve-sim (Apache-2.0), copied from Sources/SimNative and Sources/SimNativeSupport with three
 // changes:
 //
 //  1. `FrameCapture.findSimDevice` also searches the device set named by
@@ -19,6 +19,9 @@
 //     that package that needs NodeAPI; a process that writes frames to stdout instead does not
 //     need it, and the daemon can then supervise the capture the same way it supervises every
 //     other tool it runs.
+//  3. `FrameCapture` only notices a composite on its callback queue; `CopyStage`
+//     (`FrameSelection.swift`, ours) decides on the pacing grid and copies on a queue of its own,
+//     and every frame carries the time it was seen (NOTICE.md, deviation 5).
 //
 // Its input mode (`simlock-screen-capture <UDID> --input`) also carries serve-sim's `HIDInjector.swift`,
 // without the Duo, Device Hub, pose and Home paths; its app switcher and Lock are `ButtonPlan`'s (NOTICE.md, deviations 3 and 4).

@@ -74,8 +74,8 @@ export interface RequestRow {
   readonly requesterId: string;
 }
 
-// why: the first snapshot on a fresh simulator starts the XCTest runner, which agent-device gives 45 s to start (RUNNER_STARTUP_TIMEOUT_MS in packages/platform-apple/src/runner/runner-startup-transport.ts), so with the command's own 45 s it can pass the CLI's 60 s default and cut off agent-device's answer.
-export const FIRST_SNAPSHOT = { timeout: 180_000 } as const;
+// why: the first snapshot on a fresh simulator starts the XCTest runner, which can take over agent-device's default 90 s request limit under load (DAEMON_REQUEST_TIMEOUT_MS); only --timeout raises that limit, so it is 150 s here and the 180 s process timeout stays above it.
+export const FIRST_SNAPSHOT = { timeout: 180_000, flags: ["--timeout", "150000"] } as const;
 
 async function listRows<T>(env: SharedTestEnv, flag: string): Promise<T[]> {
   const result = await env.cli(["list", flag], { timeout: 60_000 });
