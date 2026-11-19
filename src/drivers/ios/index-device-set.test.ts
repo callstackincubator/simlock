@@ -94,6 +94,7 @@ describe("IosSimctlDriver device set", () => {
           sources: true,
           stdout: `${driverData.udid}\n`,
         },
+        { args: ["rename", driverData.udid, driverData.name], scoped: true },
         { args: ["boot", driverData.udid], scoped: true },
         { args: ["bootstatus", driverData.udid, "-b"], scoped: true },
         { args: ["listapps", driverData.udid], scoped: true },

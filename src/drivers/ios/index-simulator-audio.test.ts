@@ -49,6 +49,7 @@ describe("IosSimctlDriver simulator audio", () => {
     simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
     simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
   ];
+  const renameCall = simctlArgs("rename", udid, driverData.name);
   const bootCalls = [
     simctlArgs("boot", udid),
     simctlArgs("bootstatus", udid, "-b"),
@@ -60,7 +61,7 @@ describe("IosSimctlDriver simulator audio", () => {
     {
       name: "prepare",
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: [...bootCalls, ...silence],
+      expected: [renameCall, ...bootCalls, ...silence],
     },
     {
       name: "recover",
@@ -71,26 +72,26 @@ describe("IosSimctlDriver simulator audio", () => {
       name: "a slim prepare, silenced before the readback",
       data: slimData,
       options: { mode: "slim", purpose: "prepare" } as const,
-      expected: [...bootCalls, ...silence, readbackCall],
+      expected: [renameCall, ...bootCalls, ...silence, readbackCall],
     },
     {
       name: "the setting true",
       audio: true,
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: bootCalls,
+      expected: [renameCall, ...bootCalls],
     },
     {
       name: "a volume command that fails",
       volume: { code: 1, stderr: "boom", stdout: "" },
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: [...bootCalls, silence[0]],
+      expected: [renameCall, ...bootCalls, silence[0]],
       failure: "boom",
     },
     {
       name: "a volume command that times out",
       volume: "hangs" as const,
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: [...bootCalls, silence[0]],
+      expected: [renameCall, ...bootCalls, silence[0]],
       failure: "timed out",
     },
   ])(
@@ -102,6 +103,9 @@ describe("IosSimctlDriver simulator audio", () => {
         ...(result === undefined ? {} : { result }),
       });
       const runner = new ScriptedProcessRunner([
+        ...(c.options.purpose === "prepare"
+          ? [{ match: simctl("rename", udid, driverData.name) }]
+          : []),
         { match: simctl("boot", udid) },
         { match: simctl("bootstatus", udid, "-b") },
         { match: simctl("listapps", udid) },
