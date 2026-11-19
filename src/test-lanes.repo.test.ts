@@ -236,6 +236,7 @@ describe("the Windows job runs every unit test file", () => {
     const testing = readFileSync(join(REPO_ROOT, "docs/internal/agent-rules/testing.md"), "utf8");
     const unitProject = /name:\s*"unit"[\s\S]*?name:\s*"ui-dom"/.exec(config)?.[0] ?? "";
 
+    expect(unitProject).toContain("*.timing.test.ts");
     expect(existsSync(join(REPO_ROOT, "src/test-support/windows-skipped.ts"))).toBe(false);
     expect(unitProject).not.toMatch(/win32|windows|platform/i);
     expect(testing).not.toContain("windows-skipped");
