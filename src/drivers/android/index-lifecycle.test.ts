@@ -30,6 +30,7 @@ import { home } from "./test-index.js";
 const emulatorOptions = {
   env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
   killChildren: true,
+  outlivesCaller: true,
   stdio: { file: `${avdDirectory}/simlock_one/simlock.avd/emulator.log` },
 } as const;
 
@@ -495,6 +496,52 @@ describe("AndroidDriver console ports across a restart", () => {
     await refused;
 
     expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}`)).toBe(true);
+  });
+
+  it("shuts a discovered emulator down and deletes its AVD although adb lists its serial for a moment after the kill", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    const spec = await before.resolveSpec({ model: "Pixel 5", platform: "android" });
+    const running = await before.makeReady(await before.provision(spec));
+    const inner = host.runner();
+    // why: the emulator is gone at the kill, but adb keeps listing its serial for two listings, and a path asked of it fails.
+    let killed = false;
+    let staleListings = 2;
+    const runner: ProcessRunner = {
+      ...inner,
+      run: async (command, args, options) => {
+        if (command === binaries.adb && killed && staleListings > 0) {
+          if (args[0] === "devices") {
+            staleListings -= 1;
+            return ok(`List of devices attached\n${running.address}\tdevice\n`);
+          }
+          if (args.join(" ").endsWith("emu avd path")) {
+            return { code: 1, stderr: "error: closed", stdout: "" };
+          }
+        }
+        const result = await inner.run(command, args, options);
+        if (command === binaries.adb && args.includes("kill")) killed = true;
+        return result;
+      },
+    };
+    const clock = new FakeClock();
+    const after = await createDriver(filesystem, runner, { clock });
+    await after.listManaged();
+    // why: the registry keeps the ready device's stored data, port and serial included, across the restart.
+    const orphan = running;
+
+    const shutDown = after.shutdown(orphan);
+    const state = promiseState(shutDown);
+    for (let step = 0; step < 10 && state.state === "pending"; step += 1) {
+      for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      if (clock.pendingTimerCount > 0) clock.advance(2_000);
+    }
+    expect(state.state, "shutdown returns once adb stops listing the serial").toBe("fulfilled");
+    expect(staleListings, "shutdown waited out the two stale listings").toBe(0);
+    await expect(after.destroy(orphan)).resolves.toBeUndefined();
+
+    expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}`)).toBe(false);
   });
 
   it("refuses to delete the AVD when an attached emulator cannot say which AVD it runs", async () => {
