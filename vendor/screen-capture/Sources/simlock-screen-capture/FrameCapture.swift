@@ -2,8 +2,9 @@
 // see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's change
 // is `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
 // simlock-owned `simctl --set` root can be found at all, and `nativeScreenSizes` being internal
-// instead of private, so the input mode can report the device's size; everything else here is
-// upstream's.
+// instead of private, so the input mode can report the device's size, and the notice/copy split:
+// the callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
+// pacing grid and copies on a queue of its own; everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -25,8 +26,7 @@ actor FrameCapture {
     private let queue = DispatchSerialQueue(label: "frame-capture", qos: .userInteractive)
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
-    private var photocopier = Photocopier()
-    private var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
+    private var copyStage: CopyStage?
     private var frameCount: UInt64 = 0
     private(set) var capturedWidth: Int = 0
     private(set) var capturedHeight: Int = 0
@@ -54,8 +54,8 @@ actor FrameCapture {
     private var didLogRejectedPresentationSurface = false
     private var didLogMissingExpectedSurface = false
 
-    func start(deviceUDID: String, onFrame: @escaping @Sendable (CVPixelBuffer, CMTime) -> Void) throws {
-        self.onFrame = onFrame
+    func start(deviceUDID: String, fps: Int, onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void) throws {
+        self.copyStage = CopyStage(fps: fps, onFrame: onFrame)
 
         SimFrameworks.load()
         guard let device = Self.findSimDevice(udid: deviceUDID) else {
@@ -262,6 +262,9 @@ actor FrameCapture {
     // MARK: - Frame capture
 
     private func captureFrame(force: Bool = false) {
+        // why: the time the composite was noticed, before the copy below, because the copy takes
+        // 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
+        let seenNanos = DispatchTime.now().uptimeNanoseconds
         guard let desc = pickBestDescriptor() else { return }
 
         let surfSel = NSSelectorFromString("framebufferSurface")
@@ -289,19 +292,9 @@ actor FrameCapture {
             print("[capture] Surface size changed: \(w)x\(h)")
         }
 
-        var pixelBuffer: Unmanaged<CVPixelBuffer>?
-        let status = CVPixelBufferCreateWithIOSurface(
-            kCFAllocatorDefault, surface,
-            [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA] as CFDictionary,
-            &pixelBuffer
-        )
-        guard status == kCVReturnSuccess, let pb = pixelBuffer?.takeRetainedValue() else { return }
-
         lastCaptureTime = .now
         frameCount += 1
-        let timestamp = CMTime(value: CMTimeValue(frameCount), timescale: 60)
-        guard let copy = photocopier.copy(pb) else { return }
-        onFrame?(copy, timestamp)
+        copyStage?.offer(Notice(surface: surface, seed: seed, seenNanos: seenNanos, force: force))
     }
 
     func getScreenSize() -> (width: Int, height: Int)? {
@@ -323,7 +316,8 @@ actor FrameCapture {
         callbackUUIDs.removeAll()
         descriptors.removeAll()
         lastSeeds.removeAll()
-        onFrame = nil
+        copyStage?.stop()
+        copyStage = nil
         frameCount = 0
         capturedWidth = 0
         capturedHeight = 0
