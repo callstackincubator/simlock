@@ -81,7 +81,7 @@ describe("AndroidDriver", () => {
       const launches = emulatorLaunchArgs(harness.runner);
       expect(launches).toHaveLength(3);
       for (const args of launches) {
-        expect(args.slice(0, 10 + flags.length)).toEqual([...seedLaunch, ...flags]);
+        expect(args.slice(0, seedLaunch.length + flags.length)).toEqual([...seedLaunch, ...flags]);
       }
     });
 

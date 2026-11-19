@@ -10,7 +10,7 @@ Containment:
 - Ownership is root membership, proven at boot and in running observations by `emu avd path` against the device's own folder, never a name. Every copy's AVD is named `simlock`, so the name is never evidence.
 - The gate (`ownership.ts`): before any `emu kill`, `adb emu avd path` must name this device's own AVD folder. It is asked every time, never cached; unreachable, timed out or another path sends nothing.
 - Every `adb`, `emulator` and `avdmanager` call carries `ANDROID_AVD_HOME` (the root; a seed's folder while it is made; a copy's own folder at its boot) and `ANDROID_ADB_SERVER_PORT`. Without them a call reaches the user's AVD home and the shared adb server.
-- The user's AVD home and devices.xml are only read. The one write is `destroyLegacy`, for an AVD the registry names (safety rule 1).
+- The user's AVD home and devices.xml are only read, except `destroyLegacy` for an AVD the registry names (safety rule 1).
 - A stored port is not trusted after a restart (#52); pinned by `two-instances.test.ts`. A `destroy` after a restart stops each attached emulator whose `emu avd path` names this AVD; a serial that cannot answer refuses the delete, and another path is left alone.
 - `listManaged` never lists `<root>/sources/`: a seed is never a device.
 
@@ -37,8 +37,10 @@ Boot:
 - A copy boots from `simlock_boot`. When the snapshot does not load, the emulator cold-boots the same disk itself: not an error, only the logged diagnostic `snapshot-cold-boot`.
 - Never `-wipe-data`, except once for a device made before copies. Always `-no-snapshot-save`. A recovery boot never wipes and never loads a snapshot.
 - `-grpc` always goes with `-port`: without it the emulator opens no gRPC endpoint and writes no `avd/running` discovery file. So a console port claims three ports: itself, the adb port above it and the gRPC port (`GRPC_PORT_OFFSET`).
-- `-crash-report-mode never` (a stale crash dump otherwise opens a modal dialog that blocks the boot) is passed only when `emulator -help` lists it: emulator 36.1.9 exits on it (#1297), so `androidPrerequisites` does not require it. `never` deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root, never the user's shared one.
+- `-crash-report-mode never` (a stale dump opens a boot-blocking dialog) is passed only when `emulator -help` lists it: 36.1.9 exits on it (#1297). It deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root.
+- `-feature -WiFiPacketStream` is on every launch (#1586): copies share their seed's Wi-Fi MAC, so on netsim's one Wi-Fi network all but one are dropped. A seed made without it is stale.
 - Ready is more than `sys.boot_completed`: `emu avd path` must name the device's own folder (else `DriverCrashError`), and `pm path android` must answer, since after a snapshot load the boot properties pass before `pm` does.
+- `android.emulator.cores` goes into `config.ini`, never `-cores`: a snapshot does not load under another count.
 - No slim: `resolveSpec` ignores `mode`.
 
 Physical phones:

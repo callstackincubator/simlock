@@ -241,6 +241,7 @@ export class Seeds {
       (await this.#avdConfig.currentConfigHash(
         join(row.folder, `${row.avdName}.avd`),
         row.imageIdentity,
+        row.kind,
         row.emulatorVersion,
       )) !== row.configHash
     ) {
@@ -291,6 +292,7 @@ export class Seeds {
           `copying Android device ${device.deviceId} to source ${sourceId} failed`,
         );
         const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
+        await this.#avdConfig.applyCores(avdFolder);
         await this.#snapshotSource(sourceId, {
           avdHome: folder,
           avdName: SEED_AVD_NAME,
@@ -302,6 +304,7 @@ export class Seeds {
         const configHash = await this.#avdConfig.currentConfigHash(
           avdFolder,
           kind.imageIdentity,
+          "baseline",
           emulatorVersion,
         );
         const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
@@ -562,6 +565,7 @@ export class Seeds {
       if (profile.kind === "library") {
         await this.#avdConfig.applyLibraryProfile(avdFolder, profile, image);
       }
+      await this.#avdConfig.applyCores(avdFolder);
       await this.#bootSeedTwice(sourceId, {
         avdHome: folder,
         avdName: SEED_AVD_NAME,
@@ -574,6 +578,7 @@ export class Seeds {
       const configHash = await this.#avdConfig.currentConfigHash(
         avdFolder,
         imageIdentity,
+        "seed",
         emulatorVersion,
       );
       const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
