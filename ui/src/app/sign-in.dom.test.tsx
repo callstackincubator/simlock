@@ -11,6 +11,7 @@ const NAV_LABELS = [
   "Leases",
   "Queue",
   "Baselines",
+  "Screens",
   "Activity",
   "Usage",
   "Settings",

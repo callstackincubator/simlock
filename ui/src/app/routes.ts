@@ -10,6 +10,7 @@ import { BaselinesScreen } from "../screens/baselines";
 import { QueueScreen } from "../screens/queue";
 import { FleetScreen } from "../screens/fleet";
 import { SettingsScreen } from "../screens/settings";
+import { ScreensScreen } from "../screens/screens";
 
 export type NavGroup = "Operate" | "Observe" | "Settings";
 
@@ -33,6 +34,13 @@ export const ROUTES: readonly Route[] = [
     icon: "baselines",
     label: "Baselines",
     path: "/baselines",
+  },
+  {
+    Screen: ScreensScreen,
+    group: "Observe",
+    icon: "device",
+    label: "Screens",
+    path: "/screens",
   },
   {
     Screen: ActivityScreen,

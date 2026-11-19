@@ -164,6 +164,16 @@
     border-bottom: 0;
   }
 
+  /* why: a stacked row is a padded card, so its hover covers the row: on its cells it would draw a
+   * box inside the card, and a tap on a phone leaves the row hovered. */
+  .table-wide tbody tr:not(.table-group):hover {
+    background-image: linear-gradient(var(--row-hover), var(--row-hover));
+  }
+
+  .table-wide tbody tr:not(.table-group):hover td {
+    background-image: none;
+  }
+
   .table-wide td,
   .table-wide td:first-child,
   .table-wide td:last-child {
@@ -231,6 +241,14 @@
 
   .table tbody tr:last-child {
     border-bottom: 0;
+  }
+
+  .table tbody tr:not(.table-group):hover {
+    background-image: linear-gradient(var(--row-hover), var(--row-hover));
+  }
+
+  .table tbody tr:not(.table-group):hover td {
+    background-image: none;
   }
 
   .table td,
