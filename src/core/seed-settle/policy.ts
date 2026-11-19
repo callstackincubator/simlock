@@ -56,10 +56,8 @@ export type SettleDecision =
  * skips the quiet rule (ADR 0090 §4).
  */
 export function nextSettle(view: SettleView): SettleDecision {
-  if (view.running) return { kind: "wait", reason: "settle-running" };
-  if (view.pressure !== "none") return { kind: "wait", reason: "memory-pressure" };
-  if (view.diskFreeBytes < view.freeBytesThreshold)
-    return { kind: "wait", reason: "disk-pressure" };
+  const closed = closedGate(view);
+  if (closed !== undefined) return { kind: "wait", reason: closed };
   const operator = view.operator[0];
   if (operator !== undefined) {
     return {
@@ -81,4 +79,13 @@ export function nextSettle(view: SettleView): SettleDecision {
   }
   if (best === undefined) return { kind: "wait", reason: "no-candidate" };
   return { kind: "settle", operator: false, platform: best.platform, sourceId: best.sourceId };
+}
+
+function closedGate(
+  view: SettleView,
+): "settle-running" | "memory-pressure" | "disk-pressure" | undefined {
+  if (view.running) return "settle-running";
+  if (view.pressure !== "none") return "memory-pressure";
+  if (view.diskFreeBytes < view.freeBytesThreshold) return "disk-pressure";
+  return undefined;
 }

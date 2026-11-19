@@ -548,6 +548,11 @@ class SeedSettlerImpl implements SeedSettler {
       if (operator !== undefined) this.#operators.unshift(operator);
       return;
     }
+    this.#failed(target, running, error);
+  }
+
+  #failed(target: Target, running: Running, error: unknown): void {
+    const { operator } = target;
     this.#logger.warn("a seed settle failed", {
       message: errorText(error),
       model: target.kind.model,
@@ -562,10 +567,8 @@ class SeedSettlerImpl implements SeedSettler {
         this.options.clock.now() + RETRY_AFTER_FAILURE_MS,
       );
     }
-    for (const entry of [
-      ...(operator === undefined ? [] : [operator]),
-      ...this.#joined(running, operator),
-    ]) {
+    const callers = operator === undefined ? [] : [operator];
+    for (const entry of [...callers, ...this.#joined(running, operator)]) {
       entry.reject(
         new SeedSettleFailedError(
           target.platform,
