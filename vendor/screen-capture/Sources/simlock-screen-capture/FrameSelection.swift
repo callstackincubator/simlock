@@ -104,7 +104,7 @@ enum TileHasher {
     static let tileWidth = 16
     static let tileHeight = 32
 
-    /// One FNV-1a hash per 16x32-pixel tile over every 4th row of the surface (32-bit pixels),
+    /// One FNV-1a hash per 16x32-pixel tile over every 8th row and every 2nd pixel of the surface (32-bit pixels),
     /// row-major, the tiles on the right and bottom edges partial.
     static func hashes(of surface: IOSurface) -> [UInt64] {
         let width = IOSurfaceGetWidth(surface)
@@ -117,13 +117,13 @@ enum TileHasher {
         let base = IOSurfaceGetBaseAddress(surface)
         let bytesPerRow = IOSurfaceGetBytesPerRow(surface)
         var hashes = [UInt64](repeating: 0xcbf2_9ce4_8422_2325, count: columns * rows)
-        for y in stride(from: 0, to: height, by: 4) {
+        for y in stride(from: 0, to: height, by: 8) {
             let row = (base + y * bytesPerRow).assumingMemoryBound(to: UInt32.self)
             let tileRow = y / tileHeight
             for column in 0..<columns {
                 let from = column * tileWidth
                 var hash = hashes[tileRow * columns + column]
-                for x in from..<min(from + tileWidth, width) {
+                for x in stride(from: from, to: min(from + tileWidth, width), by: 2) {
                     hash = (hash ^ UInt64(row[x])) &* 0x0000_0100_0000_01b3
                 }
                 hashes[tileRow * columns + column] = hash
