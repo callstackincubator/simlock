@@ -245,12 +245,13 @@ curl -sL https://raw.githubusercontent.com/EvanBacon/serve-sim/6d009686ed08f7d8b
   | diff -u - Sources/simlock-screen-capture/FrameCapture.swift
 ```
 
-That prints five things and nothing else — the `MODIFIED FILE` header Apache §4(b)
+That prints six things and nothing else — the `MODIFIED FILE` header Apache §4(b)
 asks for, the device-set patch, the `private` that became internal on
-`nativeScreenSizes`, the deleted `import SimNativeSupport`, and the
-`import SimlockCapture` that replaced it — which is the whole claim of this notice
+`nativeScreenSizes`, the deleted `import SimNativeSupport`, the
+`import SimlockCapture` that replaced it, and the notice/copy split (`CopyStage`, `fps` on
+`start`, the seen time) — which is the whole claim of this notice
 in one screenful. If that diff ever grows past those
-five, either someone edited upstream's capture logic or Apple moved something
+six, either someone edited upstream's capture logic or Apple moved something
 upstream, and both deserve to be noticed rather than committed. For any other file
 in the table, substitute its upstream path in both places — for the four rewritten
 ones it prints a whole-file rewrite, which is what their rows say:

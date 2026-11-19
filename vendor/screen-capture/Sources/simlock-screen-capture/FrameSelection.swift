@@ -48,7 +48,8 @@ struct Notice {
 /// next composite.
 final class CopyStage: @unchecked Sendable {
     private let lock = NSLock()
-    private let queue = DispatchQueue(label: "frame-copy", qos: .userInteractive)
+    // why: internal so a test can wait for the queue to drain; nothing else touches it.
+    let queue = DispatchQueue(label: "frame-copy", qos: .userInteractive)
     private var slot: Notice?
     private var stopped = false
     private var onFrame: (@Sendable (CVPixelBuffer, UInt64) -> Void)?

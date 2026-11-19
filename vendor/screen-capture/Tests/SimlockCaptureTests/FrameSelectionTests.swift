@@ -16,7 +16,7 @@ final class FrameSelectionTests: XCTestCase {
         return times.filter { selection.decide(composite(at: $0)) }.count
     }
 
-    func testTheCaptureDecidesBeforeItCopiesAndOnlyACopiedCompositeMovesTheGrid() {
+    func testTheSelectionAdmitsByTheGridAndOnlyACopiedCompositeMovesIt() {
         func steady(_ count: Int, every step: UInt64) -> [UInt64] { (0..<count).map { UInt64($0) * step } }
         XCTAssertEqual(copied(steady(200, every: 10 * ms)), 120, "100 a second for 2 s at fps 60")
         XCTAssertEqual(copied(steady(60, every: 33_333_333)), 60, "30 a second for 2 s at fps 60")
@@ -77,5 +77,22 @@ final class FrameSelectionTests: XCTestCase {
         XCTAssertEqual(result.written, 1, "and the encode loop drops it")
         result = await copiedAndWritten([composite(at: 0), composite(at: 20 * ms, size: (1398, 2034))])
         XCTAssertEqual(result.written, result.copied, "a new picture size")
+    }
+
+    func testTheCopyStageDecidesBeforeItCopiesAndHandsOverTheSeenTime() {
+        let surface = IOSurface(properties: [
+            .width: 360, .height: 720, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
+        ])!
+        nonisolated(unsafe) var seen: [UInt64] = []
+        let stage = CopyStage(fps: 60) { _, nanos in seen.append(nanos) }
+        func offer(at time: UInt64) {
+            stage.offer(Notice(surface: surface, seed: IOSurfaceGetSeed(surface), seenNanos: time, force: false))
+            stage.queue.sync {}
+        }
+        offer(at: 0)
+        offer(at: 5 * ms)
+        offer(at: 20 * ms)
+        stage.stop()
+        XCTAssertEqual(seen, [0, 20 * ms], "the 5 ms composite is declined before any copy, the others keep their seen time")
     }
 }
