@@ -9,6 +9,7 @@ const WIFI_JOIN_MS = 90_000;
 interface WifiState {
   readonly connected: boolean;
   readonly wlan0Ipv4: boolean;
+  readonly gatewayAnswers: boolean;
 }
 
 // why: #1586: every copy restores the one seed's boot snapshot and every emulator on the host shares one netsimd, and only real emulators show whether each copy joins that Wi-Fi.
@@ -17,7 +18,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "two Pixel 9 leases held at once both report Wi-Fi connected with an IPv4 address on wlan0",
+      "two Pixel 9 leases held at once both reach the Wi-Fi gateway over wlan0",
       { timeout: 900_000 },
       async () => {
         const env = await withDaemon({
@@ -48,6 +49,13 @@ describe.skipIf(ANDROID_SDK === undefined)(
           const wifiOf = async (grant: { device: { address?: string } }): Promise<WifiState> => ({
             connected: /Wifi is connected to/.test(await shell(grant, "cmd wifi status")),
             wlan0Ipv4: /\binet \d/.test(await shell(grant, "ip -4 addr show wlan0")),
+            // why: a copy restores the seed's "connected" state and its address from the snapshot, so only traffic over wlan0 shows the copy that netsim does not serve.
+            gatewayAnswers: /answered/.test(
+              await shell(
+                grant,
+                "ping -I wlan0 -c 2 -W 2 10.0.2.2 >/dev/null 2>&1 && echo answered",
+              ),
+            ),
           });
 
           const grants = await Promise.all([lease("wifi-one"), lease("wifi-two")]);
@@ -57,7 +65,8 @@ describe.skipIf(ANDROID_SDK === undefined)(
           const deadline = Date.now() + WIFI_JOIN_MS;
           do {
             states = await Promise.all(grants.map(wifiOf));
-            if (states.every((state) => state.connected && state.wlan0Ipv4)) break;
+            if (states.every((state) => state.connected && state.wlan0Ipv4 && state.gatewayAnswers))
+              break;
             await new Promise((resolve) => setTimeout(resolve, 2_000));
           } while (Date.now() < deadline);
           const evidence = await Promise.all(
@@ -68,8 +77,8 @@ describe.skipIf(ANDROID_SDK === undefined)(
           );
 
           expect(states, evidence.join("\n")).toEqual([
-            { connected: true, wlan0Ipv4: true },
-            { connected: true, wlan0Ipv4: true },
+            { connected: true, wlan0Ipv4: true, gatewayAnswers: true },
+            { connected: true, wlan0Ipv4: true, gatewayAnswers: true },
           ]);
         } finally {
           await env
