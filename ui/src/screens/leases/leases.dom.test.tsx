@@ -125,7 +125,12 @@ describe("the leases page", () => {
             label: longLabel,
             requesterId: "agent-long",
           }),
-          lease({ deviceId: "dev_3", id: "lse_plain", requesterId: "agent-plain" }),
+          lease({
+            deviceId: "dev_3",
+            id: "lse_plain",
+            requesterId: "agent-plain",
+            ttlDeadline: NOW + 180_000,
+          }),
         ]),
         ...detailsOf(leaseDetails({ id: "lse_labelled" })),
       },
@@ -140,6 +145,14 @@ describe("the leases page", () => {
     expect(long).toHaveAttribute("title", longLabel);
     expect(long).toHaveClass("lease-ellipsis");
     expect(tableRow(/agent-plain/)).not.toHaveTextContent("feature-x");
+    expect(tableRow(/agent-plain/).querySelector(".lease-holder-label")).toBeNull();
+    const subs = [...leaseSummary().querySelectorAll(".lease-list-sub")].map(
+      (el) => el.textContent,
+    );
+    expect(subs.filter((text) => text?.startsWith("renewed") !== true)).toEqual([
+      "feature-x · iPhone 16 · mac-studio-01",
+      "dev_3 · mac-studio-01",
+    ]);
     expect(within(leaseSummary()).getByText(/^feature-x · iPhone 16/)).toBeVisible();
 
     await user.type(screen.getByRole("searchbox", { name: "Search leases" }), "feature-x");
