@@ -197,10 +197,14 @@ export class IosSourceTable {
   ): void {
     inTransaction(this.#database, () => {
       this.#database
-        .prepare("UPDATE ios_source_data SET state = 'making', settle_of = ? WHERE source_id = ?")
-        .run(settleId, retiredId);
+        .prepare(
+          "UPDATE ios_source_data SET state = 'making', settle_of = ?, throwaway_udid = (SELECT throwaway_udid FROM ios_source_data WHERE source_id = ?) WHERE source_id = ?",
+        )
+        .run(settleId, settleId, retiredId);
       this.#database
-        .prepare("UPDATE ios_source_data SET settled = 1, settle_of = NULL WHERE source_id = ?")
+        .prepare(
+          "UPDATE ios_source_data SET settled = 1, settle_of = NULL, throwaway_udid = NULL WHERE source_id = ?",
+        )
         .run(settleId);
       this.#writeReady(settleId, sizeBytes, record);
     });

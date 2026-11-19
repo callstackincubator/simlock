@@ -245,25 +245,39 @@ export class Seeds {
     try {
       saved = await this.#saveSettled(processTable, quick, settleId, options.signal, made);
     } catch (error: unknown) {
-      // why: a settle that ends early gives back what it made and keeps the quick seed as the kind's seed.
-      if (made.settledUdid !== undefined) {
-        await this.#deleteSeedSimulator(made.settledUdid).catch(() => undefined);
+      // why: a settle that ends early gives back what it made and keeps the quick seed as the kind's seed; a simulator it cannot delete keeps its row, which names it for the next start's sweep.
+      const { copy, settledUdid } = made;
+      let gaveBack = true;
+      if (settledUdid !== undefined) {
+        gaveBack =
+          (await this.#tryDelete(() => this.#deleteSeedSimulator(settledUdid))) && gaveBack;
       }
-      if (made.copy !== undefined) {
-        await this.#deleteThrowaway(made.copy, true).catch(() => undefined);
+      if (copy !== undefined) {
+        gaveBack = (await this.#tryDelete(() => this.#deleteThrowaway(copy, true))) && gaveBack;
       }
-      this.#sources.deleteRow(settleId);
+      if (gaveBack) this.#sources.deleteRow(settleId);
       throw error;
     }
-    await this.#deleteSeedInTurn(quick.udid);
-    this.#sources.deleteRow(quick.sourceId);
-    await this.#deleteThrowaway(saved.copy, false);
+    // why: the swap committed, so the new seed is answered whatever the deletes do; the retired row names the quick seed and the copy, and stays until both are gone.
+    const quickGone = await this.#tryDelete(() => this.#deleteSeedInTurn(quick.udid));
+    const copyGone = await this.#tryDelete(() => this.#deleteThrowaway(saved.copy, false));
+    if (quickGone && copyGone) this.#sources.deleteRow(quick.sourceId);
     return {
       reason: saved.reason,
       settledAfterMs: saved.settledAfterMs,
       sourceId: settleId,
       ...(saved.sizeBytes === undefined ? {} : { sizeBytes: saved.sizeBytes }),
     };
+  }
+
+  async #tryDelete(remove: () => Promise<void>): Promise<boolean> {
+    try {
+      await remove();
+      return true;
+    } catch (error: unknown) {
+      this.#logger?.warn(`could not delete a settle's simulator: ${errorMessage(error)}`);
+      return false;
+    }
   }
 
   /** why: a seed with no lineage is stale and never copied, so it is remade, never settled. */

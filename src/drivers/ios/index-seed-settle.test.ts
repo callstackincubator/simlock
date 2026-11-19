@@ -26,6 +26,7 @@ import {
   listInvocation,
   logsRoot,
   plantLaunchServices,
+  RecordingLogger,
   seedUdid,
   sourcesSimctl,
   spec,
@@ -136,10 +137,10 @@ const settleCases: readonly SettleCase[] = [
     world: defaultWorld,
   },
   {
-    copyCpu: (nowMs) => (Math.min(nowMs, 600_000) / 1_000) * 2,
-    name: "busy until 600 s, idle once the last two minutes used under 0.15 cores, at 712 s",
-    reason: "idle",
-    settledAfterMs: 712_000,
+    copyCpu: (nowMs) => (Math.min(nowMs, 790_000) / 1_000) * 2,
+    name: "busy until 790 s, so quiet enough only after the cap: saved at 900 s",
+    reason: "cap",
+    settledAfterMs: 900_000,
     world: simlockWorld,
   },
   {
@@ -470,6 +471,168 @@ describe("IosSimctlDriver settleSeed", () => {
         await filesystem.exists(`${logsRoot}/${copyUdid}`),
         `${name}: the copy's log folder is deleted`,
       ).toBe(script.length === 0);
+    }
+  });
+
+  it("a settle that cannot delete a simulator it made keeps a making row naming it, and the next start's sweep deletes it", async () => {
+    class Stopped extends Error {}
+    const failed = { code: 1, stderr: "busy", stdout: "" };
+    const clonedCopy = {
+      match: sourcesSimctl("clone", seedUdid, "simlock-device-1", deviceRoot),
+      result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+    };
+    const booted = [
+      clonedCopy,
+      { match: simctl("boot", copyUdid) },
+      { match: simctl("bootstatus", copyUdid, "-b") },
+      { match: simctl("listapps", copyUdid) },
+    ];
+    const toSwap = [
+      ...booted,
+      { match: simctl("shutdown", copyUdid) },
+      {
+        match: simctl("clone", copyUdid, "simlock-seed-device-1", sourcesSet),
+        result: { code: 0, stderr: "", stdout: `${settledUdid}\n` },
+      },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+    ];
+    const quickRow = {
+      source_id: quickSourceId,
+      state: "ready",
+      udid: seedUdid,
+      throwaway_udid: null,
+    };
+    const cases = [
+      {
+        name: "it is aborted while the copy is read, and the copy's delete fails",
+        script: [
+          ...booted,
+          { match: simctl("shutdown", copyUdid) },
+          { match: simctl("delete", copyUdid), result: failed },
+        ],
+        abort: true,
+        left: [
+          { source_id: "device-1", state: "making", udid: null, throwaway_udid: copyUdid },
+          quickRow,
+        ],
+        swept: [simctl("shutdown", copyUdid), simctl("delete", copyUdid)],
+        remaining: [quickRow],
+      },
+      {
+        name: "the quick seed's delete fails after the swap committed",
+        script: [
+          ...toSwap,
+          { match: sourcesSimctl("delete", seedUdid), result: failed },
+          { match: simctl("delete", copyUdid) },
+        ],
+        abort: false,
+        left: [
+          { source_id: "device-1", state: "ready", udid: settledUdid, throwaway_udid: null },
+          { ...quickRow, state: "making", throwaway_udid: copyUdid },
+        ],
+        swept: [
+          sourcesSimctl("shutdown", seedUdid),
+          sourcesSimctl("delete", seedUdid),
+          simctl("shutdown", copyUdid),
+          simctl("delete", copyUdid),
+        ],
+        remaining: [
+          { source_id: "device-1", state: "ready", udid: settledUdid, throwaway_udid: null },
+        ],
+      },
+      {
+        name: "the copy's delete fails after the swap committed",
+        script: [
+          ...toSwap,
+          { match: sourcesSimctl("delete", seedUdid) },
+          { match: simctl("delete", copyUdid), result: failed },
+        ],
+        abort: false,
+        left: [
+          { source_id: "device-1", state: "ready", udid: settledUdid, throwaway_udid: null },
+          { ...quickRow, state: "making", throwaway_udid: copyUdid },
+        ],
+        swept: [
+          sourcesSimctl("shutdown", seedUdid),
+          sourcesSimctl("delete", seedUdid),
+          simctl("shutdown", copyUdid),
+          simctl("delete", copyUdid),
+        ],
+        remaining: [
+          { source_id: "device-1", state: "ready", udid: settledUdid, throwaway_udid: null },
+        ],
+      },
+    ];
+    for (const { name, script, abort, left, swept, remaining } of cases) {
+      const database = plantReadySeed(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        lineage: [lineageUdid],
+        runtimeId: driverData.runtimeId,
+        udid: seedUdid,
+      });
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await plantLaunchServices(filesystem, `${deviceRoot}/${copyUdid}`);
+      await plantLaunchServices(filesystem, `${sourcesSet}/${settledUdid}`);
+      const runner = new ScriptedProcessRunner(script);
+      const clock = new FakeClock();
+      const table = new FakeProcessTable();
+      const logger = new RecordingLogger();
+      const driver = await createDriver(runner, clock, filesystem, database, logger, undefined, {
+        logsRoot,
+        processTable: table,
+      });
+      const controller = new AbortController();
+      const settle = driver.settleSeed?.(quickSourceId, { signal: controller.signal });
+      const rows = () =>
+        database
+          .prepare(
+            "SELECT source_id, state, udid, throwaway_udid FROM ios_source_data ORDER BY source_id",
+          )
+          .all();
+
+      if (abort) {
+        const state = promiseState(settle as Promise<unknown>);
+        await waitForCalls(runner, 4);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        controller.abort(new Stopped("daemon stopping"));
+        clock.advance(2_000);
+        await expect(settle, name).rejects.toBeInstanceOf(Stopped);
+        expect(state.state).toBe("rejected");
+      } else {
+        await runToEnd(settle as Promise<unknown>, clock, table, () => [
+          launchd(simlockWorld, 100, copyUdid),
+        ]);
+        await expect(settle, `${name}: the settle answers the new seed`).resolves.toMatchObject({
+          sourceId: "device-1",
+        });
+        expect(logger.warnings, `${name}: the failure is logged`).toEqual([
+          expect.stringContaining("could not delete"),
+        ]);
+      }
+      expect(rows(), `${name}: a making row still names what was left`).toEqual(left);
+
+      const restart = new ScriptedProcessRunner([
+        ...swept.map((match) => ({ match })),
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ]);
+      const next = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        database,
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "restart-1" },
+        instanceId,
+        logsRoot,
+        processRunner: restart,
+        simlockHome: "/home/.simlock",
+      });
+      await next.listSources();
+      expect(
+        restart.calls.slice(0, swept.length).map((call) => call.args.join(" ")),
+        `${name}: the sweep deletes them`,
+      ).toEqual(swept.map((step) => step.args.join(" ")));
+      expect(rows(), `${name}: the sweep leaves the ready seeds`).toEqual(remaining);
     }
   });
 });
