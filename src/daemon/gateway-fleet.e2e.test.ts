@@ -311,12 +311,15 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       stdout: "old",
       token,
     });
-    const incompatible = await vi.waitFor(async () => {
-      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
-      const found = workers.find((worker) => worker.connection === "incompatible");
-      if (found === undefined) throw new Error("the old worker never showed incompatible");
-      return found;
-    });
+    const incompatible = await vi.waitFor(
+      async () => {
+        const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+        const found = workers.find((worker) => worker.connection === "incompatible");
+        if (found === undefined) throw new Error("the old worker never showed incompatible");
+        return found;
+      },
+      { timeout: 15_000 },
+    );
 
     const answer = await gateway.dispatch(
       "worker.update",

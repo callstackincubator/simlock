@@ -508,7 +508,7 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
             adminTokenPath: join(root, "admin.token"),
             filesystem,
             ipcTransport,
-            socketPath: join(root, "daemon.sock"),
+            socketPath: resolveDaemonSocketPath(root, "linux"),
           });
         }
         // why: a daemon the service starts on a config it refuses exits at once and never answers.
@@ -520,7 +520,7 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
               adminTokenPath: join(root, "admin.token"),
               filesystem,
               ipcTransport,
-              socketPath: join(root, "daemon.sock"),
+              socketPath: resolveDaemonSocketPath(root, "linux"),
             });
           },
         });
@@ -898,11 +898,12 @@ describe("CLI: daemon service on Windows (#1698)", () => {
       await filesystem.writeFileAtomic(file, "");
     }
     const startDaemon = async (): Promise<void> => {
+      // why: the CLI under test derives the endpoint for `hostPlatform: "linux"`, so a Windows host that joins with `\` would listen where the CLI never looks.
       await startInMemoryDaemon({
         adminTokenPath: join(dataDirectory, "admin.token"),
         filesystem,
         ipcTransport,
-        socketPath: join(dataDirectory, "daemon.sock"),
+        socketPath: resolveDaemonSocketPath(dataDirectory, "linux"),
       });
     };
     if (options.daemonRunning === true) await startDaemon();
@@ -1079,7 +1080,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     const parts = supervisorArguments(xml);
     expect(parts?.slice(1, 5)).toEqual([
       nodePath,
-      "/opt/simlock/dist/daemon/service-main.js",
+      join(dirname(mainPath), "service-main.js"),
       undefined,
       name,
     ]);

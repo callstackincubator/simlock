@@ -513,7 +513,7 @@ export class MemoryFilesystem implements Filesystem {
 
   /** why: lets a test read which encoding `writeFileAtomic` was asked to write. */
   encodingOf(path: string): "utf8" | "utf16le" {
-    const entry = this.#entryAt(path);
+    const entry = this.#entryAt(memoryPath(path));
     return entry.kind === "file" ? (entry.encoding ?? "utf8") : "utf8";
   }
 
