@@ -241,6 +241,7 @@ export class Seeds {
       (await this.#avdConfig.currentConfigHash(
         join(row.folder, `${row.avdName}.avd`),
         row.imageIdentity,
+        row.kind,
         row.emulatorVersion,
       )) !== row.configHash
     ) {
@@ -302,6 +303,7 @@ export class Seeds {
         const configHash = await this.#avdConfig.currentConfigHash(
           avdFolder,
           kind.imageIdentity,
+          "baseline",
           emulatorVersion,
         );
         const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
@@ -574,6 +576,7 @@ export class Seeds {
       const configHash = await this.#avdConfig.currentConfigHash(
         avdFolder,
         imageIdentity,
+        "seed",
         emulatorVersion,
       );
       const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
