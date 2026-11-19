@@ -40,6 +40,7 @@ describe("AvdConfig", () => {
         filesystem,
         idGenerator: { generate: () => "id" },
         seedLaunchInputs,
+        cores: undefined,
         seedOnlyInputs: [],
       }).currentConfigHash(
         "/devices/android/seed",

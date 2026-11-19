@@ -222,6 +222,7 @@ export class AndroidDriver implements Driver {
       filesystem: options.filesystem,
       idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
+      cores: options.config?.emulator?.cores,
       seedOnlyInputs: seedOnlyInputs(),
     });
     this.#bootTimeoutMs = bootTimeoutFor(options);
@@ -898,19 +899,18 @@ function bootTimeoutFor(options: AndroidDriverOptions): number {
 /**
  * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
  * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
- * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
- * their defaults.
+ * other; the core count is part of the snapshot's hardware. Audio and the boot animation do not,
+ * and stay out. Nothing is added while all are at their defaults.
  */
 function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
-  if (
+  const graphics =
     launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
     launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
-  ) {
-    return [];
-  }
-  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+      ? []
+      : [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+  return launch.cores === undefined ? graphics : [...graphics, `cores=${launch.cores}`];
 }
 
 /**
