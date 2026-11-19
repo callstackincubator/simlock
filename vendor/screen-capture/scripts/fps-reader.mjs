@@ -36,13 +36,16 @@ function parseArguments(args) {
   const values = { seconds: "20" };
   for (let i = 0; i < args.length; i += 2) values[args[i].replace(/^--/, "")] = args[i + 1];
   const { udid, scenario, bin, seconds } = values;
-  if (!(udid && bin && ["scroll", "animation"].includes(scenario))) {
-    console.error(
-      "usage: node scripts/fps-reader.mjs --udid <UDID> --scenario scroll|animation --bin <path> [--seconds 20]",
-    );
-    process.exit(64);
-  }
+  const valid = [udid, bin, ["scroll", "animation"].find((name) => name === scenario)];
+  if (valid.some((value) => !value)) usage();
   return { udid, scenario, bin, seconds: Number(seconds) };
+}
+
+function usage() {
+  console.error(
+    "usage: node scripts/fps-reader.mjs --udid <UDID> --scenario scroll|animation --bin <path> [--seconds 20]",
+  );
+  process.exit(64);
 }
 
 function run(command, args) {
