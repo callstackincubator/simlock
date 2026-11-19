@@ -521,6 +521,7 @@ export class FakeDriver implements Driver {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
       readonly except?: readonly string[];
+      readonly label?: string;
     },
   ): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device, options);

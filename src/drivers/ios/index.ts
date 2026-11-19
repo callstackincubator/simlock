@@ -375,6 +375,7 @@ export class IosSimctlDriver implements Driver {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
       readonly except?: readonly string[];
+      readonly label?: string;
     },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
