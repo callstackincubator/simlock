@@ -72,6 +72,38 @@ describe("IosSimctlDriver", () => {
     } as const;
     const cloneInvocation = simctl("clone", driverData.udid, baselineName, sourcesSet);
 
+    it("saves the real device plist when a CoreSimulator temporary plist vanishes during the scan", async () => {
+      const folder = `${sourcesSet}/${cloneUdid}`;
+      const temporary = "device.plist.sb-vanishing";
+      const filesystem = new (class extends MemoryFilesystem {
+        override async lstat(path: string) {
+          if (path === `${folder}/${temporary}`) {
+            // why: CoreSimulator can finish an atomic write between readdir and lstat.
+            await this.rm(path);
+          }
+          return super.lstat(path);
+        }
+      })();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(folder);
+      const contents = `/Devices/${device.address}/data`;
+      await filesystem.writeFileAtomic(`${folder}/device.plist`, contents);
+      await filesystem.writeFileAtomic(`${folder}/${temporary}`, contents);
+      await filesystem.writeFileAtomic(`${folder}/device.plist.sb-in-progress`, contents);
+      const database = await memorySourceDatabase();
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+      await expect(driver.saveSource(device)).resolves.toMatchObject({ sourceId: "device-1" });
+      expect(database.prepare("SELECT relative_path FROM ios_source_files").all()).toEqual([
+        { relative_path: "device.plist" },
+      ]);
+    });
+
     it("keeps a shut-down copy of the device in the sources set as a ready baseline source with its disabled.plist, and a failing clone keeps no row", async () => {
       const database = await memorySourceDatabase();
       const rowsAtShutdown: unknown[] = [];

@@ -90,8 +90,7 @@ async function visitFolder(
     const path = `${directory}/${name}`;
     if ((await options.filesystem.lstat(path)).kind === "file") await flushWal(options, path);
   }
-  const names = (await options.filesystem.readdir(directory)).sort();
-  for (const name of names) {
+  for (const name of await lineageEntryNames(options.filesystem, directory, relative === "")) {
     const path = `${directory}/${name}`;
     const relativePath = relative === "" ? name : `${relative}/${name}`;
     const details = await options.filesystem.lstat(path);
@@ -102,6 +101,16 @@ async function visitFolder(
     const kind = await recordedKind(options, path, details.kind);
     if (kind !== undefined) files.push({ kind, relativePath });
   }
+}
+
+/** why: CoreSimulator's atomic device.plist writes can vanish before lstat or before a later clone. */
+async function lineageEntryNames(
+  filesystem: Filesystem,
+  directory: string,
+  sourceRoot: boolean,
+): Promise<string[]> {
+  const names = (await filesystem.readdir(directory)).sort();
+  return sourceRoot ? names.filter((name) => !name.startsWith("device.plist.sb-")) : names;
 }
 
 /** why: a link is recorded when its target names the lineage; a WAL is never recorded; any other file is recorded when its bytes name it or cannot be read. */
