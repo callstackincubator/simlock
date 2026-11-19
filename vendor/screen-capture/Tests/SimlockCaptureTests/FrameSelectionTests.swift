@@ -187,6 +187,33 @@ final class FrameSelectionTests: XCTestCase {
         XCTAssertEqual(seen, [0, 20 * ms], "the 5 ms composite is declined before any copy, the others keep their seen time")
     }
 
+    func testTheCopyStageHashesTheSurfaceInTilesAndSkipsACompositeWhoseOnlyChangeIsGlass() {
+        let surface = IOSurface(properties: [
+            .width: 64, .height: 64, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
+        ])!
+        nonisolated(unsafe) var seen: [UInt64] = []
+        let stage = CopyStage(fps: 60) { _, nanos in seen.append(nanos) }
+        var counter: UInt32 = 0
+        /// Writes a pixel into the tile at the surface's top-left (the glass) and, when asked, into the
+        /// tile at its bottom-right (an app), then offers the composite.
+        func composite(at time: UInt64, appChanged: Bool = false) {
+            counter += 1
+            surface.lock(options: [], seed: nil)
+            let base = surface.baseAddress.assumingMemoryBound(to: UInt32.self)
+            base[0] = counter
+            if appChanged { base[(63 * surface.bytesPerRow + 63 * 4) / 4] = counter }
+            surface.unlock(options: [], seed: nil)
+            stage.offer(Notice(surface: surface, seed: IOSurfaceGetSeed(surface), seenNanos: time, force: false))
+            stage.queue.sync {}
+        }
+        for step in 0..<10 { composite(at: UInt64(step) * 10 * ms) }
+        seen = []
+        composite(at: 100 * ms)
+        composite(at: 104 * ms, appChanged: true)
+        stage.stop()
+        XCTAssertEqual(seen, [104 * ms], "the glass-only composite is not copied, the one with an app change is")
+    }
+
     func testEachNewSeedIsNoticedOnceWhetherTheCallbackOrTheTickSeesItFirst() {
         func surface() -> IOSurface {
             IOSurface(properties: [
