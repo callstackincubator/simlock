@@ -104,6 +104,7 @@ describe("AndroidDriver image fit", () => {
       options: {
         readonly clock?: FakeClock;
         readonly config?: string;
+        readonly emulator?: AndroidEmulatorLaunchOptions;
         readonly filesystem?: MemoryFilesystem;
         readonly ids?: readonly string[];
         readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
@@ -119,6 +120,7 @@ describe("AndroidDriver image fit", () => {
       const driver = await createDriver(filesystem, runner, {
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
+        ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
         database,
         ids: options.ids ?? ["one", "two", "three"],
       });
@@ -174,6 +176,46 @@ describe("AndroidDriver image fit", () => {
       await expect(restarted.driver.listSources()).resolves.toMatchObject([
         { id: "seed_two", staleReason: "android.emulator launch settings changed" },
       ]);
+    });
+
+    it("judges a seed made under another android.emulator.cores stale, and one made under the same, or with cores unset on both sides, not", async () => {
+      const launch = { audio: true, bootAnimation: true, gpu: "auto", headless: false };
+      const cases = [
+        { made: undefined, now: undefined, stale: false },
+        { made: { headless: true }, now: { headless: true }, stale: false },
+        { made: undefined, now: { cores: 2 }, stale: true },
+        { made: { cores: 2 }, now: { cores: 2 }, stale: false },
+        { made: { cores: 2 }, now: { cores: 3 }, stale: true },
+        { made: { cores: 2 }, now: undefined, stale: true },
+      ];
+
+      for (const { made, now, stale } of cases) {
+        const harness = await seedHarness(
+          makingTheSeed(
+            seedHome,
+            "Android emulator version 36.1.9",
+            made?.headless === true ? ["-no-window"] : [],
+          ),
+          { emulator: { ...launch, ...made } },
+        );
+        await harness.driver.provision(harness.spec);
+
+        const restarted = await reopened(
+          harness,
+          [processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9")],
+          { emulator: { ...launch, ...now } },
+        );
+
+        expect({
+          made,
+          now,
+          staleReason: (await restarted.driver.listSources())[0]?.staleReason,
+        }).toEqual({
+          made,
+          now,
+          staleReason: stale ? "android.emulator launch settings changed" : undefined,
+        });
+      }
     });
 
     it("leases a plain Android device from a copy of the kind's seed, made first when there is none, booted from the boot snapshot", async () => {
