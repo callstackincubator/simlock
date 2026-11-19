@@ -354,6 +354,11 @@ export class IosSimctlDriver implements Driver {
     });
   }
 
+  async ensureSeed(spec: VirtualSpec): ReturnType<NonNullable<Driver["ensureSeed"]>> {
+    requireIosPlatform(spec.platform);
+    return this.#seeds.ensureSeed(await this.#catalog.resolvedSpec(spec));
+  }
+
   listSources(): Promise<readonly DriverSource[]> {
     return this.#seeds.listSources();
   }

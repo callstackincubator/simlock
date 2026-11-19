@@ -297,6 +297,23 @@ export class Seeds {
     };
   }
 
+  /** why: ADR 0090 §4: an operator names a kind's seed; it is made as a provision makes it, and no copy is cloned. */
+  async ensureSeed(resolved: ResolvedIosSpec): Promise<{
+    sourceId: string;
+    settled: boolean;
+    leases: number;
+    sizeBytes?: number;
+  }> {
+    const seed = await this.#seedFor(resolved);
+    const row = this.#sources.findRow(seed.sourceId);
+    return {
+      leases: row?.leaseCount ?? 0,
+      settled: row?.settled ?? false,
+      sourceId: seed.sourceId,
+      ...(row?.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+    };
+  }
+
   /** why: ADR 0090 §3: idle is judged from the copy's own processes, never host load; the tree's root is the `launchd_sim` whose command line names the copy's folder. */
   async #waitUntilIdle(
     processTable: ProcessTable,
