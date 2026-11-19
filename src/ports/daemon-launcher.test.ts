@@ -471,8 +471,9 @@ describe("launcherFor with the Windows task (#1698)", () => {
     const notices: string[] = [];
     const launcher = launcherFor({
       role: "worker",
-      root: "/Users/me/.simlock",
-      dataDirectory: "/Users/me/.simlock",
+      // why: the default root is join(home, ".simlock"); on Windows join uses backslashes, and any other root gets a hash suffix on the task name.
+      root: join("/Users/me", ".simlock"),
+      dataDirectory: join("/Users/me", ".simlock"),
       mainPath: "/opt/simlock/dist/daemon/main.js",
       nodePath,
       home: "/Users/me",

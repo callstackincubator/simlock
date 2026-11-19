@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -16,6 +16,8 @@ import { runSupervisor } from "./service-main.js";
 const name = "com.callstack.simlock.worker";
 const installId = "6f1c1b0e-0000-4000-8000-000000000001";
 const home = "/h/.simlock";
+// why: the supervisor resolves SIMLOCK_HOME to an absolute path, which on Windows gains the current drive.
+const homeDirectory = resolve(home);
 const nodePath = "/opt/node/node.exe";
 const mainPath = "/opt/simlock/dist/daemon/main.js";
 const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -146,9 +148,9 @@ describe("the Windows supervisor (#1698)", () => {
     ]);
     const first = failed.runner.calls[0];
     expect(first?.options.timeoutMs, "the daemon wait has no limit").toBeUndefined();
-    expect(first?.options.stdio).toEqual({ file: join(home, "daemon.log") });
+    expect(first?.options.stdio).toEqual({ file: join(homeDirectory, "daemon.log") });
     expect(first?.options.env).toMatchObject({ PATH: "saved", KEEP: "1", SIMLOCK_HOME: home });
-    expect(failed.logPaths[0]).toBe(join(home, "daemon.log"));
+    expect(failed.logPaths[0]).toBe(join(homeDirectory, "daemon.log"));
     expect(
       failed.runner.calls
         .filter((call) => call.command === "schtasks")
@@ -161,7 +163,7 @@ describe("the Windows supervisor (#1698)", () => {
     });
     expect(gateway.runner.calls[0]?.args).toEqual([mainPath, "--gateway"]);
     expect(gateway.runner.calls[0]?.options.stdio).toEqual({
-      file: join(home, "gateway", "daemon.log"),
+      file: join(homeDirectory, "gateway", "daemon.log"),
     });
 
     const stops = [
