@@ -385,7 +385,10 @@ describe("IosSimctlDriver settleSeed", () => {
         script: [cloneCopy, { hangs: true, match: simctl("boot", copyUdid) }, ...copyDeleted],
         run: async ({ runner, clock }: Context) => {
           await waitForCalls(runner, 2);
-          clock.advance(300_000);
+          clock.advance(299_999);
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(runner.calls, "the boot still has its last millisecond").toHaveLength(2);
+          clock.advance(1);
         },
         rejects: BootTimeoutError,
       },

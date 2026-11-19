@@ -244,6 +244,11 @@ export class IosSourceTable {
     );
   }
 
+  /** why: a settle's row and the row of the quick seed it retires, which no make sweeps. */
+  settleRows(): readonly SourceRow[] {
+    return this.#rows("WHERE state = 'making' AND settle_of IS NOT NULL", []);
+  }
+
   makingThrowaways(): readonly string[] {
     return this.#database
       .prepare(

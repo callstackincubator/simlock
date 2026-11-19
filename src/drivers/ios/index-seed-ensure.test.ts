@@ -28,10 +28,10 @@ describe("IosSimctlDriver ensureSeed", () => {
     const cases = [
       {
         name: "fresh",
-        planted: { ...quick, sizeBytes: 7 },
+        planted: { ...quick, leases: 3, settled: true, sizeBytes: 7 },
         script: [listed],
         calls: 1,
-        expected: [{ leases: 0, settled: false, sizeBytes: 7, sourceId: seedId }],
+        expected: [{ leases: 3, settled: true, sizeBytes: 7, sourceId: seedId }],
       },
       {
         name: "stale: remade",

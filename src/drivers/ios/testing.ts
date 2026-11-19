@@ -16,6 +16,8 @@ export interface PlantedSource {
   readonly savedWithoutLineage?: boolean;
   /** why: a seed saved after a copy of it settled (ADR 0090); absent is a quick seed. */
   readonly settled?: boolean;
+  /** why: the plain leases already copied from this seed (ADR 0090). */
+  readonly leases?: number;
   /** why: the row of a settle, or of the quick seed it retired, names the other seed (ADR 0090). */
   readonly settleOf?: string;
   readonly createdAt?: number;
@@ -59,6 +61,11 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
     });
   }
   markSettled(database, sourceId, source.settled);
+  if (source.leases !== undefined) {
+    database
+      .prepare("UPDATE ios_source_data SET lease_count = ? WHERE source_id = ?")
+      .run(source.leases, sourceId);
+  }
   return database;
 }
 

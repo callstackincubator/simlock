@@ -349,7 +349,9 @@ export class Seeds {
     });
     for (;;) {
       signal.throwIfAborted();
-      watch.observe(await processTable.list(), this.#clock.now());
+      // why: a read that fails counts as no reading (the `ProcessTable` port), so the cap still ends the wait.
+      const processes = await processTable.list().catch(() => undefined);
+      if (processes !== undefined) watch.observe(processes, this.#clock.now());
       const state = watch.state(this.#clock.now());
       if (state !== "busy") return state;
       await new Promise<void>((resolve) => {
@@ -735,7 +737,7 @@ export class Seeds {
     }
   }
 
-  /** why: ADR 0061 §3: a seed of a removed runtime can never be copied again; a stuck one is logged and the removal goes on. */
+  /** why: ADR 0061 §3: a seed of a removed runtime can never be copied again, nor can a settle of it end; a stuck one is logged and the removal goes on. */
   async destroySeedsOf(runtimeId: string): Promise<void> {
     for (const row of this.#sources.readyRows()) {
       if (row.kind !== "seed" || row.runtimeId !== runtimeId || row.udid === undefined) continue;
@@ -748,6 +750,9 @@ export class Seeds {
           `could not remove seed ${udid} of removed runtime ${runtimeId}: ${errorMessage(error)}`,
         );
       }
+    }
+    for (const row of this.#sources.settleRows()) {
+      if (row.runtimeId === runtimeId) await this.#removeLeftover(row);
     }
   }
 }

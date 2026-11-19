@@ -54,6 +54,7 @@ describe("IosSimctlDriver seed lease count", () => {
           }),
         script: [listed, listed, copySeed(baselineUdid), listed],
         provision: { source: baselineId },
+        baselineCount: 0,
         expected: [
           seedEntry({ leases: 0, settled: false }),
           { id: baselineId, kind: "baseline", model: "iPhone 16", osVersion: "26.5" },
@@ -93,7 +94,8 @@ describe("IosSimctlDriver seed lease count", () => {
       await plantManagedDevice(filesystem);
       await plantSeedClone(filesystem);
       await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
-      const driver = await createDriver(runner, new FakeClock(), filesystem, await database());
+      const sources = await database();
+      const driver = await createDriver(runner, new FakeClock(), filesystem, sources);
 
       if (!("leased" in rest)) {
         const leased = driver.provision(spec, provision);
@@ -102,6 +104,13 @@ describe("IosSimctlDriver seed lease count", () => {
       }
 
       await expect(driver.listSources(), name).resolves.toEqual(expected);
+      // why: `listSources` reports no count for a baseline, so its stored count is read from the table.
+      if ("baselineCount" in rest) {
+        const stored = sources
+          .prepare("SELECT lease_count FROM ios_source_data WHERE kind = 'baseline'")
+          .all();
+        expect(stored, name).toEqual([{ lease_count: rest.baselineCount }]);
+      }
     }
   });
 });
