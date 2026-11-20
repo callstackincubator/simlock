@@ -222,6 +222,10 @@ describe("assess", () => {
     expect(assess({ ...REQUEST, model: "iPhone 16", osVersion: "27.0" }, views)).toEqual({
       kind: "route-or-wait",
     });
+    expect(assess({ ...REQUEST, requires: ["agent-device"] }, views)).toEqual({
+      kind: "route-or-wait",
+    });
+    expect(assess({ ...REQUEST, except: ["photos"] }, views)).toEqual({ kind: "route-or-wait" });
   });
 
   it("makes a request only a starting worker can serve wait, though another worker takes requests but lists no such model", () => {

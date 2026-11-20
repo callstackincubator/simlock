@@ -124,7 +124,9 @@ function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): As
   const serving = assessServing(request, views);
   if (serving !== undefined) return serving;
   const requires = request.requires;
-  if (requires === undefined || requires.length === 0) return { kind: "route-or-wait" };
+  if (requires === undefined || requires.length === 0 || views.some(isUnread)) {
+    return { kind: "route-or-wait" };
+  }
   const capable = views.filter((worker) => hasCapabilities.check(worker, request) === undefined);
   if (assessTable(request, capable).kind === "route-or-wait") return { kind: "route-or-wait" };
   return {
@@ -147,7 +149,8 @@ function assessExcept(
   views: readonly WorkerView[],
 ): Rejection | undefined {
   const except = request.except;
-  if (except === undefined) return undefined;
+  // why: the subset below leaves out a worker with no catalog, which may keep the names; the request waits for its first read.
+  if (except === undefined || views.some(isUnread)) return undefined;
   const keeping = views.filter((worker) => keepsExcept.check(worker, request) === undefined);
   if (assessServing(request, keeping) === undefined) return undefined;
   if (
