@@ -2,12 +2,21 @@
 import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
-import starlightLlmsTxt from "starlight-llms-txt";
+import starlightLlmActions from "starlight-llm-actions";
 import starlightOpenAPI, { createOpenAPISidebarGroup } from "starlight-openapi";
 
 import { brandCss } from "./src/site/brand.ts";
+import { checkLinks } from "./src/site/check-links.ts";
 import { at, BASE, site as meta, noindexPaths } from "./src/site/content.ts";
 import { TITLE_DELIMITER } from "./src/site/meta.ts";
+import {
+  docPages,
+  lastModified,
+  readingOrder,
+  sections,
+  sourcesOf,
+  topLevelPages,
+} from "./src/site/pages.ts";
 
 const site = meta.url;
 const origin = `${site}${BASE}`;
@@ -17,7 +26,9 @@ const siteDir = "website";
 
 const openAPISidebarGroup = createOpenAPISidebarGroup();
 
-const doc = (name, label) => ({ label, slug: `docs/${name}` });
+// why: read once per build, so a page added, moved or renamed reaches the sidebar, llms.txt and
+// the sitemap without a list to edit.
+const pages = docPages();
 
 export default defineConfig({
   site,
@@ -35,6 +46,15 @@ export default defineConfig({
     // included and the noindex ones are left out.
     sitemap({
       filter: (page) => !noindexPaths.includes(new URL(page).pathname.replace(/\.html$/, "")),
+      // why: the date of the last commit to the page's source, so crawlers can tell what changed.
+      serialize(item) {
+        // why: the integration lists the home page twice, with and without the slash; only
+        // `/simlock/` is served (the other redirects to it) and named by its canonical.
+        if (item.url === origin) return undefined;
+        const path = new URL(item.url).pathname.slice(BASE.length);
+        const lastmod = lastModified(sourcesOf(path, pages));
+        return lastmod ? { ...item, lastmod } : item;
+      },
     }),
     starlight({
       // why: docs titles must read "Page | Name", the pattern src/site/meta.ts builds for every page.
@@ -74,83 +94,35 @@ export default defineConfig({
           attrs: { rel: "alternate", type: "text/plain", title: "llms.txt", href: at("/llms.txt") },
         },
       ],
+      // why: each group lists every page in its folder, in the order of the pages' frontmatter
+      // `sidebar.order` (and `sidebar.label`, where it differs from the title).
       sidebar: [
-        {
-          label: "Introduction",
+        ...sections.map(({ label, directory }) => ({
+          label,
           items: [
-            doc("introduction", "What is Simlock"),
-            doc("introduction/how-it-works", "How it works"),
-            doc("introduction/requirements", "Requirements"),
+            { autogenerate: { directory } },
+            ...(directory === "docs/reference" ? [openAPISidebarGroup] : []),
           ],
-        },
-        {
-          label: "Getting started",
-          items: [
-            doc("getting-started", "Install and check your machine"),
-            doc("getting-started/first-lease", "Lease your first device"),
-            doc("getting-started/connect-your-agent", "Connect your agent"),
-            doc("getting-started/next-steps", "Next steps"),
-          ],
-        },
-        {
-          label: "Using devices",
-          items: [
-            doc("using-devices/choosing-a-device", "Choose a device"),
-            doc("using-devices/lease-lifecycle", "Lease lifecycle"),
-            doc("using-devices/working-with-a-device", "Work with a leased device"),
-            doc("using-devices/build-and-run", "Build and run your app"),
-            doc("using-devices/physical-devices", "Physical devices"),
-            doc("using-devices/watching-the-screen", "Watch the screen"),
-            doc("using-devices/agent-device", "agent-device"),
-            doc("using-devices/remote-agents", "Remote agents over HTTP"),
-            doc("using-devices/ci", "Run tests from CI"),
-            doc("using-devices/programmatic-client", "Programmatic client"),
-            doc("using-devices/errors", "When a lease fails"),
-          ],
-        },
-        {
-          label: "Worker",
-          items: [
-            doc("worker/running-the-daemon", "Run the daemon"),
-            doc("worker/windows", "Set up a Windows worker"),
-            doc("worker/configuration", "Configuration"),
-            doc("worker/capacity", "Capacity and warm pool"),
-            doc("worker/runtimes-and-images", "Runtimes and system images"),
-            doc("worker/baselines", "Baselines"),
-            doc("worker/cleanup", "Cleanup and disk"),
-            doc("worker/enrolling-physical-devices", "Enrol physical devices"),
-            doc("worker/console", "Web console"),
-            doc("worker/monitoring", "Monitoring"),
-            doc("worker/troubleshooting", "Troubleshooting"),
-          ],
-        },
-        {
-          label: "Gateway",
-          items: [
-            doc("gateway", "When you need a gateway"),
-            doc("gateway/setup", "Set up a gateway"),
-            doc("gateway/joining-workers", "Add a worker"),
-            doc("gateway/routing", "How requests are routed"),
-            doc("gateway/managing-workers", "Manage workers"),
-            doc("gateway/access-control", "Access control"),
-            doc("gateway/alerts", "Alerts"),
-            doc("gateway/fleet-console", "Fleet console"),
-          ],
-        },
-        {
-          label: "Reference",
-          items: [
-            doc("reference/cli", "CLI"),
-            doc("reference/configuration", "Configuration keys"),
-            doc("reference/events", "Events"),
-            doc("reference/errors", "Errors and exit codes"),
-            openAPISidebarGroup,
-          ],
-        },
-        doc("prior-art", "Prior art"),
+        })),
+        ...topLevelPages(pages).map((slug) => ({ slug })),
       ],
       plugins: [
-        starlightLlmsTxt({ projectName: meta.name, description }),
+        // why: one Markdown copy of every page at its URL plus `.md`, linked from the page, and
+        // llms.txt listing each of them, all rendered from the docs collection on every build.
+        starlightLlmActions({
+          renderMarkdown: "simple",
+          linkAlternate: true,
+          actions: { openIn: false },
+          llmsTxt: {
+            title: meta.name,
+            description,
+            promote: readingOrder(pages),
+            subsets: sections.map(({ label, directory }) => ({
+              label,
+              paths: [directory, `${directory}/**`],
+            })),
+          },
+        }),
         starlightOpenAPI([
           {
             base: "docs/reference/http-api",
@@ -160,5 +132,6 @@ export default defineConfig({
         ]),
       ],
     }),
+    checkLinks({ origin: site, base: BASE }),
   ],
 });

@@ -50,7 +50,7 @@ const jsonLd = {
       description: site.description,
       url: homeUrl,
       applicationCategory: 'DeveloperApplication',
-      operatingSystem: site.platforms.join(', '),
+      operatingSystem: site.hosts.join(', '),
       license: site.license.spdx,
       isAccessibleForFree: true,
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },

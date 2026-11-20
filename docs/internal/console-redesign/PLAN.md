@@ -148,7 +148,7 @@ count), "Healthy N" compact tiles with the `leased / slots` fraction, Worker
 events log full width. No Groups/Table toggle: the table view goes.
 
 Explicit reference amendment: **Add worker** links to the existing
-[joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
+[joining instructions](https://incubator.callstack.com/simlock/docs/gateway/joining-workers).
 **Release leases** becomes an equally styled **View leases** link to `/leases`;
 neither link sends a write. Preserve placement and geometry, test both links
 in the worker browser spec, and record these exceptions in paired stage-2
@@ -192,7 +192,7 @@ request).
 
 Explicit reference amendment: replace Building with Ready, and the toolbar's
 Build baseline with an equally styled **Prepare baseline** link to the existing
-[baseline preparation instructions](https://callstackincubator.github.io/simlock/docs/worker/baselines).
+[baseline preparation instructions](https://incubator.callstack.com/simlock/docs/worker/baselines).
 The URL follows `website/astro.config.mjs` (base, file paths, sidebar) and
 `website/src/site/content.ts` (site origin and `/simlock` base). Use only
 supported ready/stale statuses; substitute the harness's ready row as DATA
