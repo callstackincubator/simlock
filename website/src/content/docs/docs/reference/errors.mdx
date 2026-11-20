@@ -63,7 +63,7 @@ In a script, check `code`, not the message: the wording of a message can change,
 | --- | --- | --- | --- | --- |
 | `DOWNLOAD_TIMEOUT` | 10 | 504 | An install ran longer than `downloads.timeoutMs` (20 minutes by default), counting the time it waited behind another download on the same platform. | Run it again, or raise `downloads.timeoutMs`. |
 | `DOWNLOADS_DISABLED` | 12 | 403 | `downloads.policy` is `never`, so no install starts. | Change `downloads.policy`, or install the component by hand. |
-| `INSUFFICIENT_DISK_SPACE` | 12 | 422 | The component does not fit in the free disk space. The message gives the bytes needed and available. | Free disk space, or remove components with `simlock component remove`. |
+| `INSUFFICIENT_DISK_SPACE` | 12 | 422 | A component, or the copy of an Android seed for a new device, does not fit in the free disk space. The message says which, and gives the bytes needed and available. A seed copy asks for the seed's full size even where the copy is a clone. | Free disk space, or remove components with `simlock component remove`. |
 | `LICENSE_NOT_ACCEPTED` | 12 | 422 | An Android SDK licence must be accepted before the install. `downloads.acceptAndroidLicenses` is `false` by default. | Accept the licences with `sdkmanager --licenses`, or set `downloads.acceptAndroidLicenses` to `true`. |
 | `COMPONENT_NOT_OWNED` | 12 | 409 | `component remove` of a component Simlock did not install, or one that changed on disk since. | Remove it with the platform's own tools if you mean to. |
 | `COMPONENT_IN_USE` | 12 | 409 | `component remove` of a component a device still uses, Simlock's or one of yours. | Delete those devices first. |

@@ -1,6 +1,7 @@
 import { basename, join } from "node:path";
 
 import {
+  DiskSpaceGuard,
   DriverCrashError,
   type DriverDevice,
   type DriverSource,
@@ -114,6 +115,8 @@ export class Seeds {
   readonly #systemImages: SystemImages;
   /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
   readonly #making = new Set<string>();
+  /** why: copies in flight each hold their full size here, so two copies cannot both see room that fits only one. */
+  readonly #copySpace = new DiskSpaceGuard();
 
   constructor(options: SeedsOptions) {
     this.#adb = options.adb;
@@ -699,18 +702,27 @@ export class Seeds {
   }
 
   async #copyAvd(fromHome: string, toHome: string, failure: string): Promise<void> {
+    const avdFolder = join(fromHome, `${SEED_AVD_NAME}.avd`);
+    // why: a clone (APFS, reflink) costs less than the folder's size, but the check cannot tell one from a full copy, so it asks for the whole size on every filesystem (#1750); a folder that cannot be measured reserves nothing.
+    const release = await this.#copySpace.reserve(
+      this.#filesystem,
+      "android",
+      await this.#filesystem.directorySize(avdFolder).catch(() => 0),
+      this.#deviceRoot,
+      "copy an Android seed",
+    );
     try {
       await this.#filesystem.mkdirp(toHome, { mode: 0o700 });
-      await this.#filesystem.copyTree(
-        join(fromHome, `${SEED_AVD_NAME}.avd`),
-        join(toHome, `${SEED_AVD_NAME}.avd`),
-        { timeoutMs: SEED_COPY_TIMEOUT_MS },
-      );
+      await this.#filesystem.copyTree(avdFolder, join(toHome, `${SEED_AVD_NAME}.avd`), {
+        timeoutMs: SEED_COPY_TIMEOUT_MS,
+      });
     } catch (error: unknown) {
       await this.#filesystem.rm(toHome);
       throw new DriverCrashError(
         `${failure}: ${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      release();
     }
     const ini = await this.#filesystem.readFile(join(fromHome, `${SEED_AVD_NAME}.ini`));
     await this.#filesystem.writeFileAtomic(

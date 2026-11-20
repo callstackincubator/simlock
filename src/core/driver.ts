@@ -719,9 +719,10 @@ export class InsufficientDiskSpaceError extends Error {
     readonly platform: Platform,
     readonly requiredBytes: number,
     readonly availableBytes: number,
+    action = `install a ${platform} component`,
   ) {
     super(
-      `Not enough free disk space to install a ${platform} component: needs ~` +
+      `Not enough free disk space to ${action}: needs ~` +
         `${formatGibibytes(requiredBytes)} free, only ${formatGibibytes(availableBytes)} available`,
     );
     this.name = "InsufficientDiskSpaceError";
@@ -766,6 +767,7 @@ export class DiskSpaceGuard {
     platform: Platform,
     requiredBytes: number,
     path = ".",
+    action?: string,
   ): Promise<() => void> {
     const availableBytes = await filesystem.diskFree(path);
     const outstandingBytes = this.#outstandingBytesByPath.get(path) ?? 0;
@@ -775,6 +777,7 @@ export class DiskSpaceGuard {
         platform,
         requiredBytes,
         Math.max(0, effectivelyAvailableBytes),
+        action,
       );
     }
     this.#outstandingBytesByPath.set(path, outstandingBytes + requiredBytes);
