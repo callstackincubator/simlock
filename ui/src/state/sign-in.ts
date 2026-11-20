@@ -1,7 +1,9 @@
 import { useState, useSyncExternalStore } from "react";
 
 import { checkToken, refusalMessage } from "../data/sign-in-check";
+import { signInHref } from "../model/sign-in-url";
 import { proxyRefusalLine } from "../model/proxy-refusal";
+import { usePath, useSearch } from "./router";
 import { useFetch, useSession } from "./services";
 
 export function useSignIn() {
@@ -25,7 +27,14 @@ export function useSignIn() {
     state.kind === "none" && state.refusedReason !== undefined
       ? proxyRefusalLine(state.refusedReason)
       : undefined;
-  return { checking, refusal: refusal ?? proxyRefusal, submit };
+  const template = state.kind === "none" || state.kind === "ended" ? state.signInUrl : undefined;
+  const path = usePath() + useSearch();
+  return {
+    checking,
+    refusal: refusal ?? proxyRefusal,
+    submit,
+    signInUrl: signInHref(template, path),
+  };
 }
 
 export function useReloadPage(): () => void {

@@ -7,7 +7,7 @@ import { useReloadPage, useSignIn } from "../state/sign-in";
 
 export function SignInScreen() {
   const [token, setToken] = useState("");
-  const { checking, refusal, submit } = useSignIn();
+  const { checking, refusal, submit, signInUrl } = useSignIn();
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void submit(token.trim());
@@ -17,6 +17,13 @@ export function SignInScreen() {
   return (
     <SignInFrame>
       <Panel title="Sign in" level={1}>
+        {signInUrl === undefined ? null : (
+          <p>
+            <a className="button" href={signInUrl}>
+              Sign in with SSO
+            </a>
+          </p>
+        )}
         <form className="sign-in-form" onSubmit={onSubmit} noValidate>
           <label htmlFor="token">Operator token</label>
           <input
@@ -79,12 +86,18 @@ export function SigningInScreen() {
 
 export function SignInEndedScreen() {
   const reload = useReloadPage();
+  const { signInUrl } = useSignIn();
   return (
     <SignInFrame>
       <Panel title="Your sign-in has ended." level={1}>
         <div className="sign-in-form">
           <p className="hint">The sign-in proxy no longer knows you.</p>
           <div className="form-actions">
+            {signInUrl === undefined ? null : (
+              <a className="button" href={signInUrl}>
+                Sign in with SSO
+              </a>
+            )}
             <Button variant="primary" type="button" onClick={reload}>
               Sign in again
             </Button>

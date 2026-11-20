@@ -111,6 +111,8 @@ another host, so this holds even if a dependency tries.
 The operator pastes a token. The console keeps it in `sessionStorage` and
 sends it only as `Authorization: Bearer` to `/v1` on the same origin.
 
+ADR 0033's optional console sign-in entry-point amendment also offers a same-tab **Sign in with SSO** link when the proxy strategy configures one. Only the identity route's 401 supplies the URL; the token form remains available. The ended screen keeps the link when that identity check supplied it.
+
 - It survives a reload. A new tab asks for a token again.
 - A browser may copy it into a duplicated or reopened tab. That is accepted.
 

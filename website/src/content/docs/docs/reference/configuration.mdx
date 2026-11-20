@@ -250,6 +250,7 @@ change are listed stale and refused.
 | `http.proxyAuth.issuer`      | string, 1–128 characters | —                                     | The `iss` the token must carry.                                                                            | Both       |
 | `http.proxyAuth.audience`    | string, 1–512 characters | —                                     | The `aud` the token must carry.                                                                            | Both       |
 | `http.proxyAuth.signOutUrl`  | `http://` or `https://` URL | not set                            | Where the console sends a person to sign out.                                                              | Both       |
+| `http.proxyAuth.signInUrl`   | `http://` or `https://` URL, at most 2048 characters | not set | Proxy login entry point; `{path}` becomes the current page, encoded. Adds **Sign in with SSO** beside the token form and on the ended screen when available. Only the identity route's 401 returns it. | Both |
 
 ```sh
 simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://acme.cloudflareaccess.com","audience":"4f1c9a7e2b"}'
