@@ -41,6 +41,34 @@ export default defineConfig({
   // why: Markdown screenshots get a srcset, so phones don't download huge files.
   image: { layout: "constrained" },
   devToolbar: { enabled: false },
+  // why: shipped CLIs and old links keep pointing at moved docs pages.
+  redirects: {
+    "/docs/introduction/requirements": `${BASE}/docs/introduction/pick-your-setup`,
+    "/docs/getting-started": `${BASE}/docs/introduction/pick-your-setup`,
+    "/docs/getting-started/next-steps": `${BASE}/docs/introduction/pick-your-setup`,
+    "/docs/using-devices/choosing-a-device": `${BASE}/docs/using-devices/lease-a-specific-device`,
+    "/docs/using-devices/lease-lifecycle": `${BASE}/docs/using-devices/keep-a-device`,
+    "/docs/using-devices/working-with-a-device": `${BASE}/docs/using-devices/run-commands`,
+    "/docs/using-devices/physical-devices": `${BASE}/docs/using-devices/lease-a-phone`,
+    "/docs/using-devices/watching-the-screen": `${BASE}/docs/using-devices/watch-the-screen`,
+    "/docs/using-devices/remote-agents": `${BASE}/docs/using-devices/http-api`,
+    "/docs/using-devices/programmatic-client": `${BASE}/docs/using-devices/node-client`,
+    "/docs/using-devices/errors": `${BASE}/docs/troubleshooting/lease-fails`,
+    "/docs/worker/running-the-daemon": `${BASE}/docs/worker/daemon`,
+    "/docs/worker/windows": `${BASE}/docs/getting-started/windows`,
+    "/docs/worker/configuration": `${BASE}/docs/worker/change-a-setting`,
+    "/docs/worker/cleanup": `${BASE}/docs/worker/free-disk`,
+    "/docs/worker/enrolling-physical-devices": `${BASE}/docs/worker/enrol-phones`,
+    "/docs/worker/console": `${BASE}/docs/worker/console-and-http`,
+    "/docs/worker/troubleshooting": `${BASE}/docs/troubleshooting/worker`,
+    "/docs/worker/baselines": `${BASE}/docs/worker/save-a-prepared-device`,
+    "/docs/gateway": `${BASE}/docs/concepts/workers-and-gateways`,
+    "/docs/gateway/joining-workers": `${BASE}/docs/gateway/add-a-worker`,
+    "/docs/gateway/routing": `${BASE}/docs/concepts/workers-and-gateways`,
+    "/docs/gateway/managing-workers": `${BASE}/docs/gateway/maintain-workers`,
+    "/docs/gateway/access-control": `${BASE}/docs/gateway/access`,
+    "/docs/gateway/fleet-console": `${BASE}/docs/reference/console`,
+  },
   integrations: [
     // why: Starlight would add the sitemap itself; listed so the pages outside Starlight are
     // included and the noindex ones are left out.

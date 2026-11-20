@@ -1,0 +1,192 @@
+---
+title: Lease a specific model or OS
+description: Ask for an exact simulator or emulator by platform, model or class, OS version or range, slim or full mode and image tag, and get a missing OS installed.
+sidebar:
+  order: 1
+  label: "Lease a model or OS"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** you hold the device you asked for, for example an iPhone 16 on iOS 18.6, or a Pixel 8 with Google Play.
+
+Only `--platform` is required. With nothing else you get a phone on the newest OS installed. How a lease lives and ends: [Leases](/simlock/docs/concepts/leases).
+
+## Before you start
+
+| Platform | Needs |
+| --- | --- |
+| iOS | A worker on a Mac with Xcode. |
+| Android | A worker with the Android SDK, on macOS, Linux or Windows (preview). |
+
+If a platform's tools are missing on the worker, the lease fails with `NO_DRIVER`. `simlock doctor` on the worker says what is missing.
+
+## Lease the device
+
+<Steps>
+
+1. See what the worker offers:
+
+   ```sh
+   simlock catalog --platform ios
+   ```
+
+   ```text
+   Platform: ios
+     Runtimes: 18.6, 26.1 (default: 26.1)
+     Models:
+       phone (default: iPhone 17):
+         iPhone 17: 26.1
+         iPhone 16: 18.6, 26.1
+         iPhone 16 Pro: 18.6, 26.1
+       tablet (default: iPad Pro 11-inch (M5)):
+         iPad Pro 11-inch (M5): 26.1
+   ```
+
+   - A model marked `(no paired runtime)` cannot be leased until an OS it supports is installed.
+   - On Android the catalog also lists the installed system images (API level, tag and CPU type) and other names a model goes by, such as its AVD id.
+   - `--json` prints the same data as one JSON line.
+
+2. Lease it, with the options from the sections below:
+
+   ```sh
+   simlock lease --platform ios --device "iPhone 16" --os 18.6 --detach
+   ```
+
+</Steps>
+
+**Check:** the grant says what you got: the model in `device.spec.model`, the OS in `device.spec.osVersion` and, on iOS, the mode in `device.mode`.
+
+`--detach` prints the grant and leaves the lease running; to hold it from a long-lived command instead, see [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device).
+
+## Pick a model or a class
+
+Use one of these, not both:
+
+- `--device <model>` asks for an exact model, spelled as the catalog prints it: `"iPhone 16"`, `"Pixel 8"`.
+- `--class <class>` asks for a kind of device and lets Simlock pick the model: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`.
+- With neither, you get a `phone`.
+
+```sh
+simlock lease --platform android --class tablet
+```
+
+With `--class`, you get an idle device of that class if there is one. Otherwise Simlock creates the first model on the class's list that the worker knows. For phones that is `iPhone 17`, then `iPhone 16`, `iPhone 15` and older on iOS, and `Pixel 9`, then `Pixel 8`, `Pixel 7` and older on Android. An operator can change the lists with `ios.defaultModels` and `android.defaultModels` ([Configuration reference](/simlock/docs/reference/configuration#devices-and-drivers)).
+
+## Pick the OS version
+
+Without `--os`, you get the newest OS installed. `--os` names one version or a range:
+
+| You write | You get |
+| --- | --- |
+| `--os 18.6` | exactly 18.6 |
+| `--os ">=18"` | 18.0 or newer |
+| `--os ">=18 <26"` | 18.0 up to, but not including, 26 |
+| `--os "18 - 26"` | 18.0 up to and including every 26.x |
+| `--os 35` | Android API level 35 |
+
+Quote a range, so your shell does not read `>` or `<` as a redirect.
+
+- A range is one or more of `>=`, `>`, `<=`, `<` followed by a version, separated by single spaces, or two versions with ` - ` between them.
+- A short version covers everything under it: `<=26` includes 26.1.
+- With a range, you get an idle device inside it if there is one. Otherwise Simlock creates one on the newest installed OS inside it.
+- A range never downloads. If no installed OS is inside it, the lease fails with `RUNTIME_MISSING`.
+- Anything that is not a range is read as an exact version. That is how Android names like `Baklava` or `34-ext12` work.
+- Refused with `BAD_REQUEST`: other range styles (`^18`, `~18`, `18.x`, `*`, `||`), and an exact version over 64 characters, with spaces, control characters or `;`, or starting with `-`.
+
+## Pick slim or full (iOS)
+
+A slim simulator has services agents rarely need turned off, and uses far less memory. What slim turns off and what it costs: [Slim iOS simulators](/simlock/docs/concepts/slim-simulators).
+
+- `--mode slim` asks for a slim simulator; `--mode full` for a normal one.
+- Without `--mode`, you get the worker's default, `full` unless an operator changed it.
+- Slim is best effort: below iOS 18.5 you get a full device. Check `device.mode` in the grant.
+
+To keep part of what slim turns off, name its categories with `--except`:
+
+```sh
+simlock lease --platform ios --mode slim --except store,other
+```
+
+The grant reports them beside the mode:
+
+```json
+{ "device": { "mode": "slim", "except": ["store", "other"] } }
+```
+
+- `--except` needs a slim lease. It is refused with `BAD_REQUEST` beside `--mode full`, with no `--mode` on a worker whose default is `full`, with a full baseline, with `--physical` and with `--platform android`. A slim baseline on a worker whose default is `full` is granted.
+- Each name is lowercase letters, digits and `-`, starting with a letter; at most 16 names, none twice, each one a category the worker slims.
+- Below iOS 18.5 you get a `full` device with no `except`.
+- A warm device is booted again with your list before you get it, so the lease can take a little longer.
+
+## Pick the system image (Android)
+
+`--image-tag` picks the kind of system image, such as `google_apis_playstore` for Google Play or `default` for plain Android. Use a tag the catalog lists under images.
+
+```sh
+simlock lease --platform android --device "Pixel 8" --image-tag google_apis_playstore
+```
+
+- Without `--image-tag`, you get the `google_apis` image for the worker's CPU when it is installed, or another installed image for that API level.
+- With `--image-tag` and no `--os`, you get the newest API level that has an image with that tag.
+- An image tag never downloads. If no image with that tag fits the API level and model, the lease fails with `RUNTIME_MISSING`.
+- Play Store images refuse `adb root` and `adb remount`. If you need them, pass `--image-tag google_apis`.
+
+### When the worker sets a default image tag
+
+When an operator sets `android.defaultImageTag`, a lease with no `--image-tag` is first tried as if it named that tag, for an image built for the worker's own CPU, and never downloads.
+
+- With no `--os`, it gets the newest API level that has an image of that tag, which can be older than the newest level installed.
+- `--os 37` is tried at 37 first.
+- If no image of the tag fits (the model takes none, the level has none, or the image is for another CPU), the lease gets what it would get without the setting, and `--allow-download` then applies.
+- A lease with `--image-tag google_apis` on such a worker is a pool of its own: an idle device made without a tag does not serve it.
+
+## Download an OS that is not installed
+
+If the OS you ask for is not installed, the lease fails with `RUNTIME_MISSING`, and the message says how to get it:
+
+```json
+{"error":{"code":"RUNTIME_MISSING","message":"iOS 26.2 is not installed; pass --allow-download (or set downloads.policy) to download it"}}
+```
+
+Either ask an operator to install it ([Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images)), or let your lease download it.
+
+<Aside type="caution">
+A runtime or system image is several gigabytes, and the download can take many minutes. Simlock never downloads one unless you, or the worker's policy, ask for it.
+</Aside>
+
+```sh
+simlock lease --platform ios --device "iPhone 16" --os 26.2 --allow-download
+```
+
+**Check:** `simlock lease` reports a `downloading` stage on stderr, with a percentage when one is known, then grants the device.
+
+- **One download at a time per platform.** A lease that needs another OS waits for the current download. Leases that need the same OS share it.
+- **Time limit.** The whole wait, including time behind another download, is limited by `downloads.timeoutMs` (20 minutes by default). Running out fails with `DOWNLOAD_TIMEOUT`; the download may be further along when you retry.
+- **The worker's policy decides.** `downloads.policy` `never` downloads nothing, even with `--allow-download`. `always` downloads without the flag. The default, `on-request`, downloads only with the flag.
+- **Android licences.** An Android image downloads only when the operator set `downloads.acceptAndroidLicenses` to `true`.
+- **Impossible pairs**, such as an OS older than the model supports, fail at once and download nothing.
+- **Through a gateway**, `--allow-download` does nothing: only OS versions already installed on a worker count.
+
+## Other kinds of lease
+
+- A real phone or tablet: [Lease a real iPhone or Android phone](/simlock/docs/using-devices/lease-a-phone).
+- A device an operator prepared with your app on it: [Lease a copy of a prepared device](/simlock/docs/using-devices/lease-a-prepared-device).
+
+Every `simlock lease` flag: [CLI reference](/simlock/docs/reference/cli#simlock-lease).
+
+## When it fails
+
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `BAD_REQUEST` | 2 | Both `--device` and `--class`; a model name over 256 characters; an `--os` Simlock does not read; `--image-tag` on iOS; a bad `--except`. | Fix the option the message names. |
+| `UNKNOWN_MODEL` | 12 | The worker does not know the model. The message says when a newer Xcode may add it. | Pick a model from `simlock catalog`. |
+| `RUNTIME_MISSING` | 12 | No installed OS or image matches `--os` or `--image-tag`, and nothing may download. | Install it, or pass `--allow-download` with an exact version. |
+| `MODE_UNAVAILABLE` | 12 | The worker serves only the other iOS mode (`ios.modes`). The details carry the `mode` you asked for and the modes it `served`; `simlock catalog` prints `Modes served`. A slim request below iOS 18.5 on a slim-only worker is refused this way too. | Ask for the mode it serves, or another worker. |
+| `NO_DRIVER` | 12 | The worker has no tools for the platform. | Run `simlock doctor` on the worker. |
+| `DOWNLOAD_TIMEOUT` | 10 | The download did not finish within `downloads.timeoutMs`. | Run the lease again. |
+| `LICENSE_NOT_ACCEPTED` | 12 | The Android SDK licences are not accepted on the worker. | Ask the operator to set `downloads.acceptAndroidLicenses` to `true`. |
+| `INSUFFICIENT_DISK_SPACE` | 12 | The download does not fit on the worker's disk. | Ask the operator to [free disk space](/simlock/docs/worker/free-disk). |
+| `PROVISION_FAILED` | 1 | With `--except`, a warm device failed to boot with your list twice. | Run the lease again. |
+
+All errors: [Errors reference](/simlock/docs/reference/errors).

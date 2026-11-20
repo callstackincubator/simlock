@@ -1,7 +1,7 @@
 # Admin client
 
 Does: the `simlock/admin` package entry — the typed client with every admin operation.
-Surface: [programmatic-client.mdx](../../website/src/content/docs/docs/using-devices/programmatic-client.mdx).
+Surface: [node-client.mdx](../../website/src/content/docs/docs/using-devices/node-client.mdx), [reference/node-client.mdx](../../website/src/content/docs/docs/reference/node-client.mdx).
 
 ## Rules
 

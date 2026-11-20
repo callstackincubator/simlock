@@ -1,0 +1,379 @@
+---
+title: Start, stop and update the daemon
+description: Start and stop the worker daemon, start it at login on macOS, Linux or Windows, find its files and log, and update Simlock.
+sidebar:
+  order: 1
+  label: "Start, stop and update"
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+**Result:** the worker daemon runs, comes back at login, and runs the Simlock version you want.
+
+The daemon is the background process that owns this machine's devices and leases. Every `simlock` command talks to it. The first command that needs it starts it and waits up to 20 seconds for it to answer. You manage it by hand only to apply a config change, to start it at login, or to update Simlock.
+
+## Start, stop and restart
+
+```sh
+simlock daemon start
+```
+
+```text
+Daemon running
+Console: http://127.0.0.1:4701/
+```
+
+The `Console:` line appears only when HTTP is on. If the daemon already runs, the command changes nothing and prints the same lines.
+
+```sh
+simlock daemon stop
+```
+
+```text
+Daemon stopping
+```
+
+With no daemon running, `stop` prints `Daemon not running` and exits 0. It never starts a daemon.
+
+- **Stopping ends no lease.** It shuts down every device that has no lease. Leased devices keep running, and the next daemon picks them up.
+- **`stop` returns once the daemon has exited.** The daemon first finishes the work it started. After 300 seconds the command gives up with `SERVICE_FAILED`. Commands sent in the meantime fail with `DAEMON_STOPPING`.
+
+To restart, for example after `simlock config set`:
+
+```sh
+simlock daemon stop
+simlock daemon start
+```
+
+**Check:** `simlock daemon status` prints `Daemon: running (worker)`.
+
+## Start it at login
+
+Without a service, the daemon keeps running after you close the terminal, but it does not come back after a reboot.
+
+<Tabs syncKey="os">
+<TabItem label="macOS">
+
+<Steps>
+
+1. Install the service:
+
+   ```sh
+   simlock daemon install
+   ```
+
+   ```text
+   Service installed: com.callstack.simlock.worker (launchd)
+   Daemon running
+   To start after a reboot, turn on automatic login for this user.
+   ```
+
+2. Turn on automatic login for this user in **System Settings > Users & Groups**. The service runs only while this user is logged in at the screen.
+
+</Steps>
+
+The service is a LaunchAgent at `~/Library/LaunchAgents/com.callstack.simlock.worker.plist`.
+
+</TabItem>
+<TabItem label="Linux">
+
+<Steps>
+
+1. Install the service:
+
+   ```sh
+   simlock daemon install
+   ```
+
+   ```text
+   Service installed: com.callstack.simlock.worker (systemd)
+   Daemon running
+   To start after a reboot without logging in, run: loginctl enable-linger dana
+   ```
+
+2. Turn on linger, so the daemon keeps running when you log out and starts after a reboot:
+
+   ```sh
+   loginctl enable-linger dana
+   ```
+
+   Without linger, logging out of your last session stops the daemon and its emulators. Simlock does not turn linger on for you.
+
+</Steps>
+
+The service is a systemd user unit at `~/.config/systemd/user/com.callstack.simlock.worker.service` (under `$XDG_CONFIG_HOME` when you set it).
+
+With no login session and no linger, for example over SSH, `daemon install` fails with `SERVICE_FAILED` (`Failed to connect to bus`) and installs nothing. Log in, or turn on linger, and run it again.
+
+</TabItem>
+<TabItem label="Windows">
+
+<Steps>
+
+1. Install the service:
+
+   ```powershell
+   simlock daemon install
+   ```
+
+   ```text
+   Service installed: com.callstack.simlock.worker (task-scheduler)
+   Daemon running
+   To start after a reboot, turn on automatic login for this user.
+   ```
+
+2. Turn on automatic login for this user. The service is a Task Scheduler task that starts at logon, and runs only while this user is logged in at the screen.
+
+</Steps>
+
+- If nobody is logged in at the screen, `daemon install` still succeeds, starts the daemon without the service and says so. That daemon stops when the SSH session ends.
+- With the service installed and the user logged in at the screen, a command over SSH starts the daemon in the desktop session, and it outlives the SSH session.
+- Ending the task in Task Scheduler does not stop the daemon. Use `simlock daemon stop`.
+- The task runs a small Simlock program with no window that starts the daemon again after a failure. `daemon.log` has a line for each restart.
+
+</TabItem>
+</Tabs>
+
+On every system:
+
+- The service starts the daemon again 10 seconds after it crashes.
+- If a daemon already ran, `install` stops it first and prints `Stopped the running daemon; leases are kept.`
+- A config file the CLI refuses stops `install` with exit 2 before anything changes.
+- The service saves `SIMLOCK_HOME`, `PATH`, `JAVA_HOME`, `DEVELOPER_DIR` and the Android SDK variables (such as `ANDROID_HOME`) as they are when you run `install`. Run `simlock daemon install` again after you change one of them, or after you move or upgrade Node or Simlock (for example with nvm or Homebrew).
+- `simlock daemon stop` still stops the daemon. The service leaves it stopped until the next command starts it.
+- With a `SIMLOCK_HOME` other than the default folder, the service name gets a short suffix, such as `com.callstack.simlock.worker.3f9c2a`.
+
+**Check:** the last line of `simlock daemon status` reads `Service: installed (launchd, com.callstack.simlock.worker)` (`systemd` or `task-scheduler` on the other systems).
+
+To remove the service and stop the daemon:
+
+```sh
+simlock daemon uninstall
+```
+
+```text
+Daemon stopping
+Service removed: com.callstack.simlock.worker (launchd)
+```
+
+## Check whether it runs
+
+```sh
+simlock daemon status
+```
+
+It never starts the daemon. It prints `Daemon stopped`, or the same report as `simlock status` (see [See what the worker is doing](/simlock/docs/worker/monitoring)), then one line about the service:
+
+| Line | Meaning | Fix |
+| --- | --- | --- |
+| `Service: not installed` | You have not run `simlock daemon install`. | Install it if you want the daemon at login. |
+| `Service: installed (launchd, com.callstack.simlock.worker)` | The service is set up and works. | Nothing. |
+| `Service: not loaded (...): commands start the daemon without it` | Nobody is logged in at the screen, there is no Linux user session, or the Windows task is disabled. | Log in at the screen, or turn on linger on Linux. |
+| `Service: broken (...): <path> is gone; run simlock daemon install` | The Node or Simlock the service starts has moved, for example after an nvm or Homebrew upgrade. | Run `simlock daemon install` again. |
+
+`Daemon: starting` means the daemon still reads the machine's devices. Devices, leases and capacity appear once it finishes.
+
+When the service cannot run, commands still work: they start the daemon without it and say so:
+
+```text
+Service com.callstack.simlock.worker is not loaded; started the daemon without it.
+```
+
+Add `--json` for a machine-readable answer, such as `{"status":"stopped"}`.
+
+## Where files live
+
+<Tabs syncKey="os">
+<TabItem label="macOS">
+Everything is in `~/.simlock`, or the folder `SIMLOCK_HOME` names.
+</TabItem>
+<TabItem label="Linux">
+Everything is in `~/.simlock`, or the folder `SIMLOCK_HOME` names.
+</TabItem>
+<TabItem label="Windows">
+Everything is in `%USERPROFILE%\.simlock`, or the folder `SIMLOCK_HOME` names:
+
+```powershell
+$env:SIMLOCK_HOME = "D:\simlock"
+```
+</TabItem>
+</Tabs>
+
+| File | What it holds |
+| --- | --- |
+| `config.json` | Your settings. See [Change a setting](/simlock/docs/worker/change-a-setting). |
+| `state.db` | Devices, leases, enrolled phones, what the warm pool learned, and HTTP tokens. |
+| `history.db` | The event history and usage figures behind `simlock events` and `simlock stats`. |
+| `daemon.log`, `daemon.log.1` | The daemon's log, and one older file. |
+| `daemon.sock` | The socket the CLI and agents connect to. Windows has no file: the daemon listens on a named pipe. |
+| `admin.token` | The secret the CLI uses to connect as an admin. |
+| `devices/ios`, `devices/android` | The simulators and emulators Simlock made. These take the most space. |
+
+<Aside type="caution">
+`devices` can grow to tens of gigabytes. Do not delete folders in it by hand while the daemon runs. Use [`simlock cleanup` or `simlock nuke`](/simlock/docs/worker/free-disk).
+</Aside>
+
+Anyone who can open the data folder can lease devices, so Simlock creates it readable by your user only. It does not change a folder that already exists. If other users can open it, the daemon log says so at each start, with the command that fixes it:
+
+<Tabs syncKey="os">
+<TabItem label="macOS">
+`chmod 700` on the folder.
+</TabItem>
+<TabItem label="Linux">
+`chmod 700` on the folder.
+</TabItem>
+<TabItem label="Windows">
+An `icacls` command with your folder and your account's security identifier:
+
+```text
+data directory D:\simlock is accessible to other users (BUILTIN\Users); run icacls "D:\simlock" /inheritance:r /grant:r "*S-1-5-21-...:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+```
+
+<Aside type="caution">
+On Windows the folder's permissions do not protect the named pipe, and another account on the machine could intercept the connection. Run Simlock on Windows only on a machine that one user account uses.
+</Aside>
+</TabItem>
+</Tabs>
+
+- **One worker per user.** A second worker started from another `SIMLOCK_HOME` refuses to start with `another Simlock worker runs for this user`, and prints the command that stops the first one.
+- **A gateway on the same machine** keeps its own files in `~/.simlock/gateway` and runs its own daemon. Add `--gateway` to reach it, for example `simlock --gateway daemon status`.
+
+## Read the log
+
+```sh
+simlock daemon logs            # the last 100 lines
+simlock daemon logs --follow   # then each new line, until Ctrl-C
+```
+
+The log's format and how to make it more detailed: [See what the worker is doing](/simlock/docs/worker/monitoring#read-the-daemon-log).
+
+## What a restart keeps
+
+After a `daemon stop`, a crash or a reboot, the new daemon checks its records against the devices that really exist:
+
+| What | After a restart |
+| --- | --- |
+| Idle devices | Shut down by `daemon stop` or an update; left as they were by a crash or reboot. They boot again when a lease or the warm pool needs them. |
+| A lease whose device still runs | Kept. Its agent goes on renewing it. If its time ran out while no daemon ran, it expires at start. |
+| A lease whose device stopped, as after a reboot | Ends with reason `device-lost`, or as expired if its time had run out. |
+| A lease on a physical device | Kept. It ends as usual: when its time runs out or the device is unplugged. |
+| A request still waiting in the queue | Fails with `INTERNAL`: `The daemon restarted before this lease request settled; send it again with a new key`. The agent asks again. |
+
+## Update Simlock
+
+<Steps>
+
+1. Run the update:
+
+   ```sh
+   simlock update
+   ```
+
+   ```text
+   Updating simlock 0.6.2 → 0.7.0
+   Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.
+   Installing simlock@0.7.0
+   Restarting the daemon
+   simlock 0.7.0 is running
+   ```
+
+   It installs the newest Simlock and restarts the daemon once the current leases have ended. While it waits, the daemon takes no new leases: new and queued requests fail with `DAEMON_UPDATING`. Held leases renew and release as usual, and `simlock status` shows `Updating to 0.7.0: waiting for 2 leases`.
+
+2. To stop waiting, run `simlock update --force`, from this shell or another one. Leases on running devices survive the restart.
+
+</Steps>
+
+**Check:** `simlock status` shows `Simlock: 0.7.0`.
+
+`--version 0.7.0` installs that exact version, older ones included. Admins can also update over HTTP with `POST /v1/update`. To update workers behind a gateway, see [Maintain workers](/simlock/docs/gateway/maintain-workers).
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `simlock status` shows `Last update failed (installing): <npm's message>` | The install failed, for example npm cannot write its global folder. The old daemon runs and takes leases again. | Fix what npm names, then update again. |
+| `Last update failed (restarting): …` | The new version did not start within two minutes. Simlock put the old version back and started it. | Read `simlock daemon logs`. |
+| `UPDATE_UNSUPPORTED_INSTALL` | Simlock was not installed with `npm i -g simlock`, for example a source checkout or a pnpm global install. Nothing changed. | [Upgrade by hand](#upgrade-by-hand). |
+| `UPDATE_SHARED_INSTALL` | A worker and a gateway of the same user share one install, and the other one runs. | Stop it, update, then start it again. |
+| `PROTOCOL_VERSION_UNSUPPORTED` | The running daemon is too old to update itself. | [Upgrade by hand](#upgrade-by-hand). |
+
+## Upgrade by hand
+
+<Steps>
+
+1. Stop the daemon. This works even when the daemon is another version and refuses other commands with `PROTOCOL_VERSION_UNSUPPORTED`.
+
+   ```sh
+   simlock daemon stop
+   ```
+
+2. Install the new version:
+
+   ```sh
+   npm i -g simlock
+   ```
+
+3. Start the daemon and check the machine:
+
+   ```sh
+   simlock daemon start
+   simlock doctor
+   ```
+
+</Steps>
+
+**Check:** `simlock doctor` prints no `Missing` line, and `simlock status` shows the new version. Leases on running devices survive the upgrade. If the daemon runs as a service, run `simlock daemon install` again when the Node or Simlock path changed.
+
+### From a version that used `state.json`
+
+Older versions kept their state in `~/.simlock/state.json` and HTTP tokens in `~/.simlock/tokens.json`. This version does not read them, and refuses to start while either file exists:
+
+```json
+{"error":{"code":"DAEMON_STARTUP_FAILED","message":"The daemon could not start: Found /Users/dana/.simlock/state.json, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove /Users/dana/.simlock/state.json and start again. ..."}}
+```
+
+Nothing carries over, so clear the old version's devices first.
+
+<Aside type="caution">
+These steps delete every device Simlock made on this machine and end every lease. Tell the agents using this machine first.
+</Aside>
+
+<Steps>
+
+1. With the older Simlock installed, release every lease and delete its devices. Answer `y` when asked. If you already installed the new version, put the old one back for this step, for example with `npm i -g simlock@0.2.4`.
+
+   ```sh
+   simlock release --all
+   simlock nuke --delete-devices
+   simlock daemon stop
+   ```
+
+2. Remove the old files:
+
+   ```sh
+   rm ~/.simlock/state.json ~/.simlock/tokens.json
+   ```
+
+3. Install the new version and start it:
+
+   ```sh
+   npm i -g simlock
+   simlock daemon start
+   ```
+
+4. If agents reached this worker over HTTP, their tokens are gone. Make new ones with `simlock token create --role agent`. See [Give agents and people access](/simlock/docs/gateway/access).
+
+</Steps>
+
+**Check:** `simlock daemon status` prints `Daemon: running (worker)`.
+
+On a gateway, remove the files the message names in `~/.simlock/gateway`, then make each worker's join token again and set it on that worker. See [Add a worker](/simlock/docs/gateway/add-a-worker).
+
+## When it fails
+
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `DAEMON_STARTUP_FAILED` | 1 | The daemon did not come up. The message says why. | See [The daemon will not start](/simlock/docs/troubleshooting/worker#the-daemon-will-not-start). |
+| `USAGE` | 2 | `config.json` has a wrong value. The CLI checks it before it starts the daemon, and the message names the key. | Fix the key. See [Change a setting](/simlock/docs/worker/change-a-setting#when-a-value-is-refused). |
+| `SERVICE_FAILED` | 1 | `launchctl`, `systemctl` or `schtasks` failed or took longer than 10 seconds, or the old daemon did not stop within 300 seconds. The message names the command and its first error line. | Fix what the message names and run the command again. A failed load removes the service file. |
+| `DAEMON_STOPPING` | 1 | The daemon is shutting down. | Wait a moment and run the command again. |
+
+Flags: [CLI reference](/simlock/docs/reference/cli#simlock-daemon), [`simlock update`](/simlock/docs/reference/cli#simlock-update).

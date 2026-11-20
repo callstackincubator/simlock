@@ -1,9 +1,9 @@
 ---
 title: Configuration
-description: Every configuration key a worker or a gateway reads, with its type, default and meaning.
+description: Every configuration key a worker or a gateway reads, with its type, default and meaning, and where the file lives.
 sidebar:
-  label: Configuration keys
   order: 2
+  label: "Configuration keys"
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -30,7 +30,7 @@ simlock config set lease.maxTtlMs 7200000
 Updated lease.maxTtlMs in /Users/alex/.simlock/config.json; takes effect on daemon restart.
 ```
 
-Add `--gateway` to work on the gateway's file: `simlock --gateway config set gateway.routing warm-then-free`.
+How to change a setting, with examples: [Change a setting](/simlock/docs/worker/change-a-setting). Add `--gateway` to work on the gateway's file: `simlock --gateway config set gateway.routing warm-then-free`.
 
 - **Changes take effect on the next daemon restart.** Run `simlock daemon stop`, then
   `simlock daemon start` (or `simlock --gateway daemon stop` and `simlock --gateway daemon start`).
@@ -161,7 +161,7 @@ Any other field in a target stops the daemon from starting. A target never downl
 | `idle.shutdownAfterMs`                  | non-negative number | `600000` (10 min)  | How long an unused running device stays up before it is shut down. Devices the warm pool keeps are exempt.  | Worker     |
 | `idle.deleteAfterMs`                    | non-negative number | `3600000` (1 h)    | How long a shut-down device stays on disk before it is deleted.                                             | Worker     |
 | `devices.deletedRetentionMs`            | positive number, at least `lease.requestRetentionMs` | `3600000` (1 h) | How long a deleted device stays in `simlock status`, `GET /v1/status` and the console, counted from its deletion. After that the worker forgets it. A value below `lease.requestRetentionMs` stops the daemon from starting. | Worker     |
-| `devices.autoEnroll`                     | boolean | `false` | Enrol every phone plugged into the worker by USB that `simlock device add` would accept, within one `health.probeIntervalMs`, with no command. A phone you remove while it stays plugged in is not enrolled again until it has been unplugged for `health.stableObservations` runs. Needs a restart. Only turn it on for a worker whose plugged-in phones are all test phones: a lease's end uninstalls every app that was not on the phone when it was enrolled. See [Enrol phones automatically](/simlock/docs/worker/enrolling-physical-devices#enrol-phones-automatically). | Worker     |
+| `devices.autoEnroll`                     | boolean | `false` | Enrol every phone plugged into the worker by USB that `simlock device add` would accept, within one `health.probeIntervalMs`, with no command. A phone you remove while it stays plugged in is not enrolled again until it has been unplugged for `health.stableObservations` runs. Needs a restart. Only turn it on for a worker whose plugged-in phones are all test phones: a lease's end uninstalls every app that was not on the phone when it was enrolled. See [Enrol a phone](/simlock/docs/worker/enrol-phones). | Worker     |
 | `diskPressure.freeBytesThreshold`       | non-negative number | `10737418240` (10 GiB) | Free disk space below which the machine is under disk pressure: idle devices are deleted sooner.      | Worker     |
 | `memoryPressure.enabled`                | boolean             | `true`             | Work out a memory pressure step from the host's memory. Off, a worker is never paused for memory.            | Worker     |
 | `memoryPressure.pauseWarming.level`     | `normal`, `warn`, `critical` or `off` | `warn` | The macOS memory pressure level at which the worker is at the `warming-paused` step. Other systems report no level. `off` ignores the level. | Worker     |
@@ -206,7 +206,7 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | Key                                | Type                               | Default                          | Meaning                                                                                                   | Applies to |
 | ---------------------------------- | ---------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------- |
 | `ios.defaultMode`                  | `slim` or `full`                   | `full`, or the one mode `ios.modes` lists when this is not set | Device mode for an iOS request that names none. It must be a mode `ios.modes` lists, or the config fails to load. | Worker     |
-| `ios.modes`                        | list of `slim` and `full`, each once | `["slim","full"]`              | The iOS device modes this worker serves. A lease, warm target or learned kind of another mode is refused at once with `MODE_UNAVAILABLE`, and a slim request on iOS below 18.5 is refused too when `full` is not listed. Needs a daemon restart. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device#modes-a-worker-serves). | Worker     |
+| `ios.modes`                        | list of `slim` and `full`, each once | `["slim","full"]`              | The iOS device modes this worker serves. A lease, warm target or learned kind of another mode is refused at once with `MODE_UNAVAILABLE`, and a slim request on iOS below 18.5 is refused too when `full` is not listed. Needs a daemon restart. See [Slim iOS simulators](/simlock/docs/concepts/slim-simulators). | Worker     |
 | `ios.slim.categories`              | list of strings                    | every category                   | Which groups of simulator services a slim device has turned off: `widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`. Narrowing the list turns the dropped services back on the next time a device is prepared. `categories` and `exclude` turn services off; `include` keeps them running. | Worker     |
 | `ios.slim.include`                 | list of strings                    | none                             | Launchd service names, such as `com.apple.apsd`, that a slim device keeps running even when a category turns them off. A name that is no service does nothing, and Simlock does not warn. A name in `exclude` too fails the config load. | Worker     |
 | `ios.slim.exclude`                 | list of strings                    | none                             | Launchd service names, such as `com.apple.diagnosticd`, that a slim device turns off beside its categories. This includes services no category holds and the three that slim never turns off (`assistantd`, `gamed`, `sharingd`). A lease's `--except` category still keeps its own services running. With `categories` set to `[]`, a list here alone makes a device slim. Removing a name turns the service back on the next time a device is prepared, except in a saved baseline made before this key existed; put the name in `include` for those. | Worker     |
@@ -214,11 +214,11 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | `ios.full.bootTimeoutMs`           | positive number                    | `300000` (5 min)                 | Boot deadline for a full iOS device: a new device, a recovery boot and the boot that makes a seed. Counted from before `simctl boot`: the boot and `bootstatus` share it.                                                   | Worker     |
 | `ios.defaultModels.<class>`        | model name, or non-empty list      | not set                          | iOS models to try first for a class (`phone`, `tablet`, `watch`, `tv`, `vision`, `auto`, `desktop`), most preferred first, before Simlock's own list. A key that is not a class stops the daemon from starting. | Worker     |
 | `android.defaultModels.<class>`    | model name, or non-empty list      | not set                          | The same for Android models.                                                                              | Worker     |
-| `android.defaultImageTag`          | image tag: 1 to 64 letters, digits, `_`, `.` or `-` | not set                | Image tag for an Android request that names none, such as `google_apis_playstore`. The worker tries an image of that tag built for its own CPU first, never downloading, and falls back to what the request gets without the setting when none fits. See [Choose the system image](/simlock/docs/using-devices/choosing-a-device#choose-the-system-image-android). | Worker     |
-| `ios.virtualDevices`               | `true` or `false`                  | `true`                           | `false` makes the worker serve only enrolled physical iOS devices. A lease without `--physical` is refused at once with `UNKNOWN_MODEL`, the warm pool boots no simulator, and idle simulators are deleted at start. See [Serve enrolled devices only](/simlock/docs/using-devices/physical-devices#serve-enrolled-devices-only). | Worker     |
+| `android.defaultImageTag`          | image tag: 1 to 64 letters, digits, `_`, `.` or `-` | not set                | Image tag for an Android request that names none, such as `google_apis_playstore`. The worker tries an image of that tag built for its own CPU first, never downloading, and falls back to what the request gets without the setting when none fits. See [Lease a specific model or OS](/simlock/docs/using-devices/lease-a-specific-device). | Worker     |
+| `ios.virtualDevices`               | `true` or `false`                  | `true`                           | `false` makes the worker serve only enrolled physical iOS devices. A lease without `--physical` is refused at once with `UNKNOWN_MODEL`, the warm pool boots no simulator, and idle simulators are deleted at start. See [Enrol a phone](/simlock/docs/worker/enrol-phones). | Worker     |
 | `android.virtualDevices`           | `true` or `false`                  | `true`                           | The same for Android emulators.                                                                           | Worker     |
 | `android.bootTimeoutMs`            | positive number                    | `300000` (5 min)                 | Boot deadline for an Android emulator, counted from its start. A new seed boots twice, each within this time. Waiting for an emulator to exit stays at 3 minutes.                          | Worker     |
-| `android.networkDevices`           | boolean                            | `false`                          | `true` lets `simlock device add --platform android` enrol a phone the worker's adb server reaches over the network (`host:port` or a wireless-debugging name), and makes the worker run `adb connect` for an enrolled `host:port` phone adb no longer lists. With `devices.autoEnroll` on too, every network phone connected on the worker is enrolled. See [Android phones reached over the network](/simlock/docs/worker/enrolling-physical-devices#android-phones-reached-over-the-network). | Worker     |
+| `android.networkDevices`           | boolean                            | `false`                          | `true` lets `simlock device add --platform android` enrol a phone the worker's adb server reaches over the network (`host:port` or a wireless-debugging name), and makes the worker run `adb connect` for an enrolled `host:port` phone adb no longer lists. With `devices.autoEnroll` on too, every network phone connected on the worker is enrolled. See [Enrol a phone](/simlock/docs/worker/enrol-phones). | Worker     |
 | `android.emulator.headless`        | boolean                            | `false`                          | Start emulators without a window. Needed on a machine with no display.                                    | Worker     |
 | `android.emulator.gpu`             | non-empty string                   | `auto`                           | Emulator GPU mode, such as `host` or `swiftshader_indirect`. `auto` leaves the emulator's own choice. A mode the emulator rejects fails the next boot, not the config load. | Worker     |
 | `ios.simulator.audio`              | boolean                            | `true`                           | `false` sets each simulator's volume to 0 after every boot; apps still play, unheard. A Mac still counts audio as playing while an app plays. On a busy Mac the volume can take up to 2 minutes after boot to reach 0. | Worker     |
@@ -228,7 +228,7 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | `android.emulator.bootAnimation`   | boolean                            | `true`                           | `false` skips the boot animation.                                                                         | Worker     |
 | `android.emulator.cores`           | positive integer                   | unset (the profile's own count)         | CPU cores of each new Android emulator. Only new devices get the count; existing devices keep theirs. Baselines made before the change are listed stale and refused for new leases. | Worker     |
 | `drivers.ios.deviceRoot`           | absolute path                      | `~/.simlock/devices/ios`         | Folder that holds Simlock's simulators. A relative path turns iOS off; `simlock doctor` says why.          | Worker     |
-| `drivers.ios.deviceSet`            | `simlock` or `default`             | `simlock`                        | Where iOS simulators live. `simlock` keeps them in `drivers.ios.deviceRoot`; `default` keeps them in Xcode's own device set, `~/Library/Developer/CoreSimulator/Devices`. Case-sensitive. Any other value, `default` together with `drivers.ios.deviceRoot`, `ios.simulator.headless: false` with `simlock`, or a switch with simulators left from the other setting turns iOS off; `simlock doctor` says why. See [Build and run your app](/simlock/docs/using-devices/build-and-run#switch-the-device-set). | Worker     |
+| `drivers.ios.deviceSet`            | `simlock` or `default`             | `simlock`                        | Where iOS simulators live. `simlock` keeps them in `drivers.ios.deviceRoot`; `default` keeps them in Xcode's own device set, `~/Library/Developer/CoreSimulator/Devices`. Case-sensitive. Any other value, `default` together with `drivers.ios.deviceRoot`, `ios.simulator.headless: false` with `simlock`, or a switch with simulators left from the other setting turns iOS off; `simlock doctor` says why. See [iOS device sets](/simlock/docs/concepts/ios-device-sets). | Worker     |
 | `drivers.ios.screenCaptureCommand` | path                               | the program installed with Simlock | Program that captures a simulator's screen for streaming. Leave it unset unless you replace that program. | Worker     |
 | `drivers.ios.deviceCaptureCommand` | path                               | the program installed with Simlock | Program that captures a physical iPhone's screen for streaming. Leave it unset unless you replace that program. | Worker     |
 | `drivers.android.deviceRoot`       | absolute path                      | `~/.simlock/devices/android`     | Folder that holds Simlock's emulators. A relative path turns Android off; `simlock doctor` says why.       | Worker     |
@@ -253,18 +253,18 @@ change are listed stale and refused.
 | `http.proxyAuth.issuer`      | string, 1–128 characters | —                                     | The `iss` the token must carry.                                                                            | Both       |
 | `http.proxyAuth.audience`    | string, 1–512 characters | —                                     | The `aud` the token must carry.                                                                            | Both       |
 | `http.proxyAuth.signOutUrl`  | `http://` or `https://` URL | not set                            | Where the console sends a person to sign out.                                                              | Both       |
-| `http.proxyAuth.signInUrl`   | `http://` or `https://` URL, at most 2048 characters | not set | Proxy login entry point; `{path}` becomes the current page, encoded. Adds **Sign in with SSO** beside the token form and on the ended screen when available. Only the identity route's 401 returns it. | Both |
+| `http.proxyAuth.signInUrl`   | `http://` or `https://` URL, at most 2048 characters | not set | The proxy's login address. `{path}` becomes the current page, URL-encoded. Adds **Sign in with SSO** next to the token form and on the session-ended screen. Only `GET /v1/identity` returns it, in its `401`. | Both |
 
 ```sh
 simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://acme.cloudflareaccess.com","audience":"4f1c9a7e2b"}'
 ```
 
 Setting one `http.proxyAuth` key on its own is refused with
-`expected set with the other http.proxyAuth keys`.
+`expected set with the other http.proxyAuth keys`. Steps and failure reasons: [Sign people in through a sign-in proxy](/simlock/docs/gateway/sign-in-proxy).
 
 ## Joining a gateway
 
-These keys go in a **worker's** file. A gateway ignores them with a warning.
+These keys go in a **worker's** file. A gateway ignores them with a warning. Steps: [Add a worker to a gateway](/simlock/docs/gateway/add-a-worker).
 
 | Key             | Type                         | Default                  | Meaning                                                                                                    | Applies to |
 | --------------- | ---------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------- | ---------- |
@@ -285,7 +285,7 @@ missing key. An `http://` or `https://` URL is refused too. A worker with `gatew
 
 ## Gateway
 
-These keys go in a **gateway's** file.
+These keys go in a **gateway's** file. Steps: [Set up a gateway](/simlock/docs/gateway/setup).
 
 | Key                               | Type                          | Default            | Meaning                                                                                                     | Applies to |
 | --------------------------------- | ----------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- | ---------- |
@@ -293,7 +293,7 @@ These keys go in a **gateway's** file.
 | `gateway.disconnectedRetentionMs` | positive number               | `86400000` (24 h)  | How long a disconnected worker stays listed before the gateway forgets it. The clock waits while leases on it are still live. | Gateway    |
 | `gateway.execTimeoutMs`           | positive number               | `660000` (11 min)  | How long the gateway waits on a device command it passed to a worker. Keep it above the worker's `exec.timeoutMs`. | Gateway    |
 | `gateway.leaseRequestTimeoutMs`   | positive number               | `300000` (5 min)   | How long the gateway waits on one worker for a lease before it fails the request with `WORKER_UNREACHABLE`. | Gateway    |
-| `gateway.admission.command` | list of 1 to 64 strings of 1 to 4096 characters | not set | The program the gateway runs once for every new lease request, as an argv list such as `["bun","/etc/simlock/policy.ts"]`. It reads the request on stdin and prints a priority or a refusal. With none set, requests wait oldest first. See [Routing](/simlock/docs/gateway/routing#ranking-or-refusing-requests-with-an-admission-command). | Gateway    |
+| `gateway.admission.command` | list of 1 to 64 strings of 1 to 4096 characters | not set | The program the gateway runs once for every new lease request, as an argv list such as `["bun","/etc/simlock/policy.ts"]`. It reads the request on stdin and prints a priority or a refusal. With none set, requests wait oldest first. See [Rank or refuse requests with an admission command](/simlock/docs/gateway/admission). | Gateway    |
 | `gateway.admission.timeoutMs` | integer from 1 to 60000 | `5000` | How long the admission command may run, counted from its start. A command that runs longer is killed and the request is refused with `ADMISSION_FAILED`. | Gateway    |
 
 ## Alerts
@@ -330,7 +330,7 @@ Each destination:
 ```
 
 `simlock config` shows alert URLs and secrets as `[redacted]`, as do the daemon log and the
-`daemon.started` event. `simlock config --show-secrets` prints them as written. See [Alerts](/simlock/docs/gateway/alerts) for the message format
+`daemon.started` event. `simlock config --show-secrets` prints them as written. See [Send alerts](/simlock/docs/gateway/alerts) for the message format
 and delivery.
 
 ## Optional modules
@@ -349,7 +349,7 @@ A name Simlock does not know is warned about and ignored.
 | `capabilities.agent-device.ios.signingIdentity` | non-empty string                 | not set          | Code-signing identity for manual signing of the iPhone runner. Passed to the phone daemon.                  | Worker     |
 | `capabilities.fseventsd.enabled` | boolean | `true` on a macOS worker, joined to a gateway or not; `false` on any other OS and on a gateway | When `simlock doctor` runs, read the memory the macOS service `fseventsd` uses, and warn when it is over 2 GB. Turned on for another OS, the capability reads `unavailable` and doctor says so. | Worker     |
 | `capabilities.input.enabled`                | boolean                              | `false`          | Let a lease's holder send taps and keys to its device over `WS /v1/leases/{id}/input`. On a gateway: pass each input socket through to the lease's worker, which needs it on too. | Both       |
-| `capabilities.tunnel.enabled` | boolean | `false` | Let a lease's holder open `WS /v1/leases/{id}/tunnel` and reverse device ports to its own machine. A gateway relays the socket to the lease's worker, so turn it on at both. The worker reserves loopback ports 47000-47999 for tunnels on Android, and a rule that `adb reverse` points into that range is removed when the worker starts, or, on a device that is leased then, when its lease ends, so keep your own rules out of it. A phone's rules are never removed that way; see [Tunnels](/simlock/docs/using-devices/remote-agents#tunnels) for what a tunnel's port is open to. | Both |
+| `capabilities.tunnel.enabled` | boolean | `false` | Let a lease's holder open `WS /v1/leases/{id}/tunnel` and reverse device ports to its own machine. A gateway relays the socket to the lease's worker, so turn it on at both. The worker reserves loopback ports 47000-47999 for tunnels on Android, and a rule that `adb reverse` points into that range is removed when the worker starts, or, on a device that is leased then, when its lease ends, so keep your own rules out of it. A phone's rules are never removed that way; see [Use your own tools through a tunnel](/simlock/docs/using-devices/tunnels) for what a tunnel's port is open to. | Both |
 | `capabilities.stream.enabled`               | boolean                              | `false`          | Let people watch a running device's screen. On a gateway: pass each stream through from the worker.           | Both       |
 | `capabilities.stream.fps`                   | integer `1`–`60`                     | `30`             | Highest frame rate. A still screen sends far fewer frames.                                                   | Worker     |
 | `capabilities.stream.maxDimension`          | integer `96`–`4096`                  | `720`            | Longest side of the picture, in pixels. The setting that changes bandwidth most.                             | Worker     |

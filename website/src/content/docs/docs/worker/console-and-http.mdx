@@ -1,0 +1,160 @@
+---
+title: Turn on the web console and HTTP
+description: Serve the HTTP API and web console from a worker, open the console and sign in with an operator token, and turn on screen streaming.
+sidebar:
+  order: 8
+  label: "Turn on console and HTTP"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** you see and manage the worker's devices, leases and queue in your browser, and remote agents can reach the HTTP API.
+
+The console shows what the worker does, and lets you release leases and cancel waiting requests; on a gateway also drain, update and remove workers. It does not lease devices. What each page shows and does: [Web console](/simlock/docs/reference/console).
+
+## Before you start
+
+- HTTP serves both the HTTP API and the console. It is on by default on a standalone worker, on `127.0.0.1:4701`. There is no separate switch for the console.
+- A worker that has joined a gateway has no HTTP and no console of its own. Use the gateway's console.
+- You need a shell on the worker to make an operator token.
+
+<Aside type="caution">
+By default HTTP listens on `127.0.0.1`, so only this machine can reach it. With `http.host` set to `0.0.0.0` or another address, anyone who can reach the port can load the sign-in page and call the HTTP API with a token. Simlock does not do HTTPS: to reach the console from another machine, put a reverse proxy or a tunnel in front of it.
+</Aside>
+
+## Open the console
+
+<Steps>
+
+1. Start the daemon. It prints the console's address:
+
+   ```sh
+   simlock daemon start
+   ```
+
+   ```text
+   Daemon running
+   Console: http://127.0.0.1:4701/
+   ```
+
+   No `Console:` line means HTTP is off. Turn it on, then restart:
+
+   ```sh
+   simlock config set http.enabled true
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+2. Make an operator token:
+
+   ```sh
+   simlock token create --role operator --label alex-laptop
+   ```
+
+   ```json
+   {"secret":"slk_Qm9vdHN0cmFwIHRoZSBjb25zb2xlIGFuZCBzaWduIGl","token":{"id":"tok_3f9c2a1e-7b4d-4e8a-9c61-2d5f0b7a8e14","role":"operator","label":"alex-laptop","createdAt":1792569600000}}
+   ```
+
+   The secret prints only once, so keep it somewhere safe. A token works only on the daemon that made it.
+
+3. Open the address in a browser, paste the `secret` into **Operator token** and press **Sign in**.
+
+</Steps>
+
+**Check:** the console opens on **Overview** and the sidebar says **Connected**.
+
+- `simlock status` prints the same `Console:` line, and `simlock status --json` has it as `daemon.consoleUrl`.
+- When `http.host` is `0.0.0.0` or `::`, the address says `localhost`. From another machine, use this machine's name or address.
+- The console keeps the token in this browser tab only. A reload keeps you signed in; a new tab asks again; closing the tab signs you out. **Sign out** at the bottom of the sidebar forgets it at once. After `simlock token revoke <token-id>`, the console signs you out the next time it asks the daemon for anything.
+- To sign people in through a sign-in proxy instead of tokens, see [Sign people in through a sign-in proxy](/simlock/docs/gateway/sign-in-proxy). With `http.proxyAuth.signInUrl` set, the console shows **Sign in with SSO** next to the token form.
+
+## Change the address or port
+
+```sh
+simlock config set http.host 0.0.0.0
+simlock config set http.port 4801
+simlock daemon stop
+simlock daemon start
+```
+
+**Check:** `simlock daemon start` prints `Console: http://localhost:4801/`.
+
+## Turn off HTTP
+
+```sh
+simlock config set http.enabled false
+simlock daemon stop
+simlock daemon start
+```
+
+This turns off the console and the HTTP API. Remote agents and tunnels then cannot reach the worker.
+
+## Turn on screen streaming
+
+The console shows a device's live screen only when screen streaming is on for the worker that holds it. It is off by default. Nothing is captured until someone watches a device.
+
+<Steps>
+
+1. On each worker, turn streaming on:
+
+   ```sh
+   simlock config set capabilities.stream.enabled true
+   ```
+
+2. With a gateway, turn it on there too:
+
+   ```sh
+   simlock --gateway config set capabilities.stream.enabled true
+   ```
+
+3. Restart each daemon you changed:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock worker list` (with `--gateway` for a fleet) ends each worker's line with the stream's state:
+
+```text
+3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93 (mac-studio-2): connected -- ios 1/6, android 0/4, 1 lease(s) -- macOS 26.0 arm64; xcode 26.1 (17B55) -- stream available
+```
+
+| State | Meaning |
+| --- | --- |
+| `stream available` | It works. |
+| `stream off` | The setting is not on for that worker. |
+| `stream unavailable: <reason>` | No platform on that worker can stream, and why. |
+
+A physical iPhone streams only when the worker runs Xcode 27 or later and the iPhone runs iOS 27 or later. Simulators stream on any Xcode the worker supports.
+
+To turn streaming off, set `capabilities.stream.enabled` to `false` and restart the daemon. How to watch a screen: [Watch a device's screen](/simlock/docs/using-devices/watch-the-screen).
+
+### Picture quality and bandwidth
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `capabilities.stream.maxDimension` | `720` | Longest side of the picture, in pixels (96 to 4096). Has the biggest effect on bandwidth. |
+| `capabilities.stream.bitrateKbps` | `1500` | Target bitrate, in kilobits per second (100 to 40000). |
+| `capabilities.stream.fps` | `30` | Highest frame rate (1 to 60). A still screen sends far fewer frames. |
+
+At the defaults, a busy screen uses about 1.4 Mbit/s, and a screen nobody touches 25 to 90 kbit/s. Each iOS capture uses about 50 to 80 MB of memory on the worker. Restart the daemon after a change.
+
+## When it fails
+
+The console says why it does not accept a token:
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| This daemon does not know that token. | The token is mistyped, revoked, or from another daemon. | Make a new one on this daemon. |
+| That token is real, but the console needs an operator token. | It is an agent or worker token. | Make one with `--role operator`. |
+| The daemon is starting. Try again in a moment. | The daemon answers but has not finished starting. | Wait, then sign in again. |
+| The daemon cannot be reached. | Nothing answers at this address. | Check `simlock daemon status` and the address. |
+| The daemon answered with an error (HTTP 500). | Anything else. | Read `simlock daemon logs`. |
+| No `Console:` line | HTTP is off, or the worker joined a gateway. | Turn on `http.enabled`, or use the gateway's console. |
+| `DAEMON_STARTUP_FAILED` after changing the port | The port is taken. | Pick another `http.port`. |
+| "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` is not `true` on that worker. | Turn it on and restart that worker's daemon. |
+
+Keys: [Configuration reference](/simlock/docs/reference/configuration#http-and-sign-in), [Optional modules](/simlock/docs/reference/configuration#optional-modules). Tokens: [Give agents and people access](/simlock/docs/gateway/access).

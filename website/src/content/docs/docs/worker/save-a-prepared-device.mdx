@@ -1,0 +1,131 @@
+---
+title: Save a prepared device for agents
+description: Prepare a simulator or emulator once, save it as a named baseline, and update, list or remove it, on one worker or through a gateway.
+sidebar:
+  order: 6
+  label: "Save a prepared device"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** agents lease copies of a device you prepared once, for example with your app installed and a test user signed in, instead of a factory-fresh device. What a baseline is and when to use one: [Baselines](/simlock/docs/concepts/baselines).
+
+## Before you start
+
+- Saving and removing need the admin role, such as your own terminal on the worker. An agent session gets `FORBIDDEN`.
+- Simulators and emulators only. A lease on a physical device is refused with `BAD_REQUEST`.
+- A baseline lives on the worker that saved it, and takes the disk space of a whole device.
+
+<Aside type="caution">
+Every copy holds what you save, including signed-in accounts. Save no credentials you would not give to every agent.
+</Aside>
+
+## Save a baseline
+
+<Steps>
+
+1. Lease the device to prepare:
+
+   ```sh
+   simlock lease --platform android --device "Pixel 9" --detach
+   ```
+
+   From the grant, note the lease id (`lease.id`) and the device address (`device.address`).
+
+2. Prepare the device: install the app, sign in, set what your tests need.
+
+   ```sh
+   simlock adb -s emulator-5556 install app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+3. Finish preparing before this step. Saving **ends the lease and deletes the device**; only the saved copy is left.
+
+   ```sh
+   simlock baseline save checkout --lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35 --note "app 4.2, test user"
+   ```
+
+   ```text
+   Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35 ended.
+   ```
+
+</Steps>
+
+**Check:** `simlock baseline list` shows `checkout` with version `1`.
+
+| Field | Rule |
+| --- | --- |
+| Name | 1 to 64 characters of `a-z`, `0-9`, `.`, `_`, `-`. Starts with a letter or digit. |
+| Note | Optional. One line, up to 200 characters. |
+
+A bad name or note is refused before the lease is touched.
+
+## Update a baseline
+
+Prepare a new device and save it under the same name. The version goes up by one, new leases get it, and the old version is deleted. See [Versions](/simlock/docs/concepts/baselines#versions).
+
+## List baselines
+
+```sh
+simlock baseline list
+```
+
+```text
+NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE
+checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40
+login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11-01 09:12  signed in
+  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
+```
+
+A line starting `stale:` means agents cannot lease that baseline. Fix it in one of two ways:
+
+- Install the runtime or system image it names again.
+- Save a new version from a device on an OS you have.
+
+An iOS baseline saved from an older Simlock version that shared one folder between simulators is stale too. Save it again from a new lease.
+
+## Remove a baseline
+
+<Aside type="caution">
+This deletes every version of the baseline and the idle copies made from it.
+</Aside>
+
+```sh
+simlock baseline remove login
+```
+
+```text
+Remove baseline login v1? [y/N] y
+Removed baseline login v1.
+```
+
+Add `--yes` to skip the question in a script. `simlock nuke --delete-devices` removes every baseline on the worker.
+
+## Through a gateway
+
+Run the same commands with `--gateway`:
+
+```sh
+simlock --gateway baseline save checkout --lease wrk_a.L7 --note "app 4.3"
+simlock --gateway baseline list
+simlock --gateway baseline remove checkout --worker wrk_a
+```
+
+- `save` runs on the worker that holds the lease.
+- `list` shows every worker's baselines. The `WORKER` column is what `--worker` takes.
+- `remove` needs `--worker`, and removes from that worker only. Without it the gateway answers `BAD_REQUEST`.
+- A lease that names a baseline goes only to a worker that holds a fresh copy of it. Save the baseline on every worker that should serve it.
+
+## When it fails
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `BASELINE_SAVE_FAILED` | The copy could not be made. The lease has ended, nothing was saved, and the device is kept for `simlock doctor`. The message says why. | Lease a new device, prepare it and save again. |
+| `UNKNOWN_LEASE` | No live lease has that id. | Check the id with `simlock list`. |
+| `UNKNOWN_BASELINE` | No baseline on this worker has that name. | Check `simlock baseline list`. |
+| `BASELINE_IN_USE` | `remove` refused: a lease uses a copy. The message names it. | Remove after that lease ends. |
+| `DEVICE_BUSY` | `remove` refused: a copy is being cleaned up. | Run it again in a moment. |
+| `FORBIDDEN` | The session lacks the admin role. | Run it as an admin. |
+
+`simlock doctor` lists each baseline's files under `sources`. Files that belong to no baseline are orphans; only `simlock doctor --purge-orphans` deletes them.
+
+Flags: [CLI reference](/simlock/docs/reference/cli#simlock-baseline). Events `baseline.saved`, `baseline.removed`, `baseline.stale`: [Events](/simlock/docs/reference/events).

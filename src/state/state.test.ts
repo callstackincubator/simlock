@@ -90,7 +90,7 @@ describe("openStateDatabase", () => {
 
 describe("openStateDatabase refusals", () => {
   const SEE =
-    "See https://incubator.callstack.com/simlock/docs/worker/running-the-daemon#upgrade-from-a-version-that-used-statejson.";
+    "See https://incubator.callstack.com/simlock/docs/worker/daemon#from-a-version-that-used-statejson.";
 
   async function seeded(directory: string): Promise<string> {
     const path = join(directory, STATE_DB_NAME);

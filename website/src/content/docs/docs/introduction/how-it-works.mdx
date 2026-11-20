@@ -1,108 +1,53 @@
 ---
 title: How it works
-description: The ideas you meet when you use Simlock, from devices and leases to the queue, the warm pool and the gateway, in plain words.
+description: The ideas you meet when you use Simlock, from leases and the queue to the warm pool, cleanup and the gateway, each in a few lines.
 sidebar:
   order: 2
 ---
 
-This page follows one request from start to finish and names each idea on the way. The table at the end sums them up.
+One request, start to finish. Each idea links to the page that explains it.
 
 ## Devices
 
-A device is something your agent can run an app on. Simlock works with three kinds:
-
-- **iOS simulators**, on macOS.
-- **Android emulators**, on macOS, Linux or Windows.
-- **Physical devices**: an iPhone, iPad or Android phone that an operator plugged in and enrolled with `simlock device add`.
-
-Simlock creates, boots and deletes its own simulators and emulators, and keeps them apart from yours. By default Xcode's device list and your usual `adb devices` do not show them, which is why you reach them through `simlock simctl` and `simlock adb`. An operator can set `drivers.ios.deviceSet` to `default` to put Simlock's iOS simulators in Xcode's own list, so build tools find them by UDID. Either way, Simlock never changes a simulator or emulator it did not create.
-
-Simlock never creates, erases or deletes a physical device. See [Physical devices](/simlock/docs/using-devices/physical-devices).
+Simlock serves iOS simulators (on macOS), Android emulators (on macOS, Linux and Windows) and enrolled physical phones and tablets. It creates, boots and deletes its own simulators and emulators, and never changes one it did not create. You reach them through `simlock simctl` and `simlock adb`.
+[iOS device sets](/simlock/docs/concepts/ios-device-sets) · [Physical devices](/simlock/docs/concepts/physical-devices)
 
 ## Leases
 
-A lease is your hold on one device. While you hold it, Simlock gives that device to nobody else.
+A lease is your hold on one device; nobody else gets it while you hold it. It ends when you release it, when its time to live (TTL) runs out without a renew, or when you lose it. Each lease belongs to a **requester**, the agent's identity, which holds one lease at a time by default.
+[Leases and requesters](/simlock/docs/concepts/leases)
 
-Every lease has a time to live (TTL). The lease ends when the TTL runs out, unless you renew it first. The default TTL is 15 minutes and the longest is 4 hours; an operator can change both.
+## Queue and capacity
 
-A lease ends in one of three ways:
+When no device is free and the machine has no room for another, your request waits in a queue, first come, first served. How many devices fit is worked out from the machine's CPUs and RAM, or set by the operator.
+[Queue and capacity](/simlock/docs/concepts/queue-and-capacity)
 
-- **You release it.** The device goes back to Simlock at once.
-- **It expires.** You stop renewing and the TTL runs out.
-- **You lose it.** An operator force-releases it, or the device disappears.
+## Creating a device
 
-`simlock lease` (without `--detach`) and the MCP server renew the lease for you while they run, and release it when they stop. If your agent crashes, the device comes back when the TTL runs out.
+When nothing fits and there is room, Simlock creates a device, but only on an iOS runtime or Android system image that is installed. Simlock never downloads one unless the request allows it.
+[Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images)
 
-What happens to the device afterwards:
+## Warm pool
 
-- **A simulator or emulator** serves one lease and is then deleted. The next lease gets a new one. A lease that names a baseline starts from a copy of that baseline.
-- **A physical device** stays, but Simlock uninstalls every app that was not on it when it was enrolled.
+Simlock keeps some devices booted and unleased, so the next lease skips the boot wait. It learns which kinds were leased in the last day; an operator can also name kinds to keep ready.
+[Warm pool](/simlock/docs/concepts/warm-pool)
 
-If a leased simulator or emulator crashes, Simlock reboots it and the lease stays yours. Apps you launched and log streams you opened on it are gone, so start them again.
+## After the lease
 
-See [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
+A simulator or emulator serves one lease and is then deleted. A physical device stays, and Simlock removes the apps that were not on it at enrolment. Idle devices are shut down, then deleted, to free RAM and disk.
+[Cleanup and disk](/simlock/docs/concepts/cleanup)
 
-## Requester: who holds a lease
+## Prepared devices and slim simulators
 
-Each lease belongs to a **requester**, the identity of the agent that asked for it. By default a requester holds at most one lease at a time, so a second request from the same agent fails with `REQUESTER_ALREADY_LEASED`. An operator can raise the limit, for all platforms together or per platform.
+A **baseline** is a device an operator set up once; every lease of it gets a fresh copy. A **slim** iOS simulator turns off background services to fit more simulators on one Mac.
+[Baselines](/simlock/docs/concepts/baselines) · [Slim iOS simulators](/simlock/docs/concepts/slim-simulators)
 
-Under Claude Code, Codex and pi, Simlock takes the requester from the agent's session, so every command in one session, sub-agents included, shares one identity. With other tools, set `SIMLOCK_AGENT_ID` to a different value for each agent session. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+## Workers and gateways
 
-## Queue: when no device is free
+A **worker** is a machine that runs Simlock and owns devices; every install is one. A **gateway** owns no devices: workers join it, and agents use its one address for the whole fleet.
+[Workers and gateways](/simlock/docs/concepts/workers-and-gateways)
 
-When no device can serve your request right now, the request waits in a queue, first come, first served. `simlock lease` prints your place in the queue while you wait.
+## Tokens and roles
 
-- With no `--timeout`, the request waits as long as it takes.
-- With `--timeout`, it fails with `QUEUE_TIMEOUT` when the time runs out.
-- With `--no-wait`, it fails at once with `NO_CAPACITY` instead of waiting.
-
-## Provisioning: creating a new device
-
-When no existing device fits and there is room, Simlock creates one. A new iOS simulator takes about a minute to create and boot.
-
-Simlock creates devices only on an iOS runtime or Android system image that is already installed. If yours is missing, the lease fails with `RUNTIME_MISSING`. Add `--allow-download` to let Simlock download it; downloads are several gigabytes, so Simlock never starts one on its own. See [Runtimes and system images](/simlock/docs/worker/runtimes-and-images).
-
-## Capacity: how many devices fit
-
-Capacity is how many simulators and emulators one machine may run and keep. By default Simlock works it out from the machine's CPUs and RAM, and leaves 4 GB of RAM for everything else. An operator can set fixed numbers instead. Physical devices do not count. See [Capacity and warm pool](/simlock/docs/worker/capacity).
-
-## Warm pool: devices ready before you ask
-
-The warm pool keeps some devices booted and unleased, so the next lease skips the boot wait. It is on by default.
-
-- Simlock remembers which kinds of device were leased in the last 24 hours, and keeps ready as many of each kind as were in use at the busiest moment. While copies of a kind are leased, it keeps the rest of that peak ready, at least one spare.
-- An operator can also name kinds of device to keep ready at all times.
-- The warm pool never downloads anything and never goes over capacity.
-
-## Cleanup: what happens to idle devices
-
-Devices nobody uses are cleaned up in two steps:
-
-1. After 10 minutes idle, a device is shut down. This frees RAM.
-2. After 60 more minutes shut down, it is deleted. This frees disk space.
-
-When free disk space drops below 10 GB, Simlock deletes after 10 minutes instead of 60. Devices the warm pool keeps ready are not shut down, and physical devices are never touched. See [Cleanup and disk](/simlock/docs/worker/cleanup).
-
-## Worker and gateway
-
-A **worker** is a machine that runs Simlock and owns devices. Every Simlock install is a worker. Its daemon starts on its own the first time you run a `simlock` command. Agents on the same machine reach it through the CLI, the MCP server or the programmatic client. See [Run the daemon](/simlock/docs/worker/running-the-daemon).
-
-A **gateway** is a Simlock daemon that owns no devices. Workers join it, and agents get one address for the whole fleet. The gateway keeps one queue for every worker and sends each request to a worker that can serve it, preferring one with a device already booted.
-
-Agents reach a gateway over HTTP with a token, or with the CLI on the gateway's own machine. Commands like `simlock simctl` and `simlock adb` run on the worker that owns the device. See [When you need a gateway](/simlock/docs/gateway).
-
-## At a glance
-
-| Term | In one line |
-| --- | --- |
-| Device | A simulator, emulator or enrolled physical device. |
-| Lease | Your hold on one device, ended by release, expiry or loss. |
-| TTL | How long a lease lasts without a renew. 15 minutes by default. |
-| Requester | The agent identity a lease belongs to. One lease each by default. |
-| Queue | Where requests wait, first come, first served, when no device is free. |
-| Provisioning | Creating a new device for a request. |
-| Capacity | How many devices one machine may run and keep. |
-| Warm pool | Booted, unleased devices kept ready for the next lease. |
-| Cleanup | Shutting down, then deleting, devices nobody uses. |
-| Worker | A machine that owns devices. |
-| Gateway | One address in front of many workers. |
+On one machine, the CLI needs no token. Over the network, every call carries a token, and its role (agent, operator, worker) decides what it can do.
+[Tokens and roles](/simlock/docs/concepts/tokens-and-roles)

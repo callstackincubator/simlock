@@ -58,7 +58,7 @@ function FleetTable() {
   );
 }
 
-const ADD_WORKER_URL = "https://incubator.callstack.com/simlock/docs/gateway/joining-workers";
+const ADD_WORKER_URL = "https://incubator.callstack.com/simlock/docs/gateway/add-a-worker";
 
 export function FleetBody({
   log,
