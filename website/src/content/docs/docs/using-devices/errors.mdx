@@ -48,7 +48,7 @@ In a script, check the exit code or `code`, never the message: the message is fo
 | `BASELINE_MISMATCH` | 2 | `--baseline` came with a platform, model, OS, mode or image tag that differs from the baseline. The message names the first one that differs. | Drop that option: the baseline already decides it. |
 | `BASELINE_STALE` | 12 | The OS or image the baseline was saved on has been removed, or an iOS baseline was saved before simulators stopped sharing folders, or from a lease made before that. | Ask an admin to install it again, or save the baseline again. |
 | `LICENSE_NOT_ACCEPTED` | 12 | An Android download needs the SDK licences accepted, and this machine hasn't accepted them. | An admin sets `downloads.acceptAndroidLicenses` to `true`. |
-| `INSUFFICIENT_DISK_SPACE` | 12 | The download, or the copy of an Android device's base image, doesn't fit on the disk. The message says which, and how much is needed and free. | Free disk space on that machine, or ask for an installed version. |
+| `INSUFFICIENT_DISK_SPACE` | 12 | A download doesn't fit on the disk. The message says how much is needed and free. | Free disk space on that machine, or ask for an installed version. |
 | `DOWNLOAD_TIMEOUT` | 10 | The download, including time waiting behind another download, took longer than the machine allows. | Retry; the download may already be further along. Or ask an admin to install the runtime. |
 | `NO_DRIVER` | 12 | The platform isn't available here: its tools are missing, or no worker in the fleet has it. | Run `simlock doctor` on the machine, or ask for the other platform. |
 | `CAPABILITY_MISSING` | 12 | No worker that could serve the request has a feature it needs, such as agent-device. | Ask an operator to turn the feature on for a worker. |
@@ -57,7 +57,7 @@ In a script, check the exit code or `code`, never the message: the message is fo
 
 | Code | Exit | What it means | What to do |
 | --- | --- | --- | --- |
-| `PROVISION_FAILED` | 1 | Simlock couldn't create or start the device. The message carries the tool's error. | Retry once. If it keeps failing, ask an operator to check `simlock doctor` and `simlock daemon logs`. |
+| `PROVISION_FAILED` | 1 | Simlock couldn't create or start the device. The message carries the tool's error. When the copy of an Android device's base image does not fit in the free disk space, the message says so and gives the bytes needed and free. | Retry once. If it keeps failing, ask an operator to check `simlock doctor` and `simlock daemon logs`. |
 
 ## Keeping and ending a lease
 

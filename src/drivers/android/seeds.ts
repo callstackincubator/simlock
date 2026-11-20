@@ -293,6 +293,7 @@ export class Seeds {
           kind.avdHome,
           folder,
           `copying Android device ${device.deviceId} to source ${sourceId} failed`,
+          "copy an Android device into a baseline",
         );
         const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
         await this.#avdConfig.applyCores(avdFolder);
@@ -498,6 +499,7 @@ export class Seeds {
       row.folder,
       avdHome,
       `copying Android source ${sourceId} to ${basename(avdHome)} failed`,
+      "copy an Android baseline",
     );
     const driverData: AndroidDriverData = {
       avdHome,
@@ -698,10 +700,11 @@ export class Seeds {
       seed.folder,
       avdHome,
       `copying Android seed ${seed.sourceId} to ${basename(avdHome)} failed`,
+      "copy an Android seed",
     );
   }
 
-  async #copyAvd(fromHome: string, toHome: string, failure: string): Promise<void> {
+  async #copyAvd(fromHome: string, toHome: string, failure: string, action: string): Promise<void> {
     const avdFolder = join(fromHome, `${SEED_AVD_NAME}.avd`);
     // why: a clone (APFS, reflink) costs less than the folder's size, but the check cannot tell one from a full copy, so it asks for the whole size on every filesystem (#1750); a folder that cannot be measured reserves nothing.
     const release = await this.#copySpace.reserve(
@@ -709,7 +712,7 @@ export class Seeds {
       "android",
       await this.#filesystem.directorySize(avdFolder).catch(() => 0),
       this.#deviceRoot,
-      "copy an Android seed",
+      action,
     );
     try {
       await this.#filesystem.mkdirp(toHome, { mode: 0o700 });

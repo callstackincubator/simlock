@@ -42,11 +42,46 @@ class SizeFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+/** why: free space per volume, so a reservation on the wrong volume is seen: only the device root is short, every other path has room. */
 class CopyRecordingFilesystem extends MemoryFilesystem {
   readonly copies: string[] = [];
+  readonly volumesAsked: string[] = [];
+  readonly #deviceRootFree: number;
+  #failuresLeft: number;
+  #gate: Promise<void> | undefined;
+  #onCopyStarted: (() => void) | undefined;
 
-  override copyTree(from: string, to: string, options: { readonly timeoutMs: number }) {
+  constructor(deviceRootFree: number, failFirstCopies = 0) {
+    super();
+    this.#deviceRootFree = deviceRootFree;
+    this.#failuresLeft = failFirstCopies;
+  }
+
+  override diskFree(path: string): Promise<number> {
+    this.volumesAsked.push(path);
+    return Promise.resolve(path === avdDirectory ? this.#deviceRootFree : Number.MAX_SAFE_INTEGER);
+  }
+
+  /** why: holds every later copy open until the returned function is called, and resolves `started` when one has begun. */
+  holdCopies(): { readonly started: Promise<void>; readonly release: () => void } {
+    let release = () => {};
+    this.#gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      this.#onCopyStarted = resolve;
+    });
+    return { started, release };
+  }
+
+  override async copyTree(from: string, to: string, options: { readonly timeoutMs: number }) {
     this.copies.push(to);
+    this.#onCopyStarted?.();
+    await this.#gate;
+    if (this.#failuresLeft > 0) {
+      this.#failuresLeft -= 1;
+      throw new Error("cp: interrupted");
+    }
     return super.copyTree(from, to, options);
   }
 }
@@ -300,11 +335,13 @@ describe("Seeds", () => {
 
     it("refuses a copy of the seed that does not fit in the device root's free space before copying, and copies one that fits exactly", async () => {
       const seedBytes = 4_112;
-      const provisionWith = async (freeBytes: number) => {
-        const filesystem = new CopyRecordingFilesystem(freeBytes);
+      const provisionWith = async (freeBytes: number, failFirstCopies = 0) => {
+        const filesystem = new CopyRecordingFilesystem(freeBytes, failFirstCopies);
         const harness = await seedHarness(
           [
             ...makingTheSeed(),
+            processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+            processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
             processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
           ],
           { filesystem },
@@ -325,6 +362,40 @@ describe("Seeds", () => {
         deviceId: "simlock_three",
       });
       expect(fits.filesystem.copies).toHaveLength(2);
+      // why: only the device root's volume is short in this filesystem, so the reservation is shown to be on it.
+      expect(new Set(fits.filesystem.volumesAsked)).toEqual(new Set([avdDirectory]));
+
+      // why: two copies at once with room for one: the second is refused while the first runs, and goes through once it ends.
+      const crowded = await provisionWith(seedBytes);
+      await crowded.provision;
+      const held = crowded.filesystem.holdCopies();
+      const running = crowded.harness.seeds.provision(crowded.harness.spec);
+      await held.started;
+      let secondRefusal: unknown;
+      const second = crowded.harness.seeds
+        .provision(crowded.harness.spec)
+        .catch((error: unknown) => {
+          secondRefusal = error;
+        });
+      await vi.waitFor(() =>
+        expect(secondRefusal !== undefined || crowded.filesystem.copies.length > 2).toBe(true),
+      );
+      expect(
+        secondRefusal,
+        "the second copy was refused while the first held the room",
+      ).toMatchObject({
+        name: "InsufficientDiskSpaceError",
+      });
+      held.release();
+      await second;
+      await expect(running).resolves.toMatchObject({ deviceId: expect.any(String) });
+
+      // why: a copy that fails gives its reservation back, so the next copy is not refused for it.
+      const interrupted = await provisionWith(seedBytes, 1);
+      await expect(interrupted.provision).rejects.toThrow("cp: interrupted");
+      await expect(
+        interrupted.harness.seeds.provision(interrupted.harness.spec),
+      ).resolves.toMatchObject({ deviceId: expect.any(String) });
 
       const short = await provisionWith(seedBytes - 1);
       const refusal = await short.provision.catch((error: unknown) => error);
