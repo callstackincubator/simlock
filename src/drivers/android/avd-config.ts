@@ -6,6 +6,7 @@ import { containsForbiddenCharacter, type DeviceProfile } from "./device-profile
 import { isPlayStoreImage } from "./image-fit.js";
 
 export const MARK_READ_TIMEOUT_MS = 5_000;
+const MARK_WRITE_TIMEOUT_MS = 5_000;
 export const ERASABLE_MARK_READ_BYTES = 4096;
 export const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 const DURABLE_MARK_KEY = "simlock.mark";
@@ -169,12 +170,11 @@ export class AvdConfig {
 
   async #writeErasableMark(serial: string, token: string): Promise<void> {
     const payload = JSON.stringify({ token });
-    await this.#options.adbTools.runOrThrow(this.#options.adb, [
-      "-s",
-      serial,
-      "shell",
-      `echo '${payload}' > ${ERASABLE_MARK_PATH}`,
-    ]);
+    await this.#options.adbTools.runOrThrow(
+      this.#options.adb,
+      ["-s", serial, "shell", `echo '${payload}' > ${ERASABLE_MARK_PATH}`],
+      { timeoutMs: MARK_WRITE_TIMEOUT_MS },
+    );
   }
 
   async readDurableMark(folder: string): Promise<string | undefined> {
