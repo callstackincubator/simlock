@@ -18,7 +18,7 @@ sidebar:
   | `--timeout 10m` | `QUEUE_TIMEOUT` once 10 minutes pass | 10 |
   | `--no-wait` | `NO_CAPACITY` at once, when no device can start now | 11 |
 
-- **Stopping the command does not leave the queue.** A killed `simlock lease --detach` leaves its request waiting; it is granted later and holds the device until its TTL runs out. Without `--detach`, Ctrl-C waits for the grant, then releases the device at once. Set `--timeout` if you might stop waiting.
+- **Stopping the command does not leave the queue.** A killed `simlock lease --detach` leaves its request waiting; it is granted later and holds the device until its TTL runs out. Without `--detach`, Ctrl-C or the parent exiting cancels the request. Set `--timeout` if you might stop waiting.
 - **A request that can never be served fails at once**, without waiting: an unknown model (`UNKNOWN_MODEL`), a platform with no tools (`NO_DRIVER`), or an OS version that is not installed (`RUNTIME_MISSING`).
 
 `simlock status` and `simlock list --requests` show each waiting request, its place, and why it waits, such as `full: running limit` or `behind an earlier request`.

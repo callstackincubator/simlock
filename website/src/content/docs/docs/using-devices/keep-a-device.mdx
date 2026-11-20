@@ -75,7 +75,7 @@ To watch another process instead of the direct parent, pass `--bind-pid <pid>`, 
 
 `--ttl` takes `ms`, `s`, `m`, `h` or `d`, such as `30m` or `2h`; a bare number is milliseconds. A lease nobody renews ends one TTL after its last renewal.
 
-The release returns as soon as the lease ends. Simlock deletes a simulator or emulator in the background, and wipes and keeps a phone. Nothing you left on the device reaches the next holder.
+The release returns as soon as the lease ends. Simlock deletes a simulator or emulator in the background, so nothing you left on it reaches the next holder. A phone is not erased: Simlock uninstalls the apps added since enrolment. What else stays on a phone: [Physical devices](/simlock/docs/concepts/physical-devices).
 
 <Aside type="caution">
 `simlock release --all` ends every lease on the worker, other agents' too. It asks you to confirm, and without a terminal it refuses unless you pass `--yes`. An agent releases only its own lease, by id.
