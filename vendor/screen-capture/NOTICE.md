@@ -170,15 +170,16 @@ and dropped: it cost 33 to 71 CPU points against 27 without it.
 
 **6. `FrameCapture`'s frame callbacks hop onto the actor instead of asserting they
 run on it.** serve-sim registers both with `assumeIsolated`, which asserts that the
-callback is already a job of the actor whose executor is `queue`. The framework
-delivers the block on that queue but does not enter it as a job of the actor, and
-the check is compiled into the binary: the release build (the `xcode-27` lane) traps
-with `Incorrect actor executor assumption` before the program writes a frame, while
-a build from another toolchain passes the same check. Each callback now starts a
-`Task` that runs `captureFrame()` on the actor, so nothing depends on which build
-made the binary or on the queue the framework calls from; upstream's file at the
-commit we took still has the assertion. The comment in `FrameCapture.swift` says the
-same, and is the authoritative wording for it.
+callback runs on the actor whose executor is `queue`. The 0.8.0 release build (the
+`xcode-27` lane) traps that assertion with `Incorrect actor executor assumption` on
+macOS 15.7.7 before the program writes a frame, while a build from Xcode 26.3 passes
+it on the same host; why the two differ is not established. Each callback now takes
+the noticed time and starts a `Task` that runs `captureFrame()` on the actor, so no
+isolation check runs at all; upstream's file at the commit we took still has the
+assertion. Measured on an iPhone 17 Pro (iOS 26.4, macOS 26.6) with `fps-reader.mjs`,
+the hop leaves distinct frames and p95 unchanged and costs about 1.3 CPU points on
+scroll (median of 8 pairs). The comment in `FrameCapture.swift` says why, and is
+the authoritative wording for it.
 
 One mechanical consequence of flattening two upstream targets into one:
 `FrameCapture.swift` and `HIDInjector.swift` no longer say `import SimNativeSupport`, because there is

@@ -5,8 +5,8 @@
 // instead of private, so the input mode can report the device's size, the notice/copy split — the
 // callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
 // pacing grid and copies on a queue of its own — and the callbacks hopping onto this actor
-// instead of asserting they already run on it, which traps the process before it writes a frame;
-// everything else here is upstream's.
+// instead of asserting they already run on it, an assertion that trapped the 0.8.0 release build
+// on macOS 15.7.7 before it wrote a frame; everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -226,12 +226,19 @@ actor FrameCapture {
         desc.registerScreenCallbacks(
             uuid: uuid,
             callbackQueue: queue,
-            // why: these callbacks are not entered as a job of this actor, and `assumeIsolated`'s
-            // check is compiled into the binary — the release build traps on the first surface
-            // change while other builds pass. A task created here inherits the actor's isolation,
-            // so its job is enqueued on the actor's executor.
-            frameCallback: { [self] in Task { self.captureFrame() } },
-            surfacesChangedCallback: { [self] in Task { self.captureFrame() } },
+            // why: serve-sim's `assumeIsolated` here trapped with "Incorrect actor executor
+            // assumption" in the 0.8.0 release build on macOS 15.7.7, while a build from Xcode 26.3
+            // passed on the same host. A task created here inherits the actor's isolation, so
+            // `captureFrame` runs as a job of the actor and nothing is checked. The noticed time is
+            // taken before the hop, so the wait for the actor does not move the frame on the grid.
+            frameCallback: { [self] in
+                let seen = DispatchTime.now().uptimeNanoseconds
+                Task { self.captureFrame(seenNanos: seen) }
+            },
+            surfacesChangedCallback: { [self] in
+                let seen = DispatchTime.now().uptimeNanoseconds
+                Task { self.captureFrame(seenNanos: seen) }
+            },
             propertiesChangedCallback: {}
         )
     }
@@ -267,10 +274,9 @@ actor FrameCapture {
 
     // MARK: - Frame capture
 
-    private func captureFrame(force: Bool = false) {
-        // why: the time the composite was noticed, before the copy below, because the copy takes
-        // 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
-        let seenNanos = DispatchTime.now().uptimeNanoseconds
+    // why: `seenNanos` is the time the composite was noticed, before the copy below, because the
+    // copy takes 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
+    private func captureFrame(force: Bool = false, seenNanos: UInt64 = DispatchTime.now().uptimeNanoseconds) {
         guard let desc = pickBestDescriptor() else { return }
 
         let surfSel = NSSelectorFromString("framebufferSurface")
