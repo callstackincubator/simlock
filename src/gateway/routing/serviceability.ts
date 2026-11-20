@@ -203,8 +203,14 @@ function assessLeading(
   views: readonly WorkerView[],
 ): Rejection | undefined {
   if (takersOf(request, views).length === 0) return noWorker();
-  if (views.some(isUnread)) return undefined;
+  return views.some(isUnread) ? undefined : assessKnown(request, views);
+}
 
+// why: rows 2 to 4: what no known worker could serve, whatever the capacity.
+function assessKnown(
+  request: RoutableRequest,
+  views: readonly WorkerView[],
+): Rejection | undefined {
   const known = views.filter(isKnown);
   const platform = request.platform;
   if (!known.some((worker) => hasPlatform(worker, request))) {
