@@ -127,20 +127,72 @@ describe("IosSimctlDriver copy swap", () => {
     ]);
   });
 
+  it("a copy whose source recorded a file and a link the copy does not have is kept, the provision succeeds and the entries still there are swapped", async () => {
+    const database = await seededDatabase({
+      files: [
+        { kind: "file", relativePath: "data/gone.plist" },
+        { kind: "link", relativePath: "data/GoneLogs" },
+        { kind: "file", relativePath: "data/kept.plist" },
+        { kind: "link", relativePath: "data/Logs" },
+      ],
+      lineage: [lineageUdid],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+      },
+      { match: simctl("delete", copyUdid) },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    const kept = `${deviceRoot}/${copyUdid}/data/kept.plist`;
+    await plantBytes(filesystem, kept, Buffer.from(`/Devices/${lineageUdid}/data`));
+    filesystem.defineSymlink(`${deviceRoot}/${copyUdid}/data/Logs`, `/Logs/${lineageUdid}`);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const outcome = await driver.provision(spec).then(
+      (device) => device.driverData,
+      (error: unknown) => error as Error,
+    );
+
+    expect(outcome).toMatchObject({ lineage: [lineageUdid] });
+    expect(runner.calls.some((call) => call.args.join(" ").endsWith(`delete ${copyUdid}`))).toBe(
+      false,
+    );
+    expect((await readBytes(filesystem, kept)).toString()).toBe(`/Devices/${copyUdid}/data`);
+    expect(await filesystem.readlink(`${deviceRoot}/${copyUdid}/data/Logs`)).toBe(
+      `/Logs/${copyUdid}`,
+    );
+  });
+
   it("a copy whose swap fails is deleted and the provision fails", async () => {
     class FailingWrites extends MemoryFilesystem {
       override async writeAt(): Promise<void> {
         throw new Error("disk full");
       }
     }
+    class LockedLinks extends MemoryFilesystem {
+      override async readlink(path: string): Promise<string> {
+        throw Object.assign(new Error(`EACCES: permission denied, readlink '${path}'`), {
+          code: "EACCES",
+        });
+      }
+    }
     const file = `${deviceRoot}/${copyUdid}/data/Library/note.plist`;
     const cases = [
       { label: "control: a swap that works", error: undefined },
-      { label: "a recorded file gone", gone: true, error: /ENOENT/ },
       {
         label: "a write that fails",
         filesystem: new FailingWrites(),
         error: /disk full/,
+      },
+      {
+        label: "a recorded link that cannot be read",
+        filesystem: new LockedLinks(),
+        link: true,
+        error: /EACCES/,
       },
       {
         label: "a result of another length",
@@ -151,7 +203,10 @@ describe("IosSimctlDriver copy swap", () => {
     ];
     for (const attempt of cases) {
       const database = await seededDatabase({
-        files: [{ kind: "file", relativePath: "data/Library/note.plist" }],
+        files: [
+          { kind: "file", relativePath: "data/Library/note.plist" },
+          ...(attempt.link === true ? [{ kind: "link" as const, relativePath: "data/Logs" }] : []),
+        ],
         lineage: attempt.lineage ?? [lineageUdid],
       });
       const runner = new ScriptedProcessRunner([
@@ -166,7 +221,7 @@ describe("IosSimctlDriver copy swap", () => {
       await plantManagedDevice(filesystem);
       await plantBytes(
         filesystem as MemoryFilesystem,
-        attempt.gone === true ? `${deviceRoot}/${copyUdid}/data/other` : file,
+        file,
         Buffer.from(`/Devices/${lineageUdid}/ AAAAAAAA-1111-2222-3333-BBBBBBBBBBB`),
       );
       const driver = await createDriver(runner, new FakeClock(), filesystem, database);
