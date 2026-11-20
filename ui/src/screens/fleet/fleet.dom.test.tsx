@@ -130,7 +130,7 @@ describe("the Fleet page", () => {
     expect(rowTexts()).toHaveLength(5);
     expect(screen.getByRole("link", { name: "Add worker" })).toHaveAttribute(
       "href",
-      "https://callstackincubator.github.io/simlock/docs/gateway/joining-workers",
+      "https://incubator.callstack.com/simlock/docs/gateway/joining-workers",
     );
     const order = rowTexts();
     expect(order[0]).toBe("Needs attention 2");
