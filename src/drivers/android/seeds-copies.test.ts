@@ -302,26 +302,39 @@ describe("Seeds", () => {
       const seedBytes = 4_112;
       const provisionWith = async (freeBytes: number) => {
         const filesystem = new CopyRecordingFilesystem(freeBytes);
-        const harness = await seedHarness(makingTheSeed(), { filesystem });
+        const harness = await seedHarness(
+          [
+            ...makingTheSeed(),
+            processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+          ],
+          { filesystem },
+        );
         await filesystem.mkdirp(`${seedHome}/simlock.avd/snapshots/simlock_boot`);
         await filesystem.writeFileAtomic(
           `${seedHome}/simlock.avd/snapshots/simlock_boot/ram.bin`,
           "x".repeat(4_096),
         );
-        return { filesystem, provision: harness.seeds.provision(harness.spec) };
+        return { filesystem, harness, provision: harness.seeds.provision(harness.spec) };
       };
 
       const fits = await provisionWith(seedBytes);
       await expect(fits.provision).resolves.toMatchObject({ deviceId: "simlock_one" });
       expect(fits.filesystem.copies).toEqual([`${copyHome}/simlock.avd`]);
+      // why: a finished copy gives its reservation back, so the next copy of the same size is not refused for it.
+      await expect(fits.harness.seeds.provision(fits.harness.spec)).resolves.toMatchObject({
+        deviceId: "simlock_three",
+      });
+      expect(fits.filesystem.copies).toHaveLength(2);
 
       const short = await provisionWith(seedBytes - 1);
-      await expect(short.provision).rejects.toMatchObject({
+      const refusal = await short.provision.catch((error: unknown) => error);
+      expect(refusal).toMatchObject({
         availableBytes: seedBytes - 1,
         name: "InsufficientDiskSpaceError",
         platform: "android",
         requiredBytes: seedBytes,
       });
+      expect((refusal as Error).message).toContain("to copy an Android seed:");
       expect(short.filesystem.copies).toEqual([]);
       expect(await short.filesystem.exists(copyHome)).toBe(false);
     });
