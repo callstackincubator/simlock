@@ -11,6 +11,7 @@ describe("signInHref", () => {
       ],
       ["https://login.example.test/start?rd=/", "https://login.example.test/start?rd=/"],
       ["{path}", undefined],
+      ["https://{path}/start", undefined],
       ["javascript:alert(1)", undefined],
       ["//login.example.test/start", undefined],
       [42, undefined],

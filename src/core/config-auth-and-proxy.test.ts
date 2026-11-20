@@ -150,6 +150,7 @@ describe("loadConfig over http.proxyAuth", () => {
       "not a url",
       "{path}",
       "{path}://login.example.test/start",
+      "https://{path}/start",
     ]) {
       await expect(load({ ...complete, signInUrl })).rejects.toThrow(
         'Invalid config value for "http.proxyAuth.signInUrl"',
