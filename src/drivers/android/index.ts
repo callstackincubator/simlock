@@ -54,6 +54,7 @@ import {
   COLD_BOOT_ESTIMATE_MS,
   DEFAULT_EMULATOR_LAUNCH,
   Emulator,
+  WIFI_PER_EMULATOR_FLAGS,
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
 import {
@@ -62,7 +63,7 @@ import {
   DEFAULT_ADB_SERVER_PORT,
   defaultAndroidDeviceRoot,
 } from "./definition.js";
-import { ADB_DEVICES_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
+import { ADB_DEVICES_TIMEOUT_MS, AVDMANAGER_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
 import { ANDROID_DEFAULT_MODELS, Catalog } from "./catalog.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { ConsolePorts, portAllocatorFor, portsFromAdbDevices } from "./console-ports.js";
@@ -221,6 +222,8 @@ export class AndroidDriver implements Driver {
       filesystem: options.filesystem,
       idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
+      cores: options.config?.emulator?.cores,
+      seedOnlyInputs: seedOnlyInputs(),
     });
     this.#bootTimeoutMs = bootTimeoutFor(options);
     this.#ownership = new Ownership({
@@ -692,12 +695,11 @@ export class AndroidDriver implements Driver {
         await this.#emulator.stopUnowned(data);
       }
       if (data.avdHome === undefined) {
-        await this.#adbTools.runOrThrow(this.#sdk.avdmanager, [
-          "delete",
-          "avd",
-          "-n",
-          data.avdName,
-        ]);
+        await this.#adbTools.runOrThrow(
+          this.#sdk.avdmanager,
+          ["delete", "avd", "-n", data.avdName],
+          { timeoutMs: AVDMANAGER_TIMEOUT_MS },
+        );
       } else {
         await this.#filesystem.rm(data.avdHome);
       }
@@ -896,19 +898,25 @@ function bootTimeoutFor(options: AndroidDriverOptions): number {
 /**
  * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
  * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
- * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
- * their defaults.
+ * other; the core count is part of the snapshot's hardware. Audio and the boot animation do not,
+ * and stay out. Nothing is added while all are at their defaults.
  */
 function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
-  if (
+  const graphics =
     launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
     launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
-  ) {
-    return [];
-  }
-  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+      ? []
+      : [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+  return launch.cores === undefined ? graphics : [...graphics, `cores=${launch.cores}`];
+}
+
+/**
+ * why: #1586: a snapshot taken on netsim's shared Wi-Fi joins no network under the per-emulator router for about a minute, so a seed made before the flag is stale. A saved baseline's hash leaves it out: its owner cannot remake it, so it stays usable.
+ */
+function seedOnlyInputs(): string[] {
+  return [`wifi=${WIFI_PER_EMULATOR_FLAGS.join(" ")}`];
 }
 
 export function hostAbiFor(architecture: string): string {

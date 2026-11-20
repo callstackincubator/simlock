@@ -186,6 +186,7 @@ const LEASE_COLUMNS = [
   "last_renewed_at",
   "id_chosen_by_requester",
   "run_id",
+  "label",
 ] as const;
 
 const REQUEST_COLUMNS = [
@@ -196,6 +197,7 @@ const REQUEST_COLUMNS = [
   "lease_id",
   "fleet_request_id",
   "run_id",
+  "label",
   "platform",
   "model",
   "os_version",
@@ -224,6 +226,7 @@ const GRANT_COLUMNS = [
   "last_renewed_at",
   "id_chosen_by_requester",
   "run_id",
+  "label",
   "estimated_provision_ms",
   "estimated_boot_ms",
   "estimated_reclaim_ms",
@@ -329,6 +332,7 @@ function leaseValues(lease: LeaseRecord): SqliteValue[] {
     lease.lastRenewedAt,
     flagValue(lease.idChosenByRequester),
     lease.runId ?? null,
+    lease.label ?? null,
   ];
 }
 
@@ -380,6 +384,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       record.leaseId ?? null,
       record.fleetRequestId ?? null,
       nullable(record.runId),
+      nullable(record.label),
       request.platform,
       request.model ?? null,
       request.osVersion ?? null,
@@ -412,6 +417,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       lease.lastRenewedAt,
       flagValue(lease.idChosenByRequester),
       nullable(lease.runId),
+      nullable(lease.label),
       grant.timing.estimatedProvisionMs,
       grant.timing.estimatedBootMs,
       grant.timing.estimatedReclaimMs,
@@ -609,6 +615,7 @@ function leaseFromRow(table: string, key: string, row: Row, idColumn: string): L
     ownerId: reader.text("owner_id"),
     requesterId: reader.text("requester_id"),
     ...present("runId", reader.optText("run_id")),
+    ...present("label", reader.optText("label")),
     ttlDeadline: reader.int("ttl_deadline"),
     ttlMs: reader.int("ttl_ms"),
   };
@@ -650,6 +657,7 @@ function loadLeaseRequests(
         ...present("leaseId", reader.optText("lease_id")),
         ...present("fleetRequestId", reader.optText("fleet_request_id")),
         ...present("runId", reader.optText("run_id")),
+        ...present("label", reader.optText("label")),
         ownerId: reader.text("owner_id"),
         request: requestFromRow(reader),
         requesterId: reader.text("requester_id"),

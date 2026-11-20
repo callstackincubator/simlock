@@ -78,9 +78,9 @@ async function boot(options: {
   };
   const calls = slimBootCalls(slim18_5.udid, "");
   const runner = new ScriptedProcessRunner([
-    ...calls.slice(0, 3),
+    ...calls.slice(0, 4),
     {
-      match: calls[3]!.match,
+      match: calls[4]!.match,
       result:
         options.readbackFails === true
           ? { code: 1, stderr: "boom\n", stdout: "" }

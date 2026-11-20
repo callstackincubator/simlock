@@ -7,6 +7,7 @@ import {
   MemoryFilesystem,
   ScriptedProcessRunner,
   type ProcessResult,
+  type ProcessRunOptions,
   type ProcessRunner,
 } from "../../ports/index.js";
 import { AndroidDriver, SdkMissingError } from "./index.js";
@@ -40,6 +41,19 @@ const scopedOptions = { env: scopedEnv } as const;
 const taggedHarness = (
   ...args: Parameters<typeof taggedHarnessWith> extends [unknown, ...infer Rest] ? Rest : never
 ) => taggedHarnessWith(buildDriver, ...args);
+
+// why: `ScriptedProcessRunner` ignores `timeoutMs`; this is a child that never exits under a runner that honours it, on the driver's fake clock.
+function endedOnlyByItsDeadline(
+  clock: FakeClock,
+  options: ProcessRunOptions | undefined,
+): Promise<ProcessResult> {
+  return new Promise((resolve) => {
+    if (options?.timeoutMs === undefined) return;
+    clock.setTimer(options.timeoutMs, () => {
+      resolve({ code: null, endedBy: "timeout", stderr: "", stdout: "" });
+    });
+  });
+}
 
 /** why: how many times the emulator has been asked whether it finished booting. */
 function bootPolls(runner: ScriptedProcessRunner): number {
@@ -205,7 +219,11 @@ describe("AndroidDriver", () => {
     const occupancyReads = runner.calls.filter((call) => call.args[0] === "devices");
     expect(occupancyReads.length).toBeGreaterThan(0);
     for (const read of occupancyReads) {
-      expect(read).toEqual({ args: ["devices"], command: binaries.adb, options: scopedOptions });
+      expect(read).toEqual({
+        args: ["devices"],
+        command: binaries.adb,
+        options: { ...scopedOptions, timeoutMs: expect.any(Number) },
+      });
     }
   });
 
@@ -252,6 +270,7 @@ describe("AndroidDriver", () => {
     const adbCalls = harness.runner.calls.filter((call) => call.command === binaries.adb);
     expect(emulatorCalls.length).toBeGreaterThan(0);
     expect(emulatorCalls.filter((call) => call.options.killChildren !== true)).toEqual([]);
+    expect(emulatorCalls.filter((call) => call.options.outlivesCaller !== true)).toEqual([]);
     expect(adbCalls.length).toBeGreaterThan(0);
     expect(adbCalls.filter((call) => call.options.killChildren !== undefined)).toEqual([]);
   });
@@ -461,34 +480,53 @@ describe("AndroidDriver", () => {
     expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
   });
 
-  it("kills an emulator that has not exited 180 s after a shutdown, whatever the boot timeout is", async () => {
-    const harness = await provisionedHarness({
-      afterwards: [
-        copyPathExpectation("emulator-5586"),
-        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
-      ],
-      bootTimeoutMs: 600_000,
-    });
-    const ready = await harness.driver.makeReady(harness.device);
-    const launch = harness.runner.calls.findLastIndex(
-      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
-    );
-    const running = harness.runner.handles[launch];
-    if (running === undefined) throw new Error("no running emulator");
-    const kill = vi.spyOn(running, "kill");
+  it.each([
+    ["adb still lists it", 180_000, "List of devices attached\nemulator-5586\tdevice\n"],
+    ["adb no longer lists it", 30_000, "List of devices attached\n"],
+  ] as const)(
+    "kills an emulator that has not exited after a shutdown, whatever the boot timeout is: %s, at %s ms",
+    async (_listing, killedAfterMs, devices) => {
+      const harness = await provisionedHarness({
+        afterwards: [
+          copyPathExpectation("emulator-5586"),
+          processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+          processResult(binaries.adb, ["devices"], devices),
+        ],
+        bootTimeoutMs: 600_000,
+      });
+      const ready = await harness.driver.makeReady(harness.device);
+      const launch = harness.runner.calls.findLastIndex(
+        (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+      );
+      const running = harness.runner.handles[launch];
+      if (running === undefined) throw new Error("no running emulator");
+      const kill = vi.spyOn(running, "kill");
 
-    // why: The emulator ignores `emu kill`: only the timeout can end the wait.
-    harness.runner.ignoresEmuKill = true;
-    const armedBefore = harness.clock.pendingTimerCount;
-    const shutdown = harness.driver.shutdown(ready);
-    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
-    expect(kill).not.toHaveBeenCalled();
-    harness.clock.advance(180_000);
-    await shutdown;
+      // why: The emulator ignores `emu kill`: only the timeout can end the wait.
+      harness.runner.ignoresEmuKill = true;
+      const armedBefore = harness.clock.pendingTimerCount;
+      const shutdown = harness.driver.shutdown(ready);
+      await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
+      expect(kill).not.toHaveBeenCalled();
+      harness.clock.advance(29_999);
+      await Promise.resolve();
+      expect(kill, "nothing is ended inside the 30 s grace").not.toHaveBeenCalled();
+      harness.clock.advance(1);
+      for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      if (killedAfterMs === 180_000) {
+        expect(kill, "adb still lists the emulator, so it keeps the 180 s").not.toHaveBeenCalled();
+        harness.clock.advance(150_000);
+      } else {
+        expect(kill, "adb lists it no more, so the wrapper alone is ended").toHaveBeenCalledWith(
+          "SIGKILL",
+        );
+      }
+      await shutdown;
 
-    expect(kill).toHaveBeenCalledWith("SIGKILL");
-    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
-  });
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
+      expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+    },
+  );
 
   it("leaves no timer armed when waiting for the emulator to exit fails", async () => {
     const harness = await provisionedHarness({
@@ -582,13 +620,16 @@ describe("AndroidDriver", () => {
     ).toBe(earlier.identity);
   });
 
-  it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError", async () => {
-    for (const { key, waitsMs } of [
+  it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError, whether adb keeps answering that it has not booted or one of its three probes never exits", async () => {
+    for (const { key, waitsMs, hung } of [
       { key: undefined, waitsMs: 300_000 },
       { key: 600_000, waitsMs: 600_000 },
+      { key: 30_000, waitsMs: 30_000, hung: "getprop sys.boot_completed" },
+      { key: 30_000, waitsMs: 30_000, hung: "getprop init.svc.bootanim" },
+      { key: 30_000, waitsMs: 30_000, hung: "pm path android" },
     ]) {
       const harness = await provisionedHarness({
-        bootCompleted: "0\n",
+        ...(hung === undefined ? { bootCompleted: "0\n" } : {}),
         ...(key === undefined ? {} : { bootTimeoutMs: key }),
       });
       const kills: string[] = [];
@@ -611,18 +652,22 @@ describe("AndroidDriver", () => {
 
       // why: the script answers one poll; a boot that outlasts minutes keeps being told it is not done.
       const scripted = harness.runner.run.bind(harness.runner);
-      vi.spyOn(harness.runner, "run").mockImplementation((command, args, options) =>
-        args.at(-1) === "sys.boot_completed"
+      vi.spyOn(harness.runner, "run").mockImplementation((command, args, options) => {
+        const probe = args.slice(3).join(" ");
+        if (probe === hung) return endedOnlyByItsDeadline(harness.clock, options);
+        return hung === undefined && probe === "getprop sys.boot_completed"
           ? Promise.resolve({ code: 0, stderr: "", stdout: "0\n" })
-          : scripted(command, args, options),
-      );
+          : scripted(command, args, options);
+      });
 
       const ready = harness.driver.makeReady(harness.device);
       const state = promiseState(ready);
       const failed = expect(ready).rejects.toMatchObject({ name: "BootTimeoutError" });
       // why: each poll arms the next delay only after the previous one fired, so the clock moves in steps.
       for (let elapsed = 0; elapsed < waitsMs - 1; elapsed += 1_000) {
-        await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+        await vi.waitFor(() =>
+          expect(harness.clock.pendingTimerCount, "timers the boot waits on").toBeGreaterThan(0),
+        );
         harness.clock.advance(Math.min(1_000, waitsMs - 1 - elapsed));
         for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
       }
@@ -631,6 +676,9 @@ describe("AndroidDriver", () => {
 
       await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
       harness.clock.advance(1);
+      await vi.waitFor(() =>
+        expect(state.state, `ended at ${String(waitsMs)} ms`).toBe("rejected"),
+      );
       await failed;
       expect(kills).toContain("SIGKILL");
     }

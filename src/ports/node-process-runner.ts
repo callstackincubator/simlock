@@ -10,10 +10,11 @@ import {
   runLimits,
   type WindowsKill,
 } from "./process-tree-kill.js";
-import { childLaunch } from "./windows-command.js";
+import { childLaunch, headlessLaunch, type ChildLaunch } from "./windows-command.js";
 import {
   InputStreamFailedError,
   ProcessSpawnError,
+  type BoundedRunOptions,
   type LineEnd,
   type NodeProcessRunnerOptions,
   type ProcessHandle,
@@ -68,39 +69,34 @@ export class NodeProcessRunner implements ProcessRunner {
   async run(
     command: string,
     args: readonly string[],
-    options: ProcessRunOptions = {},
+    options: BoundedRunOptions,
   ): Promise<ProcessResult> {
     const process = this.#launch(command, args, options);
     let killTimeout: NodeJS.Timeout | undefined;
-    const timeout =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            try {
-              process.kill("SIGTERM", "timeout");
-            } catch {
-              // why: The child may have exited between the timer firing and the kill.
-            }
-            // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
-            // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
-            // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
-            // itself the moment `process.wait()` actually settles, so a child that does exit
-            // promptly after SIGTERM never sees the follow-up signal.
-            killTimeout = setTimeout(() => {
-              try {
-                process.kill("SIGKILL");
-              } catch {
-                // why: The child may have exited between the timer firing and the kill.
-              }
-            }, this.sigkillGraceMs);
-          }, options.timeoutMs);
+    const timeout = setTimeout(() => {
+      try {
+        process.kill("SIGTERM", "timeout");
+      } catch {
+        // why: The child may have exited between the timer firing and the kill.
+      }
+      // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
+      // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
+      // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
+      // itself the moment `process.wait()` actually settles, so a child that does exit
+      // promptly after SIGTERM never sees the follow-up signal.
+      killTimeout = setTimeout(() => {
+        try {
+          process.kill("SIGKILL");
+        } catch {
+          // why: The child may have exited between the timer firing and the kill.
+        }
+      }, this.sigkillGraceMs);
+    }, options.timeoutMs);
 
     try {
       return await process.wait();
     } finally {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       if (killTimeout !== undefined) {
         clearTimeout(killTimeout);
       }
@@ -112,13 +108,14 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 
   #launch(command: string, args: readonly string[], options: ProcessRunOptions): NodeProcessHandle {
-    const launch = childLaunch(command, args);
+    const launch = launchOf(command, args, options);
     const logFd =
       typeof options.stdio === "object" ? openSync(options.stdio.file, "a", 0o600) : undefined;
     const child = spawnChildProcess(launch.command, launch.args, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      detached: process.platform !== "win32",
+      // why: on Windows only a detached child leaves Node's kill-on-exit job (see `outlivesCaller`).
+      detached: process.platform !== "win32" || options.outlivesCaller === true,
       stdio: childStdio(options.stdio, logFd),
       // why: the daemon has no console, so on Windows a console program it starts (adb, the
       // emulator, node) would otherwise get a new, visible one.
@@ -148,7 +145,11 @@ export class NodeProcessRunner implements ProcessRunner {
       options.lineEnd ?? "newline",
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      windowsKillOf(launch.windowsVerbatimArguments, options.killChildren === true),
+      windowsKillOf(
+        launch.windowsVerbatimArguments,
+        options.killChildren === true,
+        options.outlivesCaller === true,
+      ),
       runLimits(options),
     );
   }
@@ -182,7 +183,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.onChunk,
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      windowsKillOf(launch.windowsVerbatimArguments, false),
+      windowsKillOf(launch.windowsVerbatimArguments, false, false),
     );
     if (options.input !== undefined) {
       // why: One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
@@ -578,6 +579,15 @@ class NodeProcessHandle implements ProcessHandle {
   }
 }
 
+function launchOf(
+  command: string,
+  args: readonly string[],
+  options: ProcessRunOptions,
+): ChildLaunch {
+  const launch = childLaunch(command, args);
+  return options.outlivesCaller === true ? headlessLaunch(launch) : launch;
+}
+
 function childStdio(
   stdio: ProcessRunOptions["stdio"],
   logFd: number | undefined,
@@ -588,8 +598,11 @@ function childStdio(
 
 // why: a batch file's `cmd.exe` wrapper dies with its whole tree; a `killChildren` child alone
 // off Windows (its process group would end what it started for others) and with its own children
-// on Windows; any other child alone there, and off Windows its whole process group.
-function windowsKillOf(wrapped: boolean, killChildren: boolean): WindowsKill {
+// on Windows; any other child alone there, and off Windows its whole process group. A child that
+// outlives its caller runs under a headless `conhost.exe` (`headlessLaunch`), so there the child
+// Node sees is the wrapper and the wanted unit is one level further down.
+function windowsKillOf(wrapped: boolean, killChildren: boolean, headless: boolean): WindowsKill {
   if (wrapped) return "tree";
+  if (headless && process.platform === "win32") return killChildren ? "grandchildren" : "children";
   return killChildren ? "children" : "child";
 }

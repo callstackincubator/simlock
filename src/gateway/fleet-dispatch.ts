@@ -384,6 +384,7 @@ export class FleetDispatch {
             // its refusal (`LEASE_ID_TAKEN`) is the caller's answer: no other worker is tried.
             ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
             ...(waiter.options.runId === undefined ? {} : { runId: waiter.options.runId }),
+            ...(waiter.options.label === undefined ? {} : { label: waiter.options.label }),
             // why: ADR 0021: this gateway's id for the request marks the dispatch a probe. The worker
             // declines a probe it refuses (`lease.declined`) rather than rejecting it, and names
             // the id on the lease events of the dispatch.

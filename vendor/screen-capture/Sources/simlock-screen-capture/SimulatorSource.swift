@@ -9,14 +9,19 @@ import Foundation
 import SimlockCapture
 
 final class SimulatorSource: ScreenSource {
+    private let fps: Int
     private let capture = FrameCapture()
     private let rotator = PanelRotator()
     private var follower: PanelFollower?
     private var stopped = false
 
+    init(fps: Int) {
+        self.fps = fps
+    }
+
     func start(
         deviceID: String,
-        onFrame: @escaping @Sendable (CVPixelBuffer) -> Void,
+        onFrame: @escaping @Sendable (CVPixelBuffer, UInt64) -> Void,
         onEnd: @escaping @Sendable (_ reason: String?) -> Void
     ) async throws {
         // The simulator source has no way to notice its own end: a simulator that shuts down stops
@@ -27,17 +32,17 @@ final class SimulatorSource: ScreenSource {
         let panels = FrameCapture.findSimDevice(udid: deviceID).map { Panels.read(for: $0, udid: deviceID) } ?? []
         if panels.count > 1 { try await follow(panels, udid: deviceID) }
         let rotator = self.rotator
-        try await capture.start(deviceUDID: deviceID) { pixelBuffer, _ in
+        try await capture.start(deviceUDID: deviceID, fps: fps) { pixelBuffer, seenNanos in
             let width = CVPixelBufferGetWidth(pixelBuffer)
             let height = CVPixelBufferGetHeight(pixelBuffer)
             // why: by size, not by the panel in use, because a picture of the panel just left can still
             // be on its way after a switch, and it must be turned the way its own panel is mounted.
             if let panel = panels.first(where: { $0.matches(width: width, height: height) }),
                let rotation = PanelRotator.rotation(undoing: panel.nativeRotation) {
-                if let upright = rotator.rotate(pixelBuffer, by: rotation) { onFrame(upright) }
+                if let upright = rotator.rotate(pixelBuffer, by: rotation) { onFrame(upright, seenNanos) }
                 return
             }
-            onFrame(pixelBuffer)
+            onFrame(pixelBuffer, seenNanos)
         }
     }
 

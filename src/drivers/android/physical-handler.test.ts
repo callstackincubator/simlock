@@ -822,7 +822,7 @@ describe("Android physical handler: independence from emulator calls", () => {
       {
         hangs: true,
         match: {
-          args: [/^-avd$/, "simlock", /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/],
+          args: [/^-avd$/, "simlock", ...Array.from({ length: 11 }, () => /.*/)],
           command: `${sdk}/emulator/emulator`,
         },
       },

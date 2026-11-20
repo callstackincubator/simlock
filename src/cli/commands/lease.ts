@@ -76,6 +76,7 @@ async function runLease(
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
     "lease-id": { type: "string" },
+    label: { type: "string" },
     meta: { type: "string", multiple: true },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
@@ -93,7 +94,7 @@ async function runLease(
         "                     [--except <category,...>] [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
-        "                     [--run <id>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]\n",
+        "                     [--run <id>] [--label <text>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -323,6 +324,7 @@ async function runLease(
       ...(baseline === undefined ? {} : { baseline }),
       ...(runId === undefined ? {} : { runId }),
       ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
+      ...(typeof values.label === "string" ? { label: values.label } : {}),
       ...(metadata === undefined ? {} : { metadata }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(ttlMs === undefined ? {} : { ttlMs }),

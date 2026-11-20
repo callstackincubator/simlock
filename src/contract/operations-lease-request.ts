@@ -65,6 +65,8 @@ const leaseRequestBaseSchema = z
     idempotencyKey: z.string().min(1).max(200).optional(),
     // why: A plain string, bounded by `refuseBadRunId` as the one object-level check, like `osVersion`: a refined field would be checked by the MCP SDK before the handler.
     runId: z.string().optional(),
+    // why: A plain string, bounded by `refuseBadLabel` as the one object-level check, like `runId`: a refined field would be checked by the MCP SDK before the handler.
+    label: z.string().optional(),
     leaseId: leaseIdSchema.optional(),
     fleetRequestId: z.string().min(1).max(200).optional(),
     // why: A plain record of plain strings, bounded by `refuseBadMetadata` as one object-level check, like `except`: a bound on the field itself would be checked by the MCP SDK before the handler.
@@ -251,6 +253,24 @@ export function refuseBadRunId(): <T extends { readonly runId?: string | undefin
   };
 }
 
+const LABEL_LENGTH_REFUSAL = "label must be 1 to 64 characters";
+const LABEL_CONTROL_REFUSAL = "label must not contain control characters";
+
+export function refuseBadLabel(): <T extends { readonly label?: string | undefined }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    const { label } = input;
+    if (label === undefined) return;
+    if (label.length < 1 || label.length > 64) {
+      context.addIssue({ code: "custom", message: LABEL_LENGTH_REFUSAL });
+    } else if (/[\p{Cc}\u2028\u2029]/u.test(label)) {
+      context.addIssue({ code: "custom", message: LABEL_CONTROL_REFUSAL });
+    }
+  };
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -288,6 +308,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseBadExcept())
   .superRefine(refuseBadMetadata())
   .superRefine(refuseBadRunId())
+  .superRefine(refuseBadLabel())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 

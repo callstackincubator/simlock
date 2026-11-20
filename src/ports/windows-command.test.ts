@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { NodeProcessRunner, type ProcessHandle, type ProcessRunOptions } from "./index.js";
-import { childLaunch } from "./windows-command.js";
+import { windowsKillScript } from "./process-tree-kill.js";
+import { childLaunch, headlessLaunch } from "./windows-command.js";
 
 const sdkmanager = String.raw`C:\Android\Sdk/cmdline-tools/latest/bin/sdkmanager.bat`;
 
@@ -70,7 +71,65 @@ describe("childLaunch", () => {
   });
 });
 
+// why: the launch a detached child gets is pure string work the runner's surface shows only on Windows.
+describe("headlessLaunch", () => {
+  it.each([
+    ["linux", "/sdk/emulator/emulator"],
+    ["darwin", "/sdk/emulator/emulator"],
+  ] as const)("leaves a command off Windows as it is (%s)", (platform, command) => {
+    const launch = { command, args: ["-avd", "x"], windowsVerbatimArguments: false };
+
+    expect(headlessLaunch(launch, platform, String.raw`C:\Windows`)).toBe(launch);
+  });
+
+  it("runs an .exe under conhost.exe --headless from the system folder", () => {
+    expect(
+      headlessLaunch(
+        {
+          command: String.raw`D:\Android\Sdk\emulator\emulator.exe`,
+          args: ["-avd", "simlock"],
+          windowsVerbatimArguments: false,
+        },
+        "win32",
+        String.raw`C:\Windows`,
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\conhost.exe`,
+      args: ["--headless", String.raw`D:\Android\Sdk\emulator\emulator.exe`, "-avd", "simlock"],
+      windowsVerbatimArguments: false,
+    });
+  });
+});
+
+// why: the PowerShell that ends a wrapper's tree cannot run off Windows; its depth decides
+// whether qemu (the emulator's child) is ended with the emulator.
+describe("windowsKillScript", () => {
+  it("ends the process and its children at depth 1, and their children too at depth 2", () => {
+    expect(windowsKillScript(42, 1)).toContain("$grandchildren = @()");
+    expect(windowsKillScript(42, 2)).toContain("ParentProcessId = $($c.ProcessId)");
+    expect(windowsKillScript(42, 2)).toContain("Stop-Process -Id 42 -Force");
+  });
+});
+
 describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () => {
+  /**
+   * why: a detached child of the daemon runs under a headless `conhost.exe` (#1759), so the child
+   * Node holds is the wrapper; killing it must still end the program under it (the emulator) and
+   * that program's child (qemu), and leave qemu's own child (netsimd) running.
+   */
+  it("ends a detached killChildren child through its conhost wrapper: the program and its child, not the grandchild", async () => {
+    await withProcessChain(
+      { killChildren: true, outlivesCaller: true },
+      async (handle, { child, grandchild }) => {
+        handle.kill("SIGKILL");
+
+        await expect(handle.wait()).resolves.toMatchObject({ code: null });
+        await expect.poll(() => isAlive(child), { timeout: 10_000 }).toBe(false);
+        expect(isAlive(grandchild)).toBe(true);
+      },
+    );
+  });
+
   /**
    * why: the SDK's Gradle-generated batch files test `"x%~1"`, collect `%*` into a variable and
    * expand it on the `java` line, so cmd.exe parses every argument there twice more; this script

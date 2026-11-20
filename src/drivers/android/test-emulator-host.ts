@@ -1,4 +1,5 @@
 import {
+  type BoundedRunOptions,
   MemoryFilesystem,
   type ProcessHandle,
   type ProcessResult,
@@ -155,7 +156,7 @@ export class RecordingRunner implements ProcessRunner {
 
   constructor(private readonly inner: ProcessRunner) {}
 
-  run(command: string, args: readonly string[], options: ProcessRunOptions = {}) {
+  run(command: string, args: readonly string[], options: BoundedRunOptions) {
     this.calls.push({ args, command, options });
     return this.inner.run(command, args, options);
   }

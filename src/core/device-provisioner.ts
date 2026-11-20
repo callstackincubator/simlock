@@ -51,6 +51,8 @@ export interface ProvisionDeviceOptions {
   readonly claim?: { readonly kind: "boot"; readonly owner?: string };
   /** why: the categories a slim lease keeps running, handed to the driver at the boot before the grant (ADR 0066 §2). */
   readonly except?: readonly string[];
+  /** why: the lease's label, handed to the driver at the boot before the grant so the device carries it from its first boot. */
+  readonly label?: string;
   readonly onProgress?: (progress: ProvisionProgress) => void;
   readonly reservation: CapacityReservation;
 }
@@ -174,6 +176,7 @@ export class DeviceProvisioner {
         device,
         bootClaim,
         options.except,
+        options.label,
       );
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);

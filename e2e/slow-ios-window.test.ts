@@ -258,5 +258,56 @@ describe.skipIf(process.platform !== "darwin")(
         }
       },
     );
+    it(
+      "a leased simulator on Xcode's set takes the lease's label as its name",
+      { timeout: 600_000 },
+      async () => {
+        const { env } = await withHttpDaemon((httpPort) => ({
+          configOverrides: {
+            drivers: { ios: { deviceSet: "default" } },
+            http: { enabled: true, host: "127.0.0.1", port: httpPort },
+            ios: { simulator: { headless: false } },
+          },
+          driver: "real",
+        }));
+        const nameOf = async (udid: string): Promise<string | undefined> => {
+          const listed = await execFileAsync("xcrun", ["simctl", "list", "devices", "-j"]);
+          const runtimes = (
+            JSON.parse(listed.stdout) as {
+              devices: Record<string, { name: string; udid: string }[]>;
+            }
+          ).devices;
+          return Object.values(runtimes)
+            .flat()
+            .find((device) => device.udid === udid)?.name;
+        };
+        try {
+          const labelled = await env.cli(
+            [
+              "lease",
+              "--platform",
+              "ios",
+              "--agent-id",
+              "ios-label",
+              "--label",
+              "feature-x",
+              "--detach",
+            ],
+            { timeout: DEVICE_READY_MS },
+          );
+          expect(labelled.code, `lease failed: ${labelled.stdout} ${labelled.stderr}`).toBe(0);
+          const grant = labelled.json as {
+            device: { driverDeviceId: string };
+            lease: { id: string };
+          };
+          expect(await nameOf(grant.device.driverDeviceId)).toBe("feature-x");
+          await env.cli(["release", grant.lease.id]).catch(() => undefined);
+        } finally {
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 })
+            .catch(() => undefined);
+        }
+      },
+    );
   },
 );

@@ -310,6 +310,7 @@ describe("IosSimctlDriver", () => {
 
   it("boots then checks bootstatus and installer readiness with bounded commands", async () => {
     const runner = new ScriptedProcessRunner([
+      { match: simctl("rename", driverData.udid, driverData.name) },
       { match: simctl("boot", driverData.udid) },
       { match: simctl("bootstatus", driverData.udid, "-b") },
       { match: simctl("listapps", driverData.udid) },
@@ -329,6 +330,7 @@ describe("IosSimctlDriver", () => {
       mode: "full",
     });
     expect(runner.calls).toEqual([
+      { ...simctl("rename", driverData.udid, driverData.name), options: { timeoutMs: 5_000 } },
       { ...simctl("boot", driverData.udid), options: { timeoutMs: 300_000 } },
       { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 300_000 } },
       { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
@@ -340,6 +342,7 @@ describe("IosSimctlDriver", () => {
     async (hangs) => {
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
+        { match: simctl("rename", driverData.udid, driverData.name) },
         { match: simctl("boot", driverData.udid) },
         { match: simctl("bootstatus", driverData.udid, "-b") },
         {
@@ -375,6 +378,7 @@ describe("IosSimctlDriver", () => {
     async (hangs) => {
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
+        { match: simctl("rename", driverData.udid, driverData.name) },
         { match: simctl("boot", driverData.udid) },
         {
           match: simctl("bootstatus", driverData.udid, "-b"),
@@ -415,6 +419,7 @@ describe("IosSimctlDriver", () => {
     async (slowCommand) => {
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
+        { match: simctl("rename", driverData.udid, driverData.name) },
         { match: simctl("boot", driverData.udid) },
         {
           match: simctl("bootstatus", driverData.udid, "-b"),
@@ -435,6 +440,7 @@ describe("IosSimctlDriver", () => {
         ),
       ).rejects.toBeInstanceOf(BootTimeoutError);
       expect(runner.calls.map((call) => call.args)).toEqual([
+        simctlArgs("rename", driverData.udid, driverData.name),
         simctlArgs("boot", driverData.udid),
         simctlArgs("bootstatus", driverData.udid, "-b"),
         ...(slowCommand === "listapps" ? [simctlArgs("listapps", driverData.udid)] : []),
@@ -446,6 +452,7 @@ describe("IosSimctlDriver", () => {
   it("times out bootstatus and issues a best-effort shutdown", async () => {
     const clock = new FakeClock();
     const runner = new ScriptedProcessRunner([
+      { match: simctl("rename", driverData.udid, driverData.name) },
       { match: simctl("boot", driverData.udid) },
       { hangs: true, match: simctl("bootstatus", driverData.udid, "-b") },
       { match: simctl("shutdown", driverData.udid) },
@@ -459,11 +466,12 @@ describe("IosSimctlDriver", () => {
     // unhandled rejection in whichever test happens to run next.
     void ready.catch(() => undefined);
 
-    await waitForCalls(runner, 2);
+    await waitForCalls(runner, 3);
     clock.advance(300_000);
 
     await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
     expect(runner.calls.map((call) => call.args)).toEqual([
+      simctlArgs("rename", driverData.udid, driverData.name),
       simctlArgs("boot", driverData.udid),
       simctlArgs("bootstatus", driverData.udid, "-b"),
       simctlArgs("shutdown", driverData.udid),

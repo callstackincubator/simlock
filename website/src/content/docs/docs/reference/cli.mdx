@@ -119,7 +119,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
-              [--run <id>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
+              [--run <id>] [--label <text>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
 ```
 
 | Flag | Meaning | Default |
@@ -136,6 +136,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
 | `--run <id>` | The run id the lease carries: a name a CI job gives every lease it takes, 1 to 128 letters, digits, `.`, `_` or `-`, such as `123-1`. A gateway passes it to its worker and its admission command. `simlock status` shows it on the lease line. A bad value exits 2, before the command connects. The `SIMLOCK_RUN` environment variable sets it when the flag is absent; an empty value is unset. | `SIMLOCK_RUN`, else on GitHub Actions `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` (`-1` when the attempt is unset), else none |
+| `--label <text>` | A name for the lease, such as `feature-x`: 1 to 64 characters, none of them a control character. It is display-only: nothing routes or limits by it. `simlock status` shows it on the lease line after the run id, and every lease read answers it as `label`. An iOS simulator booted for the lease takes the label as its name before it boots, so with `drivers.ios.deviceSet: "default"` and `ios.simulator.headless: false` DeviceHub and Simulator.app show it; the next boot of that simulator for any other lease names it back. A warm simulator granted without a boot keeps its name. On Android and physical devices the label shows on the lease only. A bad value is refused by the daemon with `BAD_REQUEST` (exit 2). | None |
 | `--meta <key=value>` | Repeatable. Context for the gateway's admission command, such as `--meta project=checkout-app --meta role=ci`. The key is the text before the first `=`; the value is everything after it. The same key twice keeps the last. At most 16 keys; a key is 1 to 64 characters, a value 0 to 256, and keys and values together at most 2048. A gateway passes it to its admission command only: it is stored nowhere, in no event, and a worker ignores it. A flag with no `=`, or a bound broken, exits 2. | None |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
@@ -364,6 +365,8 @@ While an update runs, the line below `CLI:` reads `Updating to <version>: waitin
 
 A lease that carries a run id (`simlock lease --run`) shows it on its line: `Lease <id>: <requester> on <worker>, run <run id> since …`. `--json` carries it as the lease's `runId`.
 
+A lease that carries a label (`simlock lease --label`) shows it after the run id: `Lease <id>: <requester> on <worker>, run <run id>, label <label> since …`. `--json` carries it as the lease's `label`.
+
 ```text
 simlock status [--json]
 ```
@@ -453,7 +456,7 @@ simlock daemon uninstall [--json]
 | `stop` | Ask the daemon to stop, wait until it has exited (up to 300 s, then `SERVICE_FAILED`) and print `Daemon stopping`. With no daemon running it prints `Daemon not running` and exits 0. Before it exits the daemon shuts down every idle device it booted; leased devices keep running. Needs the admin role. Never starts a daemon. |
 | `status` | Print the daemon's status, or `Daemon stopped` when none is running, then one `Service:` line: `not installed`, `installed (launchd, <name>)`, `not loaded (launchd, <name>): commands start the daemon without it` or `broken (launchd, <name>): <path> is gone; run simlock daemon install` (`<path>, <path> are gone` for two). The manager is `launchd` on macOS, `systemd` on Linux and `task-scheduler` on Windows, where not loaded means the user has no desktop session or the task is disabled. Never starts a daemon. Exits 1 when a daemon answers but refuses the connection, with no `Service:` line. |
 | `logs` | Print the last 100 lines of `daemon.log`. |
-| `install` | macOS, Linux and Windows only. Stop a running daemon (leases are kept), add a LaunchAgent (macOS), a systemd user unit at `$XDG_CONFIG_HOME/systemd/user/<name>.service`, else `~/.config/systemd/user/<name>.service` (Linux) or a per-user logon task in Task Scheduler (Windows) for this role and start the daemon through it. Prints `Service installed: <name> (launchd)`, `(systemd)` or `(task-scheduler)`, `Daemon running` and a hint: `To start after a reboot, turn on automatic login for this user.` on macOS and Windows, `To start after a reboot without logging in, run: loginctl enable-linger <user>` on Linux. Without linger the last logout stops the user's systemd, the daemon and its emulators with it. On another platform it is a usage error: `daemon install is supported on macOS, Linux and Windows only`. |
+| `install` | macOS, Linux and Windows only. A `config.json` the CLI refuses is a usage error (exit 2) before anything else, so no service is added and a running daemon keeps running. Otherwise stop a running daemon (leases are kept), add a LaunchAgent (macOS), a systemd user unit at `$XDG_CONFIG_HOME/systemd/user/<name>.service`, else `~/.config/systemd/user/<name>.service` (Linux) or a per-user logon task in Task Scheduler (Windows) for this role and start the daemon through it. Prints `Service installed: <name> (launchd)`, `(systemd)` or `(task-scheduler)`, `Daemon running` and a hint: `To start after a reboot, turn on automatic login for this user.` on macOS and Windows, `To start after a reboot without logging in, run: loginctl enable-linger <user>` on Linux. Without linger the last logout stops the user's systemd, the daemon and its emulators with it. On another platform it is a usage error: `daemon install is supported on macOS, Linux and Windows only`. |
 | `uninstall` | Stop a running daemon, unload the LaunchAgent or systemd unit and delete its file, or delete the Windows task. Prints `Service removed: <name> (launchd)`, or `Service not installed: <name>` when there is none (exit 0). |
 
 | Flag | Meaning | Default |

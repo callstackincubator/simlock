@@ -35,5 +35,6 @@ describe("the sign-in screen", () => {
     expect(html).toContain("simlock token create --role operator");
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*>Sign in<\/button>/);
     expect(html).not.toContain('role="alert"');
+    expect(html).not.toContain("Sign in with SSO");
   });
 });

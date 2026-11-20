@@ -44,6 +44,7 @@ export const leaseRecordSchema = z.object({
   lastRenewedAt: z.number(),
   idChosenByRequester: z.boolean(),
   runId: z.string().max(128).optional(),
+  label: z.string().max(64).optional(),
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
 });
 

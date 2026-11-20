@@ -1,4 +1,5 @@
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
+import { windowsKillCommand } from "./process-tree-kill.js";
 
 /**
  * Liveness and signalling for a process addressed by pid rather than by a handle.
@@ -10,8 +11,12 @@ import type { ProcessResult, ProcessRunner } from "./process-runner.js";
 export interface ProcessSupervisor {
   /** True when a process with this pid exists and this user may signal it. */
   isAlive(pid: number): boolean;
-  /** Best effort; a pid that is already gone is not an error. */
-  signal(pid: number, signal: NodeJS.Signals): void;
+  /**
+   * why: best effort; a pid that is already gone is not an error. With `tree`, on Windows the
+   * process and what it started end together: a detached child there runs under a `conhost.exe`
+   * wrapper (`headlessLaunch`), and a recorded pid is the wrapper's, which ends alone otherwise.
+   */
+  signal(pid: number, signal: NodeJS.Signals, options?: { readonly tree?: boolean }): void;
   /**
    * why: a recorded pid may since have been handed to another process, so a caller proves what
    * it is from its arguments before signalling it. They come back unquoted and joined by single
@@ -83,11 +88,41 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
     }
   }
 
-  signal(pid: number, signal: NodeJS.Signals): void {
+  signal(pid: number, signal: NodeJS.Signals, options?: { readonly tree?: boolean }): void {
     if (!isAddressablePid(pid)) {
       return;
     }
 
+    if (options?.tree === true && this.#options.platform === "win32") {
+      try {
+        // why: depth 2 is the wrapper, its program and the program's children (the emulator's
+        // qemu), each only if it started after its parent did, as `windowsKillScript` checks.
+        const { command, args } = windowsKillCommand(pid, 2);
+        const killer = this.#options.processRunner.spawn(command, args, {
+          stdio: "ignore",
+          timeoutMs: TREE_KILL_TIMEOUT_MS,
+        });
+        // why: the helper answers later than this call returns, so a run that never finished (spawn error, timeout, killed) ends the wrapper alone, as before. A numeric exit, including the script's exit 1 for a wrapper already gone, sends nothing: that pid may be reused by now.
+        const fallBack = () => {
+          try {
+            this.#signalAlone(pid, signal);
+          } catch {
+            // why: best effort, and nobody is waiting on this call any more.
+          }
+        };
+        void killer.wait().then((result) => {
+          if (result.code === null || result.endedBy !== undefined) fallBack();
+        }, fallBack);
+        return;
+      } catch {
+        // why: without PowerShell the wrapper alone is ended, as before.
+      }
+    }
+
+    this.#signalAlone(pid, signal);
+  }
+
+  #signalAlone(pid: number, signal: NodeJS.Signals): void {
     try {
       process.kill(pid, signal);
     } catch (error: unknown) {
@@ -113,6 +148,8 @@ export interface SignalRecord {
  */
 export class FakeProcessSupervisor implements ProcessSupervisor {
   readonly signals: SignalRecord[] = [];
+  /** why: the pids signalled with `tree`, kept apart so `signals` keeps one shape for every caller. */
+  readonly treeSignals: number[] = [];
   readonly commandLineReads: number[] = [];
   readonly #live = new Set<number>();
   readonly #commandLines = new Map<number, (string | undefined)[]>();
@@ -127,8 +164,9 @@ export class FakeProcessSupervisor implements ProcessSupervisor {
     return this.#live.has(pid);
   }
 
-  signal(pid: number, signal: NodeJS.Signals): void {
+  signal(pid: number, signal: NodeJS.Signals, options?: { readonly tree?: boolean }): void {
     this.signals.push({ pid, signal });
+    if (options?.tree === true) this.treeSignals.push(pid);
   }
 
   markAlive(pid: number): void {
@@ -153,6 +191,7 @@ export class FakeProcessSupervisor implements ProcessSupervisor {
 
 /** why: PowerShell's first start on a cold host takes seconds, and `ps` answers in milliseconds; one bound covers both. */
 const COMMAND_LINE_TIMEOUT_MS = 5_000;
+const TREE_KILL_TIMEOUT_MS = 10_000;
 
 /**
  * why: Windows has no `ps`; `Win32_Process` holds the command line as the parent passed it.

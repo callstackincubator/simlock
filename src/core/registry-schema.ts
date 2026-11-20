@@ -150,6 +150,12 @@ ALTER TABLE lease_requests ADD COLUMN run_id TEXT;
 ALTER TABLE lease_grants ADD COLUMN run_id TEXT;
 `;
 
+const REGISTRY_V9 = `
+ALTER TABLE leases ADD COLUMN label TEXT;
+ALTER TABLE lease_requests ADD COLUMN label TEXT;
+ALTER TABLE lease_grants ADD COLUMN label TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
   migrations: [
     REGISTRY_V1,
@@ -160,7 +166,8 @@ export const registryOwner: SqliteSchemaOwner = {
     REGISTRY_V6,
     REGISTRY_V7,
     REGISTRY_V8,
+    REGISTRY_V9,
   ],
   name: "registry",
-  version: 8,
+  version: 9,
 };
