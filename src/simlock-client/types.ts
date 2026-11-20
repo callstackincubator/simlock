@@ -1,10 +1,6 @@
 /**
- * Public types for `simlock/client` and `simlock/admin` (ADR 0003 §10). Every type here is
- * `z.infer`red from a contract schema (`src/contract/operations.ts`, `schemas.ts`, `pushes.ts`)
- * rather than hand-declared, so a schema change is a compile-time type change here too, never a
- * silent drift. Nothing in this file imports from `src/core`, `src/daemon`, or `src/drivers` --
- * see `no-core-leak.test.ts`, which asserts the compiled `.d.ts` for these two entry points
- * never mentions a core-private type name.
+ * why: every type here is `z.infer`red from a contract schema rather than hand-declared, so a
+ * schema change is a compile-time change here, never a silent drift.
  */
 import type { z } from "zod";
 
@@ -31,6 +27,8 @@ export type LeaseRenewInput = OpInput<"lease.renew">;
 export type LeaseRecord = OpOutput<"lease.renew">;
 export type LeaseReleaseInput = OpInput<"lease.release">;
 export type LeaseReleaseOutput = OpOutput<"lease.release">;
+export type LeaseReleaseRunInput = OpInput<"lease.release-run">;
+export type LeaseReleaseRunOutput = OpOutput<"lease.release-run">;
 export type LeaseListOutput = OpOutput<"lease.list">;
 export type DoctorRunInput = OpInput<"doctor.run">;
 export type DoctorReport = OpOutput<"doctor.run">;
@@ -179,8 +177,8 @@ export interface InstallComponentOnWorkersOptions {
 }
 
 export interface RequestLeaseOptions {
-  /** ADR §10's one stateful client behaviour -- see `client.ts`'s `#requestLeaseWithAbort` for
-   * the four distinct behaviours this drives. */
+  /** why: aborting sends `lease.cancel` rather than just dropping the wait, so a queued request is
+   * withdrawn on the daemon instead of being granted later; an abort after the grant is ignored. */
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: LeaseProgress) => void;
 }

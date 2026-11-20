@@ -141,7 +141,7 @@ own that one of them draws. Named sizes and colours are above.
   then the links (icon 16px, label 500, muted; current one `--accent-text`
   on `--nav-current`, `aria-current="page"`) in a fixed order: Overview,
   Inbox, then **Operate**: Fleet, Leases, Queue, Baselines; then
-  **Observe**: Activity, Usage; then **Settings**: Settings (a gear icon), each
+  **Observe**: Screens, Activity, Usage; then **Settings**: Settings (a gear icon), each
   group under a label. Inbox carries its
   problem count in a red round badge, none at zero. At the bottom an account
   box on `--bg`: a 26px avatar chip, the token label or id (mono, cut), the

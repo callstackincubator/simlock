@@ -98,8 +98,10 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 | Run more or fewer devices | `capacity.strategy`, `capacity.config` | `resource`, sized from this machine |
 | Keep some devices booted and ready | `warmPool.targets` | none |
 | Make iOS devices slim by default | `ios.defaultMode` | `full` |
+| Serve only slim or only full iOS simulators | `ios.modes` | `["slim","full"]` |
 | Choose which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | none |
 | Run Android emulators without a window | `android.emulator.headless` | `false` |
+| Give new Android emulators fewer CPU cores | `android.emulator.cores` | unset (the profile's own count) |
 | Watch iOS simulators in a window | `ios.simulator.headless`, with `drivers.ios.deviceSet` | `true` (no window) |
 | Write more or less to the log | `log.level` | `info` |
 

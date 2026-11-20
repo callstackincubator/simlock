@@ -83,9 +83,10 @@ export function createProvider(
     const started = Date.now();
     const clientId = randomBytes(8).toString("hex");
     const farm = await client(session);
+    const runId = options.runId ?? request.runId;
     const scope = (leaseId: string) => ({
       tenant: TENANT,
-      runId: request.runId,
+      runId,
       leaseId,
       clientId,
       leaseBackend,
@@ -111,7 +112,7 @@ export function createProvider(
       request.log(
         `simlock: lease ${lease.leaseId} granted in ${String(Date.now() - started)} ms (${options.device} ${deviceId})`,
       );
-      const leased = scopeOf(lease, request.runId, clientId);
+      const leased = scopeOf(lease, runId, clientId);
       const granted: DeviceLease = {
         id: lease.leaseId,
         daemon: { baseUrl: daemonBaseUrl, authToken: options.token },

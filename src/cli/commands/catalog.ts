@@ -34,6 +34,19 @@ async function run(
   }
 }
 
+function phonesOnlyLine(entry: CatalogGetOutput["platforms"][number]): string[] {
+  if (entry.virtualDevices !== false) return [];
+  return [
+    `  Virtual devices: off (${entry.platform}.virtualDevices is false); only enrolled physical devices are leased`,
+  ];
+}
+
+// why: a missing `modes` field means the entry serves both modes (a worker serving both, or the gateway merge leaving it out); a present one lists the modes served, which can be both for a split fleet.
+function modesLine(entry: CatalogGetOutput["platforms"][number]): string[] {
+  if (entry.platform !== "ios") return [];
+  return [`  Modes served: ${(entry.modes ?? ["slim", "full"]).join(", ")}`];
+}
+
 function formatCatalog(response: CatalogGetOutput): string {
   if (response.platforms.length === 0) return "No platforms available.";
   return response.platforms
@@ -69,7 +82,12 @@ function formatCatalog(response: CatalogGetOutput): string {
       );
       return [
         `Platform: ${entry.platform}`,
+        ...phonesOnlyLine(entry),
         `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
+        ...modesLine(entry),
+        ...(entry.defaultImageTag === undefined
+          ? []
+          : [`  Default image tag: ${esc(entry.defaultImageTag)}`]),
         models.length > 0 ? "  Models:" : "  Models: (none)",
         ...models,
         ...(entry.images === undefined

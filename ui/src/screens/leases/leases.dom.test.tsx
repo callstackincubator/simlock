@@ -107,6 +107,63 @@ describe("the leases page", () => {
     expect(tableRow(/ci-runner-3/)).not.toHaveTextContent("tok_ci");
   });
 
+  it("a labelled lease shows its label in the Held by cell, the side list and the drawer, the page filter finds it, a long label is cut with the whole label in title, and an unlabelled lease reads as today", async () => {
+    const longLabel = "a-very-long-feature-label-that-would-not-fit-on-one-line-of-the-cell-x";
+    const { user } = renderConsole({
+      path: "/leases",
+      routes: {
+        ...hostWith([
+          lease({
+            id: "lse_labelled",
+            label: "feature-x",
+            requesterId: "agent-labelled",
+            ttlDeadline: NOW + 120_000,
+          }),
+          lease({
+            deviceId: "dev_2",
+            id: "lse_long",
+            label: longLabel,
+            requesterId: "agent-long",
+          }),
+          lease({
+            deviceId: "dev_3",
+            id: "lse_plain",
+            requesterId: "agent-plain",
+            ttlDeadline: NOW + 180_000,
+          }),
+        ]),
+        ...detailsOf(leaseDetails({ id: "lse_labelled" })),
+      },
+    });
+    expect(await screen.findByRole("link", { name: "agent-labelled" })).toBeVisible();
+
+    const labelled = tableRow(/agent-labelled/);
+    const cell = within(labelled).getByText("feature-x");
+    expect(cell).toHaveAttribute("title", "feature-x");
+    expect(cell.nextElementSibling).toHaveTextContent("agent-labelled");
+    const long = within(tableRow(/agent-long/)).getByText(longLabel);
+    expect(long).toHaveAttribute("title", longLabel);
+    expect(long).toHaveClass("lease-ellipsis");
+    expect(tableRow(/agent-plain/)).not.toHaveTextContent("feature-x");
+    expect(tableRow(/agent-plain/).querySelector(".lease-holder-label")).toBeNull();
+    const subs = [...leaseSummary().querySelectorAll(".lease-list-sub")].map(
+      (el) => el.textContent,
+    );
+    expect(subs.filter((text) => text?.startsWith("renewed") !== true)).toEqual([
+      "feature-x · iPhone 16 · mac-studio-01",
+      "dev_3 · mac-studio-01",
+    ]);
+    expect(within(leaseSummary()).getByText(/^feature-x · iPhone 16/)).toBeVisible();
+
+    await user.type(screen.getByRole("searchbox", { name: "Search leases" }), "feature-x");
+    expect(screen.getAllByRole("row")).toHaveLength(1 + 1);
+    expect(tableRow(/agent-labelled/)).toBeVisible();
+
+    await user.click(tableRow(/agent-labelled/));
+    expect(await within(leasePane()).findByText("lse_labelled")).toBeVisible();
+    expect(fact(leasePane(), "Label")).toHaveTextContent("feature-x");
+  });
+
   it("a lease row opens its inspector beside the table at the lease's address", async () => {
     const { user } = renderConsole({
       path: "/leases",

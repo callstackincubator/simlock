@@ -1,18 +1,18 @@
 ---
 title: Programmatic client
-description: Lease, renew and release devices from a Node.js program on the same machine as the daemon, with simlock/client and simlock/admin.
+description: Lease, renew and release devices from a Node.js program, on the daemon's machine or on another one, with simlock/client and simlock/admin.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-A Node.js program on the machine that runs the Simlock daemon can lease devices directly, without running `simlock` commands. The `simlock` package has two entry points:
+A Node.js program can lease devices directly, without running `simlock` commands, on the machine that runs the Simlock daemon or on another one. The `simlock` package has two entry points:
 
 | Import | For | Can |
 | --- | --- | --- |
 | `simlock/client` | Agents and tools that need devices | Lease, renew and release devices, run commands on a leased device, read the catalog and status |
 | `simlock/admin` | Operator tools | All of the above, plus every lease and device, tokens, cleanup, events, updating the daemon and stopping it |
 
-Both only work on the same machine as the daemon. A program on another machine uses the [HTTP API](/simlock/docs/using-devices/remote-agents) instead.
+Both connect to the daemon's socket on the same machine, or to a worker or gateway on another machine by [URL and token](#connect-to-a-worker-or-gateway-on-another-machine).
 
 ## Before you start
 
@@ -50,6 +50,33 @@ Give every agent or worker process its own `principal`. Every client that leaves
 </Aside>
 
 One client is one connection, and it doesn't reconnect. If the daemon stops, every call in progress fails with `DAEMON_CONNECTION_LOST`, and you connect again. A lost connection doesn't release your lease.
+
+## Connect to a worker or gateway on another machine
+
+Give `url` and `token` in place of `endpoint`, and you get the same client, talking to a standalone worker or a gateway:
+
+```ts
+import { connectSimlock } from "simlock/client";
+
+const client = await connectSimlock({
+  url: "https://simlock.example.com",
+  token: process.env.SIMLOCK_TOKEN,
+});
+```
+
+- **`url`** is the farm's origin, with no path, query or fragment. It must be `https://`, except `http://` for `127.0.0.1`, `[::1]` and `localhost`, and at most 2,048 characters. It cannot go with `endpoint`, `ipc`, `connection` or `principal`, and `connectSimlockAdmin` takes no `credential` with it. A URL, a token or a mix of options that breaks these rules throws a `TypeError` before anything is sent.
+- **`token`** is a token the farm knows, 1 to 4,096 characters. Its role is the session's role: an operator token gives `simlock/admin` every admin call, an agent token gives the agent calls. The token's own id is the principal.
+- **`signal`** is an optional `AbortSignal`. Aborting it while the client connects stops the attempt, and the call rejects with the signal's reason. Once the client is connected, it ends nothing.
+
+The calls, the pushes and the version check work as on the daemon's machine. Three errors are new:
+
+| Code | When |
+| --- | --- |
+| `REMOTE_UNREACHABLE` | Nothing answers at the URL, the farm gives no answer in 10 seconds, or a proxy or an older farm answers the connection with a status such as 502 or 404. |
+| `UNAUTHENTICATED` | The farm refuses the token, or the token is revoked while the client is connected: the calls in progress fail with it, and so does every later call. |
+| `DAEMON_CONNECTION_LOST` | The connection dropped, or the farm sent no ping for 45 seconds. |
+
+A token that the farm refuses for what it may do, such as a worker join token, fails with `FORBIDDEN`. The client still never reconnects: a lost connection doesn't release your lease, and connecting again is your program's job.
 
 ## A complete example
 
@@ -114,7 +141,7 @@ Run it with a TypeScript runner, for example `npx tsx lease-and-launch.mts`.
 | `renewLease({ leaseId, ttlMs? })` | Moves the deadline to now plus the TTL. Resolves with the lease, including the new `ttlDeadline`. |
 | `releaseLease({ leaseId })` | Ends the lease. A simulator or emulator is then deleted; a physical device is cleaned. |
 | `exec({ leaseId, tool, args, stdin?, stdinFile? }, { onOutput })` | Runs `simctl` or `adb` (or `devicectl` on a physical iPhone or iPad) on the device, and resolves with `{ exitCode }`. `stdin` holds at most 8,388,608 characters. `stdinFile` names a file of the lease's folder to send on stdin instead; give one of the two. |
-| `rotate(leaseId, orientation)` | Turns an iPhone or iPad simulator. See [Rotate without a socket](/simlock/docs/using-devices/watching-the-screen#rotate-without-a-socket). |
+| `rotate(leaseId, orientation)` | Turns an iPhone or iPad simulator, not a foldable iPhone Duo. See [Rotate without a socket](/simlock/docs/using-devices/watching-the-screen#rotate-without-a-socket). |
 | `listLeases()` | Your leases. |
 | `getCatalog({ platform? })` | What you can ask for, as `simlock catalog --json` prints it. |
 | `onLeaseLost`, `onDeviceUnhealthy`, `onDeviceRecovered` | Tell you what happens to a lease this client took. Each returns a function that stops listening. |

@@ -101,6 +101,17 @@ export async function sweepStaleDeviceSets(): Promise<void> {
   }
 }
 
+// why: a simulator's daemons run from the runtime's own root, not from the device set, so a service
+// is found by its binary's name under a `RuntimeRoot`.
+export async function runtimeRootProcesses(binary: string): Promise<string[]> {
+  const { stdout } = await execFileAsync("ps", ["-axo", "command="], {
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return stdout
+    .split("\n")
+    .filter((line) => line.includes("RuntimeRoot") && line.includes(`/usr/libexec/${binary}`));
+}
+
 /**
  * Host processes whose command line names a path inside `deviceSet`. A booted simulator runs a
  * `launchd_sim` (and its children) out of its device directory, so a non-empty result means a

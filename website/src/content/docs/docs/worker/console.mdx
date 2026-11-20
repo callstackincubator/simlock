@@ -72,7 +72,7 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar floats beside the page in its own card. Use the button at the foot of the sidebar, above the account box, to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Activity** and **Usage**, and **Settings** at the bottom. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
+The sidebar floats beside the page in its own card. Use the button at the foot of the sidebar, above the account box, to collapse or expand it. On a phone, open its menu above the page. It leads to every page: **Overview** and **Inbox**, then **Fleet**, **Leases**, **Queue** and **Baselines**, then **Screens**, **Activity** and **Usage**, and **Settings** at the bottom. **Inbox** shows how many items need you, on every page. At the bottom, the account box shows the connection, who you are signed in as, and a **Sign out** icon. Hover over the name to see it in full. On a gateway that is behind the latest release, a line above the account says, for example, `simlock 0.3.0 · 0.4.0 available`.
 
 <picture>
   <source srcSet="/simlock/console-shell-dark.png" media="(prefers-color-scheme: dark)" />
@@ -158,7 +158,7 @@ While the daemon is still starting, devices, capacity and the warm pool are left
 
 ## Leases
 
-**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder (**Held by**), the device and its runtime, the worker, and the time left (**Expires in**) as a countdown with a bar. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list, and the box beside them searches by holder, device and worker. Under the table, a line counts the rows shown; a list longer than one page gets a pager.
+**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder (**Held by**), with the lease's label above it when the lease has one (see `simlock lease --label`), the device and its runtime, the worker, and the time left (**Expires in**) as a countdown with a bar. A lease with less than 5 minutes left turns amber. **Ending < 5 min**, **iOS** and **Android** narrow the list, and the box beside them searches by holder, label, device and worker. The search (⌘K) finds a lease by its label too, and shows it as `<label> · <holder> · <device>`. The lease's pane lists the label as **Label**. Under the table, a line counts the rows shown; a list longer than one page gets a pager.
 
 The holder is the identity that took the lease. A lease taken over the HTTP API shows the label of the token that took it, so give each agent's token a label:
 
@@ -224,6 +224,14 @@ To save or remove a baseline, use `simlock baseline save` and `simlock baseline 
 On a gateway the list also has `update failed`: the update of a worker failed, with **Update…** as its fix. The facts are **From**, **To**, **Stage** and **When**. The list also has `disconnected`, `incompatible` and `drained` workers; a single worker never shows those. See [Fleet console](/simlock/docs/gateway/fleet-console).
 
 Select an item to see the facts that matter for it, such as how much RAM the worker uses of its budget, and the events of the last hour about that device or worker.
+
+## Screens
+
+Select **Screens** under **Observe** to watch what agents are doing on their devices, side by side.
+
+The table lists running devices across workers: who holds each one, the device, its worker, its state and how long it has been leased. It opens on **Leased**; choose **Ready** for devices nobody holds, or **All** for every ready and leased device. Select **Watch** on a row to add its screen to **Watching** at the top, and **Stop** or **Stop watching** to remove it. **Open** goes to the device's own streaming page.
+
+You can watch up to four screens at once; **Watch** is unavailable on the other rows until you stop one. Nothing streams until you watch it. The page remembers what you watch in its address, so a reload or a shared link shows the same screens, and so does coming back to **Screens** from another page in the same tab. Watched screens pause while the browser tab is hidden and stop when you leave the page or sign out. A watched device that stops running leaves the list. A stream that fails or ends shows its reason in its place without affecting the others.
 
 ## Activity
 

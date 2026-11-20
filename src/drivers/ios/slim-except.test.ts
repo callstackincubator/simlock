@@ -61,12 +61,12 @@ async function bootWithExcept(options: {
   const calls = slimBootCalls(slim18_5.udid, "");
   const readbackCall =
     typeof options.readback === "string"
-      ? { match: calls[3]!.match, result: { code: 0, stderr: "", stdout: options.readback } }
+      ? { match: calls[4]!.match, result: { code: 0, stderr: "", stdout: options.readback } }
       : {
-          match: calls[3]!.match,
+          match: calls[4]!.match,
           result: { code: options.readback.code, stderr: options.readback.stderr, stdout: "" },
         };
-  const runner = new ScriptedProcessRunner([...calls.slice(0, 3), readbackCall]);
+  const runner = new ScriptedProcessRunner([...calls.slice(0, 4), readbackCall]);
   const onSlimmed = vi.fn<(fact: SlimmedFact) => void>();
   const onSlimSkipped = vi.fn<(fact: SlimSkippedFact) => void>();
   const driver = await createSlimDriver(

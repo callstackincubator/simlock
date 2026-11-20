@@ -28,6 +28,7 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   uninstallPlan,
   PassthroughRefusedError,
@@ -604,9 +605,11 @@ export class OutOfProcessFakeDriver implements Driver {
     };
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    const script = await this.#beforeCall("listPresentPhysical", [enrolledIds]);
-    return enrolledIds.map((driverDeviceId) => {
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    const script = await this.#beforeCall("listPresentPhysical", [enrolled]);
+    return enrolled.map(({ driverDeviceId }) => {
       const scripted = script.physicalDevices?.find((candidate) =>
         candidate.ids.includes(driverDeviceId),
       );
@@ -646,10 +649,12 @@ export class OutOfProcessFakeDriver implements Driver {
       enrollable: true,
       model: device.model ?? "Fake Phone",
       osVersion: device.osVersion ?? "1.0",
+      ...(device.hardwareSerial === undefined ? {} : { hardwareSerial: device.hardwareSerial }),
     };
   }
 
   /** Not through `#beforeCall`, so a test's call log holds only what the test caused. */
+  // fallow-ignore-next-line unused-class-member -- called through the Driver interface, and by its tests through a test-* harness.
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     return (await this.#readScript()).toolVersions ?? [];
   }

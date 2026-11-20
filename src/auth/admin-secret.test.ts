@@ -66,6 +66,9 @@ describe("AdminSecretManager", () => {
       writeFileAtomic: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      writeFileInPlace: () => {
+        throw new Error("must not touch the filesystem");
+      },
       copyFile: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -100,6 +103,15 @@ describe("AdminSecretManager", () => {
         throw new Error("verify() must not touch the filesystem");
       },
       directorySize: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      writeAt: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      readlink: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      replaceSymlink: () => {
         throw new Error("verify() must not touch the filesystem");
       },
       writeFileExclusive: () => {
@@ -153,6 +165,9 @@ describe("AdminSecretManager", () => {
       writeFileAtomic: () => {
         throw new Error("must not touch the filesystem");
       },
+      writeFileInPlace: () => {
+        throw new Error("must not touch the filesystem");
+      },
       copyFile: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -187,6 +202,15 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       directorySize: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      writeAt: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      readlink: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      replaceSymlink: () => {
         throw new Error("must not touch the filesystem");
       },
       writeFileExclusive: () => {

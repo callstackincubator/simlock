@@ -65,6 +65,16 @@ const GOOD = {
   device: "iPhone 17 Pro",
 } as const;
 
+// why: a run on GitHub Actions has these set, and they would pick a run id these tests do not mean.
+beforeEach(() => {
+  for (const name of ["SIMLOCK_RUN", "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"]) {
+    vi.stubEnv(name, undefined);
+  }
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function provider(
   load: () => Promise<Factory>,
   patch: Record<string, unknown> = {},
@@ -689,6 +699,33 @@ describe("createProvider renewals", () => {
     expect(ended.lines.at(-1)).toBe(
       `simlock: lease ${goneLease.id} was ended by the farm; failures on its device are infrastructure, not tests`,
     );
+  });
+});
+
+// why: createProvider is the seam the spec names (I7); see the first describe.
+describe("createProvider run id", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("allocate, heartbeat and release all send the `runId` option when there is one, and the runner's run id when there is none", async () => {
+    for (const [patch, sent] of [
+      [{ runId: "nightly-7" }, "nightly-7"],
+      [{}, "0123456789abcdef-run"],
+    ] as const) {
+      const steady = farm();
+      const held = provider(steady.load, patch);
+      const lease = await held.acquire(request().request);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await held.release(lease, ending());
+
+      const calls = [...steady.of("allocate"), ...steady.of("heartbeat"), ...steady.of("release")];
+      expect(calls.map((call) => call.method)).toEqual(["allocate", "heartbeat", "release"]);
+      expect(calls.map((call) => call.options["runId"])).toEqual([sent, sent, sent]);
+    }
   });
 });
 

@@ -23,6 +23,8 @@ export interface LeaseRequestInput {
   /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
   readonly leaseId?: string;
+  readonly runId?: string;
+  readonly label?: string;
   readonly metadata?: Readonly<Record<string, string>>;
 }
 
@@ -80,6 +82,8 @@ export function buildLeasePayload(
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
     ttlMs: lease.ttlMs,
+    ...(lease.runId === undefined ? {} : { runId: lease.runId }),
+    ...(lease.label === undefined ? {} : { label: lease.label }),
     dataPlane: null,
     ...(device.mode === undefined ? {} : { mode: device.mode }),
     ...(device.except === undefined ? {} : { except: device.except }),
@@ -118,8 +122,16 @@ function requestOptions(body: LeaseRequestInput) {
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
+    ...requestNameOptions(body),
+  };
+}
+
+function requestNameOptions(body: LeaseRequestInput) {
+  return {
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
+    ...(body.runId === undefined ? {} : { runId: body.runId }),
+    ...(body.label === undefined ? {} : { label: body.label }),
     ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
   };
 }
@@ -364,6 +376,7 @@ export class LeaseRequestTracker {
     return { kind: "not-cancellable" };
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the app's tracker, and by its tests through a test-* harness.
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.requests.requestIdForLease(leaseId);
   }
@@ -415,6 +428,8 @@ interface HttpLeaseRecord {
   readonly grantedAt: number;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  readonly runId?: string | undefined;
+  readonly label?: string | undefined;
   /** ADR 0005 §18: set on a lease a gateway issued, naming the worker it lives on. */
   readonly worker?: { readonly id: string; readonly label?: string | undefined } | undefined;
 }

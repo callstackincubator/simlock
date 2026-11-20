@@ -179,13 +179,29 @@ One transition stays manual, one click: `bug:new` → `bug:ready`, after
 you read the triage report of a bug the fast track did not pass. Flipping a closed feature's
 ADRs to _Accepted_ (delivery rule 10) is yours too, unless delivery did it.
 
+## Your inbox
+
+`node .agents/scripts/inbox.mjs` lists everything that waits on you, each
+with the one action it needs: triage reports to read, blockers, PRs to
+review or merge, issues with no state label, work that needs a spec
+session, work `deliver` may start, and decisions delivery took that are
+still marked pending. `--save` records the list, and the next run marks
+what is new.
+
+Two scheduled tasks in T3 Code use it, so you do not have to ask. **Inbox**
+runs it every hour in one thread, labels reports that arrived with no
+label `bug:new` or `request:new`, and posts only when the list changed;
+reply there with the numbers to start, and it opens one thread per item.
+**Bug sweep** runs `deliver` every hour on the oldest `bug:new` that has
+no triage report, one bug at a time.
+
 ## Watching the pipeline
 
 `node .agents/scripts/delivery-stats.mjs` prints one row per week for the
 last five: blocking findings per review raised and fixed, notes, PRs
 needing a second round, median hours to merge, rounds and tokens,
-handoffs. `--since <date>` lists PRs; `--calibration` prints the recent
-incorrect findings every reviewer reads. `delivery-counters.mjs --since
+handoffs. `--since <date>` lists PRs; `--calibration` prints the last four
+weeks' rejected findings, to read when a review's confirmation rate drops. `delivery-counters.mjs --since
 <date>` prints the per-PR counters the process review judges delivery
 changes by (CI lines sent to fix runs, stack syncs, empty builds, fix runs
 that changed nothing, tests per Tests line), and `instruction-reads.mjs`
@@ -193,7 +209,7 @@ how often each role opens each rule, brief and manual. Change one thing in
 the pipeline at a time and compare the rows before and after.
 
 Weekly routines keep the suite and the reviews in shape: `harden-tests`,
-`audit-tests`, `garden-comments`, `calibrate-reviews` and `refactor`
+`audit-tests`, `garden-comments` and `refactor`
 ([toolchain.md](agent-rules/toolchain.md) "Routines"). `check-upstream`
 reads every `upstream` issue's `## Waiting on upstream` links each week
 and comments when they are fixed in a release; you move the issue back to

@@ -5,6 +5,7 @@ import {
   PassthroughRefusedError,
   type PhysicalDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   type ReclaimResult,
   ScreenUnavailableError,
@@ -23,6 +24,7 @@ export const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
 
 const READ_TIMEOUT_MS = 30_000;
 const UNINSTALL_TIMEOUT_MS = 60_000;
+const CONNECT_TIMEOUT_MS = 10_000;
 const PORT = String(DEFAULT_ADB_PORT);
 
 const STRIPPED_ENV_KEYS = ["ANDROID_ADB_SERVER_ADDRESS", "ADB_SERVER_SOCKET", "ANDROID_SERIAL"];
@@ -49,6 +51,8 @@ const REFUSED_REBOOT_TARGETS = new Set([
   "fastboot",
 ]);
 
+// why: ADR 0080 §3: only a `host:port` address is connected again; an mDNS name is left to adb.
+const NETWORK_ADDRESS = /^[^\s:]+:\d{1,5}$/;
 const USER_ID = /^\d{1,6}$/;
 const PACKAGE_LINE = /^package:([A-Za-z0-9_.]+)$/;
 
@@ -56,6 +60,7 @@ interface ListedTransport {
   readonly serial: string;
   readonly state: string;
   readonly usb: boolean;
+  readonly emulator: boolean;
 }
 
 type Ran =
@@ -65,6 +70,12 @@ type Ran =
 
 type Refusal = Extract<PhysicalInspection, { enrollable: false }>;
 
+const EMULATOR_REFUSAL: Refusal = {
+  enrollable: false,
+  message: "an emulator is not a phone, whatever it is connected through",
+  reason: "unsupported-kind",
+};
+
 export class AndroidPhysicalHandler {
   readonly #gate: DefaultAdbServerGate;
   readonly #adb: string;
@@ -72,6 +83,7 @@ export class AndroidPhysicalHandler {
   readonly #processRunner: ProcessRunner;
   readonly #isBareShell: (args: readonly string[]) => boolean;
   readonly #platform: NodeJS.Platform;
+  readonly #networkDevices: boolean;
 
   constructor(
     options: Omit<DefaultAdbServerGateOptions, "env"> & {
@@ -80,15 +92,16 @@ export class AndroidPhysicalHandler {
       readonly isBareShell: (args: readonly string[]) => boolean;
       // why: how a USB transport is told apart depends on the host's adb; injected so Windows can be tested anywhere.
       readonly platform?: NodeJS.Platform;
+      // why: ADR 0080 §1: the worker's `android.networkDevices`, off by default.
+      readonly networkDevices?: boolean;
     },
   ) {
     this.#platform = options.platform ?? process.platform;
+    this.#networkDevices = options.networkDevices ?? false;
     this.#isBareShell = options.isBareShell;
     this.#adb = options.adb;
     this.#processRunner = options.processRunner;
-    const env: NodeJS.ProcessEnv = { ...options.baseEnv };
-    for (const key of STRIPPED_ENV_KEYS) delete env[key];
-    env.ANDROID_ADB_SERVER_PORT = PORT;
+    const env = phoneEnv(options.baseEnv);
     this.#env = env;
     this.#gate = new DefaultAdbServerGate({ ...options, env });
   }
@@ -152,60 +165,170 @@ export class AndroidPhysicalHandler {
     const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
     if (listing.kind !== "ok") return this.#refusal(listing, "the device list (adb devices -l)");
 
-    const unusable = unenrollable(
-      parseDevices(listing.stdout, this.#platform).filter((entry) => entry.serial === id),
+    const matching = parseDevices(listing.stdout, this.#platform).filter(
+      (entry) => entry.serial === id,
     );
+    const unusable = unenrollable(matching, this.#networkDevices);
     if (unusable !== undefined) return unusable;
-    return this.#readDevice(id);
+    return this.#readDevice(id, !matching.some((entry) => entry.usb));
   }
 
-  async #readDevice(id: string): Promise<PhysicalInspection> {
-    const model = await this.#readText(id, ["shell", "getprop", "ro.product.model"]);
-    if (model.kind !== "ok")
-      return this.#refusal(model.ran, "the model (getprop ro.product.model)");
-    const level = await this.#readText(id, ["shell", "getprop", "ro.build.version.sdk"]);
-    if (level.kind !== "ok") {
-      return this.#refusal(level.ran, "the API level (getprop ro.build.version.sdk)");
+  async #readDevice(id: string, network: boolean): Promise<PhysicalInspection> {
+    let hardwareSerial: string | undefined;
+    if (network) {
+      const identity = await this.#readNetworkIdentity(id);
+      if (identity.kind === "refused") return identity.refusal;
+      hardwareSerial = identity.serial;
     }
-    const user = await this.#readUser(id);
-    if (user.kind !== "ok") return this.#refusal(user.ran, "the current user id");
-    const apps = await this.#readPackages(id, user.value);
-    if (apps.kind !== "ok") return this.#refusal(apps.ran, "the user apps (pm list packages -3)");
-
+    const facts = await this.#readPhoneFacts(id);
+    if (facts.kind === "refused") return facts.refusal;
     return {
-      apps: apps.value,
+      apps: facts.apps,
       class: "phone",
       driverDeviceId: id,
       enrollable: true,
-      model: model.value,
-      osVersion: level.value,
+      model: facts.model,
+      osVersion: facts.osVersion,
+      ...(hardwareSerial === undefined ? {} : { hardwareSerial }),
     };
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
-    const entries = listing.kind === "ok" ? parseDevices(listing.stdout, this.#platform) : [];
+  async #readNetworkIdentity(
+    id: string,
+  ): Promise<
+    | { readonly kind: "ok"; readonly serial: string }
+    | { readonly kind: "refused"; readonly refusal: Refusal }
+  > {
+    const emulator = await this.#refuseEmulator(id);
+    if (emulator !== undefined) return { kind: "refused", refusal: emulator };
+    const serial = await this.#readHardwareSerial(id);
+    return serial.kind === "ok"
+      ? { kind: "ok", serial: serial.value }
+      : { kind: "refused", refusal: serial.refusal };
+  }
+
+  async #readPhoneFacts(id: string): Promise<
+    | {
+        readonly kind: "ok";
+        readonly apps: readonly string[];
+        readonly model: string;
+        readonly osVersion: string;
+      }
+    | { readonly kind: "refused"; readonly refusal: Refusal }
+  > {
+    const model = await this.#readText(id, ["shell", "getprop", "ro.product.model"]);
+    if (model.kind !== "ok") {
+      return {
+        kind: "refused",
+        refusal: this.#refusal(model.ran, "the model (getprop ro.product.model)"),
+      };
+    }
+    const level = await this.#readText(id, ["shell", "getprop", "ro.build.version.sdk"]);
+    if (level.kind !== "ok") {
+      return {
+        kind: "refused",
+        refusal: this.#refusal(level.ran, "the API level (getprop ro.build.version.sdk)"),
+      };
+    }
+    const user = await this.#readUser(id);
+    if (user.kind !== "ok") {
+      return { kind: "refused", refusal: this.#refusal(user.ran, "the current user id") };
+    }
+    const apps = await this.#readPackages(id, user.value);
+    if (apps.kind !== "ok") {
+      return {
+        kind: "refused",
+        refusal: this.#refusal(apps.ran, "the user apps (pm list packages -3)"),
+      };
+    }
+    return { apps: apps.value, kind: "ok", model: model.value, osVersion: level.value };
+  }
+
+  // why: `adb connect 127.0.0.1:<port>` makes an emulator look like a network phone, so the emulator's own flags decide.
+  async #refuseEmulator(id: string): Promise<Refusal | undefined> {
+    for (const property of ["ro.boot.qemu", "ro.kernel.qemu"]) {
+      const ran = await this.#run(["-s", id, "shell", "getprop", property], READ_TIMEOUT_MS);
+      if (ran.kind !== "ok") return this.#refusal(ran, `the emulator flag (getprop ${property})`);
+      if (ran.stdout.trim() === "1") {
+        return EMULATOR_REFUSAL;
+      }
+    }
+    return undefined;
+  }
+
+  async #hasHardwareSerial(id: string, recorded: string | undefined): Promise<boolean> {
+    const read = await this.#readText(id, ["shell", "getprop", "ro.serialno"]);
+    return read.kind === "ok" && read.value === recorded;
+  }
+
+  async #readHardwareSerial(
+    id: string,
+  ): Promise<
+    | { readonly kind: "ok"; readonly value: string }
+    | { readonly kind: "refused"; readonly refusal: Refusal }
+  > {
+    const serial = await this.#readText(id, ["shell", "getprop", "ro.serialno"]);
+    if (serial.kind !== "ok") {
+      return {
+        kind: "refused",
+        refusal: this.#refusal(serial.ran, "the hardware serial (getprop ro.serialno)"),
+      };
+    }
+    return { kind: "ok", value: serial.value };
+  }
+
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    const entries = await this.#listWithReconnects(enrolled);
     const answers: PresentPhysical[] = [];
-    for (const driverDeviceId of enrolledIds) {
-      const usb = entries.filter((entry) => entry.serial === driverDeviceId && entry.usb);
-      if (usb.some((entry) => entry.state === "device")) {
-        const level = await this.#readText(driverDeviceId, [
-          "shell",
-          "getprop",
-          "ro.build.version.sdk",
-        ]);
+    for (const { driverDeviceId, hardwareSerial } of enrolled) {
+      const network = this.#networkDevices && hardwareSerial !== undefined;
+      const matching = entries.filter(
+        (entry) => entry.serial === driverDeviceId && (entry.usb || network),
+      );
+      if (matching.some((entry) => entry.state === "device")) {
+        const same = !network || (await this.#hasHardwareSerial(driverDeviceId, hardwareSerial));
+        const level = same
+          ? await this.#readText(driverDeviceId, ["shell", "getprop", "ro.build.version.sdk"])
+          : undefined;
         answers.push(
-          level.kind === "ok"
+          level?.kind === "ok"
             ? { driverDeviceId, osVersion: level.value, present: true }
             : { driverDeviceId, present: false, reason: "not-present" },
         );
-      } else if (usb.some((entry) => entry.state === "unauthorized")) {
+      } else if (matching.some((entry) => entry.state === "unauthorized")) {
         answers.push({ driverDeviceId, present: false, reason: "untrusted" });
       } else {
         answers.push({ driverDeviceId, present: false, reason: "not-present" });
       }
     }
     return answers;
+  }
+
+  // why: ADR 0080 §3: adb forgets a `host:port` transport when its server restarts, so every presence read connects the enrolled addresses the listing lacks, then lists again.
+  async #listWithReconnects(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly ListedTransport[]> {
+    const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
+    if (listing.kind !== "ok") return [];
+    const first = parseDevices(listing.stdout, this.#platform);
+    const missing = this.#networkDevices
+      ? enrolled.filter(
+          ({ driverDeviceId }) =>
+            NETWORK_ADDRESS.test(driverDeviceId) &&
+            !first.some((entry) => entry.serial === driverDeviceId),
+        )
+      : [];
+    if (missing.length === 0) return first;
+    // why: `adb connect` exits 0 when it fails, so its result is ignored and the next listing is the outcome.
+    await Promise.all(
+      missing.map(({ driverDeviceId }) =>
+        this.#run(["connect", driverDeviceId], CONNECT_TIMEOUT_MS),
+      ),
+    );
+    const again = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
+    return again.kind === "ok" ? parseDevices(again.stdout, this.#platform) : [];
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
@@ -215,13 +338,14 @@ export class AndroidPhysicalHandler {
       throw new Error("could not read the device list (adb devices -l)");
     }
     const serials = parseDevices(listing.stdout, this.#platform)
-      .filter((entry) => entry.usb)
+      .filter((entry) => entry.usb || (this.#networkDevices && !entry.emulator))
       .map((entry) => entry.serial);
     return [...new Set(serials)].sort();
   }
 
   async reclaim(device: PhysicalDriverDevice): Promise<ReclaimResult> {
     const serial = device.deviceId;
+    await this.#assertEnrolledPhone(device);
     const user = await this.#readUser(serial);
     if (user.kind !== "ok") throw failure("the current user id", user.ran);
     const before = await this.#readPackages(serial, user.value);
@@ -245,6 +369,19 @@ export class AndroidPhysicalHandler {
       throw new Error(`physical reclaim left apps installed: ${left.join(", ")}`);
     }
     return { missingApps: plan.missing, state: "ready", strategy: "uninstall" };
+  }
+
+  // why: a lease can end before the watcher sees the address change hands, so nothing is uninstalled before the phone proves it is the enrolled one (ADR 0080 §2).
+  async #assertEnrolledPhone(device: PhysicalDriverDevice): Promise<void> {
+    if (device.hardwareSerial === undefined) return;
+    const serial = device.deviceId;
+    const read = await this.#readText(serial, ["shell", "getprop", "ro.serialno"]);
+    if (read.kind !== "ok") throw failure("the hardware serial", read.ran);
+    if (read.value !== device.hardwareSerial) {
+      throw new Error(
+        `the phone at ${serial} is not the enrolled one (hardware serial ${read.value}, enrolled ${device.hardwareSerial})`,
+      );
+    }
   }
 
   async passthrough(
@@ -363,7 +500,7 @@ function parseDevices(output: string, platform: NodeJS.Platform): ListedTranspor
     const usb =
       tokens.some((token) => token.startsWith("usb:")) ||
       (platform === "win32" && !isNetworkOrEmulatorSerial(serial));
-    entries.push({ serial, state, usb });
+    entries.push({ emulator: /^emulator-\d+$/.test(serial), serial, state, usb });
   }
   return entries;
 }
@@ -377,17 +514,40 @@ function isNetworkOrEmulatorSerial(serial: string): boolean {
   return /:\d+$/.test(serial) || serial.includes("._tcp") || /^emulator-\d+$/.test(serial);
 }
 
-function unenrollable(matching: readonly ListedTransport[]): Refusal | undefined {
+function phoneEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  for (const key of STRIPPED_ENV_KEYS) delete env[key];
+  env.ANDROID_ADB_SERVER_PORT = PORT;
+  return env;
+}
+
+function unenrollable(
+  matching: readonly ListedTransport[],
+  networkDevices: boolean,
+): Refusal | undefined {
   const usb = matching.filter((entry) => entry.usb);
   if (usb.some((entry) => entry.state === "device")) return undefined;
-  if (usb.some((entry) => entry.state === "unauthorized")) {
+  const network = networkDevices ? matching.filter((entry) => !entry.usb && !entry.emulator) : [];
+  if (networkDevices && usb.length === 0 && matching.some((entry) => entry.emulator)) {
+    return EMULATOR_REFUSAL;
+  }
+  if (network.some((entry) => entry.state === "device")) return undefined;
+  return notUsable(usb.concat(network), matching.length > 0 && usb.length === 0, networkDevices);
+}
+
+function notUsable(
+  candidates: readonly ListedTransport[],
+  onlyOtherKinds: boolean,
+  networkDevices: boolean,
+): Refusal {
+  if (candidates.some((entry) => entry.state === "unauthorized")) {
     return {
       enrollable: false,
       message: "USB debugging is not authorized for this host on the device",
       reason: "untrusted",
     };
   }
-  if (usb.length === 0 && matching.length > 0) {
+  if (!networkDevices && onlyOtherKinds) {
     return {
       enrollable: false,
       message: "only USB-connected devices can be enrolled",

@@ -67,7 +67,7 @@ simlock --gateway token revoke tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45
 {"revoked":true}
 ```
 
-A revoked token stops working on its next request. Revoking a worker token also closes that worker's connection, and lets the worker join with a new token. Leases made with a revoked agent token stay until their time to live runs out or an operator releases them; the agent can no longer renew or release them. An id that names no token answers `"revoked":false`.
+A revoked token stops working on its next request. Revoking a worker token also closes that worker's connection, and lets the worker join with a new token. Revoking an agent or operator token also closes every [session](../../using-devices/remote-agents/#more-calls) it has open, with WebSocket close code `4003` and the reason `token revoked`. Leases made with a revoked agent token stay until their time to live runs out or an operator releases them; the agent can no longer renew or release them. An id that names no token answers `"revoked":false`.
 
 ## Admin commands on the CLI
 

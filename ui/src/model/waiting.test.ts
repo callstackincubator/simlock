@@ -285,7 +285,7 @@ describe("the waiting table on a gateway", () => {
       field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
     ).unwrap().element.shape.reason.options;
 
-    expect(listed).toHaveLength(18);
+    expect(listed).toHaveLength(19);
     for (const reason of listed) {
       const text = rowOf({ workers: [{ reason, workerId: "wrk_1" } as never] }).workers?.[0]?.text;
       expect(text).toMatch(/^[A-Z]/);

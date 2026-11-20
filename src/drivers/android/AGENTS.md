@@ -1,6 +1,6 @@
 # Android driver
 
-Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server.
+Does: emulators in an owned AVD home behind Simlock's own adb server, and phones on the default adb server.
 Flows: [device selection](../../../docs/internal/flows/device-selection.md), [drivers](../AGENTS.md), [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
 ## Rules
@@ -10,7 +10,7 @@ Containment:
 - Ownership is root membership, proven at boot and in running observations by `emu avd path` against the device's own folder, never a name. Every copy's AVD is named `simlock`, so the name is never evidence.
 - The gate (`ownership.ts`): before any `emu kill`, `adb emu avd path` must name this device's own AVD folder. It is asked every time, never cached; unreachable, timed out or another path sends nothing.
 - Every `adb`, `emulator` and `avdmanager` call carries `ANDROID_AVD_HOME` (the root; a seed's folder while it is made; a copy's own folder at its boot) and `ANDROID_ADB_SERVER_PORT`. Without them a call reaches the user's AVD home and the shared adb server.
-- The user's AVD home and devices.xml are only read. The one write is `destroyLegacy`, for an AVD the registry names (safety rule 1).
+- The user's AVD home and devices.xml are only read, except `destroyLegacy` for an AVD the registry names (safety rule 1).
 - A stored port is not trusted after a restart (#52); pinned by `two-instances.test.ts`. A `destroy` after a restart stops each attached emulator whose `emu avd path` names this AVD; a serial that cannot answer refuses the delete, and another path is left alone.
 - `listManaged` never lists `<root>/sources/`: a seed is never a device.
 
@@ -37,19 +37,21 @@ Boot:
 - A copy boots from `simlock_boot`. When the snapshot does not load, the emulator cold-boots the same disk itself: not an error, only the logged diagnostic `snapshot-cold-boot`.
 - Never `-wipe-data`, except once for a device made before copies. Always `-no-snapshot-save`. A recovery boot never wipes and never loads a snapshot.
 - `-grpc` always goes with `-port`: without it the emulator opens no gRPC endpoint and writes no `avd/running` discovery file. So a console port claims three ports: itself, the adb port above it and the gRPC port (`GRPC_PORT_OFFSET`).
-- `-crash-report-mode never` (a stale crash dump otherwise opens a modal dialog that blocks the boot) is passed only when `emulator -help` lists it: emulator 36.1.9 exits on it (#1297), so `androidPrerequisites` does not require it. `never` deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root, never the user's shared one.
+- `-crash-report-mode never` (a stale dump opens a boot-blocking dialog) is passed only when `emulator -help` lists it: 36.1.9 exits on it (#1297). It deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root.
+- `-feature -WiFiPacketStream` is on every launch (#1586): copies share their seed's Wi-Fi MAC, so on netsim's one Wi-Fi network all but one are dropped. A seed made without it is stale.
 - Ready is more than `sys.boot_completed`: `emu avd path` must name the device's own folder (else `DriverCrashError`), and `pm path android` must answer, since after a snapshot load the boot properties pass before `pm` does.
+- `android.emulator.cores` goes into `config.ini`, never `-cores`: a snapshot does not load under another count.
 - No slim: `resolveSpec` ignores `mode`.
 
 Physical phones:
 
-- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it as a side effect when nothing listens. Phones are USB transports only.
+- The 5037 server is never started, stopped or adopted on purpose. A physical `adb` command, `listAttachedPhysical`'s `devices -l` included, may start it when nothing listens. Under `android.networkDevices` (ADR 0080) a phone is its `ro.serialno`, not its address.
 - Before every command `DefaultAdbServerGate.check`: the 5037 server's protocol must equal Simlock's `adb version`; nothing listening is open. A mismatch or an unreadable answer sends no command and shows as advisory `adb-protocol-mismatch`.
 
 Profiles and components:
 
 - Profile sources are read in order: the library, the SDK (`avdmanager list device`), the user's devices.xml. The first case-insensitive name match wins and classes the model. A devices.xml name the library shadows is advisory `device-profile-hidden`.
-- The `avdmanager list device` answer is kept until a file it reads profiles from changes, appears or goes (`AvdmanagerDeviceList`); a failed run is not kept. The sdkmanager catalog is never read.
+- The sdkmanager catalog is never read.
 - Existing devices are not re-checked for fit.
 - A component is an API level. A licence refusal runs `sdkmanager --licenses` only under `downloads.acceptAndroidLicenses`, else `AndroidLicenseNotAcceptedError`: licence consent is never implied by download permission.
 

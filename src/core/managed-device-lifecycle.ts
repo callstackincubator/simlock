@@ -76,8 +76,9 @@ export class ManagedDeviceLifecycle {
     target: VirtualDevice,
     claim: DeviceOperationClaim,
     except?: readonly string[],
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "shutdown", claim, except);
+    return this.#makeReadyForLease(target, "shutdown", claim, except, label);
   }
 
   /**
@@ -107,6 +108,7 @@ export class ManagedDeviceLifecycle {
     target: VirtualDevice,
     claim: DeviceOperationClaim,
     except: readonly string[],
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
     const claimed = await this.#claim(target, ["ready"], "boot", claim);
     if (claimed === undefined) return undefined;
@@ -116,6 +118,7 @@ export class ManagedDeviceLifecycle {
       await driver.shutdown(toDriverDevice(claimed.device));
       ready = await driver.makeReady(toDriverDevice(claimed.device), {
         except,
+        ...(label === undefined ? {} : { label }),
         mode: specMode(claimed.device.spec),
         purpose: "prepare",
       });
@@ -161,8 +164,9 @@ export class ManagedDeviceLifecycle {
     target: VirtualDevice,
     claim?: DeviceOperationClaim,
     except?: readonly string[],
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "provisioning", claim, except);
+    return this.#makeReadyForLease(target, "provisioning", claim, except, label);
   }
 
   async shutdown(
@@ -303,6 +307,7 @@ export class ManagedDeviceLifecycle {
     expectedState: "provisioning" | "shutdown",
     existingClaim?: DeviceOperationClaim,
     except?: readonly string[],
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
     const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
     if (claimed === undefined) return undefined;
@@ -315,6 +320,7 @@ export class ManagedDeviceLifecycle {
           mode: specMode(claimed.device.spec),
           purpose: "prepare",
           ...(except === undefined ? {} : { except }),
+          ...(label === undefined ? {} : { label }),
         });
     } catch (error: unknown) {
       await this.#release(claimed);

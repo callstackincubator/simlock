@@ -140,8 +140,34 @@ CREATE TABLE ended_lease_ids (
 ) STRICT;
 `;
 
+const REGISTRY_V7 = `
+ALTER TABLE devices ADD COLUMN hardware_serial TEXT;
+`;
+
+const REGISTRY_V8 = `
+ALTER TABLE leases ADD COLUMN run_id TEXT;
+ALTER TABLE lease_requests ADD COLUMN run_id TEXT;
+ALTER TABLE lease_grants ADD COLUMN run_id TEXT;
+`;
+
+const REGISTRY_V9 = `
+ALTER TABLE leases ADD COLUMN label TEXT;
+ALTER TABLE lease_requests ADD COLUMN label TEXT;
+ALTER TABLE lease_grants ADD COLUMN label TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4, REGISTRY_V5, REGISTRY_V6],
+  migrations: [
+    REGISTRY_V1,
+    REGISTRY_V2,
+    REGISTRY_V3,
+    REGISTRY_V4,
+    REGISTRY_V5,
+    REGISTRY_V6,
+    REGISTRY_V7,
+    REGISTRY_V8,
+    REGISTRY_V9,
+  ],
   name: "registry",
-  version: 6,
+  version: 9,
 };

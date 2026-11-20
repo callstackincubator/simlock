@@ -43,6 +43,8 @@ export interface ModuleConfig<C> {
 export interface ModuleFinding {
   readonly message: string;
   readonly remedy: string;
+  // why: an advisory finding warns about a module that works (ADR 0088 §3); the host builds `module-advisory` from it.
+  readonly advisory?: true;
 }
 
 export interface ModuleEndedLease {
@@ -166,7 +168,7 @@ export interface WorkerModule {
   readonly mount?: (deps: MountDeps) => ModuleHandler;
   readonly leaseRoute?: ModuleLeaseHandler;
   readonly socket?: ModuleLeaseSocketHandler;
-  readonly findings?: () => readonly ModuleFinding[];
+  readonly findings?: () => readonly ModuleFinding[] | Promise<readonly ModuleFinding[]>;
   readonly hooks?: WorkerHooks;
 }
 
@@ -275,6 +277,7 @@ export interface FleetLease {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  readonly runId?: string;
   readonly idChosenByRequester?: boolean;
 }
 
@@ -325,6 +328,8 @@ export interface ModuleHttpResponse {
   readonly description: string;
   readonly contentTypes?: readonly string[];
   readonly headers?: Readonly<Record<string, string>>;
+  // why: a header the answer may leave out is published `required: false`; `headers` are always sent.
+  readonly optionalHeaders?: Readonly<Record<string, string>>;
   readonly errorCodes?: readonly string[];
 }
 
@@ -366,7 +371,7 @@ export interface OptionalModuleDefinition<C> {
   readonly config: ModuleConfig<C>;
   readonly localProfile?: ModuleLocalProfile;
   // why: plain data the config loader reads without naming the module; a missing `enabled` then means on for a standalone worker (ADR 0046 §1).
-  readonly enabledByDefault?: "standalone-worker";
+  readonly enabledByDefault?: "standalone-worker" | "macos-worker";
   readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
@@ -379,12 +384,14 @@ export interface ModuleHost {
   readonly leaseEndParticipants: readonly ModuleLeaseEndParticipant[];
   mounts(deps: MountDeps): readonly ModuleMount[];
   leaseRoutes(): readonly ModuleLeaseRoute[];
-  findings(): readonly {
-    readonly kind: "module-unavailable";
-    readonly module: string;
-    readonly message: string;
-    readonly remedy: string;
-  }[];
+  findings(): Promise<
+    readonly {
+      readonly kind: "module-unavailable" | "module-advisory";
+      readonly module: string;
+      readonly message: string;
+      readonly remedy: string;
+    }[]
+  >;
   afterSocketClaimed(): void;
   prepareLocalProfiles(): Promise<void>;
   beforeDrain(): Promise<void>;

@@ -31,7 +31,9 @@ const virtualRequest = {
 
 function config(leaseOverrides: object = {}): TestEngineConfig {
   return {
+    android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    ios: { modes: ["slim", "full"], virtualDevices: true },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -118,11 +120,16 @@ async function createHarness(
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
-async function enrollIphone(harness: Harness, driverDeviceId: string): Promise<PhysicalDevice> {
+async function enrollIphone(
+  harness: Harness,
+  driverDeviceId: string,
+  hardwareSerial?: string,
+): Promise<PhysicalDevice> {
   const device = await harness.registry.enrollPhysical({
     apps: [],
     class: "phone",
     driverDeviceId,
+    ...(hardwareSerial === undefined ? {} : { hardwareSerial }),
     model: "iPhone 15 Pro",
     osVersion: "18.4",
     platform: "ios",
@@ -168,17 +175,27 @@ function stateOf(harness: Harness, device: PhysicalDevice): string | undefined {
   return harness.registry.snapshot.devices.find((candidate) => candidate.id === device.id)?.state;
 }
 
-function presenceReads(harness: Harness): unknown[] {
+function presenceEntries(harness: Harness): unknown[] {
   return harness.driver.calls
     .filter((call) => call.operation === "listPresentPhysical")
     .map((call) => call.arguments[0]);
+}
+
+function presenceReads(harness: Harness): unknown[] {
+  return presenceEntries(harness).map((entries) =>
+    (entries as readonly { readonly driverDeviceId: string }[]).map(
+      (entry) => entry.driverDeviceId,
+    ),
+  );
 }
 
 function claimKind(harness: Harness, device: PhysicalDevice): string | undefined {
   return harness.engine.core.claims.claim(device.id)?.kind;
 }
 
-async function waiterMidPresenceRead(options: { readonly timeoutMs?: number } = {}) {
+async function waiterMidPresenceRead(
+  options: { readonly timeoutMs?: number; readonly runId?: string } = {},
+) {
   const harness = await createHarness();
   const device = await enrollIphone(harness, "UDID-A");
   await startReclaiming(harness, device);
@@ -239,6 +256,18 @@ describe("createLeasing with physical devices", () => {
     expect(lookups(refusing)).toEqual([]);
     expect(granted).toMatchObject({ device: { id: device.id } });
     expect(refused).toBeInstanceOf(UnknownModelError);
+  });
+
+  it("reads a device's presence before the grant with its driverDeviceId and hardwareSerial", async () => {
+    const harness = await createHarness();
+    await enrollIphone(harness, "UDID-A", "SER-A");
+
+    const result = await outcome(harness.engine.request(physicalRequest, asking("agent")));
+
+    expect(result).toMatchObject({ device: { driverDeviceId: "UDID-A" } });
+    expect(presenceEntries(harness)).toEqual([
+      [{ driverDeviceId: "UDID-A", hardwareSerial: "SER-A" }],
+    ]);
   });
 
   it("counts a presence read that rejects as not present and releases the grant claim", async () => {
@@ -372,6 +401,20 @@ describe("createLeasing with physical devices", () => {
     expect(killed.harness.registry.snapshot.leases).toEqual([]);
     expect(stateOf(killed.harness, killed.device)).toBe("ready");
     expect(killed.harness.engine.core.claims.isClaimed(killed.device.id)).toBe(false);
+  });
+
+  it("cancels a physical request of the run during its presence read: it is not granted, its id is listed, the device stays ready", async () => {
+    const { device, harness, promise } = await waiterMidPresenceRead({ runId: "nightly-7" });
+    expect(claimKind(harness, device)).toBe("grant");
+    const requestId = harness.engine.waitingRequests()[0]?.id;
+
+    const released = await harness.engine.releaseRun("nightly-7", "agent");
+    harness.driver.releasePresenceReads();
+
+    expect(released).toEqual({ leaseIds: [], requestIds: [requestId] });
+    expect(await outcome(promise)).toBeInstanceOf(RequestCancelledError);
+    expect(stateOf(harness, device)).toBe("ready");
+    expect(harness.engine.core.claims.isClaimed(device.id)).toBe(false);
   });
 
   it("wakes the queue after a grant: a queued physical request that no wake reached since a second device became ready is granted it", async () => {

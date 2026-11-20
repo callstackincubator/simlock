@@ -8,7 +8,7 @@ import type {
   ObservedMark,
 } from "../../core/index.js";
 import type { Filesystem } from "../../ports/index.js";
-import { SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
+import { AVDMANAGER_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
 import {
   ERASABLE_MARK_PATH,
   ERASABLE_MARK_READ_BYTES,
@@ -142,6 +142,7 @@ export class DeviceTable {
     const { avdName } = this.#adbTools.dataFor(device);
     await this.#adbTools.runOrThrow(this.#options.avdmanager, ["delete", "avd", "-n", avdName], {
       env: { ...this.#options.baseEnv, ANDROID_AVD_HOME: this.#options.legacyAvdHome },
+      timeoutMs: AVDMANAGER_TIMEOUT_MS,
     });
   }
 

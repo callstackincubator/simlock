@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeDirectoryAccessReader,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DaemonServer } from "./server.js";
@@ -12,9 +18,9 @@ export const runningDaemons: DaemonServer[] = [];
 
 export const temporaryDirectories: string[] = [];
 
-// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test that asks for neither pins them off, and two daemons would clash on port 4701.
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046), and a macOS worker checks fseventsd (ADR 0088); a test that asks for neither pins them off, and two daemons would clash on port 4701.
 export const STANDALONE_OFF = {
-  capabilities: { "agent-device": { enabled: false } },
+  capabilities: { "agent-device": { enabled: false }, fseventsd: { enabled: false } },
   http: { enabled: false },
 } as const;
 
@@ -38,6 +44,8 @@ export async function start(
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       deviceDataTables: fakeDeviceDataTables,
+      // why: on Windows the real reader would start PowerShell for every test daemon.
+      directoryAccess: new FakeDirectoryAccessReader({ user: "S-1-5-21-1-2-3-1001", entries: [] }),
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: null,
       logger,

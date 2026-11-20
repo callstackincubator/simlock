@@ -1,5 +1,5 @@
 // why: a capture belongs to the device it films, not to a connection -- the device is the thing that says
-// it still runs. A viewer going away stops a capture through its own request; this covers what that
+// it still runs. The last viewer going away stops a capture through its own request; this covers what that
 // cannot, a device that stops running or whose lease ends (released elsewhere, expired, the device lost)
 // while somebody is still watching, or while a capture is still starting.
 import type { ModuleLeaseEndParticipant } from "../modules/index.js";
@@ -12,7 +12,7 @@ export interface CaptureSlot {
   // why: an open that failed has already cleaned up after itself; this settles and forgets the slot
   // with nothing to close.
   abandon(): void;
-  // why: the viewer is gone. The slot stays registered until its open settles and what it attached
+  // why: the last viewer is gone. The slot stays registered until its open settles and what it attached
   // is closed, so a lease that ends meanwhile still waits for the device to be left alone.
   release(): Promise<void>;
   // why: the lease-end reason this slot was stopped with, so its body can end on a frame that says

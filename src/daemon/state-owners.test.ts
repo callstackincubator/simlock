@@ -163,7 +163,7 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
           state.database
             .prepare("SELECT version FROM schema_versions WHERE owner = ?")
             .get(owner.name),
-        ).toEqual({ version: 2 });
+        ).toEqual({ version: owner.version });
         expect(
           state.database
             .prepare(`SELECT source_id, kind, state FROM ${table} ORDER BY source_id`)

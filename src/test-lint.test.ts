@@ -314,6 +314,39 @@ describe("test-lint.mjs", () => {
     expect(lint(repo(before, after))).toEqual({ status: 1, lines: [`${line}: ${BOUND}`] });
   });
 
+  it("testing 5, 6 and 10: passes a split that moves tests unchanged into a new file, and flags a line or an internal import the split adds", () => {
+    const dir = repo(
+      {
+        ...LEASING_INDEX,
+        "src/leasing/queue.test.ts": file(
+          'import { admit } from "./queue.js";',
+          "it('admits', () => {});",
+          "it('rejects', () => { expect(admit()).rejects.toBeInstanceOf(Error); });",
+        ),
+      },
+      {
+        "src/leasing/queue.test.ts": file(
+          'import { admit } from "./queue.js";',
+          "it('admits', () => {});",
+        ),
+        "src/leasing/queue-rejects.test.ts": file(
+          'import { admit } from "./queue.js";',
+          'import { plan } from "./planner.js";',
+          "it('rejects', () => { expect(admit()).rejects.toBeInstanceOf(Error); });",
+          "it.skip('plans', () => {});",
+        ),
+      },
+    );
+
+    const result = lint(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.lines).toEqual([
+      `src/leasing/queue-rejects.test.ts:4: ${SKIP}`,
+      `src/leasing/queue-rejects.test.ts:2: ${INTERNAL}`,
+    ]);
+  });
+
   it("judges only the lines the diff adds in the files given, and never a pattern inside a string or comment", () => {
     const dir = repo(
       { "src/a/old.test.ts": file("it.skip('old', () => {});") },

@@ -14,6 +14,7 @@ describe("the fleet types a module sees, declared by shape", () => {
         | "requesterId"
         | "ownerId"
         | "grantedAt"
+        | "runId"
         | "idChosenByRequester"
       >
     >();

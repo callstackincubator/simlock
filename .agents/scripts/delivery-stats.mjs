@@ -14,8 +14,7 @@
 // week's rejected findings, its handoffs, and the PRs waiting on hardware, for someone to read.
 //
 // --calibration prints instead the rejected findings of the last four weeks as Markdown, by
-// review, newest first: the weekly `calibrate-reviews` routine writes it to
-// .agents/briefs/calibration.md, which every reviewer reads before its diff.
+// review, newest first: what to read when a review's confirmation rate drops.
 //
 // GitHub is read through repo-scoped REST only: a cloud session's GitHub proxy serves a fixed set
 // of GraphQL queries (`gh pr list --json` is GraphQL) and refuses unscoped endpoints like search.

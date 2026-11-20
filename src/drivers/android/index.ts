@@ -25,6 +25,7 @@ import {
   isPhysicalDriverDevice,
   type PhysicalDriverDevice,
   type VirtualDriverDevice,
+  type EnrolledPhysical,
   type PresentPhysical,
   type DriverToolVersion,
   type InstalledComponent,
@@ -53,6 +54,7 @@ import {
   COLD_BOOT_ESTIMATE_MS,
   DEFAULT_EMULATOR_LAUNCH,
   Emulator,
+  WIFI_PER_EMULATOR_FLAGS,
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
 import {
@@ -61,7 +63,7 @@ import {
   DEFAULT_ADB_SERVER_PORT,
   defaultAndroidDeviceRoot,
 } from "./definition.js";
-import { ADB_DEVICES_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
+import { ADB_DEVICES_TIMEOUT_MS, AVDMANAGER_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
 import { ANDROID_DEFAULT_MODELS, Catalog } from "./catalog.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { ConsolePorts, portAllocatorFor, portsFromAdbDevices } from "./console-ports.js";
@@ -146,6 +148,8 @@ export interface AndroidDriverOptions {
   readonly pid?: number;
   /** why: the driver's own keys of the `android` config section; without it emulators launch with the section's defaults. */
   readonly config?: Partial<AndroidDriverConfig> | undefined;
+  /** why: the worker's `android.defaultImageTag`, which `advisories` checks against the images installed for the host CPU. */
+  readonly defaultImageTag?: string | undefined;
 }
 
 export type AndroidDriverDiagnostic = SnapshotColdBootDiagnostic | DeviceProfileSourceDiagnostic;
@@ -185,6 +189,8 @@ export class AndroidDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
   readonly #systemImages: SystemImages;
+  readonly #defaultImageTag: string | undefined;
+  readonly #hostAbi: string;
   readonly #seeds: Seeds;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
@@ -214,10 +220,12 @@ export class AndroidDriver implements Driver {
       adb: sdk.adb,
       adbTools: this.#adbTools,
       filesystem: options.filesystem,
-      idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
+      idGenerator: idGeneratorFor(options),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
+      cores: options.config?.emulator?.cores,
+      seedOnlyInputs: seedOnlyInputs(),
     });
-    this.#bootTimeoutMs = options.config?.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
+    this.#bootTimeoutMs = bootTimeoutFor(options);
     this.#ownership = new Ownership({
       adb: sdk.adb,
       adbTools: this.#adbTools,
@@ -228,14 +236,7 @@ export class AndroidDriver implements Driver {
     this.#filesystem = options.filesystem;
     this.#onDiagnostic = options.onDiagnostic;
     this.#processRunner = options.processRunner;
-    this.#physical = new AndroidPhysicalHandler({
-      adb: sdk.adb,
-      baseEnv: options.env,
-      filesystem: options.filesystem,
-      isBareShell: (args) => this.#passthroughRules.isBareShell(args),
-      processRunner: options.processRunner,
-      tcpProbe: options.tcpProbe,
-    });
+    this.#physical = this.#physicalFor(options, sdk);
     this.#passthroughRules = new PassthroughRules({
       adb: sdk.adb,
       adbServerPort,
@@ -257,6 +258,8 @@ export class AndroidDriver implements Driver {
     // read by `SystemImages.listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
+    this.#defaultImageTag = options.defaultImageTag;
+    this.#hostAbi = options.hostAbi;
     this.#systemImages = new SystemImages({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
@@ -315,10 +318,22 @@ export class AndroidDriver implements Driver {
       deviceTable: this.#deviceTable,
       emulator: this.#emulator,
       filesystem: options.filesystem,
-      idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
+      idGenerator: idGeneratorFor(options),
       ownership: this.#ownership,
       processRunner: options.processRunner,
       systemImages: this.#systemImages,
+    });
+  }
+
+  #physicalFor(options: AndroidDriverOptions, sdk: AndroidSdkPaths): AndroidPhysicalHandler {
+    return new AndroidPhysicalHandler({
+      adb: sdk.adb,
+      baseEnv: options.env,
+      filesystem: options.filesystem,
+      isBareShell: (args) => this.#passthroughRules.isBareShell(args),
+      networkDevices: options.config?.networkDevices ?? false,
+      processRunner: options.processRunner,
+      tcpProbe: options.tcpProbe,
     });
   }
 
@@ -680,12 +695,11 @@ export class AndroidDriver implements Driver {
         await this.#emulator.stopUnowned(data);
       }
       if (data.avdHome === undefined) {
-        await this.#adbTools.runOrThrow(this.#sdk.avdmanager, [
-          "delete",
-          "avd",
-          "-n",
-          data.avdName,
-        ]);
+        await this.#adbTools.runOrThrow(
+          this.#sdk.avdmanager,
+          ["delete", "avd", "-n", data.avdName],
+          { timeoutMs: AVDMANAGER_TIMEOUT_MS },
+        );
       } else {
         await this.#filesystem.rm(data.avdHome);
       }
@@ -697,8 +711,10 @@ export class AndroidDriver implements Driver {
     });
   }
 
-  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
-    return this.#physical.listPresentPhysical(enrolledIds);
+  async listPresentPhysical(
+    enrolled: readonly EnrolledPhysical[],
+  ): Promise<readonly PresentPhysical[]> {
+    return this.#physical.listPresentPhysical(enrolled);
   }
 
   async listAttachedPhysical(): Promise<readonly string[]> {
@@ -714,10 +730,27 @@ export class AndroidDriver implements Driver {
     const hidden = await this.#catalog.hiddenProfiles();
     return [
       ...physical,
+      ...(await this.#defaultImageTagAdvisories()),
       ...hidden.map(({ libraryName, userName }) => ({
         code: "device-profile-hidden",
         message: `"${userName}" in devices.xml is not used: Simlock's own ${libraryName} profile answers to that name`,
       })),
+    ];
+  }
+
+  // why: ADR 0078 §4 -- a setting no image meets is advice, never a refusal; only host-CPU images count, since the worker's default tag never picks another CPU's.
+  async #defaultImageTagAdvisories(): Promise<readonly DriverAdvisory[]> {
+    const tag = this.#defaultImageTag;
+    if (tag === undefined) return [];
+    const hostImages = this.#systemImages.builtForHost(await this.#systemImages.installedImages());
+    if (hostImages.some((image) => image.tag === tag)) return [];
+    const installed =
+      [...new Set(hostImages.map((image) => image.tag))].sort().join(", ") || "none";
+    return [
+      {
+        code: "default-image-tag-not-installed",
+        message: `android.defaultImageTag is "${tag}", but no installed system image for this machine's CPU (${this.#hostAbi}) has that tag (installed for ${this.#hostAbi}: ${installed}). Android leases that name no image tag get the image they would get without it.`,
+      },
     ];
   }
 
@@ -752,6 +785,7 @@ export class AndroidDriver implements Driver {
           : SNAPSHOT_RECLAIM_ESTIMATE_MS;
     }
   }
+  // fallow-ignore-next-line unused-class-member -- called through the Driver interface, and by its tests through a test-* harness.
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     return this.#systemImages.toolVersions();
   }
@@ -853,22 +887,36 @@ async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPat
   throw new SdkMissingError(location.searched);
 }
 
+function idGeneratorFor(options: AndroidDriverOptions): IdGenerator {
+  return options.idGenerator ?? new SequentialIdGenerator();
+}
+
+function bootTimeoutFor(options: AndroidDriverOptions): number {
+  return options.config?.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
+}
+
 /**
  * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
  * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
- * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
- * their defaults.
+ * other; the core count is part of the snapshot's hardware. Audio and the boot animation do not,
+ * and stay out. Nothing is added while all are at their defaults.
  */
 function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
-  if (
+  const graphics =
     launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
     launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
-  ) {
-    return [];
-  }
-  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+      ? []
+      : [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+  return launch.cores === undefined ? graphics : [...graphics, `cores=${launch.cores}`];
+}
+
+/**
+ * why: #1586: a snapshot taken on netsim's shared Wi-Fi joins no network under the per-emulator router for about a minute, so a seed made before the flag is stale. A saved baseline's hash leaves it out: its owner cannot remake it, so it stays usable.
+ */
+function seedOnlyInputs(): string[] {
+  return [`wifi=${WIFI_PER_EMULATOR_FLAGS.join(" ")}`];
 }
 
 export function hostAbiFor(architecture: string): string {

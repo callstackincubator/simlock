@@ -11,6 +11,8 @@ import {
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
+  refuseBadLabel,
+  refuseBadRunId,
   refuseModelWithClass,
   requesterIdSchema,
   waitingRequestSchema,
@@ -35,6 +37,8 @@ const leasePayloadSchema = z.object({
   os: z.string(),
   platform: z.string(),
   requestId: z.string().optional(),
+  runId: z.string().max(128).optional(),
+  label: z.string().max(64).optional(),
   ttlMs: z.number(),
   udid: z.string(),
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
@@ -185,7 +189,7 @@ export const leaseRotateRoute = declareRoute({
   summary: "Rotate the lease's iOS simulator",
   role: "agent",
   notes:
-    "Turns an iPhone or iPad simulator, whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
+    "Turns an iPhone or iPad simulator (not a foldable iPhone Duo), whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
   request: { params: leaseParamsSchema, json: rotateBodySchema },
   reply: OPERATIONS["device.rotate"].output,
   errors: {
@@ -227,13 +231,19 @@ export const leaseRequestBodySchema = z
     os: z.string().min(1).optional(),
     physical: z.boolean().optional(),
     platform: z.enum(["ios", "android"]),
+    // why: A plain string, bounded by `refuseBadRunId` below as the one check, like `lease.request`'s: the same words on every transport.
+    runId: z.string().optional(),
+    // why: A plain string, bounded by `refuseBadLabel` below as the one check, like `lease.request`'s: the same words on every transport.
+    label: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((body, context) =>
     refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
-  );
+  )
+  .superRefine(refuseBadRunId())
+  .superRefine(refuseBadLabel());
 
 export const leaseRequestCreateRoute = declareRoute({
   method: "post",
@@ -258,7 +268,7 @@ export const leaseRequestCreateRoute = declareRoute({
     409: ["LEASE_ID_TAKEN", "LEASE_ENDED", "REQUESTER_ALREADY_LEASED"],
     403: ["ADMISSION_DENIED"],
     404: ["UNKNOWN_BASELINE"],
-    422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
+    422: ["UNKNOWN_MODEL", "MODE_UNAVAILABLE", "BASELINE_MISMATCH", "BASELINE_STALE"],
     503: ["NO_CAPACITY", "ADMISSION_FAILED"],
   },
   errorExtras: {

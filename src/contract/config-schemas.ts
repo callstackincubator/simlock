@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { deviceClassSchema } from "./device-schemas.js";
+import { deviceClassSchema, imageTagSchema } from "./device-schemas.js";
 import { deviceModeSchema, leaseIdentitySchema } from "./schema-parts.js";
 import { capabilityNameSchema } from "./status-schemas.js";
 
@@ -150,9 +150,16 @@ export const configSchema = z.object({
   }),
   // why: a platform's section also holds its driver's own keys, which no client reads: they are carried as the worker's loader validated them, the way a module's `capabilities` section is, so a new driver key changes no wire shape.
   ios: z
-    .object({ defaultMode: deviceModeSchema, defaultModels: defaultModelsSchema })
+    .object({
+      defaultMode: deviceModeSchema,
+      defaultModels: defaultModelsSchema,
+      // why: optional, since a worker from before ADR 0082 sends none and serves both.
+      modes: z.array(deviceModeSchema).min(1).max(2).optional(),
+    })
     .catchall(z.unknown()),
-  android: z.object({ defaultModels: defaultModelsSchema }).catchall(z.unknown()),
+  android: z
+    .object({ defaultImageTag: imageTagSchema.optional(), defaultModels: defaultModelsSchema })
+    .catchall(z.unknown()),
   gateway: z.object({
     url: z.string().optional(),
     token: z.string().optional(),

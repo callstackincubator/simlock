@@ -11,8 +11,7 @@ every change made to a test file after a `test:` commit first wrote it
 failing, but the next cycle's added test. Assumptions: `assumptions.md`, each line a small gap the
 specification left open, closed by the implementer. `spec/always-in-scope.md`
 lists what every change includes without its specification asking; treat
-each item as asked for. `briefs/calibration.md`, when it exists, lists findings
-like yours that were rejected lately: read it first.
+each item as asked for.
 
 Answer four questions, and only these:
 

@@ -30,6 +30,9 @@ async function waitUntil(condition: () => boolean, timeoutMs = 5_000): Promise<v
   }
 }
 
+// why: `run` takes a deadline on every call; one these children never reach.
+const longDeadline = { timeoutMs: 30_000 };
+
 describe("ScriptedProcessRunner", () => {
   it("returns the scripted result for a matching invocation", async () => {
     const runner = new ScriptedProcessRunner([
@@ -422,14 +425,10 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   }, 6_000);
 
   it("does not crash the process when onChunk throws synchronously -- treated as a failed delivery instead", async () => {
-    // `onChunk` is typed `void | Promise<void>`, but nothing stops a transport's own
-    // implementation from throwing synchronously. Called bare inside a `data` listener (round
-    // 4 hardening), that throw becomes an uncaughtException that takes the whole daemon down
-    // over one bad chunk -- latent today because both real callers (`daemon/server.ts`,
-    // `http/app.ts`) happen to be `async`, but nothing enforces that. A `process.on
-    // ("uncaughtException", ...)` listener is the only way to observe the pre-fix crash from
-    // inside a test without actually taking this process down, so this registers one, asserts
-    // it never fires, and removes it again in `finally` regardless of outcome.
+    // why: nothing stops a transport's `onChunk` from throwing synchronously, and inside a `data`
+    // listener that is an uncaughtException that takes the daemon down; a `process.on
+    // ("uncaughtException", ...)` listener is the only way to see it without taking this process
+    // down, so it is registered here and removed in `finally` whatever the outcome.
     const uncaught: unknown[] = [];
     const onUncaughtException = (error: unknown): void => {
       uncaught.push(error);
@@ -517,6 +516,63 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     }
   });
 
+  // why: off Windows a `killChildren` kill signals the child's pid alone (process-tree-kill.ts:112),
+  // so a child that answers SIGTERM with its own exit code keeps reporting it.
+  it.skipIf(process.platform === "win32")(
+    "reports the exit code of a killChildren child that exits on SIGTERM",
+    async () => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => process.exit(7)); console.log('ready'); setInterval(() => {}, 1_000)",
+        ],
+        { killChildren: true },
+      );
+      for await (const line of handle.stdout) if (line === "ready") break;
+
+      handle.kill("SIGTERM");
+
+      await expect(handle.wait()).resolves.toMatchObject({ code: 7 });
+    },
+  );
+
+  // why: off Windows the `emulator` launcher execs qemu, so the spawned pid is qemu, and the
+  // first emulator's qemu starts the host's one `netsimd` as its own child, in its process group.
+  // Every emulator's network goes through that `netsimd`, so killing one emulator must not end it.
+  it.skipIf(process.platform === "win32")(
+    "ends a child spawned with killChildren and leaves the process it started running",
+    async () => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        [
+          "-e",
+          "const { spawn } = require('node:child_process');" +
+            "const shared = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
+            "console.log(String(shared.pid));" +
+            "setInterval(() => {}, 1000);",
+        ],
+        { killChildren: true },
+      );
+      let sharedPid: number | undefined;
+      try {
+        for await (const line of handle.stdout) {
+          sharedPid = Number(line);
+          break;
+        }
+        expect(Number.isInteger(sharedPid)).toBe(true);
+
+        handle.kill("SIGKILL");
+
+        await expect(handle.wait()).resolves.toMatchObject({ code: null });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isAlive(sharedPid ?? 0)).toBe(true);
+      } finally {
+        if (sharedPid !== undefined && isAlive(sharedPid)) process.kill(sharedPid, "SIGKILL");
+      }
+    },
+  );
+
   it("kills the grandchildren too, because the signal goes to the process group", async () => {
     // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
     // `adb`/`emulator` wrapper script, `simctl spawn`) leaves the work in a *grandchild*, and a
@@ -570,10 +626,14 @@ describe("NodeProcessRunner", () => {
     const runner = new NodeProcessRunner();
 
     await expect(
-      runner.run(process.execPath, [
-        "-e",
-        "process.stdout.write('standard out'); process.stderr.write('standard error'); process.exit(7)",
-      ]),
+      runner.run(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('standard out'); process.stderr.write('standard error'); process.exit(7)",
+        ],
+        longDeadline,
+      ),
     ).resolves.toEqual({
       code: 7,
       stderr: "standard error",
@@ -652,7 +712,7 @@ describe("NodeProcessRunner", () => {
 
     // Past the tick the `error` event would arrive on: still here, still able to assert.
     await new Promise((resolve) => setImmediate(resolve));
-    await expect(runner.run("/nonexistent/simlock-adb", [])).rejects.toBeInstanceOf(
+    await expect(runner.run("/nonexistent/simlock-adb", [], longDeadline)).rejects.toBeInstanceOf(
       ProcessSpawnError,
     );
   });
@@ -667,19 +727,27 @@ describe("NodeProcessRunner", () => {
 
     const outcomes = {
       aborted: await runner.run(process.execPath, ["-e", lingers], {
+        ...longDeadline,
         signal: controller.signal,
       }),
-      answer: await runner.run(process.execPath, ["-e", echo], { input: '{"a":1}\n' }),
-      exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], { input: "{}\n" }),
-      killedFromOutside: await runner.run(process.execPath, [
-        "-e",
-        "process.kill(process.pid, 'SIGKILL')",
-      ]),
+      answer: await runner.run(process.execPath, ["-e", echo], {
+        ...longDeadline,
+        input: '{"a":1}\n',
+      }),
+      exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], {
+        ...longDeadline,
+        input: "{}\n",
+      }),
+      killedFromOutside: await runner.run(
+        process.execPath,
+        ["-e", "process.kill(process.pid, 'SIGKILL')"],
+        longDeadline,
+      ),
       timeout: await runner.run(process.execPath, ["-e", lingers], { timeoutMs: 100 }),
       tooMuchOutput: await runner.run(
         process.execPath,
         ["-e", `process.stdout.write('x'.repeat(70_000)); ${lingers}`],
-        { maxStdoutBytes: 65_536 },
+        { ...longDeadline, maxStdoutBytes: 65_536 },
       ),
     };
 
@@ -692,47 +760,46 @@ describe("NodeProcessRunner", () => {
     expect(outcomes.killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
     expect(outcomes.killedFromOutside.endedBy).toBeUndefined();
     await expect(
-      runner.run("/nonexistent/simlock-policy", [], { input: "{}\n" }),
+      runner.run("/nonexistent/simlock-policy", [], { ...longDeadline, input: "{}\n" }),
     ).rejects.toBeInstanceOf(ProcessSpawnError);
   });
 
   it.each([
-    { deadline: "its timeoutMs", options: { timeoutMs: 100 } },
-    { deadline: "the runner's default when the call names none", options: {} },
-    { deadline: "once when its timeoutMs is 0", options: { timeoutMs: 0 } },
-    { deadline: "once when its timeoutMs is Infinity", options: { timeoutMs: Infinity } },
-  ])("run ends a child that never exits, at $deadline", async ({ options }) => {
-    const runner = new NodeProcessRunner({ defaultRunTimeoutMs: 100 });
+    { deadline: "its timeoutMs", timeoutMs: 100 },
+    { deadline: "once when its timeoutMs is 0", timeoutMs: 0 },
+    { deadline: "once when its timeoutMs is Infinity", timeoutMs: Infinity },
+  ])("run ends a child that never exits, at $deadline", async ({ timeoutMs }) => {
+    const runner = new NodeProcessRunner();
 
     // why: the child exits on its own after 2 s, so a run with no deadline fails on the assertion instead of waiting out vitest's timeout.
     const outcome = await runner.run(
       process.execPath,
       ["-e", "setTimeout(() => process.exit(0), 2_000)"],
-      options,
+      { timeoutMs },
     );
 
     expect(outcome).toMatchObject({ code: null, endedBy: "timeout", signal: "SIGTERM" });
-  });
-
-  it("a runner built with no options gives run a default deadline of 60 s", () => {
-    expect(new NodeProcessRunner().defaultRunTimeoutMs).toBe(60_000);
   });
 
   // why: real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
   // no-op SIGTERM handler survives the initial signal `run()` sends on timeout, so this only
   // resolves at all if the follow-up SIGKILL actually lands once the grace period elapses.
   // The grace is shortened through the constructor; the child is still real.
-  it("escalates to SIGKILL when a process that ran past the default deadline ignores SIGTERM, within the configured grace", async () => {
-    const runner = new NodeProcessRunner({ defaultRunTimeoutMs: 100, sigkillGraceMs: 100 });
+  it("escalates to SIGKILL when a timed-out process ignores SIGTERM, within the configured grace", async () => {
+    const runner = new NodeProcessRunner({ sigkillGraceMs: 100 });
     const startedAt = Date.now();
 
     // why: the child outlives the 2 s bound below by exiting on its own after 4 s, so a missing
     // SIGKILL fails on the assertion instead of waiting out vitest's timeout or leaking it.
     const outcome = await Promise.race([
-      runner.run(process.execPath, [
-        "-e",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 4_000)",
-      ]),
+      runner.run(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 4_000)",
+        ],
+        { timeoutMs: 100 },
+      ),
       new Promise<"still running after 2 s">((resolve) => {
         setTimeout(() => resolve("still running after 2 s"), 2_000).unref();
       }),
@@ -921,8 +988,9 @@ describe("NodeProcessRunner: line ends", () => {
     const runner = new NodeProcessRunner();
     const args = ["-e", writeChunks, "[=  ] 10%\r", "\n[== ] 20%\r\n", "\r[===] 30%\n"];
 
-    const byDefault = await runner.run(process.execPath, args);
+    const byDefault = await runner.run(process.execPath, args, longDeadline);
     const carriageReturnToo = await runner.run(process.execPath, args, {
+      ...longDeadline,
       lineEnd: "carriage-return-too",
     });
 

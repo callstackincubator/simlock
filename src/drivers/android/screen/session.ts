@@ -22,6 +22,7 @@ import type { ChunkReader } from "./adb-socket.js";
 import { EnvelopeMapper } from "./envelope.js";
 import {
   CLOSE_DEADLINE_MS,
+  connectScrcpyControl,
   connectScrcpySocket,
   DEVICE_DIRECTORY,
   errorMessage,
@@ -48,6 +49,11 @@ const SCREEN_OFF_MESSAGE =
 // the socket is open the session says so with an empty `alive` frame, well inside those bounds.
 export const ALIVE_AFTER_MS = 5_000;
 const ALIVE_FRAME = encodeScreenFrame(SCREEN_FRAME_TAG.alive, new Uint8Array(0));
+// why: ADR 0079 §5 bounds the gap between key frames at 5 s; scrcpy's encoder sends none for a still screen
+// and the reset (control message 17) makes it send a session, parameters and a key frame at once. The reset
+// waits 4 s, not 5, because an emulator takes about a second to answer it and the answer must land inside the 5 s.
+const RESET_VIDEO_AFTER_MS = 4_000;
+const RESET_VIDEO = new Uint8Array([17]);
 const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
 const SCID_LIMIT = 2 ** 31;
@@ -114,11 +120,15 @@ class ScrcpySession {
   readonly #isPhone: boolean;
   readonly #tail: string[] = [];
   readonly #abort = new AbortController();
+  // why: an abort is the start bound only when the timer set this; a stop or the control socket's end aborts too.
+  #deadlinePassed = false;
   #pushed = false;
   #shell: ProcessHandle | undefined;
   #shellExited = false;
   #collected: Promise<void> | undefined;
   #stream: TcpStream | undefined;
+  #control: TcpStream | undefined;
+  #resetTimer: ReturnType<Clock["setTimer"]> | undefined;
   #closing: Promise<void> | undefined;
 
   constructor(
@@ -158,12 +168,15 @@ class ScrcpySession {
       const startedAt = await this.#spawnServer();
       const deadlineAt = startedAt + START_DEADLINE_MS;
       timer = this.#clock.setTimer(START_DEADLINE_MS, () => {
+        this.#deadlinePassed = true;
         this.#abort.abort();
       });
       const reader = await this.#connect(deadlineAt);
+      await this.#connectControl(deadlineAt);
       const parser = new ScrcpyVideoParser();
       const mapper = new EnvelopeMapper(this.#settings.fps);
       const pending = await this.#untilSized(reader, parser, mapper);
+      this.#armReset();
       return { body: this.#body(reader, parser, mapper, pending), close: () => this.close() };
     } catch (error) {
       await this.close();
@@ -249,17 +262,21 @@ class ScrcpySession {
       "com.genymobile.scrcpy.Server",
       SCRCPY_SERVER_VERSION,
       `scid=${this.#scidHex}`,
-      "log_level=info",
+      // why: some Samsung codecs abort with `stack corruption detected` when app_process's command line
+      // reaches about 255 bytes (https://github.com/Genymobile/scrcpy/issues/2841), so the line is kept
+      // short (ADR 0089): no log_level (the server logs at debug), `0` for false (scrcpy reads
+      // a boolean as true only for `true`), a codec option with no type (scrcpy assumes int), and no
+      // option that restates a default. Two of those defaults are relied on, and a scrcpy upgrade must check them:
+      // `control=true` (the reset below needs the channel) and `cleanup=true` (it puts a phone's
+      // stay-awake back and deletes the jar).
       "tunnel_forward=true",
-      "video=true",
-      "audio=false",
-      "control=false",
-      "video_codec=h264",
-      "send_device_meta=false",
-      "send_dummy_byte=true",
-      "send_stream_meta=true",
-      "send_frame_meta=true",
-      "cleanup=true",
+      "audio=0",
+      // why: with a control channel scrcpy would power the screen on and sync the clipboard; a stream changes no device setting.
+      "power_on=0",
+      "clipboard_autosync=0",
+      // why: a moving screen then rarely needs the reset that bounds a still one's key frames.
+      "video_codec_options=i-frame-interval=2",
+      "send_device_meta=0",
       // why: scrcpy puts the phone's stay-awake setting back when the server ends (its clean-up
       // process), and needs no controller for it; an emulator's screen is not held.
       ...(this.#isPhone ? ["stay_awake=true"] : []),
@@ -314,11 +331,34 @@ class ScrcpySession {
     return reader;
   }
 
+  async #connectControl(deadlineAt: number): Promise<void> {
+    const { reader, stream } = await connectScrcpyControl({
+      clock: this.#clock,
+      deadlineAt,
+      scidHex: this.#scidHex,
+      signal: this.#abort.signal,
+      stopped: (last) => this.#startFailure(`did not accept its control connection (${last})`),
+      target: this.#target,
+    });
+    this.#control = stream;
+    void this.#drainControl(reader);
+  }
+
+  // why: the device's answers on the control socket mean nothing to a stream, but a socket nobody reads
+  // fills and stops the server; its end before `close` is a server that died, and the abort closes the
+  // video socket, so the body ends as it does when the video ends.
+  async #drainControl(reader: ChunkReader): Promise<void> {
+    while ((await reader.read()) !== undefined) {
+      // why: only the end matters.
+    }
+    if (this.#closing === undefined) this.#abort.abort();
+  }
+
   #startFailure(what: string): ScreenUnavailableError {
     const server = `The screen server on ${this.#target.serial}`;
     const reason = this.#shellExited
       ? `${server} exited before it streamed`
-      : this.#abort.signal.aborted
+      : this.#deadlinePassed
         ? `${server} did not start streaming within ${String(START_DEADLINE_MS / 1000)} s: it ${what}`
         : `${server} ${what}`;
     return new ScreenUnavailableError(this.#withTail(reason));
@@ -328,6 +368,17 @@ class ScrcpySession {
     return this.#tail.length === 0
       ? message
       : `${message}. Its last output:\n${this.#tail.join("\n")}`;
+  }
+
+  // why: every key frame the body delivers restarts the timer, so a reset is sent only when the body delivers
+  // none in time; the timer lives apart from the reads, which a slow viewer stops.
+  #armReset(): void {
+    if (this.#closing !== undefined) return;
+    if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
+    this.#resetTimer = this.#clock.setTimer(RESET_VIDEO_AFTER_MS, () => {
+      this.#armReset();
+      this.#control?.write(RESET_VIDEO).catch(() => this.#abort.abort());
+    });
   }
 
   #body(
@@ -373,7 +424,10 @@ class ScrcpySession {
             }
             const frame = pending.shift();
             if (frame !== undefined) {
-              if (frame[4] === SCREEN_FRAME_TAG.keyframe) started = true;
+              if (frame[4] === SCREEN_FRAME_TAG.keyframe) {
+                started = true;
+                this.#armReset();
+              }
               controller.enqueue(frame);
             }
           } catch (error) {
@@ -419,9 +473,11 @@ class ScrcpySession {
 
   async #teardown(): Promise<void> {
     this.#abort.abort();
+    if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
     // why: the server exits when a write to its video socket fails, which is the stop it was built
     // for; the kill below only covers a screen so still that the server has nothing to write.
     this.#stream?.close();
+    this.#control?.close();
     const shell = this.#shell;
     if (shell !== undefined && !(await this.#exitsWithin(shell, SHELL_EXIT_GRACE_MS))) {
       shell.kill("SIGKILL");

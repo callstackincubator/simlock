@@ -1,16 +1,7 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { DEVICE_READY_MS, waitFor, withHttpDaemon } from "./helpers/index.js";
-
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
+import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
 
 const FILE_BYTES = 70_000_000;
 
@@ -35,7 +26,7 @@ async function readSse(response: Response): Promise<SseFrame[]> {
 }
 
 // why: only a real emulator proves that the folder a lease's upload went to is the folder `adb push` reads from, and that `adb pull` leaves a file the GET route serves, at a size no fake pipe is asked to carry.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "a lease's files on a real emulator",
   { tags: ["slow", "android"] },
   () => {

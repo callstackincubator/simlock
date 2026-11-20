@@ -82,7 +82,7 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("service-broken"),
-    manager: z.enum(["launchd", "systemd"]),
+    manager: z.enum(["launchd", "systemd", "task-scheduler"]),
     name: z.string(),
     missing: z.array(z.string()).min(1),
     remedy: z.string(),
@@ -98,7 +98,7 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     kind: z.literal("warm-pool-target-unreachable"),
     platform: platformSchema.optional(),
     target: z.string(),
-    reason: z.enum(["runtime-missing", "unknown-model", "over-limit"]),
+    reason: z.enum(["runtime-missing", "unknown-model", "mode-unavailable", "over-limit"]),
     message: z.string(),
     remedy: z.string(),
   }),
@@ -107,6 +107,12 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     module: capabilityNameSchema,
     message: z.string(),
     remedy: z.string(),
+  }),
+  z.object({
+    kind: z.literal("module-advisory"),
+    module: capabilityNameSchema,
+    message: z.string().max(1000),
+    remedy: z.string().max(1000),
   }),
 ]);
 

@@ -13,6 +13,7 @@ import {
   LaunchdServiceManager,
   productionServiceManager,
   SystemdServiceManager,
+  TaskSchedulerServiceManager,
   serviceDefinition,
   ServiceFailedError,
   type ServiceDefinition,
@@ -352,7 +353,7 @@ describe("LaunchdServiceManager (#830)", () => {
     await expect(install).rejects.toThrow("denied");
   });
 
-  it("productionServiceManager is the launchd adapter on macOS, the systemd adapter on Linux and nothing elsewhere", () => {
+  it("productionServiceManager is the launchd adapter on macOS, the systemd adapter on Linux, the Task Scheduler adapter on Windows and nothing elsewhere", () => {
     const dependencies = {
       runner: new ScriptedProcessRunner([]),
       filesystem: new MemoryFilesystem(),
@@ -360,7 +361,10 @@ describe("LaunchdServiceManager (#830)", () => {
     };
     expect(productionServiceManager("darwin", dependencies)).toBeInstanceOf(LaunchdServiceManager);
     expect(productionServiceManager("linux", dependencies)).toBeInstanceOf(SystemdServiceManager);
-    expect(productionServiceManager("win32", dependencies)).toBeUndefined();
+    expect(productionServiceManager("win32", dependencies)).toBeInstanceOf(
+      TaskSchedulerServiceManager,
+    );
+    expect(productionServiceManager("freebsd", dependencies)).toBeUndefined();
   });
 
   it("start kickstarts the loaded service", async () => {

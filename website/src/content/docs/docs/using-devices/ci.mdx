@@ -33,6 +33,36 @@ This page uses the [`e2e` runner](https://www.npmjs.com/package/@e2e-dev/mobile)
 
 </Steps>
 
+## Run simlock commands from a job
+
+A job that is not an `e2e` run can use the `simlock` commands with the same two secrets, from a machine with no daemon. Set `SIMLOCK_AGENT_ID` to a value that is the same for every step of the job, such as the job id, so `simlock adb` and `simlock simctl` find the lease the job took:
+
+```sh
+export SIMLOCK_AGENT_ID="$CI_JOB_ID"
+simlock lease --platform android --detach
+simlock adb shell getprop ro.build.version.release
+```
+
+See [Use the CLI](/simlock/docs/using-devices/remote-agents#use-the-cli).
+
+### Free a job's devices when it ends
+
+A job that is cancelled or fails can leave leases behind, and they hold devices until their TTL runs out. Give every job its own run id with `SIMLOCK_RUN`, so each lease it takes carries it, and end the job with a cleanup step that releases that run:
+
+```yaml
+env:
+  SIMLOCK_RUN: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+steps:
+  # ...the steps that lease and test...
+  - name: Free the devices
+    if: always()
+    run: npx simlock release --run "$SIMLOCK_RUN"
+```
+
+The provider tags its leases with `SIMLOCK_RUN` the same way, or with its `runId` option when you set one. On GitHub Actions with neither, it uses `<run id>-<run attempt>` from GitHub's own variables; elsewhere it sends the run id the runner gives it, which no cleanup step knows. A `SIMLOCK_RUN` outside the run id rule makes the provider throw at config load.
+
+Add `simlock` to the project as a dev dependency (`npm install --save-dev simlock`) so the step runs without a daemon of its own. `simlock release --run` releases the leases of this run and cancels its requests still waiting, and it prints what it freed. It touches only the leases of the token it runs with: an agent token cannot free another job's devices, and another run id is left alone. See [`simlock release`](/simlock/docs/reference/cli#simlock-release).
+
 ## Install the provider
 
 ```sh
@@ -88,6 +118,7 @@ Each worker gets its own device from the farm. The provider uploads the build na
 | `ttlMs` | `180000` | The lease time in milliseconds, at least `30000`. The provider renews each lease every third of it. |
 | `queueMs` | `1200000` | How long a worker waits for a free device, in milliseconds. |
 | `installConcurrency` | `3` | How many app installs run at once from this machine. |
+| `runId` | `SIMLOCK_RUN`, else GitHub Actions' run id, else the runner's | The run id every lease carries, so [`simlock release --run`](#free-a-jobs-devices-when-it-ends) frees them. 1 to 128 letters, digits, `.`, `_` or `-`; anything else throws at config load. |
 
 The provider sends `deviceMode` and `deviceBaseline` only when you set them, and they need an agent-device client that sends them (0.21.37 or newer).
 
@@ -109,7 +140,7 @@ If the install on a device fails, the provider gives that device back and leases
 
 When the run ends, fails or is interrupted, the runner calls the provider, which gives every device back at once. Closing a test session does not release a device; only the provider's release does.
 
-While the run lives, the provider renews each lease every third of `ttlMs`. A job that is killed cannot release or renew, so its leases run out by themselves within `ttlMs`: 3 minutes by default. Other jobs wait that long on a full farm. Keep `ttlMs` short for that reason, and no shorter than `30000`.
+While the run lives, the provider renews each lease every third of `ttlMs`. A job that is killed cannot release or renew, so its leases run out by themselves within `ttlMs`: 3 minutes by default, unless the [cleanup step](#free-a-jobs-devices-when-it-ends) frees them sooner. Other jobs wait that long on a full farm. Keep `ttlMs` short for that reason, and no shorter than `30000`.
 
 If the farm ends a lease while the run lives (an operator released it), the provider logs `simlock: lease <id> was ended by the farm; failures on its device are infrastructure, not tests`.
 

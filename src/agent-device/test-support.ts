@@ -367,6 +367,7 @@ interface LeaseView {
   readonly ttlMs: number;
   readonly ttlDeadline: number;
   readonly lastRenewedAt: number;
+  readonly runId?: string;
 }
 
 export async function leases(rig: Rig): Promise<readonly LeaseView[]> {

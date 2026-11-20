@@ -20,21 +20,21 @@ Start and stop:
 - On a worker, no request but `hello`, `status.get`, `daemon.stop` and `daemon.update` with `query` runs before converge ends. A gateway's dispatcher never parks.
 - `daemon.stop` is handled by the server, before the version and stopping gates. `daemon.update` skips only the version gate.
 - `daemon.started` is emitted only after converge, and never after `daemon.stopping`. A stop during converge arms nothing.
-- A failed claim or `admin.token` write: `start` disposes what the stop does, without `daemon.stopping` or the `admin.token` removal, then rejects. A stop already running is the one teardown instead: `start` rejects at once, and `startDaemon` waits for the stop before it rejects.
 - `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server. The entry then exits at once (`process.exit`), since a start that lost the claim keeps its drivers' children.
 - A bind failure of the HTTP listener fails the start and stops the daemon (`http-start-failed`).
 - `daemon.stop` releases nothing; leases persist with their deadlines.
 - `dispose` stops the event history after the drivers are disposed, and closes `state.db` last.
 - A history file that fails costs only history. A start the history refuses (a newer stored projection version, a failed migration) stops the daemon (`history-refused`).
+- The Windows supervisor (`service-main.ts`, ADR 0086) imports only `ports/`.
 - A daemon works in its own role's data directory. Its one look outside is the update's `socketHeld` probe of the other role's socket (`composition-support.ts`).
 
 Connections:
 
-- Role and principal are fixed at `hello` for the connection's life. The uplink connection is `admin` by acceptance; otherwise admin comes only from a credential at `hello`, never from the socket itself.
+- Role and principal are fixed at `hello` for the connection's life. The uplink connection is `admin` by acceptance; a session (`acceptSession`, ADR 0081) has its token's role, principal, name and `via` from the upgrade, so its `hello` names no principal that counts and a credential is refused; otherwise admin comes only from a credential at `hello`, never from the socket itself.
+- `token.revoke` closes the token's open sessions (`closeSessionsForToken`, 4003) on a worker and a gateway; a session's principal is its token id. The leases go on.
 - No protocol overlap leaves the connection open: every request but `daemon.stop` and `daemon.update` gets `PROTOCOL_VERSION_UNSUPPORTED`.
 - A closed connection only silences its pushes; the request, the lease and a running command go on.
 - `lease-lost` skips the connection that asked for that release.
-- On Windows the endpoint is a named pipe: none of the socket-file steps run, and a live one fails the bind with `address-in-use`.
 
 Update:
 

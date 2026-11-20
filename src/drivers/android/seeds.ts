@@ -14,7 +14,12 @@ import type {
   ProcessRunner,
   SqliteDatabase,
 } from "../../ports/index.js";
-import { ADB_DEVICES_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
+import {
+  ADB_DEVICES_TIMEOUT_MS,
+  AVDMANAGER_TIMEOUT_MS,
+  SEED_AVD_NAME,
+  type AdbTools,
+} from "./adb-tools.js";
 import { assertLibraryProfileWritable, iniValues, type AvdConfig } from "./avd-config.js";
 import type { Catalog } from "./catalog.js";
 import type { ConsolePorts } from "./console-ports.js";
@@ -36,8 +41,6 @@ export const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
 const STALE_REASON_MAX_LENGTH = 300;
-// why: avdmanager create writes a config and an empty data image, in seconds; past this it is taken as hung.
-const AVD_CREATE_TIMEOUT_MS = 60_000;
 // why: the ceiling of one seed make: two boots plus avdmanager create and the steps between the boots, which are bounded at 600 s in all.
 const SEED_MAKE_MIN_CEILING_MS = 900_000;
 const SEED_MAKE_STEPS_MS = 600_000;
@@ -243,6 +246,7 @@ export class Seeds {
       (await this.#avdConfig.currentConfigHash(
         join(row.folder, `${row.avdName}.avd`),
         row.imageIdentity,
+        row.kind,
         row.emulatorVersion,
       )) !== row.configHash
     ) {
@@ -293,6 +297,7 @@ export class Seeds {
           `copying Android device ${device.deviceId} to source ${sourceId} failed`,
         );
         const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
+        await this.#avdConfig.applyCores(avdFolder);
         await this.#snapshotSource(sourceId, {
           avdHome: folder,
           avdName: SEED_AVD_NAME,
@@ -304,6 +309,7 @@ export class Seeds {
         const configHash = await this.#avdConfig.currentConfigHash(
           avdFolder,
           kind.imageIdentity,
+          "baseline",
           emulatorVersion,
         );
         const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
@@ -558,7 +564,7 @@ export class Seeds {
         ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
         {
           env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder },
-          timeoutMs: AVD_CREATE_TIMEOUT_MS,
+          timeoutMs: AVDMANAGER_TIMEOUT_MS,
         },
       );
       if (profile.kind === "properties") {
@@ -567,6 +573,7 @@ export class Seeds {
       if (profile.kind === "library") {
         await this.#avdConfig.applyLibraryProfile(avdFolder, profile, image);
       }
+      await this.#avdConfig.applyCores(avdFolder);
       await this.#bootSeedTwice(sourceId, {
         avdHome: folder,
         avdName: SEED_AVD_NAME,
@@ -579,6 +586,7 @@ export class Seeds {
       const configHash = await this.#avdConfig.currentConfigHash(
         avdFolder,
         imageIdentity,
+        "seed",
         emulatorVersion,
       );
       const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);

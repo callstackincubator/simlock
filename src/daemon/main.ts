@@ -48,6 +48,8 @@ import {
   type IpcListenerFactory,
   type Logger,
   NodeFilesystem,
+  PowerShellDirectoryAccessReader,
+  type DirectoryAccessReader,
   filterSqliteExperimentalWarning,
   NodeSqliteOpener,
   NodeHostInfo,
@@ -142,6 +144,7 @@ export interface StartDaemonOptions extends WorkerOptions {
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly role?: DaemonMode;
   readonly filesystem?: Filesystem;
+  readonly directoryAccess?: DirectoryAccessReader;
   readonly hostInfo?: HostInfo;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
@@ -229,7 +232,11 @@ async function composeDaemon(
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
-  const dataDirectoryWarning = await prepareDataDirectory(filesystem, dataDirectory);
+  const dataDirectoryWarning = await prepareDataDirectory(filesystem, dataDirectory, {
+    platform: process.platform,
+    directoryAccess:
+      options.directoryAccess ?? new PowerShellDirectoryAccessReader(baseProcessRunner),
+  });
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
   const { config, defaulted } = await loadConfigWithDefaults({
@@ -241,6 +248,7 @@ async function composeDaemon(
       ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
     })),
     driverSections: driverConfigEntries,
+    hostPlatform: process.platform,
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     role,
     systemStats,
@@ -555,6 +563,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     clock,
     errorCode: classifyError,
     closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
+    closeSessionsForToken: (tokenId) => daemon.closeSessionsForToken(tokenId),
     config,
     coordinator: fleetCoordinator,
     directory: gatewayService,
@@ -593,7 +602,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       logger: logger.child("connection-host"),
     }),
     leaseSnapshot: () =>
-      leaseIndex.all().map((entry) => ({ id: entry.gatewayLeaseId, ownerId: entry.ownerId })),
+      leaseIndex.all().map((entry) => ({
+        id: entry.gatewayLeaseId,
+        ownerId: entry.ownerId,
+        ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+      })),
     logger: logger.child("server"),
     ownerRoutedFacts: gatewayOwnerRoutedFacts,
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
@@ -651,6 +664,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     const dispatch: HttpDispatch = (operation, input, session) =>
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
+      acceptSession: (connection, session) => daemon.acceptSession(connection, session),
       clock,
       dispatch,
       eventBus,
@@ -682,6 +696,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
         createUpgradeRouter({
           clock,
           leaseSocket: (request) => app.leaseSocket(request),
+          session: (request) => app.session(request),
           uplinks,
         }).attach(server),
       port: config.http.port,

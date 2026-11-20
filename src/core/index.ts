@@ -7,8 +7,6 @@ export {
   type Config,
   type ConfigOverrides,
   type DaemonMode,
-  // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
-  type DownloadPolicy,
   driverConfig,
   type DriverConfigEntry,
   effectiveAllowDownload,
@@ -19,6 +17,10 @@ export {
   REDACTED_VALUE,
   redactConfig,
 } from "./config.js";
+export {
+  // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
+  type DownloadPolicy,
+} from "./config-types.js";
 export {
   type AbsentReason,
   DEVICE_CLASSES,
@@ -55,6 +57,7 @@ export {
   invalidValue,
   nonEmptyString,
   objectValidator,
+  positiveInteger,
   positiveNumber,
   stringArray,
 } from "./validation.js";
@@ -96,6 +99,7 @@ export {
   type DriverRefusalReason,
   type VirtualDriverDevice,
   type PhysicalInspection,
+  type EnrolledPhysical,
   type PresentPhysical,
   toDriverDevice,
   uninstallPlan,

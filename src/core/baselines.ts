@@ -1,6 +1,6 @@
 import type { EventBus } from "../bus/index.js";
 import type { BaselineEntry } from "../contract/index.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import { assertVirtual, type Platform, type VirtualDevice } from "./domain.js";
 import type { Driver, DriverSource } from "./driver.js";
@@ -105,6 +105,7 @@ export interface BaselineServiceOptions {
   readonly decisions: SerializedDecision;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "dispose">;
+  readonly logger?: Logger | undefined;
   readonly reclaim: Pick<ReclaimCoordinator, "retireSaved">;
   readonly registry: { readonly snapshot: Pick<Registry["snapshot"], "leases" | "virtualDevices"> };
   readonly state: StateDatabase;
@@ -170,6 +171,13 @@ export class BaselineService {
       });
     await this.#destroyIdleOlderDevices(baseline.name, baseline.version);
     await this.#dropReplaced(request.requesterId);
+    try {
+      await this.checkStale();
+    } catch (error: unknown) {
+      this.options.logger?.warn(
+        `could not check baselines after a save: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     return { baseline, leaseId: request.leaseId };
   }
 

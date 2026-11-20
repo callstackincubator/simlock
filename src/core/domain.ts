@@ -76,11 +76,16 @@ export interface PhysicalSpec {
 export type DeviceSpec = VirtualSpec | PhysicalSpec;
 
 /**
- * Why a warm target did not resolve to a spec: the platform has no driver on this machine, its
- * runtime is not installed (and a target never downloads), its model is not listed, or the driver
- * refused it some other way.
+ * why: Why a warm target did not resolve to a spec: the platform has no driver on this machine, its
+ * runtime is not installed (and a target never downloads), its model is not listed, its mode is
+ * not one the worker serves (ADR 0082), or the driver refused it some other way.
  */
-export type TargetRefusal = "no-driver" | "runtime-missing" | "unknown-model" | "unresolvable";
+export type TargetRefusal =
+  | "no-driver"
+  | "runtime-missing"
+  | "unknown-model"
+  | "mode-unavailable"
+  | "unresolvable";
 
 /** What the request resolver answers for a request that is not going to be granted a lease. */
 export type TargetResolution =
@@ -365,6 +370,8 @@ export interface PhysicalDevice extends DeviceRecordFields {
   readonly spec: PhysicalSpec;
   readonly state: PhysicalState;
   readonly enrolledApps: readonly string[];
+  /** why: a network phone's `ro.serialno`, kept so every presence read can check the address still reaches that phone (ADR 0080 §2); absent for a USB phone. */
+  readonly hardwareSerial?: string;
   readonly reclaimingSince?: number;
   readonly absentReason?: AbsentReason;
   readonly mode?: undefined;
@@ -433,6 +440,9 @@ export interface LeaseRecord {
    * `false`: every ID then was generated.
    */
   readonly idChosenByRequester: boolean;
+  // why: `| undefined` because a lease read from a worker (the contract's type) is projected as this type by a gateway.
+  readonly runId?: string | undefined;
+  readonly label?: string | undefined;
 }
 
 export interface LeaseTiming {
@@ -490,6 +500,8 @@ export interface LeaseRequestRecord<Grant = LeaseGrant> {
    * is granted it.
    */
   readonly leaseId?: string;
+  readonly runId?: string;
+  readonly label?: string;
   /**
    * The gateway's request id (ADR 0021) when this request is a gateway dispatch, a probe. Kept so
    * a probe settled at the next start still names it.

@@ -58,3 +58,24 @@ export function childLaunch(
     windowsVerbatimArguments: true,
   };
 }
+
+/**
+ * why: a detached child of the daemon (the emulator, Simlock's adb server) starts with no console
+ * of its own, and its qemu then opens a visible Windows Terminal window titled with the qemu path
+ * (#1759). Under `conhost.exe --headless` the child and everything it starts inherit a console
+ * that has no window, as the logon task's do (ADR 0086). The wrapper is the child Node sees; it
+ * lives while any process on its console does, so it can outlive the program it runs (the
+ * emulator's `netsimd` holds it). A batch-file launch is left as it is: none outlives its caller.
+ */
+export function headlessLaunch(
+  launch: ChildLaunch,
+  platform: NodeJS.Platform = process.platform,
+  systemRoot: string | undefined = process.env.SystemRoot,
+): ChildLaunch {
+  if (platform !== "win32" || launch.windowsVerbatimArguments) return launch;
+  return {
+    command: win32.join(systemRoot ?? "C:\\Windows", "System32", "conhost.exe"),
+    args: ["--headless", launch.command, ...launch.args],
+    windowsVerbatimArguments: false,
+  };
+}

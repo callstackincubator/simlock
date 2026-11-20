@@ -13,6 +13,9 @@ never enforce them only inside an individual rule or driver.
    baselines it keeps in its sources set, by an id its source table holds.
    `doctor --purge-orphans` may also delete a simulator in the sources set
    that no table row names. Nothing outside the sources set is reached this way.
+   An iOS seed's throwaway simulator, which sits in the device set the copies
+   live in, may be deleted too, only by the UDID its source's `making` row
+   stores ([ADR 0076](../adr/0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) §1).
 
    A physical device is the one kind of registry device Simlock did not
    create. It is Simlock's to act on only through its enrollment record,
@@ -21,7 +24,12 @@ never enforce them only inside an individual rule or driver.
    erases, reboots, shuts down or unpairs a physical device, and never runs
    a command on one that is not enrolled, except `device add`'s read-only
    inspection, which a worker with `devices.autoEnroll` runs on a phone plugged in
-   by USB ([ADR 0073](../adr/0073-a-worker-may-enrol-the-phones-plugged-into-it.md) §5)
+   by USB ([ADR 0073](../adr/0073-a-worker-may-enrol-the-phones-plugged-into-it.md) §5), or under
+   `android.networkDevices` one reached over the network ([ADR 0080](../adr/0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) §4),
+   and, under `android.networkDevices`, `adb connect` for an enrolled
+   address and the read-only inspection and hardware-serial read that may
+   reach a phone answering at an enrolled address that is not the enrolled
+   one ([ADR 0080](../adr/0080-an-android-worker-may-enrol-phones-reached-over-the-network.md) §5)
    ([ADR 0022](../adr/0022-a-physical-device-is-a-second-device-type-the-core-knows.md) §3).
 
    A component (an iOS simulator runtime or an Android system image) is
@@ -99,8 +107,9 @@ never enforce them only inside an individual rule or driver.
    scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
    default device locations. (Under iOS `deviceSet: "default"`, reality is Xcode's set read through
    devices whose durable mark names this instance, ADR 0048 §2.) For a physical device, reality is the platform
-   tool's list of USB devices, read only for enrolled IDs. The one read made beyond
-   enrolled IDs is the host-level USB list, `listAttachedPhysical()` (ADR 0073 §5).
+   tool's list of USB devices (under `android.networkDevices`, network phones too), read only for enrolled IDs. The one read made beyond
+   enrolled IDs is the host-level USB list, `listAttachedPhysical()` (ADR 0073 §5); under
+   `android.networkDevices` it also lists network transports, never an emulator (ADR 0080 §5).
 8. **Ownership is proven, never inferred.** A device is Simlock's because it
    lives inside a validly-marked Simlock root, not because of what it is
    called. `Driver.listManaged()` must answer from root membership; the
@@ -112,7 +121,8 @@ never enforce them only inside an individual rule or driver.
    physical device is Simlock's because an admin enrolled it, or the worker did under
    `devices.autoEnroll`;
    `listPresentPhysical()` answers only for enrolled IDs; `listAttachedPhysical()`
-   is the exception, a host-level list that names no phone and sends nothing to one.
+   is the exception, a host-level list that names no phone and sends nothing to one;
+   under `android.networkDevices` it also lists network transports (ADR 0080 §5).
 9. **Root validation fails closed.** If a device root is missing its marker,
    carries another instance's marker, is a symlink, or has the wrong owner or
    permissions, that platform's driver does not start and Simlock reports why. Under iOS

@@ -23,6 +23,8 @@ export interface AgentDeviceResult {
 
 export interface AgentDeviceRunOptions {
   readonly timeout?: number;
+  // why: agent-device flags appended after the command's args, for a limit only a flag raises (--timeout).
+  readonly flags?: readonly string[];
 }
 
 export interface Agent {
@@ -145,6 +147,8 @@ export async function makeAgent(
     AGENT_DEVICE_STATE_DIR: home,
     AGENT_DEVICE_DAEMON_AUTH_TOKEN: token.secret,
     AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1",
+    // why: the pinned agent-device refuses a leased remote connection without a named session (REMOTE_SESSION_REQUIRED).
+    AGENT_DEVICE_SESSION: name,
     ...(options.direct ? { AGENT_DEVICE_DAEMON_BASE_URL: proxyUrl(env) } : {}),
   };
   const background = new Set<CliBackgroundHandle>();
@@ -154,7 +158,7 @@ export async function makeAgent(
     token: token.secret,
     tokenId: token.id,
     async run(args, options = {}) {
-      const result = await cli(["--json", ...args], childEnv, {
+      const result = await cli(["--json", ...args, ...(options.flags ?? [])], childEnv, {
         entry,
         timeout: options.timeout ?? 60_000,
       });
@@ -249,10 +253,14 @@ export async function makeProfileAgent(env: SharedTestEnv, name: string): Promis
     token: secret,
     tokenId,
     async run(args, options = {}) {
-      const result = await cli(["--json", ...args, "--session", name], childEnv, {
-        entry,
-        timeout: options.timeout ?? 60_000,
-      });
+      const result = await cli(
+        ["--json", ...args, ...(options.flags ?? []), "--session", name],
+        childEnv,
+        {
+          entry,
+          timeout: options.timeout ?? 60_000,
+        },
+      );
       return parseResult(result.code, result.stdout, result.stderr);
     },
     start(args) {

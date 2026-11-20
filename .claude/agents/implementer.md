@@ -10,11 +10,12 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Agent, WebFetch, WebSearch
 
 # Implement an issue
 
-The checklist below is what the review judges you by. It is the short
-form of the rule files under `docs/internal/agent-rules/`, cited by file
-and number; your brief names the ones to open before you act, and a
-finding cites them. Every command comes from `toolchain.md`; the tests
-you run are copied below, so you need not open it for them.
+The issue body is the spec: build exactly what it says, plus the
+always-in-scope list (checklist 5). Do not claim, review, mark ready or
+merge. The checklist is what the review judges you by: the short form of
+the rule files under `docs/internal/agent-rules/`, cited by file and
+number; your brief names the ones to open before you act. Commands come
+from `toolchain.md`; the tests you run are copied here.
 
 ## Tests agents run
 
@@ -22,6 +23,7 @@ you run are copied below, so you need not open it for them.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Unit tests that import what the branch changed      | `pnpm test:changed`                                                                                |
 | One unit test file                                  | `pnpm exec vitest run --project unit <file>`                                                       |
+| Types across the project, before a commit           | `pnpm typecheck`                                                                                   |
 | One console DOM test file (`*.dom.test.tsx`)        | `pnpm exec vitest run --project ui-dom <file>`                                                     |
 | One timing file (`*.timing.test.ts`)                | `pnpm exec vitest run --project timing <file>`                                                     |
 | Fast e2e files (builds first)                       | `pnpm test:e2e <files>`                                                                            |
@@ -30,14 +32,11 @@ you run are copied below, so you need not open it for them.
 | Website build and its HTTP API check (2)            | `pnpm --dir website install && pnpm --dir website build && node website/scripts/check-openapi.mjs` |
 
 (1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
-`src/contract/`, and only the spec files the diff changed or whose page
-it changes: the whole lane is CI's, on every push. The lane holds only
-what needs a real daemon or a real browser engine; a page's behaviour is a
-DOM test, which `pnpm test:changed` runs. A stage agent never
-runs it without a spec file (the tool guard refuses), never in the
-background, and sets `timeout: 600000` on the Bash call: the default
-120 s moves the run to the background, where it holds the agent's
-report until it ends.
+`src/contract/`, and only the spec files it changed or whose page it
+changes; CI runs the whole lane. A page's behaviour is a DOM test, which
+`pnpm test:changed` runs; this lane holds what needs a real daemon or
+browser engine. Always with a spec file, in the foreground, with
+`timeout: 600000` on the Bash call (the tool guard refuses otherwise).
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.
@@ -47,9 +46,8 @@ pages; it compares nothing. Open the pictures the change touched.
 
 ## Checklist
 
-1. The issue body is the spec: build what it says, plus the always-in-scope
-   list below; a small gap is an `Assumption:` line, a contradiction a
-   stop (`coding.md` 1, 2).
+1. A small gap in the spec is an `Assumption:` line, a contradiction a
+   stop (`coding.md` 1, 2; section 2 below).
 2. Branch `<kind>/<n>`; every agent is in a worktree; `origin/<branch>` is
    the truth (`coding.md` 3, 4). The PR walks every Done when line to the hunk
    or test that delivers it (`coding.md` 5).
@@ -73,35 +71,17 @@ pages; it compares nothing. Open the pictures the change touched.
    (`documentation.md` 7); Fallow entries for files nothing
    imports; every comment starts with `why:` or goes; a vendored
    artifact's notice and rows (`always-in-scope.md`).
-6. Never `git stash`, never the slow lane, never a check listed under
+6. Never `git stash` (commit instead), never the slow lane, never a check listed under
    "Checks agents never run"; the hooks and CI run them (toolchain).
-
-The issue body is the spec. Build exactly what it says, plus what
-`always-in-scope.md` lists. Do not claim, review, mark ready or merge.
+   Never `sed -i`: its flag differs between macOS and Linux, and a
+   pattern that misses changes nothing without an error. Change a file
+   with the Edit tool, or a script that fails when its match is missing.
 
 Arguments: `issue`, `branch`, `pr` once there is one, `mode`, `base` for a
-build stage stacked on another PR's branch; audit/fix inputs also carry
-immutable `base-sha`, `merge-base`, `head`, `previous` and resolution history.
-For some modes `remaining` or
-`fixes`. Anything else is context. Each mode is a fresh
-agent, so the work runs in short contexts. Steps 1 and 2 are every mode's;
-step 3 is the mode's own brief in `.agents/briefs/`:
-
-| Mode           | Brief                       | Starts from                             | Ends with                                    |
-| -------------- | --------------------------- | --------------------------------------- | -------------------------------------------- |
-| `build`        | `implement-build.md`        | the spec, or the branch and `remaining` | a test and its code per Tests line, draft PR |
-| `audit`        | `implement-audit.md`        | the spec and immutable PR diff          | fixes, PR body done                          |
-| `fix`          | `implement-fix.md`          | the branch and `fixes`                  | each finding fixed                           |
-| `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests  | those tests pass on the lane                 |
-| `refactor`     | `implement-refactor.md`     | a `refactor:ready` issue                | pins, refactor, pins deleted, draft PR       |
-
-**Order**, which the caller runs, a fresh agent per mode: `build`, again
-with the last `remaining` while a report lists `remaining` and built a
-cycle since the last; then `audit` with the PR's base, merge-base
-and head from `review-inputs.sh`. A refactor issue (delivery rule 18)
-runs `refactor` alone in place of both. `fix` applies findings, `hardware-fix`
-failing slow-lane tests. An agent given `fixes` does them and skips the
-audit. Every caller stops at `spec needs` under `open`.
+build stacked on another PR's branch; audit and fix runs also carry
+immutable `base-sha`, `merge-base`, `head`, `previous` and the resolution
+history; some modes `remaining` or `fixes`. Anything else is context.
+Given `fixes`, do them and skip the audit.
 
 ## 1. Workspace
 
@@ -129,14 +109,12 @@ Decisions (the parent's rows the task names under Rows are its spec,
 word for word); for a bug, the triage report (its Simplest fix is the agreed
 approach) and any `## Decision` comment; the latest `## Handoff` comment
 (its Findings are facts). Never the rest of the comment thread. Reread the
-files under Rules in play before touching the code they cover, and open
-the rule files your brief names under `docs/internal/agent-rules/`, whole:
-a rule file is short and read once, and the narrow-read rule below is for
-code.
+files under Rules in play before touching the code they cover, and open,
+whole, the rule files your brief names.
 
-Read code narrowly: find what you need with `rg -n`, then read only those
-lines. Never print a whole file to skim it: everything you read stays in
-your context and is paid for again on every later turn.
+Read code narrowly: find it with `rg -n`, then read only those lines.
+Never print a whole file to skim it: what you read is paid for again on
+every later turn.
 
 **Explore selectively.** Follow `docs/internal/EXPLORATION.md`: direct
 `rg` and source reads for straightforward lookups; bounded Haiku discovery
@@ -147,18 +125,15 @@ consequential architecture/concurrency judgments to Opus. To check a library
 or tool's documentation, use WebFetch or WebSearch.
 
 **Helpers run in the foreground.** Start every helper agent of a step in
-one message, each an Agent call with `run_in_background: false`, so they
-run in parallel and your turn cannot end before their results are in. A
-helper started in the background reports to the orchestrator, not to you,
-and nothing wakes you when it ends. Give parallel helpers files that do not
-overlap.
+one message, each with `run_in_background: false`, on files that do not
+overlap. A background helper reports to the orchestrator, and nothing
+wakes you when it ends.
 
-**A small gap is an assumption, not a stop** (coding rule 2). When the body,
-the rules, the accepted ADRs and `always-in-scope.md` leave a small question
-open (a wording, an order, a bound the spec implies but does not number,
-which helper to reuse), take the conservative option: the smallest change,
-the one that matches existing behaviour, the one easiest to undo. Build it
-and add one line to the PR body's `## Assumptions`:
+**A small gap is an assumption, not a stop** (coding rule 2): a wording, an
+order, a bound the spec implies but does not number, which helper to
+reuse. Take the conservative option (the smallest change, the one that
+matches existing behaviour, the easiest to undo), build it, and add one
+line to the PR body's `## Assumptions`:
 
 ```markdown
 - Assumption: <the question, in a few words> — <what you chose and why it is the conservative option>.
@@ -167,15 +142,15 @@ and add one line to the PR body's `## Assumptions`:
 Stop only when building would contradict the body, a rule or an accepted
 ADR, or would change behaviour a user sees in a way nobody decided.
 Changing a spec test after its `test:` commit, or an existing test, so it
-asserts behaviour the spec did not decide, is never an assumption: it is a
-stop. Push what you have and report `spec needs: <line>` under `open`. Do
-not work around it.
+asserts behaviour the spec did not decide, is a stop, never an assumption.
+Push what you have and report `spec needs: <line>` under `open`. Do not
+work around it.
 
 ## 3. Your mode
 
-Your prompt carries the full text of `.agents/briefs/implement-<mode>.md`
-under `brief:`; do what it says. When it does not (an older caller), read
-the file from the main checkout's tree (the worktree has it too).
+Your prompt carries your mode's brief under `brief:` (a hook adds
+`.agents/briefs/implement-<mode>.md`); do what it says. Without it, read
+that file.
 
 ## Report
 

@@ -167,7 +167,7 @@ function sumRamBudget(
 }
 
 /**
- * ADR 0005 §21: the union of the connected workers' catalogs, each model and runtime annotated
+ * why: ADR 0005 §21: the union of the connected workers' catalogs, each model and runtime annotated
  * with the workers that have it.
  *
  * Connected workers only: a catalog answers "what can this fleet give me", and a machine whose
@@ -176,7 +176,8 @@ function sumRamBudget(
  * new dispatches, but it is a temporary operator state, and a catalog that shrank while a
  * machine was drained would read as models having been uninstalled.
  *
- * `defaultRuntime` survives only when every worker offering that platform names the same one.
+ * `defaultRuntime` survives only when every worker offering that platform names the same one;
+ * so does `defaultImageTag`, where a worker that names none is a disagreement.
  * A fleet whose machines default differently has no single default, and picking one at random
  * would make `simlock lease` non-deterministic across an unchanged fleet.
  *
@@ -220,7 +221,14 @@ interface CatalogBucket {
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly slimCategories: Set<string>;
+  /** why: ADR 0082 §4: the modes the workers that list `modes` serve; `anyServesBoth` is set by the first worker with no field, and then the merged entry has none. */
+  readonly modes: Set<"slim" | "full">;
+  anyServesBoth: boolean;
+  /** why: ADR 0084 §3: stays true only while every worker reporting the platform says `virtualDevices: false`. */
+  phonesOnly: boolean;
   readonly defaults: Set<string | undefined>;
+  /** why: absent ones count as `undefined`, so one worker without a default image tag is a disagreement (ADR 0078 §3). */
+  readonly imageTagDefaults: Set<string | undefined>;
   /** Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
   readonly classDefaults: Partial<Record<DeviceClass, string>>[];
 }
@@ -249,29 +257,45 @@ function addCatalogEntry(
   entry: PlatformCatalog,
   workerId: string,
 ): void {
-  const bucket = byPlatform.get(entry.platform) ?? {
+  const bucket = byPlatform.get(entry.platform) ?? emptyBucket();
+  byPlatform.set(entry.platform, bucket);
+  addNames(bucket, entry, workerId);
+  addModelClasses(bucket.modelClasses, entry);
+  addCustomModels(bucket.customModels, entry);
+  bucket.phonesOnly &&= entry.virtualDevices === false;
+  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
+  if (entry.modes === undefined) bucket.anyServesBoth = true;
+  for (const mode of entry.modes ?? []) bucket.modes.add(mode);
+  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
+  bucket.defaults.add(entry.defaultRuntime);
+  bucket.imageTagDefaults.add(entry.defaultImageTag);
+  bucket.classDefaults.push(listedClassDefaults(entry));
+}
+
+function addNames(bucket: CatalogBucket, entry: PlatformCatalog, workerId: string): void {
+  for (const model of entry.models) annotate(bucket.models, model, workerId);
+  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
+  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
+  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
+}
+
+function emptyBucket(): CatalogBucket {
+  return {
     classDefaults: [],
     customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
+    imageTagDefaults: new Set<string | undefined>(),
     images: undefined,
     modelAliases: new Map<string, Map<string, string>>(),
     modelClasses: new Map<string, DeviceClass>(),
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
+    anyServesBoth: false,
+    modes: new Set<"slim" | "full">(),
+    phonesOnly: true,
     slimCategories: new Set<string>(),
   };
-  byPlatform.set(entry.platform, bucket);
-  for (const model of entry.models) annotate(bucket.models, model, workerId);
-  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
-  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
-  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
-  addModelClasses(bucket.modelClasses, entry);
-  addCustomModels(bucket.customModels, entry);
-  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
-  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
-  bucket.defaults.add(entry.defaultRuntime);
-  bucket.classDefaults.push(listedClassDefaults(entry));
 }
 
 /**
@@ -364,6 +388,8 @@ function agreedClassDefaults(
 
 function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
+  const agreedImageTag =
+    bucket.imageTagDefaults.size === 1 ? [...bucket.imageTagDefaults][0] : undefined;
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
     classDefaults: agreedClassDefaults(bucket.classDefaults),
@@ -402,6 +428,16 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
     platform,
     runtimes,
     runtimeWorkers: Object.fromEntries(bucket.runtimes),
+    ...slimFields(bucket),
+    ...(bucket.phonesOnly ? { virtualDevices: false as const } : {}),
+    ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
+    ...(agreedImageTag === undefined ? {} : { defaultImageTag: agreedImageTag }),
+  };
+}
+
+/** why: the iOS-only fields of the merged entry: the slim categories any worker names, and the modes, left out once any worker serves both. */
+function slimFields(bucket: CatalogBucket) {
+  return {
     ...(bucket.slimCategories.size === 0
       ? {}
       : {
@@ -409,7 +445,7 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
             .sort()
             .slice(0, CATALOG_LIST_LIMITS.slimCategories),
         }),
-    ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
+    ...(bucket.anyServesBoth ? {} : { modes: [...bucket.modes].sort() }),
   };
 }
 
