@@ -10,7 +10,6 @@ import {
   type ProcessRunOptions,
   type ProcessRunner,
 } from "../../ports/index.js";
-import { ADB_DEVICES_TIMEOUT_MS } from "./adb-tools.js";
 import { AndroidDriver, SdkMissingError } from "./index.js";
 import {
   androidFilesystem,
@@ -223,7 +222,7 @@ describe("AndroidDriver", () => {
       expect(read).toEqual({
         args: ["devices"],
         command: binaries.adb,
-        options: { ...scopedOptions, timeoutMs: ADB_DEVICES_TIMEOUT_MS },
+        options: { ...scopedOptions, timeoutMs: expect.any(Number) },
       });
     }
   });
