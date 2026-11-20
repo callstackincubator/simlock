@@ -1,6 +1,8 @@
 ---
 title: Access control
 description: Choose the right token role for agents, people and workers, make and revoke tokens, run admin commands from the CLI, and sign people in to the console through a sign-in proxy.
+sidebar:
+  order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -114,6 +116,15 @@ Then restart the gateway.
 | `issuer` | The `iss` the JWT must carry. |
 | `audience` | The `aud` the JWT must carry. For Cloudflare Access, the application's audience tag. |
 | `signOutUrl` | Optional. Where the console's **Sign out** sends a person signed in through the proxy. Without it, such a person sees no **Sign out**. |
+| `signInUrl` | Optional absolute HTTP or HTTPS URL, at most 2048 characters, for your proxy's login entry point. A `{path}` in it becomes the page the person was on. The console shows **Sign in with SSO** alongside its operator-token form. The link opens in the same tab. |
+
+Set `signInUrl` when the proxy lets the unsigned console page and `/v1/identity` reach Simlock, and starts login only when a person chooses it. For example, with oauth2-proxy use `https://fleet.example.com/oauth2/start?rd={path}`: the console replaces `{path}` with the current path and search, URL-encoded, so a person who opens `/leases/<id>` returns to it after login. A URL without `{path}` is used as written. Simlock refuses a template that is no longer an `http://` or `https://` URL once a path is put in. Configure the proxy to return the person to the console after login and to attach its signed JWT on subsequent API requests. Simlock does not run an OAuth flow itself. Proxies that already redirect every unsigned page to login need no sign-in link.
+
+The link grants no permissions. Limit who can sign in using your identity provider's application assignments or your proxy's access policy. Every accepted proxy identity still becomes an operator.
+
+When configured, only `GET /v1/identity` includes `error.signInUrl` in its `401 UNAUTHENTICATED` response, including for missing or unknown bearer tokens and refused proxy JWTs. Other routes and `403` responses do not include it. It is public login metadata, not a credential; headless clients should continue using their Simlock tokens.
+
+This works on a gateway or a worker with HTTP enabled. The console also keeps the link on the ended screen when an unsigned identity check supplies it. The link does not fix an issuer, audience, or key-fetch configuration error; the refusal message still explains why the JWT was rejected.
 
 Your proxy must also:
 

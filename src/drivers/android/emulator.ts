@@ -10,6 +10,7 @@ import type {
   Clock,
   Filesystem,
   ProcessHandle,
+  ProcessResult,
   ProcessRunner,
   TcpProbe,
   TimerHandle,
@@ -198,15 +199,7 @@ export class Emulator {
   ): Promise<void> {
     const { adbTools, clock, bootTimeoutMs } = this.#options;
     while (!abandoned()) {
-      if (clock.now() - startedAt >= bootTimeoutMs) {
-        throw new BootTimeoutError(data.avdName);
-      }
-
-      const completed = await this.#options.processRunner.run(
-        this.#options.adb,
-        ["-s", data.serial, "shell", "getprop", "sys.boot_completed"],
-        { env: adbTools.env() },
-      );
+      const completed = await this.#bootProbe(data, startedAt, ["getprop", "sys.boot_completed"]);
       if (completed.code !== 0) {
         // why: A serial that will not answer is a serial the server has no transport for, which
         // is the same evidence "absent from `adb devices`" would give and costs no extra
@@ -221,7 +214,7 @@ export class Emulator {
         continue;
       }
       if (completed.stdout.trim() === "1") {
-        if (await this.#bootSettled(data)) return;
+        if (await this.#bootSettled(data, startedAt)) return;
       }
 
       await adbTools.delay(
@@ -234,23 +227,40 @@ export class Emulator {
    * why: After a snapshot load both boot properties pass before `pm` answers, so a device granted
    * then fails its first install or package query.
    */
-  async #bootSettled(data: AndroidDriverData): Promise<boolean> {
-    const bootAnimation = await this.#options.adbTools.runOrThrow(this.#options.adb, [
-      "-s",
-      data.serial,
-      "shell",
-      "getprop",
-      "init.svc.bootanim",
-    ]);
+  async #bootSettled(data: AndroidDriverData, startedAt: number): Promise<boolean> {
+    const command = ["getprop", "init.svc.bootanim"];
+    const bootAnimation = await this.#bootProbe(data, startedAt, command);
+    if (bootAnimation.code !== 0) {
+      throw new DriverCrashError(
+        `${this.#options.adb} -s ${data.serial} shell ${command.join(" ")} failed: ${bootAnimation.stderr || bootAnimation.stdout}`,
+      );
+    }
     const stopped = bootAnimation.stdout.trim();
     if (stopped !== "" && stopped !== "stopped") return false;
     await this.#options.ownership.confirmAvdAnswers(data);
-    const answer = await this.#options.processRunner.run(
-      this.#options.adb,
-      ["-s", data.serial, "shell", "pm", "path", "android"],
-      { env: this.#options.adbTools.env() },
-    );
+    const answer = await this.#bootProbe(data, startedAt, ["pm", "path", "android"]);
     return answer.code === 0 && answer.stdout.includes("package:");
+  }
+
+  /**
+   * why: the one place the boot deadline is kept. A probe is given what is left of it, not a limit
+   * of its own: read only between probes, the deadline would not end a boot whose adb never
+   * answers.
+   */
+  async #bootProbe(
+    data: AndroidDriverData,
+    startedAt: number,
+    command: readonly string[],
+  ): Promise<ProcessResult> {
+    const { adb, adbTools, bootTimeoutMs, clock, processRunner } = this.#options;
+    const left = bootTimeoutMs - (clock.now() - startedAt);
+    if (left <= 0) throw new BootTimeoutError(data.avdName);
+    const answer = await processRunner.run(adb, ["-s", data.serial, "shell", ...command], {
+      env: adbTools.env(),
+      timeoutMs: left,
+    });
+    if (answer.endedBy === "timeout") throw new BootTimeoutError(data.avdName);
+    return answer;
   }
 
   async start(

@@ -83,13 +83,16 @@ describe("a person the sign-in proxy signed in", () => {
     });
   });
 
-  it("answers a refused JWT with 401 UNAUTHENTICATED, the refusal's message and its reason in the body", async () => {
+  it("advertises proxy sign-in only on identity 401s and preserves the refusal reason", async () => {
     const key = await createTestKey("ES256", "k1");
     const keySetFetcher = new FakeKeySetFetcher();
     keySetFetcher.answer({ status: 200, body: keySetBody(key) });
     const clock = new FakeClock(PROXY_NOW);
     const auth = createAuth({
-      config: authConfigWith(),
+      config: {
+        ...authConfigWith(),
+        proxyAuth: { ...proxyAuthConfig, signInUrl: "https://login.example.test/start" },
+      },
       dataDirectory: "/home/agent/.simlock",
       database: (await openMemoryStateDatabase([tokensOwner])).database,
       filesystem: new MemoryFilesystem(),
@@ -107,6 +110,33 @@ describe("a person the sign-in proxy signed in", () => {
     });
     expect(good.status).toBe(200);
 
+    const missing = await app.request("/v1/identity");
+    expect(missing.status).toBe(401);
+    expect(await missing.json()).toMatchObject({
+      error: { signInUrl: "https://login.example.test/start" },
+    });
+
+    const unknown = await app.request("/v1/identity", {
+      headers: { authorization: "Bearer slk_unknown" },
+    });
+    expect(unknown.status).toBe(401);
+    expect(await unknown.json()).toMatchObject({
+      error: { signInUrl: "https://login.example.test/start" },
+    });
+
+    const status = await app.request("/v1/status");
+    expect(status.status).toBe(401);
+    expect(await status.json()).toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Missing bearer token" },
+    });
+
+    const { secret } = await auth.tokens.create("worker");
+    const forbidden = await app.request("/v1/identity", {
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    expect(forbidden.status).toBe(403);
+    expect((await forbidden.json()).error).not.toHaveProperty("signInUrl");
+
     const expired = await key.sign(personClaims({ exp: Math.floor(PROXY_NOW / 1000) - 120 }));
     const response = await app.request("/v1/identity", { headers: { [header]: expired } });
 
@@ -116,6 +146,7 @@ describe("a person the sign-in proxy signed in", () => {
         code: "UNAUTHENTICATED",
         message: "Sign-in proxy identity refused: expired",
         reason: "expired",
+        signInUrl: "https://login.example.test/start",
       },
     });
   });

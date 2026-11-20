@@ -73,7 +73,7 @@ When Simlock is connected to you as an MCP server, it has six tools:
 
 Under Codex and pi, the MCP server and the CLI are two identities: use only one of them per session.`;
 
-const MORE = "More: https://callstackincubator.github.io/simlock/docs/";
+const MORE = "More: https://incubator.callstack.com/simlock/docs/introduction";
 
 export const AGENT_INSTRUCTIONS = `${[
   TITLE,

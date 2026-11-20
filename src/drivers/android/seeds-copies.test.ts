@@ -240,7 +240,8 @@ describe("Seeds", () => {
         {
           advance: 300_000,
           expectations: [stage.version, stage.create, ...neverReady],
-          message: "Timed out waiting for device to boot",
+          message:
+            "Device failed to boot: seed_two: the first boot did not finish within 300000 ms",
         },
         {
           advance: 60_000,
@@ -317,6 +318,56 @@ describe("Seeds", () => {
         expect(await harness.filesystem.exists(seedHome)).toBe(false);
         await expect(harness.seeds.listSources()).resolves.toEqual([]);
         expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
+      }
+    });
+
+    it("names the seed and which of its two boots ran out of android.bootTimeoutMs when making a seed times out", async () => {
+      const stage = seedStages();
+      const serial = "emulator-5586";
+      const neverReady = [
+        bootingAt(seedHome, ["-no-snapshot-load"], true)[0],
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "0\n",
+        ),
+      ] as ScriptedProcessExpectation[];
+      const cases = [
+        {
+          boot: "first boot",
+          expectations: [stage.version, stage.create, stage.devices, ...neverReady],
+          probesBeforeHang: 1,
+        },
+        {
+          boot: "second boot",
+          expectations: [
+            stage.version,
+            stage.create,
+            stage.devices,
+            ...stage.firstBoot,
+            stage.sync,
+            stage.powerOff,
+            ...neverReady,
+          ],
+          probesBeforeHang: 2,
+        },
+      ] as const;
+
+      for (const failing of cases) {
+        const clock = new FakeClock();
+        const harness = await seedHarness(failing.expectations, { clock });
+        const failure = harness.seeds.provision(harness.spec).catch((error: unknown) => error);
+        await vi.waitFor(() =>
+          expect(
+            harness.runner.calls.filter((call) => call.args.includes("sys.boot_completed")),
+          ).toHaveLength(failing.probesBeforeHang),
+        );
+        clock.advance(300_000);
+
+        const error = (await failure) as Error;
+        expect(error.name, failing.boot).toBe("BootTimeoutError");
+        expect(error.message, failing.boot).toContain("seed_two");
+        expect(error.message, failing.boot).toContain(failing.boot);
       }
     });
 
@@ -562,7 +613,7 @@ describe("Seeds", () => {
         { clock },
       );
       const making = harness.seeds.provision(harness.spec);
-      const failed = expect(making).rejects.toThrow("Timed out waiting for device to boot");
+      const failed = expect(making).rejects.toThrow("did not finish within 300000 ms");
       await vi.waitFor(() =>
         expect(harness.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
           true,

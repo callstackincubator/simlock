@@ -1,6 +1,8 @@
 ---
 title: Web console
 description: Turn on the web console, sign in with an operator token, and read what each page shows about your worker's devices, leases and queue.
+sidebar:
+  order: 9
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
@@ -44,6 +46,8 @@ Every page has its own address, such as `/leases`, so you can bookmark a page, r
 
 ## Sign in with an operator token
 
+If your operator configured a sign-in proxy with a login URL, choose **Sign in with SSO** to sign in through that proxy in the same tab. The operator-token form remains available. See [Access control](/simlock/docs/gateway/access-control#sign-in-to-the-console-through-a-sign-in-proxy).
+
 The console asks for an operator token. Make one on the worker:
 
 ```sh
@@ -68,7 +72,7 @@ If the console does not accept the token, it says why:
 
 The console keeps the token in this browser tab only. A reload keeps you signed in; a new tab asks again; closing the tab signs you out. **Sign out** at the bottom of the sidebar forgets the token at once. If you revoke the token with `simlock token revoke <token-id>`, the console signs you out the next time it asks the daemon for anything.
 
-To sign people in through a sign-in proxy instead of tokens, see [Access control](/simlock/docs/gateway/access-control).
+To sign people in through a sign-in proxy instead of tokens, see [Access control](/simlock/docs/gateway/access-control). On either a worker or a gateway, configure `http.proxyAuth.signInUrl` when the proxy needs an explicit login entry point. The console offers **Sign in with SSO** beside the token form and on the ended screen when the identity check supplies the URL. A refused JWT still shows its refusal message; signing in again cannot repair a misconfigured proxy.
 
 ## Find your way around
 

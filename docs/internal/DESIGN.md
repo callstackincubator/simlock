@@ -336,7 +336,7 @@ The Fleet page is a grouped table, not the reference's cards and tiles (see
 Fleet table above); the Worker page's devices are a table too.
 
 The reference's **Add worker** is a link to the existing
-[joining instructions](https://callstackincubator.github.io/simlock/docs/gateway/joining-workers).
+[joining instructions](https://incubator.callstack.com/simlock/docs/gateway/joining-workers).
 **Release leases** becomes an equally styled **View leases** link to `/leases`.
 Neither sends a write. Keep reference placement and geometry; stage-2 and
 stage-7 paired images record these exceptions. Test both links in the worker
@@ -345,7 +345,7 @@ browser spec. (decided in delivery, pending the maintainer)
 ## Baselines reference amendment
 
 Use All / Stale / Ready and an equally styled **Prepare baseline** link to
-[baseline preparation instructions](https://callstackincubator.github.io/simlock/docs/worker/baselines)
+[baseline preparation instructions](https://incubator.callstack.com/simlock/docs/worker/baselines)
 in place of the reference's Building filter and Build baseline action.
 Only ready/stale list data is supported (`src/contract/device-schemas.ts:119-135`);
 the harness replaces the fictitious building row with a ready row as a DATA

@@ -2,7 +2,7 @@
 // site-wide one; the first paragraph of the page says what the page is about, so it is used.
 import { defineRouteMiddleware } from "@astrojs/starlight/route-data";
 
-import { docs, site as meta } from "./site/content";
+import { at, docs, site as meta } from "./site/content";
 import { fullTitle } from "./site/meta";
 
 const MAX = 160;
@@ -81,7 +81,8 @@ export const onRequest = defineRouteMiddleware((context) => {
   // why: sidebar groups are left out: they have no page of their own, and every breadcrumb but
   // the last needs a URL.
   const items = [
-    { name: meta.name, item: site },
+    // why: `site` is the origin only; the home page sits under the base.
+    { name: meta.name, item: new URL(at("/"), site).href },
     { name: "Docs", item: new URL(docs.intro, site).href },
     {
       name: entry.data.title,
