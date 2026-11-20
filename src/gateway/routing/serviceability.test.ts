@@ -192,8 +192,11 @@ describe("assess", () => {
     });
   });
 
-  it("judges a request on the other workers when one has no catalog at all", () => {
-    const { catalog: _catalog, ...unread } = view("wrk_a", IOS, { catalogReadAt: undefined });
+  it("judges a request on the other workers when the one with no catalog is drained", () => {
+    const { catalog: _catalog, ...unread } = view("wrk_a", IOS, {
+      catalogReadAt: undefined,
+      drained: true,
+    });
 
     expect(assess(REQUEST, [unread, view("wrk_b")])).toEqual({ kind: "route-or-wait" });
     expect(rejectionOf([unread, view("wrk_b")], { ...REQUEST, model: "iPhone 99" }).code).toBe(

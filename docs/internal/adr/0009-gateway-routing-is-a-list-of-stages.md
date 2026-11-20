@@ -133,7 +133,9 @@ again and a waiting request that has moved to rows 1 to 5 is rejected.
 
 A worker connecting for the first time, whose catalog has not arrived yet,
 neither takes requests nor is known. Alone, it gives row 1, never a false
-`UNKNOWN_MODEL`. The view records when the catalog was read in the current
+`UNKNOWN_MODEL`. While one connected, undrained worker has no catalog yet (as
+after a gateway restart, until its first full refresh), rows 2 to 5 do not
+reject: the request waits, as for an updating worker. The view records when the catalog was read in the current
 session, so "not read yet" and "read and empty" can be told apart.
 
 ### 5. Refusals

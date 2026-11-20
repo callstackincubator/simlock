@@ -203,6 +203,7 @@ function assessLeading(
   views: readonly WorkerView[],
 ): Rejection | undefined {
   if (takersOf(request, views).length === 0) return noWorker();
+  if (views.some(isUnread)) return undefined;
 
   const known = views.filter(isKnown);
   const platform = request.platform;
@@ -260,7 +261,12 @@ function assessServing(
       : takers.some(
           (worker) => servesMode(worker, request) && matchRequest(worker, request) !== undefined,
         );
-  return fits ? undefined : noWorker();
+  return fits || views.some(isUnread) ? undefined : noWorker();
+}
+
+// why: ADR 0009 §4: a connected worker the gateway has not read yet (as after a gateway restart) may serve what no other can, so the request waits for its first catalog.
+function isUnread(worker: WorkerView): boolean {
+  return worker.connection === "connected" && !worker.drained && worker.catalog === undefined;
 }
 
 function isKnown(worker: WorkerView): boolean {
