@@ -1,25 +1,29 @@
 ---
-title: Capacity and the warm pool
-description: Set how many devices a machine creates and runs at once, keep devices booted so leases start fast, and read the capacity lines in simlock status.
+title: Run more devices at once
+description: See how full a worker is, raise or lower its device and running limits, use one fixed number on every machine, and fit more iOS simulators with slim mode.
 sidebar:
-  label: Capacity and warm pool
   order: 4
+  label: "Run more devices"
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Steps, Aside } from '@astrojs/starlight/components';
 
-A worker has two limits per platform:
+**Result:** the worker creates and runs as many simulators and emulators as the machine can take, and no more.
 
-- **Devices**: how many simulators or emulators may exist, booted or shut down.
-- **Running**: how many may be booted at the same time.
+How limits, the RAM budget and the queue behave, and the defaults: [Queue and capacity](/simlock/docs/concepts/queue-and-capacity). By default the limits come from the machine's CPU and RAM, so most machines need no change.
 
-By default Simlock sets both from the machine's CPU and RAM, so most machines need no change. Physical devices never count against either limit.
+## Before you start
 
-Every setting on this page goes in the worker's config file and applies after a daemon restart. See [Configuration](/simlock/docs/worker/configuration) for how to change settings.
+- Every setting here goes in the worker's `config.json` and applies after a daemon restart. See [Change a setting](/simlock/docs/worker/change-a-setting).
+- Physical devices never count against a limit.
 
 ## See how full the machine is
 
-Run `simlock status`. On a Mac with 12 CPU cores and 32 GiB of RAM, with one iPhone leased and one ready, the capacity lines read:
+```sh
+simlock status
+```
+
+On a Mac with 12 CPU cores and 32 GiB of RAM, with one iPhone leased and one ready:
 
 ```text
 Running global: 2 + 0 reserved/9, warm 1
@@ -32,82 +36,92 @@ warm pool: enabled, reserve ios 0 android 0
 | Part | Meaning |
 | --- | --- |
 | `managed 2/6` | Devices on this platform, booted or shut down, out of the device limit. |
-| `running 2 + 0 reserved/6` | Devices booted now, plus boots already under way, out of the running limit. |
+| `running 2 + 0 reserved/6` | Devices booted now, plus boots under way, out of the running limit. |
 | `warm 1` | Booted devices that are ready and not leased. |
 | `Running global` | Running devices across both platforms, out of the overall running limit. |
 | `(over limit)` | More devices run than the limit allows, for example after you lowered it. Nothing is stopped; new boots wait. |
 | `(at RAM budget)` | One more device of this platform would not fit in the RAM budget. |
-| `RAM budget` | RAM counted for existing devices, out of the budget. |
-| `warm pool` | Whether the warm pool is on, and the running slots it keeps free per platform. |
+| `RAM budget` | RAM counted for existing devices, out of the budget. Shown only with the `resource` strategy. |
+| `warm pool` | Whether the warm pool is on, and the running slots it holds back per platform. See [Make leases start faster](/simlock/docs/worker/warm-pool). |
 
-`simlock status --json` gives the same figures as JSON.
+A platform the host cannot run, such as iOS on Linux or Windows, has no line. `simlock status --json` gives the same figures as JSON.
 
-## What happens when the machine is full
-
-When a lease needs a device, Simlock tries these in order:
-
-1. Hand over a ready device that fits, or one the warm pool is already booting.
-2. Boot a shut-down device that fits, if a running slot is free.
-3. Create a device, if the device limit and the RAM budget allow it.
-4. At the device limit, delete an idle device of the same platform to make room.
-5. At the running limit, shut down an idle device to make room.
-6. Otherwise, wait in the queue until a device frees up. With `--no-wait`, the request fails at once with `NO_CAPACITY`.
-
-When the host is short of memory enough to pause new devices, steps 2 and 3 are skipped and so is rebooting a ready device for an `--except` lease or a default-set iOS simulator: the request waits for pressure to lift, or returns `NO_CAPACITY` when it cannot wait. Other fitting ready devices can still be handed over, and nothing is shut down for the wait.
-
-A leased device is never shut down or deleted to make room. When RAM is the only thing in the way, Simlock shuts nothing down for it; the request waits until RAM frees up, for example when an idle device shuts down on its own.
-
-Each simulator or emulator serves one lease and is deleted when that lease ends. The first lease of an iOS model and version takes longer; later ones of the same kind start faster.
+To see why a request waits, run `simlock list --requests`. See [A lease waits and never starts](/simlock/docs/troubleshooting/worker#a-lease-waits-and-never-starts).
 
 ## Change the limits for this machine
 
-The default strategy, `resource`, sizes the limits from the machine and adds a RAM budget:
+The default strategy, `resource`, sizes the limits from the machine and adds a RAM budget. Override the parts you need:
 
-| Limit | Default | Key |
-| --- | --- | --- |
-| iOS devices | half the CPU cores, at least 1 | `capacity.config.limits.ios.maxDevices` |
-| iOS running | same as iOS devices | `capacity.config.limits.ios.maxRunning` |
-| Android devices | a quarter of the CPU cores, or one per 8 GiB of RAM, whichever is lower; at least 1 | `capacity.config.limits.android.maxDevices` |
-| Android running | same as Android devices | `capacity.config.limits.android.maxRunning` |
-| Running across both platforms | iOS devices plus Android devices | `capacity.config.limits.maxRunning` |
-| RAM per iOS simulator | 1.5 GiB | `capacity.config.ramBudget.iosBytesPerDevice` |
-| RAM per Android emulator | 4 GiB | `capacity.config.ramBudget.androidBytesPerDevice` |
-| RAM per slim iOS simulator | same as a full one | `capacity.config.ramBudget.iosSlimBytesPerDevice` |
-
-This config lets an Apple silicon Mac run eight simulators and two emulators, ten at a time:
-
-```json title="~/.simlock/config.json"
-{
-  "capacity": {
-    "strategy": "resource",
-    "config": {
-      "limits": {
-        "maxRunning": 10,
-        "ios": { "maxDevices": 8, "maxRunning": 8 },
-        "android": { "maxDevices": 2, "maxRunning": 2 }
-      }
-    }
-  }
-}
-```
+| Limit | Key |
+| --- | --- |
+| iOS devices | `capacity.config.limits.ios.maxDevices` |
+| iOS running | `capacity.config.limits.ios.maxRunning` |
+| Android devices | `capacity.config.limits.android.maxDevices` |
+| Android running | `capacity.config.limits.android.maxRunning` |
+| Running across both platforms | `capacity.config.limits.maxRunning` |
+| RAM per iOS simulator (default 1.5 GiB) | `capacity.config.ramBudget.iosBytesPerDevice` |
+| RAM per slim iOS simulator (default: same as full) | `capacity.config.ramBudget.iosSlimBytesPerDevice` |
+| RAM per Android emulator (default 4 GiB) | `capacity.config.ramBudget.androidBytesPerDevice` |
 
 <Aside type="caution" title="Set the limits together">
 Each default comes from the machine, not from your other settings. If you raise `ios.maxDevices` and leave out `ios.maxRunning` and `maxRunning`, those stay at the machine's defaults and still hold you back.
 </Aside>
 
-**How the RAM budget works.** The budget is the machine's total RAM minus 4 GiB for the operating system. Every device that is not shut down counts at its platform's size from the table above. Simlock does not create a device that would go over the budget. It does not measure what a device really uses, so raise or lower the sizes to match your devices. RAM sizes are in bytes: 1 GiB is `1073741824`.
+<Steps>
 
-Config files that set `limits` and `ramBudget` at the top of `capacity` instead of inside `capacity.config` still work.
+1. Write the limits in `config.json`. This lets an Apple silicon Mac run eight simulators and two emulators, ten at a time:
+
+   ```json title="~/.simlock/config.json"
+   {
+     "capacity": {
+       "strategy": "resource",
+       "config": {
+         "limits": {
+           "maxRunning": 10,
+           "ios": { "maxDevices": 8, "maxRunning": 8 },
+           "android": { "maxDevices": 2, "maxRunning": 2 }
+         }
+       }
+     }
+   }
+   ```
+
+2. Restart the daemon:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock status` shows `Running global: ... /10` and `Capacity ios: managed .../8`.
+
+- **RAM sizes are in bytes.** 1 GiB is `1073741824`. Simlock does not measure what a device really uses, so set the sizes to match your devices.
+- Older config files that set `limits` and `ramBudget` at the top of `capacity` instead of inside `capacity.config` still work.
 
 ## Use the same fixed number on every machine
 
-The `fixed` strategy ignores the machine and has no RAM budget:
+The `fixed` strategy ignores the machine and has no RAM budget.
 
-```sh
-simlock config set capacity '{"strategy":"fixed","config":{"maxRunning":4}}'
-simlock daemon stop
-simlock daemon start
-```
+<Steps>
+
+1. Set it, with the running limit:
+
+   ```sh
+   simlock config set capacity '{"strategy":"fixed","config":{"maxRunning":4}}'
+   ```
+
+2. Restart the daemon:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock status` shows `Running global: ... /4` and no `RAM budget` line.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
@@ -119,118 +133,57 @@ simlock daemon start
 
 `maxRunning` alone is enough. The per-platform keys split it between platforms.
 
-## Fit more iOS simulators with slim mode
+## Fit more iOS simulators with slim
 
-A slim iOS simulator has background services turned off that most agent work does not need, such as widgets, Siri, Spotlight, iCloud, the App Store, mail, Photos and telemetry. It uses much less RAM.
+A slim iOS simulator has background services turned off and uses much less RAM. What slim turns off, and when a slim request gets a full device instead: [Slim iOS simulators](/simlock/docs/concepts/slim-simulators).
 
-An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full` (or the only mode `ios.modes` lists). To limit the worker to one mode, set `ios.modes` to `["slim"]` or `["full"]`; a lease, warm target or learned kind of the other mode is then refused. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`).
+<Steps>
 
-What to expect:
+1. Make slim the default, and give slim simulators a smaller RAM size so more fit in the budget:
 
-- **A `full` request always gets a full device. A `slim` request may not.** On iOS older than 18.5, and on Android, a slim request gets a full device instead of failing, unless `ios.modes` leaves out `full`: then an iOS request that would get a full device is refused with `MODE_UNAVAILABLE`. If Simlock finds after the boot that the services are not off as asked, the lease also gets a full device, and the daemon log says why. The lease always reports the mode the device really has.
-- **The first boot of a slim simulator can be slow**, up to `ios.slim.bootTimeoutMs` (10 minutes by default).
-- **Slim and full devices are never mixed up.** A request only reuses an idle device of the mode it asked for.
+   ```json title="~/.simlock/config.json"
+   {
+     "ios": { "defaultMode": "slim" },
+     "capacity": {
+       "strategy": "resource",
+       "config": {
+         "limits": {
+           "maxRunning": 12,
+           "ios": { "maxDevices": 12, "maxRunning": 12 }
+         },
+         "ramBudget": {
+           "iosBytesPerDevice": 4294967296,
+           "iosSlimBytesPerDevice": 1073741824
+         }
+       }
+     }
+   }
+   ```
 
-To fit more slim simulators in the RAM budget, give them a smaller size:
+2. Restart the daemon.
 
-```json title="~/.simlock/config.json"
-{
-  "ios": { "defaultMode": "slim" },
-  "capacity": {
-    "strategy": "resource",
-    "config": {
-      "limits": {
-        "maxRunning": 12,
-        "ios": { "maxDevices": 12, "maxRunning": 12 }
-      },
-      "ramBudget": {
-        "iosBytesPerDevice": 4294967296,
-        "iosSlimBytesPerDevice": 1073741824
-      }
-    }
-  }
-}
-```
+</Steps>
 
-A device counts at the full size until it has booted and been checked as slim. So creating or booting any device needs room for a full one; if there is none, the request waits.
+**Check:** `simlock status` shows new iOS devices as `mode slim`.
 
-## Keep devices booted: the warm pool
+A device counts at the full size until it has booted and been checked as slim. So creating or booting any device needs room for a full one; without it, the request waits.
 
-The warm pool keeps idle devices booted, so a lease starts without waiting for a boot. It is on by default and needs no setup: it learns from your leases.
+Other slim settings:
 
-- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode), it keeps ready as many as were leased at the same time at the busiest moment of the last 24 hours (its peak) while none is leased. While some of its copies are leased, it keeps the peak less those leased ready, at least one spare. What it learned survives a daemon restart.
-- **A baseline is learned on its Nth lease within 24 hours.** N is `warmPool.baselineLearnAfter` (3 by default). Until then a lease of it leaves nothing booted. Once learned, it stays learned and is kept warm like any other kind, as the baseline's newest version: if you save a version from another model, the next pass warms that model.
-- **You can add targets.** `warmPool.targets` names devices to keep booted before anyone asks:
-
-```json title="~/.simlock/config.json"
-{
-  "warmPool": {
-    "targets": [
-      { "platform": "ios", "model": "iPhone 16", "osVersion": "26.0", "count": 2 },
-      { "platform": "android", "model": "Pixel 8", "count": 1 }
-    ]
-  }
-}
-```
-
-Each target needs `platform`, `model` (an exact model name, not a class such as `phone`) and `count`. `osVersion` takes a version or a range such as `">=18"`, which picks the newest installed runtime in it. `mode` takes `slim` or `full`. Any other key stops the daemon from starting.
-
-What the warm pool does and does not do:
-
-- It uses only free running slots, and never shuts down a leased device.
-- Your targets come first. To fill a target, it may shut down an idle device that only a learned kind keeps.
-- It never downloads a runtime or system image. A target whose runtime is missing stays short.
-- A booted device that nobody leases and nothing keeps warm is shut down after `idle.shutdownAfterMs` (10 minutes). See [Cleanup](/simlock/docs/worker/cleanup).
-- When host memory pressure pauses warming, it starts nothing, a target left short reports `memory-pressure`, and each new memory reading it shuts down one idle device. It fills its targets again when the pause lifts.
-- A target that fails to boot is tried again after 1, 2, 4 and so on minutes, at most 10 minutes apart.
-
-| Key | Meaning | Default |
-| --- | --- | --- |
-| `warmPool.enabled` | `false` keeps nothing booted. | `true` |
-| `warmPool.baselineLearnAfter` | Leases of one baseline within 24 hours that make the warm pool learn it. | `3` |
-| `warmPool.learn` | `false` keeps only your targets warm. Simlock still records leases, so turning it back on starts from the last 24 hours. | `true` |
-| `warmPool.reserveRunning.ios`, `.android` | Running slots idle warm devices may not fill, so a lease for another kind never waits for a shutdown. Leases can still use them. | `0` |
-| `warmPool.maxConcurrentBoots` | Boots and creations under way at once. | a quarter of the CPU cores, at least 1 |
-
-### Forget a learned kind
-
-A lease of the wrong model, such as `--device Pixel` instead of `Pixel 9`, teaches the warm pool that model too. Its device then stays booted and holds a running slot. To forget it:
-
-```sh
-simlock warm forget android Pixel
-```
-
-The warm pool stops keeping that model booted, and the normal [cleanup timers](/simlock/docs/worker/cleanup) shut the device down and delete it. Add the OS version, `--mode` or `--image-tag` to forget only one kind of the model. See [`simlock warm forget`](/simlock/docs/reference/cli#simlock-warm-forget).
-
-### Read the warm pool in `simlock status`
-
-Each target and learned kind gets a line under `warm pool`:
-
-```text
-warm pool: enabled, reserve ios 1 android 0
-  iPhone 16 / 26.0 / full   configured   wanted 2  ready 1  booting 1
-  iPhone 15 / 18.4 / full   learned   wanted 1  ready 1  booting 0
-  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 0  booting 0  short: running-limit
-  iPhone 16 / 26.0 / full / baseline checkout   learned   wanted 1  ready 1  booting 0
-```
-
-`configured` is one of your `warmPool.targets`; `learned` is a kind the worker leased. A kind that is both shows once, as `configured`, with the larger count. An Android image tag and a baseline name show at the end of the kind.
-
-`short` says why the warm pool could not fill a line:
-
-| Reason | What to do |
+| You want to | Key |
 | --- | --- |
-| `disabled` | The warm pool is off (`warmPool.enabled` is `false`). |
-| `runtime-missing` | Install the runtime or system image. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images). |
-| `unknown-model` | The model does not exist on this machine, or the platform's `<platform>.virtualDevices` is `false`. Check `simlock catalog`. |
-| `mode-unavailable` | The target is an iOS mode that `ios.modes` leaves out, or a slim target on iOS below 18.5 (which can only be full) when `ios.modes` has no `full`. Remove the target or add the mode to `ios.modes`. |
-| `unresolvable` | No device can be created for it. Check its OS version and mode. |
-| `no-driver` | The platform's tools are missing. Run `simlock doctor`. |
-| `boot-failed` | The last boot failed, or did not finish within `ios.full.bootTimeoutMs`, `ios.slim.bootTimeoutMs` or `android.bootTimeoutMs`. Simlock tries again later. Check `simlock daemon logs`. |
-| `running-limit` | No running slot is free. Raise the running limits or lower `count`. |
-| `device-limit` | The platform is at its device limit. |
-| `reserve` | The slot is held back by `warmPool.reserveRunning`. A platform with `<platform>.virtualDevices` set to `false` holds none. |
-| `ram-budget` | The device would not fit in the RAM budget. |
-| `memory-pressure` | The host is short of memory and warming is paused (`memoryPressure.*`). |
+| Serve only slim or only full simulators | `ios.modes`: `["slim"]` or `["full"]`. A lease, warm target or learned kind of the other mode is refused with `MODE_UNAVAILABLE`. |
+| Turn off only some groups of services | `ios.slim.categories`: a list of `widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`. |
+| Give a slim first boot more or less time | `ios.slim.bootTimeoutMs` (10 minutes by default). |
 
-A line that is filling, or waiting behind a queued lease, shows no reason. `simlock doctor` warns when your targets add up to more devices than the running limit allows.
+## When it fails
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| Limits stay low after you raised one | The other limits kept the machine's defaults. | Set `maxDevices`, the platform's `maxRunning` and the global `maxRunning` together. |
+| `(at RAM budget)` while devices sit idle | The RAM sizes are larger than the devices use. | Lower the `ramBudget` sizes, or `iosSlimBytesPerDevice` for slim. |
+| `(over limit)` | You lowered a limit below what runs now. | Nothing. New boots wait until devices end. |
+| `MODE_UNAVAILABLE` on a lease | `ios.modes` leaves out the mode the lease needs. | Add the mode to `ios.modes`, or ask agents for the mode you serve. |
+| `simlock doctor` warns about warm pool targets | Your targets add up to more devices than the running limit allows. | Raise the running limits or lower the targets' `count`. |
+
+Keys: [Configuration reference](/simlock/docs/reference/configuration#capacity).

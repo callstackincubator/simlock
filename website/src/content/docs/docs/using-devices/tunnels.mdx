@@ -1,0 +1,110 @@
+---
+title: Use your own adb and tools through a tunnel
+description: Connect ports between your machine and a leased emulator or iOS simulator on a remote worker, for Metro and dev servers, and drive a remote emulator with your own adb and Android Studio.
+sidebar:
+  order: 11
+  label: "Use your own adb"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** a device on a remote worker reaches a server on your machine, your machine reaches a port on the device, or your own `adb` and Android Studio drive a remote emulator.
+
+| Tunnel | Does | Devices |
+| --- | --- | --- |
+| `reverse <port>` | The device's `localhost:<port>` reaches your machine, for Metro or a dev server. | Android emulators and phones, iOS simulators |
+| `forward <port>` | Your `localhost:<port>` reaches a port on the device. | Android emulators and phones, iOS simulators |
+| `emulator adb` | Your `adb` lists the remote emulator as a device. | Android emulators |
+
+## Before you start
+
+- Tunnels are off by default. The operator turns on `capabilities.tunnel.enabled` on the worker, and on the gateway too if you go through one, then restarts each daemon.
+- `SIMLOCK_URL` and `SIMLOCK_TOKEN` are set (see [Use an existing farm](/simlock/docs/getting-started/existing-farm)). `simlock tunnel` talks HTTP to the worker or gateway and needs no daemon on your machine.
+- You hold a lease. A physical iPhone takes no tunnel.
+
+<Aside type="caution">
+While a tunnel is open, its port on the worker can be reached by others on that machine: any process on the worker, another lease's emulator (at `10.0.2.2`), and any other lease's device with an `adb reverse` rule to it. Do not send anything through a tunnel you would not show them.
+</Aside>
+
+## Let the device reach your machine
+
+<Steps>
+
+1. Start your server on your machine, for example Metro on port 8081.
+
+2. Open the tunnel:
+
+   ```sh
+   simlock tunnel reverse 8081
+   ```
+
+   ```text
+   reverse device:8081 -> localhost:8081 (lease lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3)
+   ```
+
+3. Keep it running. Ctrl-C closes it.
+
+</Steps>
+
+**Check:** an app on the device that connects to `localhost:8081` reaches your server.
+
+- `reverse 8081:9000` connects the device's port 8081 to port 9000 on your machine.
+- `forward 9100` works the other way: your `localhost:9100` reaches port 9100 on the device. Repeat `reverse` and `forward` in one command for several tunnels.
+- With an agent token that holds one lease, the command finds it. Otherwise pass `--lease <lease-id>`.
+- Device ports are 1024 or higher. A lease takes up to 8 tunnels.
+
+### On an iOS simulator
+
+A simulator has no network of its own: an app in it listens on the worker's loopback and reaches the worker's ports.
+
+- `reverse 8081` makes the worker itself listen on port 8081, on `127.0.0.1` and `::1`. So two leases on one worker cannot reverse the same port, and a port anything on the worker already listens on is refused with `TUNNEL_PORT_IN_USE`.
+- `forward 9100` reaches port 9100 only when a process of your own lease's simulator listens there. A port another simulator's app, the worker's own tools or nothing listens on is closed, and `simlock tunnel` prints the reason on stderr.
+
+## Drive a remote emulator with your own adb
+
+<Steps>
+
+1. Lease an Android emulator with a `google_apis` image. A Play Store image keeps `ro.adb.secure` on, so your adb sees it as `unauthorized`.
+
+2. Open the tunnel:
+
+   ```sh
+   simlock tunnel emulator adb
+   ```
+
+   ```text
+   emulator localhost:61544 -> emulator:adb (lease lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3)
+   adb: connected to 127.0.0.1:61544
+   ```
+
+   The command runs `adb connect` for you, and `adb disconnect` when you press Ctrl-C. `emulator adb:6000` picks the port on your machine yourself.
+
+</Steps>
+
+**Check:** `adb devices` on your machine lists `127.0.0.1:61544` as a `device`. Shell, install, Logcat, the debugger and `adb reverse` work on it, and Android Studio lists it. Simlock's own adb on the worker stays connected beside yours.
+
+- If the command cannot find or run your adb, it warns and keeps the tunnel open; run the `adb connect` it prints.
+- Rules you add with `adb reverse` live on the emulator and go when the lease ends.
+
+## Things that interfere
+
+- A device port you already reversed yourself with `adb reverse` through `exec` is refused with `TUNNEL_PORT_IN_USE`. An `adb reverse` rule you set through `exec` after the tunnel opens replaces it, and the tunnel stops working.
+- On a phone, Simlock removes only the rules its own tunnels set. It never clears the phone's other `adb reverse` or `adb forward` rules.
+- If the worker crashes while a tunnel is open, the rule stays on the phone until it reboots or you run `adb reverse --remove`. Until then, that port cannot take a new tunnel.
+
+## When it fails
+
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `TUNNEL_UNAVAILABLE` | 1 | Tunnels are off on the worker or gateway. | Ask the operator to turn on `capabilities.tunnel.enabled`. |
+| `TUNNEL_PORT_IN_USE` | 1 | Something already uses that device port: another tunnel, your own `adb reverse` rule, or, on an iOS simulator, any process on the worker. | Pick another port, or remove the rule. |
+| `TUNNEL_CALLER_PORT_IN_USE` | 1 | The port on your machine is taken. | Pick another caller port, such as `forward 9100:9200`. |
+| `TUNNEL_BAD_PORT` | 1 | A device port below 1024. | Use 1024 or higher. |
+| `TUNNEL_LIMIT` | 1 | The lease already has 8 tunnels. | Close one. |
+| `TUNNEL_UNSUPPORTED` | 1 | `emulator adb` on a phone or iOS simulator, or a tunnel on a physical iPhone. | Lease an Android emulator. |
+| `TUNNEL_DISCONNECTED` | 1 | The connection dropped, or the worker stopped answering. | Run the command again. |
+| `TUNNEL_LEASE_ENDED` | 14 | The lease ended. | Lease again. |
+| `adb answered: failed to authenticate` | — | A Play Store image. | Lease a `google_apis` image. |
+| A usage error | 2 | No `--url`, token or lease; a bad port; a caller port below 1024 for `forward` or `emulator`; a repeated caller port. | Fix the command. |
+
+Every flag: [CLI reference](/simlock/docs/reference/cli#simlock-tunnel). Every tunnel error: [Errors reference](/simlock/docs/reference/errors#tunnels). To write your own tunnel client, see [Lease over the HTTP API](/simlock/docs/using-devices/http-api#build-your-own-tunnel-client).

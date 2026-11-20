@@ -1,0 +1,110 @@
+---
+title: Leases and requesters
+description: What a lease is, how long it lasts, who it belongs to, how it ends, and what happens to the device afterwards.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **lease** is your hold on one device. While you hold it, Simlock gives that device to nobody else. Every lease belongs to a **requester**: the identity of the agent that asked for it.
+
+## How a lease runs
+
+```text
+request ─► queued ─► provisioning ─► booting ─► granted
+                                                  │
+                     renew ─► renew ─► … ─────────┤
+                                                  ▼
+                                   released | expired | lost
+```
+
+While a request waits, `simlock lease` reports its stage on stderr:
+
+| Stage | Means |
+| --- | --- |
+| `queued` | Waiting for a free device. See [Queue and capacity](/simlock/docs/concepts/queue-and-capacity). |
+| `downloading` | Downloading an OS version. Only when the request allows downloads. |
+| `reclaiming` | The device is being deleted, or a phone cleaned, after its last holder. |
+| `provisioning` | Creating the device. |
+| `booting` | Starting the device. |
+
+The **grant** names the lease id, the deadline, the device, and the environment other tools need to reach it. Every later command names the lease by its id.
+
+## Time to live and renewing
+
+Every lease has a **time to live (TTL)**. The lease ends when its TTL runs out, unless someone renews it first. Only renewing keeps a lease alive.
+
+| | Default | Key |
+| --- | --- | --- |
+| TTL of a new lease | 15 minutes | `lease.defaultTtlMs` |
+| Longest TTL anyone can ask for | 4 hours | `lease.maxTtlMs` |
+
+- **Asking for more than the longest TTL fails** with `BAD_REQUEST`. It is not cut down for you.
+- **A renew moves the deadline to now plus the lease's TTL**, however much time was left. A 2-hour lease stays a 2-hour lease, unless the renew names a new TTL.
+- **Some tools renew for you.** A held `simlock lease` (without `--detach`) and the MCP server renew while they run. With `--detach`, the HTTP API or the Node client, you renew yourself.
+- **A held `simlock lease` releases the lease when it stops**: on a normal exit, on Ctrl-C or `SIGTERM`, and when its parent process (or the process `--bind-pid` names) exits.
+- **Nothing else releases a lease.** A closed connection or a killed process leaves the lease running until its TTL runs out. If your agent crashes, the device comes back one TTL after the last renew.
+
+## How a lease ends
+
+| Ending | When |
+| --- | --- |
+| Released | The holder, or an operator, releases it. |
+| Expired | Nobody renewed it before its deadline. |
+| Lost | An operator ran `simlock release --all` or `simlock nuke`, or the device stopped and could not be brought back, or a phone was unplugged for too long. |
+
+A held `simlock lease` reports the end on stderr as a `lease-lost` line and exits with code 14. Its `reason` is `expired`, `killed` (an operator ended it) or `device-lost`. Stop using the device and request a new lease.
+
+## What happens to the device afterwards
+
+- **A simulator or emulator serves one lease, then is deleted.** The release returns at once; the deletion runs in the background. The next lease gets a new device.
+- **Nothing you left on it survives**: apps, files and settings are gone. A lease that started from a [baseline](/simlock/docs/concepts/baselines) leaves the baseline as it was.
+- **A physical device stays**, but Simlock uninstalls the apps that were not on it at enrolment. See [Physical devices](/simlock/docs/concepts/physical-devices).
+
+## When something breaks under a lease
+
+- **The device crashes.** Simlock starts it again under the same lease. You see `device-unhealthy`, then `device-recovered`. The lease is still yours, but apps you launched and log streams you opened are gone: start them again.
+- **The daemon stops.** Leases are not released, and they survive a daemon restart with their deadlines. A held `simlock lease` exits with code 1 and `DAEMON_CONNECTION_LOST`, and the message says how long the lease is still yours. Renew it once the daemon is back. A simulator or emulator that is no longer running when the daemon starts again ends its lease as `device-lost`.
+- **The connection to a remote farm drops.** A held `simlock lease` reconnects and renews by itself until the lease's deadline. See [Remote mode](/simlock/docs/reference/cli#remote-mode).
+
+## Requesters
+
+The requester decides which leases are yours, and limits count per requester. The CLI uses the first of these that is set:
+
+1. `--agent-id <id>` on `simlock lease`.
+2. The `SIMLOCK_AGENT_ID` environment variable.
+3. The agent session: `claude-code:<session id>` under Claude Code, `codex:<session id>` under Codex, `pi:<session id>` under pi. Every command and sub-agent in one session shares that id, and so shares its leases.
+4. The process id of that one `simlock` command.
+
+The MCP server resolves its requester the same way, falling back to `mcp:<process id>`. Codex and pi do not pass their session id to an MCP server, so under them the CLI and the MCP server are two requesters and can hold two leases. To use both in one session, set the same `SIMLOCK_AGENT_ID` for the CLI and the server.
+
+A requester id is at most 256 characters, with no control characters; any other fails with `BAD_REQUEST`.
+
+<Aside type="caution">
+Outside an agent session, with nothing set, each `simlock` command is a different requester. When you run agents some other way, give each agent its own `SIMLOCK_AGENT_ID`. Agents that share an id share its leases.
+</Aside>
+
+Over the HTTP API, the requester is the [token](/simlock/docs/concepts/tokens-and-roles): agents that share a token share its leases. The CLI pointed at a remote farm sends `SIMLOCK_AGENT_ID` with its token, so agents that share a token can still each hold their own lease.
+
+### One lease per requester
+
+By default a requester holds one lease, or has one request waiting, at a time. A second request fails with `REQUESTER_ALREADY_LEASED` (exit 13), and the message names the lease you already hold. Keep using it, or release it first.
+
+An operator can raise the limit with `lease.maxPerRequester`: one number for all platforms, or a limit per platform, such as one iOS and one Android lease. With a limit per platform, a requester can wait for one device per platform at the same time. Through a gateway, the limit counts across every worker; see [Workers and gateways](/simlock/docs/concepts/workers-and-gateways#the-lease-limit-across-the-fleet).
+
+### Who can act on a lease
+
+Renewing and releasing a lease is for its requester. A session with the admin role can renew and release any lease. On the daemon's own machine, the CLI is admin, so it sees and acts on every agent's leases. With an agent token, `simlock status` shows only your own leases and waiting requests.
+
+## Lease id and label
+
+- **Lease id.** Simlock makes one, or you choose it with `--lease-id`: 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. An id an active lease or waiting request has fails with `LEASE_ID_TAKEN`. An id whose lease ended in the last 24 hours (`lease.endedIdRetentionMs`) fails with `LEASE_ENDED`, so a late retry of a finished job never gets a new device. Through a gateway, a lease id Simlock makes starts with the worker's id; pass it back exactly as you got it.
+- **Label.** `--label` gives a lease a name people can read, such as `checkout-flow`: 1 to 64 characters, no control characters. It is for display only; nothing routes or limits by it. `simlock status` and the console show it. An iOS simulator booted for the lease takes the label as its name, so Xcode tools show it; a warm simulator granted without a boot keeps its own name. On Android and physical devices the label shows on the lease only.
+
+## Use it
+
+- [Lease your first device](/simlock/docs/getting-started/first-lease)
+- [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device)
+- [Use several devices at once](/simlock/docs/using-devices/several-devices)
+- [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails)

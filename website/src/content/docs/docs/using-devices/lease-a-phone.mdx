@@ -1,0 +1,120 @@
+---
+title: Lease a real iPhone or Android phone
+description: Lease an enrolled iPhone, iPad or Android phone, install and launch your app on it with devicectl or adb, and know what is removed when the lease ends.
+sidebar:
+  order: 3
+  label: "Lease a real phone"
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+**Result:** you hold a real phone or tablet plugged into a worker, with your app installed and running on it.
+
+What Simlock does to a phone, and when a phone counts as absent: [Physical devices](/simlock/docs/concepts/physical-devices).
+
+<Aside type="danger">
+When a physical lease ends, Simlock uninstalls every app that was not on the device when it was enrolled. Do not lease a phone that holds an app you want to keep, unless that app was on it at enrolment.
+</Aside>
+
+## Before you start
+
+- **The phone is enrolled** on the worker it is plugged into. Simlock never leases a phone that is not. An operator enrols it: [Enrol an iPhone or Android phone](/simlock/docs/worker/enrol-phones).
+- **The phone is usable** when the lease is granted: plugged in by USB (an Android phone can also be reached over the network), trusted, and, for an iPhone or iPad, unlocked. A phone that is not is skipped, and your request waits for it.
+- `--mode`, `--image-tag`, `--baseline` and `--allow-download` do not apply to phones.
+
+## Lease the phone
+
+<Steps>
+
+1. See which phones are enrolled:
+
+   ```sh
+   simlock status
+   ```
+
+   A phone that cannot be used shows as `absent`, with the reason: `locked`, `untrusted` or `not-present`.
+
+2. Lease one with `--physical`:
+
+   ```sh
+   simlock lease --platform ios --physical --device "iPhone 15" --detach
+   ```
+
+   - `--device` matches the model name, in any letter case.
+   - `--class` is `phone` or `tablet`. An iPad is a `tablet`; every Android device is a `phone`. With neither, you get a `phone`.
+   - `--os` matches exactly: `--os 18` does not match 18.4.1. For any 18.x, write `--os ">=18 <19"`. On Android the OS is the API level, such as `--os 34`.
+
+</Steps>
+
+**Check:** the grant has `device.physical` set to `true` and a `device.class`, and no `device.mode`.
+
+## Install and launch your app
+
+`simlock simctl` and `simlock adb` reach only simulators and emulators. For a phone, use the platform's own tools with the values from the grant's `environment`:
+
+<Tabs syncKey="platform">
+  <TabItem label="iPhone and iPad">
+
+The `environment` holds `SIMLOCK_DEVICE_UDID`. Pass it to `devicectl`:
+
+```sh
+eval "$(simlock lease --platform ios --physical --device "iPhone 15" --detach --export-env)"
+xcrun devicectl device install app --device "$SIMLOCK_DEVICE_UDID" ./build/Debug-iphoneos/MyApp.app
+xcrun devicectl device process launch --device "$SIMLOCK_DEVICE_UDID" com.example.myapp
+```
+
+  </TabItem>
+  <TabItem label="Android">
+
+The `environment` holds `ANDROID_SERIAL` and `ANDROID_ADB_SERVER_PORT=5037`. Plain `adb` reads both, so it reaches your phone and never one of Simlock's emulators:
+
+```sh
+eval "$(simlock lease --platform android --physical --detach --export-env)"
+adb install app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.example.myapp/.MainActivity
+```
+
+For a phone reached over the network, `ANDROID_SERIAL` is its address.
+
+  </TabItem>
+</Tabs>
+
+**Check:** the app opens on the phone.
+
+From another machine, run the same commands through `exec` over HTTP: `devicectl` for an iPhone or iPad, `adb` for an Android phone. Simlock adds the device for you. See [Lease over the HTTP API](/simlock/docs/using-devices/http-api#run-a-command-on-the-device).
+
+<Aside type="caution">
+Phones are not kept apart from the rest of the worker the way simulators are. Every tool on the worker sees them, so an agent can reach a phone it did not lease. Tell agents to use only the device their lease names.
+</Aside>
+
+## Find phones from an agent
+
+- **Over MCP**, `list_devices` returns them as `physicalDevices`.
+- **Over HTTP**, read `GET /v1/status` and keep the devices with `physical: true` and a state other than `deleted`. A removed phone stays in the answer for `devices.deletedRetentionMs` (one hour by default). Through a gateway, also keep only those on a worker that is connected and not drained.
+
+Neither says who holds a leased phone, and the list can be out of date a moment later. Whether you get one is decided when you lease.
+
+## Keep an app between leases
+
+To keep an app you installed on purpose, ask the operator to enrol the phone again with `simlock device add`, so the app joins its list. See [Enrol an iPhone or Android phone](/simlock/docs/worker/enrol-phones).
+
+## Watch the screen or drive the UI
+
+- Watch the phone's screen in the console: [Watch a device's screen](/simlock/docs/using-devices/watch-the-screen). A physical iPhone needs iOS 27 or later.
+- Drive the app with agent-device: `open --physical` leases a phone. See [Drive an app's UI with agent-device](/simlock/docs/using-devices/agent-device#use-a-real-phone).
+
+## When it fails
+
+| What you see | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `UNKNOWN_MODEL` | 12 | No enrolled phone could ever match. It never waits. The message gives the range to write for `--os`. | Check `simlock status`, or widen `--os`. |
+| `UNKNOWN_MODEL` on a lease without `--physical` | 12 | The worker serves only enrolled phones for that platform (`android.virtualDevices` or `ios.virtualDevices` is `false`). | Add `--physical`. |
+| `BAD_REQUEST` | 2 | `--mode`, `--image-tag`, `--baseline` or `--allow-download` with `--physical`. | Drop the option. |
+| The request waits | — | A matching phone is leased, being cleaned, or absent (locked, untrusted, unplugged). | Wait, unlock or plug in the phone, or pass `--no-wait` to fail with `NO_CAPACITY` (exit 11). |
+| `lease-lost` with reason `device-lost`, exit 14 | 14 | The phone was missing for about a minute (unplugged, or a locked iPhone). | Lease again once it is back. |
+
+```json
+{"error":{"code":"UNKNOWN_MODEL","message":"no enrolled physical device can match ios model iPhone 15 os 18; --os is exact, for any 18.x write --os \">=18 <19\""}}
+```
+
+All errors: [Errors reference](/simlock/docs/reference/errors#physical-devices).

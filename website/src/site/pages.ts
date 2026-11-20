@@ -14,10 +14,12 @@ const CONTENT = join(ROOT, "src/content/docs");
 // why: the sidebar's groups, in order; llms.txt follows the same order and has one file per group.
 export const sections = [
   { label: "Introduction", directory: "docs/introduction" },
-  { label: "Getting started", directory: "docs/getting-started" },
-  { label: "Using devices", directory: "docs/using-devices" },
-  { label: "Worker", directory: "docs/worker" },
-  { label: "Gateway", directory: "docs/gateway" },
+  { label: "Get started", directory: "docs/getting-started" },
+  { label: "Concepts", directory: "docs/concepts" },
+  { label: "Use devices", directory: "docs/using-devices" },
+  { label: "Run a worker", directory: "docs/worker" },
+  { label: "Run a fleet", directory: "docs/gateway" },
+  { label: "Troubleshooting", directory: "docs/troubleshooting" },
   { label: "Reference", directory: "docs/reference" },
 ];
 

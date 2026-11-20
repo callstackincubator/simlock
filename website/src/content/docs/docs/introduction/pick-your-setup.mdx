@@ -1,0 +1,77 @@
+---
+title: Pick your setup
+description: Choose between one machine, an existing farm and a fleet behind a gateway, see which system runs which devices, and find where to go next for your role.
+sidebar:
+  order: 3
+---
+
+## Three setups
+
+| Setup | When | Start here |
+| --- | --- | --- |
+| **One machine** | Your agents run on the machine that runs the devices. | Install on [macOS](/simlock/docs/getting-started/macos), [Linux](/simlock/docs/getting-started/linux) or [Windows](/simlock/docs/getting-started/windows). |
+| **An existing farm** | Someone already runs Simlock on another machine and gave you a URL and a token. Your machine needs no Xcode or Android SDK. | [Use an existing farm](/simlock/docs/getting-started/existing-farm) |
+| **A fleet** | One machine is not enough. A gateway puts several workers behind one address. | Set up each worker as for one machine, then [set up a gateway](/simlock/docs/gateway/setup). |
+
+## What runs where
+
+| You want | macOS | Linux | Windows (preview) |
+| --- | --- | --- | --- |
+| The `simlock` CLI (Node.js 22.13 or later) | Yes | Yes | Yes |
+| iOS simulators | Yes, with Xcode | No | No |
+| Android emulators | Yes | Yes, with KVM | Yes, with the Windows Hypervisor Platform |
+| A physical iPhone or iPad | Yes, over USB | No | No |
+| A physical Android phone | Yes | Yes | Not checked |
+| A gateway | Yes | Yes | Yes |
+| Start at login (`simlock daemon install`) | Yes | Yes | Yes |
+
+Simlock uses the platform tools already on the machine and never installs Xcode, the Android SDK or a JDK. A machine missing one platform's tools still serves the other. A gateway runs no devices, so it needs only Node.js.
+
+Phones: [Enrol an iPhone or Android phone](/simlock/docs/worker/enrol-phones) lists what each one needs.
+
+## When you need a gateway
+
+You need one when:
+
+- your agents need more devices than one machine can run at once;
+- your agents run on several machines, or in CI, and should share one pool of devices;
+- you want one place to see every machine, lease and waiting request.
+
+If one machine runs all the devices your agents need, you don't need a gateway.
+
+What a gateway adds:
+
+- **One address.** Agents ask the gateway; it picks a worker that can serve the request, and everything the agent does with the lease goes through it.
+- **One queue** for every worker.
+- **No inbound port on workers.** Workers connect out to the gateway; only the gateway must be reachable.
+
+What it does not do:
+
+- **It owns no devices.** It runs on its own machine or beside a worker.
+- **It never downloads an OS for a lease.** Install runtimes and system images on the workers first.
+- **It does not run commands that manage one machine**, such as `doctor`, `cleanup`, `nuke` or `device add`. Run those on the worker.
+- **It does not copy files or baselines between workers.** A path in `simlock adb` or `simctl` names a file on the worker that holds the device.
+
+How workers and the gateway fit: [Workers and gateways](/simlock/docs/concepts/workers-and-gateways).
+
+## Where next
+
+**You use devices from an agent:**
+
+- [Lease your first device](/simlock/docs/getting-started/first-lease), then [connect your coding agent](/simlock/docs/getting-started/connect-your-agent).
+- [Lease a specific model or OS](/simlock/docs/using-devices/lease-a-specific-device), [build and run your app](/simlock/docs/using-devices/build-and-run), [drive its UI with agent-device](/simlock/docs/using-devices/agent-device).
+- [Run e2e tests from CI](/simlock/docs/using-devices/ci).
+
+**You run a worker:**
+
+- [Start, stop and update the daemon](/simlock/docs/worker/daemon), [change a setting](/simlock/docs/worker/change-a-setting).
+- [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images), [run more devices at once](/simlock/docs/worker/capacity).
+- [See what the worker is doing](/simlock/docs/worker/monitoring).
+
+**You run a fleet:**
+
+- [Set up a gateway](/simlock/docs/gateway/setup), then [add a worker](/simlock/docs/gateway/add-a-worker).
+- [Give agents and people access](/simlock/docs/gateway/access).
+- [Maintain workers](/simlock/docs/gateway/maintain-workers).
+
+**You look something up:** [CLI](/simlock/docs/reference/cli), [configuration keys](/simlock/docs/reference/configuration), [errors and exit codes](/simlock/docs/reference/errors).

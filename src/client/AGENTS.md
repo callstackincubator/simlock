@@ -1,7 +1,7 @@
 # Client
 
 Does: the `simlock/client` package entry — the typed client for agent operations.
-Surface: [programmatic-client.mdx](../../website/src/content/docs/docs/using-devices/programmatic-client.mdx).
+Surface: [node-client.mdx](../../website/src/content/docs/docs/using-devices/node-client.mdx), [reference/node-client.mdx](../../website/src/content/docs/docs/reference/node-client.mdx).
 
 ## Rules
 

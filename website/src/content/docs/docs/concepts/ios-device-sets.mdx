@@ -1,0 +1,67 @@
+---
+title: iOS device sets
+description: Where a worker keeps its iOS simulators, simlock or default, and what each setting means for Xcode, build tools and simulator windows.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **device set** is a folder of iOS simulators. Xcode and `simctl` look in one set unless told otherwise. The worker setting `drivers.ios.deviceSet` decides which set Simlock's simulators live in: `simlock` (the default) or `default`.
+
+## The two settings
+
+| | `simlock` (default) | `default` |
+| --- | --- | --- |
+| Where simulators live | Simlock's own folder, `~/.simlock/devices/ios` | Xcode's own set, `~/Library/Developer/CoreSimulator/Devices` |
+| Xcode and `xcrun simctl` see them | No | Yes, beside your own simulators and other agents' |
+| Build tools find a simulator by UDID | `xcodebuild` on Xcode 27 or later, when told where the set is; otherwise install through `simlock simctl` | Yes: `xcodebuild`, the React Native CLI, Detox, agent-device's test runner |
+| Simulator windows | Never | Can be turned on (`ios.simulator.headless: false`) |
+| Grant `environment` | Has `SIMLOCK_IOS_DEVICE_SET` | No `SIMLOCK_IOS_DEVICE_SET` |
+
+An agent can tell which setting a worker uses from its grant: `SIMLOCK_IOS_DEVICE_SET` is present only with `simlock`.
+
+## `simlock`: kept apart
+
+Simlock's simulators sit where Xcode does not look. Your own simulators and theirs never mix, and a stray `xcrun simctl shutdown all` cannot touch a leased device. You reach a leased simulator through `simlock simctl`, or by pointing a tool at the set the grant names.
+
+The cost: a tool that finds simulators only in Xcode's own set cannot see a leased one. On an older Xcode, build for any simulator and install the result through Simlock.
+
+## `default`: in Xcode's own list
+
+Simlock creates its simulators in Xcode's own set and marks each one. It touches only simulators it marked; your own are left alone. Every tool that finds a simulator by UDID works with no extra argument.
+
+The cost is that every tool on the Mac sees every simulator:
+
+- Name your own UDID in every command. Xcode also lists your own and other agents' simulators.
+- `xcrun simctl shutdown all` stops every leased simulator. Simlock starts each one again under its lease, but its holder loses the apps it had running.
+- A leased simulator erased while it is stopped ends its lease.
+
+DeviceHub's Mac clipboard sync is off for every Simlock simulator in Xcode's set, so one agent's clipboard never reaches another's device. A lease is refused if Simlock cannot turn the sync off.
+
+## Simulator windows
+
+With `default` and `ios.simulator.headless` set to `false`, every simulator Simlock gets ready shows on the Mac: in DeviceHub when it is installed, otherwise in a Simulator.app window. The window opens in the background, so the app you are typing in keeps focus. If a window cannot open, the lease still works, and the daemon log says `Could not open a window for iOS simulator`.
+
+- DeviceHub's main window shows the newest simulator; the others are in its list. If you close the main window, DeviceHub shows no new simulators until you restart it.
+- If Simlock opened DeviceHub or Simulator.app, closing a window or quitting the app leaves the simulators running.
+- If you opened DeviceHub or Simulator.app yourself, quitting DeviceHub or closing a Simulator.app window shuts the simulator down. Simlock boots it again within about a minute, and whatever was running on it is lost.
+- A simulator booted for a lease with a [label](/simlock/docs/concepts/leases#lease-id-and-label) shows the label as its name.
+
+Windows need `default`. With `simlock`, DeviceHub cannot see the simulators.
+
+## Switching
+
+The setting is read when the daemon starts. iOS stays off, and `simlock doctor` says why, when:
+
+- **`device-set-changed`**: simulators from the old setting are still there. Clear them before you switch; the message names any that remain, with the `xcrun simctl delete` command for each.
+- **`invalid-device-set`**: the value is not exactly `simlock` or `default`, or it clashes: `default` with `drivers.ios.deviceRoot` set, or `ios.simulator.headless: false` with `simlock`.
+
+<Aside type="caution">
+Switching deletes no simulator for you. Leased and idle simulators in the old set must be cleared first, so plan the switch for a quiet moment. Steps: [Switch the iOS device set](/simlock/docs/worker/change-a-setting#switch-the-ios-device-set).
+</Aside>
+
+## Use it
+
+- Agents: [Build, install and launch your app](/simlock/docs/using-devices/build-and-run), for each setting.
+- Operators: [Change a setting](/simlock/docs/worker/change-a-setting): switch the device set, show simulator windows.

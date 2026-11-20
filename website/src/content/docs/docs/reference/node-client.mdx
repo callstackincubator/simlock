@@ -1,0 +1,185 @@
+---
+title: Node client
+description: The simlock/client and simlock/admin API for Node.js, with connect options, every method with its input and answer, the pushes, and the errors.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+How to lease from a program, with a complete example: [Lease from Node.js code](/simlock/docs/using-devices/node-client).
+
+| Import | Connects with | Has |
+| --- | --- | --- |
+| `simlock/client` | `connectSimlock(options)` | The agent calls: lease, renew, release, run commands, read the catalog and status. |
+| `simlock/admin` | `connectSimlockAdmin(options)` | Every agent call, plus the admin calls: every lease and device, tokens, configuration, events, workers, components, baselines, updating and stopping the daemon. |
+
+Both need Node.js 22.13 or later, and `npm i simlock` in your project. Both export `SimlockError`, `isSimlockError` and the TypeScript types of every input and answer below, such as `LeaseRequestInput`, `LeaseGrant` and `SimlockClient`.
+
+## Connect options
+
+Give `endpoint` for the daemon on this machine, or `url` and `token` for a worker or gateway on another machine.
+
+| Option | Type | Meaning |
+| --- | --- | --- |
+| `endpoint` | string | The daemon's socket: `~/.simlock/daemon.sock`, `$SIMLOCK_HOME/daemon.sock`, or a gateway's `~/.simlock/gateway/daemon.sock`. On Windows, the named pipe `\\.\pipe\simlock-` followed by the first 16 hex characters of the SHA-256 of the data folder's full path in lower case (for `~/.simlock`, of `c:\users\<you>\.simlock`). |
+| `principal` | string | With `endpoint`: your requester id. Your leases belong to it. At most 256 characters, no control characters, else a lease request fails with `BAD_REQUEST`. Leave it out and you share the daemon's default id, and its lease. |
+| `credential` | string | `simlock/admin` with `endpoint` only: the contents of the daemon's `admin.token` file, or an operator token's secret. Missing or wrong: the connection fails with `ADMIN_AUTHENTICATION_FAILED`. |
+| `url` | string | A farm's origin, with no path, query or fragment: `https://`, or `http://` for `127.0.0.1`, `[::1]` and `localhost`, at most 2,048 characters. Not with `endpoint`, `principal` or `credential`. |
+| `token` | string | With `url`: a token the farm knows, 1 to 4,096 characters. Its role is the session's role, and its id is the principal. |
+| `signal` | `AbortSignal` | Aborting it while the client connects stops the attempt, and the call rejects with the signal's reason. After the connect it ends nothing. |
+
+A `url`, `token` or mix of options that breaks these rules throws a `TypeError` before anything is sent. The daemon's `admin.token` changes each time it starts: read it again after a restart.
+
+<Aside type="caution">
+An admin credential lets a program release every agent's lease and stop the daemon. Give agents `simlock/client` and an agent token instead.
+</Aside>
+
+## The connection
+
+- One client is one connection. It never reconnects, retries or renews.
+- If the connection drops, every call in progress rejects with `DAEMON_CONNECTION_LOST`, and so does every later call. Connect again. A lost connection releases no lease.
+- With `url`, 45 seconds with no ping from the farm counts as a drop.
+- A daemon on a different protocol version answers every call with `PROTOCOL_VERSION_UNSUPPORTED`, except `stopDaemon()` and `updateDaemon()`.
+
+| Property | Holds |
+| --- | --- |
+| `principal` | The principal this connection acts as. |
+| `role` | `agent` or `admin`. |
+| `daemonVersion` | The daemon's Simlock version. |
+
+## Agent calls
+
+Every call returns a promise. On `simlock/client` and `simlock/admin`.
+
+| Call | Input | Answers |
+| --- | --- | --- |
+| `requestLease(input, { onProgress?, signal? })` | A [lease request](#lease-request). | The grant: `device`, `environment`, `lease`, `timing`, the JSON `simlock lease` prints. |
+| `renewLease({ leaseId, ttlMs? })` | `ttlMs` up to `lease.maxTtlMs`; default the TTL it was granted with. | The lease, with the new `ttlDeadline`. |
+| `releaseLease({ leaseId })` | | `{ leaseId }`. A simulator or emulator is then deleted, a phone cleaned. |
+| `releaseRunLeases({ runId })` | A run id. | `{ leaseIds, requestIds }`: the run's leases released and its waiting requests cancelled, as `simlock release --run`. |
+| `cancelLease({ requesterId?, platform? })` | | `{ result }`: `cancelled`, `not-found` or `not-cancellable`. Cancels your waiting request. |
+| `listLeases()` | | `{ leases }`: your leases. |
+| `exec({ leaseId, tool, args, stdin?, stdinFile? }, { onOutput? })` | `tool` is `simctl` or `adb`, or `devicectl` on an iPhone or iPad. `stdin` at most 8,388,608 characters; `stdinFile` names a file in the lease's folder to send instead. Give one of the two. | `{ exitCode }`. `onOutput` gets `{ stream, chunk }` as output arrives. |
+| `rotate(leaseId, orientation, { requesterId? })` | An orientation as [`simlock rotate`](/simlock/docs/reference/cli#simlock-rotate) takes it. iPhone or iPad simulator, not a foldable. | `{ leaseId, orientation }`. |
+| `getCatalog({ platform? })` | | What you can ask for, as `simlock catalog --json` prints it. |
+| `getStatus()` | | The daemon's status, as `simlock status --json` prints it. An agent sees only its own leases and waiting requests. |
+| `identity()` | | `{ principal, name, role, via }`, as `simlock whoami --json`. |
+| `listComponents({ platform? })` | | `{ components }`: each installed runtime or system image with its size, whether Simlock installed it, and how many devices use it. |
+| `runDoctor({ fix?, purgeOrphans? })` | `fix` and `purgeOrphans` need the admin role. | The `simlock doctor` report. |
+| `close()` | | Closes the connection. Releases no lease. |
+
+For `exec`: leave the device out of `args`, since Simlock adds the lease's device, and a command naming another one is refused with `PASSTHROUGH_REFUSED`. Use absolute paths: the command runs in the daemon's process, not in your program's folder.
+
+### Lease request
+
+The fields of `requestLease`'s input. The same choices as [`simlock lease`](/simlock/docs/reference/cli#simlock-lease).
+
+| Field | Meaning |
+| --- | --- |
+| `platform` | `ios` or `android`. Required. |
+| `model` or `class` | An exact model, or any model of a class. Not both. |
+| `osVersion` | An exact version or a range. |
+| `mode` | `slim` or `full`. |
+| `except` | iOS slim only: slim categories to keep running. |
+| `imageTag` | Android system image type. |
+| `baseline` | A saved baseline's name. |
+| `physical` | `true` for an enrolled phone or tablet. |
+| `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` | Time to live, longest queue wait, fail instead of waiting, allow a download. |
+| `leaseId` | Your own lease id. |
+| `runId`, `label` | A run id and a display name, as `--run` and `--label`. |
+| `requesterId` | Lease under another requester id than the connection's principal. |
+| `idempotencyKey` | 1 to 200 characters. The same key again joins the request already made. |
+| `metadata` | An object of text values for a gateway's admission command. See [Rank or refuse requests](/simlock/docs/gateway/admission). |
+| `requires` | Up to 8 optional modules the serving worker must have on, such as `stream`, each once. A request no worker can meet fails with `CAPABILITY_MISSING`. |
+
+### Stop waiting
+
+Pass an `AbortSignal` in `requestLease`'s options:
+
+- Aborting takes the request out of the queue and rejects with `CANCELLED`.
+- If Simlock was already creating or starting the device, it finishes, and the client releases the device as soon as it is granted.
+- An abort after the grant does nothing: release the lease yourself.
+
+### Pushes
+
+Each returns a function that stops listening.
+
+| Listener | Hears |
+| --- | --- |
+| `onLeaseLost(push)` | The daemon ended a lease this client took: `{ leaseId, deviceId, reason }`, such as `expired`. |
+| `onDeviceUnhealthy(push)` | A leased device crashed; recovery runs under the same lease. |
+| `onDeviceRecovered(push)` | The device is ready again, with `attempts`. Apps inside it must be started again. |
+| `onConnectionLost(error)` | Once, when the connection ends for any reason, `close()` included. Your leases are still granted. |
+
+`onProgress` on `requestLease` hears each stage: `queued` with `queuePosition`, `downloading` with `component` and `percent`, `provisioning`, `booting` and `reclaiming` with `etaMs`.
+
+## Admin calls
+
+On `simlock/admin` only, with an admin session.
+
+| Call | Does what this command does | Answers |
+| --- | --- | --- |
+| `list({ kind? })` | `simlock list`: `kind` is `devices` (default), `leases`, `rules` or `requests`. | An array of that kind. |
+| `releaseAllLeases()` | `simlock release --all` | `{ leaseIds }` |
+| `runCleanup({ dryRun?, rule? })` | `simlock cleanup` | What each rule did, or would do. |
+| `runNuke({ deleteDevices? })` | `simlock nuke` | The nuke report. |
+| `forgetWarmKind({ platform, model, osVersion?, mode?, imageTag? })` | `simlock warm forget` | `{ forgotten: [{ platform, model, osVersion, mode, imageTag?, baseline? }] }`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`. |
+| `getConfig({ showSecrets? })` | `simlock config` | The effective configuration. |
+| `stopDaemon()` | `simlock daemon stop` | `{ stopping: true }`. Works across protocol versions. |
+| `updateDaemon({ version?, force?, query? })` | `simlock update` | See [Update the daemon](#update-the-daemon). |
+| `replayEvents({ sinceTs?, beforeId?, limit?, workerId? })` | `simlock events --since` | An array of events. `limit` is 1 to 500; `beforeId` and `limit` don't go with `sinceTs`. |
+| `subscribeEvents(listener)` | `simlock events --follow` | A function that unsubscribes. |
+| `usage({ from, to, includeLedger? })` | `simlock stats` | The usage figures. `from` and `to` in milliseconds, at most 90 days apart. |
+| `createToken({ role, label? })`, `listTokens()`, `revokeToken({ id })` | `simlock token` | As the command prints. |
+| `listWorkers()` | `simlock worker list` | `{ workers }`. On a worker, the worker itself. |
+| `drainWorker({ workerId })`, `undrainWorker({ workerId })`, `removeWorker({ workerId })` | `simlock worker drain`, `undrain`, `remove` | `{ workerId, drained }` or `{ workerId, removed }`. A worker refuses them with `UNSUPPORTED_IN_WORKER_MODE`. |
+| `updateWorker({ workerId, version?, force? })` | `simlock worker update` | As `updateDaemon()`, plus `workerId`. `WORKER_NOT_CONNECTED` when the worker isn't connected or doesn't answer within 90 seconds. |
+| `testAlertDestination({ destination })` | `simlock alerts test` | `{ destination, status }` |
+| `installComponent({ platform, version }, { onProgress? })` | `simlock component install` | `{ platform, component, outcome, version }`; `outcome` is `installed` or `already-installed`. `onProgress` hears `waiting`, then `downloading`. |
+| `installComponentOnWorkers({ platform, version, workers }, { onProgress? })` | `simlock component install --worker` or `--all-workers` | `{ results }`, one per worker. `workers` is a list of ids or `"all"`. Gateway only. |
+| `removeComponent({ platform, version, dryRun? })` | `simlock component remove` | `{ platform, version, outcome, sizeBytes?, residue? }`; `outcome` is `removed` or `would-remove`. |
+| `saveBaseline({ leaseId, name, note? })` | `simlock baseline save` | `{ baseline, leaseId }`. `baseline` is `{ name, version, platform, model, osVersion, mode, imageTag?, note?, sizeBytes?, savedAt, staleReason? }`. |
+| `listBaselines()` | `simlock baseline list` | `{ baselines }`, the newest version of each. On a gateway each has its `workerId`. |
+| `removeBaseline({ name, workerId? })` | `simlock baseline remove` | `{ name, versions, deletedDevices }`. `workerId` is required on a gateway. |
+| `addDevice({ platform, id })` | `simlock device add` | `{ id, driverDeviceId, platform, model, osVersion, class, appCount, reenrolled }` |
+| `removeDevice({ id })` | `simlock device remove` | `{ id, driverDeviceId }` |
+
+### Update the daemon
+
+`updateDaemon()` finds the version on npm, starts the update and answers at once. The daemon then takes no new leases, waits for its leases to end unless `force`, installs and restarts.
+
+```ts
+const answer = await admin.updateDaemon({ version: "0.4.0" });
+// { started: true, upToDate: false, resolved: "0.4.0", version: "0.3.0", health: "running",
+//   update: { stage: "waiting", leases: 2, from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1760000000000 },
+//   lastUpdateFailure: null, latestVersion: null }
+```
+
+| Field | Meaning |
+| --- | --- |
+| `version` (input) | An exact version, such as `0.4.0` or `0.4.0-rc.1`. |
+| `force` (input) | Don't wait for leases. On a waiting update, install now. |
+| `query` (input) | Start nothing; return the same answer. Takes no other field. Call it again to follow the update, and reconnect while the daemon restarts. |
+| `started` | `true` only for the call that began the update. A call during an update follows it, whatever `version` it names. |
+| `upToDate` | `true` when nothing was needed: the version found runs already, or the running one is newer and you named no `version`. |
+| `latestVersion` | npm's newest version as the daemon last checked it (at start, then every 24 hours), or `null` when it hasn't, or `update.check` is `false`. |
+
+On a gateway, `updateDaemon()` updates the gateway itself, at once. To follow a worker's update, call `listWorkers()`: its `version`, `latestVersion`, `update` and `lastUpdateFailure` show it, and `update` is `null` once it is over.
+
+## Errors
+
+Every failure the daemon reports rejects with a `SimlockError`, with `code` and `message`. Check for it with `isSimlockError(error)`. The codes and what to do: [Errors](/simlock/docs/reference/errors).
+
+| Code | When |
+| --- | --- |
+| `DAEMON_CONNECTION_LOST` | The connection dropped, or nothing listens at `endpoint`. |
+| `REMOTE_UNREACHABLE` | With `url`: nothing answers, no answer in 10 seconds, or a proxy or an older farm answers the connection with a status such as 502 or 404. |
+| `UNAUTHENTICATED` | With `url`: the farm refuses the token, or the token was revoked while connected. Every later call fails with it too. |
+| `FORBIDDEN` | The token's role may not do this, such as a worker join token, or the lease is another requester's. |
+| `ADMIN_AUTHENTICATION_FAILED` | `connectSimlockAdmin`: the `credential` is wrong. |
+| `PROTOCOL_VERSION_UNSUPPORTED` | The daemon runs a Simlock version this client can't talk to. |
+| `CANCELLED` | You aborted a `requestLease`. Never sent by the daemon. |
+| `UNKNOWN_DAEMON_ERROR` | The daemon answered with a code this client doesn't know, usually because the daemon is newer. |
+
+The message of `REQUESTER_ALREADY_LEASED` names the lease you already hold.

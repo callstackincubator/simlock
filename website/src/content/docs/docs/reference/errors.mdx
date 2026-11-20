@@ -1,9 +1,8 @@
 ---
-title: Errors reference
+title: Errors and exit codes
 description: Every Simlock error code with its CLI exit code, its HTTP status, what it means and what to do about it.
 sidebar:
-  label: Errors and exit codes
-  order: 4
+  order: 6
 ---
 
 A failed `simlock` command writes one line to stderr and exits with a non-zero code:
@@ -18,7 +17,7 @@ The HTTP API answers with the same codes in the response body, with the status i
 {"error":{"code":"NO_CAPACITY","message":"No device capacity is currently available"}}
 ```
 
-In a script, check `code`, not the message: the wording of a message can change, the code does not. For what a failing lease looks like from the agent's side, see [When a lease fails](/simlock/docs/using-devices/errors).
+In a script, check `code`, not the message: the wording of a message can change, the code does not. For what a failing lease looks like from the agent's side, see [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails).
 
 ## Exit codes
 
@@ -181,14 +180,15 @@ A bad file name is `BAD_REQUEST`, and a worker whose free disk is under `diskPre
 
 ## Codes outside this table
 
-The CLI and the HTTP API each add a few codes of their own:
+The CLI, the HTTP API and the MCP server each add a few codes of their own:
 
 | Code | Where | Exit or HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
 | `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `config.json` the CLI rejects before it starts the daemon, and a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
 | `SETUP_REFUSED` | CLI | exit 2 | `simlock setup` found a file or a symlink where its `simlock` skill directory goes. Nothing was written. | Move it aside and run `setup` again. |
-| `SETUP_MCP_FAILED` | CLI | exit 1 | `simlock setup` wrote the skills, but a tool's `mcp add` command failed or ran longer than 30 seconds. The message names each tool and the reason. | Run the tool's `mcp add` command by hand, as the message and [Connect your agent](/simlock/docs/getting-started/connect-your-agent) show. |
+| `SETUP_MCP_FAILED` | CLI | exit 1 | `simlock setup` wrote the skills, but a tool's `mcp add` command failed or ran longer than 30 seconds. The message names each tool and the reason. | Run the tool's `mcp add` command by hand, as the message and [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent) show. |
 | `SERVICE_FAILED` | CLI | exit 1 | `simlock daemon install`, `uninstall` or `daemon stop`, or a start through the service, could not finish: the service manager (launchd, systemd or `schtasks` on Windows) failed or did not answer in time, or the old daemon did not stop. The message names the command and its first error line. | Fix what the message names and run the command again. |
 | `UNSUPPORTED_MEDIA_TYPE` | HTTP | 415 | A request with a JSON body did not send `Content-Type: application/json`. | Send the header `Content-Type: application/json`. |
+| `NO_LEASE` | MCP | tool error | `run_on_device` or `rotate_device` in a session that holds no lease. | Call `lease_simulator` first. See [MCP tools](/simlock/docs/reference/mcp-tools). |
 | `UNKNOWN_LEASE_REQUEST` | HTTP | 404 | No lease request has this ID. | Check the ID the create call returned. |
 | `REQUEST_NOT_CANCELLABLE` | HTTP | 409 | The lease request was already granted, or device work for it is under way. When it was granted, the answer carries the `leaseId`. | Release the lease in place of cancelling the request. |
