@@ -1,7 +1,7 @@
 # Core
 
-Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, baselines, doctor.
-Flows: [startup](../../docs/internal/flows/startup.md), [device selection](../../docs/internal/flows/device-selection.md), [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm pool](warm-pool/AGENTS.md), [capacity](capacity/AGENTS.md).
+Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, seed settle, capacity, cleanup, components, baselines, doctor.
+Flows: [startup](../../docs/internal/flows/startup.md), [device selection](../../docs/internal/flows/device-selection.md), [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm pool](warm-pool/AGENTS.md), [capacity](capacity/AGENTS.md), [seed settle](seed-settle/AGENTS.md).
 
 ## Rules
 

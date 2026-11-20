@@ -34,6 +34,7 @@ function config(options: HarnessOptions): TestEngineConfig {
   return {
     android: { virtualDevices: true },
     devices: { autoEnroll: false, deletedRetentionMs: 3_600_000 },
+    diskPressure: { freeBytesThreshold: 0 },
     ios: { modes: ["slim", "full"], virtualDevices: true },
     health: {
       enabled: true,

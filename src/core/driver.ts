@@ -263,6 +263,18 @@ export interface DriverSource {
   readonly staleReason?: string;
   /** why: a simulator in the sources set that no row names; only `doctor --purge-orphans` destroys it, never nuke (ADR 0061 §1). */
   readonly orphan?: true;
+  /** why: set on a seed only: whether it was saved after a copy of it settled (ADR 0090); absent on a baseline. */
+  readonly settled?: boolean;
+  /** why: set on a seed only: the plain leases copied from it since it was made; absent on a baseline. */
+  readonly leases?: number;
+}
+
+/** why: ADR 0090 §3: what a driver answers once it has replaced a quick seed with its settled copy. */
+export interface DriverSettleResult {
+  readonly sourceId: string;
+  readonly sizeBytes?: number;
+  readonly settledAfterMs: number;
+  readonly reason: "idle" | "cap";
 }
 
 export interface Driver {
@@ -302,6 +314,22 @@ export interface Driver {
   /** why: ready sources only; a source being made is never listed (ADR 0061 §1). */
   listSources(): Promise<readonly DriverSource[]>;
   destroySource(sourceId: string): Promise<void>;
+  /**
+   * why: ADR 0090 §3: boots a copy of the ready quick seed `sourceId`, waits until the copy's own
+   * processes are idle, saves it as the kind's new seed and deletes the quick seed. Absent on a
+   * driver that does not settle, which core never asks. Rejects with the signal's reason when aborted.
+   */
+  settleSeed?(
+    sourceId: string,
+    options: { readonly signal: AbortSignal },
+  ): Promise<DriverSettleResult>;
+  /** why: ADR 0090 §4: the kind's fresh ready seed, made as a provision would if it is missing or stale. */
+  ensureSeed?(spec: VirtualSpec): Promise<{
+    readonly sourceId: string;
+    readonly settled: boolean;
+    readonly leases: number;
+    readonly sizeBytes?: number;
+  }>;
   /**
    * why: keeps a copy of a device as a baseline source (ADR 0061 §4). The driver writes the
    * source's row, kind `baseline`, state `making`, before any folder or simulator exists, shuts the
@@ -704,6 +732,27 @@ export class BootTimeoutError extends Error {
       deviceId,
       error instanceof BootTimeoutError || !(error instanceof Error) ? undefined : error.message,
     );
+  }
+}
+
+/** why: a settle or the make an operator asked for failed, or the operator's 60 minutes ran out (ADR 0090 §4). */
+export class SeedSettleFailedError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly model: string,
+    readonly reason: "failed" | "timed-out",
+    message: string,
+  ) {
+    super(message);
+    this.name = "SeedSettleFailedError";
+  }
+}
+
+/** why: the daemon is stopping, so the settler takes no more work (ADR 0090 §2). */
+export class SeedSettlerStoppedError extends Error {
+  constructor() {
+    super("The daemon is stopping");
+    this.name = "SeedSettlerStoppedError";
   }
 }
 

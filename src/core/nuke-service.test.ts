@@ -11,6 +11,9 @@ import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { NukeService, type NukeDeviceLifecycle, type NukeRegistryView } from "./nuke-service.js";
 
+/** why: no settle ever runs in these tests, so holding the settler runs the work as it is. */
+const noSettler = { holdWhile: <Result>(work: () => Promise<Result>) => work() };
+
 const device = (id: string, state: VirtualDevice["state"]): VirtualDevice => ({
   physical: false,
   createdAt: 0,
@@ -89,6 +92,7 @@ function createHarness(
       },
     },
     registry,
+    seedSettler: noSettler,
     warmPool: { forget: onForget },
   });
   return { calls, lifecycle, registry, service };
@@ -331,6 +335,7 @@ describe("NukeService", () => {
       },
       registry: harness.registry,
 
+      seedSettler: noSettler,
       warmPool: { forget() {} },
     });
 
@@ -392,6 +397,7 @@ describe("NukeService", () => {
       },
       registry,
 
+      seedSettler: noSettler,
       warmPool: { forget() {} },
     });
 
@@ -499,6 +505,7 @@ describe("NukeService", () => {
       logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
       registry: harness.registry,
 
+      seedSettler: noSettler,
       warmPool: { forget() {} },
     });
 
