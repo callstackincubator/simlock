@@ -93,6 +93,8 @@ export interface EventHistoryOptions {
   readonly config: { readonly retention: number; readonly maxBytes: number };
   readonly projections: readonly HistoryProjectionDefinition[];
   readonly projectionOptions: HistoryProjectionOptions;
+  /** why: an e2e test holds the rebuild until it has proved what the daemon does meanwhile; production leaves it out. */
+  readonly beforeRebuild?: () => Promise<void>;
 }
 
 interface RunningProjection {
@@ -296,6 +298,8 @@ class EventHistory implements EventHistoryHandle {
 
   async #rebuild(database: SqliteDatabase, targets: RunningProjection[]): Promise<void> {
     try {
+      await this.#options.beforeRebuild?.();
+      if (this.#stopped) return;
       const outcome = await rebuildProjections({
         database,
         isStopped: () => this.#stopped,
