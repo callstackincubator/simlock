@@ -14,6 +14,9 @@ import {
   driverData,
   waitForCalls,
   FaultyFilesystem,
+  overridesFolder,
+  overridesPath,
+  overridesPlist,
   plantManagedDevice,
   simctl,
 } from "./test-slim.js";
@@ -737,6 +740,124 @@ describe("IosSimctlDriver", () => {
     });
     expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_files").get()).toEqual({
       n: rows,
+    });
+  });
+
+  it("deleting a baseline's simulator removes its launchd overrides folder, through destroySource, the leftover sweep and a failed save, and a failed delete keeps it", async () => {
+    const baselineUdid = "00000000-0000-0000-0000-0000000000bb";
+    const kind = { deviceTypeId: driverData.deviceTypeId, kind: "baseline" as const };
+    const cases = [
+      {
+        name: "destroySource",
+        plant: { ...kind, runtimeId: driverData.runtimeId, udid: baselineUdid },
+        steps: [
+          { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+          { match: sourcesSimctl("shutdown", baselineUdid) },
+          { match: sourcesSimctl("delete", baselineUdid) },
+        ],
+        act: async (driver: Awaited<ReturnType<typeof createDriver>>) => {
+          const [listed] = await driver.listSources();
+          await driver.destroySource(listed?.id ?? "");
+        },
+      },
+      {
+        name: "the sweep of another process's making row",
+        plant: {
+          ...kind,
+          maker: "earlier-process",
+          runtimeId: driverData.runtimeId,
+          state: "making" as const,
+          udid: baselineUdid,
+        },
+        steps: [
+          { match: sourcesSimctl("shutdown", baselineUdid) },
+          { match: sourcesSimctl("delete", baselineUdid) },
+        ],
+        act: async (driver: Awaited<ReturnType<typeof createDriver>>) => {
+          await driver.listSources();
+        },
+      },
+      {
+        name: "a save that fails after the clone",
+        plant: undefined,
+        steps: [
+          { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+          { match: simctl("shutdown", driverData.udid) },
+          {
+            match: simctl(
+              "clone",
+              driverData.udid,
+              "simlock-baseline-device-1",
+              `${deviceRoot}/sources`,
+            ),
+            result: { code: 0, stderr: "", stdout: `${baselineUdid}\n` },
+          },
+          { match: sourcesSimctl("shutdown", baselineUdid) },
+          { match: sourcesSimctl("delete", baselineUdid) },
+        ],
+        act: async (
+          driver: Awaited<ReturnType<typeof createDriver>>,
+          database: Awaited<ReturnType<typeof memorySourceDatabase>>,
+        ) => {
+          database.exec(
+            "CREATE TRIGGER refuse_ready BEFORE UPDATE OF state ON ios_source_data BEGIN SELECT RAISE(ABORT, 'source row locked'); END",
+          );
+          await expect(
+            driver.saveSource({
+              address: driverData.udid,
+              deviceId: driverData.udid,
+              driverData,
+              physical: false,
+            }),
+          ).rejects.toMatchObject({ message: expect.stringContaining("source row locked") });
+        },
+      },
+      {
+        name: "destroySource whose delete fails",
+        plant: { ...kind, runtimeId: driverData.runtimeId, udid: baselineUdid },
+        steps: [
+          { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+          { match: sourcesSimctl("shutdown", baselineUdid) },
+          {
+            match: sourcesSimctl("delete", baselineUdid),
+            result: { code: 1, stderr: "busy", stdout: "" },
+          },
+        ],
+        act: async (driver: Awaited<ReturnType<typeof createDriver>>) => {
+          const [listed] = await driver.listSources();
+          await expect(driver.destroySource(listed?.id ?? "")).rejects.toBeInstanceOf(
+            DriverCrashError,
+          );
+        },
+      },
+    ];
+    const outcomes: Record<string, { deleted: boolean; folderKept: boolean }> = {};
+    for (const { name, plant, steps, act } of cases) {
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      const database = await memorySourceDatabase();
+      if (plant !== undefined) plantSource(database, plant);
+      // why: the save copies the lease's folder to the clone; a planted baseline already has its own.
+      const from = plant === undefined ? driverData.udid : baselineUdid;
+      await filesystem.mkdirp(overridesFolder(from));
+      await filesystem.writeFileAtomic(overridesPath(from), overridesPlist({ "a.b": true }));
+      const runner = new ScriptedProcessRunner(steps);
+      const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+      await act(driver, database);
+
+      outcomes[name] = {
+        deleted: runner.calls.some(
+          (call) => call.args.at(-2) === "delete" && call.args.at(-1) === baselineUdid,
+        ),
+        folderKept: await filesystem.exists(overridesFolder(baselineUdid)),
+      };
+    }
+    expect(outcomes).toEqual({
+      destroySource: { deleted: true, folderKept: false },
+      "the sweep of another process's making row": { deleted: true, folderKept: false },
+      "a save that fails after the clone": { deleted: true, folderKept: false },
+      "destroySource whose delete fails": { deleted: true, folderKept: true },
     });
   });
 
