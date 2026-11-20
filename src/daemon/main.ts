@@ -777,12 +777,12 @@ function openEventHistory(options: {
 function rebuildHold(
   path: string | undefined,
   clock: Clock,
-): { beforeRebuild?: () => Promise<void> } {
+): { beforeRebuild?: (isStopped: () => boolean) => Promise<void> } {
   if (path === undefined || path === "") return {};
   const filesystem = new NodeFilesystem();
   return {
-    beforeRebuild: async () => {
-      while (!(await filesystem.exists(path))) {
+    beforeRebuild: async (isStopped) => {
+      while (!isStopped() && !(await filesystem.exists(path))) {
         await new Promise<void>((next) => clock.setTimer(50, next));
       }
     },
