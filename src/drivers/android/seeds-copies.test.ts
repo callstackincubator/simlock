@@ -196,7 +196,8 @@ describe("Seeds", () => {
         {
           advance: 300_000,
           expectations: [stage.version, stage.create, ...neverReady],
-          message: "Timed out waiting for device to boot",
+          message:
+            "Device failed to boot: seed_two: the first boot did not finish within 300000 ms",
         },
         {
           advance: 60_000,
@@ -491,7 +492,7 @@ describe("Seeds", () => {
         { clock },
       );
       const making = harness.seeds.provision(harness.spec);
-      const failed = expect(making).rejects.toThrow("Timed out waiting for device to boot");
+      const failed = expect(making).rejects.toThrow("did not finish within 300000 ms");
       await vi.waitFor(() =>
         expect(harness.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
           true,
