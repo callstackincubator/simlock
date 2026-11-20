@@ -139,7 +139,18 @@ describe("loadConfig over http.proxyAuth", () => {
     await expect(load({ ...complete, signInUrl: longest + "a" })).rejects.toThrow(
       'Invalid config value for "http.proxyAuth.signInUrl": expected an http:// or https:// URL of at most 2048 characters',
     );
-    for (const signInUrl of ["javascript:alert(1)", "//login.example.test/start", "not a url"]) {
+    const template = "https://fleet.example.com/oauth2/start?rd={path}";
+    expect(proxyAuthOf(await load({ ...complete, signInUrl: template }))).toEqual({
+      ...complete,
+      signInUrl: template,
+    });
+    for (const signInUrl of [
+      "javascript:alert(1)",
+      "//login.example.test/start",
+      "not a url",
+      "{path}",
+      "{path}://login.example.test/start",
+    ]) {
       await expect(load({ ...complete, signInUrl })).rejects.toThrow(
         'Invalid config value for "http.proxyAuth.signInUrl"',
       );

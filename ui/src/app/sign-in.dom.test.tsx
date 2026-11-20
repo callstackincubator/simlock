@@ -82,6 +82,32 @@ describe("signing in with a token", () => {
     expect(screen.getByRole("link", { name: "Sign in with SSO" })).not.toHaveAttribute("target");
   });
 
+  it("replaces {path} in the sign-in URL with the page the person was on, path and search encoded", async () => {
+    renderConsole({
+      path: "/leases/lease_1?tab=all",
+      routes: {
+        ...DAEMON,
+        "/v1/identity": {
+          status: 401,
+          body: {
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Sign in",
+              signInUrl: "https://fleet.example.com/oauth2/start?rd={path}",
+            },
+          },
+        },
+      },
+      token: null,
+    });
+
+    await screen.findByLabelText("Operator token");
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      "https://fleet.example.com/oauth2/start?rd=%2Fleases%2Flease_1%3Ftab%3Dall",
+    );
+  });
+
   it("an operator token signs in and shows the shell", async () => {
     const view = renderConsole({ routes: DAEMON, token: null });
 

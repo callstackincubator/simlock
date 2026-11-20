@@ -1,3 +1,4 @@
+import { signInHref } from "../model/sign-in-url";
 import { type Fetch, hasSimlockErrorCode, RequestTimeoutError, send } from "./api";
 
 export type IdentityOutcome =
@@ -49,14 +50,10 @@ function signInRefusal(body: unknown, afterLoss: boolean): IdentityOutcome {
   return { kind: "none", ...login };
 }
 
+// why: the template is kept as written, because the page the person is on when the link is drawn
+// is not the page the check ran on; the scheme check here runs on the template with a sample path.
 function webSignInUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    const { protocol } = new URL(value);
-    return protocol === "https:" || protocol === "http:" ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  return signInHref(value, "/") === undefined ? undefined : (value as string);
 }
 
 async function readJson(response: Response): Promise<unknown> {

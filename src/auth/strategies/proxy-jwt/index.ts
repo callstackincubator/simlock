@@ -50,6 +50,12 @@ function isWebUrl(value: string): boolean {
   }
 }
 
+// why: the console replaces `{path}` in `signInUrl` with a person's page, so the template must be a web
+// URL once a sample path is in.
+function isWebUrlTemplate(value: string): boolean {
+  return isWebUrl(value.split("{path}").join(encodeURIComponent("/leases/lease_1?tab=all")));
+}
+
 // why: each message is the text after "expected" in the config error, so core/config.ts prints it as written.
 const proxyAuthSchema = z.object({
   header: z
@@ -73,7 +79,7 @@ const proxyAuthSchema = z.object({
   signInUrl: z
     .string({ error: "an http:// or https:// URL" })
     .max(2048, "an http:// or https:// URL of at most 2048 characters")
-    .refine(isWebUrl, "an http:// or https:// URL")
+    .refine(isWebUrlTemplate, "an http:// or https:// URL")
     .optional(),
 });
 
