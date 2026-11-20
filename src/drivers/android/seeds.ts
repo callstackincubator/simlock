@@ -1,6 +1,7 @@
 import { basename, join } from "node:path";
 
 import {
+  BootTimeoutError,
   DriverCrashError,
   type DriverDevice,
   type DriverSource,
@@ -105,6 +106,7 @@ export class Seeds {
   readonly #avdConfig: AvdConfig;
   readonly #avdmanager: string;
   readonly #makeCeilingMs: number;
+  readonly #bootTimeoutMs: number;
   readonly #catalog: Catalog;
   readonly #clock: Clock;
   readonly #consolePorts: ConsolePorts;
@@ -129,6 +131,7 @@ export class Seeds {
       SEED_MAKE_MIN_CEILING_MS,
       2 * options.bootTimeoutMs + SEED_MAKE_STEPS_MS,
     );
+    this.#bootTimeoutMs = options.bootTimeoutMs;
     this.#catalog = options.catalog;
     this.#clock = options.clock;
     this.#consolePorts = options.consolePorts;
@@ -605,7 +608,7 @@ export class Seeds {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+      state.handle = await this.#startSeedEmulator(sourceId, "first boot", booted);
       await this.#adbTools.runOrThrow(this.#adb, ["-s", booted.serial, "shell", "sync"], {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
@@ -613,7 +616,7 @@ export class Seeds {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
       await this.#awaitSeedPowerOff(sourceId, booted, state);
-      await this.#bootToSnapshot(sourceId, booted, state);
+      await this.#bootToSnapshot(sourceId, "second boot", booted, state);
     } finally {
       state.handle?.kill("SIGKILL");
       if (state.port !== undefined) this.#consolePorts.release(state.port);
@@ -625,7 +628,7 @@ export class Seeds {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      await this.#bootToSnapshot(sourceId, booted, state);
+      await this.#bootToSnapshot(sourceId, "snapshot boot", booted, state);
     } finally {
       state.handle?.kill("SIGKILL");
       if (state.port !== undefined) this.#consolePorts.release(state.port);
@@ -636,12 +639,30 @@ export class Seeds {
     return { handle: undefined, imageIdentity: seed.imageIdentity ?? "", port: undefined };
   }
 
+  /** why: every seed AVD is named `simlock`, so a boot timeout names the seed and the boot, which the emulator's own error cannot. */
+  async #startSeedEmulator(
+    sourceId: string,
+    boot: string,
+    booted: AndroidDriverData,
+  ): ReturnType<Emulator["start"]> {
+    try {
+      return await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+    } catch (error: unknown) {
+      if (!(error instanceof BootTimeoutError)) throw error;
+      throw new BootTimeoutError(
+        sourceId,
+        `the ${boot} did not finish within ${this.#bootTimeoutMs} ms`,
+      );
+    }
+  }
+
   async #bootToSnapshot(
     sourceId: string,
+    boot: string,
     booted: AndroidDriverData,
     state: DeviceState,
   ): Promise<void> {
-    state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+    state.handle = await this.#startSeedEmulator(sourceId, boot, booted);
     await this.#saveBootSnapshot(sourceId, booted);
     await this.#emulator.shutdown(booted, state.handle);
     state.handle = undefined;
