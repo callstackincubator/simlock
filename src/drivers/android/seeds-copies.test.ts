@@ -42,6 +42,50 @@ class SizeFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+/** why: free space per volume, so a reservation on the wrong volume is seen: only the device root is short, every other path has room. */
+class CopyRecordingFilesystem extends MemoryFilesystem {
+  readonly copies: string[] = [];
+  readonly volumesAsked: string[] = [];
+  readonly #deviceRootFree: number;
+  #failuresLeft: number;
+  #gate: Promise<void> | undefined;
+  #onCopyStarted: (() => void) | undefined;
+
+  constructor(deviceRootFree: number, failFirstCopies = 0) {
+    super();
+    this.#deviceRootFree = deviceRootFree;
+    this.#failuresLeft = failFirstCopies;
+  }
+
+  override diskFree(path: string): Promise<number> {
+    this.volumesAsked.push(path);
+    return Promise.resolve(path === avdDirectory ? this.#deviceRootFree : Number.MAX_SAFE_INTEGER);
+  }
+
+  /** why: holds every later copy open until the returned function is called, and resolves `started` when one has begun. */
+  holdCopies(): { readonly started: Promise<void>; readonly release: () => void } {
+    let release = () => {};
+    this.#gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      this.#onCopyStarted = resolve;
+    });
+    return { started, release };
+  }
+
+  override async copyTree(from: string, to: string, options: { readonly timeoutMs: number }) {
+    this.copies.push(to);
+    this.#onCopyStarted?.();
+    await this.#gate;
+    if (this.#failuresLeft > 0) {
+      this.#failuresLeft -= 1;
+      throw new Error("cp: interrupted");
+    }
+    return super.copyTree(from, to, options);
+  }
+}
+
 class CopyFailureFilesystem extends MemoryFilesystem {
   readonly #message: string;
 
@@ -196,7 +240,8 @@ describe("Seeds", () => {
         {
           advance: 300_000,
           expectations: [stage.version, stage.create, ...neverReady],
-          message: "Timed out waiting for device to boot",
+          message:
+            "Device failed to boot: seed_two: the first boot did not finish within 300000 ms",
         },
         {
           advance: 60_000,
@@ -276,6 +321,56 @@ describe("Seeds", () => {
       }
     });
 
+    it("names the seed and which of its two boots ran out of android.bootTimeoutMs when making a seed times out", async () => {
+      const stage = seedStages();
+      const serial = "emulator-5586";
+      const neverReady = [
+        bootingAt(seedHome, ["-no-snapshot-load"], true)[0],
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "0\n",
+        ),
+      ] as ScriptedProcessExpectation[];
+      const cases = [
+        {
+          boot: "first boot",
+          expectations: [stage.version, stage.create, stage.devices, ...neverReady],
+          probesBeforeHang: 1,
+        },
+        {
+          boot: "second boot",
+          expectations: [
+            stage.version,
+            stage.create,
+            stage.devices,
+            ...stage.firstBoot,
+            stage.sync,
+            stage.powerOff,
+            ...neverReady,
+          ],
+          probesBeforeHang: 2,
+        },
+      ] as const;
+
+      for (const failing of cases) {
+        const clock = new FakeClock();
+        const harness = await seedHarness(failing.expectations, { clock });
+        const failure = harness.seeds.provision(harness.spec).catch((error: unknown) => error);
+        await vi.waitFor(() =>
+          expect(
+            harness.runner.calls.filter((call) => call.args.includes("sys.boot_completed")),
+          ).toHaveLength(failing.probesBeforeHang),
+        );
+        clock.advance(300_000);
+
+        const error = (await failure) as Error;
+        expect(error.name, failing.boot).toBe("BootTimeoutError");
+        expect(error.message, failing.boot).toContain("seed_two");
+        expect(error.message, failing.boot).toContain(failing.boot);
+      }
+    });
+
     it("removes the device's folder and throws when copying the seed fails", async () => {
       const harness = await seedHarness(makingTheSeed(), {
         filesystem: new CopyFailureFilesystem("cp: no space left on device"),
@@ -287,6 +382,83 @@ describe("Seeds", () => {
 
       expect(await harness.filesystem.exists(copyHome)).toBe(false);
       expect(await harness.filesystem.exists(seedHome)).toBe(true);
+    });
+
+    it("refuses a copy of the seed that does not fit in the device root's free space before copying, and copies one that fits exactly", async () => {
+      const seedBytes = 4_112;
+      const provisionWith = async (freeBytes: number, failFirstCopies = 0) => {
+        const filesystem = new CopyRecordingFilesystem(freeBytes, failFirstCopies);
+        const harness = await seedHarness(
+          [
+            ...makingTheSeed(),
+            processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+            processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+            processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+          ],
+          { filesystem },
+        );
+        await filesystem.mkdirp(`${seedHome}/simlock.avd/snapshots/simlock_boot`);
+        await filesystem.writeFileAtomic(
+          `${seedHome}/simlock.avd/snapshots/simlock_boot/ram.bin`,
+          "x".repeat(4_096),
+        );
+        return { filesystem, harness, provision: harness.seeds.provision(harness.spec) };
+      };
+
+      const fits = await provisionWith(seedBytes);
+      await expect(fits.provision).resolves.toMatchObject({ deviceId: "simlock_one" });
+      expect(fits.filesystem.copies).toEqual([`${copyHome}/simlock.avd`]);
+      // why: a finished copy gives its reservation back, so the next copy of the same size is not refused for it.
+      await expect(fits.harness.seeds.provision(fits.harness.spec)).resolves.toMatchObject({
+        deviceId: "simlock_three",
+      });
+      expect(fits.filesystem.copies).toHaveLength(2);
+      // why: only the device root's volume is short in this filesystem, so the reservation is shown to be on it.
+      expect(new Set(fits.filesystem.volumesAsked)).toEqual(new Set([avdDirectory]));
+
+      // why: two copies at once with room for one: the second is refused while the first runs, and goes through once it ends.
+      const crowded = await provisionWith(seedBytes);
+      await crowded.provision;
+      const held = crowded.filesystem.holdCopies();
+      const running = crowded.harness.seeds.provision(crowded.harness.spec);
+      await held.started;
+      let secondRefusal: unknown;
+      const second = crowded.harness.seeds
+        .provision(crowded.harness.spec)
+        .catch((error: unknown) => {
+          secondRefusal = error;
+        });
+      await vi.waitFor(() =>
+        expect(secondRefusal !== undefined || crowded.filesystem.copies.length > 2).toBe(true),
+      );
+      expect(
+        secondRefusal,
+        "the second copy was refused while the first held the room",
+      ).toMatchObject({
+        name: "InsufficientDiskSpaceError",
+      });
+      held.release();
+      await second;
+      await expect(running).resolves.toMatchObject({ deviceId: expect.any(String) });
+
+      // why: a copy that fails gives its reservation back, so the next copy is not refused for it.
+      const interrupted = await provisionWith(seedBytes, 1);
+      await expect(interrupted.provision).rejects.toThrow("cp: interrupted");
+      await expect(
+        interrupted.harness.seeds.provision(interrupted.harness.spec),
+      ).resolves.toMatchObject({ deviceId: expect.any(String) });
+
+      const short = await provisionWith(seedBytes - 1);
+      const refusal = await short.provision.catch((error: unknown) => error);
+      expect(refusal).toMatchObject({
+        availableBytes: seedBytes - 1,
+        name: "InsufficientDiskSpaceError",
+        platform: "android",
+        requiredBytes: seedBytes,
+      });
+      expect((refusal as Error).message).toContain("to copy an Android seed:");
+      expect(short.filesystem.copies).toEqual([]);
+      expect(await short.filesystem.exists(copyHome)).toBe(false);
     });
 
     it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
@@ -441,7 +613,7 @@ describe("Seeds", () => {
         { clock },
       );
       const making = harness.seeds.provision(harness.spec);
-      const failed = expect(making).rejects.toThrow("Timed out waiting for device to boot");
+      const failed = expect(making).rejects.toThrow("did not finish within 300000 ms");
       await vi.waitFor(() =>
         expect(harness.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
           true,

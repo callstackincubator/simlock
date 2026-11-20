@@ -522,7 +522,7 @@ export class Seeds {
       { lineage, own: udid },
     );
     this.#logger?.debug(
-      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable`,
+      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable, ${String(counts.missing)} missing`,
     );
   }
 

@@ -123,7 +123,39 @@ describe("IosSimctlDriver copy swap", () => {
     );
     expect(device.driverData).toMatchObject({ lineage: [lineageUdid] });
     expect(logger.debugs).toEqual([
-      `swapped 9 files and 1 links in 40 ms for ${copyUdid}; 1 unreadable`,
+      `swapped 9 files and 1 links in 40 ms for ${copyUdid}; 1 unreadable, 0 missing`,
+    ]);
+  });
+
+  it("a copy whose source recorded a file and a link it no longer has skips them, swaps the rest and logs them as missing", async () => {
+    const database = await seededDatabase({
+      files: [
+        { kind: "file", relativePath: "data/gone.plist" },
+        { kind: "link", relativePath: "data/GoneLogs" },
+        { kind: "file", relativePath: "data/kept.plist" },
+      ],
+      lineage: [lineageUdid],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+      },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    const logger = new RecordingLogger();
+    await plantManagedDevice(filesystem);
+    const kept = `${deviceRoot}/${copyUdid}/data/kept.plist`;
+    await plantBytes(filesystem, kept, Buffer.from(`/Devices/${lineageUdid}/data`));
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database, logger);
+
+    await driver.provision(spec);
+
+    expect((await readBytes(filesystem, kept)).toString()).toBe(`/Devices/${copyUdid}/data`);
+    expect(runner.calls.some((call) => call.args.includes("delete"))).toBe(false);
+    expect(logger.debugs).toEqual([
+      `swapped 1 files and 0 links in 0 ms for ${copyUdid}; 0 unreadable, 2 missing`,
     ]);
   });
 
@@ -133,14 +165,26 @@ describe("IosSimctlDriver copy swap", () => {
         throw new Error("disk full");
       }
     }
+    class LockedLinks extends MemoryFilesystem {
+      override async readlink(path: string): Promise<string> {
+        throw Object.assign(new Error(`EACCES: permission denied, readlink '${path}'`), {
+          code: "EACCES",
+        });
+      }
+    }
     const file = `${deviceRoot}/${copyUdid}/data/Library/note.plist`;
     const cases = [
       { label: "control: a swap that works", error: undefined },
-      { label: "a recorded file gone", gone: true, error: /ENOENT/ },
       {
         label: "a write that fails",
         filesystem: new FailingWrites(),
         error: /disk full/,
+      },
+      {
+        label: "a recorded link that cannot be read",
+        filesystem: new LockedLinks(),
+        link: true,
+        error: /EACCES/,
       },
       {
         label: "a result of another length",
@@ -151,7 +195,10 @@ describe("IosSimctlDriver copy swap", () => {
     ];
     for (const attempt of cases) {
       const database = await seededDatabase({
-        files: [{ kind: "file", relativePath: "data/Library/note.plist" }],
+        files: [
+          { kind: "file", relativePath: "data/Library/note.plist" },
+          ...(attempt.link === true ? [{ kind: "link" as const, relativePath: "data/Logs" }] : []),
+        ],
         lineage: attempt.lineage ?? [lineageUdid],
       });
       const runner = new ScriptedProcessRunner([
@@ -166,7 +213,7 @@ describe("IosSimctlDriver copy swap", () => {
       await plantManagedDevice(filesystem);
       await plantBytes(
         filesystem as MemoryFilesystem,
-        attempt.gone === true ? `${deviceRoot}/${copyUdid}/data/other` : file,
+        file,
         Buffer.from(`/Devices/${lineageUdid}/ AAAAAAAA-1111-2222-3333-BBBBBBBBBBB`),
       );
       const driver = await createDriver(runner, new FakeClock(), filesystem, database);

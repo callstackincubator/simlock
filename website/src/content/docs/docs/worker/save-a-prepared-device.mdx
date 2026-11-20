@@ -119,7 +119,7 @@ simlock --gateway baseline remove checkout --worker wrk_a
 
 | Error | Cause | Fix |
 | --- | --- | --- |
-| `BASELINE_SAVE_FAILED` | The copy could not be made. The lease has ended, nothing was saved, and the device is kept for `simlock doctor`. The message says why. | Lease a new device, prepare it and save again. |
+| `BASELINE_SAVE_FAILED` | The copy could not be made. The lease has ended, nothing was saved, and the device is kept for `simlock doctor`. The message says why; when the copy does not fit in the free disk space, it gives the bytes needed and free. | Lease a new device, prepare it and save again. |
 | `UNKNOWN_LEASE` | No live lease has that id. | Check the id with `simlock list`. |
 | `UNKNOWN_BASELINE` | No baseline on this worker has that name. | Check `simlock baseline list`. |
 | `BASELINE_IN_USE` | `remove` refused: a lease uses a copy. The message names it. | Remove after that lease ends. |

@@ -72,7 +72,7 @@ A gateway also fails a request at once when no connected worker could serve it, 
 
 | Error | Exit | Cause | Fix |
 | --- | --- | --- | --- |
-| `PROVISION_FAILED` | 1 | Simlock could not create or start the device. The message carries the tool's error. Through a gateway: every worker that tried failed. | Retry once. If it keeps failing, ask an operator to check `simlock doctor` and `simlock daemon logs`. See [A device will not boot or reset](/simlock/docs/troubleshooting/worker#a-device-will-not-boot-or-reset). |
+| `PROVISION_FAILED` | 1 | Simlock could not create or start the device. The message carries the tool's error. When the copy of an Android device's base image or of a baseline does not fit in the free disk space, the message says so, with the bytes needed and free. Through a gateway: every worker that tried failed. | Retry once. If it keeps failing, ask an operator to check `simlock doctor` and `simlock daemon logs`. See [A device will not boot or reset](/simlock/docs/troubleshooting/worker#a-device-will-not-boot-or-reset). |
 
 ## You lost the lease
 
