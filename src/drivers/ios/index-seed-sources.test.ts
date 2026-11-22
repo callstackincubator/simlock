@@ -148,6 +148,63 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "clone", "delete"]);
   });
 
+  it("a clone whose LaunchServices drop fails and whose delete then exits non-zero or times out is logged with its UDID", async () => {
+    const udid = driverData.udid;
+    const cases = [
+      { label: "control: a delete that works", delete: { code: 0 }, warnings: [] },
+      {
+        label: "a delete that exits non-zero",
+        delete: { code: 1, stderr: "Unable to delete" },
+        warnings: [
+          `could not delete simulator ${udid} after a failed provision: simctl delete ${udid} exited with code 1: Unable to delete`,
+        ],
+      },
+      {
+        label: "a delete that times out",
+        delete: { hangs: true },
+        warnings: [
+          `could not delete simulator ${udid} after a failed provision: simctl delete ${udid} timed out after 30000ms`,
+        ],
+      },
+    ];
+    for (const attempt of cases) {
+      const filesystem = new FaultyFilesystem();
+      await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
+      await plantLaunchServices(filesystem, `${deviceRoot}/${udid}`);
+      filesystem.failing = "rm";
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+          result: { code: 0, stderr: "", stdout: `${udid}\n` },
+        },
+        "hangs" in attempt.delete
+          ? { hangs: true, match: simctl("delete", udid) }
+          : {
+              match: simctl("delete", udid),
+              result: {
+                code: attempt.delete.code,
+                stderr: attempt.delete.stderr ?? "",
+                stdout: "",
+              },
+            },
+      ]);
+      const logger = new RecordingLogger();
+      const clock = new FakeClock();
+      const driver = await createDriver(runner, clock, filesystem, await seededDatabase(), logger);
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      const provision = driver.provision(spec).catch((error: unknown) => error as Error);
+      await waitForCalls(runner, 3);
+      clock.advance(30_000);
+      const outcome = await provision;
+
+      expect((outcome as Error).message, attempt.label).toBe("disk full");
+      expect(logger.warnings, attempt.label).toEqual(attempt.warnings);
+    }
+  });
+
   it.each([
     {
       name: "a named source is copied instead of the seed, with its lineage swapped for the copy's own UDID",
