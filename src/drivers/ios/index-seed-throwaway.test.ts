@@ -9,6 +9,7 @@ import {
   instanceId,
   plantManagedDevice,
   simctl,
+  waitForCalls,
 } from "./test-slim.js";
 import {
   RecordingLogger,
@@ -271,6 +272,75 @@ describe("IosSimctlDriver seed throwaway", () => {
       );
       expect(logger.warnings, failure.label).toEqual(failure.warnings);
       expect(runner.calls.length, failure.label).toBe(failure.steps.length + 1);
+    }
+  });
+
+  it("a make that fails after its throwaway is gone, whose seed clone's delete then exits non-zero or times out, logs the clone's UDID", async () => {
+    const cases = [
+      { label: "control: a delete that works", delete: { code: 0 }, warnings: [] },
+      {
+        label: "a delete that exits non-zero",
+        delete: { code: 1, stderr: "Unable to delete" },
+        warnings: [
+          `could not delete seed clone ${seedUdid} after a failed make: simctl delete ${seedUdid} exited with code 1: Unable to delete`,
+        ],
+      },
+      {
+        label: "a delete that times out",
+        delete: { hangs: true },
+        warnings: [
+          `could not delete seed clone ${seedUdid} after a failed make: simctl delete ${seedUdid} timed out after 30000ms`,
+        ],
+      },
+    ];
+    for (const attempt of cases) {
+      const database = await memorySourceDatabase();
+      // why: the make fails at its last step, after the throwaway is deleted, so no row is kept for a sweep.
+      database.exec(
+        "CREATE TRIGGER refuse_ready BEFORE UPDATE OF state ON ios_source_data WHEN NEW.state = 'ready' BEGIN SELECT RAISE(ABORT, 'source row locked'); END",
+      );
+      const logger = new RecordingLogger();
+      const clock = new FakeClock();
+      const filesystem = new MemoryFilesystem();
+      const steps = [
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...throwawaySeedSteps(),
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        "hangs" in attempt.delete
+          ? { hangs: true, match: sourcesSimctl("delete", seedUdid) }
+          : {
+              match: sourcesSimctl("delete", seedUdid),
+              result: {
+                code: attempt.delete.code,
+                stderr: attempt.delete.stderr ?? "",
+                stdout: "",
+              },
+            },
+      ];
+      const runner = new ScriptedProcessRunner(steps);
+      scopedRunners.push(runner);
+      await plantManagedDevice(filesystem);
+      await plantSeedClone(filesystem);
+      const driver = await IosSimctlDriver.create({
+        clock,
+        database,
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        logger,
+        logsRoot,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+
+      const provision = driver.provision(spec).catch((error: unknown) => error as Error);
+      await waitForCalls(runner, steps.length);
+      clock.advance(30_000);
+      const outcome = await provision;
+
+      expect((outcome as Error).message, attempt.label).toContain("source row locked");
+      expect(logger.warnings, attempt.label).toEqual(attempt.warnings);
     }
   });
 
