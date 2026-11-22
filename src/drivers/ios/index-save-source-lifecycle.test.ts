@@ -180,6 +180,61 @@ describe("IosSimctlDriver", () => {
       ).toEqual(["shutdown", "delete"]);
       expect(lateDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     });
+
+    it("a failed save whose clone's delete then exits non-zero or times out logs the clone's UDID", async () => {
+      const cases = [
+        { label: "control: a delete that works", delete: { code: 0 }, warnings: [] },
+        {
+          label: "a delete that exits non-zero",
+          delete: { code: 1, stderr: "Unable to delete" },
+          warnings: [
+            `could not delete baseline clone ${cloneUdid} after a failed save: simctl delete ${cloneUdid} exited with code 1: Unable to delete`,
+          ],
+        },
+        {
+          label: "a delete that times out",
+          delete: { hangs: true },
+          warnings: [
+            `could not delete baseline clone ${cloneUdid} after a failed save: simctl delete ${cloneUdid} timed out after 30000ms`,
+          ],
+        },
+      ];
+      for (const attempt of cases) {
+        const filesystem = new MemoryFilesystem();
+        await plantManagedDevice(filesystem);
+        const runner = new ScriptedProcessRunner([
+          { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+          { match: simctl("shutdown", driverData.udid) },
+          { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+          { match: sourcesSimctl("shutdown", cloneUdid) },
+          "hangs" in attempt.delete
+            ? { hangs: true, match: sourcesSimctl("delete", cloneUdid) }
+            : {
+                match: sourcesSimctl("delete", cloneUdid),
+                result: {
+                  code: attempt.delete.code,
+                  stderr: attempt.delete.stderr ?? "",
+                  stdout: "",
+                },
+              },
+        ]);
+        const database = await memorySourceDatabase();
+        database.exec(
+          "CREATE TRIGGER refuse_update BEFORE UPDATE ON ios_source_data BEGIN SELECT RAISE(ABORT, 'source row locked'); END",
+        );
+        const logger = new RecordingLogger();
+        const clock = new FakeClock();
+        const driver = await createDriver(runner, clock, filesystem, database, logger);
+
+        const save = driver.saveSource(device).catch((error: unknown) => error as Error);
+        await waitForCalls(runner, 5);
+        clock.advance(30_000);
+        const outcome = await save;
+
+        expect((outcome as Error).message, attempt.label).toContain("source row locked");
+        expect(logger.warnings, attempt.label).toEqual(attempt.warnings);
+      }
+    });
   });
 
   it.each([
