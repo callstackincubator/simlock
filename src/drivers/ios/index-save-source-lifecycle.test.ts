@@ -513,6 +513,30 @@ describe("IosSimctlDriver", () => {
     expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
   });
 
+  it("destroy still runs simctl delete after a simctl shutdown that times out, and succeeds when the delete does", async () => {
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, match: simctl("shutdown", driverData.udid) },
+      { match: simctl("delete", driverData.udid) },
+    ]);
+    const clock = new FakeClock();
+    const driver = await createDriver(runner, clock);
+
+    const destroyed = driver
+      .destroy({ address: driverData.udid, deviceId: driverData.udid, driverData })
+      .then(
+        () => "deleted",
+        (error: unknown) => (error as Error).message,
+      );
+    await waitForCalls(runner, 1);
+    clock.advance(30_000);
+
+    expect(await destroyed).toBe("deleted");
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      simctlArgs("shutdown", driverData.udid),
+      simctlArgs("delete", driverData.udid),
+    ]);
+  });
+
   it.each([
     { name: "removal succeeds", method: "destroy" as const, failing: undefined, deleteCode: 0 },
     {
