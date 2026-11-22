@@ -98,6 +98,38 @@ describe("Doctor with a platform it cannot observe", () => {
     );
   });
 
+  it("a daemon start's reconcile destroys every orphan device in the owned root without --purge-orphans", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    const driver = new FakeDriver({ clock, deviceRoot: "/roots/ios", platform: "ios" });
+    driver.setManagedReality({
+      devices: [observed("orphan-1", "stopped"), observed("orphan-2", "stopped")],
+      processes: [],
+    });
+    const doctor = new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    });
+
+    await doctor.reconcile();
+
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "device.orphan-purged")
+        .map((event) => event.payload),
+    ).toEqual([
+      { deviceRoot: "/roots/ios", driverDeviceId: "orphan-1", platform: "ios" },
+      { deviceRoot: "/roots/ios", driverDeviceId: "orphan-2", platform: "ios" },
+    ]);
+    expect((await doctor.reconcile()).findings).toEqual([]);
+  });
+
   it("re-proves the root before the first destroy of a purge", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
