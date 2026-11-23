@@ -22,6 +22,7 @@ Auth and answers:
 - An error nothing recognizes answers `INTERNAL`, "Internal error", and is logged; its own message never leaves.
 - The ETag step buffers a body to hash it, so it runs only on a JSON answer under `/v1` that is not a mount's. A stream's or a mount's body is never read.
 - `emptyBodyAsNone` runs before the validator on a route whose body is optional: an empty body is read as none, whatever the content type.
+- An answer sent before its request body arrived (a refused upload, any early 4xx or 5xx) ends the connection: `server.ts` destroys the socket 2 s after the answer unless the body ended by then. It never waits on the adapter's half-close.
 
 Route declarations:
 

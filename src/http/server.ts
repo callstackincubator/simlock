@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -198,6 +198,11 @@ export class HttpGateway {
       });
       // why: Node cuts any request that lasts over 300 s by default, which would cut a big upload that keeps moving; a stalled one is cut by the upload's own silence bound, and headers stay bounded by `headersTimeout`.
       server.requestTimeout = 0;
+      server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+        response.once("close", () => {
+          if (!request.complete) cutUnreadBody(request);
+        });
+      });
       this.#server = server;
       // Before `listening` fires deliberately: an upgrade cannot arrive until the server is
       // listening, and wiring it here means there is no window where a connection is accepted
@@ -223,6 +228,19 @@ export class HttpGateway {
     });
     this.#logger.info("HTTP gateway stopped", { host: this.#host, port: this.#port });
   }
+}
+
+// why: an answer sent before its request body ended (a refused upload) leaves the body to the socket: Node reads it to the end however long it is, and once the body was read from and then dropped, the adapter only half-closes the socket, which can sit in FIN_WAIT_2 holding the unread bytes in kernel buffers (https://github.com/callstackincubator/simlock/issues/1810).
+const UNREAD_BODY_LINGER_MS = 2_000;
+
+// why: the linger lets the client read the answer before the socket is cut; a socket whose body ended in it stays open for keep-alive.
+function cutUnreadBody(request: IncomingMessage): void {
+  const socket = request.socket;
+  const timer = setTimeout(() => {
+    if (!request.complete) socket.destroy();
+  }, UNREAD_BODY_LINGER_MS);
+  timer.unref();
+  socket.once("close", () => clearTimeout(timer));
 }
 
 // why: the node adapter answers a body that fails mid-stream by ending the response cleanly with an error line, so a client would take a cut-short download for a whole one; this makes the client see the failure.
