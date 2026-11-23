@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type AuthorizeContext, type Role } from "./roles.js";
+import { type AuthorizeContext, type OperationRole } from "./roles.js";
 
 export type Effect = "read" | "write";
 
@@ -9,7 +9,7 @@ export interface OperationDefinition<
   OutputSchema extends z.ZodType = z.ZodType,
 > {
   readonly name: Name;
-  readonly role: Role | ((input: z.infer<InputSchema>) => Role);
+  readonly role: OperationRole | ((input: z.infer<InputSchema>) => OperationRole);
   readonly effect: Effect | ((input: z.infer<InputSchema>) => Effect);
   readonly input: InputSchema;
   readonly output: OutputSchema;

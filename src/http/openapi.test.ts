@@ -41,10 +41,11 @@ describe("buildOpenApiDocument", () => {
 
     expect(summarize(status)).toEqual({
       codes503: ["DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
-      description: expect.stringContaining("Role: agent."),
+      description: expect.stringContaining("Role: any (agent, viewer or admin)."),
       statuses: ["200", "401", "403", "500", "503"],
       tags: ["System"],
     });
+    expect(paths["/v1/workers"]?.get?.description).toContain("Role: viewer or admin.");
     expect(Object.keys(replySchema(status, "200").properties ?? {})).toEqual(
       expect.arrayContaining(["devices", "leases", "capacity", "daemon"]),
     );

@@ -206,7 +206,7 @@ export const deviceExec = defineOperation({
  */
 export const leaseList = defineOperation({
   name: "lease.list",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({}),
   output: z.object({ leases: z.array(statusLeaseSchema) }),
@@ -215,7 +215,7 @@ export const leaseList = defineOperation({
 // why: no `authorize` hook -- the handler answers `UNKNOWN_LEASE` for a lease the caller does not own, as `lease.list` hides it (ADR 0044 §3), so "not yours" and "not there" look the same.
 export const leaseGet = defineOperation({
   name: "lease.get",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({ leaseId: z.string() }),
   output: z.object({ lease: statusLeaseSchema }),

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { type Answer, type Call, type Routes, renderConsole } from "../test/console";
 
-const OPERATOR_NEEDED = "That token is real, but the console needs an operator token.";
+const OPERATOR_NEEDED = "That token is real, but the console needs an operator or viewer token.";
 const NAV_LABELS = [
   "Overview",
   "Inbox",
@@ -37,7 +37,7 @@ function daemonKnowing(
   };
   return {
     "/v1/healthz": { body: { status: "ok" } },
-    "/v1/identity": (call) => answer(call, (name) => ({ body: { name } })),
+    "/v1/identity": (call) => answer(call, (name) => ({ body: { name, role: "admin" } })),
     "/v1/workers": (call) => answer(call, () => ({ body: { workers: [] } })),
   };
 }
@@ -47,7 +47,7 @@ const DAEMON = daemonKnowing({ tok_operator: "operator", tok_ci: "ci-runner" });
 type Console = ReturnType<typeof renderConsole>;
 
 async function signIn(view: Console, token: string): Promise<void> {
-  await view.user.type(await screen.findByLabelText("Operator token"), token);
+  await view.user.type(await screen.findByLabelText("Operator or viewer token"), token);
   await view.user.click(screen.getByRole("button", { name: "Sign in" }));
 }
 
@@ -74,7 +74,7 @@ describe("signing in with a token", () => {
       token: null,
     });
 
-    await screen.findByLabelText("Operator token");
+    await screen.findByLabelText("Operator or viewer token");
     expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
       "href",
       "https://login.example.test/start",
@@ -101,7 +101,7 @@ describe("signing in with a token", () => {
       token: null,
     });
 
-    await screen.findByLabelText("Operator token");
+    await screen.findByLabelText("Operator or viewer token");
     expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
       "href",
       "https://fleet.example.com/oauth2/start?rd=%2Fleases%2Flease_1%3Ftab%3Dall",
@@ -122,7 +122,7 @@ describe("signing in with a token", () => {
     expect(window.location.pathname).toBe("/");
     expect(screen.getByRole("heading", { level: 1, name: "Overview" })).toBeInTheDocument();
     expect(await screen.findByText("Connected")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Operator or viewer token")).not.toBeInTheDocument();
   });
 
   it("an operator token's label is shown in the sidebar as who is signed in", async () => {
@@ -166,7 +166,7 @@ describe("signing in with a token", () => {
 
   it("signing in with an empty field asks the daemon nothing", async () => {
     const view = renderConsole({ routes: DAEMON, token: null });
-    const field = await screen.findByLabelText("Operator token");
+    const field = await screen.findByLabelText("Operator or viewer token");
     const asked = view.calls.length;
 
     await view.user.click(screen.getByRole("button", { name: "Sign in" }));
@@ -180,7 +180,7 @@ describe("signing in with a token", () => {
 
   it("a token pasted with spaces around it signs in", async () => {
     const view = renderConsole({ routes: DAEMON, token: null });
-    await view.user.click(await screen.findByLabelText("Operator token"));
+    await view.user.click(await screen.findByLabelText("Operator or viewer token"));
     await view.user.paste("  tok_operator  ");
 
     await view.user.click(screen.getByRole("button", { name: "Sign in" }));
@@ -199,7 +199,7 @@ describe("signing in with a token", () => {
       await signIn(view, `tok_${role}`);
 
       expect(await screen.findByRole("alert")).toHaveTextContent(OPERATOR_NEEDED);
-      expect(screen.getByLabelText("Operator token")).toBeInTheDocument();
+      expect(screen.getByLabelText("Operator or viewer token")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
     },
   );
@@ -223,7 +223,7 @@ describe("signing in with a token", () => {
 
     renderConsole({ routes: daemonKnowing({}), token: null });
 
-    expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Operator or viewer token")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 
@@ -245,12 +245,12 @@ describe("signing in with a token", () => {
     await signIn(first, "tok_operator");
 
     await first.user.click(await screen.findByRole("button", { name: "Sign out" }));
-    expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Operator or viewer token")).toBeInTheDocument();
     first.unmount();
 
     renderConsole({ routes: DAEMON, token: null });
 
-    expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Operator or viewer token")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 });

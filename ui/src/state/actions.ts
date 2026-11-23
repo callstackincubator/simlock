@@ -3,6 +3,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import { ApiError } from "../data/api";
 import type { MenuEntry, ToastSpec } from "../ds";
 import type { ItemAction } from "../model/actions";
+import { useCanAct } from "./live";
 import { navigate } from "./router";
 import { useApi, useConfirm, useNotify } from "./services";
 
@@ -66,12 +67,14 @@ function successToast(
 
 export function useActions(): Actions {
   const api = useApi();
+  const canAct = useCanAct();
   const confirm = useConfirm();
   const notify = useNotify();
   const busy = useSyncExternalStore(subscribe, current, current);
   const run = useCallback(
     async (action: ItemAction): Promise<void> => {
-      if (inFlight.has(action.itemKey)) return;
+      // why: every write flows through this hook, so gating here keeps every screen and future menu fail-closed for read-only viewers.
+      if (!canAct || inFlight.has(action.itemKey)) return;
       const perform = async (): Promise<void> => {
         if (inFlight.has(action.itemKey)) return;
         setInFlight(action.itemKey, true);
@@ -104,20 +107,22 @@ export function useActions(): Actions {
       if (action.confirm === undefined) await perform();
       else await confirm(action.confirm, perform);
     },
-    [api, confirm, notify],
+    [api, canAct, confirm, notify],
   );
   const entries = useCallback(
     (actions: readonly ItemAction[]) =>
-      actions.map((action) => ({
-        danger: action.danger,
-        disabled: busy.has(action.itemKey),
-        key: action.id,
-        label: action.label,
-        onSelect: () => {
-          void run(action);
-        },
-      })),
-    [busy, run],
+      canAct
+        ? actions.map((action) => ({
+            danger: action.danger,
+            disabled: busy.has(action.itemKey),
+            key: action.id,
+            label: action.label,
+            onSelect: () => {
+              void run(action);
+            },
+          }))
+        : [],
+    [busy, canAct, run],
   );
   return { entries, run };
 }

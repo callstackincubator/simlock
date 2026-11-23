@@ -25,11 +25,13 @@ import {
   describeSchemaIssues,
   OPERATIONS,
   requesterIdSchema,
+  roleAllows,
   type AuthorizeContext,
   type ComponentProgress,
   type Effect,
   type OperationDefinition,
   type OperationName,
+  type OperationRole,
   type Role,
   type UsageOutput,
   type leaseProgressSchema,
@@ -357,9 +359,9 @@ function checkAccess(
   session: DispatchSession,
   pipeline: DispatchPipeline,
 ): void {
-  const requiredRole: Role =
+  const requiredRole: OperationRole =
     typeof definition.role === "function" ? definition.role(input) : definition.role;
-  if (!roleSatisfies(session.role, requiredRole)) {
+  if (!roleAllows(session.role, requiredRole)) {
     throw new DispatchError(
       "FORBIDDEN",
       `Operation ${operation} requires role ${requiredRole}, session is ${session.role}`,
@@ -383,10 +385,6 @@ function authorizeContext(session: DispatchSession, pipeline: DispatchPipeline):
     principal: session.principal,
     role: session.role,
   };
-}
-
-function roleSatisfies(sessionRole: Role, required: Role): boolean {
-  return sessionRole === "admin" || required === "agent";
 }
 
 function parseDispatchInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {

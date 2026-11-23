@@ -365,9 +365,11 @@ async function leaseToUse(
   if (lease !== undefined) return lease;
   const identity = await lookup(environment, `${base}/v1/identity`, token);
   const leases = await lookup(environment, `${base}/v1/leases`, token);
+  const rawRole = field(identity.body, "role");
+  const role = rawRole === "admin" || rawRole === "viewer" ? rawRole : "agent";
   return selectOnlyLease(
     (field(leases.body, "leases") as { id: string; requesterId: string }[] | undefined) ?? [],
-    field(identity.body, "role") === "admin" ? "admin" : "agent",
+    role,
   );
 }
 

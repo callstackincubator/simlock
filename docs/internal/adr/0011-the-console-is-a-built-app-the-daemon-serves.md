@@ -1,6 +1,6 @@
 # 0011. The console is a built app the daemon serves at `/`
 
-- **Status:** Accepted
+- **Status:** Accepted; §6 narrowed by [0090](0090-a-viewer-role-reads-the-fleet-without-changing-it.md)
 - **Date:** 2026-10-02
 - **Issue:** [#88](https://github.com/callstackincubator/simlock/issues/88)
 - **Supersedes:** nothing.

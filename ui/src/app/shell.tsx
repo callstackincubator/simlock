@@ -86,6 +86,7 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
               {signedIn.name}
             </p>
           )}
+          {signedIn.readOnly && !collapsed ? <p className="signed-in-role">Read-only</p> : null}
           <ConnectionStatus collapsed={collapsed} />
         </div>
         {signedIn.canSignOut ? (

@@ -487,7 +487,7 @@ test.describe("keyboard and focus in a real browser", () => {
         await page.goto(host.url);
         await tabTo(page, page.getByRole("button", { name: "Sign out" }), tab, 30);
         await page.keyboard.press("Enter");
-        await expect(page.getByLabel("Operator token")).toBeVisible();
+        await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
       });
 
       await test.step("Inbox opens an item and its worker from the keyboard", async () => {

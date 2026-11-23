@@ -1,6 +1,6 @@
 # 0045. A device's screen streams to operators, not a lease's
 
-- **Status:** Accepted; §2 narrowed by 0049 (a lease holder streams its own lease); §5 narrowed by [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) (one capture per device, shared)
+- **Status:** Accepted; §2 narrowed by 0049 (a lease holder streams its own lease) and [0090](0090-a-viewer-role-reads-the-fleet-without-changing-it.md) (read-only viewers stream devices too); §5 narrowed by [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) (one capture per device, shared)
 - **Date:** 2026-10-23
 - **Issue:** [#906](https://github.com/callstackincubator/simlock/issues/906)
 - **Depends on:** ADR 0012 (a worker answers fleet routes as a fleet of one), ADR 0030 (stream is an optional module), ADR 0031 (screen-source seam), ADR 0039 (joined workers serve no HTTP of their own).

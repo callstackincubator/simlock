@@ -1,4 +1,5 @@
-import type { ModuleLease } from "../modules/index.js";
+import type { Role } from "../contract/index.js";
+import type { ModuleIdentity, ModuleLease } from "../modules/index.js";
 import {
   handleStreamRequest,
   relayedDeviceTargetOf,
@@ -6,6 +7,19 @@ import {
   streamTargetOf,
   type StreamServiceOptions,
 } from "./service.js";
+
+// why: exhaustive over `ModuleIdentity["role"]` so a new role cannot fall through quietly.
+function toStreamRole(role: ModuleIdentity["role"]): Role {
+  switch (role) {
+    case "operator":
+      return "admin";
+    case "viewer":
+      return "viewer";
+    case "agent":
+    case "worker":
+      return "agent";
+  }
+}
 
 // why: the shape the HTTP layer mounts, declared here rather than imported from `src/http`, because a
 // stream is the same exchange whether a console on this host asks for it or a gateway relays one, and a
@@ -17,7 +31,7 @@ export interface StreamMount {
 // why: `expiresAt` is set only for an identity that signed in through a proxy; a token or the local socket has none.
 export interface StreamIdentity {
   readonly principal: string;
-  readonly role: string;
+  readonly role: ModuleIdentity["role"];
   readonly expiresAt?: number | undefined;
 }
 
@@ -38,7 +52,7 @@ export function createStreamLeaseHandler(options: StreamServiceOptions): StreamL
       request,
       {
         principal: identity.principal,
-        role: identity.role === "operator" ? "operator" : "agent",
+        role: toStreamRole(identity.role),
       },
       {
         leaseId: lease.id,
@@ -57,7 +71,7 @@ export function createStreamMount(options: StreamServiceOptions): StreamMount {
         request,
         {
           principal: identity.principal,
-          role: identity.role === "operator" ? "operator" : "agent",
+          role: toStreamRole(identity.role),
         },
         streamTargetOf(new URL(request.url).pathname),
         identity.expiresAt,
@@ -73,7 +87,7 @@ export function createStreamRelayTarget(options: StreamServiceOptions): StreamRe
     return handleStreamRequest(
       options,
       request,
-      { principal: tenant, role: "operator" },
+      { principal: tenant, role: "admin" },
       relayedDeviceTargetOf(pathname) ?? relayedLeaseTargetOf(pathname),
     );
   };

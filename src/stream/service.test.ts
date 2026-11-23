@@ -16,7 +16,7 @@ function linkThat(serve: StreamLink["serve"]): StreamLink {
   return { serve };
 }
 
-const OPERATOR = { principal: "tok_op", role: "operator" } as const;
+const OPERATOR = { principal: "tok_op", role: "admin" } as const;
 
 const TARGET = { deviceId: "dev_1", workerId: "w1" };
 

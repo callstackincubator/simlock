@@ -180,7 +180,7 @@ export {
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const catalogGet = defineOperation({
   name: "catalog.get",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({ platform: platformSchema.optional() }),
   output: z.object({ platforms: z.array(platformCatalogSchema) }),
@@ -188,7 +188,7 @@ export const catalogGet = defineOperation({
 
 export const statusGet = defineOperation({
   name: "status.get",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({}),
   output: z.object({

@@ -3,6 +3,7 @@ import { defineOperation } from "./operation-definition.js";
 import { daemonUpdate } from "./operations-admin.js";
 import { componentVersionSchema, leaseIdSchema } from "./operations-lease-request.js";
 import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
+import { ROLES } from "./roles.js";
 import {
   capabilityNameSchema,
   inboxItemSchema,
@@ -13,7 +14,7 @@ import {
 
 export const workerList = defineOperation({
   name: "worker.list",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z.object({}),
   output: z.object({ workers: z.array(workerViewSchema) }),
@@ -108,7 +109,7 @@ export const componentInstall = defineOperation({
  */
 export const componentList = defineOperation({
   name: "component.list",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({ platform: platformSchema.optional() }),
   output: z.object({
@@ -306,7 +307,7 @@ export const alertsTest = defineOperation({
 
 export const inboxGet = defineOperation({
   name: "inbox.get",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z.object({}),
   output: z.object({ items: z.array(inboxItemSchema) }),
@@ -314,13 +315,13 @@ export const inboxGet = defineOperation({
 
 const identityGet = defineOperation({
   name: "identity.get",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({}),
   output: z.object({
     principal: z.string(),
     name: z.string(),
-    role: z.enum(["admin", "agent"]),
+    role: z.enum(ROLES),
     via: z.enum(["token", "proxy", "socket", "uplink"]),
     signOutUrl: z.string().optional(),
   }),

@@ -34,7 +34,7 @@ export function registerLeaseRoutes(
   app.openapi({ ...leaseGetRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
-    const lease = await findOwnedLease(deps, session, c.req.valid("param").id);
+    const lease = await findOwnedLease(deps, session, c.req.valid("param").id, "read");
     const device = findDevice(deps, lease);
     if (device === undefined) throw unknownLease(lease.id);
     // why: ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
@@ -202,7 +202,13 @@ export function registerLeaseRoutes(
 
   app.openapi({ ...leaseEventsRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
-    const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.valid("param").id);
+    // why: subscribing drains the lease's notice buffer, so it is a holder-or-operator call and refuses viewers.
+    const lease = await findOwnedLease(
+      deps,
+      buildHttpSession(identity),
+      c.req.valid("param").id,
+      "hold",
+    );
 
     return pipeSse(
       c,

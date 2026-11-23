@@ -755,7 +755,7 @@ export const test = base.extend<object, { daemon: RunningDaemon; gateway: Runnin
 export { expect };
 
 export async function signIn(page: Page, token: string): Promise<void> {
-  await page.getByLabel("Operator token").fill(token);
+  await page.getByLabel("Operator or viewer token").fill(token);
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
@@ -763,7 +763,7 @@ export async function signIn(page: Page, token: string): Promise<void> {
 // and the typing sent before the form shows are lost; wait for the form and the focus first.
 /** Signs in with the keyboard alone: tabs to the token field, types the token and presses Enter. */
 export async function signInWithKeyboard(page: Page, token: string, tab: string): Promise<void> {
-  const field = page.getByLabel("Operator token");
+  const field = page.getByLabel("Operator or viewer token");
   await expect(field).toBeVisible();
   await expect(field).toBeEnabled();
   await page.keyboard.press(tab);

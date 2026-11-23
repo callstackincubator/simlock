@@ -1,4 +1,4 @@
-export type TokenRole = "agent" | "operator" | "worker";
+export type TokenRole = "agent" | "viewer" | "operator" | "worker";
 
 export interface TokenRecord {
   readonly id: string;

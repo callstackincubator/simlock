@@ -60,7 +60,7 @@ async function shootExtras(page: Page, gateway: RunningDaemon): Promise<void> {
     await shoot(page, `${DIRECTORY}/leases-${scenario}.png`);
   }
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByLabel("Operator token")).toBeVisible();
+  await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
   await shoot(page, `${DIRECTORY}/sign-in.png`);
 }
 

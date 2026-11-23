@@ -7,7 +7,7 @@ import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import { StreamRefusalError } from "./refusal.js";
 import { ScriptedFeed } from "./test-fixtures.js";
 
-const OPERATOR: StreamCaller = { principal: "tok_op", role: "operator" };
+const OPERATOR: StreamCaller = { principal: "tok_op", role: "admin" };
 const DEVICE = { deviceId: "dev_9", workerId: "w1" };
 
 interface Relayed {
@@ -610,5 +610,20 @@ describe("a shared relay that is refused or fails", () => {
       await shared.link.serve(DEVICE, OPERATOR, signal());
       expect(shared.calls, label).toHaveLength(2);
     }
+  });
+
+  it("relays a device stream for a viewer caller", async () => {
+    const meta = encodeScreenFrame(
+      SCREEN_FRAME_TAG.meta,
+      new TextEncoder().encode(JSON.stringify(META)),
+    );
+    const { calls, link } = relayingAs(
+      () => new Response(bodyOf(meta), { headers: streamHeaders() }),
+    );
+
+    const stream = await link.serve(DEVICE, { principal: "tok_viewer", role: "viewer" }, signal());
+    expect(stream.meta).toEqual(META);
+    expect(calls).toHaveLength(1);
+    await stream.close();
   });
 });

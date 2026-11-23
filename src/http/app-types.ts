@@ -67,6 +67,8 @@ export interface HttpLeaseFiles {
 // lease handler never checks who owns it; http knows a module only by its name.
 export interface HttpLeaseRoute {
   readonly name: string;
+  // why: default-deny for read-only viewers; only read-only lease routes (stream) opt in.
+  readonly viewerLeaseRoute?: boolean;
   // why: the module's two-step socket handler, run for a WebSocket upgrade of the same path.
   readonly socket?: {
     open(

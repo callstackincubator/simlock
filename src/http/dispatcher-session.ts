@@ -18,12 +18,16 @@ export type HttpDispatch = <Op extends OperationName>(
   session: DispatchSession,
 ) => Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>>;
 
-/** ADR §5's socket roles map onto HTTP's pre-existing bearer-token roles one for one: an
- * `operator` token is what already grants HTTP's admin-only routes (`/v1/leases`,
- * `/v1/devices`, `/v1/events`...), so it resolves to the contract's `"admin"`; an `agent`
- * token resolves to `"agent"`. */
+// why: exhaustive over `Identity["role"]` so a new role can never fall through to `agent`.
 function toRole(identityRole: Identity["role"]): Role {
-  return identityRole === "operator" ? "admin" : "agent";
+  switch (identityRole) {
+    case "operator":
+      return "admin";
+    case "viewer":
+      return "viewer";
+    case "agent":
+      return "agent";
+  }
 }
 
 const VIA_VALUES = OPERATIONS["identity.get"].output.shape.via.options;

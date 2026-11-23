@@ -107,7 +107,7 @@ export type ModuleDispatch = <Op extends OperationName>(
 
 export interface ModuleIdentity {
   readonly principal: string;
-  readonly role: "agent" | "operator" | "worker";
+  readonly role: "agent" | "viewer" | "operator" | "worker";
 }
 
 export type ModuleHandler = (request: Request, identity: ModuleIdentity) => Promise<Response>;
@@ -148,6 +148,8 @@ export interface ModuleLeaseRoute {
   readonly name: string;
   readonly handle: ModuleLeaseHandler;
   readonly socket?: ModuleLeaseSocketHandler;
+  // why: default-deny for read-only viewers; only read-only lease routes (stream) opt in.
+  readonly viewerLeaseRoute?: boolean;
 }
 
 export interface MountDeps {
@@ -344,7 +346,7 @@ export interface ModuleHttpRoute {
 export interface ModuleTokenRecord {
   readonly id: string;
   readonly hash: string;
-  readonly role: "agent" | "operator" | "worker";
+  readonly role: "agent" | "viewer" | "operator" | "worker";
   readonly label?: string;
   readonly createdAt: number;
 }
@@ -373,6 +375,8 @@ export interface OptionalModuleDefinition<C> {
   // why: plain data the config loader reads without naming the module; a missing `enabled` then means on for a standalone worker (ADR 0046 §1).
   readonly enabledByDefault?: "standalone-worker" | "macos-worker";
   readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
+  // why: default-deny for read-only viewers on `/v1/leases/{id}/<name>`; only read-only lease routes opt in.
+  readonly viewerLeaseRoute?: boolean;
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
 }

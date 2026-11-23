@@ -482,6 +482,33 @@ describe("GatewayDispatcher", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("lets a viewer read fleet workers, status, leases and redacted config while refusing worker mutations and secrets", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const viewer = session({ principal: "tok_viewer", role: "viewer" });
+
+    await expect(dispatcher.dispatch("worker.list", {}, viewer)).resolves.toMatchObject({
+      workers: [expect.objectContaining({ id: "wrk_1" })],
+    });
+    await expect(dispatcher.dispatch("status.get", {}, viewer)).resolves.toMatchObject({
+      workers: [expect.objectContaining({ id: "wrk_1" })],
+    });
+    await expect(dispatcher.dispatch("lease.list", {}, viewer)).resolves.toEqual({ leases: [] });
+    await expect(dispatcher.dispatch("config.get", {}, viewer)).resolves.toBeDefined();
+
+    for (const [operation, input] of [
+      ["config.get", { showSecrets: true }],
+      ["worker.drain", { workerId: "wrk_1" }],
+      ["worker.undrain", { workerId: "wrk_1" }],
+      ["worker.remove", { workerId: "wrk_1" }],
+      ["lease.request", { model: "iPhone 17", noWait: true, platform: "ios" }],
+    ] as const) {
+      await expect(dispatcher.dispatch(operation, input, viewer), operation).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    }
+  });
+
   it("has an answer for every operation the contract declares", async () => {
     const inputs: Partial<Record<OperationName, unknown>> = {
       "driver.passthrough": { args: [], tool: "adb" },

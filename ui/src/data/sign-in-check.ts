@@ -40,7 +40,7 @@ export function refusalMessage(outcome: Exclude<SignInOutcome, { kind: "signed-i
     case "unknown-token":
       return "This daemon does not know that token.";
     case "not-operator":
-      return "That token is real, but the console needs an operator token.";
+      return "That token is real, but the console needs an operator or viewer token.";
     case "starting":
       return "The daemon is starting. Try again in a moment.";
     case "unreachable":

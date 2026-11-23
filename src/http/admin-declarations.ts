@@ -15,7 +15,7 @@ export const workerListRoute = declareRoute({
   path: "/v1/workers",
   tag: "Workers",
   summary: "The workers the gateway holds; a worker lists itself",
-  role: "admin",
+  role: "viewer",
   reply: OPERATIONS["worker.list"].output,
 });
 
@@ -24,7 +24,7 @@ export const inboxRoute = declareRoute({
   path: "/v1/inbox",
   tag: "Workers",
   summary: "What needs the operator: the Inbox items",
-  role: "admin",
+  role: "viewer",
   notes:
     "The daemon decides: workers that are lost, incompatible, drained, failed to update or over their RAM budget; devices that are quarantined, stalled or absent; requests that have waited over 60 s; leases with under 5 minutes left. A gateway answers for its fleet, a worker for itself.",
   reply: OPERATIONS["inbox.get"].output,
@@ -35,7 +35,7 @@ export const configRoute = declareRoute({
   path: "/v1/config",
   tag: "Workers",
   summary: "The daemon's live configuration, secrets masked",
-  role: "admin",
+  role: "viewer",
   notes:
     "Answers for the daemon that serves it: a gateway's own configuration, never its workers'. A secret is shown as [redacted]. Change a value with `simlock config set` on the daemon's machine.",
   reply: OPERATIONS["config.get"].output,
@@ -125,7 +125,7 @@ export const componentListRoute = declareRoute({
   path: "/v1/components",
   tag: "Components",
   summary: "The simulator runtimes and system images on this machine",
-  role: "agent",
+  role: "any",
   notes: "Worker only: a gateway answers 501 UNSUPPORTED_IN_GATEWAY_MODE.",
   request: { query: platformQuerySchema },
   reply: OPERATIONS["component.list"].output,
@@ -161,7 +161,7 @@ export const baselineListRoute = declareRoute({
   path: "/v1/baselines",
   tag: "Baselines",
   summary: "The baselines on this machine: the newest version of each, with its stale reason",
-  role: "agent",
+  role: "any",
   notes: "On a gateway, every worker's baselines, each with its `workerId`.",
   reply: OPERATIONS["baseline.list"].output,
 });
@@ -208,7 +208,7 @@ export const tokenListRoute = declareRoute({
   path: "/v1/tokens",
   tag: "Tokens",
   summary: "The token records, never a secret or a hash",
-  role: "admin",
+  role: "viewer",
   reply: OPERATIONS["token.list"].output,
 });
 
@@ -224,7 +224,7 @@ export const eventsRoute = declareRoute({
   path: "/v1/events",
   tag: "Events",
   summary: "Replay stored events, newest page first",
-  role: "admin",
+  role: "viewer",
   notes:
     "`since` is a duration such as 5m; `before` and `limit` page back through the history and cannot be used with `since`. `worker` keeps only the events of that worker (1 to 128 characters); a gateway never returns a `worker.rejected` for it, and a worker answers only its own id.",
   request: { query: eventsQuerySchema },
@@ -238,7 +238,7 @@ export const eventsStreamRoute = declareRoute({
   path: "/v1/events/stream",
   tag: "Events",
   summary: "Stream every event as it happens",
-  role: "admin",
+  role: "viewer",
   notes:
     "A stream of messages, one per event: `event` is the event's name and `data` its envelope, whose `payload` is an open object. Each event's payload is in the Events reference, /simlock/docs/reference/events.",
   stream: z.object({ data: eventEnvelopeSchema, event: z.string() }),

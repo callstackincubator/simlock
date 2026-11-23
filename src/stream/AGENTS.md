@@ -53,7 +53,7 @@ On a worker:
 
 Through a gateway:
 
-1. The gateway's link refuses a non-operator on a device path and a worker that is not in the fleet.
+1. The gateway's link refuses a caller that is neither an operator nor a viewer on a device path, and refuses a worker that is not in the fleet.
 2. It relays the request to the worker's `stream` relay target, by device id or by the worker's own lease id.
 3. The worker serves it as a local request.
 4. The gateway checks the answer's headers, then relays; inactivity bounds the body, `expiresAt` each viewer.

@@ -126,9 +126,10 @@ describe("CLI: token operations go through the daemon", () => {
     });
     const environment = outputCapture().environmentWith({ connectAdmin: async () => client });
     await runCli(["token", "create", "--role", "operator"], environment);
+    await runCli(["token", "create", "--role", "viewer", "--label", "dashboard"], environment);
     await runCli(["token", "list"], environment);
     await runCli(["token", "revoke", "tok_1"], environment);
-    expect(calls).toEqual(["create", "list", "revoke"]);
+    expect(calls).toEqual(["create", "create", "list", "revoke"]);
   });
 });
 

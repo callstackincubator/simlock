@@ -383,10 +383,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     );
   });
 
-  // why: the lease is resolved with `lease.get` (owner or operator) before the files handler runs, so it never checks an owner.
+  // why: the lease is resolved with `findOwnedLease(..., "hold")` (owner or operator; refuses viewer with 403) before the files handler runs, so it never checks an owner.
   const serveLeaseFiles = async (c: Context<Env>, id: string, name: string | undefined) => {
     const identity = c.get("identity");
-    const lease = await findOwnedLease(deps, buildHttpSession(identity), id);
+    const lease = await findOwnedLease(deps, buildHttpSession(identity), id, "hold");
     return deps.leaseFiles.handle(
       c.req.raw,
       identity,
@@ -420,7 +420,12 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   for (const route of deps.leaseRoutes ?? []) {
     app.all(`/v1/leases/:id/${route.name}`, agentAuth, async (c) => {
       const identity = c.get("identity");
-      const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.param("id"));
+      const lease = await findOwnedLease(
+        deps,
+        buildHttpSession(identity),
+        c.req.param("id"),
+        route.viewerLeaseRoute === true ? "read" : "hold",
+      );
       const resolved = {
         deviceId: lease.deviceId,
         id: lease.id,

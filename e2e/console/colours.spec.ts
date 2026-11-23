@@ -155,7 +155,10 @@ async function expectSignInStyles(
   surface: string,
 ): Promise<void> {
   await page.goto(host.url);
-  await expect(page.getByLabel("Operator token")).toHaveCSS("background-color", background);
+  await expect(page.getByLabel("Operator or viewer token")).toHaveCSS(
+    "background-color",
+    background,
+  );
   await expect(page.locator(".byline")).toHaveCSS("background-color", surface);
   const signInButton = page.getByRole("button", { name: "Sign in" });
   await expect(signInButton).toHaveCSS("min-height", "30px");
@@ -468,7 +471,7 @@ test.describe("colours and sizes the style engine decides", () => {
         await expectLeaseFacts(page, host, pages.lease);
         await expectWatchStyles(page, host, pages.device);
         await page.getByRole("button", { name: "Sign out" }).click();
-        await expect(page.getByLabel("Operator token")).toBeVisible();
+        await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
       }
     } finally {
       await host.dispose();

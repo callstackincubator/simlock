@@ -212,7 +212,7 @@ export const configSchema = z.object({
  * is a join token that resolves to no session role at all, only an uplink, so it is a third value
  * rather than a reuse of `agent`.
  */
-export const tokenRoleSchema = z.enum(["agent", "operator", "worker"]);
+export const tokenRoleSchema = z.enum(["agent", "viewer", "operator", "worker"]);
 
 export const tokenRecordSchema = z.object({
   id: z.string(),

@@ -1,4 +1,5 @@
 import { EventBus } from "../bus/index.js";
+import { readsEveryLease } from "../contract/index.js";
 import { UnknownLeaseError } from "../core/index.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
@@ -21,6 +22,7 @@ export function buildHarness(
     readonly identities?: Readonly<Record<string, Identity>>;
     readonly auth?: Auth;
     readonly mounts?: HttpGatewayDeps["mounts"];
+    readonly leaseRoutes?: HttpGatewayDeps["leaseRoutes"];
     readonly leaseFiles?: (parts: {
       readonly clock: FakeClock;
       readonly logger: JsonLinesLogger;
@@ -38,6 +40,7 @@ export function buildHarness(
       new Map<string, Identity>([
         ["slk_agent", tokenIdentity("tok_agent", "agent")],
         ["slk_other", tokenIdentity("tok_other", "agent")],
+        ["slk_viewer", tokenIdentity("tok_viewer", "viewer")],
         ["slk_operator", tokenIdentity("tok_operator", "operator")],
         [
           "slk_labelled",
@@ -51,7 +54,7 @@ export function buildHarness(
 
   dispatcher.handlers["lease.list"] = (_input, session) => ({
     leases: registry.leases.filter(
-      (lease) => session.role === "admin" || lease.ownerId === session.principal,
+      (lease) => readsEveryLease(session.role) || lease.ownerId === session.principal,
     ),
   });
 
@@ -59,7 +62,7 @@ export function buildHarness(
     const lease = registry.leases.find(
       (candidate) =>
         candidate.id === input.leaseId &&
-        (session.role === "admin" || candidate.ownerId === session.principal),
+        (readsEveryLease(session.role) || candidate.ownerId === session.principal),
     );
     if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
     return { lease };
@@ -76,6 +79,7 @@ export function buildHarness(
     registry: overrides.registry ?? registry,
     auth,
     ...(overrides.mounts === undefined ? {} : { mounts: overrides.mounts }),
+    ...(overrides.leaseRoutes === undefined ? {} : { leaseRoutes: overrides.leaseRoutes }),
     leaseFiles: overrides.leaseFiles?.({ clock, logger }) ?? noLeaseFiles,
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
@@ -89,6 +93,7 @@ export type App = ReturnType<typeof buildHarness>["app"];
 
 export const agentAuth = { authorization: "Bearer slk_agent" };
 export const otherAgentAuth = { authorization: "Bearer slk_other" };
+export const viewerAuth = { authorization: "Bearer slk_viewer" };
 export const operatorAuth = { authorization: "Bearer slk_operator" };
 export const defaultBody = { device: "iPhone 17 Pro", platform: "ios" };
 

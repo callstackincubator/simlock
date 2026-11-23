@@ -8,7 +8,7 @@ import { buildResults, groupStatuses, searchGroups } from "../model/search";
 import { type WaitingList, waitingTable } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
 import { useActions } from "./actions";
-import { useDaemonMode, useRouteQuery, useNow } from "./live";
+import { useCanAct, useDaemonMode, useRouteQuery, useNow } from "./live";
 import { loadView } from "./resource";
 import { navigate } from "./router";
 
@@ -92,11 +92,12 @@ export function useSearchSession(
   const requests = useSettledOnce<WaitingList>("/v1/lease-requests");
   const now = useNow();
   const [at] = useState(now.server);
+  const canAct = useCanAct();
   const mode = useDaemonMode();
   const { run } = useActions();
   const results = useMemo(() => {
     const workerList = listOf(workers, (data) => data.workers);
-    return buildResults({
+    const built = buildResults({
       leases: leaseRows({
         leases: listOf(leases, (data) => data.leases),
         now: at,
@@ -112,9 +113,10 @@ export function useSearchSession(
       ).rows,
       workers: workerList,
     });
-  }, [at, leases, mode, pages, requests, tokens, workers]);
+    return canAct ? built : built.filter((result) => result.target.kind === "go");
+  }, [at, canAct, leases, mode, pages, requests, tokens, workers]);
   const [typed, type] = useState("");
-  const groups = searchGroups(
+  const rawGroups = searchGroups(
     results,
     typed,
     groupStatuses({
@@ -124,6 +126,7 @@ export function useSearchSession(
       workers: workers.kind,
     }),
   );
+  const groups = canAct ? rawGroups : rawGroups.filter((group) => group.name !== "Actions");
   return {
     choose: (id) => {
       const chosen = results.find((result) => result.id === id);

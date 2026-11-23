@@ -9,6 +9,7 @@ import {
   operatorAuth,
   otherAgentAuth,
   readSseFrames,
+  viewerAuth,
 } from "./test-app.js";
 import { makeDevice, makeLease, waitForDispatch } from "./test-fakes.js";
 
@@ -713,5 +714,69 @@ describe("POST /v1/components/install", () => {
 
     expect(response.status).toBe(400);
     expect(dispatcher.calls).toEqual([]);
+  });
+});
+
+describe("viewer role over HTTP", () => {
+  it("reads any lease and opts-in viewer lease routes, while refusing lease events, lease files, lease requests by id and default-deny lease routes", async () => {
+    let deniedRouteHit = false;
+    let streamRouteHit = false;
+    const { app, dispatcher, registry } = buildHarness({
+      leaseRoutes: [
+        {
+          handle: async () => {
+            deniedRouteHit = true;
+            return new Response("ok");
+          },
+          name: "input",
+          socket: {
+            open: async () => {
+              deniedRouteHit = true;
+              return () => {};
+            },
+          },
+        },
+        {
+          handle: async () => {
+            streamRouteHit = true;
+            return new Response("picture");
+          },
+          name: "stream",
+          viewerLeaseRoute: true,
+        },
+      ],
+    });
+    registry.devices = [makeDevice({ id: "dev_1" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    const { id: requestId } = await createLeaseRequest(app, dispatcher);
+
+    expect((await app.request("/v1/leases", { headers: viewerAuth })).status).toBe(200);
+    expect((await app.request("/v1/leases/lse_1", { headers: viewerAuth })).status).toBe(200);
+    expect((await app.request("/v1/leases/lse_1/stream", { headers: viewerAuth })).status).toBe(
+      200,
+    );
+    expect(streamRouteHit).toBe(true);
+
+    const refusedPaths: readonly (readonly [string, string])[] = [
+      ["GET", "/v1/leases/lse_1/events"],
+      ["GET", "/v1/leases/lse_1/files"],
+      ["GET", "/v1/leases/lse_1/files/app.apk"],
+      ["PUT", "/v1/leases/lse_1/files/app.apk"],
+      ["DELETE", "/v1/leases/lse_1/files/app.apk"],
+      ["GET", "/v1/leases/lse_1/input"],
+      ["GET", `/v1/lease-requests/${requestId}`],
+      ["GET", `/v1/lease-requests/${requestId}/events`],
+      ["DELETE", `/v1/lease-requests/${requestId}`],
+    ];
+    for (const [method, path] of refusedPaths) {
+      const response = await app.request(path, { headers: viewerAuth, method });
+      expect(response.status, `${method} ${path}`).toBe(403);
+    }
+
+    const socketOutcome = await app.leaseSocket(
+      new Request("http://simlock.test/v1/leases/lse_1/input", { headers: viewerAuth }),
+    );
+    expect("response" in socketOutcome && socketOutcome.response.status).toBe(403);
+    expect(deniedRouteHit).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ import {
   test,
 } from "./fixtures.js";
 
-const OPERATOR_NEEDED = "That token is real, but the console needs an operator token.";
+const OPERATOR_NEEDED = "That token is real, but the console needs an operator or viewer token.";
 
 test.describe("sign-in", () => {
   test("the configured SSO link opens the proxy login in the same tab", async ({
@@ -34,7 +34,7 @@ test.describe("sign-in", () => {
       );
       await page.goto(gateway.url);
       await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
-      await expect(page.getByLabel("Operator token")).toBeVisible();
+      await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath("sso-sign-in.png"), fullPage: true });
       await page.getByRole("link", { name: "Sign in with SSO" }).click();
       await expect(page).toHaveURL(signInUrl);
@@ -90,14 +90,14 @@ test.describe("sign-in", () => {
 
     const tab = await context.newPage();
     await tab.goto("/fleet");
-    await expect(tab.getByLabel("Operator token")).toBeVisible();
+    await expect(tab.getByLabel("Operator or viewer token")).toBeVisible();
     await expect(tab.getByRole("button", { name: "Sign out" })).toHaveCount(0);
     await tab.close();
 
     await page.getByRole("button", { name: "Sign out" }).click();
-    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
     await page.reload();
-    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
 
     expect(requested.length).toBeGreaterThan(0);
     expect(requested.filter((url) => new URL(url).origin !== origin)).toEqual([]);
@@ -116,7 +116,7 @@ test.describe("sign-in", () => {
 
     await signIn(page, daemon.tokens.agent);
     await expect(page.getByRole("alert")).toHaveText(OPERATOR_NEEDED);
-    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
     await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 
     await signIn(page, daemon.tokens.worker);
@@ -137,7 +137,7 @@ test.describe("serving", () => {
   }) => {
     await page.goto(daemon.url);
     await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
-    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByLabel("Operator or viewer token")).toBeVisible();
 
     await page.goto(gateway.url);
     await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
@@ -189,7 +189,7 @@ test.describe("signing in through a proxy", () => {
 
       await page.goto(proxied.url);
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-      await expect(page.getByLabel("Operator token")).toHaveCount(0);
+      await expect(page.getByLabel("Operator or viewer token")).toHaveCount(0);
       await expect(page.getByText("Signed in as Alice")).toBeVisible();
 
       await openFromNav(page, "Leases");

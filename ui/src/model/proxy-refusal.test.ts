@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { proxyRefusalLine } from "./proxy-refusal";
 
 const line = (why: string) =>
-  `Your sign-in proxy's identity was refused: ${why}. You can still sign in with an operator token.`;
+  `Your sign-in proxy's identity was refused: ${why}. You can still sign in with an operator or viewer token.`;
 
 describe("proxyRefusalLine", () => {
   it("says why the proxy's identity was refused for each reason, and that it was refused for one it does not know", () => {

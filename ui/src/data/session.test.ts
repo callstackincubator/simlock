@@ -123,9 +123,11 @@ describe("a session behind a sign-in proxy", () => {
     const states: unknown[] = [];
     session.subscribe(() => states.push(session.state()));
     session.start();
-    await vi.waitFor(() => expect(session.state()).toEqual({ kind: "proxy", name: "Alice" }));
+    await vi.waitFor(() =>
+      expect(session.state()).toEqual({ kind: "proxy", name: "Alice", role: "admin" }),
+    );
 
-    expect(states).toEqual([{ kind: "checking" }, { kind: "proxy", name: "Alice" }]);
+    expect(states).toEqual([{ kind: "checking" }, { kind: "proxy", name: "Alice", role: "admin" }]);
     const direct = page({ identity: answers(401, { error: { code: "UNAUTHENTICATED" } }) });
     const opened = direct.open().session;
     opened.start();
@@ -169,7 +171,9 @@ describe("a session behind a sign-in proxy", () => {
 
     expect(session.token()).toBeUndefined();
     expect(proxied.storage.items.size).toBe(0);
-    await vi.waitFor(() => expect(session.state()).toEqual({ kind: "proxy", name: "Alice" }));
+    await vi.waitFor(() =>
+      expect(session.state()).toEqual({ kind: "proxy", name: "Alice", role: "admin" }),
+    );
     expect(proxied.calls.filter((call) => call === "/v1/identity")).toHaveLength(1);
   });
 
@@ -228,7 +232,7 @@ describe("a session behind a sign-in proxy", () => {
     await api.getJson("/v1/workers").catch(() => undefined);
     await settled();
 
-    expect(session.state()).toEqual({ kind: "proxy", name: "Alice" });
+    expect(session.state()).toEqual({ kind: "proxy", name: "Alice", role: "admin" });
     expect(proxied.reload).not.toHaveBeenCalled();
 
     const loading = page({ healthz, identity: HTML_403 });

@@ -11,7 +11,7 @@ import {
 import type { CommandContext } from "../tree.js";
 
 const TOKEN_USAGE =
-  "Usage: simlock token create --role <agent|operator|worker> [--label <text>]\n" +
+  "Usage: simlock token create --role <agent|viewer|operator|worker> [--label <text>]\n" +
   "       simlock token list\n" +
   "       simlock token revoke <token-id>\n";
 
@@ -43,7 +43,7 @@ async function runTokenCreate(
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: simlock token create --role <agent|operator|worker> [--label <text>]\n",
+      "Usage: simlock token create --role <agent|viewer|operator|worker> [--label <text>]\n",
     );
     return 0;
   }
@@ -86,9 +86,11 @@ async function runTokenRevoke(
   return 0;
 }
 
-function parseTokenRole(value: unknown): "agent" | "operator" | "worker" {
-  if (value !== "agent" && value !== "operator" && value !== "worker")
-    throw new UsageError(withHelpHint("token create requires --role <agent|operator|worker>"));
+function parseTokenRole(value: unknown): "agent" | "viewer" | "operator" | "worker" {
+  if (value !== "agent" && value !== "viewer" && value !== "operator" && value !== "worker")
+    throw new UsageError(
+      withHelpHint("token create requires --role <agent|viewer|operator|worker>"),
+    );
   return value;
 }
 

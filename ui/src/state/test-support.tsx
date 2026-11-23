@@ -11,7 +11,11 @@ import { ConsoleProvider } from "./services";
 // reads are there to satisfy the context, and a call into any of them would be the finding.
 const noFacts = { latestVersion: null };
 
-export function inConsole(node: ReactNode, mode?: Partial<Live["mode"]>): string {
+export function inConsole(
+  node: ReactNode,
+  mode?: Partial<Live["mode"]>,
+  role: "admin" | "viewer" = "admin",
+): string {
   const services = {
     api: {} as unknown as ApiClient,
     confirm: () => Promise.resolve(),
@@ -21,6 +25,7 @@ export function inConsole(node: ReactNode, mode?: Partial<Live["mode"]>): string
     session: {} as unknown as Session,
   };
   const live = {
+    identity: { canSignOut: true, name: "operator", role },
     mode: {
       daemon: () => noFacts,
       dispose: () => undefined,
