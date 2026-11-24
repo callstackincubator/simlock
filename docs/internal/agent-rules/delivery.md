@@ -455,10 +455,12 @@ rules mechanically, so nobody has to remember them:
 - A claim on a `*:ready` issue with no comment, label change, or commit on
   `<kind>/<n>` for three days is released, with a comment.
 - A pull request from a `<kind>/<n>` branch fails its check unless its body
-  closes `#<n>` and closes nothing else. A branch that starts with a kind
-  prefix and is not exactly `<kind>/<n>` (or an ADR's `feature/<n>-adr...`)
-  fails it, and so does a PR that closes a task or a bug from any branch
-  but that issue's `<kind>/<n>`.
+  closes `#<n>` and closes nothing else, except that a `bug/<n>` PR may also
+  close other `bug:` issues (coding rule 3). A branch that starts with a
+  kind prefix and is not exactly `<kind>/<n>` (or an ADR's
+  `feature/<n>-adr...`) fails it, and so does a PR that closes a task or a
+  bug from any branch but that issue's `<kind>/<n>` (for a bug, any branch
+  but a `bug/<m>`).
 
 `bug:new` → `bug:ready` is the maintainer's call once they have read the
 triage report, except for a bug the fast track passes (rule 17). A task

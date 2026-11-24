@@ -480,6 +480,8 @@ export class Seeds {
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#simctl.bestEffortShutdown(udid, this.#sourcesSet);
     await this.#deleteIn(udid, this.#sourcesSet);
+    // why: the overrides folder lives outside the device set, so `simctl delete` leaves it; a failed delete throws before this and keeps it.
+    await this.#slimBoot.removeOverrides(udid);
   }
 
   /** why: ADR 0076 §1: the throwaway lives in the device set and is deleted only through the `making` row that names it (ADR 0001 §6), with its log folder, which `simctl delete` leaves behind. */
