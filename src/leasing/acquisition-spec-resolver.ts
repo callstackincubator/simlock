@@ -68,6 +68,7 @@ export class AcquisitionSpecResolver {
     request: DeviceRequest,
     options: LeaseRequestOptions,
     onProgress: (progress: DownloadingProgress) => void,
+    requireServed = true,
   ): Promise<{
     readonly spec: VirtualSpec;
     readonly requirement: DeviceRequirement;
@@ -89,13 +90,14 @@ export class AcquisitionSpecResolver {
           { ...options, allowDownload: false },
           onProgress,
           true,
+          requireServed,
         );
       } catch (error: unknown) {
         // why: only a missing runtime says the tag cannot be met here; any other refusal is the request's answer (ADR 0078 §2).
         if (!(error instanceof RuntimeMissingError)) throw error;
       }
     }
-    return this.#resolveAttempt(driver, request, options, onProgress, false);
+    return this.#resolveAttempt(driver, request, options, onProgress, false, requireServed);
   }
 
   /** why: the image tag the worker gives this request, or none for a request the default does not apply to (ADR 0078 §1). */
@@ -110,6 +112,7 @@ export class AcquisitionSpecResolver {
     options: LeaseRequestOptions,
     onProgress: (progress: DownloadingProgress) => void,
     defaultTag: boolean,
+    requireServed: boolean,
   ): Promise<{
     readonly spec: VirtualSpec;
     readonly requirement: DeviceRequirement;
@@ -122,7 +125,7 @@ export class AcquisitionSpecResolver {
         "except needs a slim lease (this worker's default mode is full)",
       );
     }
-    this.#requireServed(request.platform, mode);
+    if (requireServed) this.#requireServed(request.platform, mode);
     const range = requestedRange(request);
     const target =
       range === undefined
@@ -371,6 +374,26 @@ export class AcquisitionSpecResolver {
       });
       return driver.resolveSpec(request);
     }
+  }
+
+  /**
+   * why: ADR 0090 §4: the spec `simlock seed` makes a seed for, resolved as a lease resolves it with downloads off, except that the
+   * served-mode check is skipped and the spec is full, because one seed serves every mode. Throws the lease's own refusals.
+   */
+  async resolveSeedSpec(request: {
+    readonly platform: Platform;
+    readonly model: string;
+    readonly osVersion?: string;
+    readonly imageTag?: string;
+  }): Promise<VirtualSpec> {
+    const { spec } = await this.resolveSpec(
+      this.options.drivers.get(request.platform),
+      { ...request, mode: "full" },
+      { allowDownload: false, ownerId: "seed", requesterId: "seed" },
+      () => undefined,
+      false,
+    );
+    return spec;
   }
 
   /**
