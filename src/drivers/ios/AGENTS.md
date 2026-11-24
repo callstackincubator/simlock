@@ -21,7 +21,7 @@ Resolve and boot:
 - Named services (ADR 0083): `exclude` beats `include` beats a category; `simlock-managed.json` records the names, so one dropped from both is written back on. A baseline saved before it keeps a dropped name off; `include` it.
 - Slim `except` (ADR 0066): an excepted category's labels are written `false`; an unknown name is `BAD_REQUEST`; a kept label not read back throws `KeptCategoriesError`.
 - A recovery boot writes no slim overrides and reads nothing back. DeviceHub clipboard isolation is configured before preparation and recovery boots; ready default-set simulators reboot under the lease claim before a grant. Active leases at upgrade keep clipboard sync until a later boot or lease end.
-- The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` and every seed deletion remove it themselves after `simctl delete`.
+- The overrides folder is outside the device set (`launchdOverridesRoot`): `destroy` and each seed deletion remove it after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`).
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached.
