@@ -332,8 +332,7 @@ export class Seeds {
           ...(sizeBytes === undefined ? {} : { sizeBytes }),
         };
       } catch (error: unknown) {
-        await this.#filesystem.rm(folder);
-        this.#sources.remove(sourceId);
+        if (await this.#removeAfterFailure(folder)) this.#sources.remove(sourceId);
         throw error;
       } finally {
         this.#making.delete(sourceId);
@@ -604,18 +603,7 @@ export class Seeds {
       this.#sources.markReady(sourceId, configHash, sizeBytes);
       return { configHash, folder, sourceId };
     } catch (error: unknown) {
-      // why: the make's own error is the one the caller must see; a folder that cannot be removed (on Windows a killed emulator's qemu child still holds its disks) stays as its `making` row, which the next sweep clears.
-      const removed = await this.#filesystem.rm(folder).then(
-        () => true,
-        (removal: unknown) => {
-          this.#logger?.warn("android seed folder was not removed after a failed make", {
-            error: String(removal),
-            folder,
-          });
-          return false;
-        },
-      );
-      if (removed) this.#sources.remove(sourceId);
+      if (await this.#removeAfterFailure(folder)) this.#sources.remove(sourceId);
       throw error;
     } finally {
       this.#making.delete(sourceId);
@@ -638,6 +626,20 @@ export class Seeds {
     } finally {
       await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
+    }
+  }
+
+  /** why: the operation's own error is the one the caller must see; a folder that cannot be removed (on Windows a killed emulator's qemu child still holds its disks) stays, as its `making` row for the next sweep to clear. */
+  async #removeAfterFailure(folder: string): Promise<boolean> {
+    try {
+      await this.#filesystem.rm(folder);
+      return true;
+    } catch (removal: unknown) {
+      this.#logger?.warn("android folder was not removed after a failed operation", {
+        error: String(removal),
+        folder,
+      });
+      return false;
     }
   }
 
@@ -769,7 +771,7 @@ export class Seeds {
         timeoutMs: SEED_COPY_TIMEOUT_MS,
       });
     } catch (error: unknown) {
-      await this.#filesystem.rm(toHome);
+      await this.#removeAfterFailure(toHome);
       throw new DriverCrashError(
         `${failure}: ${error instanceof Error ? error.message : String(error)}`,
       );

@@ -429,10 +429,14 @@ describe("Seeds", () => {
       );
       expect(warnings).toEqual([
         {
-          message: "android seed folder was not removed after a failed make",
+          message: "android folder was not removed after a failed operation",
           detail: expect.objectContaining({ folder: seedHome }),
         },
       ]);
+      expect(
+        harness.database.prepare("SELECT state FROM android_source_data").all(),
+        "the row stays for the next sweep",
+      ).toEqual([{ state: "making" }]);
     });
 
     it("names the seed and which of its two boots ran out of android.bootTimeoutMs when making a seed times out", async () => {
