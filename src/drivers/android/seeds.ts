@@ -13,6 +13,7 @@ import type {
   Clock,
   Filesystem,
   IdGenerator,
+  ProcessHandle,
   ProcessRunner,
   ProcessTable,
   SqliteDatabase,
@@ -509,19 +510,78 @@ export class Seeds {
     };
     const state = this.#coldState(copy);
     const booted = await this.#consolePorts.withReservedPort(copy, state);
+    let listener: ProcessHandle | undefined;
     try {
       state.handle = await this.#emulator.start(booted, ["-snapshot", BOOT_SNAPSHOT], true);
       const readyAt = this.#clock.now();
-      const reason = await this.#waitUntilIdle(processTable, state.handle.pid, readyAt, signal);
+      const network = this.#watchDefaultNetwork(booted);
+      listener = network.listener;
+      const reason = await this.#waitUntilIdle(
+        processTable,
+        state.handle.pid,
+        readyAt,
+        signal,
+        network.has,
+      );
       const settledAfterMs = this.#clock.now() - readyAt;
       await this.#saveBootSnapshot(settleId, booted);
       await this.#emulator.shutdown(booted, state.handle);
       state.handle = undefined;
       return { reason, settledAfterMs };
     } finally {
+      listener?.kill("SIGKILL");
       state.handle?.kill("SIGKILL");
       if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
+  }
+
+  /**
+   * why: #1631: a snapshot saved before the guest has a default network restores offline. A one-shot
+   * listener started at ready catches the log line ConnectivityService writes when it picks one
+   * (`logcat -e` matches the message only, so the tag goes in the filter spec); one `dumpsys
+   * connectivity` read backs it up, so a log text that changes in another image falls back to the cap.
+   */
+  #watchDefaultNetwork(booted: AndroidDriverData): {
+    readonly has: () => Promise<boolean>;
+    readonly listener: ProcessHandle;
+  } {
+    const listener = this.#processRunner.spawn(
+      this.#adb,
+      [
+        "-s",
+        booted.serial,
+        "logcat",
+        "-T",
+        "1",
+        "-m",
+        "1",
+        "-e",
+        "CONNECTED broadcast.*isDefaultNetwork=true",
+        "ConnectivityService:D",
+        "*:S",
+      ],
+      { env: this.#adbTools.env() },
+    );
+    let fired = false;
+    void listener.wait().then((result) => {
+      fired = result.stdout.includes("isDefaultNetwork=true");
+    });
+    let dumpsysRead = false;
+    return {
+      has: async () => {
+        if (fired) return true;
+        if (dumpsysRead) return false;
+        dumpsysRead = true;
+        const dumpsys = await this.#processRunner
+          .run(this.#adb, ["-s", booted.serial, "shell", "dumpsys", "connectivity"], {
+            env: this.#adbTools.env(),
+            timeoutMs: SEED_SHELL_TIMEOUT_MS,
+          })
+          .catch(() => undefined);
+        return /Active default network: \d+/.test(dumpsys?.stdout ?? "");
+      },
+      listener,
+    };
   }
 
   /** why: ADR 0090 §3: idle is judged from the copy's own processes, never host load; the tree's root is the emulator process the driver spawned. */
@@ -530,6 +590,7 @@ export class Seeds {
     rootPid: number,
     readyAt: number,
     signal: AbortSignal,
+    hasDefaultNetwork: () => Promise<boolean>,
   ): Promise<"idle" | "cap"> {
     const watch = new IdleWatch({
       idleCores: ANDROID_IDLE_CORES,
@@ -542,7 +603,7 @@ export class Seeds {
       const processes = await processTable.list().catch(() => undefined);
       if (processes !== undefined) watch.observe(processes, this.#clock.now());
       const state = watch.state(this.#clock.now());
-      if (state !== "busy") return state;
+      if (state === "cap" || (state === "idle" && (await hasDefaultNetwork()))) return state;
       await this.#adbTools.delay(IDLE_POLL_MS);
     }
   }
