@@ -169,6 +169,61 @@ describe("Dispatcher: seed.make", () => {
     },
   );
 
+  it("fails a call queued behind another kind's settle with timed-out after 60 minutes from its arrival, and never makes its seed afterwards", async () => {
+    let release: (() => void) | undefined;
+    const ensured: string[] = [];
+    const built = await buildDispatcher({
+      seedVerbs: {
+        ensureSeed: async (spec) => {
+          ensured.push(spec.model);
+          return { leases: 0, settled: false, sourceId: spec.model };
+        },
+        settleSeed: (sourceId) =>
+          new Promise((resolve) => {
+            release = () => resolve({ reason: "idle", settledAfterMs: 1, sourceId });
+          }),
+      },
+    });
+    built.engine.core.seedSettler.start();
+    const first = built.dispatcher.dispatch(
+      "seed.make",
+      { model: "iPhone 17", platform: "ios" },
+      admin,
+    );
+    first.catch(() => undefined);
+    await flushPromises();
+    built.clock.advance(30 * 60_000);
+    const waits: unknown[] = [];
+    let error: unknown = "no answer yet";
+    built.dispatcher
+      .dispatch(
+        "seed.make",
+        { model: "iPhone 16", platform: "ios" },
+        { ...admin, onSeedProgress: (_kind: unknown, progress: unknown) => waits.push(progress) },
+      )
+      .catch((caught: unknown) => {
+        error = caught;
+      });
+    await flushPromises();
+    expect(waits).toEqual([{ reason: "settle-running", stage: "waiting" }]);
+
+    built.clock.advance(59 * 60_000);
+    await flushPromises();
+    expect(error, "59 minutes after its arrival it still waits").toBe("no answer yet");
+    built.clock.advance(60_000);
+    await flushPromises();
+    expect(classifyError(error)).toBe("SEED_SETTLE_FAILED");
+    expect(error).toMatchObject({
+      details: { model: "iPhone 16", platform: "ios", reason: "timed-out" },
+    });
+
+    release?.();
+    await flushPromises();
+    built.clock.advance(10 * 60_000);
+    await flushPromises();
+    expect(ensured, "the timed-out call's seed is never made").toEqual(["iPhone 17"]);
+  });
+
   it("makes a seed on a worker that serves only slim simulators, because a seed is made full and leased by no one", async () => {
     const built = await buildDispatcher({
       iosModes: ["slim"],
