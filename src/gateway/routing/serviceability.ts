@@ -124,7 +124,9 @@ function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): As
   const serving = assessServing(request, views);
   if (serving !== undefined) return serving;
   const requires = request.requires;
-  if (requires === undefined || requires.length === 0) return { kind: "route-or-wait" };
+  if (requires === undefined || requires.length === 0 || views.some(isUnread)) {
+    return { kind: "route-or-wait" };
+  }
   const capable = views.filter((worker) => hasCapabilities.check(worker, request) === undefined);
   if (assessTable(request, capable).kind === "route-or-wait") return { kind: "route-or-wait" };
   return {
@@ -147,7 +149,8 @@ function assessExcept(
   views: readonly WorkerView[],
 ): Rejection | undefined {
   const except = request.except;
-  if (except === undefined) return undefined;
+  // why: the subset below leaves out a worker with no catalog, which may keep the names; the request waits for its first read.
+  if (except === undefined || views.some(isUnread)) return undefined;
   const keeping = views.filter((worker) => keepsExcept.check(worker, request) === undefined);
   if (assessServing(request, keeping) === undefined) return undefined;
   if (
@@ -203,7 +206,14 @@ function assessLeading(
   views: readonly WorkerView[],
 ): Rejection | undefined {
   if (takersOf(request, views).length === 0) return noWorker();
+  return views.some(isUnread) ? undefined : assessKnown(request, views);
+}
 
+// why: rows 2 to 4: what no known worker could serve, whatever the capacity.
+function assessKnown(
+  request: RoutableRequest,
+  views: readonly WorkerView[],
+): Rejection | undefined {
   const known = views.filter(isKnown);
   const platform = request.platform;
   if (!known.some((worker) => hasPlatform(worker, request))) {
@@ -260,7 +270,12 @@ function assessServing(
       : takers.some(
           (worker) => servesMode(worker, request) && matchRequest(worker, request) !== undefined,
         );
-  return fits ? undefined : noWorker();
+  return fits || views.some(isUnread) ? undefined : noWorker();
+}
+
+// why: ADR 0009 §4: a connected worker the gateway has not read yet (as after a gateway restart) may serve what no other can, so the request waits for its first catalog.
+function isUnread(worker: WorkerView): boolean {
+  return worker.connection === "connected" && !worker.drained && worker.catalog === undefined;
 }
 
 function isKnown(worker: WorkerView): boolean {

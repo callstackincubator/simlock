@@ -107,6 +107,26 @@ describe("the search results", () => {
   });
 });
 
+describe("a labelled lease in the search", () => {
+  it("reads `<label> · <holder> · <model>` and is found by its label", () => {
+    const labelled = { ...LEASE, label: "feature-x" } as LeaseRecord;
+    const workers = [worker("wrk_2", "mac-studio-2", { devices: [PHONE] })];
+    const results = buildResults({
+      leases: leaseRows({ leases: [labelled], now: NOW, tokens: [], workers }),
+      mode: "gateway",
+      pages: PAGES,
+      requests: [],
+      workers,
+    });
+    const found = (typed: string) =>
+      searchGroups(results, typed)
+        .filter((group) => group.name === "Leases")
+        .flatMap((group) => group.results.map((result) => result.label));
+    expect(found("feature")).toEqual(["feature-x · agent-1 · iPhone 17 Pro"]);
+    expect(found("feature-x")).toEqual(["feature-x · agent-1 · iPhone 17 Pro"]);
+  });
+});
+
 describe("the update actions in the search", () => {
   it("offers Update… for a worker behind the latest and Update now for one that waits, as its menu does", () => {
     const behind = worker("wrk_2", "mac-studio-2", { latestVersion: "0.4.0", version: "0.3.0" });

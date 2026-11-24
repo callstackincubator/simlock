@@ -404,7 +404,8 @@ describe("startDaemon", () => {
       const runner = new ScriptedProcessRunner([{ match: query, result }]);
       const host = {
         manager: new TaskSchedulerServiceManager({ runner, filesystem }),
-        root: "/Users/me/.simlock",
+        // why: the default root is join(home, ".simlock"); on Windows join uses backslashes, and any other root gets a hash suffix on the task name.
+        root: join("/Users/me", ".simlock"),
         home: "/Users/me",
         nodePath: "/gone/node.exe",
         mainPath: "/here/main.js",
@@ -429,9 +430,11 @@ describe("startDaemon", () => {
       uninstall: async () => undefined,
       start: async () => undefined,
     };
+    // why: the service name is the plain one when the root is `join(home, ".simlock")`, which is `\` on Windows.
+    const root = join("/Users/me", ".simlock");
     const host = {
       manager,
-      root: "/Users/me/.simlock",
+      root,
       home: "/Users/me",
       nodePath: "/gone/node",
       mainPath: "/gone/main.js",
@@ -445,8 +448,8 @@ describe("startDaemon", () => {
     expect(seen).toEqual([
       serviceDefinition({
         role: "worker",
-        root: "/Users/me/.simlock",
-        dataDirectory: daemonDataDirectory("/Users/me/.simlock", "worker"),
+        root,
+        dataDirectory: daemonDataDirectory(root, "worker"),
         home: "/Users/me",
         nodePath: "/gone/node",
         mainPath: "/gone/main.js",
@@ -486,11 +489,11 @@ describe("startDaemon", () => {
       ...host,
       manager: { ...manager, manager: "systemd" },
       home: "/home/me",
-      root: "/home/me/.simlock",
+      root: join("/home/me", ".simlock"),
     });
     await systemd.serviceCheck?.check();
     expect(seen.at(-1)?.path).toBe(
-      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+      join("/home/me", ".config", "systemd", "user", "com.callstack.simlock.worker.service"),
     );
   });
 

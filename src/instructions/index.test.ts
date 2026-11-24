@@ -135,7 +135,7 @@ describe("the rules text", () => {
 
     expect(sections.get("## agent-device")).not.toContain("--os");
     expect(AGENT_INSTRUCTIONS.trimEnd().split("\n").at(-1)).toBe(
-      "More: https://callstackincubator.github.io/simlock/docs/",
+      "More: https://incubator.callstack.com/simlock/docs/introduction",
     );
   });
 
@@ -186,7 +186,7 @@ describe("the router skill", () => {
     expect(skill).not.toContain("# Using Simlock");
     expect(skill).not.toContain("--allow-download");
     expect(skill.trimEnd().split("\n").at(-1)).toBe(
-      "More: https://callstackincubator.github.io/simlock/docs/getting-started/connect-your-agent/",
+      "More: https://incubator.callstack.com/simlock/docs/getting-started/connect-your-agent",
     );
   });
 });

@@ -14,7 +14,7 @@ import {
 } from "../../ds";
 import { BASELINE_FILTERS, type BaselineRow, useBaselines } from "../../state/baselines";
 
-const PREPARE = "https://callstackincubator.github.io/simlock/docs/worker/baselines";
+const PREPARE = "https://incubator.callstack.com/simlock/docs/worker/save-a-prepared-device";
 
 const COLUMNS: readonly Column<BaselineRow>[] = [
   {

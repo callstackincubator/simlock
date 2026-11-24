@@ -1,0 +1,109 @@
+---
+title: Give agents and people access
+description: Make, list and revoke tokens for agents, people and workers, and run admin commands from the CLI as another user or from another machine.
+sidebar:
+  order: 3
+  label: "Give access"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** each agent, person and worker that reaches the gateway over HTTP has its own token, and you can cut any of them off. What each role may do: [Tokens and roles](/simlock/docs/concepts/tokens-and-roles).
+
+The examples use the gateway. Tokens work the same on a standalone worker: drop `--gateway`.
+
+## Before you start
+
+- Admin rights on the daemon: run the commands on its machine as the user who runs it (see [Admin commands from the CLI](#admin-commands-from-the-cli)).
+- A token works only on the daemon that made it. A gateway token doesn't work on a worker, and the other way round.
+- On the daemon's own machine, the CLI needs no token to lease devices.
+
+| Role | Give it to |
+| --- | --- |
+| `agent` | Each coding agent or CI job that leases devices over HTTP. One token per agent: all leases made with one token count as one requester. |
+| `operator` | Each person who uses the console, or a script that manages the fleet. |
+| `worker` | Each worker machine that joins the gateway. See [Add a worker](/simlock/docs/gateway/add-a-worker). |
+
+<Aside type="caution">
+An agent token is shell access to your workers: commands an agent runs on its device run on the worker as the daemon's user. Give one only to something you would let run commands there. See [Tokens and roles](/simlock/docs/concepts/tokens-and-roles).
+</Aside>
+
+## Make a token
+
+```sh
+simlock --gateway token create --role agent --label ci-ios-runner-3
+```
+
+```json
+{"secret":"slk_Xr8vB2nQ5kLw0pT7yHc4mZs9dFj1gUe6aKo3iVb-Rq0","token":{"id":"tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45","role":"agent","label":"ci-ios-runner-3","createdAt":1792569600000}}
+```
+
+- `--role` is `agent`, `operator` or `worker`.
+- `--label` is optional, and shows wherever the token's leases are listed, the console's **Held by** included. Give each one a name you will recognise.
+- The `secret` is printed once and can't be shown again. If you lose it, make a new token and revoke the old one.
+
+Hand the secret to the agent as `SIMLOCK_TOKEN`, with the gateway's address as `SIMLOCK_URL`. See [Use an existing farm](/simlock/docs/getting-started/existing-farm).
+
+**Check:** `SIMLOCK_URL=https://gateway.example.com SIMLOCK_TOKEN=slk_Xr8v… simlock whoami` names the token's label and role `agent`.
+
+## List tokens
+
+```sh
+simlock --gateway token list
+```
+
+```json
+{"tokens":[{"id":"tok_3f9c2a1e-7b4d-4e8a-9c61-2d5f0b7a8e14","role":"operator","label":"alex-laptop","createdAt":1792569600000},{"id":"tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45","role":"agent","label":"ci-ios-runner-3","createdAt":1792569600000}]}
+```
+
+The list shows ids, roles and labels, never secrets. A worker token a worker has joined with also shows `workerId`, the worker it is paired with.
+
+## Revoke a token
+
+<Aside type="caution">
+A revoked token stops working on its next request. Its open sessions close at once, with WebSocket close code `4003` and the reason `token revoked`.
+</Aside>
+
+```sh
+simlock --gateway token revoke tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45
+```
+
+```json
+{"revoked":true}
+```
+
+- **Agent token:** its leases stay until their time to live runs out or an operator releases them. The agent can no longer renew or release them.
+- **Worker token:** the worker's connection closes, and the worker may join with a new token.
+- An id that names no token answers `"revoked":false`.
+
+**Check:** `simlock --gateway token list` no longer lists the id.
+
+## Admin commands from the CLI
+
+Commands such as `token create`, `worker drain` or `config get` need admin rights. The CLI uses the first of these it finds:
+
+1. `--token <secret>` on the command line.
+2. The `SIMLOCK_ADMIN_TOKEN` environment variable.
+3. The `admin.token` file in the daemon's folder: `~/.simlock/gateway/admin.token` for the gateway, `~/.simlock/admin.token` for the worker.
+
+The daemon writes a new `admin.token` each time it starts, readable only by its user. As that user on that machine, admin commands work with no setup. As another user, or from another machine, pass an operator token:
+
+```sh
+simlock --gateway --token slk_Qm9vdHN0cmFwIHRoZSBjb25zb2xlIGFuZCBzaWduIGl worker list
+SIMLOCK_URL=https://gateway.example.com SIMLOCK_TOKEN=slk_Qm9vdHN0cmFwIHRoZSBjb25zb2xlIGFuZCBzaWduIGl simlock worker list
+```
+
+**Check:** `simlock --gateway whoami` reports role `admin`.
+
+To sign people in to the console through your company's sign-in proxy instead of tokens: [Sign people in through a sign-in proxy](/simlock/docs/gateway/sign-in-proxy).
+
+## When it fails
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `{"notice":"admin credential unavailable; connecting as agent (admin-only commands will fail with FORBIDDEN)"}` on stderr | The CLI found no admin credential, or the daemon refused it. It goes on as an agent. | Pass an operator token with `--token` or `SIMLOCK_ADMIN_TOKEN`. Right after a daemon restart, run the command again. |
+| `FORBIDDEN` (exit 1, HTTP 403) | The token's role may not do this, or the lease belongs to another requester. | Use a token of the right role. |
+| `UNAUTHENTICATED` (exit 1, HTTP 401) | The token is unknown or revoked, or made on another daemon. | Make a new token on this daemon. |
+| Two agents block each other with `REQUESTER_ALREADY_LEASED` | They share one agent token, so they are one requester. | Give each agent its own token. |
+
+Flags: [CLI reference](/simlock/docs/reference/cli#simlock-token).

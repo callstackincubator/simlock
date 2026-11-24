@@ -67,7 +67,7 @@ for false and the untyped codec option, 261.
    `clipboard_autosync` are passed only because of it) and `cleanup=true`
    (it puts a phone's stay-awake setting back and deletes the jar). A
    scrcpy upgrade checks both, beside the launch.
-3. ADR 0079 §5 is unchanged: scrcpy's interval stays 2, and the 4 s reset
+3. ADR 0079 §5 is unchanged: scrcpy's interval stays 2, and the 3 s reset
    still bounds a still screen.
 
 ## Consequences
@@ -75,7 +75,7 @@ for false and the untyped codec option, 261.
 - Android streams start on devices with the limit.
 - The server logs at debug: a few more lines at start, and one line per
   reset, so a still screen writes `Display: using DisplayManager API` to
-  the device's logcat every 4 s. A moving screen rarely resets. After a
+  the device's logcat every 3 s. A moving screen rarely resets. After a
   long still stream the 20 last lines a failure is reported with
   (`LOG_TAIL_LINES`) hold mostly that line before the failure's own lines,
   which come last.
@@ -88,8 +88,8 @@ for false and the untyped codec option, 261.
 - **`--nice-name`.** Rejected on the measurement above.
 - **Leave out the key frame interval and keep `log_level=info`.** 238
   bytes. Rejected: at scrcpy's own interval a moving screen sends no key
-  frame of its own (ADR 0079's measurement), so the 4 s reset would restart
-  the device's capture and encoder every 4 s for as long as the screen
+  frame of its own (ADR 0079's measurement), so the 3 s reset would restart
+  the device's capture and encoder every 3 s for as long as the screen
   moves.
 - **Also leave out `send_device_meta=false`.** Rejected: the video parser
   would have to read and skip scrcpy's 64-byte device-name header, a change

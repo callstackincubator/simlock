@@ -1,10 +1,12 @@
 // MODIFIED FILE — this file is copied from serve-sim (Copyright 2026 Evan Bacon, Apache-2.0;
-// see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's change
-// is `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
-// simlock-owned `simctl --set` root can be found at all, and `nativeScreenSizes` being internal
-// instead of private, so the input mode can report the device's size, and the notice/copy split:
-// the callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
-// pacing grid and copies on a queue of its own; everything else here is upstream's.
+// see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's changes
+// are `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
+// simlock-owned `simctl --set` root can be found at all, `nativeScreenSizes` being internal
+// instead of private, so the input mode can report the device's size, the notice/copy split — the
+// callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
+// pacing grid and copies on a queue of its own — and the callbacks hopping onto this actor
+// instead of asserting they already run on it, an assertion that trapped the 0.8.0 release build
+// on macOS 15.7.7 before it wrote a frame; everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -224,8 +226,19 @@ actor FrameCapture {
         desc.registerScreenCallbacks(
             uuid: uuid,
             callbackQueue: queue,
-            frameCallback: { [self] in assumeIsolated { $0.captureFrame() } },
-            surfacesChangedCallback: { [self] in assumeIsolated { $0.captureFrame() } },
+            // why: serve-sim's `assumeIsolated` here trapped with "Incorrect actor executor
+            // assumption" in the 0.8.0 release build on macOS 15.7.7, while a build from Xcode 26.3
+            // passed on the same host. A task created here inherits the actor's isolation, so
+            // `captureFrame` runs as a job of the actor and nothing is checked. The noticed time is
+            // taken before the hop, so the wait for the actor does not move the frame on the grid.
+            frameCallback: { [self] in
+                let seen = DispatchTime.now().uptimeNanoseconds
+                Task { self.captureFrame(seenNanos: seen) }
+            },
+            surfacesChangedCallback: { [self] in
+                let seen = DispatchTime.now().uptimeNanoseconds
+                Task { self.captureFrame(seenNanos: seen) }
+            },
             propertiesChangedCallback: {}
         )
     }
@@ -261,10 +274,9 @@ actor FrameCapture {
 
     // MARK: - Frame capture
 
-    private func captureFrame(force: Bool = false) {
-        // why: the time the composite was noticed, before the copy below, because the copy takes
-        // 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
-        let seenNanos = DispatchTime.now().uptimeNanoseconds
+    // why: `seenNanos` is the time the composite was noticed, before the copy below, because the
+    // copy takes 10-20 ms and varies, and the encode loop's grid judges the frame by when it appeared.
+    private func captureFrame(force: Bool = false, seenNanos: UInt64 = DispatchTime.now().uptimeNanoseconds) {
         guard let desc = pickBestDescriptor() else { return }
 
         let surfSel = NSSelectorFromString("framebufferSurface")

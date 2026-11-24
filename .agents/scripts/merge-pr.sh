@@ -36,7 +36,7 @@ fail() {
 
 # why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr`, `gh issue` and
 # `gh repo view` use, so this script calls repo-scoped REST only.
-nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
+nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\\#/#g; s#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
 api() {
   at=$1
   shift

@@ -1,19 +1,22 @@
 ---
-title: Set up a gateway
-description: Start a gateway daemon, configure its address, put HTTPS in front of it with a reverse proxy, and make the tokens your workers, agents and operators need.
+title: Set up a gateway behind HTTPS
+description: Start a gateway daemon, start it at login, put HTTPS in front of it with a reverse proxy, and change its settings.
+sidebar:
+  order: 1
+  label: "Set up a gateway"
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-When you finish this page, workers and agents reach your gateway at an `https://` address, and you have the tokens that let them in.
+**Result:** workers and agents reach your gateway at an `https://` address, and you hold an operator token for it. How workers and a gateway fit together: [Workers and gateways](/simlock/docs/concepts/workers-and-gateways).
 
 ## Before you start
 
-- A machine with Node.js 22.13 or later and Simlock installed (`npm i -g simlock`). The gateway needs no Xcode and no Android SDK. It can be one of your workers.
+- A machine with Node.js 22.13 or later and Simlock (`npm i -g simlock`). It needs no Xcode and no Android SDK. It can be one of your workers.
 - A host name your workers and agents can reach, such as `gateway.example.com`, if they run on other machines.
-- Simlock doesn't start the gateway at login, and ships no service file. After each reboot, start it yourself or with your own service manager.
+- Run every command on this page on the gateway machine, as the user who runs the gateway.
 
-## Start the gateway
+## 1. Start the gateway
 
 <Steps>
 
@@ -30,68 +33,33 @@ When you finish this page, workers and agents reach your gateway at an `https://
 
    The gateway keeps its configuration, tokens, log and usage history in `~/.simlock/gateway`, apart from any worker on the same machine.
 
-2. Check that it answers:
+2. Start it at login, so it comes back after a reboot:
 
    ```sh
-   curl http://127.0.0.1:4700/v1/healthz
+   simlock --gateway daemon install
    ```
 
-   ```json
-   {"ok":true}
+   ```text
+   Service installed: com.callstack.simlock.gateway (launchd)
+   Daemon running
+   To start after a reboot, turn on automatic login for this user.
    ```
+
+   The service manager is `launchd` on macOS, `systemd` on Linux and Task Scheduler on Windows. What each needs to start after a reboot: [Start, stop and update the daemon](/simlock/docs/worker/daemon).
 
 </Steps>
 
-A gateway always serves HTTP: that is how agents and workers reach it. By default it listens on `127.0.0.1`, port `4700`, so only this machine can reach it until you [put HTTPS in front](#put-https-in-front).
+**Check:** `curl http://127.0.0.1:4700/v1/healthz` prints `{"ok":true}`.
 
-## Change a gateway setting
+A gateway always serves HTTP: agents and workers reach it that way. By default it listens on `127.0.0.1`, port `4700`, so only this machine reaches it until you put HTTPS in front.
 
-Run `simlock --gateway config set <key> <value>`. The value is read as JSON when it is valid JSON, and as a string otherwise. The change takes effect when the gateway restarts:
+## 2. Put HTTPS in front
 
-```sh
-simlock --gateway config set http.port 4800
-```
-
-```text
-Updated http.port in /Users/alex/.simlock/gateway/config.json; takes effect on daemon restart.
-```
-
-```sh
-simlock --gateway daemon stop
-simlock --gateway daemon start
-```
-
-The settings you are most likely to change:
-
-| Key | What it sets | Default |
-| --- | --- | --- |
-| `http.host` | The address the gateway listens on. | `127.0.0.1` |
-| `http.port` | The port it listens on. | `4700` |
-| `http.proxyAuth` | Sign-in through a sign-in proxy. See [Access control](/simlock/docs/gateway/access-control#sign-in-to-the-console-through-a-sign-in-proxy). | not set |
-| `lease.defaultTtlMs`, `lease.maxTtlMs`, `lease.maxPerRequester` | Lease time to live and the lease limit per requester, for every lease made through this gateway. | 15 minutes, 4 hours, 1 (a number, or a limit per platform) |
-| `gateway.disconnectedRetentionMs` | How long the gateway keeps showing a worker after it disconnects. A worker that still holds a lease made through the gateway stays as long as the lease. | 24 hours |
-| `gateway.leaseRequestTimeoutMs` | How long the gateway waits for a worker to grant a lease it asked for. | 5 minutes |
-| `gateway.execTimeoutMs` | How long the gateway waits for one `simctl`, `adb` or exec command on a worker. | 11 minutes |
-| `gateway.alerts.destinations` | Where to send alerts. See [Alerts](/simlock/docs/gateway/alerts). | none |
-
-A gateway also reads `log`, `eventBuffer`, `eventLog`, `metrics` and `capabilities`. Every key is in the [Configuration reference](/simlock/docs/reference/configuration).
-
-Settings for devices, such as `capacity`, `warmPool` or `ios`, belong on the workers. A gateway ignores them, starts anyway, and logs a warning for each one, for example `Ignoring "capacity": it configures a worker, and this daemon runs in gateway mode.`
-
-### If the gateway doesn't start
-
-Two settings stop it:
-
-- **`http.enabled` is `false`.** The gateway fails with `Invalid config value for "http.enabled": expected true in gateway mode (a gateway is reached over HTTP)`. Set it back to `true` or remove it.
-- **A `mode` key left from an older Simlock.** Remove it from `config.json`. A daemon started with `--gateway` is a gateway; any other is a worker.
-
-## Put HTTPS in front
-
-Simlock doesn't do TLS. To let other machines reach the gateway, keep it on `127.0.0.1` and run a reverse proxy in front of it on the same machine. The proxy must:
+Simlock does no TLS. Keep the gateway on `127.0.0.1` and run a reverse proxy in front of it on the same machine. The proxy must:
 
 - **Pass WebSocket upgrades.** Each worker keeps a WebSocket open to `/v1/uplink`.
-- **Pass streamed responses on as they arrive, without buffering.** Lease progress, events, command output and the live screen are streamed.
-- **Keep long requests open.** A command on a device may run for up to 11 minutes, and a request waiting for a lease may wait for minutes.
+- **Pass streamed responses on as they arrive, unbuffered.** Lease progress, events, command output and the live screen are streamed.
+- **Keep long requests open.** A command on a device may run up to 11 minutes, and a request waiting for a lease may wait for minutes.
 
 This [Caddy](https://caddyserver.com/) configuration does all three, and gets and renews a certificate for the host name:
 
@@ -103,19 +71,17 @@ gateway.example.com {
 }
 ```
 
-Caddy passes WebSocket upgrades with no extra setting. `flush_interval -1` sends each streamed response on as soon as it arrives.
+Caddy passes WebSocket upgrades with no extra setting. `flush_interval -1` sends each streamed response on at once. When Caddy reloads its configuration it closes open WebSockets; workers reconnect within 30 seconds.
 
-Workers then join with `wss://gateway.example.com`, and agents and the console use `https://gateway.example.com`.
+**Check:** `curl https://gateway.example.com/v1/healthz` from another machine prints `{"ok":true}`.
 
-When Caddy reloads its configuration, it closes open WebSocket connections. Your workers reconnect by themselves within 30 seconds.
+Workers then join with `wss://gateway.example.com`; agents and the console use `https://gateway.example.com`.
 
 <Aside type="caution">
-You can instead set `http.host` to `0.0.0.0` and let workers and agents connect to port 4700 directly. Then every token, including the workers' join tokens, travels over the network in plain text. Do this only on a network you trust completely, such as a private VPN.
+You can instead set `http.host` to `0.0.0.0` and let workers and agents connect to port 4700 directly. Every token, the workers' join tokens included, then crosses the network in plain text. Do this only on a network you trust completely, such as a private VPN.
 </Aside>
 
-## Make tokens for workers, agents and people
-
-Every worker, agent and person that reaches the gateway over the network needs a token made on the gateway. A token works only on the daemon that made it.
+## 3. Make your operator token
 
 ```sh
 simlock --gateway token create --role operator --label alex-laptop
@@ -125,17 +91,50 @@ simlock --gateway token create --role operator --label alex-laptop
 {"secret":"slk_Qm9vdHN0cmFwIHRoZSBjb25zb2xlIGFuZCBzaWduIGl","token":{"id":"tok_3f9c2a1e-7b4d-4e8a-9c61-2d5f0b7a8e14","role":"operator","label":"alex-laptop","createdAt":1792569600000}}
 ```
 
-Copy the `secret` now. It is printed once and can't be shown again.
+Copy the `secret`: it is printed once. Paste it into the console at the gateway's address.
 
-Make one of each kind you need:
+**Check:** the console at `https://gateway.example.com` signs you in.
 
-- `--role worker` for each worker that joins. See [Add a worker](/simlock/docs/gateway/joining-workers).
-- `--role agent` for each agent that leases devices over HTTP. Give every agent its own token: all leases made with one agent token count as one requester, and a requester holds one lease at a time by default (one per platform when the operator sets `lease.maxPerRequester` per platform).
-- `--role operator` for each person who uses the console or manages the fleet over HTTP.
+Next: [add workers](/simlock/docs/gateway/add-a-worker), and [give agents and people tokens](/simlock/docs/gateway/access).
 
-What each role may do, and how to list and revoke tokens, is in [Access control](/simlock/docs/gateway/access-control).
+## Change a gateway setting
 
-## Next steps
+Set a value, then restart the gateway. The value is read as JSON when it is valid JSON, else as a string:
 
-- [Add workers](/simlock/docs/gateway/joining-workers) to the gateway.
-- Open the console at the gateway's address. See [Fleet console](/simlock/docs/gateway/fleet-console).
+```sh
+simlock --gateway config set http.port 4800
+simlock --gateway daemon stop
+simlock --gateway daemon start
+```
+
+```text
+Updated http.port in /Users/alex/.simlock/gateway/config.json; takes effect on daemon restart.
+```
+
+The settings you are most likely to change:
+
+| Key | What it sets | Default |
+| --- | --- | --- |
+| `http.host`, `http.port` | Where the gateway listens. | `127.0.0.1`, `4700` |
+| `lease.defaultTtlMs`, `lease.maxTtlMs` | Lease time to live for every lease made through the gateway. | 15 min, 4 h |
+| `lease.maxPerRequester` | Leases one requester may hold across the fleet: a number, or a limit per platform. | `1` |
+| `gateway.disconnectedRetentionMs` | How long a disconnected worker stays listed. A worker that holds a lease made through the gateway stays as long as the lease. | 24 h |
+| `gateway.leaseRequestTimeoutMs` | How long the gateway waits for a worker to grant a lease it asked for. | 5 min |
+| `gateway.execTimeoutMs` | How long the gateway waits on one command on a worker's device. Keep it above the workers' `exec.timeoutMs`. | 11 min |
+
+Keep the gateway's `lease.maxTtlMs` at or below every worker's: the worker's own cap still applies, and the gateway logs a warning when a worker's is lower.
+
+Sign-in through a proxy, alerts and the admission command have their own pages: [Sign people in through a sign-in proxy](/simlock/docs/gateway/sign-in-proxy), [Send alerts](/simlock/docs/gateway/alerts), [Rank or refuse requests](/simlock/docs/gateway/admission). Every key: [Configuration](/simlock/docs/reference/configuration).
+
+Device settings, such as `capacity`, `warmPool` or `ios`, belong on the workers. A gateway ignores them, starts anyway and logs a warning for each, such as `Ignoring "capacity": it configures a worker, and this daemon runs in gateway mode.`
+
+## When it fails
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `Invalid config value for "http.enabled": expected true in gateway mode (a gateway is reached over HTTP)` | `http.enabled` is `false` in the gateway's `config.json`. | Set it to `true`, or remove it. |
+| `"mode" is no longer a config key. …` | A `mode` key left from an older Simlock. | Remove `mode` from `config.json`. A daemon started with `--gateway` is a gateway. |
+| `DAEMON_STARTUP_FAILED` (exit 1), the message names the port | Something else holds `http.port`. | Stop it, or set another `http.port`. |
+| `GATEWAY_NOT_PRESENT` (exit 2) | A `--gateway` command on a machine where no gateway has started. | Run `simlock --gateway daemon start` first. |
+| Workers do not join through the proxy | The proxy does not pass WebSocket upgrades to `/v1/uplink`. | Fix the proxy, then see [Add a worker](/simlock/docs/gateway/add-a-worker#when-it-fails). |
+| Lease progress or command output arrives all at once | The proxy buffers responses. | Turn buffering off (Caddy: `flush_interval -1`). |

@@ -47,6 +47,20 @@ describe("checkIdentity", () => {
         { kind: "none" },
       ],
       [json(401, simlock("UNAUTHENTICATED")), { kind: "none" }],
+      ...["javascript:alert(1)", "//login.example.test/start", "not a url", 42].map(
+        (signInUrl) =>
+          [json(401, { error: { code: "UNAUTHENTICATED", signInUrl } }), { kind: "none" }] as const,
+      ),
+      [
+        json(401, {
+          error: {
+            code: "UNAUTHENTICATED",
+            reason: "expired",
+            signInUrl: "https://login.example.test/start",
+          },
+        }),
+        { kind: "refused", reason: "expired", signInUrl: "https://login.example.test/start" },
+      ],
       [json(403, simlock("FORBIDDEN")), { kind: "none" }],
       [json(503, simlock("UNAVAILABLE")), { kind: "none" }],
     ];
@@ -61,6 +75,13 @@ describe("checkIdentity", () => {
     const outcome = await checkIdentity(asking(json(503, simlock("UNAVAILABLE"))).fetch, true);
 
     expect(outcome).toEqual({ kind: "unreachable" });
+  });
+
+  it("keeps the proxy sign-in URL when an unsigned identity ends a proxy session", async () => {
+    const signInUrl = "https://login.example.test/start";
+    const answering = asking(json(401, { error: { code: "UNAUTHENTICATED", signInUrl } }));
+
+    expect(await checkIdentity(answering.fetch, true)).toEqual({ kind: "ended", signInUrl });
   });
 
   it("asks /v1/healthz when the answer is not Simlock's, and says the proxy's session ended when that answers", async () => {

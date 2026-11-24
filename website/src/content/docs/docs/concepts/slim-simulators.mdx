@@ -1,0 +1,68 @@
+---
+title: Slim iOS simulators
+description: What a slim simulator turns off, what you gain and lose, when you get a full one instead, and how a worker limits the modes it serves.
+sidebar:
+  order: 5
+---
+
+A **slim** iOS simulator boots with background services turned off that most agent work does not need. It uses much less memory than a **full** simulator, so a worker fits more of them. Every iOS lease has a mode: `slim` or `full`.
+
+## What slim turns off
+
+Services are grouped in categories. A slim simulator turns off all of them unless the worker narrows the list:
+
+`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`
+
+So on a slim simulator, push notifications, Spotlight results, App Store and StoreKit sheets, universal links, Siri and iCloud sync do not work. If a test waits for one of these and it never appears, check the lease's `device.mode` and ask for `full`.
+
+## Which mode you get
+
+- **A lease that names no mode gets the worker's default**, which is `full` unless the operator set `ios.defaultMode`.
+- **A `full` request always gets a full simulator.**
+- **A `slim` request may get a full one.** iOS older than 18.5 cannot be slimmed, and neither can Android emulators. If Simlock finds after the boot that the services are not off as asked, the lease gets a full device too, and the daemon log says why.
+- **The grant always reports the mode the device really has**, in `device.mode`.
+- **Idle devices are never mixed up.** A request reuses only an idle device of the mode it asked for, so it can wait for a new device while devices of the other mode sit idle.
+- **The first boot of a slim simulator can be slow**: up to 10 minutes (`ios.slim.bootTimeoutMs`).
+- **A baseline keeps the mode it was saved with.**
+
+## Keep some categories running
+
+A test that needs one part of what slim turns off can keep that category running with `--except`, and still save the rest:
+
+```text
+slim                     all categories off
+slim --except store      all off but store        device.except: ["store"]
+full                     nothing off
+```
+
+- `--except` needs a slim lease on an iOS simulator. With `full`, Android or a physical device it is refused with `BAD_REQUEST`, as is a category the worker does not slim.
+- On iOS older than 18.5 you get a full device with no `except`.
+- A warm simulator is shut down and booted again with your list before you get it, so the lease takes a little longer than one without `--except`.
+
+## Modes a worker serves
+
+An operator can limit a worker to one mode with `ios.modes`. The worker then refuses a lease of the other mode at once with `MODE_UNAVAILABLE` (exit 12), before it downloads or boots anything.
+
+- A request that names no mode gets the worker's only mode.
+- A baseline is checked by the mode it was saved with.
+- A worker that serves only slim refuses a slim request on iOS older than 18.5, since it would get a full device.
+- `simlock catalog` prints `Modes served` for iOS. Through a gateway, a request goes only to a worker that serves its mode.
+
+## What a worker can tune
+
+The operator chooses which categories slim turns off (`ios.slim.categories`), and can keep or turn off single services by name:
+
+- `ios.slim.include` keeps a service running even when its category is off.
+- `ios.slim.exclude` turns a service off, even one no category holds, and even the three slim never touches (`assistantd`, `gamed`, `sharingd`). With no categories, `exclude` alone makes a simulator slim; a simulator with nothing turned off is `full`.
+- A category a lease keeps with `--except` wins over `exclude` for its own services.
+- These change every slim simulator the worker prepares from then on, including idle ones after a restart. A lease cannot change them, and `--except` still names categories only.
+- Simlock does not check that a service name is real: a misspelt name changes nothing. A named service that does not read back as written gives a full device, as for any slim service.
+- Taking a name out of `exclude` turns the service back on at the next prepare. A baseline saved before Simlock had these settings has no record of the names: to turn a service back on in its copies, put the name in `include`.
+
+A slim simulator can also count at a smaller size in the [RAM budget](/simlock/docs/concepts/queue-and-capacity#how-capacity-is-counted), so more fit.
+
+## Use it
+
+- Agents: [Lease a specific model or OS](/simlock/docs/using-devices/lease-a-specific-device): ask for `--mode slim` or `full`, and `--except`.
+- Operators: [Run more devices at once](/simlock/docs/worker/capacity): make slim the default and fit more simulators.
+- Operators: [Change a setting](/simlock/docs/worker/change-a-setting): `ios.modes` and the `ios.slim.*` keys, in the [configuration reference](/simlock/docs/reference/configuration#devices-and-drivers).

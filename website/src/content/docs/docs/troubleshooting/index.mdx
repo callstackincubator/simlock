@@ -1,0 +1,78 @@
+---
+title: Find your problem
+description: Find what you see, from a lease that never starts to a worker that will not join a gateway, and go to the section that fixes it.
+sidebar:
+  order: 1
+---
+
+Find what you see, then follow the link. For any error code, [Errors and exit codes](/simlock/docs/reference/errors) lists them all. On the worker, start with `simlock daemon logs` and `simlock doctor`: see [Read the log first](/simlock/docs/troubleshooting/worker#read-the-log-first).
+
+## Leasing a device
+
+| What you see | Go to |
+| --- | --- |
+| `simlock lease` stays at `queued` | [The lease waits and never starts](/simlock/docs/troubleshooting/lease-fails#the-lease-waits-and-never-starts) |
+| `QUEUE_TIMEOUT` or `NO_CAPACITY` | [The lease waits and never starts](/simlock/docs/troubleshooting/lease-fails#the-lease-waits-and-never-starts) |
+| `REQUESTER_ALREADY_LEASED`, `LEASE_ID_TAKEN` | [You already hold a lease](/simlock/docs/troubleshooting/lease-fails#you-already-hold-a-lease) |
+| `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `MODE_UNAVAILABLE`, `NO_DRIVER` | [The machine cannot give you that device](/simlock/docs/troubleshooting/lease-fails#the-machine-cannot-give-you-that-device) |
+| A baseline lease fails: `UNKNOWN_BASELINE`, `BASELINE_STALE`, `BASELINE_MISMATCH` | [The machine cannot give you that device](/simlock/docs/troubleshooting/lease-fails#the-machine-cannot-give-you-that-device) |
+| `ADMISSION_DENIED`, `ADMISSION_FAILED` | [The gateway refused the request](/simlock/docs/troubleshooting/lease-fails#the-gateway-refused-the-request) |
+| `PROVISION_FAILED` | [The device does not start](/simlock/docs/troubleshooting/lease-fails#the-device-does-not-start) |
+| Exit 14, a `lease-lost` line, or `UNKNOWN_LEASE` | [You lost the lease](/simlock/docs/troubleshooting/lease-fails#you-lost-the-lease) |
+| `simlock adb` or `simlock simctl` refuses a command, or `EXEC_TIMEOUT` | [A command on the device fails](/simlock/docs/troubleshooting/lease-fails#a-command-on-the-device-fails) |
+| `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `PROTOCOL_VERSION_UNSUPPORTED` | [The CLI cannot reach the daemon](/simlock/docs/troubleshooting/lease-fails#the-cli-cannot-reach-the-daemon) |
+| `401`, `404` or `409` from the HTTP API | [Over HTTP](/simlock/docs/troubleshooting/lease-fails#over-http) |
+| A real phone is never granted | [Lease a real iPhone or Android phone](/simlock/docs/using-devices/lease-a-phone) |
+| MCP tools answer `NO_LEASE`, or the lease ended under the agent | [Give your agent the MCP server](/simlock/docs/getting-started/mcp-server) |
+| agent-device reports an error | [Drive an app's UI with agent-device](/simlock/docs/using-devices/agent-device) |
+| A tunnel or your own adb cannot reach the device | [Use your own adb and tools through a tunnel](/simlock/docs/using-devices/tunnels) |
+| A CI job leaves devices leased, or a full farm fails jobs | [Run e2e tests from CI](/simlock/docs/using-devices/ci) |
+| The screen does not show, or the picture stops | [Watch a device's screen](/simlock/docs/using-devices/watch-the-screen) |
+
+## Running a worker
+
+| What you see | Go to |
+| --- | --- |
+| The daemon will not start | [The daemon will not start](/simlock/docs/troubleshooting/worker#the-daemon-will-not-start) |
+| The daemon does not come back after a reboot, or `Service: not loaded` / `broken` | [Check whether it runs](/simlock/docs/worker/daemon#check-whether-it-runs) |
+| `simlock update` fails | [Update Simlock](/simlock/docs/worker/daemon#update-simlock) |
+| A config value is refused, or a setting has no effect | [Change a setting](/simlock/docs/worker/change-a-setting#when-it-fails) |
+| iOS or Android leases fail with `NO_DRIVER` | [A platform is missing](/simlock/docs/troubleshooting/worker#a-platform-is-missing) |
+| `simlock doctor` prints `Unavailable [ios] ...` | [iOS or Android stays off](/simlock/docs/troubleshooting/worker#ios-or-android-stays-off) |
+| `simlock doctor` prints a finding you do not know | [Check the machine with doctor](/simlock/docs/troubleshooting/worker#check-the-machine-with-doctor) |
+| Requests wait while the machine looks idle | [A lease waits and never starts](/simlock/docs/troubleshooting/worker#a-lease-waits-and-never-starts) |
+| The worker runs fewer devices than the machine can take | [Run more devices at once](/simlock/docs/worker/capacity#when-it-fails) |
+| A warm pool line shows `short:` | [Make leases start faster](/simlock/docs/worker/warm-pool#when-it-fails) |
+| A device is `quarantined` or `stalled` | [A device will not boot or reset](/simlock/docs/troubleshooting/worker#a-device-will-not-boot-or-reset) |
+| An Android emulator exits at once, or hangs until the boot timeout | [An emulator exits at once or hangs on boot](/simlock/docs/troubleshooting/worker#an-emulator-exits-at-once-or-hangs-on-boot) |
+| An Android device drops off adb | [An Android device drops off adb](/simlock/docs/troubleshooting/worker#an-android-device-drops-off-adb) |
+| `LICENSE_NOT_ACCEPTED` | [Accept the Android SDK licences](/simlock/docs/worker/runtimes-and-images#accept-the-android-sdk-licences) |
+| An install fails, or `component remove` is refused | [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images#when-it-fails) |
+| The disk is full, or `INSUFFICIENT_DISK_SPACE` | [The disk is full](/simlock/docs/troubleshooting/worker#the-disk-is-full) |
+| `orphan-device` findings | [Orphaned devices](/simlock/docs/troubleshooting/worker#orphaned-devices) |
+| `fseventsd` uses too much memory | [fseventsd uses too much memory](/simlock/docs/troubleshooting/worker#fseventsd-uses-too-much-memory) |
+| `default-image-tag-not-installed` | [default-image-tag-not-installed](/simlock/docs/troubleshooting/worker#default-image-tag-not-installed) |
+| A `History:` line in status, or `HISTORY_UNAVAILABLE` | [The event history is not written](/simlock/docs/troubleshooting/worker#the-event-history-is-not-written) |
+| `device add` fails | [Enrol an iPhone or Android phone](/simlock/docs/worker/enrol-phones#when-it-fails) |
+| An enrolled phone shows as `absent` | [An enrolled device shows as absent](/simlock/docs/worker/enrol-phones#an-enrolled-device-shows-as-absent) |
+| No Android phone is seen, `adb-protocol-mismatch` | [No Android phone is seen](/simlock/docs/worker/enrol-phones#no-android-phone-is-seen) |
+| A baseline save fails, or a baseline shows `stale:` | [Save a prepared device for agents](/simlock/docs/worker/save-a-prepared-device#when-it-fails) |
+| The console does not accept a token | [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http#when-it-fails) |
+| "Streaming is off on" a worker | [Turn on screen streaming](/simlock/docs/worker/console-and-http#turn-on-screen-streaming) |
+| Everything is stuck | [Start over](/simlock/docs/troubleshooting/worker#start-over) |
+| A Windows worker misbehaves | [Install on Windows](/simlock/docs/getting-started/windows) |
+
+## Running a fleet
+
+| What you see | Go to |
+| --- | --- |
+| The gateway does not start | [Set up a gateway behind HTTPS](/simlock/docs/gateway/setup) |
+| A worker does not appear in `simlock --gateway worker list` | [Add a worker](/simlock/docs/gateway/add-a-worker) |
+| A command reaches the wrong daemon: `GATEWAY_NOT_PRESENT`, `UNSUPPORTED_IN_WORKER_MODE` | [Workers and gateways](/simlock/docs/concepts/workers-and-gateways) |
+| A request fails at once through the gateway although workers are up | [Workers and gateways](/simlock/docs/concepts/workers-and-gateways) |
+| A worker is `disconnected`, `incompatible` or `drained` | [Maintain workers](/simlock/docs/gateway/maintain-workers) |
+| A worker update fails | [Maintain workers](/simlock/docs/gateway/maintain-workers) |
+| The console refuses the sign-in proxy's identity | [Sign people in through a sign-in proxy](/simlock/docs/gateway/sign-in-proxy) |
+| A token is refused, or a role cannot do something | [Give agents and people access](/simlock/docs/gateway/access) |
+| Alerts do not arrive | [Send alerts to Slack or a webhook](/simlock/docs/gateway/alerts) |
+| The admission command refuses everything | [Rank or refuse requests with an admission command](/simlock/docs/gateway/admission) |

@@ -172,13 +172,14 @@ describe("IosSimctlDriver", () => {
         expect(filesystem.writes).toEqual(rewritten ? [overridesPath(slim18_5.udid)] : []);
         expect(filesystem.modes).toEqual(rewritten ? { file: 0o644, folder: 0o700 } : {});
         expect(runner.calls.map((call) => call.args)).toEqual([
+          simctlArgs("rename", slim18_5.udid, driverData.name),
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
           simctlArgs("listapps", slim18_5.udid),
           simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
         ]);
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 260_000 });
-        expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
+        expect(runner.calls[2]?.options).toEqual({ timeoutMs: 260_000 });
+        expect(runner.calls[4]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
         expect(onSlimmed).toHaveBeenCalledWith({
           address: slim18_5.udid,
@@ -322,6 +323,7 @@ describe("IosSimctlDriver", () => {
 
         expect(result.mode).toBe(mode);
         expect(runner.calls.map((call) => call.args[3])).toEqual([
+          "rename",
           "boot",
           "bootstatus",
           "listapps",
@@ -395,7 +397,9 @@ describe("IosSimctlDriver", () => {
         await plantManagedDevice(filesystem);
         filesystem.writes.length = 0;
         const data = { ...driverData, runtimeId };
+        const renamed = options.purpose === "prepare";
         const runner = new ScriptedProcessRunner([
+          ...(renamed ? [{ match: simctl("rename", data.udid, driverData.name) }] : []),
           { match: simctl("boot", data.udid) },
           { match: simctl("bootstatus", data.udid, "-b") },
           { match: simctl("listapps", data.udid) },
@@ -422,6 +426,7 @@ describe("IosSimctlDriver", () => {
           mode: "full",
         });
         expect(runner.calls.map((call) => call.args)).toEqual([
+          ...(renamed ? [simctlArgs("rename", data.udid, driverData.name)] : []),
           simctlArgs("boot", data.udid),
           simctlArgs("bootstatus", data.udid, "-b"),
           simctlArgs("listapps", data.udid),
@@ -440,6 +445,7 @@ describe("IosSimctlDriver", () => {
       await plantManagedDevice(filesystem);
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
+        { match: { command: "xcrun", args: simctlArgs("rename", slim18_5.udid, driverData.name) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         {
           hangs: true,
@@ -465,7 +471,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 2);
+      await waitForCalls(runner, 3);
       const readyState = promiseState(ready);
 
       // why: Just past the default 120s: a boot timed against it would have given up by now.
@@ -475,7 +481,7 @@ describe("IosSimctlDriver", () => {
 
       clock.advance(300_000 - 120_001);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
+      expect(runner.calls[2]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
     it("an operator's full iOS boot waits ios.full.bootTimeoutMs, then fails with BootTimeoutError", async () => {
@@ -492,7 +498,18 @@ describe("IosSimctlDriver", () => {
         const filesystem = new MemoryFilesystem();
         await plantManagedDevice(filesystem);
         const clock = new FakeClock();
+        const renamed = options.purpose === "prepare";
         const runner = new ScriptedProcessRunner([
+          ...(renamed
+            ? [
+                {
+                  match: {
+                    command: "xcrun",
+                    args: simctlArgs("rename", data.udid, driverData.name),
+                  },
+                },
+              ]
+            : []),
           { match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
           {
             hangs: true,
@@ -520,7 +537,7 @@ describe("IosSimctlDriver", () => {
           { address: data.udid, deviceId: data.udid, driverData: data },
           options,
         );
-        await waitForCalls(runner, 2);
+        await waitForCalls(runner, renamed ? 3 : 2);
         const readyState = promiseState(ready);
 
         clock.advance(waitsMs - 1);
@@ -571,15 +588,16 @@ function runnerReadingFileAtBoot(filesystem: FaultyFilesystem, clock: FakeClock)
   let contents: string | undefined;
   const calls = slimBootCalls(driverData.udid, wantedReadback());
   const runner = new ScriptedProcessRunner([
+    calls[0]!,
     {
-      ...calls[0]!,
+      ...calls[1]!,
       onSpawn: async () => {
         clock.advance(40_000);
         const path = overridesPath(driverData.udid);
         contents = (await filesystem.exists(path)) ? await filesystem.readFile(path) : undefined;
       },
     },
-    ...calls.slice(1),
+    ...calls.slice(2),
   ]);
   return { fileAtBoot: () => contents, runner };
 }

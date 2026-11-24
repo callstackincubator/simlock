@@ -93,6 +93,7 @@ export const identityRoute = declareRoute({
   summary: "Who the token in the request is",
   role: "agent",
   reply: OPERATIONS["identity.get"].output,
+  errorExtras: { 401: { fields: { signInUrl: z.string().optional() } } },
 });
 
 export const deviceRemoveRoute = declareRoute({

@@ -1,0 +1,105 @@
+---
+title: Rank or refuse requests with an admission command
+description: Have the gateway run your own program for every lease request, to give it a priority in the fleet queue or refuse it with a reason.
+sidebar:
+  order: 7
+  label: "Rank or refuse requests"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** the gateway asks your program about every new lease request. The program gives the request a priority in the fleet queue, or refuses it with a reason the agent sees. How the fleet queue works: [Workers and gateways](/simlock/docs/concepts/workers-and-gateways).
+
+## Before you start
+
+- A gateway. A worker ignores `gateway.admission.*`.
+- A program on the gateway machine that reads one line of JSON on stdin and prints one JSON object on stdout.
+- Without a command, requests wait oldest first.
+
+<Aside type="caution">
+The gateway fails closed: while the command is broken, slow or missing, every lease request through the gateway is refused with `ADMISSION_FAILED`. Test the program by hand before you set it.
+</Aside>
+
+## Set the command
+
+<Steps>
+
+1. Write the program. It reads the request and answers with a priority or a refusal:
+
+   ```ts title="/etc/simlock/policy.ts"
+   const input = JSON.parse(await Bun.stdin.text());
+   if (input.metadata.role === 'ci' && input.platform === 'ios') {
+     console.log(JSON.stringify({ priority: 10 }));
+   } else if (input.metadata.project === 'archived-app') {
+     console.log(JSON.stringify({ deny: 'archived-app has no device budget' }));
+   } else {
+     console.log('{}');
+   }
+   ```
+
+2. Set it on the gateway as an argv list, and restart the gateway:
+
+   ```sh
+   simlock --gateway config set gateway.admission.command '["bun","/etc/simlock/policy.ts"]'
+   simlock --gateway daemon stop
+   simlock --gateway daemon start
+   ```
+
+3. Optional: give the command longer to answer, up to 60000 ms. The default is 5000:
+
+   ```sh
+   simlock --gateway config set gateway.admission.timeoutMs 10000
+   ```
+
+   Restart the gateway again after this change.
+
+</Steps>
+
+**Check:** `simlock --gateway lease --platform ios --meta project=archived-app --no-wait` fails with `ADMISSION_DENIED` and the reason `archived-app has no device budget`.
+
+## What the command reads
+
+The gateway runs the command once for every new lease request, before the request waits. It writes one line of JSON to stdin, then closes it:
+
+```json
+{"requesterId":"job-78","principal":"tok_7f3a","platform":"ios","request":{"platform":"ios","leaseId":"job-78"},"metadata":{"project":"checkout-app","role":"ci"}}
+```
+
+| Field | Holds |
+| --- | --- |
+| `requesterId` | The requester the lease would belong to. |
+| `principal` | Who sent it, such as the id of the token the request came with. |
+| `platform` | `ios` or `android`. |
+| `request` | The lease request as the caller sent it, without `requesterId`, `idempotencyKey` and `metadata`, and not filled with defaults: a `ttlMs` the caller didn't send is absent. It holds the caller's `runId` when sent. |
+| `metadata` | What the caller sent as metadata, or `{}`. |
+
+The caller sends metadata with `simlock lease --meta project=checkout-app --meta role=ci`, the HTTP body's `metadata`, or the Node client's `metadata`. It is an object of text values: at most 16 keys, a key of 1 to 64 characters, a value of 0 to 256, and 2048 characters in all, else `BAD_REQUEST`. The gateway hands it to the command and nowhere else: it is not stored, in no event, and not sent to a worker.
+
+## What the command answers
+
+The command exits 0 and prints one JSON object on stdout, whitespace around it allowed:
+
+| Output | The caller gets |
+| --- | --- |
+| `{"priority": 10}` | The request waits at priority 10: an integer from -1000 to 1000. |
+| `{}` | The request waits at priority 0, as with no command. |
+| `{"deny": "budget used"}` | `ADMISSION_DENIED` (exit 16, HTTP 403) with the reason: 1 to 500 characters. |
+| Anything else | `ADMISSION_FAILED` (exit 16, HTTP 503). |
+
+Other keys in the object are ignored. A higher priority is served first; equal priorities are served oldest first. Requests for virtual and for physical devices wait in separate lines, each ordered on its own.
+
+These skip the command: a request the gateway already holds (a repeated idempotency key), a requester over its lease limit, and a chosen lease id that is taken or ended. A `lease.cancel` for the requester while the command runs kills the command and ends the request `cancelled`.
+
+## When it fails
+
+Each of these refuses the request with `ADMISSION_FAILED` (exit 16, HTTP 503). The gateway's log says why at warn level, with the first 2048 bytes of the command's stderr.
+
+| What the command did | Fix |
+| --- | --- |
+| Exited non-zero, or was killed by a signal. | Run the program by hand with a sample line on stdin. |
+| Ran past `gateway.admission.timeoutMs` (5 seconds by default), counted from its start. It is killed. | Make it faster, or raise the timeout. |
+| Printed more than 65536 bytes on stdout. It is killed. | Print one object only. |
+| Printed something that is no answer: not JSON, two objects, a priority out of range, an empty reason, or both keys. | Print one of the answers above. |
+| Doesn't exist, or can't start. | Check the argv list. Give the full path to the program if the gateway can't find it. |
+
+An agent that gets `ADMISSION_DENIED` reads the reason in the message and the details' `reason`. Every code: [Errors](/simlock/docs/reference/errors).

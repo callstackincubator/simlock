@@ -28,7 +28,7 @@ describe("sourceFilesRecursive", () => {
       writeFileSync(join(dir, "nested", "deep.test.ts"), "export {};");
 
       const found = sourceFilesRecursive(dir)
-        .map((path) => path.slice(dir.length + 1))
+        .map((path) => path.slice(dir.length + 1).replaceAll("\\", "/"))
         .sort();
 
       expect(found).toEqual(["nested/deep.ts", "top.ts"]);

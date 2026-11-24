@@ -15,17 +15,29 @@ const SCRIPT = join(
 );
 const MINUTE = 60_000;
 
+// why: Python's monotonic clock read here, not through awake.mjs, so a wrong clock in the hook
+// fails a test instead of agreeing with itself; Windows 11 may answer `python3` with the Store alias.
 function awakeNowMs(): number {
-  return (
-    Number(execFileSync("python3", ["-I", "-c", "import time; print(time.monotonic())"])) * 1000
-  );
+  const candidates =
+    process.platform === "win32" ? [["python"], ["py", "-3"], ["python3"]] : [["python3"]];
+  for (const [command, ...prefix] of candidates) {
+    try {
+      const out = execFileSync(
+        command!,
+        [...prefix, "-c", "import time; print(time.monotonic())"],
+        { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] },
+      );
+      if (/^\d+(\.\d+)?$/.test(out.trim())) return Number(out) * 1000;
+    } catch {}
+  }
+  throw new Error("no Python 3 on this host");
 }
 
 function call(dir: string, input: object): string {
   return spawnSync("node", [SCRIPT], {
     input: JSON.stringify(input),
     encoding: "utf8",
-    env: { ...process.env, TMPDIR: dir },
+    env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir },
   }).stdout;
 }
 

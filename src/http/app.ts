@@ -83,6 +83,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   const notices = new LeaseNoticeBuffer(deps.ownerRoutedFacts);
 
   const agentAuth = requireAuth(deps.auth);
+  const identityAuth = requireAuth(deps.auth, { signInUrl: deps.auth.signInUrl });
 
   // why: The one error boundary. Hono's `compose` catches a thrown error at the layer that threw
   // it and hands it to `app.onError` right there -- it never propagates up through an outer
@@ -235,7 +236,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
-  app.openapi({ ...identityRoute, middleware: [agentAuth] }, async (c) =>
+  app.openapi({ ...identityRoute, middleware: [identityAuth] }, async (c) =>
     c.json(await deps.dispatch("identity.get", {}, buildHttpSession(c.get("identity"))), 200),
   );
 

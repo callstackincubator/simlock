@@ -4,6 +4,8 @@ import { type AndroidSdkPaths, locateSdk } from "../../src/drivers/android/testi
 import { type Filesystem, NodeFilesystem, NodeProcessRunner } from "../../src/ports/index.js";
 
 const runner = new NodeProcessRunner();
+// why: the runner needs a deadline on every run; the tools these tests call answer in seconds.
+const SDK_TOOL_TIMEOUT_MS = 60_000;
 
 /**
  * why: the slow Android tests skip exactly when the real driver could not start, so they ask the
@@ -44,11 +46,9 @@ export async function runSdkTool(
   args: readonly string[],
   options: { readonly timeout?: number } = {},
 ): Promise<{ readonly stdout: string; readonly stderr: string }> {
-  const result = await runner.run(
-    tool,
-    args,
-    options.timeout === undefined ? {} : { timeoutMs: options.timeout },
-  );
+  const result = await runner.run(tool, args, {
+    timeoutMs: options.timeout ?? SDK_TOOL_TIMEOUT_MS,
+  });
   if (result.code === 0) return result;
   throw Object.assign(
     new Error(`${tool} ${args.join(" ")} exited ${String(result.code)}: ${result.stderr}`),

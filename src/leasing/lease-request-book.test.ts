@@ -281,7 +281,7 @@ describe("LeaseRequestBook", () => {
     await book.admit(request, { ...keyed, leaseId: "myid" }, () => granted("myid"));
     await settled();
 
-    expect(() => book.replay(request, keyed)).toThrow(/different device request or lease ID/);
+    expect(() => book.replay(request, keyed)).toThrow(/different device request, lease ID/);
   });
 
   it.each([

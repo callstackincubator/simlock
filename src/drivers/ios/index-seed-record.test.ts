@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FakeClock,
@@ -7,7 +8,7 @@ import {
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { memorySourceDatabase, plantBytes } from "./testing.js";
-import { deviceRoot, driverData, plantManagedDevice, simctl } from "./test-slim.js";
+import { deviceRoot, driverData, sourcesSetPath, plantManagedDevice, simctl } from "./test-slim.js";
 import {
   RecordingLogger,
   createDriver,
@@ -28,8 +29,7 @@ afterEach(() => {
 
 const copyUdid = "CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD";
 const lineageUdid = throwawayUdid.toUpperCase();
-const sourcesSet = `${deviceRoot}/sources`;
-const seedFolder = `${sourcesSet}/${seedUdid}`;
+const seedFolder = join(sourcesSetPath, seedUdid);
 const SQLITE_HEADER = Buffer.from("SQLite format 3\u0000");
 const MEBIBYTE = 1_048_576;
 
@@ -37,8 +37,23 @@ function utf16be(text: string): Buffer {
   return Buffer.from(text, "utf16le").swap16();
 }
 
+// why: the walk asks for a path in the memory filesystem's own `/` spelling, which on Windows has
+// no drive and no `\`, while a test names it as the host spells it.
+const walkSpelling = (path: string) => path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/");
+
 class UnreadableFiles extends MemoryFilesystem {
   readonly unreadable = new Set<string>();
+  /** why: CoreSimulator's atomic write lists a `*.sb-*` temp file and renames it away before the walk reaches it. */
+  readonly vanishing = new Set<string>();
+  /** why: the same rename can land just after the walk's lstat, before the file is read. */
+  readonly vanishingAfterLstat = new Set<string>();
+
+  override async lstat(path: string): ReturnType<MemoryFilesystem["lstat"]> {
+    if (this.vanishing.has(walkSpelling(path))) await this.rm(path);
+    const details = await super.lstat(path);
+    if (this.vanishingAfterLstat.has(walkSpelling(path))) await this.rm(path);
+    return details;
+  }
 
   override async openFile(path: string): ReturnType<MemoryFilesystem["openFile"]> {
     if (this.unreadable.has(path)) {
@@ -70,7 +85,7 @@ async function provisionNewSeed(options: {
   const database = await memorySourceDatabase();
   const filesystem = new UnreadableFiles();
   await plantManagedDevice(filesystem);
-  await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+  await filesystem.mkdirp(join(logsRoot, throwawayUdid));
   await options.plant(filesystem);
   // why: `simctl clone` gives the copy what the seed holds, and the scripted runner cannot.
   await filesystem.mkdirp(seedFolder);
@@ -117,18 +132,24 @@ const baselineUdid = "EEEEEEEE-7777-8888-9999-FFFFFFFFFFFF";
 async function saveBaseline(options: {
   readonly lineage?: readonly string[];
   readonly plant: (filesystem: UnreadableFiles) => Promise<void>;
+  readonly vanishingPaths?: readonly string[];
+  readonly vanishingAfterLstatPaths?: readonly string[];
 }): Promise<Made> {
   const database = await memorySourceDatabase();
   const filesystem = new UnreadableFiles();
   await plantManagedDevice(filesystem);
   await options.plant(filesystem);
+  for (const path of options.vanishingPaths ?? []) filesystem.vanishing.add(walkSpelling(path));
+  for (const path of options.vanishingAfterLstatPaths ?? []) {
+    filesystem.vanishingAfterLstat.add(walkSpelling(path));
+  }
   const opener = new FakeSqliteOpener(filesystem);
   const logger = new RecordingLogger();
   const runner = new ScriptedProcessRunner([
     { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
     { match: simctl("shutdown", driverData.udid) },
     {
-      match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSet),
+      match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSetPath),
       result: { code: 0, stderr: "", stdout: `${baselineUdid}\n` },
     },
   ]);
@@ -187,7 +208,7 @@ describe("IosSimctlDriver source records", () => {
         await plantBytes(filesystem, `${seedFolder}/data/one.db-shm`, Buffer.from("index"));
         await plantBytes(filesystem, `${seedFolder}/data/two.db`, SQLITE_HEADER);
         await plantBytes(filesystem, `${seedFolder}/data/two.db-wal`, naming);
-        filesystem.defineSymlink(`${seedFolder}/data/Logs`, `${logsRoot}/${lineageUdid}`);
+        filesystem.defineSymlink(`${seedFolder}/data/Logs`, join(logsRoot, lineageUdid));
       },
     });
 
@@ -266,14 +287,14 @@ describe("IosSimctlDriver source records", () => {
     expect(walkFails.error).toMatchObject({ code: "EACCES" });
     expect(
       walkFails.runner.calls.some(
-        (call) => call.args.join(" ") === `simctl --set ${sourcesSet} delete ${seedUdid}`,
+        (call) => call.args.join(" ") === `simctl --set ${sourcesSetPath} delete ${seedUdid}`,
       ),
       "the seed's clone is deleted",
     ).toBe(true);
     expect(walkFails.database.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     expect(recorded(walkFails.database)).toEqual([]);
 
-    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
     const lease = driverData.udid.toUpperCase();
     const fromUsedLease = await saveBaseline({
       lineage: [lineageUdid],
@@ -307,5 +328,62 @@ describe("IosSimctlDriver source records", () => {
       saved_without_lineage: 1,
     });
     expect(recorded(fromOldDevice.database)).toEqual([]);
+  });
+
+  it("a baseline is saved when files listed in its clone are gone before the walk reaches them, and only the files still there are recorded", async () => {
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
+    const lease = driverData.udid.toUpperCase();
+    const topTemp = join(baselineFolder, "device.plist.sb-55c05b11-ISuHtw");
+    const nestedTemp = join(
+      baselineFolder,
+      "data",
+      "Library",
+      "Preferences",
+      "app.plist.sb-0a1b2c3d-QwErTy",
+    );
+
+    const saved = await saveBaseline({
+      lineage: [lineageUdid],
+      plant: async (filesystem) => {
+        await plantBytes(filesystem, `${baselineFolder}/device.plist`, Buffer.from(lease));
+        await plantBytes(filesystem, topTemp, Buffer.from(lease));
+        await plantBytes(
+          filesystem,
+          `${baselineFolder}/data/Library/Preferences/app.plist`,
+          Buffer.from(lease),
+        );
+        await plantBytes(filesystem, nestedTemp, Buffer.from(lease));
+      },
+      vanishingPaths: [topTemp, nestedTemp],
+    });
+
+    expect(saved.error).toBeUndefined();
+    expect(saved.database.prepare("SELECT state FROM ios_source_data").all()).toEqual([
+      { state: "ready" },
+    ]);
+    expect(recorded(saved.database)).toEqual([
+      { kind: "file", relative_path: "data/Library/Preferences/app.plist" },
+      { kind: "file", relative_path: "device.plist" },
+    ]);
+    expect(saved.logger.warnings).toEqual([]);
+  });
+
+  it("a baseline is saved when a file in its clone is renamed away after the walk reaches it but before it is read, and the file is not recorded", async () => {
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
+    const lease = driverData.udid.toUpperCase();
+    const temp = join(baselineFolder, "device.plist.sb-55c05b11-ISuHtw");
+
+    const saved = await saveBaseline({
+      lineage: [lineageUdid],
+      plant: async (filesystem) => {
+        await plantBytes(filesystem, `${baselineFolder}/device.plist`, Buffer.from(lease));
+        await plantBytes(filesystem, temp, Buffer.from(lease));
+      },
+      vanishingAfterLstatPaths: [temp],
+    });
+
+    expect(saved.error).toBeUndefined();
+    expect(recorded(saved.database)).toEqual([{ kind: "file", relative_path: "device.plist" }]);
+    expect(saved.logger.warnings).toEqual([]);
   });
 });

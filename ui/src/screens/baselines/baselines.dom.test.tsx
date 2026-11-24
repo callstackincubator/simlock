@@ -195,7 +195,7 @@ describe("the Baselines page", () => {
     const link = await screen.findByRole("link", { name: "Prepare baseline" });
     expect(link).toHaveAttribute(
       "href",
-      "https://callstackincubator.github.io/simlock/docs/worker/baselines",
+      "https://incubator.callstack.com/simlock/docs/worker/save-a-prepared-device",
     );
     await waitFor(() => expect(rows()).toHaveLength(2));
     expect(screen.getAllByRole("radio")).toHaveLength(3);

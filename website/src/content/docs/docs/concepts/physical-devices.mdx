@@ -1,0 +1,80 @@
+---
+title: Physical devices
+description: How a real iPhone, iPad or Android phone becomes leasable, what Simlock does to it after each lease, what it never does, and the states a phone can be in.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **physical device** is a real iPhone, iPad or Android phone plugged into a worker. Once an operator **enrols** it, agents lease it with `--physical`, the same way they lease a simulator: the lease has a TTL, is renewed and is released.
+
+## Enrolment
+
+Enrolling a device records its model, OS version, whether it is a phone or a tablet, and the list of apps on it:
+
+- On iOS, the apps installed by Xcode or `devicectl`. App Store and TestFlight apps are not on the list, and Simlock never touches them.
+- On Android, the user-installed apps.
+
+Simlock knows the device by its UDID (iPhone, iPad) or adb serial (Android). An iPad is a `tablet`; every Android device is a `phone`. On Android the OS version is the API level.
+
+Simlock never leases a device that is not enrolled. A worker can enrol phones on its own when its operator turns on `devices.autoEnroll`. An Android phone that adb reaches over the network can be enrolled when the worker turns on `android.networkDevices`; its address is then its ID.
+
+## What happens when a lease ends
+
+```text
+enrol: apps A, B recorded
+lease: agent installs C, D ─► lease ends ─► C, D uninstalled ─► ready
+```
+
+When a physical lease is released or expires, Simlock uninstalls every app it can see that was not on the device at enrolment. It does **not**:
+
+- touch App Store or TestFlight apps on iOS;
+- reset settings, files, accounts or keychain items;
+- clear the data of an app that was there at enrolment;
+- reinstall an app from enrolment that has gone missing. It is reported, not put back.
+
+To keep an app installed on purpose, the operator enrols the device again after installing it, so the app joins the list.
+
+<Aside type="danger">
+Every app that was not on the device at enrolment is uninstalled after each lease. Do not enrol, or lease, a phone that holds an app you want to keep, unless that app was on it at enrolment.
+</Aside>
+
+## What Simlock never does
+
+- **It never erases or resets the device.**
+- **It never deletes a physical device.** Cleanup, `simlock nuke` and `nuke --delete-devices` leave it enrolled. Removing a device only makes Simlock forget it; nothing is sent to the device.
+- **It does not hide the device from other tools.** Simulators are kept apart from the rest of the machine; phones are not. Every tool on the worker sees an enrolled device, so an agent can reach a phone it did not lease. Tell agents to use only the device their lease names.
+
+<Aside type="caution">
+Enrol a device in one Simlock installation only. A second installation would uninstall the first one's apps whenever it ends a lease.
+</Aside>
+
+## Leasing a phone
+
+- **`--device` matches the model name**, in any letter case. **`--class`** is `phone` or `tablet`; with neither you get a `phone`.
+- **`--os` matches exactly.** `--os 18` does not match 18.4.1; write a range such as `">=18 <19"` for any 18.x.
+- **Slim mode, image tags and downloads do not apply** to a phone.
+- **A request no enrolled device could ever match fails at once** with `UNKNOWN_MODEL`. One that matches a leased, cleaning or absent device waits for it, in a line of its own.
+- **A lease without `--physical` never gets a phone.** A worker can serve only phones on a platform (`<platform>.virtualDevices` set to `false`); it then refuses every lease without `--physical` on that platform with `UNKNOWN_MODEL`.
+- **A physical lease survives a daemon restart.**
+
+`simlock simctl` and `simlock adb` reach simulators and emulators only. For a phone, you use the platform's own tools with the values from the grant.
+
+## Device states
+
+| State | Means | What happens |
+| --- | --- | --- |
+| `ready` | Enrolled, connected and free. | It can be leased. |
+| `leased` | An agent holds it. | Nobody else gets it. |
+| `absent` | Not reachable for about a minute: `not-present` (unplugged, or a different phone at a network address), `untrusted`, or `locked`. | A lease on it ends as `device-lost`. When it is back, Simlock cleans it and grants it to the next waiting request. |
+| `quarantined` | The leftover apps could not be uninstalled after a lease. | Nobody can lease it. Simlock retries in the background; if it keeps failing, it unenrols the device and deletes nothing else on it. |
+
+- **A locked iPhone or iPad counts as absent.** It is not enrolled or leased while it asks for its passcode.
+- **Simlock cannot tell when an Android phone is locked**, so a locked Android phone is still leased.
+- `simlock status` shows an absent or quarantined device with its reason.
+
+## Use it
+
+- Agents: [Lease a real iPhone or Android phone](/simlock/docs/using-devices/lease-a-phone)
+- Operators: [Enrol an iPhone or Android phone](/simlock/docs/worker/enrol-phones): USB, network, automatic, keep an app, remove, failures.

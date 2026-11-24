@@ -1,0 +1,165 @@
+---
+title: Stream the screen and send input from your own tool
+description: Read a leased device's live screen over HTTP, send taps, swipes, keys and buttons over a WebSocket, and rotate an iOS simulator with one call.
+sidebar:
+  order: 15
+  label: "Stream and send input"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** your own tool shows a leased device's screen and drives it with taps, keys and buttons.
+
+To watch in the browser instead, see [Watch a device's screen](/simlock/docs/using-devices/watch-the-screen).
+
+## Before you start
+
+- On the worker, the operator turned on `capabilities.stream.enabled` for the screen and `capabilities.input.enabled` for input; both are off by default. Through a gateway, each must be on at the gateway and at the lease's worker. See [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http).
+- You hold a lease, and a token: the lease's holder, or an operator for any lease. The examples use the variables from [Lease over the HTTP API](/simlock/docs/using-devices/http-api).
+
+| Device | Screen | Input |
+| --- | --- | --- |
+| iOS simulator | Yes | Yes |
+| Android emulator | Yes | Yes |
+| Android phone | Yes | Yes |
+| Physical iPhone | iOS 27 or later, worker on Xcode 27 or later | No: the socket reports `inputUnavailable` |
+
+## Stream the screen
+
+| Who | Route | Works on |
+| --- | --- | --- |
+| The lease's holder (or an operator) | `GET /v1/leases/<lease-id>/stream` | A worker or a gateway |
+| An operator, for any running device | `GET /v1/stream/workers/<worker-id>/devices/<device-id>` | A worker (its own id only) or a gateway |
+
+An agent token reads a screen only through its own lease.
+
+```sh
+curl -sS -N "$SIMLOCK_URL/v1/leases/$LEASE/stream" \
+  -H "Authorization: Bearer $SIMLOCK_TOKEN" -o screen.bin
+```
+
+**Check:** bytes keep arriving while the device is running.
+
+- The body is H.264 frames in Simlock's own framing, made for the console's player. It runs until you close the request, or the device stops or its lease ends.
+- When a lease end stops the stream, the last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Other ends send no such frame.
+- The size headers give the picture's size when the stream opens; a meta frame in the body gives each later size, such as after a rotation or a fold. Read every meta frame, or the picture stretches until you reconnect.
+- A worker's answer carries `simlock-stream-keyframe-ms: 5000`, a promise of a key frame at least every 5 seconds. A gateway shares one relayed stream between viewers only for a worker that makes the promise, and its own answer never carries the header. You can ignore it.
+
+### Picture quality
+
+The worker's operator sets picture size, bitrate and frame rate, which decide the bandwidth a stream uses. See [Picture quality and bandwidth](/simlock/docs/worker/console-and-http#picture-quality-and-bandwidth).
+
+## Send input
+
+<Steps>
+
+1. Open a WebSocket to `GET /v1/leases/<lease-id>/input`, with `Authorization: Bearer <token>`, on the worker or the gateway.
+2. Wait for `0x83` (input accepted), then read `0x82` for the screen's size.
+3. Send touch, button, key, orientation and scroll messages.
+
+</Steps>
+
+**Check:** a `0x03` `begin` and `end` pair at `{"x":0.5,"y":0.5}` taps the middle of the screen.
+
+The messages use expo serve-sim's format, so a client that already drives serve-sim, such as T3 Code's device panel, needs nothing Simlock-specific. Each message is one tag byte followed by UTF-8 JSON.
+
+From the server:
+
+| Tag | Means |
+| --- | --- |
+| `0x83` | Input is accepted from now on. |
+| `0x82` | The screen's size, such as `{"width":1179,"height":2556,"orientation":"portrait"}`. Sent after `0x83`, and again whenever the size changes. A device that takes no input gets `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}`. |
+| `0x90` | The answer to `0x10`: `{"requestId":7,"ok":false}`. |
+
+From your client:
+
+| Tag | Sends | Example |
+| --- | --- | --- |
+| `0x03` | Touch. `type` is `begin`, `move` or `end`; positions are fractions of the screen, 0 to 1. | `{"type":"begin","x":0.4,"y":0.7}` |
+| `0x04` | Button: `home`, `app_switcher`, `lock` or `back`. | |
+| `0x06` | Key, as a USB HID usage from 0 to 255. | `{"type":"down","usage":4}` |
+| `0x07` | Orientation: `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. | `{"orientation":"landscape_left"}` |
+| `0x0b` | Scroll. | |
+
+A message is dropped, and the socket stays open, when it is not valid JSON, has an unknown tag, a position outside 0 to 1 or an unknown orientation, or is over 64 KiB. Up to 8 sockets can share one lease's input. A socket that does not answer a ping within 15 seconds is closed.
+
+### On Android
+
+- **Taps and scrolls** land on the screen as it is now, in its current rotation. Right after a rotation, a tap may use the old size for up to 2 seconds; the socket then gets a new `0x82`.
+- **A scroll** moves 1 wheel unit for each 1/16 of the screen, up to 16, at the given position or the centre. A positive `dy` moves the content down; a positive `dx` moves it right.
+- **Buttons:** `home`, `app_switcher`, `lock` and `back` are Home, Recents, Power and Back.
+- **Keys** are typed as a US keyboard: letters, digits, Enter, Escape, Backspace, Tab, Space, the punctuation row, the arrows and the modifiers (Shift, Ctrl, Alt, Meta). A modifier stays held until its `up`. Other keys, such as function keys and the keypad, are dropped.
+- **Orientation (`0x07`)** is dropped. Rotate an Android device with [agent-device](/simlock/docs/using-devices/agent-device).
+- **A dark screen is not woken**, so a tap on it does nothing. Input changes no device setting.
+- A phone whose adb check is closed reports `inputUnavailable`.
+
+### On an iOS simulator
+
+- **Taps, swipes and scrolls** work. A scroll is sent as a finger drag.
+- **Buttons:** `home` shows the home screen, `app_switcher` opens the app switcher, `lock` locks or wakes the screen. `back` is dropped. A press the simulator ignores is not reported.
+- **Keys** work on every runtime.
+- **Orientation (`0x07`)** turns the simulator as if you turned the phone in your hand. A screen that does not rotate, such as the iPhone home screen, stays as it is, and nothing is reported.
+- `0x82` always says `"orientation":"portrait"`, even after a rotation, and touch positions stay fractions of the portrait screen.
+- **iPhone Duo:** a tap lands at its fraction of the panel in use, upright: the cover when folded, the inner panel when unfolded. A fold sends a new `0x82` with the new panel's size.
+
+## Rotate without a socket
+
+The lease's holder can turn an iPhone or iPad simulator with one call, on a worker or a gateway, whether or not input is on:
+
+```sh
+curl -sS -X POST "$SIMLOCK_URL/v1/leases/$LEASE/rotate" \
+  -H "Authorization: Bearer $SIMLOCK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"orientation":"landscape_left"}'
+```
+
+```json
+{"leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","orientation":"landscape_left"}
+```
+
+**Check:** the answer is `200`, which means the rotation was sent to the simulator.
+
+`orientation` is `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. Through a gateway, use the gateway's lease id. The same from the command line: `simlock rotate landscape-left` ([CLI reference](/simlock/docs/reference/cli#simlock-rotate)); from Node: `client.rotate(leaseId, orientation)`. A foldable iPhone Duo turns with `agent-device orientation` instead.
+
+## When it fails
+
+Screen stream:
+
+| Answer | Cause |
+| --- | --- |
+| `404` | Streaming is off on the daemon you called. |
+| `404 UNKNOWN_LEASE` | The lease is not yours, or does not exist. |
+| `409 DEVICE_NOT_RUNNING` | The device route, for a device that is not `ready` or `leased`. |
+| `503 STREAM_UNAVAILABLE` | Through a gateway, streaming is off on the lease's worker. |
+| The stream ends with an error | No new frame for 30 seconds. |
+
+Input socket, before it opens:
+
+| Answer | Cause |
+| --- | --- |
+| `401` | No token. |
+| `404 UNKNOWN_LEASE` | The lease is not yours, or does not exist. |
+| `404` | Input is off on the daemon you called. |
+| `426` | A plain `GET` without an upgrade. |
+| `503 INPUT_UNAVAILABLE` | Through a gateway, input is off on the lease's worker ("Worker w1 does not take input for lease L-42; turn on capabilities.input.enabled there"). |
+| `503 WORKER_UNREACHABLE` | Through a gateway, the worker did not answer within 10 seconds. |
+
+Input socket, once open:
+
+| Close code | Reason | When |
+| --- | --- | --- |
+| 4001 | `explicit`, `killed`, `expired` or `device-lost` | The lease ended. Through a gateway, `lease ended` if the worker did not say why within 2 seconds. |
+| 1011 | `Worker <id> stopped answering` | Through a gateway, the worker stopped answering for 15 seconds or lost its connection. |
+| 1001 | `Simlock is stopping` | The daemon is stopping. |
+| 1013 | `Input is unavailable for this lease` | A 9th socket, a failure to reach the device's input, or a reconnect within 10 seconds of a failed open. |
+
+Rotate:
+
+| Answer | Cause |
+| --- | --- |
+| `400 BAD_REQUEST` | Any other `orientation` spelling. |
+| `403` | The lease is not yours. |
+| `404 UNKNOWN_LEASE` | The lease does not exist. |
+| `422 ROTATION_UNSUPPORTED` | Not an iPhone or iPad simulator: an Apple TV, Watch or Vision simulator, an Android device, a physical iPhone or iPad, or an iPhone Duo simulator (the message points to `agent-device orientation`). |
+| `503 INPUT_UNAVAILABLE` | The rotation could not be sent. Retry. |
+| `504 EXEC_TIMEOUT` | Through a gateway, the worker did not answer within `gateway.execTimeoutMs`. |

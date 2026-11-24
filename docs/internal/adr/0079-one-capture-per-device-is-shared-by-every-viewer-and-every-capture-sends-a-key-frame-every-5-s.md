@@ -104,8 +104,8 @@ MJPEG capture has no key frames; see section 4):
   5 s of frame arrival time have passed since the last key frame, whoever
   chose it.
 - **Android** (emulator and phone): the stream's scrcpy server runs with its
-  control channel on, and the driver sends reset video when 4 s pass with
-  no key frame, leaving 1 s of the 5 s for the answer. scrcpy's own interval is set to 2, so a moving screen
+  control channel on, and the driver sends reset video when 3 s pass with
+  no key frame, leaving 2 s of the 5 s for the answer. scrcpy's own interval is set to 2, so a moving screen
   rarely needs a reset. The server is also told not to power the screen on
   and not to sync the clipboard, so a stream still changes no device
   setting beyond today's stay-awake on a phone.
@@ -174,7 +174,7 @@ sequenceDiagram
 - An H.264 viewer that joins a still device sees its first picture up to 5 s
   later than today, where it got a capture of its own. An MJPEG viewer sees
   its next picture, with no wait.
-- On a still Android screen, scrcpy's encoder restarts every 4 s.
+- On a still Android screen, scrcpy's encoder restarts every 3 s.
 - While moving, key frames come more often at the same bitrate, so the
   picture is slightly softer.
 - A viewer that joins a phone whose screen went dark mid-stream (off its

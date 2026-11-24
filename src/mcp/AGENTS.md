@@ -1,7 +1,7 @@
 # stdio MCP server
 
 Does: one agent session over stdin/stdout — its tools, a renew timer, lazy reconnect.
-Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-started/connect-your-agent.mdx), [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx).
+Surface: [mcp-tools.mdx](../../website/src/content/docs/docs/reference/mcp-tools.mdx), [mcp-server.mdx](../../website/src/content/docs/docs/getting-started/mcp-server.mdx), [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx).
 
 ## Rules
 

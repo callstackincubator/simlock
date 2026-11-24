@@ -9,19 +9,26 @@ export interface AuthEnv {
   };
 }
 
-export function requireAuth(auth: Pick<Auth, "authenticateRequest">): MiddlewareHandler<AuthEnv> {
+export function requireAuth(
+  auth: Pick<Auth, "authenticateRequest">,
+  options: { readonly signInUrl?: string | undefined } = {},
+): MiddlewareHandler<AuthEnv> {
   return async (c: Context<AuthEnv>, next: Next) => {
     try {
       c.set("identity", await auth.authenticateRequest(c.req.raw.headers));
     } catch (error: unknown) {
       if (!(error instanceof AuthError)) throw error;
+      const signInUrl = error.status === 401 ? options.signInUrl : undefined;
+      let extra: Record<string, unknown> | undefined =
+        error.details === undefined
+          ? undefined
+          : { details: error.details, ...reasonOf(error.details) };
+      if (signInUrl !== undefined) extra = { ...extra, signInUrl };
       throw new HttpApiError(
         error.status,
         error.status === 401 ? "UNAUTHENTICATED" : "FORBIDDEN",
         error.message,
-        error.details === undefined
-          ? undefined
-          : { details: error.details, ...reasonOf(error.details) },
+        extra,
       );
     }
     refuseCrossSiteChange(c);

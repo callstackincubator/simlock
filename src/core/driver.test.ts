@@ -36,6 +36,20 @@ describe("DiskSpaceGuard", () => {
     });
   });
 
+  it("names what the space was for in the refusal's message, an install when the reservation names no action", async () => {
+    const filesystem = new MemoryFilesystem(gibibyte);
+    const guard = new DiskSpaceGuard();
+
+    await expect(guard.reserve(filesystem, "android", 2 * gibibyte, "/volume")).rejects.toThrow(
+      "Not enough free disk space to install a android component: needs ~2.0 GiB free, only 1.0 GiB available",
+    );
+    await expect(
+      guard.reserve(filesystem, "android", 2 * gibibyte, "/volume", "copy an Android seed"),
+    ).rejects.toThrow(
+      "Not enough free disk space to copy an Android seed: needs ~2.0 GiB free, only 1.0 GiB available",
+    );
+  });
+
   it("rejects a second concurrent reservation that would overfill the volume alongside the first", async () => {
     const filesystem = new MemoryFilesystem(10 * gibibyte);
     const guard = new DiskSpaceGuard();

@@ -14,8 +14,13 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+// why: the root where there is no page URL, as when a test renders a view to a string.
 export function usePath(): string {
-  return useSyncExternalStore(subscribe, () => window.location.pathname);
+  return useSyncExternalStore(
+    subscribe,
+    () => window.location.pathname,
+    () => "/",
+  );
 }
 
 // why: empty where there is no page URL, as when a test renders a view to a string.

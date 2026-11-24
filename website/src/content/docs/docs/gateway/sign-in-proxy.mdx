@@ -1,0 +1,119 @@
+---
+title: Sign people in through a sign-in proxy
+description: Let the gateway trust a sign-in proxy such as Cloudflare Access, so people open the console with their company sign-in instead of a token.
+sidebar:
+  order: 4
+  label: "Sign in through a proxy"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** a person your sign-in proxy has signed in opens the gateway's console with no token, and the sidebar shows their name. What the operator role may do: [Tokens and roles](/simlock/docs/concepts/tokens-and-roles).
+
+## Before you start
+
+- A gateway behind HTTPS. See [Set up a gateway](/simlock/docs/gateway/setup). Over plain `http://` from another machine, a person signed in through the proxy can look but not change anything: Simlock refuses their changes and screen input.
+- A sign-in proxy that adds a signed JWT to each request, signs it with RS256 or ES256, and publishes its public keys.
+- The JWT carries `sub` (1 to 120 characters) and `email`, and an expiry. The console shows its `name`, or the email when there is none.
+- The examples set it on the gateway. A standalone worker takes the same setting: drop `--gateway`.
+
+<Aside type="caution">
+Every person the proxy signs in becomes an operator, with full rights on the gateway and, through it, on every worker. Restrict who may pass the proxy to the people you would give an operator token.
+</Aside>
+
+## Turn it on
+
+<Steps>
+
+1. Set the whole `http.proxyAuth` object in one command. Simlock refuses one key on its own. This example is for Cloudflare Access with the team name `acme`:
+
+   ```sh
+   simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://acme.cloudflareaccess.com","audience":"4f1c2b9e7d3a8c6f5e0b1d2a9c8e7f6b5a4d3c2b1e0f9a8d7c6b5a4f3e2d1c0b","signOutUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/logout"}'
+   ```
+
+   | Key | Value |
+   | --- | --- |
+   | `header` | The request header that carries the JWT. Case does not matter. With `authorization`, only a `Bearer` value that does not start with `slk_` counts as the proxy's. |
+   | `jwksUrl` | Where the proxy publishes its public keys: `https://`, or `http://` on `localhost`, `127.0.0.1` or `::1`. |
+   | `issuer` | The `iss` the JWT must carry. |
+   | `audience` | The `aud` the JWT must carry. For Cloudflare Access, the application's audience tag. |
+   | `signOutUrl` | Optional. Where the console's **Sign out** sends the person. Without it, a person signed in through the proxy sees no **Sign out**. |
+   | `signInUrl` | Optional. Your proxy's login address. The console shows **Sign in with SSO** next to the token form. See [Add a Sign in with SSO button](#add-a-sign-in-with-sso-button). |
+
+2. Set up the proxy so that it:
+
+   - **Lets workers through without a sign-in.** Workers connect to `/v1/uplink` with their join token. Or give each worker the proxy's service credentials in `gateway.headers` (below).
+   - **Lets `/v1/healthz` through**, if anything checks the gateway's health.
+   - **Lets agents through**, with a bypass rule or service credentials. Agents send their Simlock token, which Simlock checks as usual. A request with both a Simlock token and a JWT is judged by the token.
+
+3. Restart the gateway:
+
+   ```sh
+   simlock --gateway daemon stop
+   simlock --gateway daemon start
+   ```
+
+</Steps>
+
+**Check:** open `https://gateway.example.com` in a browser, sign in to the proxy, and the console opens with your name in the sidebar. An operator token pasted into the console still works too.
+
+## Add a Sign in with SSO button
+
+Use this when the proxy lets the console page through unsigned and asks for login only when a person chooses to. A proxy that sends every unsigned page to its login needs no button.
+
+<Steps>
+
+1. Add `signInUrl` to the `http.proxyAuth` object from step 1, and set the whole object again. For oauth2-proxy:
+
+   ```sh
+   simlock --gateway config set http.proxyAuth '{"header":"x-forwarded-access-token","jwksUrl":"https://login.example.com/keys","issuer":"https://login.example.com","audience":"simlock","signInUrl":"https://gateway.example.com/oauth2/start?rd={path}"}'
+   ```
+
+   `{path}` becomes the page the person was on, URL-encoded, so they return to it after login. Without `{path}` the URL is used as written.
+
+2. Set up the proxy to send the person back to the console after login and to add its JWT to the console's requests.
+
+3. Restart the gateway.
+
+</Steps>
+
+**Check:** open the console signed out. **Sign in with SSO** shows next to the token form and opens the proxy's login in the same tab.
+
+- The button grants nothing. Limit who can sign in in your identity provider or proxy policy; every person the proxy accepts is an operator.
+- The URL is at most 2048 characters, `http://` or `https://`. A template that is no longer such a URL once `{path}` is filled in is refused.
+- The button also shows on the "session ended" screen.
+- HTTP clients: only `GET /v1/identity` returns the URL, as `error.signInUrl` in its `401`. It is public login metadata, not a credential; scripts keep using Simlock tokens.
+
+## Send service credentials from a worker
+
+If the proxy must see credentials on the worker's connection, set them on each worker:
+
+```sh
+simlock config set gateway.headers '{"CF-Access-Client-Id":"7c1e2f9a.access","CF-Access-Client-Secret":"3b8d6f0e1a2c4e7f9b5d"}'
+```
+
+Restart the worker. The values read `[redacted]` in `simlock config` unless you pass `--show-secrets`. Limits on names and values: [Configuration](/simlock/docs/reference/configuration#joining-a-gateway).
+
+## When it fails
+
+The console shows the token form with a line such as "Your sign-in proxy's identity was refused: it has expired. You can still sign in with an operator token." The gateway's log names the reason, and an HTTP client gets it as `reason` in the `401` answer.
+
+| The console says it | Reason | Fix |
+| --- | --- | --- |
+| has expired | `expired` | The JWT expired more than 60 seconds ago. Sign in to the proxy again. |
+| is not valid yet | `not-yet-valid` | Check the gateway machine's clock. |
+| comes from a different sign-in service | `wrong-issuer` | Make `issuer` match the JWT's `iss`. |
+| was made for a different application | `wrong-audience` | Make `audience` match the JWT's `aud`. |
+| is signed in a way this daemon does not accept | `algorithm` | Make the proxy sign with RS256 or ES256. |
+| its signature does not check out | `unknown-key` or `bad-signature` | Point `jwksUrl` at the proxy's own key URL. |
+| this daemon cannot reach the sign-in service's keys | `keys-unavailable` | Let the gateway reach `jwksUrl`. This shows once the keys have been out of reach for 10 minutes. |
+| is not a valid sign-in token | `malformed` | Make `header` name the header that holds the JWT. A JWT over 8 KiB, with no expiry, or with a `sub` over 120 characters is refused too. |
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `expected set with the other http.proxyAuth keys` | You set one `http.proxyAuth` key on its own. | Set the whole object, as in step 1. |
+| Workers stop joining after you turn the proxy on | The proxy asks the worker's connection to sign in. | Let `/v1/uplink` through, or set `gateway.headers` on each worker. |
+| A signed-in person can't release a lease or drain a worker | The console is served over plain `http://`. | Serve it over HTTPS. |
+| **Sign in with SSO** returns to the token form with a refusal line | The proxy's JWT is refused. Signing in again does not fix a wrong `issuer`, `audience` or `jwksUrl`. | Fix the setting the refusal line names (table above). |
+
+How the console handles sign-in and sign-out: [Turn on the web console](/simlock/docs/worker/console-and-http).

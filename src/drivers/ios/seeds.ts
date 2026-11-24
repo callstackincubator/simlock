@@ -198,8 +198,9 @@ export class Seeds {
       await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
     } catch (error: unknown) {
-      if (cloneUdid !== undefined && cloneUdid !== "") {
-        await this.#deleteSeedSimulator(cloneUdid).catch(() => undefined);
+      const clone = cloneUdid;
+      if (clone !== undefined && clone !== "") {
+        await this.#cleanUp(clone, "baseline save", () => this.#deleteSeedSimulator(clone));
       }
       this.#sources.deleteRow(sourceId);
       throw error;
@@ -454,7 +455,7 @@ export class Seeds {
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
-      await this.#simctl.invoke(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      await this.#cleanUp(udid, "provision", () => this.#deleteIn(udid, undefined));
       throw error;
     }
     return udid;
@@ -616,7 +617,9 @@ export class Seeds {
     throwaway: string | undefined,
     keepRow: boolean,
   ): Promise<boolean> {
-    if (seedClone !== undefined) await this.#deleteSeedSimulator(seedClone).catch(() => undefined);
+    if (seedClone !== undefined) {
+      await this.#cleanUp(seedClone, "seed make", () => this.#deleteSeedSimulator(seedClone));
+    }
     if (throwaway === undefined) return keepRow;
     return !(await this.#deleteThrowaway(throwaway, true).then(
       () => true,
@@ -659,9 +662,22 @@ export class Seeds {
     this.#sources.deleteRow(seed.sourceId);
   }
 
+  /** why: the log line naming the UDID is what tells the user which simulator a failed step left behind; the step's own error is still what the caller gets. */
+  async #cleanUp(udid: string, step: string, remove: () => Promise<void>): Promise<void> {
+    try {
+      await remove();
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not delete simulator ${udid} left by a failed ${step}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#simctl.bestEffortShutdown(udid, this.#sourcesSet);
     await this.#deleteIn(udid, this.#sourcesSet);
+    // why: the overrides folder lives outside the device set, so `simctl delete` leaves it; a failed delete throws before this and keeps it.
+    await this.#slimBoot.removeOverrides(udid);
   }
 
   /** why: ADR 0076 §1: the throwaway lives in the device set and is deleted only through the `making` row that names it (ADR 0001 §6), with its log folder, which `simctl delete` leaves behind. */
@@ -718,7 +734,7 @@ export class Seeds {
       { lineage, own: udid },
     );
     this.#logger?.debug(
-      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable`,
+      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable, ${String(counts.missing)} missing`,
     );
   }
 

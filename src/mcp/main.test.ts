@@ -16,6 +16,7 @@ import {
   NodeDaemonLauncher,
   MemoryFilesystem,
   MemoryIpcTransport,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { startMcpStdio, type McpTransport } from "./main.js";
@@ -204,7 +205,7 @@ describe("MCP stdio lifecycle", () => {
       await vi.waitFor(() => expect(connectToRunningDaemon).toHaveBeenCalledTimes(1));
 
       expect(connectToRunningDaemon.mock.calls[0]?.[0]).toMatchObject({
-        socketPath: join(root, "gateway", "daemon.sock"),
+        socketPath: resolveDaemonSocketPath(join(root, "gateway")),
       });
       await mcpClient.close();
       await runner.shutdown();

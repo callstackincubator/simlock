@@ -60,7 +60,7 @@ say() { echo "review-inputs: $*" >&2; }
 
 # why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr`, `gh issue` and
 # `gh repo view` use, so this script calls repo-scoped REST only.
-nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
+nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\\#/#g; s#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
 api() {
   at=$1
   shift
@@ -139,6 +139,8 @@ fi
 
 tmp=${TMPDIR:-/tmp}
 out=$(mktemp -d "${tmp%/}/review-$pr.XXXXXX")
+# why: on Windows mktemp answers with an MSYS path (/tmp/...) that node and git cannot open.
+! command -v cygpath >/dev/null 2>&1 || out=$(cygpath -m "$out")
 mkdir "$out/spec" "$out/rules"
 
 git diff "$fork" "$head" >"$out/diff.patch"

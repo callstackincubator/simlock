@@ -81,6 +81,7 @@ describe("IosSimctlDriver simulator window", () => {
   const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
   const open = (...args: string[]) => ({ command: "open", args: ["-g", ...args] });
   const clipboard = deviceHubEdit(`Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`);
+  const renameCall = xcrun("rename", udid, driverData.name);
   const bootCalls = [xcrun("boot", udid), xcrun("bootstatus", udid, "-b"), xcrun("listapps", udid)];
   const deviceHub = open(
     "-b",
@@ -131,8 +132,9 @@ describe("IosSimctlDriver simulator window", () => {
   ])(
     "shows a simulator in a window without taking focus when ios.simulator.headless is false: $name",
     async (c) => {
+      const renamed = (c.options?.purpose ?? "prepare") === "prepare" ? [renameCall] : [];
       const runner = new ScriptedProcessRunner(
-        [...clipboard, ...c.expected].map((match) => ({
+        [...renamed, ...clipboard, ...c.expected].map((match) => ({
           match,
           ...(match === deviceHub && c.deviceHubResult !== undefined
             ? { result: c.deviceHubResult }
@@ -162,6 +164,7 @@ describe("IosSimctlDriver simulator window", () => {
         ),
       ).resolves.toMatchObject({ address: udid });
       expect(runner.calls.map(({ command, args }) => ({ command, args }))).toEqual([
+        ...renamed,
         ...clipboard,
         ...c.expected,
       ]);
@@ -209,7 +212,7 @@ describe("IosSimctlDriver simulator window", () => {
     "makes the simulator ready and reports the failure when opening its window fails: $name",
     async (c) => {
       const runner = new ScriptedProcessRunner([
-        ...[...clipboard, ...bootCalls].map((match) => ({ match })),
+        ...[renameCall, ...clipboard, ...bootCalls].map((match) => ({ match })),
         ...c.script,
       ]);
       const clock = new FakeClock();
@@ -234,7 +237,7 @@ describe("IosSimctlDriver simulator window", () => {
       );
       if (c.script.some((step) => "hangs" in step)) {
         const state = promiseState(ready);
-        await waitForCalls(runner, clipboard.length + bootCalls.length + c.script.length);
+        await waitForCalls(runner, 1 + clipboard.length + bootCalls.length + c.script.length);
         clock.advance(29_999);
         await flushMicrotasks();
         expect(state.state).toBe("pending");

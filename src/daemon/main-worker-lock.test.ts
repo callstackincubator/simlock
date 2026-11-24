@@ -10,6 +10,7 @@ import {
   MemoryFilesystem,
   ScriptedProcessRunner,
 } from "../ports/index.js";
+import { binaries } from "../drivers/android/testing.js";
 import { type StartDaemonOptions } from "./main.js";
 import {
   start,
@@ -40,14 +41,9 @@ describe("startDaemon worker lock", () => {
 
   async function installAndroidSdk(filesystem: MemoryFilesystem): Promise<void> {
     vi.stubEnv("ANDROID_HOME", "/android-sdk");
-    for (const binary of [
-      "platform-tools/adb",
-      "emulator/emulator",
-      "cmdline-tools/latest/bin/avdmanager",
-      "cmdline-tools/latest/bin/sdkmanager",
-    ]) {
-      await filesystem.mkdirp(dirname(join("/android-sdk", binary)));
-      await filesystem.writeFileAtomic(join("/android-sdk", binary), "binary");
+    for (const binary of Object.values(binaries)) {
+      await filesystem.mkdirp(dirname(binary));
+      await filesystem.writeFileAtomic(binary, "binary");
     }
   }
 
@@ -192,7 +188,7 @@ describe("startDaemon worker lock", () => {
       JSON.stringify({ pid: 4343, port: 5038, startedAt: 1 }),
     );
     const supervisor = new FakeProcessSupervisor([4242, 4343]);
-    supervisor.answerCommandLine(4343, "/android-sdk/platform-tools/adb -P 5038 nodaemon server");
+    supervisor.answerCommandLine(4343, `${binaries.adb} -P 5038 nodaemon server`);
     const lockAtDisposal: Promise<boolean>[] = [];
     const signal = supervisor.signal.bind(supervisor);
     supervisor.signal = (pid, kill) => {

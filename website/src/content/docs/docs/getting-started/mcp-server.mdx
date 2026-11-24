@@ -1,0 +1,122 @@
+---
+title: Give your agent the MCP server
+description: Add Simlock's MCP server to Claude Code, Codex or another MCP client, so an agent leases, uses and releases a device through tool calls.
+sidebar:
+  order: 7
+  label: "Give your agent MCP"
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+**Result:** your agent tool lists Simlock's tools, and an agent can lease a device, run commands on it and release it without a shell.
+
+Every tool, its inputs and its errors: [MCP tools](/simlock/docs/reference/mcp-tools).
+
+## Before you start
+
+- Simlock is installed on the machine where the agent tool runs. See [macOS](/simlock/docs/getting-started/macos), [Linux](/simlock/docs/getting-started/linux) or [Windows](/simlock/docs/getting-started/windows).
+- Use the MCP server or the CLI in one agent session, not both: under Codex and pi they count as two requesters. See [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent#2-give-each-agent-session-its-own-identity).
+
+## Add the server
+
+`simlock mcp` runs the server over stdio. Add it to your agent tool:
+
+<Tabs syncKey="agent-tool">
+<TabItem label="Claude Code">
+
+```sh
+simlock setup --tool claude-code --mcp
+```
+
+At user scope this runs `claude mcp add -s user simlock -- simlock mcp`, which writes `~/.claude.json`. With `--project` it runs `claude mcp add -s project simlock -- simlock mcp`, which writes `.mcp.json`.
+
+Or add it to `.mcp.json` at the root of your project by hand:
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "simlock": {
+      "command": "simlock",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The server uses the Claude Code session's identity, the same one the CLI uses.
+
+</TabItem>
+<TabItem label="Codex">
+
+```sh
+simlock setup --tool codex --mcp
+```
+
+This runs `codex mcp add simlock -- simlock mcp`. Codex has user scope only, so with `--project` the report lists Codex as `skipped`.
+
+The server gets its own identity, different from the CLI's in the same session.
+
+</TabItem>
+<TabItem label="Other MCP clients">
+
+Configure a stdio server that runs `simlock` with the argument `mcp`. Leave `SIMLOCK_AGENT_ID` unset: each server process gets its own identity.
+
+This works when your client starts one server process per agent session. If it shares one process between sessions, those sessions share one requester and one lease.
+
+</TabItem>
+</Tabs>
+
+**Check:** your agent tool lists the `simlock` server with the tools `list_devices`, `lease_simulator`, `release_simulator`, `lease_status`, `run_on_device` and `rotate_device`. Ask the agent to lease a device and call `lease_status`: it answers `held: true`.
+
+## What the server does
+
+- **Starts the daemon** on the first tool call that needs it, if it is not running.
+- **Holds the lease for the session.** It renews the lease while it runs, and releases it when the agent tool closes the connection. An agent holds one lease per session by default.
+- **Fills in the device.** The agent never names a device or lease: `run_on_device` runs `simctl`, `adb` or `devicectl` on the session's device, and refuses a command that names another one. File paths are on the machine that holds the device.
+- **Teaches the agent.** It sends a short version of Simlock's rules when it connects, and the full text as the resource `simlock://instructions`.
+
+An agent installs and launches an app with `run_on_device`, for example:
+
+```json
+{"tool":"simctl","args":["install","/builds/App.app"]}
+```
+
+## Use a farm's devices
+
+Give the server the farm's URL and an agent token, as environment variables `SIMLOCK_URL` and `SIMLOCK_TOKEN`, or as `--url` and `--token`. For Claude Code:
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "simlock": {
+      "command": "simlock",
+      "args": ["mcp"],
+      "env": {
+        "SIMLOCK_URL": "https://simlock.example.com",
+        "SIMLOCK_TOKEN": "slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM"
+      }
+    }
+  }
+}
+```
+
+<Aside type="caution">
+Keep a file that holds a token out of version control. Anyone with the token can run commands on the farm's workers. See [Tokens and roles](/simlock/docs/concepts/tokens-and-roles).
+</Aside>
+
+The server then starts no daemon on this machine. If the network drops, it reconnects and keeps renewing the lease until the lease's deadline, and tells the agent with logging messages. A refused token, a lost lease or a passed deadline ends the lease the same way as on one machine. Without a token, `simlock mcp` exits 2.
+
+On a gateway's own machine, run the server as `simlock --gateway mcp` instead.
+
+## When it fails
+
+| What the agent sees | Cause | Fix |
+| --- | --- | --- |
+| `NO_LEASE` from `run_on_device` or `rotate_device` | This session holds no lease. | Call `lease_simulator` first. |
+| A warning log message that the lease ended | Someone else ended it, for example an operator releasing it. | Lease a new device. |
+| A warning, then a notice that the device is ready again | The device crashed and Simlock rebooted it. The lease is still yours. | Install and launch your app again. |
+| `held: false` through a gateway, shortly after a worker restarts | For up to about a minute, the restarting worker cannot report its leases. | Do not lease a new device. Call `lease_status` again. |
+| `REQUESTER_ALREADY_LEASED` | Several sessions share one server process or one `SIMLOCK_AGENT_ID`. | Give each session its own server process, and leave `SIMLOCK_AGENT_ID` unset. |
+| `ROTATION_UNSUPPORTED` from `rotate_device` | Only iOS simulators rotate. | Leave rotation out on Android, physical devices and Apple TV. |
+
+All errors: [Errors reference](/simlock/docs/reference/errors).

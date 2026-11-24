@@ -1,0 +1,50 @@
+---
+title: Warm pool
+description: How Simlock keeps devices booted before anyone asks, what it learns from your leases, and what it never does to make room.
+sidebar:
+  order: 3
+---
+
+The **warm pool** keeps idle devices booted, so a lease starts without waiting for a boot. It is on by default and learns from your leases; you can also name devices to keep ready.
+
+## Why it matters
+
+Booting a simulator or emulator takes from tens of seconds to minutes. A device the warm pool holds ready is handed over at once. Each warm device is still a fresh device: it has served no lease, and after its lease it is deleted like any other.
+
+## What it keeps ready
+
+```text
+leases in the last 24 h:  iPhone 16 ▮▮▮ (peak 3)   Pixel 8 ▮ (peak 1)
+warm pool keeps:          iPhone 16 × 3 ready      Pixel 8 × 1 ready
+1 iPhone 16 leased   ─►   2 iPhone 16 ready (the peak less those leased)
+3 iPhone 16 leased   ─►   1 iPhone 16 ready (always at least one spare)
+```
+
+- **Learned kinds.** A kind is a platform, model, OS version and mode (and on Android, an image tag). For each kind leased in the last 24 hours, the warm pool keeps ready as many as were leased at the same time at the busiest moment (the **peak**). While some are leased, it keeps the peak less those leased ready, and at least one spare.
+- **Targets.** An operator can name kinds to keep ready at all times, with a count, before anyone asks. Targets come first: to fill one, the warm pool may shut down an idle device that only a learned kind keeps.
+- **Baselines.** A [baseline](/simlock/docs/concepts/baselines) is learned on its third lease within 24 hours (`warmPool.baselineLearnAfter`). Until then, leasing it leaves nothing booted. Once learned it stays learned, and the warm pool keeps copies of its newest version ready.
+- **What it learned survives a daemon restart.** `simlock nuke` makes it forget; targets stay.
+
+A lease of the wrong model, such as `Pixel` instead of `Pixel 9`, teaches the warm pool that model too, and its device holds a running slot. An operator can make it forget a kind.
+
+## What it never does
+
+- **It never shuts down or deletes a leased device.**
+- **It never goes over capacity.** It uses only free running slots, within the device limit and the RAM budget. An operator can hold back running slots per platform that warm devices may not fill, so a lease for another kind never waits for a shutdown.
+- **It never downloads** an iOS runtime or Android system image. A kind whose runtime is missing stays short.
+- **It boots nothing while host memory is short.** See [memory pressure](/simlock/docs/concepts/queue-and-capacity#memory-pressure).
+
+## When a kind stays short
+
+A kind it cannot fill shows a reason in `simlock status`, such as `running-limit`, `runtime-missing` or `boot-failed`. A failed boot is tried again after 1, 2, 4 and so on minutes, at most 10 minutes apart. A target that goes short and that the warm pool can do nothing about raises a `warm-pool.target-missed` event.
+
+A booted device that nobody leases and nothing keeps warm is shut down after 10 minutes, like any idle device. See [Cleanup and disk](/simlock/docs/concepts/cleanup).
+
+## Through a gateway
+
+Each worker runs its own warm pool. The gateway sends a request to a worker with a matching warm device first. See [Workers and gateways](/simlock/docs/concepts/workers-and-gateways#which-worker-gets-a-request).
+
+## Use it
+
+- [Make leases start faster](/simlock/docs/worker/warm-pool): set targets, forget a learned kind, read the warm pool in `simlock status`.
+- [Run more devices at once](/simlock/docs/worker/capacity)

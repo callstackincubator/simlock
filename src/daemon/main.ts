@@ -769,7 +769,24 @@ function openEventHistory(options: {
     },
     projections: Object.values(HISTORY_PROJECTIONS),
     sqlite: new NodeSqliteOpener(),
+    ...rebuildHold(process.env.SIMLOCK_TEST_HOLD_HISTORY_REBUILD, options.clock),
   });
+}
+
+// why: an e2e test sets this to a path; the history rebuild waits until a file exists there, so the test decides when the race it checks ends.
+function rebuildHold(
+  path: string | undefined,
+  clock: Clock,
+): { beforeRebuild?: (isStopped: () => boolean) => Promise<void> } {
+  if (path === undefined || path === "") return {};
+  const filesystem = new NodeFilesystem();
+  return {
+    beforeRebuild: async (isStopped) => {
+      while (!isStopped() && !(await filesystem.exists(path))) {
+        await new Promise<void>((next) => clock.setTimer(50, next));
+      }
+    },
+  };
 }
 
 export function eventBusLogger(logger: Logger): EventBusLogger {

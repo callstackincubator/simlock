@@ -63,7 +63,7 @@ import {
   DEFAULT_ADB_SERVER_PORT,
   defaultAndroidDeviceRoot,
 } from "./definition.js";
-import { ADB_DEVICES_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
+import { ADB_DEVICES_TIMEOUT_MS, AVDMANAGER_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
 import { ANDROID_DEFAULT_MODELS, Catalog } from "./catalog.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { ConsolePorts, portAllocatorFor, portsFromAdbDevices } from "./console-ports.js";
@@ -319,6 +319,7 @@ export class AndroidDriver implements Driver {
       emulator: this.#emulator,
       filesystem: options.filesystem,
       idGenerator: idGeneratorFor(options),
+      logger: options.logger,
       ownership: this.#ownership,
       processRunner: options.processRunner,
       systemImages: this.#systemImages,
@@ -695,12 +696,11 @@ export class AndroidDriver implements Driver {
         await this.#emulator.stopUnowned(data);
       }
       if (data.avdHome === undefined) {
-        await this.#adbTools.runOrThrow(this.#sdk.avdmanager, [
-          "delete",
-          "avd",
-          "-n",
-          data.avdName,
-        ]);
+        await this.#adbTools.runOrThrow(
+          this.#sdk.avdmanager,
+          ["delete", "avd", "-n", data.avdName],
+          { timeoutMs: AVDMANAGER_TIMEOUT_MS },
+        );
       } else {
         await this.#filesystem.rm(data.avdHome);
       }
