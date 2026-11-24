@@ -17,9 +17,10 @@ name: Issue state
 # - a PR closed without merge releases the claim on the issue it would close;
 # - a claim with no activity for three days is released;
 # - bug:needs-info with no activity for two weeks closes as not planned;
-# - a PR from a <kind>/<n> branch must close issue <n> and no other; a branch starting with a
-#   kind prefix is exactly <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task,
-#   a bug or a refactor comes from that issue's <kind>/<n>;
+# - a PR from a <kind>/<n> branch must close issue <n> and no other, but a bug/<n> PR may also
+#   close other bug: issues (coding rule 3); a branch starting with a kind prefix is exactly
+#   <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task or a refactor comes
+#   from that issue's <kind>/<n>, a bug from its own bug/<n> or another bug/<m>;
 # - a PR body passes .agents/scripts/pr-body-check.mjs: warnings while it is a draft, a failed
 #   check once it is ready.
 # Actions taken with the workflow token do not trigger this workflow again,

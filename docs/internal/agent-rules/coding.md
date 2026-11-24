@@ -25,7 +25,8 @@ Labels, claims, reviews and the merge gate are in
    branch closes that issue and no other, with one exception: when the
    maintainer asks for several bugs in one PR, the branch is named from the
    first one (`bug/<n>`) and its PR also closes the others, each labelled
-   `bug:`. An agent never bundles bugs on its own.
+   `bug:`. An agent never bundles bugs on its own, and every stage gets
+   the others on an `also:` line.
 4. **Assume every agent is in a worktree.** Several agents share one clone
    through `git worktree`, so a branch may already be checked out somewhere
    else and `git switch` to it will fail. Create branches in whatever
