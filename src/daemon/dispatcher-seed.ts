@@ -1,4 +1,10 @@
-import { SeedSettleFailedError, type SeedSettler, type VirtualSpec } from "../core/index.js";
+import {
+  RuntimeMissingError,
+  SeedSettleFailedError,
+  type SeedSettler,
+  type VirtualSpec,
+} from "../core/index.js";
+import { parseOsConstraint } from "../contract/index.js";
 import { DispatchError, type SeedKind } from "./dispatch.js";
 import type { DispatcherOptions, Handler } from "./dispatcher-options.js";
 
@@ -19,12 +25,16 @@ export class SeedHandlers {
   readonly seedMake: Handler<"seed.make"> = async (input, session) => {
     const { seeds } = this.options;
     if (seeds === undefined) throw new DispatchError("INTERNAL", "Seeds are unavailable");
-    const spec = await seeds.resolveSeedSpec({
-      model: input.model,
-      platform: input.platform,
-      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
-    });
+    const spec = await seeds
+      .resolveSeedSpec({
+        model: input.model,
+        platform: input.platform,
+        ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
+        ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
+      })
+      .catch((error: unknown) => {
+        throw error instanceof RuntimeMissingError ? runtimeMissing(error, input.osVersion) : error;
+      });
     const kind: SeedKind = {
       model: spec.model,
       osVersion: spec.osVersion,
@@ -47,4 +57,19 @@ export class SeedHandlers {
       throw error;
     }
   };
+}
+
+/** why: `seed.make` never downloads, so the lease's "pass --allow-download" is no advice here; it names the command that installs the runtime (ADR 0090 §4). */
+function runtimeMissing(error: RuntimeMissingError, osVersion: string | undefined): DispatchError {
+  const name = error.platform === "ios" ? "iOS" : "Android";
+  const asked = osVersion === undefined ? undefined : parseOsConstraint(osVersion);
+  const message =
+    asked?.ok === true && asked.constraint.kind === "exact"
+      ? `${name} ${asked.constraint.version} is not installed; install it with simlock component install ${error.platform} ${asked.constraint.version}`
+      : `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`;
+  return new DispatchError("RUNTIME_MISSING", message, {
+    downloadable: error.downloadable,
+    osVersion: error.osVersion,
+    platform: error.platform,
+  });
 }

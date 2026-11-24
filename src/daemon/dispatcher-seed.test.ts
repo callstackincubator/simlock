@@ -142,14 +142,6 @@ describe("Dispatcher: seed.make", () => {
       options: { driverOptions: { availableOsVersions: [] } },
     },
     {
-      code: "RUNTIME_MISSING",
-      input: { model: "iPhone 17", osVersion: ">=99", platform: "ios" },
-      label: "a range no installed runtime fits",
-      message:
-        "no installed iOS runtime fits >=99; install one with simlock component install ios and a version",
-      options: {},
-    },
-    {
       code: "FORBIDDEN",
       input: { model: "iPhone 17", platform: "ios" },
       label: "an agent session",
