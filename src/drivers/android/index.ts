@@ -319,6 +319,7 @@ export class AndroidDriver implements Driver {
       emulator: this.#emulator,
       filesystem: options.filesystem,
       idGenerator: idGeneratorFor(options),
+      logger: options.logger,
       ownership: this.#ownership,
       processRunner: options.processRunner,
       systemImages: this.#systemImages,

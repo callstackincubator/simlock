@@ -50,6 +50,22 @@ class ArmedCopyFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+/** why: Windows refuses to delete a folder an emulator's child still holds; a failed baseline save must still throw its own error then (#1765). */
+class BusyFolderFilesystem extends MemoryFilesystem {
+  constructor(private readonly busy: string) {
+    super();
+  }
+
+  override async rm(path: string): Promise<void> {
+    if (path === this.busy) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, unlink '${path}'`), {
+        code: "EBUSY",
+      });
+    }
+    await super.rm(path);
+  }
+}
+
 const live = process.env.SIMLOCK_LIVE_ANDROID === "1" ? it : it.skip;
 
 live(
@@ -793,6 +809,35 @@ describe("AndroidDriver image fit", () => {
             await vi.waitFor(() => expect(exited, "the source's emulator was stopped").toBe(true));
           }
         }
+      });
+
+      it("throws the save's own error and keeps the source's `making` row when its folder cannot be removed", async () => {
+        const filesystem = new BusyFolderFilesystem(savedHome);
+        const harness = await seedHarness(
+          [
+            ...makingTheSeed(),
+            processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+            ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true),
+            markWriteExpectation(serial, "three"),
+            ...poweredOff,
+            stage.devices,
+            ...stage.secondBoot,
+            { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+          ],
+          { config, filesystem, ids: ["one", "two", "three", "four"] },
+        );
+        const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
+
+        await expect(
+          harness.driver.saveSource({ ...ready, physical: false as const }),
+        ).rejects.toThrow("Android seed baseline_four: boot snapshot simlock_boot was not saved");
+
+        expect(await harness.filesystem.exists(savedHome)).toBe(true);
+        expect(
+          harness.database
+            .prepare("SELECT state FROM android_source_data WHERE source_id = 'baseline_four'")
+            .all(),
+        ).toEqual([{ state: "making" }]);
       });
     });
   });
