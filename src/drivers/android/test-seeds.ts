@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   FakeClock,
   FakeTcpProbe,
@@ -167,9 +168,9 @@ export const buildPart: BuildProvisioner = async (filesystem, processRunner, opt
 export const libraryHarness = (options?: Parameters<typeof libraryHarnessWith>[1]) =>
   libraryHarnessWith(buildPart, options);
 
-export const sources = `${avdDirectory}/sources`;
+export const sources = join(avdDirectory, "sources");
 
-export const seedHome = `${sources}/seed_two`;
+export const seedHome = join(sources, "seed_two");
 
 export async function seedHarness(
   expectations: readonly ScriptedProcessExpectation[],

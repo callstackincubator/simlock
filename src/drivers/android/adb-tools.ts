@@ -113,8 +113,8 @@ export class AdbTools {
   /** why: a copy's AVD sits in its own folder under the root; a device made before copies sat at `<root>/<avdName>.avd`. */
   avdFolder(data: AndroidDriverData): string {
     return data.avdHome === undefined
-      ? `${this.#options.deviceRoot}/${data.avdName}.avd`
-      : `${data.avdHome}/${SEED_AVD_NAME}.avd`;
+      ? join(this.#options.deviceRoot, `${data.avdName}.avd`)
+      : join(data.avdHome, `${SEED_AVD_NAME}.avd`);
   }
 
   dataFor(device: DriverDevice): AndroidDriverData {

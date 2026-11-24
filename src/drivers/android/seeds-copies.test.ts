@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 
 import { FakeClock, MemoryFilesystem, type ScriptedProcessExpectation } from "../../ports/index.js";
 
@@ -19,7 +20,7 @@ import {
   writeSeedFiles,
 } from "./testing.js";
 
-const copyHome = `${avdDirectory}/simlock_one`;
+const copyHome = join(avdDirectory, "simlock_one");
 
 /** why: the daemon after a restart: a new part over the same device folders and the same source table. */
 function reopened(
@@ -104,7 +105,7 @@ class CopyFailureFilesystem extends MemoryFilesystem {
 describe("Seeds", () => {
   describe("seeds and copies", () => {
     it("makes one seed when two plain leases of one kind are provisioned at once", async () => {
-      const madeHome = `${sources}/seed_three`;
+      const madeHome = join(sources, "seed_three");
       const harness = await seedHarness([
         ...makingTheSeed(madeHome),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
@@ -120,7 +121,7 @@ describe("Seeds", () => {
       expect(harness.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
       expect([first.deviceId, second.deviceId]).toEqual(["simlock_one", "simlock_two"]);
       await expect(
-        harness.filesystem.exists(`${avdDirectory}/simlock_two/simlock.avd`),
+        harness.filesystem.exists(join(avdDirectory, "simlock_two", "simlock.avd")),
       ).resolves.toBe(true);
       const listed = await harness.seeds.listSources();
       expect(listed.filter((source) => source.orphan !== true)).toHaveLength(1);
@@ -192,7 +193,7 @@ describe("Seeds", () => {
     it("destroys a stale seed and makes it again at the next provision", async () => {
       const harness = await seedHarness(makingTheSeed());
       await harness.seeds.provision(harness.spec);
-      const newHome = `${sources}/seed_five`;
+      const newHome = join(sources, "seed_five");
       await writeSeedFiles(harness.filesystem, newHome);
       const newer = "Android emulator version 36.2.0";
       const later = await reopened(harness, [
@@ -407,7 +408,7 @@ describe("Seeds", () => {
 
       const fits = await provisionWith(seedBytes);
       await expect(fits.provision).resolves.toMatchObject({ deviceId: "simlock_one" });
-      expect(fits.filesystem.copies).toEqual([`${copyHome}/simlock.avd`]);
+      expect(fits.filesystem.copies).toEqual([join(copyHome, "simlock.avd")]);
       // why: a finished copy gives its reservation back, so the next copy of the same size is not refused for it.
       await expect(fits.harness.seeds.provision(fits.harness.spec)).resolves.toMatchObject({
         deviceId: "simlock_three",
@@ -462,7 +463,7 @@ describe("Seeds", () => {
     });
 
     it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
-      const makingHome = `${sources}/seed_device-4`;
+      const makingHome = join(sources, "seed_device-4");
       const harness = await seedHarness([
         ...makingTheSeed(),
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -507,7 +508,7 @@ describe("Seeds", () => {
       );
       const second = await provisioning;
 
-      expect(second.driverData).toMatchObject({ avdHome: expect.stringContaining("/simlock_") });
+      expect(second.driverData).toMatchObject({ avdHome: expect.stringContaining("simlock_") });
       expect(
         harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
       ).toEqual([{ state: "making" }, { state: "ready" }]);
@@ -533,7 +534,7 @@ describe("Seeds", () => {
 
     it("lists each ready seed with its size, reports a sources folder no row names as an orphan, and destroys a source by id after stopping its emulator by path", async () => {
       const serial = "emulator-5586";
-      const orphanHome = `${sources}/seed_orphan`;
+      const orphanHome = join(sources, "seed_orphan");
       const harness = await seedHarness([
         ...makingTheSeed(),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
@@ -563,7 +564,7 @@ describe("Seeds", () => {
       await harness.seeds.destroySource("seed_orphan");
       await harness.seeds.destroySource("seed_two");
 
-      expect(await harness.filesystem.exists(`${sources}/seed_two`)).toBe(false);
+      expect(await harness.filesystem.exists(join(sources, "seed_two"))).toBe(false);
       expect(await harness.filesystem.exists(orphanHome)).toBe(false);
       expect(
         harness.runner.calls

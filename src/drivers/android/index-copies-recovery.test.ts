@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 import { FakeClock, MemoryFilesystem, type ScriptedProcessExpectation } from "../../ports/index.js";
 import { type AndroidDriverDiagnostic, type AndroidEmulatorLaunchOptions } from "./index.js";
 import {
@@ -24,9 +25,9 @@ import { sdk } from "./test-index.js";
 
 describe("AndroidDriver image fit", () => {
   describe("seeds and copies", () => {
-    const sources = `${avdDirectory}/sources`;
-    const copyHome = `${avdDirectory}/simlock_one`;
-    const seedHome = `${sources}/seed_two`;
+    const sources = join(avdDirectory, "sources");
+    const copyHome = join(avdDirectory, "simlock_one");
+    const seedHome = join(sources, "seed_two");
     async function seedHarness(
       expectations: readonly ScriptedProcessExpectation[],
       options: {
@@ -160,7 +161,7 @@ describe("AndroidDriver image fit", () => {
       expect(await destroyed.filesystem.exists(seedHome)).toBe(false);
       await expect(destroyed.driver.listSources()).resolves.toEqual([]);
 
-      const otherHome = `${sources}/seed_device-4`;
+      const otherHome = join(sources, "seed_device-4");
       const other = await seedHarness([
         ...makingTheSeed(),
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -256,9 +257,9 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
         processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
       ]);
-      await harness.filesystem.mkdirp(`${avdDirectory}/simlock_old.avd`);
+      await harness.filesystem.mkdirp(join(avdDirectory, "simlock_old.avd"));
       await harness.filesystem.writeFileAtomic(
-        `${avdDirectory}/simlock_old.avd/config.ini`,
+        join(avdDirectory, "simlock_old.avd", "config.ini"),
         "hw.ramSize=2048\n",
       );
       const legacy = {
@@ -305,7 +306,7 @@ describe("AndroidDriver image fit", () => {
       };
       const harness = async (expectations: readonly ScriptedProcessExpectation[]) => {
         const filesystem = await androidFilesystem();
-        for (const home of [copyHome, `${avdDirectory}/simlock_two`]) {
+        for (const home of [copyHome, join(avdDirectory, "simlock_two")]) {
           await filesystem.mkdirp(`${home}/simlock.avd`);
           await filesystem.writeFileAtomic(`${home}/simlock.avd/config.ini`, "hw.ramSize=2048\n");
         }
@@ -327,7 +328,7 @@ describe("AndroidDriver image fit", () => {
       ]);
       await passes.driver.destroy(own);
       expect(await passes.filesystem.exists(copyHome)).toBe(false);
-      expect(await passes.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+      expect(await passes.filesystem.exists(join(avdDirectory, "simlock_two"))).toBe(true);
 
       const neighbour = await harness([
         processResult(
@@ -363,7 +364,7 @@ describe("AndroidDriver image fit", () => {
       ]);
       failingDelete.filesystem.defineFailure(copyHome, "EACCES");
       await expect(failingDelete.driver.destroy(own)).rejects.toMatchObject({ code: "EACCES" });
-      expect(await failingDelete.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+      expect(await failingDelete.filesystem.exists(join(avdDirectory, "simlock_two"))).toBe(true);
 
       const outside = await harness([]);
       await outside.filesystem.mkdirp("/elsewhere/simlock_two");
@@ -375,7 +376,7 @@ describe("AndroidDriver image fit", () => {
         }),
       ).rejects.toThrow("Android device simlock_two names a folder outside the root");
       expect(await outside.filesystem.exists("/elsewhere/simlock_two")).toBe(true);
-      expect(await outside.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+      expect(await outside.filesystem.exists(join(avdDirectory, "simlock_two"))).toBe(true);
 
       const malformed = await harness([]);
       await expect(
