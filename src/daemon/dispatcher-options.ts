@@ -33,7 +33,6 @@ import type {
   StatusMemoryPressure,
 } from "../contract/index.js";
 import type { DispatchSession } from "./dispatch.js";
-import type { SeedMaking } from "./dispatcher-seed.js";
 import type { UpdateCoordinator } from "./update-coordinator.js";
 
 export interface CapabilitySource {
@@ -63,8 +62,6 @@ export interface DispatcherOptions {
   readonly warmKinds?: WarmKindForgetter;
   /** why: the baselines' one way in; optional so tests that never save need none. */
   readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
-  /** why: `seed.make`'s one way in: the settler and the lease's resolution; optional so tests that never make a seed need none. */
-  readonly seeds?: SeedMaking;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */

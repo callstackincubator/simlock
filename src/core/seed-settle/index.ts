@@ -1,2 +1,2 @@
 export { createSeedSettler } from "./settler.js";
-export type { SeedSettleProgress, SeedSettleResult, SeedSettler } from "./types.js";
+export type { SeedSettleProgress, SeedSettler } from "./types.js";

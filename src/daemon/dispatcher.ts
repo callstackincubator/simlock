@@ -12,7 +12,6 @@ import { ExecHandlers } from "./dispatcher-exec.js";
 import { FleetHandlers, unsupportedOnWorker } from "./dispatcher-fleet.js";
 import { LeaseHandlers } from "./dispatcher-leases.js";
 import type { DispatcherOptions, WorkerOperationName } from "./dispatcher-options.js";
-import { SeedHandlers } from "./dispatcher-seed.js";
 import { StatusHandlers } from "./dispatcher-status.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
@@ -38,7 +37,6 @@ export class Dispatcher {
   readonly #status: StatusHandlers;
   readonly #leases: LeaseHandlers;
   readonly #components: ComponentHandlers;
-  readonly #seeds: SeedHandlers;
   readonly #admin: AdminHandlers;
   readonly #fleet: FleetHandlers;
   readonly #exec: ExecHandlers;
@@ -50,7 +48,6 @@ export class Dispatcher {
     this.#status = new StatusHandlers(options);
     this.#leases = new LeaseHandlers(options);
     this.#components = new ComponentHandlers(options);
-    this.#seeds = new SeedHandlers(options);
     this.#admin = new AdminHandlers(options);
     this.#fleet = new FleetHandlers(options, {
       components: this.#components,
@@ -100,7 +97,6 @@ export class Dispatcher {
       "token.list": this.#admin.tokenList,
       "token.revoke": this.#admin.tokenRevoke,
       "component.install": this.#components.componentInstall,
-      "seed.make": this.#seeds.seedMake,
       "component.list": this.#components.componentList,
       "component.remove": this.#components.componentRemove,
       "device.add": this.#devices.deviceAdd,

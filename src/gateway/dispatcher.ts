@@ -273,10 +273,6 @@ export class GatewayDispatcher {
         "component.install installs on one machine; on a gateway, name the workers to install on " +
           "(simlock component install --worker <id> or --all-workers)",
       ),
-      "seed.make": unsupportedByDesign(
-        "seed.make",
-        "seed acts on one machine's devices; run it against a worker",
-      ),
       "component.list": unsupportedByDesign(
         "component.list",
         "component.list lists one machine's components; run it against a worker",
