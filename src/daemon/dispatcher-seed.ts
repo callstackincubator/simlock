@@ -65,26 +65,39 @@ export class SeedHandlers {
  * A refusal no download could fix for an exact version or the default (below iOS 16, out of range, an image tag) keeps the lease's own words, because that command would fail for it.
  */
 function runtimeMissing(error: RuntimeMissingError, osVersion: string | undefined): DispatchError {
-  const asked = osVersion === undefined ? undefined : parseOsConstraint(osVersion);
-  const exact =
-    asked?.ok === true && asked.constraint.kind === "exact" ? asked.constraint : undefined;
-  const ranged = asked?.ok === true && exact === undefined;
-  const message =
-    error.downloadable || ranged ? installAdvice(error, exact?.version, osVersion) : error.message;
-  return new DispatchError("RUNTIME_MISSING", message, {
-    downloadable: error.downloadable,
-    osVersion: error.osVersion,
-    platform: error.platform,
-  });
+  const asked = askedVersion(osVersion);
+  const advice = error.downloadable || asked.kind === "range";
+  return new DispatchError(
+    "RUNTIME_MISSING",
+    advice ? installAdvice(error, asked, osVersion) : error.message,
+    {
+      downloadable: error.downloadable,
+      osVersion: error.osVersion,
+      platform: error.platform,
+    },
+  );
+}
+
+type AskedVersion =
+  | { readonly kind: "exact"; readonly version: string }
+  | { readonly kind: "range" | "none" };
+
+function askedVersion(osVersion: string | undefined): AskedVersion {
+  if (osVersion === undefined) return { kind: "none" };
+  const parsed = parseOsConstraint(osVersion);
+  if (!parsed.ok) return { kind: "none" };
+  return parsed.constraint.kind === "exact"
+    ? { kind: "exact", version: parsed.constraint.version }
+    : { kind: "range" };
 }
 
 function installAdvice(
   error: RuntimeMissingError,
-  exact: string | undefined,
+  asked: AskedVersion,
   osVersion: string | undefined,
 ): string {
   const name = error.platform === "ios" ? "iOS" : "Android";
-  return exact === undefined
-    ? `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`
-    : `${name} ${exact} is not installed; install it with simlock component install ${error.platform} ${exact}`;
+  return asked.kind === "exact"
+    ? `${name} ${asked.version} is not installed; install it with simlock component install ${error.platform} ${asked.version}`
+    : `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`;
 }
