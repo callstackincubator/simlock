@@ -466,7 +466,7 @@ export class Seeds {
     this.#sources.deleteRow(seed.sourceId);
   }
 
-  /** why: a clone a failed step could not delete has no record, so the log line naming its UDID is all that is left of it; the step's own error is still what the caller gets. */
+  /** why: the log line naming the UDID is what tells the user which simulator a failed step left behind; the step's own error is still what the caller gets. */
   async #cleanUp(udid: string, step: string, remove: () => Promise<void>): Promise<void> {
     try {
       await remove();

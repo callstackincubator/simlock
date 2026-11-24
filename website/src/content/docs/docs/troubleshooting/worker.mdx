@@ -259,6 +259,14 @@ sudo rm /Library/LaunchDaemons/local.fseventsd-restart.plist
 
 **Fix.** `simlock doctor --purge-orphans`. See [Delete orphaned devices](/simlock/docs/worker/free-disk#delete-orphaned-devices).
 
+## A simulator is left behind by a failed step
+
+**Symptom.** `daemon.log` has a `warn` line such as `could not delete simulator 3F1C9A52-7D44-4B0E-9C2A-5E8B1D6A0F77 left by a failed seed make: <error>`. The step name is `provision`, `baseline save` or `seed make`. The step's own error reaches the caller as usual.
+
+**Cause.** A simulator or baseline step failed, and Simlock could not delete the simulator it had made for it. The line names that simulator by its UDID.
+
+**Fix.** Run `simlock doctor --purge-orphans`. Or delete the UDID in the line by hand. See [Orphaned devices](#orphaned-devices).
+
 ## The event history is not written
 
 **Symptom.** `simlock status` shows a `History:` line, such as `History: the event history is not being written; see daemon.log.`, or `simlock stats` fails with `HISTORY_UNAVAILABLE`.
