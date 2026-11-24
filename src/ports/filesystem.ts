@@ -518,7 +518,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async readFile(path: string): Promise<string> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const entry = this.#entryAt(path);
 
     if (entry.kind !== "file") {
@@ -537,7 +537,7 @@ export class MemoryFilesystem implements Filesystem {
     body: ReadableStream<Uint8Array>,
     options: { readonly mode?: number } = {},
   ): Promise<number> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
     this.#requireDirectory(parentPath(path));
     if (this.#entries.has(path)) throw errnoError("EEXIST", `File already exists: ${path}`);
@@ -557,7 +557,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async openFile(path: string): Promise<OpenedFile> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const entry = this.#entryAt(path);
     if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
     const bytes = fileBytes(entry);
@@ -581,8 +581,8 @@ export class MemoryFilesystem implements Filesystem {
     to: string,
     _options: { readonly timeoutMs: number },
   ): Promise<void> {
-    this.#failIfDefined(from);
-    this.#failIfDefined(to);
+    from = this.#failIfDefined(from);
+    to = this.#failIfDefined(to);
     this.#rawEntryAt(from);
     if (this.#entries.has(to)) throw errnoError("EEXIST", `File already exists: ${to}`);
     this.#requireDirectory(parentPath(to));
@@ -610,7 +610,7 @@ export class MemoryFilesystem implements Filesystem {
     contents: string,
     options?: WriteFileAtomicOptions,
   ): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
     this.#requireDirectory(parentPath(path));
     const encoding = options?.encoding ?? "utf8";
@@ -629,7 +629,7 @@ export class MemoryFilesystem implements Filesystem {
     contents: string,
     options: { readonly mode: number },
   ): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
     const existing = this.#entries.get(path);
 
@@ -648,7 +648,7 @@ export class MemoryFilesystem implements Filesystem {
     contents: string,
     options?: WriteFileExclusiveOptions,
   ): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
 
     if (this.#entries.has(path)) {
@@ -663,7 +663,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async mkdirp(path: string, options: MkdirpOptions = {}): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     let currentPath = "";
 
     for (const segment of path.split("/")) {
@@ -691,8 +691,8 @@ export class MemoryFilesystem implements Filesystem {
    * is what tells it another process won the race.
    */
   async rename(from: string, to: string): Promise<void> {
-    this.#failIfDefined(from);
-    this.#failIfDefined(to);
+    from = this.#failIfDefined(from);
+    to = this.#failIfDefined(to);
     const moved = this.#rawEntryAt(from);
     const occupant = this.#entries.get(to);
 
@@ -727,7 +727,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async rm(path: string): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const prefix = path.endsWith("/") ? path : `${path}/`;
 
     for (const entryPath of this.#entries.keys()) {
@@ -738,7 +738,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async stat(path: string): Promise<FileStat> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const entry = this.#entryAt(path);
 
     return {
@@ -751,14 +751,14 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async lstat(path: string): Promise<PathDetails> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const entry = this.#rawEntryAt(path);
 
     return { kind: entry.kind, uid: entry.uid, mode: entry.mode };
   }
 
   async mkdir(path: string, options: { readonly mode?: number } = {}): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
 
     if (this.#entries.has(path)) {
@@ -772,12 +772,12 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async chmod(path: string, mode: number): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     this.#rawEntryAt(path).mode = mode & 0o777;
   }
 
   async realpath(path: string): Promise<string> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const resolved = this.#resolveLinks(path, 0);
 
     if (!this.#entries.has(resolved)) {
@@ -788,7 +788,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async readdir(path: string): Promise<string[]> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     this.#requireDirectory(path);
     const prefix = path === "/" ? "/" : `${path}/`;
     const children = new Set<string>();
@@ -815,7 +815,7 @@ export class MemoryFilesystem implements Filesystem {
    * the double pass for correct.
    */
   async exists(path: string): Promise<boolean> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
 
     try {
       this.#entryAt(path);
@@ -840,10 +840,10 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async directorySize(path: string): Promise<number> {
+    path = memoryPath(path);
     let total = 0;
     for (const name of await this.readdir(path)) {
-      const child = joinMemoryPath(path, name);
-      this.#failIfDefined(child);
+      const child = this.#failIfDefined(joinMemoryPath(path, name));
       const entry = this.#rawEntryAt(child);
       if (entry.kind === "directory") total += await this.directorySize(child);
       else if (entry.kind === "file") total += fileBytes(entry).byteLength;
@@ -852,14 +852,15 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async readlink(path: string): Promise<string> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const entry = this.#rawEntryAt(this.#underResolvedParent(path));
     if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
     return entry.target;
   }
 
-  async replaceSymlink(path: string, target: string): Promise<void> {
-    this.#failIfDefined(path);
+  async replaceSymlink(path: string, given: string): Promise<void> {
+    path = this.#failIfDefined(path);
+    const target = memoryPath(given);
     const at = this.#underResolvedParent(path);
     const entry = this.#rawEntryAt(at);
     if (entry.kind !== "symlink") throw errnoError("EINVAL", `Not a symbolic link: ${path}`);
@@ -867,7 +868,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async writeAt(path: string, offset: number, bytes: Uint8Array): Promise<void> {
-    this.#failIfDefined(path);
+    path = this.#failIfDefined(path);
     const entry = this.#entryAt(path);
     if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
     const old = fileBytes(entry);
@@ -883,18 +884,21 @@ export class MemoryFilesystem implements Filesystem {
    * reach the branches that turn an unexpected filesystem failure into a typed rejection.
    */
   defineFailure(path: string, code: string): void {
-    this.#failures.set(path, code);
+    this.#failures.set(memoryPath(path), code);
   }
 
   defineSymlink(path: string, target: string): void {
-    this.#entries.set(path, this.#newEntry({ kind: "symlink", target }));
+    this.#entries.set(
+      memoryPath(path),
+      this.#newEntry({ kind: "symlink", target: memoryPath(target) }),
+    );
   }
 
   defineAttributes(
     path: string,
     attributes: { readonly uid?: number; readonly mode?: number; readonly modifiedAtMs?: number },
   ): void {
-    const entry = this.#rawEntryAt(path);
+    const entry = this.#rawEntryAt(memoryPath(path));
 
     if (attributes.uid !== undefined) {
       entry.uid = attributes.uid;
@@ -909,11 +913,14 @@ export class MemoryFilesystem implements Filesystem {
     }
   }
 
-  #failIfDefined(path: string): void {
+  /** why: every method that takes a path and can fail enters here, so the one place that fails an injected path is also the one that reads a path in either style. */
+  #failIfDefined(given: string): string {
+    const path = memoryPath(given);
     const code = this.#failures.get(path);
     if (code !== undefined) {
-      throw errnoError(code, `Injected ${code} failure: ${path}`);
+      throw errnoError(code, `Injected ${code} failure: ${given}`);
     }
+    return path;
   }
 
   #newEntry(kind: MemoryEntryKind): MemoryEntry {
@@ -987,6 +994,15 @@ export class MemoryFilesystem implements Filesystem {
 
 function fileBytes(entry: { readonly contents: string; readonly bytes?: Uint8Array }): Uint8Array {
   return entry.bytes ?? Buffer.from(entry.contents, "utf8");
+}
+
+/**
+ * why: the fake reads `D:\a\b`, `\a\b` and `/a/b` as one entry, so a test written for the host's
+ * path style passes on every host; production code keeps `node:path`.
+ */
+function memoryPath(path: string): string {
+  const absolute = path.replace(/^[A-Za-z]:(?=[\\/]|$)/, "");
+  return /^[\\/]/.test(absolute) ? absolute.replaceAll("\\", "/") : path;
 }
 
 function joinMemoryPath(parent: string, child: string): string {

@@ -66,9 +66,13 @@ list and this one the same.
   `.fallowrc.json` limits, and refactoring targets never fail. Its findings
   show as annotations on the PR. A `fallow-ignore` comment names its reason
   after ` -- `, and one that no longer hides a finding fails. The `pnpm
-  check` steps run as parallel jobs (static checks, unit tests, the timing
-  tests, the e2e lane in three shards); the Quality check passes only when all of them
-  do. The console DOM tests run with the unit tests. The console lane runs
+  check` steps run as parallel jobs (static checks, unit tests, the unit
+  tests on Windows, the timing tests, the e2e lane in three shards); the
+  Quality check passes only when all of them do. A contributor on Windows
+  runs the tests from Git Bash with Python 3 installed, never PowerShell. A
+  failure only the `Unit tests (Windows)` job shows is reproduced by
+  rerunning that job on the base commit's CI run (`gh run rerun <run> --job
+  <job>`), not locally. The console DOM tests run with the unit tests. The console lane runs
   in Chromium in two shards (the required Console check passes only when
   they all do) on every push to `main`, and on a pull request when it
   changes a source, UI, console spec or build file.
