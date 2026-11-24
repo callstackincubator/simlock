@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import {
   DriverCrashError,
   type DriverDevice,
+  type DriverSettleResult,
   type DriverSource,
   type VirtualDriverDevice,
   type VirtualSpec,
@@ -12,6 +13,7 @@ import type {
   Filesystem,
   IdGenerator,
   ProcessRunner,
+  ProcessTable,
   SqliteDatabase,
 } from "../../ports/index.js";
 import { ADB_DEVICES_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
@@ -408,6 +410,14 @@ export class Seeds {
       if (this.#clock.now() - startedAt >= timeoutMs) return false;
       await this.#adbTools.delay(SAVE_EXIT_POLL_INTERVAL_MS);
     }
+  }
+
+  async settleSeed(
+    _processTable: ProcessTable,
+    sourceId: string,
+    _options: { readonly signal: AbortSignal },
+  ): Promise<DriverSettleResult> {
+    return { reason: "idle", settledAfterMs: 0, sourceId };
   }
 
   async destroySource(sourceId: string): Promise<void> {

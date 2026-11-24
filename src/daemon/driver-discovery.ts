@@ -294,6 +294,7 @@ async function discoverAndroidDriver(
       logger: logger.child("android"),
       onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
       processRunner: options.processRunner,
+      ...(options.processTable === undefined ? {} : { processTable: options.processTable }),
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,

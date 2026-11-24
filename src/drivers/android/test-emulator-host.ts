@@ -25,12 +25,18 @@ export class EmulatorHost {
   /** why: the AVD folder each console port's emulator runs, as its `emu avd path` answers it. */
   readonly #listening = new Map<number, string>();
   readonly #exits = new Map<number, () => void>();
+  readonly #pids = new Map<number, number>();
   #nextPid = 1;
 
   constructor(private readonly filesystem: MemoryFilesystem) {}
 
   pathAnswering(serial: string | undefined): string | undefined {
     return this.#listening.get(consolePortOf(serial));
+  }
+
+  /** why: the pid the runner gave the emulator listening on a serial, which is what a process table names as the root of its tree. */
+  pidAnswering(serial: string | undefined): number | undefined {
+    return this.#pids.get(consolePortOf(serial));
   }
 
   /** why: the id of the device whose AVD answers: a copy's folder name, or an old-layout AVD's name. */
@@ -124,8 +130,10 @@ export class EmulatorHost {
       exit = resolve;
     });
     const bound = !this.#listening.has(port);
+    const pid = this.#nextPid++;
     if (bound) {
       this.#listening.set(port, avdName);
+      this.#pids.set(port, pid);
       this.#exits.set(port, () => exit({ code: 0, stderr: "", stdout: "" }));
     } else {
       exit({ code: 1, stderr: `console port ${port} is already used`, stdout: "" });
@@ -135,7 +143,7 @@ export class EmulatorHost {
       kill: () => {
         if (bound && this.#listening.get(port) === avdName) this.#exit(port);
       },
-      pid: this.#nextPid++,
+      pid,
       stderr: emptyLines(),
       stdout: emptyLines(),
       unref: () => undefined,
