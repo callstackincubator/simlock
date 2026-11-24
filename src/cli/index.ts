@@ -22,6 +22,8 @@ Commands:
                               single host, list shows the host itself
   alerts test <destination> [--json]
                               Send one sample message to a gateway's alert destination
+  seed <ios|android> <model> [--os <version|range>] [--image-tag <tag>] [--json]
+                              Make and settle a kind's seed before anyone leases it
   warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]
                               Forget a kind the warm pool learned from a lease
   component install <ios|android> <version> [--worker <id>... | --all-workers]

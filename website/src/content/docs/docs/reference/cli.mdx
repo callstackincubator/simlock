@@ -35,6 +35,7 @@ What each command accepts. The **Guide** column links the task page that uses it
 | [`simlock doctor`](#simlock-doctor) | Check the machine and fix Simlock's records | [A worker misbehaves](/simlock/docs/troubleshooting/worker) |
 | [`simlock cleanup`](#simlock-cleanup) | Run the cleanup rules now | [Free disk space](/simlock/docs/worker/free-disk) |
 | [`simlock nuke`](#simlock-nuke) | End every lease and stop every device at once | [Free disk space and reset a machine](/simlock/docs/worker/free-disk) |
+| [`simlock seed`](#simlock-seed) | Make and settle the seed of a model before anyone leases it | [Settle a seed before the first lease](/simlock/docs/worker/capacity) |
 | [`simlock warm`](#simlock-warm) | Forget a kind the warm pool learned from a lease | [Make leases start faster](/simlock/docs/worker/warm-pool) |
 | [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images) |
 | [`simlock baseline`](#simlock-baseline) | Save a held device as a named baseline, list baselines, remove one | [Save a prepared device](/simlock/docs/worker/save-a-prepared-device) |
@@ -614,6 +615,31 @@ simlock nuke [--delete-devices] [--yes]
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+
+## simlock seed
+
+Make the seed of one kind and settle it, so the first leases of that kind start from a settled copy. Waits until the seed is settled, and prints each stage on stderr. Needs the admin role and runs on a worker; a gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2). See [Settle a seed before the first lease](/simlock/docs/worker/capacity).
+
+```text
+simlock seed <ios|android> <model> [--os <version|range>] [--image-tag <tag>] [--json]
+```
+
+| Argument or flag | Meaning | Default |
+| --- | --- | --- |
+| `<ios\|android>` | The platform of the kind. | Required |
+| `<model>` | The exact model name, as `simlock catalog` lists it. | Required |
+| `--os <version\|range>` | The OS version, or a range, as `simlock lease --os` takes it. | The newest installed |
+| `--image-tag <tag>` | The Android system image tag. | The default tag |
+| `--json` | Print the answer as one JSON line, and no stage lines. | Off |
+
+```text
+$ simlock seed ios "iPhone 17"
+seed iPhone 17, iOS 26.5: making the seed…
+seed iPhone 17, iOS 26.5: settling…
+seed iPhone 17, iOS 26.5: settled in 3m01s (1.7 GiB)
+```
+
+A seed that is already settled answers `already settled` with its size. The `--json` answer carries `platform`, `model`, `osVersion`, `imageTag` when the seed has one, `sourceId`, `sizeBytes` when known, `outcome` (`settled` or `already-settled`) and `settledAfterMs` on `settled`. Ctrl-C stops waiting and exits 0; the settle goes on in the daemon. It never downloads a runtime: a missing one fails with `RUNTIME_MISSING`, and a failed or 60-minute settle with `SEED_SETTLE_FAILED`.
 
 ## simlock warm
 
