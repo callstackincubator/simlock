@@ -408,7 +408,7 @@ describe("Seeds", () => {
 
       const fits = await provisionWith(seedBytes);
       await expect(fits.provision).resolves.toMatchObject({ deviceId: "simlock_one" });
-      expect(fits.filesystem.copies).toEqual([`${copyHome}/simlock.avd`]);
+      expect(fits.filesystem.copies).toEqual([join(copyHome, "simlock.avd")]);
       // why: a finished copy gives its reservation back, so the next copy of the same size is not refused for it.
       await expect(fits.harness.seeds.provision(fits.harness.spec)).resolves.toMatchObject({
         deviceId: "simlock_three",
