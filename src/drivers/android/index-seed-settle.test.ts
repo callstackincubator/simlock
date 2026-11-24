@@ -21,7 +21,7 @@ async function quickSeedWorld() {
   const table = new FakeProcessTable();
   const driver = await createDriver(filesystem, runner, {
     clock,
-    ids: ["one", "two", "three"],
+    ids: ["one", "two", "three", "four"],
     processTable: table,
   });
   await driver.provision(
@@ -179,6 +179,25 @@ describe("AndroidDriver settleSeed", () => {
         "the copy's emulator was stopped",
       ).toBeUndefined();
     }
+  });
+
+  it("serves a provision of the kind from the quick seed while its settle runs", async () => {
+    const world = await quickSeedWorld();
+    const settle = world.driver.settleSeed?.("seed_two", { signal: new AbortController().signal });
+    if (settle === undefined) throw new Error("the driver offers no settleSeed");
+    const settling = settle.catch((error: unknown) => error);
+    for (let tick = 0; tick < 20; tick += 1) await new Promise<void>((r) => setImmediate(r));
+
+    const provisioned = world.driver.provision(
+      await world.driver.resolveSpec({ model: "Pixel 5", osVersion: "34", platform: "android" }),
+    );
+    const state = promiseState(provisioned);
+    for (let tick = 0; tick < 50 && state.state === "pending"; tick += 1)
+      await new Promise<void>((r) => setImmediate(r));
+
+    expect(state.state, "the provision did not wait for the settle").toBe("fulfilled");
+    await expect(world.filesystem.exists(`${sources}/seed_two/simlock.avd`)).resolves.toBe(true);
+    await runToEnd(settling, world, 60_000, () => undefined);
   });
 
   it("throws and leaves the quick seed when the save does not list, the emulator exits, the settle is aborted or the source is no ready quick seed", async () => {
