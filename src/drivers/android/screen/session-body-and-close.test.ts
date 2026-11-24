@@ -85,6 +85,54 @@ describe("Android screen capture: the key frame bound", () => {
     failing.clock.advance(4_000);
     await expect(ended).rejects.toBeInstanceOf(ScreenUnavailableError);
   });
+
+  it("relays a still screen's key frame 4 s plus the answer after the last one when the device takes 5 s to answer reset video", async () => {
+    // why: scrcpy v5.0.1 answers reset video by preparing a new capture and encoder, and when another reset
+    // came while it did, it sends nothing and prepares again (SurfaceEncoder.java:142,
+    // `if (!captureControl.isResetRequested())`). This device takes 5 s to prepare, as a just-booted emulator
+    // on a loaded host does (#1762): a reset written during the answer starts the answer again.
+    const ANSWER_MS = 5_000;
+    const still = await setup();
+    const feed = await opened(still);
+    const startedAt = still.clock.now();
+    const peer = still.target.server.last;
+    const control = still.target.server.controls[0]!;
+    const reader = feed.body.getReader();
+    const keyFramesAt: number[] = [];
+    void (async () => {
+      for (;;) {
+        const step = await reader.read().catch(() => ({ done: true, value: undefined }));
+        if (step.done || step.value === undefined) return;
+        if (frameTag(step.value) === SCREEN_FRAME_TAG.keyframe)
+          keyFramesAt.push(still.clock.now() - startedAt);
+      }
+    })();
+    let resets = 0;
+    let answerAt: number | undefined;
+    for (let spent = 0; spent < 20_000; spent += 500) {
+      still.clock.advance(500);
+      await settle();
+      const written = control.written.slice(2).length;
+      if (written > resets) {
+        resets = written;
+        answerAt = still.clock.now() + ANSWER_MS;
+      }
+      if (answerAt !== undefined && still.clock.now() >= answerAt) {
+        answerAt = undefined;
+        peer.send(
+          sessionPacket(96, 64),
+          mediaPacket({ config: true }, SAMPLE.config),
+          mediaPacket({ key: true }, SAMPLE.idr),
+        );
+        await settle();
+      }
+    }
+    expect(keyFramesAt, "key frames, in ms after the open, of a still screen").toEqual([
+      4_000 + ANSWER_MS,
+      2 * (4_000 + ANSWER_MS),
+    ]);
+    await drive(still.clock, reader.cancel());
+  });
 });
 
 describe("Android screen capture: the body", () => {
