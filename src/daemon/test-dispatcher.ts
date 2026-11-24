@@ -206,6 +206,8 @@ export async function buildDispatcher(
     /** why: the worker's memory pressure step at the start; a test changes it with `setMemoryPressure`. */
     readonly memoryPressureStep?: MemoryPressureStep;
     readonly warmPool?: Partial<Config["warmPool"]>;
+    /** why: the free disk bytes below which the worker is under disk pressure; a test sets it above what the memory filesystem reports to put the worker there. */
+    readonly diskPressureThreshold?: number;
     /** why: the `ios.defaultMode` `catalog.get` reports. */
     readonly iosDefaultMode?: "slim" | "full";
     /** why: the `ios.modes` the worker serves; the default mode and the leasing engine follow it as the loader and the daemon's wiring do (ADR 0082 §1). */
@@ -304,6 +306,9 @@ export async function buildDispatcher(
             android: { ...baseConfig.android, defaultImageTag: overrides.androidDefaultImageTag },
           }),
       warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+      ...(overrides.diskPressureThreshold === undefined
+        ? {}
+        : { diskPressure: { freeBytesThreshold: overrides.diskPressureThreshold } }),
       ios,
       ...(overrides.bootTimeouts === undefined
         ? {}

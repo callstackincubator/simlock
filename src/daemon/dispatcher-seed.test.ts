@@ -224,6 +224,106 @@ describe("Dispatcher: seed.make", () => {
     expect(ensured, "the timed-out call's seed is never made").toEqual(["iPhone 17"]);
   });
 
+  it("joins the settle already running on its kind's seed: two calls for one kind settle it once and each hears it wait", async () => {
+    let release: (() => void) | undefined;
+    const settleSeed = vi.fn(
+      (sourceId: string) =>
+        new Promise<{ reason: "idle"; settledAfterMs: number; sourceId: string }>((resolve) => {
+          release = () =>
+            resolve({ reason: "idle", settledAfterMs: 5, sourceId: `${sourceId}-settled` });
+        }),
+    );
+    const ensureSeed = vi.fn(async () => ({ leases: 0, settled: false, sourceId: "made" }));
+    const built = await buildDispatcher({ seedVerbs: { ensureSeed, settleSeed } });
+    built.driver.setSources([
+      {
+        id: "quick",
+        kind: "seed",
+        leases: 3,
+        model: "iPhone 17",
+        osVersion: "26.5",
+        settled: false,
+      },
+    ]);
+    built.engine.core.seedSettler.start();
+    built.clock.advance(5 * 60_000);
+    await flushPromises();
+    expect(settleSeed, "the background settle is under way").toHaveBeenCalledTimes(1);
+
+    const waits: unknown[][] = [[], []];
+    const calls = waits.map((heard, index) =>
+      built.dispatcher.dispatch(
+        "seed.make",
+        { model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+        {
+          ...admin,
+          onSeedProgress: (_kind: unknown, progress: unknown) => waits[index]!.push(progress),
+        },
+      ),
+    );
+    await flushPromises();
+    expect(waits).toEqual([
+      [{ reason: "settle-running", stage: "waiting" }],
+      [{ reason: "settle-running", stage: "waiting" }],
+    ]);
+
+    release?.();
+    await flushPromises();
+    await expect(Promise.all(calls)).resolves.toEqual([
+      expect.objectContaining({ outcome: "settled", sourceId: "quick-settled" }),
+      expect.objectContaining({ outcome: "settled", sourceId: "quick-settled" }),
+    ]);
+    expect(settleSeed, "one settle for both calls").toHaveBeenCalledTimes(1);
+    expect(ensureSeed, "the seed was not made again").not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: "memory-pressure", options: { memoryPressureStep: "new-devices-paused" } },
+    { reason: "disk-pressure", options: { diskPressureThreshold: 2 ** 60 } },
+    {
+      reason: "capacity",
+      options: {
+        capacity: {
+          strategy: "resource",
+          config: {
+            limits: {
+              android: { maxDevices: 1, maxRunning: 1 },
+              ios: { maxDevices: 1, maxRunning: 1 },
+              maxRunning: 2,
+            },
+            ramBudget: { androidBytesPerDevice: 2 ** 50, iosBytesPerDevice: 2 ** 50 },
+          },
+        },
+      },
+    },
+  ] as const)(
+    "waits and starts nothing while the worker is under $reason",
+    async ({ reason, options }) => {
+      const ensureSeed = vi.fn(async () => ({ leases: 0, settled: false, sourceId: "made" }));
+      const settleSeed = vi.fn(async (sourceId: string) => ({
+        reason: "idle" as const,
+        settledAfterMs: 1,
+        sourceId,
+      }));
+      const built = await buildDispatcher({ ...options, seedVerbs: { ensureSeed, settleSeed } });
+      built.engine.core.seedSettler.start();
+      const heard: unknown[] = [];
+
+      void built.dispatcher
+        .dispatch(
+          "seed.make",
+          { model: "iPhone 17", platform: "ios" },
+          { ...admin, onSeedProgress: (_kind: unknown, progress: unknown) => heard.push(progress) },
+        )
+        .catch(() => undefined);
+      await flushPromises();
+
+      expect(heard).toEqual([{ reason, stage: "waiting" }]);
+      expect(ensureSeed).not.toHaveBeenCalled();
+      expect(settleSeed).not.toHaveBeenCalled();
+    },
+  );
+
   it("makes a seed on a worker that serves only slim simulators, because a seed is made full and leased by no one", async () => {
     const built = await buildDispatcher({
       iosModes: ["slim"],
