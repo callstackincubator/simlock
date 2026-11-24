@@ -103,6 +103,8 @@ const FAKE_LANE_BASE_CONFIG: Record<string, unknown> = {
     android: { maxDevices: 8, maxRunning: 8 },
   },
   ramBudget: { iosBytesPerDevice: 1024 * 1024, androidBytesPerDevice: 1024 * 1024 },
+  // why: the daemon refuses an upload below the default 10 GiB free-disk threshold, so a test host with less free disk would fail the file-upload flows for a reason that is not theirs.
+  diskPressure: { freeBytesThreshold: 0 },
 };
 
 export interface WithDaemonOptions {

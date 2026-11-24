@@ -389,6 +389,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
       ...(twoWayTarget === undefined ? {} : { relayTwoWayTargets: { echo: twoWayTarget } }),
       ...options.worker,
       configOverrides: {
+        diskPressure: { freeBytesThreshold: 0 },
         gateway: { label: "worker-a", token: secret, url: workerDials },
       },
       drivers: [
