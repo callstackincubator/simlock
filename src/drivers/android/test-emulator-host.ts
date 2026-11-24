@@ -31,6 +31,8 @@ export class EmulatorHost {
   #nextPid = 1;
   /** why: the network id `dumpsys connectivity` names as the default one; `undefined` before the guest has one. A real emulator has one almost at once, so a test that is about the wait sets it to `undefined`. */
   defaultNetwork: number | undefined = 100;
+  /** why: what `emu avd snapshot list` prints; a test of a save that did not take empties it. */
+  snapshotListing = "simlock_boot\n";
 
   constructor(private readonly filesystem: MemoryFilesystem) {}
 
@@ -45,6 +47,11 @@ export class EmulatorHost {
         "ConnectivityService: Sending CONNECTED broadcast for type 1 [100 WIFI] isDefaultNetwork=true",
       );
     }
+  }
+
+  /** why: an emulator that dies on its own, as one does when the guest crashes or the host runs out of memory. */
+  crash(serial: string): void {
+    this.#exit(consolePortOf(serial));
   }
 
   /** why: the pid the runner gave the emulator listening on a serial, which is what a process table names as the root of its tree. */
@@ -117,6 +124,7 @@ export class EmulatorHost {
       this.#exit(port);
       return ok("OK: killing emulator, bye bye\n");
     }
+    if (rest === "emu avd snapshot list") return ok(this.snapshotListing);
     if (rest === "shell dumpsys connectivity") {
       return ok(`Active default network: ${this.defaultNetwork ?? "none"}\n`);
     }

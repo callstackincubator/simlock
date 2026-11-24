@@ -30,6 +30,8 @@ async function quickSeedWorld() {
   return { clock, driver, filesystem, host, runner, table };
 }
 
+type World = Awaited<ReturnType<typeof quickSeedWorld>>;
+
 /** why: the booted copy's tree as a process table prints it: the emulator the driver spawned and its qemu, using one core for the first minute and none after. */
 function emulatorTree(
   rootPid: number,
@@ -53,6 +55,7 @@ async function runToEnd(
   },
   busyUntilMs: number,
   atStep: (nowMs: number) => void,
+  ends: "fulfilled" | "rejected" = "fulfilled",
 ): Promise<void> {
   const state = promiseState(settle);
   for (let step = 0; step < 600 && state.state === "pending"; step += 1) {
@@ -63,7 +66,7 @@ async function runToEnd(
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (state.state === "pending") world.clock.advance(2_000);
   }
-  expect(state.state, "the settle ended within 20 simulated minutes").toBe("fulfilled");
+  expect(state.state, "the settle ended within 20 simulated minutes").toBe(ends);
 }
 
 /** why: how the guest's network comes up in each case: `dumpsys connectivity` names a default network from the start, or the log announces one at a time while `dumpsys` still says none. */
@@ -175,6 +178,74 @@ describe("AndroidDriver settleSeed", () => {
         world.host.pathAnswering("emulator-5586"),
         "the copy's emulator was stopped",
       ).toBeUndefined();
+    }
+  });
+
+  it("throws and leaves the quick seed when the save does not list, the emulator exits, the settle is aborted or the source is no ready quick seed", async () => {
+    const controller = new AbortController();
+    const stopping = new Error("the daemon is stopping");
+    const scenarios = [
+      {
+        error: /boot snapshot simlock_boot was not saved/,
+        name: "a snapshot that is not listed",
+        prepare: (world: World) => {
+          world.host.snapshotListing = "";
+        },
+      },
+      {
+        atStep: (nowMs: number, world: World) => {
+          if (nowMs === 10_000) world.host.crash("emulator-5586");
+        },
+        error: /exited/,
+        name: "an emulator that exits early",
+      },
+      {
+        atStep: (nowMs: number) => {
+          if (nowMs === 100_000) controller.abort(stopping);
+        },
+        error: stopping,
+        name: "an abort",
+      },
+    ];
+    for (const scenario of scenarios) {
+      const world = await quickSeedWorld();
+      scenario.prepare?.(world);
+
+      const settle = world.driver.settleSeed?.("seed_two", { signal: controller.signal });
+      if (settle === undefined) throw new Error("the driver offers no settleSeed");
+      const outcome = settle.catch((error: unknown) => error);
+      await runToEnd(outcome, world, 60_000, (nowMs) => scenario.atStep?.(nowMs, world));
+
+      const error = await outcome;
+      if (scenario.error instanceof RegExp) {
+        expect((error as Error | undefined)?.message, scenario.name).toMatch(scenario.error);
+      } else {
+        expect(error, scenario.name).toBe(scenario.error);
+      }
+      await expect(
+        world.filesystem.exists(`${sources}/seed_three`),
+        `${scenario.name}: the settle's folder is deleted at once`,
+      ).resolves.toBe(false);
+      await expect(
+        world.driver.listSources(),
+        `${scenario.name}: the quick seed is still the kind's seed`,
+      ).resolves.toMatchObject([{ id: "seed_two", settled: false }]);
+      await expect(world.filesystem.exists(`${sources}/seed_two/simlock.avd`)).resolves.toBe(true);
+      expect(
+        world.host.pathAnswering("emulator-5586"),
+        `${scenario.name}: nothing runs`,
+      ).toBeUndefined();
+    }
+
+    const refused = await quickSeedWorld();
+    const first = refused.driver.settleSeed?.("seed_two", { signal: new AbortController().signal });
+    if (first === undefined) throw new Error("the driver offers no settleSeed");
+    await runToEnd(first, refused, 60_000, () => undefined);
+    for (const sourceId of ["seed_nope", "seed_three"]) {
+      await expect(
+        refused.driver.settleSeed?.(sourceId, { signal: new AbortController().signal }),
+        sourceId,
+      ).rejects.toThrow(`Android keeps no ready quick seed ${sourceId}`);
     }
   });
 });
