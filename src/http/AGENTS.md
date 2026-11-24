@@ -21,6 +21,7 @@ Auth and answers:
 - No secret or hash in a body: `token.list`'s output schema has neither. The secret is shown once, by `token.create`.
 - An error nothing recognizes answers `INTERNAL`, "Internal error", and is logged; its own message never leaves.
 - The ETag step buffers a body to hash it, so it runs only on a JSON answer under `/v1` that is not a mount's. A stream's or a mount's body is never read.
+- The `request` log line carries `code` on an answer `errorResponse` wrote, which records it on the context. The log step reads no body, so a mount's own answer and a worker's answer relayed by a gateway log their status alone.
 - `emptyBodyAsNone` runs before the validator on a route whose body is optional: an empty body is read as none, whatever the content type.
 
 Route declarations:

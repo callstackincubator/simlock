@@ -103,7 +103,9 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     // would let an anonymous flood drive the synchronous log sink from the event loop.
     if (c.req.path === "/v1/healthz") return;
     const identity = c.get("identity") as Identity | undefined;
+    const code = c.get("errorCode");
     logger.info("request", {
+      ...(code === undefined ? {} : { code }),
       durationMs: deps.clock.now() - start,
       method: c.req.method,
       path: c.req.path,
