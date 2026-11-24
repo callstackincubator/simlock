@@ -57,6 +57,10 @@ pre-push:
     # never selects them and any change can break them; together they take about a second.
     repo-tests:
       priority: 1
+      # why: a triage branch pushes a reproduction that fails by design (delivery rule 8); CI runs every repo test.
+      skip:
+        - ref: bug/*-repro
+        - ref: wip/*-repro
       run: pnpm exec vitest run --project unit .repo.test.ts
       fail_text: "A test of the repository's own files fails (a size cap, the ADR index, a doc's audience): the output names the file and the rule."
     protocol-bump:

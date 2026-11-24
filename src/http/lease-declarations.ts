@@ -11,6 +11,7 @@ import {
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
+  refuseBadLabel,
   refuseBadRunId,
   refuseModelWithClass,
   requesterIdSchema,
@@ -37,6 +38,7 @@ const leasePayloadSchema = z.object({
   platform: z.string(),
   requestId: z.string().optional(),
   runId: z.string().max(128).optional(),
+  label: z.string().max(64).optional(),
   ttlMs: z.number(),
   udid: z.string(),
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
@@ -231,6 +233,8 @@ export const leaseRequestBodySchema = z
     platform: z.enum(["ios", "android"]),
     // why: A plain string, bounded by `refuseBadRunId` below as the one check, like `lease.request`'s: the same words on every transport.
     runId: z.string().optional(),
+    // why: A plain string, bounded by `refuseBadLabel` below as the one check, like `lease.request`'s: the same words on every transport.
+    label: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
@@ -238,7 +242,8 @@ export const leaseRequestBodySchema = z
   .superRefine((body, context) =>
     refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
   )
-  .superRefine(refuseBadRunId());
+  .superRefine(refuseBadRunId())
+  .superRefine(refuseBadLabel());
 
 export const leaseRequestCreateRoute = declareRoute({
   method: "post",

@@ -1,4 +1,5 @@
 import {
+  type BoundedRunOptions,
   MemoryFilesystem,
   type ProcessHandle,
   type ProcessResult,
@@ -6,7 +7,7 @@ import {
   type ProcessRunOptions,
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { processResult, pixelDevices, avdDirectory, binaries, ok } from "./test-sdk-fixtures.js";
 import { emulatorHelpListing, writeSeedFiles } from "./test-seed-harness.js";
 
@@ -37,7 +38,7 @@ export class EmulatorHost {
   avdAnswering(serial: string | undefined): string | undefined {
     const folder = this.#listening.get(consolePortOf(serial));
     if (folder === undefined) return undefined;
-    const home = folder.slice(0, folder.lastIndexOf("/"));
+    const home = dirname(folder);
     return home === avdDirectory ? basename(folder, ".avd") : basename(home);
   }
 
@@ -117,7 +118,7 @@ export class EmulatorHost {
     if (command !== binaries.emulator || args[0] !== "-avd") {
       throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
     }
-    const avdName = `${env?.["ANDROID_AVD_HOME"] ?? avdDirectory}/${args[1] ?? ""}.avd`;
+    const avdName = join(env?.["ANDROID_AVD_HOME"] ?? avdDirectory, `${args[1] ?? ""}.avd`);
     const port = Number(args[args.indexOf("-port") + 1]);
     let exit!: (result: ProcessResult) => void;
     const exited = new Promise<ProcessResult>((resolve) => {
@@ -155,7 +156,7 @@ export class RecordingRunner implements ProcessRunner {
 
   constructor(private readonly inner: ProcessRunner) {}
 
-  run(command: string, args: readonly string[], options: ProcessRunOptions = {}) {
+  run(command: string, args: readonly string[], options: BoundedRunOptions) {
     this.calls.push({ args, command, options });
     return this.inner.run(command, args, options);
   }
@@ -193,7 +194,7 @@ export function copyPathExpectation(
   return processResult(
     binaries.adb,
     ["-s", serial, "emu", "avd", "path"],
-    `${avdDirectory}/${folder}/simlock.avd\r\nOK\r\n`,
+    `${join(avdDirectory, folder, "simlock.avd")}\r\nOK\r\n`,
   );
 }
 

@@ -292,7 +292,7 @@ describe("WebSocketUplinkConnection binary messages", () => {
     await vi.waitFor(() => expect(received).toEqual([[2]]));
   });
 
-  it("unsentBytes follows the socket's buffered amount with onSent firing when a send completes", async () => {
+  it("unsentBytes is 0 again and onSent has fired once a send completes", async () => {
     const { accepted, url } = await startAcceptingGateway();
     const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
     await accepted;
@@ -300,14 +300,27 @@ describe("WebSocketUplinkConnection binary messages", () => {
     worker.onSent(onSent);
     expect(worker.unsentBytes).toBe(0);
 
-    const write = worker.writeBinary(new Uint8Array(16 * 1024 * 1024));
-    const buffered = worker.unsentBytes;
-    await write;
+    await worker.writeBinary(new Uint8Array(16 * 1024 * 1024));
 
-    expect(buffered).toBeGreaterThan(0);
     expect(worker.unsentBytes).toBe(0);
     expect(onSent).toHaveBeenCalled();
   });
+
+  // why: on the Windows CI runner the loopback socket takes the whole 16 MiB write at once, so the buffered amount reads 0 right after it and there is nothing to follow.
+  it.skipIf(process.platform === "win32")(
+    "unsentBytes counts what the socket still buffers while a send is in flight",
+    async () => {
+      const { accepted, url } = await startAcceptingGateway();
+      const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
+      await accepted;
+
+      const write = worker.writeBinary(new Uint8Array(16 * 1024 * 1024));
+      const buffered = worker.unsentBytes;
+      await write;
+
+      expect(buffered).toBeGreaterThan(0);
+    },
+  );
 
   it("onSent fires when a text send completes", async () => {
     const { accepted, url } = await startAcceptingGateway();
@@ -386,8 +399,11 @@ describe("WebSocketUplinkConnector liveness", () => {
     ]);
     expect(firstOutcome).toBe("closed");
 
-    clock.advance(1_000);
-    await vi.waitFor(() => expect(accepted).toBe(2));
+    // why: the redial's backoff timer is armed when the worker's end sees the close, which can come after the gateway's end on Windows, and an earlier timer (the stable-connection one) is already pending; advancing again on each try reaches the backoff timer whenever it is armed.
+    await vi.waitFor(() => {
+      clock.advance(1_000);
+      expect(accepted).toBe(2);
+    });
     expect(gateway.peers).toHaveLength(2);
     await uplink.stop();
   });

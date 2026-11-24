@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { promiseState } from "../../test-support/promise-state.js";
 import {
@@ -28,7 +29,7 @@ const simctlListFixture = readFileSync(
   "utf8",
 );
 
-const JSON_DIR = `${SIMLOCK_HOME}/devicectl`;
+const JSON_DIR = join(SIMLOCK_HOME, "devicectl");
 
 describe("IosSimctlDriver physical handler: files and limits", () => {
   it("every devicectl read passes --json-output <path> naming a new file in <simlockHome>/devicectl/ (the driver creates it, mode 0700), and the driver reads that file and then deletes it", async () => {
@@ -40,7 +41,7 @@ describe("IosSimctlDriver physical handler: files and limits", () => {
     expect(lab.written).toHaveLength(3);
     expect(new Set(lab.written).size).toBe(3);
     for (const path of lab.written) {
-      expect(path).toMatch(/^\/home\/\.simlock\/devicectl\/[^/]+$/);
+      expect(dirname(path)).toBe(JSON_DIR);
       expect(await lab.filesystem.exists(path)).toBe(false);
     }
     const directory = await lab.filesystem.lstat(JSON_DIR);

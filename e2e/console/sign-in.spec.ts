@@ -1,8 +1,49 @@
-import { expect, NAV_LABELS, openFromNav, signIn, startProxiedDaemon, test } from "./fixtures.js";
+import {
+  expect,
+  NAV_LABELS,
+  openFromNav,
+  signIn,
+  startDaemon,
+  startProxiedDaemon,
+  test,
+} from "./fixtures.js";
 
 const OPERATOR_NEEDED = "That token is real, but the console needs an operator token.";
 
 test.describe("sign-in", () => {
+  test("the configured SSO link opens the proxy login in the same tab", async ({
+    page,
+  }, testInfo) => {
+    const signInUrl = "https://login.example.test/start";
+    const gateway = await startDaemon("gateway", {
+      config: {
+        http: {
+          proxyAuth: {
+            header: "x-proxy-jwt",
+            jwksUrl: "https://login.example.test/keys",
+            issuer: "https://login.example.test",
+            audience: "fleet-console",
+            signInUrl,
+          },
+        },
+      },
+    });
+    try {
+      await page.route(signInUrl, (route) =>
+        route.fulfill({ contentType: "text/html", body: "<h1>Proxy sign in</h1>" }),
+      );
+      await page.goto(gateway.url);
+      await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
+      await expect(page.getByLabel("Operator token")).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath("sso-sign-in.png"), fullPage: true });
+      await page.getByRole("link", { name: "Sign in with SSO" }).click();
+      await expect(page).toHaveURL(signInUrl);
+      await expect(page.getByRole("heading", { name: "Proxy sign in" })).toBeVisible();
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
   test("an operator token signs in with its label, a reload keeps it, a new tab asks for a token, signing out is final, and the page asks no host but the daemon", async ({
     context,
     daemon,

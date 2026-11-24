@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 import { promiseState } from "../../test-support/promise-state.js";
 import {
   FakeClock,
@@ -11,6 +12,7 @@ import {
   answeringAvdPath,
   androidFilesystem,
   avdDirectory,
+  privateAliasOf,
   binaries,
   bootProbes,
   EmulatorExitingRunner,
@@ -28,10 +30,10 @@ import { home } from "./test-index.js";
 
 // why: The emulator outlives the daemon, so it is spawned detached; its output goes to the log file in its AVD folder.
 const emulatorOptions = {
-  env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
+  env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: join(avdDirectory, "emu-crash.db") },
   killChildren: true,
   outlivesCaller: true,
-  stdio: { file: `${avdDirectory}/simlock_one/simlock.avd/emulator.log` },
+  stdio: { file: join(avdDirectory, "simlock_one", "simlock.avd", "emulator.log") },
 } as const;
 
 function recordKillTimeout(
@@ -185,7 +187,9 @@ function overridingAvdPath(inner: ProcessRunner): {
 
 class LinkedHomeFilesystem extends MemoryFilesystem {
   override async realpath(path: string): Promise<string> {
-    const resolved = await super.realpath(path.replace(/^\/private\/home\//, "/home/"));
+    // why: the driver hands the path over in the host's separators, the link below is in `/` form.
+    const slashed = path.replaceAll("\\", "/");
+    const resolved = await super.realpath(slashed.replace(/^\/private\/home\//, "/home/"));
     return resolved.replace(/^\/home\//, "/private/home/");
   }
 }
@@ -238,7 +242,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
     // device starts by shutting it down.
     await driver.shutdown(stopped);
 
-    const ownPath = `${avdDirectory}/simlock_one/simlock.avd`;
+    const ownPath = join(avdDirectory, "simlock_one", "simlock.avd");
     expect({ readied, other: other.observed() }).toEqual({
       readied: {
         refused: expect.stringMatching(
@@ -254,19 +258,22 @@ describe("AndroidDriver readiness on a taken console port", () => {
     readonly answer: string;
     readonly filesystem?: () => MemoryFilesystem;
   }>([
-    { answer: `${avdDirectory}/simlock_one/simlock.avd\r\nOK\r\n`, reported: "exactly" },
     {
-      answer: `${avdDirectory}/simlock_one/simlock.avd/\r\nOK\r\n`,
+      answer: `${join(avdDirectory, "simlock_one", "simlock.avd")}\r\nOK\r\n`,
+      reported: "exactly",
+    },
+    {
+      answer: `${join(avdDirectory, "simlock_one", "simlock.avd")}/\r\nOK\r\n`,
       reported: "with a trailing slash",
     },
     {
-      answer: `/private${avdDirectory}/simlock_one/simlock.avd\r\nOK\r\n`,
+      answer: `${privateAliasOf(join(avdDirectory, "simlock_one", "simlock.avd"))}\r\nOK\r\n`,
       reported: "through a link to the device root's directory",
     },
     // why: `/home` is a link to `/private/home`, as macOS's `/var` is to `/private/var`: the link
     // is on the device root's side, and the emulator answers with the resolved path.
     {
-      answer: `/private${avdDirectory}/simlock_one/simlock.avd\r\nOK\r\n`,
+      answer: `${privateAliasOf(join(avdDirectory, "simlock_one", "simlock.avd"))}\r\nOK\r\n`,
       filesystem: () => new LinkedHomeFilesystem(),
       reported: "resolved, when the device root's own path runs through a link",
     },
@@ -288,7 +295,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
       if (reported === "exactly") {
         // why: An exact answer needs nothing from the filesystem: a directory that cannot be
         // resolved this moment does not fail the boot.
-        filesystem.defineFailure(`${avdDirectory}/simlock_one/simlock.avd`, "EACCES");
+        filesystem.defineFailure(join(avdDirectory, "simlock_one", "simlock.avd"), "EACCES");
       }
 
       const ready = await driver.makeReady(device);
@@ -313,9 +320,9 @@ describe("AndroidDriver readiness on a taken console port", () => {
       answered: "a directory that does not exist",
     },
     {
-      answer: ok(`${avdDirectory}/simlock_two/simlock.avd\r\nOK\r\n`),
+      answer: ok(`${join(avdDirectory, "simlock_two", "simlock.avd")}\r\nOK\r\n`),
       answered: "another device's directory in the same root",
-      existing: `${avdDirectory}/simlock_two/simlock.avd`,
+      existing: join(avdDirectory, "simlock_two", "simlock.avd"),
     },
     {
       answer: ok(`${home}/.android/avd/simlock_one/simlock.avd\r\nOK\r\n`),
@@ -323,7 +330,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
       existing: `${home}/.android/avd/simlock_one/simlock.avd`,
     },
     {
-      answer: ok(`\r\n${avdDirectory}/simlock_one/simlock.avd\r\nOK\r\n`),
+      answer: ok(`\r\n${join(avdDirectory, "simlock_one", "simlock.avd")}\r\nOK\r\n`),
       answered: "its own directory below a blank first line",
     },
     {
@@ -445,7 +452,7 @@ describe("AndroidDriver console ports across a restart", () => {
       },
     };
     filesystem.onRemove = (path) => {
-      if (path === `${avdDirectory}/${running.deviceId}`) {
+      if (path === join(avdDirectory, running.deviceId)) {
         runningAtDeletion.push(host.avdAnswering(running.address));
       }
     };
@@ -461,7 +468,7 @@ describe("AndroidDriver console ports across a restart", () => {
       undefined,
     ]);
     expect(killTimeouts, "the kill must be bounded").toEqual([5_000]);
-    expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}`)).toBe(false);
+    expect(await filesystem.exists(join(avdDirectory, running.deviceId))).toBe(false);
   });
 
   it("refuses to delete the AVD of a discovered emulator that does not exit", async () => {
@@ -495,7 +502,7 @@ describe("AndroidDriver console ports across a restart", () => {
     clock.advance(1);
     await refused;
 
-    expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}`)).toBe(true);
+    expect(await filesystem.exists(join(avdDirectory, running.deviceId))).toBe(true);
   });
 
   it("shuts a discovered emulator down and deletes its AVD although adb lists its serial for a moment after the kill", async () => {
@@ -541,7 +548,7 @@ describe("AndroidDriver console ports across a restart", () => {
     expect(staleListings, "shutdown waited out the two stale listings").toBe(0);
     await expect(after.destroy(orphan)).resolves.toBeUndefined();
 
-    expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}`)).toBe(false);
+    expect(await filesystem.exists(join(avdDirectory, running.deviceId))).toBe(false);
   });
 
   it("refuses to delete the AVD when an attached emulator cannot say which AVD it runs", async () => {
@@ -571,7 +578,7 @@ describe("AndroidDriver console ports across a restart", () => {
     expect({
       kills: calls.filter((call) => call.args.includes("kill")).length,
       probeTimeoutMs: calls.find((call) => call.args.includes("path"))?.timeoutMs,
-      kept: await filesystem.exists(`${avdDirectory}/${running.deviceId}`),
+      kept: await filesystem.exists(join(avdDirectory, running.deviceId)),
       running: host.avdAnswering(running.address),
     }).toEqual({ kills: 0, probeTimeoutMs: 5_000, kept: true, running: running.deviceId });
   });

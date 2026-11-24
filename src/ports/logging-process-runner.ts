@@ -2,6 +2,7 @@ import type { Clock } from "./clock.js";
 import type { Logger } from "./logger.js";
 import {
   exitCodeOf,
+  type BoundedRunOptions,
   type ProcessHandle,
   type ProcessResult,
   type ProcessRunner,
@@ -38,7 +39,7 @@ export class LoggingProcessRunner implements ProcessRunner {
   async run(
     command: string,
     args: readonly string[],
-    options?: ProcessRunOptions,
+    options: BoundedRunOptions,
   ): Promise<ProcessResult> {
     const startedAt = this.#clock.now();
     try {

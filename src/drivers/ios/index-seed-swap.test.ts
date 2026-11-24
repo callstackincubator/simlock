@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DriverCrashError } from "../../core/index.js";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
@@ -22,6 +23,10 @@ afterEach(() => {
 
 const lineageUdid = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
 const copyUdid = "CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD";
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 describe("IosSimctlDriver copy swap", () => {
   it("a copy keeps its source's lineage, swaps the lineage's UDIDs in every recorded file and link for its own before its first boot and logs the swap", async () => {
@@ -123,7 +128,39 @@ describe("IosSimctlDriver copy swap", () => {
     );
     expect(device.driverData).toMatchObject({ lineage: [lineageUdid] });
     expect(logger.debugs).toEqual([
-      `swapped 9 files and 1 links in 40 ms for ${copyUdid}; 1 unreadable`,
+      `swapped 9 files and 1 links in 40 ms for ${copyUdid}; 1 unreadable, 0 missing`,
+    ]);
+  });
+
+  it("a copy whose source recorded a file and a link it no longer has skips them, swaps the rest and logs them as missing", async () => {
+    const database = await seededDatabase({
+      files: [
+        { kind: "file", relativePath: "data/gone.plist" },
+        { kind: "link", relativePath: "data/GoneLogs" },
+        { kind: "file", relativePath: "data/kept.plist" },
+      ],
+      lineage: [lineageUdid],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+      },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    const logger = new RecordingLogger();
+    await plantManagedDevice(filesystem);
+    const kept = `${deviceRoot}/${copyUdid}/data/kept.plist`;
+    await plantBytes(filesystem, kept, Buffer.from(`/Devices/${lineageUdid}/data`));
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database, logger);
+
+    await driver.provision(spec);
+
+    expect((await readBytes(filesystem, kept)).toString()).toBe(`/Devices/${copyUdid}/data`);
+    expect(runner.calls.some((call) => call.args.includes("delete"))).toBe(false);
+    expect(logger.debugs).toEqual([
+      `swapped 1 files and 0 links in 0 ms for ${copyUdid}; 0 unreadable, 2 missing`,
     ]);
   });
 
@@ -133,25 +170,42 @@ describe("IosSimctlDriver copy swap", () => {
         throw new Error("disk full");
       }
     }
+    class LockedLinks extends MemoryFilesystem {
+      override async readlink(path: string): Promise<string> {
+        throw Object.assign(new Error(`EACCES: permission denied, readlink '${path}'`), {
+          code: "EACCES",
+        });
+      }
+    }
     const file = `${deviceRoot}/${copyUdid}/data/Library/note.plist`;
     const cases = [
       { label: "control: a swap that works", error: undefined },
-      { label: "a recorded file gone", gone: true, error: /ENOENT/ },
       {
         label: "a write that fails",
         filesystem: new FailingWrites(),
         error: /disk full/,
       },
       {
+        label: "a recorded link that cannot be read",
+        filesystem: new LockedLinks(),
+        link: true,
+        error: /EACCES/,
+      },
+      {
         label: "a result of another length",
         lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBB"],
         crash: true,
-        error: new RegExp(`${file}.*length`),
+        error: new RegExp(
+          `${escapeRegExp(`${join(deviceRoot, copyUdid)}/data/Library/note.plist`)}.*length`,
+        ),
       },
     ];
     for (const attempt of cases) {
       const database = await seededDatabase({
-        files: [{ kind: "file", relativePath: "data/Library/note.plist" }],
+        files: [
+          { kind: "file", relativePath: "data/Library/note.plist" },
+          ...(attempt.link === true ? [{ kind: "link" as const, relativePath: "data/Logs" }] : []),
+        ],
         lineage: attempt.lineage ?? [lineageUdid],
       });
       const runner = new ScriptedProcessRunner([
@@ -166,7 +220,7 @@ describe("IosSimctlDriver copy swap", () => {
       await plantManagedDevice(filesystem);
       await plantBytes(
         filesystem as MemoryFilesystem,
-        attempt.gone === true ? `${deviceRoot}/${copyUdid}/data/other` : file,
+        file,
         Buffer.from(`/Devices/${lineageUdid}/ AAAAAAAA-1111-2222-3333-BBBBBBBBBBB`),
       );
       const driver = await createDriver(runner, new FakeClock(), filesystem, database);
@@ -190,6 +244,44 @@ describe("IosSimctlDriver copy swap", () => {
     }
   });
 
+  it("a copy whose swap fails and whose delete fails logs the UDID it could not delete and still fails the provision with the swap's error", async () => {
+    class FailingWrites extends MemoryFilesystem {
+      override async writeAt(): Promise<void> {
+        throw new Error("disk full");
+      }
+    }
+    const database = await seededDatabase({
+      files: [{ kind: "file", relativePath: "data/Library/note.plist" }],
+      lineage: [lineageUdid],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
+      },
+      {
+        match: simctl("delete", copyUdid),
+        result: { code: 1, stderr: "Unable to delete device", stdout: "" },
+      },
+    ]);
+    const filesystem = new FailingWrites();
+    await plantManagedDevice(filesystem);
+    await plantBytes(
+      filesystem,
+      `${deviceRoot}/${copyUdid}/data/Library/note.plist`,
+      Buffer.from(`/Devices/${lineageUdid}/`),
+    );
+    const logger = new RecordingLogger();
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database, logger);
+
+    await expect(driver.provision(spec)).rejects.toThrow(/disk full/);
+
+    expect(logger.warnings).toEqual([
+      expect.stringMatching(new RegExp(`${copyUdid}.*Unable to delete device`)),
+    ]);
+  });
+
   it("a copy swaps every file and link its seed recorded even when the seed is destroyed between the clone and the swap", async () => {
     let reachedSwap!: () => void;
     const atSwap = new Promise<void>((resolve) => {
@@ -199,7 +291,7 @@ describe("IosSimctlDriver copy swap", () => {
     const swapReleased = new Promise<void>((resolve) => {
       releaseSwap = resolve;
     });
-    const launchServicesFolder = `${deviceRoot}/${copyUdid}/data/var/db/lsd`;
+    const launchServicesFolder = join(deviceRoot, copyUdid, "data", "var", "db", "lsd");
     class HeldAfterClone extends MemoryFilesystem {
       override async exists(path: string): Promise<boolean> {
         if (path === launchServicesFolder) {

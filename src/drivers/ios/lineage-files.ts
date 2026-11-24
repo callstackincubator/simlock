@@ -17,40 +17,58 @@ const WAL_SUFFIX = "-wal";
 export interface SwapCounts {
   readonly files: number;
   readonly links: number;
+  readonly missing: number;
   readonly unreadable: number;
 }
 
-/** why: ADR 0076 §3: before its first boot a copy's recorded files and links name its own UDID in place of the lineage's, each keeping its length; an unreadable file is left. */
+/** why: ADR 0076 §3: before its first boot a copy's recorded files and links name its own UDID in place of the lineage's, each keeping its length; an unreadable file is left, and a missing one has nothing left to swap (#1714). */
 export async function swapCopyFiles(
   filesystem: Filesystem,
   folder: string,
   files: readonly SourceFile[],
   swap: LineageSwap,
 ): Promise<SwapCounts> {
-  const counts = { files: 0, links: 0, unreadable: 0 };
+  const counts = { files: 0, links: 0, missing: 0, unreadable: 0 };
   for (const file of files) {
     const path = `${folder}/${file.relativePath}`;
     if (file.kind === "unreadable") {
       counts.unreadable += 1;
-    } else if (file.kind === "link") {
-      counts.links += 1;
-      const target = Buffer.from(await filesystem.readlink(path));
-      const swapped = swapLineage(target, swap);
-      checkLength(path, target, swapped);
-      if (!target.equals(swapped)) {
-        await filesystem.replaceSymlink(path, Buffer.from(swapped).toString());
-      }
-    } else {
-      counts.files += 1;
-      await eachWindow(filesystem, path, async (window, start) => {
-        const swapped = swapLineage(window, swap);
-        checkLength(path, window, swapped);
-        if (!window.equals(swapped)) await filesystem.writeAt(path, start, swapped);
-        return false;
-      });
+      continue;
     }
+    try {
+      await swapEntry(filesystem, path, file.kind, swap);
+    } catch (error: unknown) {
+      if (!isMissingPathError(error)) throw error;
+      counts.missing += 1;
+      continue;
+    }
+    if (file.kind === "link") counts.links += 1;
+    else counts.files += 1;
   }
   return counts;
+}
+
+async function swapEntry(
+  filesystem: Filesystem,
+  path: string,
+  kind: "file" | "link",
+  swap: LineageSwap,
+): Promise<void> {
+  if (kind === "link") {
+    const target = Buffer.from(await filesystem.readlink(path));
+    const swapped = swapLineage(target, swap);
+    checkLength(path, target, swapped);
+    if (!target.equals(swapped)) {
+      await filesystem.replaceSymlink(path, Buffer.from(swapped).toString());
+    }
+    return;
+  }
+  await eachWindow(filesystem, path, async (window, start) => {
+    const swapped = swapLineage(window, swap);
+    checkLength(path, window, swapped);
+    if (!window.equals(swapped)) await filesystem.writeAt(path, start, swapped);
+    return false;
+  });
 }
 
 function checkLength(path: string, before: Uint8Array, after: Uint8Array): void {
@@ -94,7 +112,12 @@ async function visitFolder(
   for (const name of names) {
     const path = `${directory}/${name}`;
     const relativePath = relative === "" ? name : `${relative}/${name}`;
-    const details = await options.filesystem.lstat(path);
+    // why: CoreSimulator writes a clone's plists atomically, so a `*.sb-*` temp file is listed and renamed away before this walk reaches it.
+    const details = await options.filesystem.lstat(path).catch((error: unknown) => {
+      if (isMissingPathError(error)) return undefined;
+      throw error;
+    });
+    if (details === undefined) continue;
     if (details.kind === "directory") {
       await visitFolder(options, path, relativePath, files);
       continue;
@@ -155,6 +178,8 @@ async function classify(
     );
     return names ? "file" : undefined;
   } catch (error: unknown) {
+    // why: a file renamed away after the walk's lstat names nothing a copy could swap (#1714).
+    if (isMissingPathError(error)) return undefined;
     options.logger?.warn(
       `could not read ${path} in source ${options.udid}: ${errorMessage(error)}; recorded as unreadable`,
     );

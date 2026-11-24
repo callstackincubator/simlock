@@ -149,6 +149,9 @@ export function LeaseFacts({ lease }: { readonly lease: LeaseInspection }) {
         ),
     },
     { label: "Granted", value: `${lease.heldFor} ago · ${lease.granted}` },
+    ...(lease.label === undefined
+      ? []
+      : [{ label: "Label", value: <span className="lease-id">{lease.label}</span> }]),
     ...(lease.holder?.label === undefined
       ? []
       : [{ label: "Holder", value: <span className="mono lease-id">{lease.holder.id}</span> }]),

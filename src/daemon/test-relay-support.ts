@@ -1,5 +1,5 @@
 import { createCipheriv, createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { connect, createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import type { RelayTarget, RelayTargets, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
@@ -287,9 +288,7 @@ export async function openRelay(
 
 export async function cleanUp(daemons: DaemonServer[], directories: string[]): Promise<void> {
   await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
-  await Promise.all(
-    directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
-  );
+  await Promise.all(directories.splice(0).map((directory) => removeDirectory(directory)));
 }
 
 export function gate(): { readonly promise: Promise<void>; readonly open: () => void } {
@@ -390,6 +389,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
       ...(twoWayTarget === undefined ? {} : { relayTwoWayTargets: { echo: twoWayTarget } }),
       ...options.worker,
       configOverrides: {
+        diskPressure: { freeBytesThreshold: 0 },
         gateway: { label: "worker-a", token: secret, url: workerDials },
       },
       drivers: [

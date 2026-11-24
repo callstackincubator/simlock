@@ -27,10 +27,19 @@ try {
     .split("\n")
     .filter((p) => p !== "");
   // why: a type error elsewhere does not stop tsc emitting declarations, and the surface is
-  // what it emits; the commit hook and CI judge the errors.
+  // what it emits; the commit hook and CI judge the errors. Node runs the compiler's entry file
+  // because node_modules/.bin/tsc is a .cmd shim on Windows, which spawn cannot start.
   spawnSync(
-    join(dir, "node_modules", ".bin", "tsc"),
-    ["-p", "tsconfig.json", "--emitDeclarationOnly", "--removeComments", "--outDir", out],
+    process.execPath,
+    [
+      join(dir, "node_modules", "typescript", "bin", "tsc"),
+      "-p",
+      "tsconfig.json",
+      "--emitDeclarationOnly",
+      "--removeComments",
+      "--outDir",
+      out,
+    ],
     { cwd: dir, stdio: "ignore" },
   );
   const lines = [];

@@ -3,7 +3,7 @@ import { RuntimeMissingError, DriverCrashError } from "../../core/index.js";
 import { ScriptedProcessRunner, FakeClock, MemoryFilesystem } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
-import { deviceRoot, simctl, instanceId } from "./test-slim.js";
+import { deviceRoot, sourcesSetPath, simctl, instanceId } from "./test-slim.js";
 import {
   UNSCOPED_LEGACY_CALLS,
   createDriver,
@@ -30,7 +30,7 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesSetPath]).toContain(call.args[2]);
   }
 });
 

@@ -53,7 +53,12 @@ const holders = [
   "claude-code:3f2a9c1e-7b44-4d0e-a2f1-0c9d8e7f91c4",
 ];
 
-function lease(index: number, requesterId = holders[index]) {
+function lease(
+  index: number,
+  requesterId = holders[index],
+): Record<string, unknown> & {
+  readonly ttlDeadline: number;
+} {
   return {
     id: `lse_${index + 1}`,
     deviceId: `dev_${index + 1}`,
@@ -168,6 +173,9 @@ function leasesBody(scenario: Scenario, onOverview: boolean): unknown {
       if (record !== undefined) records[index] = { ...record, ttlDeadline: NOW + left };
     }
   }
+  const [oldest, third] = [13, 11].map((index) => records[index]);
+  if (oldest !== undefined) records[13] = { ...oldest, label: "feature-checkout-flow" };
+  if (third !== undefined) records[11] = { ...third, label: "fix-push-retries" };
   return { leases: scenario === "long" ? [lease(0, "x".repeat(256))] : records };
 }
 

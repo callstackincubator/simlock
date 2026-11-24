@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { fakeCommandEnv, scriptCommand, writeFakeCommand } from "./test-support/fake-command.js";
+
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -29,7 +31,7 @@ function commit(cwd: string, file: string): string {
 }
 
 function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "worktree-sh-")));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "worktree-sh-")));
   const origin = join(root, "origin.git");
   const main = join(root, "main");
   git(root, "init", "-q", "--bare", "-b", "main", origin);
@@ -40,11 +42,12 @@ function fixture() {
   git(main, "fetch", "-q", "origin");
   const stage = join(main, ".claude", "worktrees", "agent-red");
   git(main, "worktree", "add", "-q", "--track", "-b", "task/1", stage, "origin/task/1");
-  return { root, origin, main, stage };
+  // why: the script prints the path git prints, which has "/" on every host and the long user name.
+  return { root, origin, main, stage: stage.replaceAll("\\", "/") };
 }
 
 function run(cwd: string, ...args: string[]): string {
-  return execFileSync("sh", [SCRIPT, ...args], { cwd, encoding: "utf8" })
+  return execFileSync(...scriptCommand(SCRIPT, args), { cwd, encoding: "utf8" })
     .trim()
     .split("\n")
     .at(-1)!;
@@ -92,10 +95,10 @@ describe("worktree.sh", () => {
     const bin = join(root, "bin");
     const installs = join(root, "installs");
     mkdirSync(bin);
-    writeFileSync(
-      join(bin, "pnpm"),
-      `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\npwd >> "${installs}"\n`,
-      { mode: 0o755 },
+    writeFakeCommand(
+      bin,
+      "pnpm",
+      `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\n{ pwd -W 2>/dev/null || pwd; } >> "${installs}"\n`,
     );
     writeFileSync(
       join(main, "package.json"),
@@ -105,10 +108,10 @@ describe("worktree.sh", () => {
     git(main, "commit", "-qm", "package.json");
     const head = git(main, "rev-parse", "HEAD");
     const detach = (...args: string[]) =>
-      execFileSync("sh", [SCRIPT, "--detach", ...args], {
+      execFileSync(...scriptCommand(SCRIPT, ["--detach", ...args]), {
         cwd: main,
         encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: { ...process.env, ...fakeCommandEnv(bin) },
       }).trim();
 
     const after = detach(head, "--prepare");
@@ -116,6 +119,10 @@ describe("worktree.sh", () => {
 
     expect(git(after, "rev-parse", "HEAD")).toBe(head);
     expect(git(before, "rev-parse", "HEAD")).toBe(head);
-    expect(readFileSync(installs, "utf8").trim().split("\n")).toEqual([after, before]);
+    // why: the fake pnpm prints the long spelling of the user's folder, the script the short one.
+    const real = (path: string) => realpathSync.native(path).replaceAll("\\", "/");
+    expect(readFileSync(installs, "utf8").trim().split("\n").map(real)).toEqual(
+      [after, before].map(real),
+    );
   });
 });

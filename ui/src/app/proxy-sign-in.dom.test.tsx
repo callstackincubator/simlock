@@ -8,19 +8,28 @@ import { returnToTab } from "../test/tab";
 const EXPIRED_LINE =
   "Your sign-in proxy's identity was refused: it has expired. You can still sign in with an operator token.";
 const SIGNED_OUT_URL = "https://proxy.example.test/signed-out";
+const SIGN_IN_URL = "https://proxy.example.test/start?rd=/";
 
-type Mode = "signed-in" | "expired" | "redirect" | "html";
+type Mode = "signed-in" | "expired" | "signed-out" | "redirect" | "html";
 
 // why: a sign-in proxy stands in front of the daemon. Signed in, it adds the person's identity to a
 // call with no token; expired, the daemon refuses that identity; at the end of its own session it
 // answers its login page, or redirects to it, which `fetch` cannot follow. A call that carries an
 // operator token is not the proxy's to judge.
-function proxyDaemon(options: { readonly signOutUrl?: string } = { signOutUrl: SIGNED_OUT_URL }) {
+function proxyDaemon(
+  options: { readonly signOutUrl?: string; readonly signInUrl?: string } = {
+    signOutUrl: SIGNED_OUT_URL,
+  },
+) {
   const state: {
     mode: Mode;
     held: Promise<void> | undefined;
     operators: Record<string, string>;
   } = { held: undefined, mode: "signed-in", operators: { tok_ci: "ci-runner" } };
+  const signInByPath: Record<string, { readonly signInUrl?: string }> = {
+    "/v1/identity": options.signInUrl === undefined ? {} : { signInUrl: options.signInUrl },
+  };
+  const refusals = { expired: { reason: "expired" }, "signed-out": {} };
 
   const behind =
     (ok: (call: Call) => Answer): Handler =>
@@ -33,8 +42,16 @@ function proxyDaemon(options: { readonly signOutUrl?: string } = { signOutUrl: S
       }
       switch (state.mode) {
         case "expired":
+        case "signed-out":
           return {
-            body: { error: { code: "UNAUTHENTICATED", message: "Sign in", reason: "expired" } },
+            body: {
+              error: {
+                code: "UNAUTHENTICATED",
+                message: "Sign in",
+                ...refusals[state.mode],
+                ...signInByPath[call.path],
+              },
+            },
             status: 401,
           };
         case "html":
@@ -129,11 +146,15 @@ describe("signing in through a proxy", () => {
   });
 
   it("an expired identity is said so on the token form, a labelled operator token opens the console, and its Sign out lands in the proxy session", async () => {
-    const proxy = proxyDaemon();
+    const proxy = proxyDaemon({ signOutUrl: SIGNED_OUT_URL, signInUrl: SIGN_IN_URL });
     proxy.state.mode = "expired";
     const view = renderConsole({ routes: proxy.routes, token: null });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(EXPIRED_LINE);
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      SIGN_IN_URL,
+    );
     await view.user.type(screen.getByLabelText("Operator token"), "tok_ci");
     await view.user.click(screen.getByRole("button", { name: "Sign in" }));
 
@@ -157,6 +178,25 @@ describe("signing in through a proxy", () => {
 
     expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(EXPIRED_LINE);
+  });
+
+  it("keeps the SSO link on the ended screen after a second unsigned identity within a minute", async () => {
+    const reload = vi.fn();
+    const proxy = proxyDaemon({ signInUrl: SIGN_IN_URL });
+    renderConsole({ reload, routes: proxy.routes, token: null });
+    await waitFor(() => signedInAs("Alice"));
+
+    proxy.state.mode = "signed-out";
+    await returnToTab();
+    await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    await returnToTab();
+
+    expect(await screen.findByText("Your sign-in has ended.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      SIGN_IN_URL,
+    );
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it.each(["html", "redirect"] as const)(

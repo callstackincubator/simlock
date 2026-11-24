@@ -18,8 +18,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { blankSource } from "./test-support/source-text.js";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const oxlint = join(repoRoot, "node_modules", ".bin", "oxlint");
-const depcruise = join(repoRoot, "node_modules", ".bin", "depcruise");
+// why: node_modules/.bin holds .cmd shims on Windows, which spawn cannot start; node running each
+// tool's entry file starts the same everywhere.
+const oxlint = join(repoRoot, "node_modules", "oxlint", "bin", "oxlint");
+const depcruise = join(
+  repoRoot,
+  "node_modules",
+  "dependency-cruiser",
+  "bin",
+  "dependency-cruiser.mjs",
+);
 const scratch = mkdtempSync(join(tmpdir(), "simlock-lint-rules-"));
 let counter = 0;
 
@@ -36,7 +44,10 @@ function lint(path: string, source: string): { passes: boolean; rules: string[];
   const names = [...source.matchAll(/import (?:type )?\{ (\w+) \}/g)].map((match) => match[1]);
   writeFileSync(join(dir, path), `${source}export { ${names.join(", ")} };\n`);
   copyFileSync(join(repoRoot, ".oxlintrc.json"), join(dir, ".oxlintrc.json"));
-  const result = spawnSync(oxlint, ["--format", "json", "."], { cwd: dir, encoding: "utf8" });
+  const result = spawnSync(process.execPath, [oxlint, "--format", "json", "."], {
+    cwd: dir,
+    encoding: "utf8",
+  });
   const parsed = JSON.parse(result.stdout) as { diagnostics: { code: string }[] };
   return {
     passes: result.status === 0,
@@ -92,7 +103,7 @@ interface Violation {
 }
 
 function cruise(dir: string, args: readonly string[]): Violation[] {
-  const result = spawnSync(depcruise, [...args, "--output-type", "json"], {
+  const result = spawnSync(process.execPath, [depcruise, ...args, "--output-type", "json"], {
     cwd: dir,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,

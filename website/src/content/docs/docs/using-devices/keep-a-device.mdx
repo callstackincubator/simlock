@@ -1,0 +1,128 @@
+---
+title: Keep a device for a long task
+description: Hold a lease across separate commands with --detach, renew it before its TTL runs out, see what you hold, and release it when you are done.
+sidebar:
+  order: 4
+  label: "Keep a device longer"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** you keep one device for as long as your task runs, and give it back when you finish.
+
+What a lease is, its TTL, and when Simlock ends one: [Leases](/simlock/docs/concepts/leases).
+
+## Before you start
+
+- Only renewing keeps a lease alive. Closing a connection or killing a process releases nothing, except a held `simlock lease` command (below).
+- The default TTL is 15 minutes, and the longest you can ask for is 4 hours. An operator changes them with `lease.defaultTtlMs` and `lease.maxTtlMs`.
+
+## Pick how to hold the lease
+
+| Your agent runs commands… | Use |
+| --- | --- |
+| in a shell that lives as long as the work | A held `simlock lease` in the background. It renews for you. |
+| each in a new shell that exits at once | `--detach`, then renew and release yourself. |
+| under one long-running process of its own | `--bind-pid <pid>`. |
+
+A held `simlock lease` started in a shell that exits at once sees its parent exit and releases the device straight away. That is why the second and third rows exist.
+
+## Hold it from a running command
+
+```sh
+simlock lease --platform ios --device "iPhone 16" > lease.json &
+```
+
+The command waits for a device, prints the grant to stdout, then keeps running. It renews the lease every third of its TTL, and releases it on a normal exit, on Ctrl-C or `SIGTERM`, and when its parent process exits. Stop the process when you are done.
+
+To watch another process instead of the direct parent, pass `--bind-pid <pid>`, pointed at your agent's own long-running process. The lease is released when that process exits.
+
+**Check:** `simlock status` lists your lease.
+
+## Hold it across separate commands
+
+<Steps>
+
+1. Lease with `--detach`. It prints the grant and exits, and the lease stays:
+
+   ```sh
+   simlock lease --platform android --device "Pixel 8" --ttl 2h --detach
+   ```
+
+   Take `lease.id` and `lease.ttlDeadline` (milliseconds since 1970) from the grant.
+
+2. Renew before `ttlDeadline`:
+
+   ```sh
+   simlock lease renew lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3
+   ```
+
+   A renew moves the deadline to now plus the lease's TTL, however much time was left, and prints the lease as one JSON line. Without `--ttl` the lease keeps its TTL; with `--ttl`, the new TTL applies from this renewal on.
+
+3. Release it when you are done:
+
+   ```sh
+   simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3
+   ```
+
+   ```json
+   {"leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3"}
+   ```
+
+</Steps>
+
+**Check:** `simlock status` no longer lists the lease.
+
+`--ttl` takes `ms`, `s`, `m`, `h` or `d`, such as `30m` or `2h`; a bare number is milliseconds. A lease nobody renews ends one TTL after its last renewal.
+
+The release returns as soon as the lease ends. Simlock deletes a simulator or emulator in the background, so nothing you left on it reaches the next holder. A phone is not erased: Simlock uninstalls the apps added since enrolment. What else stays on a phone: [Physical devices](/simlock/docs/concepts/physical-devices).
+
+<Aside type="caution">
+`simlock release --all` ends every lease on the worker, other agents' too. It asks you to confirm, and without a terminal it refuses unless you pass `--yes`. An agent releases only its own lease, by id.
+</Aside>
+
+## Set how long to wait for a device
+
+When no device is free, your request waits in a queue. How the queue works: [Queue and capacity](/simlock/docs/concepts/queue-and-capacity).
+
+- With no `--timeout`, the request waits as long as it takes.
+- `--timeout 10m` gives up after 10 minutes with `QUEUE_TIMEOUT`.
+- `--no-wait` fails at once with `NO_CAPACITY` instead of waiting.
+
+`simlock list --requests` shows every waiting request, its place in the queue, and why it waits.
+
+<Aside type="caution">
+With `--detach`, killing `simlock lease` while it waits leaves the request in the queue. It is granted later and holds the device until its TTL runs out. Set `--timeout` if you might stop waiting. Without `--detach`, Ctrl-C or the parent exiting while it waits cancels the request.
+</Aside>
+
+## Name the lease
+
+- `--label feature-x` gives the lease a display name, 1 to 64 characters with no control characters. `simlock status` shows it, and an iOS simulator booted for the lease takes it as its name. Nothing routes or limits by it.
+- `--lease-id <id>` sets the lease id yourself, for when your tool already has an id for the work: 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. Do not reuse one.
+
+## See what you hold
+
+| Command | Shows |
+| --- | --- |
+| `simlock whoami` | Your requester id (as `Principal`) and your role. |
+| `simlock status` | The devices, every lease with its requester, and how many requests wait. |
+| `simlock list --leases` | Every lease, as one JSON line. |
+| `simlock list --requests` | Every request waiting for a device. |
+
+On the worker's own machine the CLI connects as admin, so these show everyone's leases, and `lease renew` and `release` work on any lease id. With an agent token, `simlock status` shows only your own.
+
+## When it fails
+
+| What you see | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `{"push":"lease-lost",…}` on stderr | 14 | Simlock ended the lease: `expired` (nobody renewed), `killed` (an operator ran `release --all` or `nuke`) or `device-lost` (the device stopped and could not be brought back). | Stop using the device and lease a new one. Your work on it is gone. |
+| `DAEMON_CONNECTION_LOST` | 1 | The worker's daemon stopped or crashed. The lease is not released; the message gives its deadline. | After the daemon is back, run `simlock lease renew <lease-id>`. |
+| `device-unhealthy`, then `device-recovered` | — | The device crashed and Simlock started it again under your lease. | Keep the lease. Start your app again. |
+| `BAD_REQUEST` | 2 | `--ttl` above `lease.maxTtlMs`. It is not cut down for you. | Ask for less. |
+| `QUEUE_TIMEOUT` | 10 | `--timeout` ran out. | Retry, or wait longer. |
+| `NO_CAPACITY` | 11 | Nothing free, with `--no-wait`. | Retry later. |
+| `REQUESTER_ALREADY_LEASED` | 13 | You already hold a lease. The message names it. | Use it, or release it first. See [Use several devices at once](/simlock/docs/using-devices/several-devices). |
+| `LEASE_ID_TAKEN` | 13 | An active lease or waiting request has that `--lease-id`. | Pick another id. |
+| `LEASE_ENDED` | 13 | A lease with that `--lease-id` ended in the last 24 hours (`lease.endedIdRetentionMs`). | Pick another id. |
+
+More: [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails).

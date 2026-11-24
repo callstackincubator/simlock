@@ -1,11 +1,12 @@
 import { createServer, Server } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setUp as setUpAgentDeviceRig } from "./test-support.js";
 import type { RelayTarget } from "../daemon/relay.js";
 import type { DaemonServer } from "../daemon/server.js";
-import { cleanUp, startFleet } from "../daemon/test-relay-support.js";
+import { startFleet } from "../daemon/test-relay-support.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 interface Thief {
   readonly port: () => number | undefined;
@@ -52,8 +53,16 @@ describe("the shared daemon test rigs", { timeout: 30_000 }, () => {
   const target: RelayTarget = () => Promise.resolve(new Response("ok"));
 
   afterEach(async () => {
-    await cleanUp(daemons, directories);
-  });
+    await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
+    // why: on Windows the fleet worker's directory stays busy for a few seconds after its daemon stopped, longer than `removeDirectory` waits, so the removal is tried again until it goes through.
+    await Promise.all(
+      directories
+        .splice(0)
+        .map((directory) =>
+          vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 10_000 }),
+        ),
+    );
+  }, 30_000);
 
   it("start their daemon on another port when another listener takes the port they picked before the daemon binds it", async () => {
     const rigs: Record<string, () => Promise<number>> = {

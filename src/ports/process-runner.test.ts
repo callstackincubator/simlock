@@ -30,6 +30,9 @@ async function waitUntil(condition: () => boolean, timeoutMs = 5_000): Promise<v
   }
 }
 
+// why: `run` takes a deadline on every call; one these children never reach.
+const longDeadline = { timeoutMs: 30_000 };
+
 describe("ScriptedProcessRunner", () => {
   it("returns the scripted result for a matching invocation", async () => {
     const runner = new ScriptedProcessRunner([
@@ -623,10 +626,14 @@ describe("NodeProcessRunner", () => {
     const runner = new NodeProcessRunner();
 
     await expect(
-      runner.run(process.execPath, [
-        "-e",
-        "process.stdout.write('standard out'); process.stderr.write('standard error'); process.exit(7)",
-      ]),
+      runner.run(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('standard out'); process.stderr.write('standard error'); process.exit(7)",
+        ],
+        longDeadline,
+      ),
     ).resolves.toEqual({
       code: 7,
       stderr: "standard error",
@@ -705,7 +712,7 @@ describe("NodeProcessRunner", () => {
 
     // Past the tick the `error` event would arrive on: still here, still able to assert.
     await new Promise((resolve) => setImmediate(resolve));
-    await expect(runner.run("/nonexistent/simlock-adb", [])).rejects.toBeInstanceOf(
+    await expect(runner.run("/nonexistent/simlock-adb", [], longDeadline)).rejects.toBeInstanceOf(
       ProcessSpawnError,
     );
   });
@@ -720,19 +727,22 @@ describe("NodeProcessRunner", () => {
 
     const outcomes = {
       aborted: await runner.run(process.execPath, ["-e", lingers], {
+        ...longDeadline,
         signal: controller.signal,
       }),
-      answer: await runner.run(process.execPath, ["-e", echo], { input: '{"a":1}\n' }),
-      exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], { input: "{}\n" }),
-      killedFromOutside: await runner.run(process.execPath, [
-        "-e",
-        "process.kill(process.pid, 'SIGKILL')",
-      ]),
+      answer: await runner.run(process.execPath, ["-e", echo], {
+        ...longDeadline,
+        input: '{"a":1}\n',
+      }),
+      exit1: await runner.run(process.execPath, ["-e", "process.exit(1)"], {
+        ...longDeadline,
+        input: "{}\n",
+      }),
       timeout: await runner.run(process.execPath, ["-e", lingers], { timeoutMs: 100 }),
       tooMuchOutput: await runner.run(
         process.execPath,
         ["-e", `process.stdout.write('x'.repeat(70_000)); ${lingers}`],
-        { maxStdoutBytes: 65_536 },
+        { ...longDeadline, maxStdoutBytes: 65_536 },
       ),
     };
 
@@ -742,21 +752,36 @@ describe("NodeProcessRunner", () => {
     expect(outcomes.timeout).toMatchObject({ code: null, endedBy: "timeout" });
     expect(outcomes.tooMuchOutput).toMatchObject({ code: null, endedBy: "output-limit" });
     expect(outcomes.aborted).toMatchObject({ code: null, endedBy: "aborted" });
-    expect(outcomes.killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
-    expect(outcomes.killedFromOutside.endedBy).toBeUndefined();
+    // why: Windows has no signals, so a process that kills itself there exits with code 1.
+    if (process.platform !== "win32") {
+      const killedFromOutside = await runner.run(
+        process.execPath,
+        ["-e", "process.kill(process.pid, 'SIGKILL')"],
+        longDeadline,
+      );
+      expect(killedFromOutside).toMatchObject({ code: null, signal: "SIGKILL" });
+      expect(killedFromOutside.endedBy).toBeUndefined();
+    }
     await expect(
-      runner.run("/nonexistent/simlock-policy", [], { input: "{}\n" }),
+      runner.run("/nonexistent/simlock-policy", [], { ...longDeadline, input: "{}\n" }),
     ).rejects.toBeInstanceOf(ProcessSpawnError);
   });
 
-  it("kills a process that exceeds its timeout", async () => {
+  it.each([
+    { deadline: "its timeoutMs", timeoutMs: 100 },
+    { deadline: "once when its timeoutMs is 0", timeoutMs: 0 },
+    { deadline: "once when its timeoutMs is Infinity", timeoutMs: Infinity },
+  ])("run ends a child that never exits, at $deadline", async ({ timeoutMs }) => {
     const runner = new NodeProcessRunner();
 
-    await expect(
-      runner.run(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
-        timeoutMs: 100,
-      }),
-    ).resolves.toMatchObject({ code: null, stderr: "", stdout: "" });
+    // why: the child exits on its own after 2 s, so a run with no deadline fails on the assertion instead of waiting out vitest's timeout.
+    const outcome = await runner.run(
+      process.execPath,
+      ["-e", "setTimeout(() => process.exit(0), 2_000)"],
+      { timeoutMs },
+    );
+
+    expect(outcome).toMatchObject({ code: null, endedBy: "timeout", signal: "SIGTERM" });
   });
 
   // why: real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
@@ -966,8 +991,9 @@ describe("NodeProcessRunner: line ends", () => {
     const runner = new NodeProcessRunner();
     const args = ["-e", writeChunks, "[=  ] 10%\r", "\n[== ] 20%\r\n", "\r[===] 30%\n"];
 
-    const byDefault = await runner.run(process.execPath, args);
+    const byDefault = await runner.run(process.execPath, args, longDeadline);
     const carriageReturnToo = await runner.run(process.execPath, args, {
+      ...longDeadline,
       lineEnd: "carriage-return-too",
     });
 

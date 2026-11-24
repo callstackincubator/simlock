@@ -31,9 +31,11 @@ describe("the one daemon module the gateway imports", () => {
 describe("the relay is the bus's only republisher", () => {
   it("only the gateway's worker link calls republish", () => {
     const callers = sourceFilesRecursive(srcDir)
-      .filter((file) => !/(^|\/)(testing|test-[^/]+)\.ts$/.test(file))
-      .filter((file) => /\.republish\s*[<(]/.test(stripComments(readFileSync(file, "utf8"))))
-      .map((file) => relative(srcDir, file));
+      // why: `relative` joins with `\` on Windows, and this list is compared with `/` paths.
+      .map((file) => ({ file, name: relative(srcDir, file).replaceAll("\\", "/") }))
+      .filter(({ name }) => !/(^|\/)(testing|test-[^/]+)\.ts$/.test(name))
+      .filter(({ file }) => /\.republish\s*[<(]/.test(stripComments(readFileSync(file, "utf8"))))
+      .map(({ name }) => name);
 
     expect(callers).toEqual(["gateway/worker-link.ts"]);
   });

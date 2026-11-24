@@ -58,6 +58,12 @@ export function exceptOption(waiter: AcquisitionWaiter): { readonly except?: rea
   return except === undefined || waiter.spec?.mode !== "slim" ? {} : { except };
 }
 
+/** why: a request's label goes to the driver's boot only when it has one, so an unlabelled lease passes no key. */
+export function labelOption(waiter: AcquisitionWaiter): { readonly label?: string } {
+  const label = waiter.options.label;
+  return label === undefined ? {} : { label };
+}
+
 /**
  * why: a plan handed out the capacity or device claim its operation needs; dropping the plan has
  * to give it back, or the resource stays held with nobody left to release it.

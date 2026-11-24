@@ -1,5 +1,6 @@
 import { DriverCrashError } from "../../core/index.js";
 import type { ProcessRunner, TcpProbe } from "../../ports/index.js";
+import { ADB_DEVICES_TIMEOUT_MS } from "./adb-tools.js";
 import { serialFor, type AdbTools } from "./adb-tools.js";
 import type { AndroidDriverData, DeviceState } from "./data.js";
 
@@ -58,7 +59,10 @@ class PortAllocator {
     });
     await previous;
     try {
-      const result = await this.processRunner.run(this.adb, ["devices"], { env });
+      const result = await this.processRunner.run(this.adb, ["devices"], {
+        env,
+        timeoutMs: ADB_DEVICES_TIMEOUT_MS,
+      });
       if (result.code !== 0) {
         throw new DriverCrashError(`adb devices failed: ${result.stderr || result.stdout}`);
       }
