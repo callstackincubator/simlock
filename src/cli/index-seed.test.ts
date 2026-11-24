@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { SeedMakeInput, SeedMakeOutput, SeedProgressUpdate } from "../admin/index.js";
@@ -118,6 +120,43 @@ describe("CLI: simlock seed", () => {
     expect(output.stderr).toBe("");
     expect(output.stdout).toBe(`${JSON.stringify(result)}\n`);
   });
+
+  it.each([
+    {
+      label: "waiting behind another settle",
+      stage: { reason: "settle-running", stage: "waiting" },
+    },
+    { label: "settling", stage: { stage: "settling" } },
+  ] as const)(
+    "stops waiting on Ctrl-C while $label, says the settle goes on, exits 0 and closes the client",
+    async ({ stage }) => {
+      const output = outputCapture();
+      const signals = new EventEmitter();
+      const close = vi.fn(async () => undefined);
+      const client = fakeClient({
+        close,
+        makeSeed: (_input, options) => {
+          options?.onProgress?.({ kind: iphone, progress: stage });
+          return new Promise<never>(() => undefined);
+        },
+      });
+
+      const running = runCli(
+        ["seed", "ios", "iPhone 17"],
+        output.environmentWith({
+          connectAdmin: signedIn(client),
+          readAdminTokenFile: async () => "admin-secret",
+          signals: signals as never,
+        }),
+      );
+      await vi.waitFor(() => expect(output.stderr).toContain("seed iPhone 17, iOS 26.5:"));
+      signals.emit("SIGINT");
+
+      await expect(running).resolves.toBe(0);
+      expect(output.stderr).toContain("stopped waiting; the settle goes on in the daemon\n");
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { argv: ["seed"], label: "no platform word" },
