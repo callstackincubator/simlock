@@ -65,20 +65,26 @@ export class SeedHandlers {
  * A refusal no download could fix for an exact version or the default (below iOS 16, out of range, an image tag) keeps the lease's own words, because that command would fail for it.
  */
 function runtimeMissing(error: RuntimeMissingError, osVersion: string | undefined): DispatchError {
-  const name = error.platform === "ios" ? "iOS" : "Android";
   const asked = osVersion === undefined ? undefined : parseOsConstraint(osVersion);
-  const exact = asked?.ok === true && asked.constraint.kind === "exact";
-  const ranged = asked?.ok === true && !exact;
-  const message = exact
-    ? `${name} ${asked.constraint.version} is not installed; install it with simlock component install ${error.platform} ${asked.constraint.version}`
-    : `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`;
-  return new DispatchError(
-    "RUNTIME_MISSING",
-    error.downloadable || ranged ? message : error.message,
-    {
-      downloadable: error.downloadable,
-      osVersion: error.osVersion,
-      platform: error.platform,
-    },
-  );
+  const exact =
+    asked?.ok === true && asked.constraint.kind === "exact" ? asked.constraint : undefined;
+  const ranged = asked?.ok === true && exact === undefined;
+  const message =
+    error.downloadable || ranged ? installAdvice(error, exact?.version, osVersion) : error.message;
+  return new DispatchError("RUNTIME_MISSING", message, {
+    downloadable: error.downloadable,
+    osVersion: error.osVersion,
+    platform: error.platform,
+  });
+}
+
+function installAdvice(
+  error: RuntimeMissingError,
+  exact: string | undefined,
+  osVersion: string | undefined,
+): string {
+  const name = error.platform === "ios" ? "iOS" : "Android";
+  return exact === undefined
+    ? `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`
+    : `${name} ${exact} is not installed; install it with simlock component install ${error.platform} ${exact}`;
 }
