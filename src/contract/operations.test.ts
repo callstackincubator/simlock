@@ -62,6 +62,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.update", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
+  { name: "seed.make", input: { model: "iPhone 17", platform: "ios" }, role: "admin" },
   { name: "component.list", input: {}, role: "agent" },
   {
     name: "worker.install-component",
@@ -160,6 +161,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.update", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, effect: "write" },
+  { name: "seed.make", input: { model: "iPhone 17", platform: "ios" }, effect: "write" },
   { name: "component.list", input: {}, effect: "read" },
   {
     name: "worker.install-component",

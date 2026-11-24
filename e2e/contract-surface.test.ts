@@ -90,6 +90,7 @@ describe("contract surface", () => {
     expect((await env.startDaemon()).code).toBe(0);
     // ADR 0010 §6's operation is part of the sweep, not left to the registry walk alone.
     expect(probedOperations()).toContain("component.install");
+    expect(probedOperations()).toContain("seed.make");
 
     // Asserted as one object rather than per operation so a failure names every unreachable
     // operation at once, instead of stopping at the first. The `worker.*` operations are
