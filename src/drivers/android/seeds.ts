@@ -183,7 +183,13 @@ export class Seeds {
     for (const row of this.#sources.makingRows()) {
       if (onlyKind !== undefined && row.specKey !== onlyKind) continue;
       const mine = this.#making.has(row.sourceId);
-      if (mine && this.#clock.now() - row.createdAt <= this.#makeCeilingMs) continue;
+      // why: a settle, or the quick seed it retires, runs far longer than a make; within this process only its own end deletes it, and only a restart sweeps it.
+      if (
+        mine &&
+        (row.settleOf !== undefined || this.#clock.now() - row.createdAt <= this.#makeCeilingMs)
+      ) {
+        continue;
+      }
       await this.#removeSource(row.sourceId, row.folder, row.avdName);
     }
   }
@@ -483,6 +489,7 @@ export class Seeds {
       await this.#deviceTable.withLock(`seed:${quick.specKey}`, async () => {
         this.#sources.promoteSettled(settleId, quick.sourceId, configHash, sizeBytes);
       });
+      this.#making.add(quick.sourceId);
       swapped = { ...settled, sizeBytes };
     } catch (error: unknown) {
       await this.#removeSource(settleId, folder, SEED_AVD_NAME);
@@ -490,7 +497,11 @@ export class Seeds {
     } finally {
       this.#making.delete(settleId);
     }
-    await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
+    try {
+      await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
+    } finally {
+      this.#making.delete(quick.sourceId);
+    }
     return {
       reason: swapped.reason,
       settledAfterMs: swapped.settledAfterMs,
