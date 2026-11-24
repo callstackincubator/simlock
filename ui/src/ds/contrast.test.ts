@@ -87,7 +87,9 @@ describe("contrast", () => {
 describe("the Settings theme", () => {
   it("themes every rule the system's dark mode changes through the palette, which data-theme overrides both ways", () => {
     const root = new URL("../", import.meta.url);
+    // why: Windows lists a nested file with a backslash; the expected names below use `/`.
     const sheets = readdirSync(root, { recursive: true, encoding: "utf8" })
+      .map((file) => file.replaceAll("\\", "/"))
       .filter((file) => file.endsWith(".css"))
       .map((file) => [file, readFileSync(new URL(file, root), "utf8")] as const);
     const schemeBlocks = sheets.flatMap(([file, text]) =>

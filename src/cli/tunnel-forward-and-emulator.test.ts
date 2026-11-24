@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TUNNEL_TAG, encodeTunnelFrame } from "../contract/index.js";
 import { promiseState } from "../test-support/promise-state.js";
@@ -166,6 +167,9 @@ describe("simlock tunnel emulator adb", () => {
       ...output,
     });
     const rerun = `run: adb connect ${target}`;
+    // why: the command joins the SDK folders with the host's `join`, so the expected names do too.
+    const sdkAdb = join("/sdk", "platform-tools", "adb");
+    const homeAdb = join("/home/caller", "Library", "Android", "sdk", "platform-tools", "adb");
     const outputs = [
       {
         adb: new CallerAdb([
@@ -214,16 +218,13 @@ describe("simlock tunnel emulator adb", () => {
         out: "",
       },
       {
-        adb: new CallerAdb([connect("/sdk/platform-tools/adb")], ["/sdk/platform-tools/adb"]),
+        adb: new CallerAdb([connect(sdkAdb)], [sdkAdb]),
         env: { ANDROID_HOME: "/sdk" },
         err: "",
         out: `adb: connected to ${target}\n`,
       },
       {
-        adb: new CallerAdb(
-          [connect("/home/caller/Library/Android/sdk/platform-tools/adb")],
-          ["/home/caller/Library/Android/sdk/platform-tools/adb"],
-        ),
+        adb: new CallerAdb([connect(homeAdb)], [homeAdb]),
         err: "",
         out: `adb: connected to ${target}\n`,
       },

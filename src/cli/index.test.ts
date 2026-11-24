@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MemoryFilesystem } from "../ports/index.js";
 import { SimlockError } from "../contract/index.js";
@@ -233,7 +234,7 @@ describe("CLI: exit codes", () => {
       expect(code, summary).toBe(0);
       expect(doctorInputs, summary).toEqual([{}]);
       expect(output.stdout, summary).toBe(
-        "claude-code  skill  wrote      /home/operator/.claude/skills/simlock\n" +
+        `claude-code  skill  wrote      ${join("/home/operator", ".claude", "skills", "simlock")}\n` +
           `machine      ${summary}\n`,
       );
       expect(output.stderr, summary).toBe(stderr);
@@ -271,7 +272,10 @@ describe("CLI: exit codes", () => {
         tools: [
           {
             tool: "claude-code",
-            skill: { status: "wrote", path: "/home/operator/.claude/skills/simlock" },
+            skill: {
+              status: "wrote",
+              path: join("/home/operator", ".claude", "skills", "simlock"),
+            },
           },
         ],
         machine: { summary, findings: report.findings },
@@ -333,10 +337,13 @@ describe("CLI: exit codes", () => {
       );
       expect(code, name).toBe(0);
       expect(output.stdout, name).toBe(
-        "claude-code  skill  wrote      /home/operator/.claude/skills/simlock\n" +
+        `claude-code  skill  wrote      ${join("/home/operator", ".claude", "skills", "simlock")}\n` +
           `machine      not checked: ${message}\n`,
       );
-      expect(await filesystem.exists("/home/operator/.claude/skills/simlock"), name).toBe(true);
+      expect(
+        await filesystem.exists(join("/home/operator", ".claude", "skills", "simlock")),
+        name,
+      ).toBe(true);
     }
     expect(gatewayConnects).toBe(0);
   });
@@ -367,7 +374,7 @@ describe("CLI: exit codes", () => {
       const filesystem = new MemoryFilesystem();
       await filesystem.mkdirp(HOME);
       await filesystem.mkdirp(CWD);
-      await filesystem.mkdirp(`${HOME}/.claude`);
+      await filesystem.mkdirp(join(HOME, ".claude"));
       await options.prepare?.(filesystem);
       const questions: string[] = [];
       const output = outputCapture();
@@ -397,17 +404,17 @@ describe("CLI: exit codes", () => {
     expect(plain.code).toBe(0);
     expect(plain.stderr).toBe("");
     expect(plain.stdout).toBe(
-      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n` +
-        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n` +
+      `claude-code  skill  wrote      ${join(HOME, ".claude", "skills", "simlock")}\n` +
+        `codex        skill  skipped    ${join(HOME, ".agents", "skills", "simlock")}  (Codex not found here; pass --tool codex to install anyway)\n` +
         MACHINE,
     );
     expect(plain.questions[0]).toBe(SCOPE_PROMPT);
 
     const again = await setupRun(["setup", "--tool", "claude-code"], {
-      prepare: async (filesystem) => filesystem.mkdirp(`${HOME}/.claude/skills/simlock`),
+      prepare: async (filesystem) => filesystem.mkdirp(join(HOME, ".claude", "skills", "simlock")),
     });
     expect(again.stdout).toBe(
-      `claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n${MACHINE}`,
+      `claude-code  skill  replaced   ${join(HOME, ".claude", "skills", "simlock")}\n${MACHINE}`,
     );
 
     for (const [outcome, line] of [
@@ -421,7 +428,7 @@ describe("CLI: exit codes", () => {
       const run = await setupRun(["setup", "--tool", "claude-code", "--mcp"], { outcome });
       expect(run.code, line).toBe(0);
       expect(run.stdout, line).toBe(
-        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}${MACHINE}`,
+        `claude-code  skill  wrote      ${join(HOME, ".claude", "skills", "simlock")}\n${line}${MACHINE}`,
       );
     }
 
@@ -432,7 +439,7 @@ describe("CLI: exit codes", () => {
       tools: [
         {
           tool: "claude-code",
-          skill: { status: "wrote", path: `${HOME}/.claude/skills/simlock` },
+          skill: { status: "wrote", path: join(HOME, ".claude", "skills", "simlock") },
           mcp: { status: "connected" },
         },
       ],
@@ -451,7 +458,7 @@ describe("CLI: exit codes", () => {
       tools: [
         {
           tool: "codex",
-          skill: { status: "wrote", path: `${CWD}/.agents/skills/simlock` },
+          skill: { status: "wrote", path: join(CWD, ".agents", "skills", "simlock") },
           mcp: { status: "skipped", reason: "codex mcp add has no project scope" },
         },
       ],
@@ -463,7 +470,7 @@ describe("CLI: exit codes", () => {
     });
     expect(failed.code).toBe(1);
     expect(failed.stdout).toBe(
-      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n${MACHINE}`,
+      `claude-code  skill  wrote      ${join(HOME, ".claude", "skills", "simlock")}\nclaude-code  mcp    failed  (boom)\n${MACHINE}`,
     );
     expect(JSON.parse(failed.stderr)).toEqual({
       error: { code: "SETUP_MCP_FAILED", message: "MCP not connected for claude-code: boom" },
@@ -471,8 +478,8 @@ describe("CLI: exit codes", () => {
 
     const refused = await setupRun(["setup"], {
       prepare: async (filesystem) => {
-        await filesystem.mkdirp(`${HOME}/.claude/skills`);
-        await filesystem.writeFileAtomic(`${HOME}/.claude/skills/simlock`, "mine");
+        await filesystem.mkdirp(join(HOME, ".claude", "skills"));
+        await filesystem.writeFileAtomic(join(HOME, ".claude", "skills", "simlock"), "mine");
       },
     });
     expect(refused.code).toBe(2);
@@ -480,7 +487,7 @@ describe("CLI: exit codes", () => {
     expect(JSON.parse(refused.stderr)).toEqual({
       error: {
         code: "SETUP_REFUSED",
-        message: `Refusing to install: ${HOME}/.claude/skills/simlock exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
+        message: `Refusing to install: ${join(HOME, ".claude", "skills", "simlock")} exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
       },
     });
 
@@ -495,9 +502,10 @@ describe("CLI: exit codes", () => {
       expect(refusedUsage.code, argv.join(" ")).toBe(2);
       expect(refusedUsage.stdout, argv.join(" ")).toBe("");
       expect(JSON.parse(refusedUsage.stderr).error.code, argv.join(" ")).toBe("USAGE");
-      expect(await refusedUsage.filesystem.exists(`${HOME}/.claude/skills`), argv.join(" ")).toBe(
-        false,
-      );
+      expect(
+        await refusedUsage.filesystem.exists(join(HOME, ".claude", "skills")),
+        argv.join(" "),
+      ).toBe(false);
     }
 
     for (const argv of [
