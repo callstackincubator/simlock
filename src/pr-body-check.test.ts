@@ -142,7 +142,9 @@ const valid = [
   "",
 ].join("\n");
 
-describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
+// why: a case starts the script and git many times; its longest takes 10 s alone on a Windows PC
+// and more than 20 s under a full run there, where it is 1 s elsewhere.
+describe("pr-body-check.mjs", { timeout: 60_000 }, () => {
   it("refuses incomplete assessment even with zero findings and allows a completed assessment", () => {
     const body = valid.replace("Assessment: complete", "Assessment: incomplete — budget exhausted");
     expect(check(body).status).toBe(1);
