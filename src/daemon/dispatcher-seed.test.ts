@@ -49,6 +49,62 @@ describe("Dispatcher: seed.make", () => {
     });
   });
 
+  it("reports each stage with the seed's kind, and answers a seed that is already settled at once with no settle", async () => {
+    const stages: unknown[] = [];
+    const settleSeed = vi.fn(async (sourceId: string) => ({
+      reason: "idle" as const,
+      settledAfterMs: 1,
+      sourceId,
+    }));
+    const built = await buildDispatcher({
+      seedVerbs: {
+        ensureSeed: async () => ({ leases: 0, settled: false, sourceId: "made" }),
+        settleSeed,
+      },
+    });
+    built.engine.core.seedSettler.start();
+    const onSeedProgress = (kind: unknown, progress: unknown) => stages.push({ kind, progress });
+
+    const made = built.dispatcher.dispatch(
+      "seed.make",
+      { model: "iPhone 17", platform: "ios" },
+      { ...admin, onSeedProgress },
+    );
+    await flushPromises();
+    await made;
+    built.driver.setSources([
+      {
+        id: "ready",
+        kind: "seed",
+        leases: 3,
+        model: "iPhone 17",
+        osVersion: "26.5",
+        settled: true,
+        sizeBytes: 900,
+      },
+    ]);
+    settleSeed.mockClear();
+    const settled = built.dispatcher.dispatch(
+      "seed.make",
+      { model: "iPhone 17", platform: "ios" },
+      admin,
+    );
+    await flushPromises();
+
+    const kind = { model: "iPhone 17", osVersion: "26.5", platform: "ios" };
+    expect(stages).toEqual([
+      { kind, progress: { stage: "making" } },
+      { kind, progress: { stage: "settling" } },
+    ]);
+    await expect(settled).resolves.toEqual({
+      ...kind,
+      outcome: "already-settled",
+      sizeBytes: 900,
+      sourceId: "ready",
+    });
+    expect(settleSeed).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "a make that fails",
