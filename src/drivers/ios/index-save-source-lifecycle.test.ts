@@ -179,6 +179,35 @@ describe("IosSimctlDriver", () => {
         "the clone made before the failure is shut down and deleted from the sources set",
       ).toEqual(["shutdown", "delete"]);
       expect(lateDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
+
+      const stuckDeleteRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+        { match: sourcesSimctl("shutdown", cloneUdid) },
+        {
+          match: sourcesSimctl("delete", cloneUdid),
+          result: { code: 1, stderr: "Unable to delete device", stdout: "" },
+        },
+      ]);
+      const stuckDeleteDatabase = await memorySourceDatabase();
+      stuckDeleteDatabase.exec(
+        "CREATE TRIGGER refuse_update BEFORE UPDATE ON ios_source_data BEGIN SELECT RAISE(ABORT, 'source row locked'); END",
+      );
+      const logger = new RecordingLogger();
+      const stuckDelete = await createDriver(
+        stuckDeleteRunner,
+        new FakeClock(),
+        filesystem,
+        stuckDeleteDatabase,
+        logger,
+      );
+      await expect(stuckDelete.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("source row locked"),
+      });
+      expect(logger.warnings, "a clone that could not be deleted is logged with its UDID").toEqual([
+        expect.stringMatching(new RegExp(`${cloneUdid}.*Unable to delete device`)),
+      ]);
     });
   });
 
