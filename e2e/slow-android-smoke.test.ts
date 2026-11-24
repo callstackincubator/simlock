@@ -29,6 +29,17 @@ async function adbDevices(sdk: AndroidSdkPaths, serverPort: number): Promise<str
 }
 
 /**
+ * why: the daemon's "fell back to a cold boot" warning is a timing guess (a copy ready after more than 12 s), and two copies booting at once on a busy host pass it with their snapshot loaded (1.6 s in the emulator's log, a 14 s ready); the emulator's own log line is the evidence that the snapshot loaded.
+ */
+async function bootedFromSnapshot(deviceRoot: string, driverDeviceId: string): Promise<boolean> {
+  const log = await readFile(
+    join(deviceRoot, driverDeviceId, "simlock.avd", "emulator.log"),
+    "utf8",
+  );
+  return log.includes("Successfully loaded snapshot 'simlock_boot'");
+}
+
+/**
  * why: the emulator keeps crash dumps in `/tmp/android-<user>/emu-crash-<version>.db`, shared with
  * Android Studio, and `-crash-report-mode never` deletes the ones in the database it reads.
  * Returns the shared `completed/` folder of the installed emulator.
@@ -354,6 +365,12 @@ describe.skipIf(ANDROID_SDK === undefined)(
           for (const grant of [first, second]) {
             expect(existsSync(join(root, grant.device.driverDeviceId, "simlock.avd"))).toBe(true);
           }
+          for (const grant of [first, second]) {
+            expect(
+              await bootedFromSnapshot(root, grant.device.driverDeviceId),
+              "a copy boots from the seed's snapshot",
+            ).toBe(true);
+          }
           const touched = await adbOn(first, "shell", "touch", "/data/local/tmp/t2");
           expect(touched.code, touched.stderr).toBe(0);
 
@@ -376,9 +393,10 @@ describe.skipIf(ANDROID_SDK === undefined)(
             0,
           );
 
-          expect(await readFile(env.logPath, "utf8")).not.toContain(
-            "Android snapshot boot fell back to a cold boot",
-          );
+          expect(
+            await bootedFromSnapshot(root, third.device.driverDeviceId),
+            "a later copy boots from the seed's snapshot",
+          ).toBe(true);
           await env.cli(["release", third.lease.id]);
           await waitFor(async () => !existsSync(join(root, third.device.driverDeviceId)), {
             timeout: 120_000,
@@ -405,7 +423,6 @@ describe.skipIf(ANDROID_SDK === undefined)(
       "android.emulator.cores: a Pixel 9 lease made with cores 2 prints 2 for nproc, and so does a lease of a baseline saved after the change, both without a cold-boot fallback",
       { timeout: 1_800_000 },
       async () => {
-        const fellBack = "Android snapshot boot fell back to a cold boot";
         const quiet = { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } };
         const lease = async (env: TestEnv, agent: string, extra: readonly string[]) => {
           const granted = await env.cli(
@@ -413,7 +430,16 @@ describe.skipIf(ANDROID_SDK === undefined)(
             { timeout: DEVICE_READY_MS },
           );
           expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
-          const grant = granted.json as { device: { address?: string }; lease: { id: string } };
+          const grant = granted.json as {
+            device: { address?: string; driverDeviceId: string };
+            lease: { id: string };
+          };
+          // why: read before the lease ends, since a released copy's folder is deleted.
+          const loaded = await bootedFromSnapshot(
+            join(env.home, "devices", "android"),
+            grant.device.driverDeviceId,
+          );
+          expect(loaded, "the copy boots from its snapshot, not cold").toBe(true);
           const nproc = await env.cli(["adb", "-s", grant.device.address ?? "", "shell", "nproc"]);
           return { grant, nproc: nproc.stdout.trim() };
         };
@@ -441,7 +467,6 @@ describe.skipIf(ANDROID_SDK === undefined)(
         try {
           const made = await lease(withCores, "cores-new", ["--device", "Pixel 9"]);
           expect(made.nproc).toBe("2");
-          expect(await readFile(withCores.logPath, "utf8")).not.toContain(fellBack);
         } finally {
           await nuke(withCores);
         }
@@ -471,7 +496,6 @@ describe.skipIf(ANDROID_SDK === undefined)(
             expect(saved.code, `baseline save failed: ${saved.stderr}`).toBe(0);
             const copy = await lease(unset, "cores-copy", ["--baseline", "cores-baseline"]);
             expect(copy.nproc).toBe("2");
-            expect(await readFile(unset.logPath, "utf8")).not.toContain(fellBack);
           });
         } finally {
           await nuke(unset);
