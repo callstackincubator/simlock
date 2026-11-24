@@ -1,4 +1,4 @@
-import type { SeedSettler, VirtualSpec } from "../core/index.js";
+import { SeedSettleFailedError, type SeedSettler, type VirtualSpec } from "../core/index.js";
 import { DispatchError, type SeedKind } from "./dispatch.js";
 import type { DispatcherOptions, Handler } from "./dispatcher-options.js";
 
@@ -31,9 +31,20 @@ export class SeedHandlers {
       platform: spec.platform,
       ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
     };
-    const result = await seeds.settler.settle(spec, {
-      onProgress: (progress) => session.onSeedProgress?.(kind, progress),
-    });
-    return { ...kind, ...result };
+    try {
+      const result = await seeds.settler.settle(spec, {
+        onProgress: (progress) => session.onSeedProgress?.(kind, progress),
+      });
+      return { ...kind, ...result };
+    } catch (error: unknown) {
+      if (error instanceof SeedSettleFailedError) {
+        throw new DispatchError("SEED_SETTLE_FAILED", error.message, {
+          model: error.model,
+          platform: error.platform,
+          reason: error.reason,
+        });
+      }
+      throw error;
+    }
   };
 }
