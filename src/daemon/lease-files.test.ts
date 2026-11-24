@@ -32,6 +32,7 @@ async function rig(filesystem: NodeFilesystem = new NodeFilesystem()) {
   const drivers = [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })];
   const started = await start({
     clock,
+    configOverrides: { diskPressure: { freeBytesThreshold: 0 } },
     drivers,
     filesystem,
     withHttp: true,
