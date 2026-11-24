@@ -630,13 +630,45 @@ export class Seeds {
     }
   }
 
-  async ensureSeed(_spec: VirtualSpec): Promise<{
+  /** why: a provision and `ensureSeed` find or make the kind's seed the same way: under the kind's lock, a stale one destroyed and made again. */
+  async #freshSeed(spec: VirtualSpec): Promise<{ image: SystemImage; seed: SeedRecord }> {
+    const profile = await this.#catalog.profileFor(spec.model);
+    const image = await this.#systemImages.requireImage(profile, spec.osVersion, spec.imageTag);
+    const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
+    const specKey = `${spec.model}|${packageName}`;
+    const seed = await this.#deviceTable.withLock(`seed:${specKey}`, async () => {
+      await this.#sweepLeftovers(specKey);
+      const ready = this.#sources.findReadySeed(specKey);
+      if (ready !== undefined) {
+        const reason = await this.#staleReasonOf(
+          ready,
+          await this.#systemImages.installedImages(),
+          await this.#adbTools.emulatorVersion(),
+        );
+        if (reason === undefined) return ready;
+        await this.#removeSeed(ready);
+      }
+      return this.#makeSeed({ image, packageName, profile, spec, specKey });
+    });
+    return { image, seed };
+  }
+
+  /** why: ADR 0090 §4: an operator names a kind's seed; it is made as a provision makes it, and no copy is taken. */
+  async ensureSeed(spec: VirtualSpec): Promise<{
     sourceId: string;
     settled: boolean;
     leases: number;
     sizeBytes?: number;
   }> {
-    return { leases: 0, settled: false, sourceId: "" };
+    this.#assertAndroidSpec(spec);
+    const { seed } = await this.#freshSeed(spec);
+    const row = this.#sources.findRow(seed.sourceId);
+    return {
+      leases: row?.leaseCount ?? 0,
+      settled: row?.settled ?? false,
+      sourceId: seed.sourceId,
+      ...(row?.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+    };
   }
 
   async destroySource(sourceId: string): Promise<void> {
@@ -662,27 +694,10 @@ export class Seeds {
   ): Promise<DriverDevice> {
     this.#assertAndroidSpec(spec);
     if (options.source !== undefined) return await this.#provisionFromSource(options.source);
-    const profile = await this.#catalog.profileFor(spec.model);
-    const image = await this.#systemImages.requireImage(profile, spec.osVersion, spec.imageTag);
     // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
     // folder. Nothing reads it back as evidence of anything -- ownership comes from the root.
     const deviceId = `simlock_${this.#idGenerator.generate()}`;
-    const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
-    const specKey = `${spec.model}|${packageName}`;
-    const seed = await this.#deviceTable.withLock(`seed:${specKey}`, async () => {
-      await this.#sweepLeftovers(specKey);
-      const ready = this.#sources.findReadySeed(specKey);
-      if (ready !== undefined) {
-        const reason = await this.#staleReasonOf(
-          ready,
-          await this.#systemImages.installedImages(),
-          await this.#adbTools.emulatorVersion(),
-        );
-        if (reason === undefined) return ready;
-        await this.#removeSeed(ready);
-      }
-      return this.#makeSeed({ image, packageName, profile, spec, specKey });
-    });
+    const { image, seed } = await this.#freshSeed(spec);
     const avdHome = join(this.#deviceRoot, deviceId);
     await this.#copySeed(seed, avdHome);
     this.#sources.addLease(seed.sourceId);
