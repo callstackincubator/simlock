@@ -88,6 +88,7 @@ const WINDOWS_SKIPPED: readonly string[] = [
   "src/drivers/ios/index-passthrough.test.ts",
   "src/drivers/ios/index-provenance-root.test.ts",
   "src/drivers/ios/index-remove-component.test.ts",
+  "src/drivers/ios/index-rename.test.ts",
   "src/drivers/ios/index-save-source-lifecycle.test.ts",
   "src/drivers/ios/index-seed-provision.test.ts",
   "src/drivers/ios/index-seed-record.test.ts",
