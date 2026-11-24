@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Driver } from "../core/index.js";
 import { classifyError } from "./error-code.js";
@@ -110,6 +110,79 @@ describe("Dispatcher: seed.make", () => {
         details: { model: "iPhone 17", platform: "ios", reason },
         message,
       });
+    },
+  );
+
+  it.each([
+    {
+      code: "UNKNOWN_MODEL",
+      input: { model: "iPhone 99", platform: "ios" },
+      label: "an unknown model",
+      options: { driverOptions: { knownModels: ["iPhone 17"] } },
+    },
+    {
+      code: "UNKNOWN_MODEL",
+      input: { model: "iPhone 17", platform: "ios" },
+      label: "a platform whose virtual devices are off",
+      options: { virtualDevices: { ios: false } },
+    },
+    {
+      code: "RUNTIME_MISSING",
+      input: { model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+      label: "an exact runtime that is not installed",
+      message: "iOS 27.0 is not installed; install it with simlock component install ios 27.0",
+      options: {},
+    },
+    {
+      code: "RUNTIME_MISSING",
+      input: { model: "iPhone 17", platform: "ios" },
+      label: "a default runtime when none is installed",
+      message:
+        "no installed iOS runtime fits the default; install one with simlock component install ios and a version",
+      options: { driverOptions: { availableOsVersions: [] } },
+    },
+    {
+      code: "RUNTIME_MISSING",
+      input: { model: "iPhone 17", osVersion: ">=99", platform: "ios" },
+      label: "a range no installed runtime fits",
+      message:
+        "no installed iOS runtime fits >=99; install one with simlock component install ios and a version",
+      options: {},
+    },
+    {
+      code: "FORBIDDEN",
+      input: { model: "iPhone 17", platform: "ios" },
+      label: "an agent session",
+      options: {},
+      session: session(),
+    },
+    {
+      code: "DAEMON_STOPPING",
+      input: { model: "iPhone 17", platform: "ios" },
+      label: "a daemon that is stopping",
+      options: {},
+      stopping: true,
+    },
+  ])(
+    "refuses $label with $code, before any seed is made",
+    async ({ code, input, message, options, session: asked, stopping }) => {
+      const verbs = {
+        ensureSeed: vi.fn(async () => ({ leases: 0, settled: false, sourceId: "made" })),
+        settleSeed: vi.fn(async () => {
+          throw new Error("unreachable");
+        }),
+      };
+      const built = await buildDispatcher({ ...options, seedVerbs: verbs });
+      if (stopping === true) built.engine.core.seedSettler.beginStop();
+
+      const error = await built.dispatcher
+        .dispatch("seed.make", input, asked ?? admin)
+        .catch((caught: unknown) => caught);
+
+      expect(classifyError(error)).toBe(code);
+      if (message !== undefined) expect(error).toMatchObject({ message });
+      expect(verbs.ensureSeed).not.toHaveBeenCalled();
+      expect(built.driver.calls.map((call) => call.operation)).not.toContain("provision");
     },
   );
 });
