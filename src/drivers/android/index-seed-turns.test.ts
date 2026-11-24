@@ -4,6 +4,7 @@ import { promiseState } from "../../test-support/promise-state.js";
 import { avdDirectory } from "./testing.js";
 import {
   imageProperties,
+  letGo,
   seedWorld as world,
   sources,
   stepSettle,
@@ -45,9 +46,15 @@ describe("AndroidDriver seed turns", () => {
         w.filesystem.exists(`${sources}/seed_two/simlock.avd`),
         `${name}: the seed's folder stays while a copy runs from it`,
       ).resolves.toBe(true);
+      // why: a copy asked for after the deletion began is held at its own copy, so one that ignored the deletion would still be copying when the folder goes.
+      const openFirst = w.filesystem.open;
+      void w.filesystem.hold(`${sources}/seed_two/`);
       const after = w.driver.provision(w.spec);
-      w.filesystem.open();
+      await letGo();
+      openFirst();
       const device = await copy;
+      await letGo();
+      w.filesystem.open();
       await expect(
         w.filesystem.exists(`${avdDirectory}/${device.deviceId}/simlock.avd/config.ini`),
         `${name}: the copy in flight completed`,

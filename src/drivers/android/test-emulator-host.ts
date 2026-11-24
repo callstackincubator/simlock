@@ -41,6 +41,11 @@ export class EmulatorHost {
     return this.#listening.get(consolePortOf(serial));
   }
 
+  /** why: how many `logcat` listeners are still open; a settle that ends leaves none. */
+  get openLogcats(): number {
+    return this.#logcats.size;
+  }
+
   /** why: the guest's ConnectivityService picking a default network: the line `logcat` prints for it, to every open listener. */
   announceDefaultNetwork(): void {
     for (const announce of this.#logcats) {

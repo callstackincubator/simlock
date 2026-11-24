@@ -505,7 +505,6 @@ export class Seeds {
       await this.#deviceTable.withLock(`seed:${quick.specKey}`, async () => {
         this.#sources.promoteSettled(settleId, quick.sourceId, configHash, sizeBytes);
       });
-      this.#making.add(quick.sourceId);
       swapped = { ...settled, sizeBytes };
     } catch (error: unknown) {
       await this.#removeSource(settleId, folder, SEED_AVD_NAME);
@@ -513,11 +512,7 @@ export class Seeds {
     } finally {
       this.#making.delete(settleId);
     }
-    try {
-      await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
-    } finally {
-      this.#making.delete(quick.sourceId);
-    }
+    await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
     return {
       reason: swapped.reason,
       settledAfterMs: swapped.settledAfterMs,

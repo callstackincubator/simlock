@@ -156,14 +156,18 @@ describe("AndroidDriver settleSeed", () => {
           `${scenario.name}: nothing was saved before the log line`,
         ).toBe(false);
       }
+      await expect(
+        world.filesystem.exists(`${sources}/seed_two`),
+        `${scenario.name}: the quick seed's folder is deleted when the settle returns`,
+      ).resolves.toBe(false);
+      await expect(world.filesystem.exists(`${sources}/seed_three/simlock.avd`)).resolves.toBe(
+        true,
+      );
       const listed = await world.driver.listSources();
       expect(listed).toHaveLength(1);
       expect(listed[0]).toMatchObject({ id: "seed_three", kind: "seed", settled: true });
       expect(listed[0]).not.toHaveProperty("staleReason");
-      await expect(world.filesystem.exists(`${sources}/seed_two`)).resolves.toBe(false);
-      await expect(world.filesystem.exists(`${sources}/seed_three/simlock.avd`)).resolves.toBe(
-        true,
-      );
+      expect(world.host.openLogcats, "the network listener is closed").toBe(0);
       const after = world.runner.calls.slice(callsBefore);
       expect(
         after.some(
@@ -265,5 +269,30 @@ describe("AndroidDriver settleSeed", () => {
         sourceId,
       ).rejects.toThrow(`Android keeps no ready quick seed ${sourceId}`);
     }
+
+    const running = await quickSeedWorld();
+    const settling = running.driver.settleSeed?.("seed_two", {
+      signal: new AbortController().signal,
+    });
+    if (settling === undefined) throw new Error("the driver offers no settleSeed");
+    for (let tick = 0; tick < 20; tick += 1) await new Promise<void>((r) => setImmediate(r));
+    const second = running.driver.settleSeed?.("seed_three", {
+      signal: new AbortController().signal,
+    });
+    if (second === undefined) throw new Error("the driver offers no settleSeed");
+    const answer = promiseState(second.catch((error: unknown) => error));
+    for (let tick = 0; tick < 20; tick += 1) await new Promise<void>((r) => setImmediate(r));
+    expect(answer.state, "a settle that is still making is refused at once").toBe("fulfilled");
+    await expect(second).rejects.toThrow("Android keeps no ready quick seed seed_three");
+    await runToEnd(settling, running, 60_000, () => undefined);
+
+    const filesystem = await androidFilesystem();
+    const withoutTable = await createDriver(
+      filesystem,
+      new RecordingRunner(new EmulatorHost(filesystem).runner()),
+    );
+    expect(withoutTable.settleSeed, "a driver given no process table offers no settle").toBe(
+      undefined,
+    );
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { seedWorld, stepSettle } from "./test-seed-world.js";
 import {
   androidFilesystem,
   ANDROID_SDK_ROOT,
@@ -47,5 +48,33 @@ describe("AndroidDriver ensureSeed", () => {
     await expect(ensure(), "stale: remade").resolves.toMatchObject({ sourceId: "seed_two" });
     expect(made()).toBe(2);
     await expect(driver.listSources()).resolves.toMatchObject([{ id: "seed_two" }]);
+
+    // why: the answer carries the seed's lease count, whether it is settled and its size, which a seed no lease copied from does not show.
+    const world = await seedWorld();
+    const ensureWorld = () => {
+      const ensured = world.driver.ensureSeed?.(world.spec);
+      if (ensured === undefined) throw new Error("the driver offers no ensureSeed");
+      return ensured;
+    };
+    const [listed] = await world.driver.listSources();
+    const quick = await ensureWorld();
+    expect(quick, "a quick seed one lease copied from").toMatchObject({
+      leases: 1,
+      settled: false,
+      sourceId: "seed_two",
+    });
+    expect(listed?.sizeBytes, "the fixture seed has a size").toBeGreaterThan(0);
+    expect(quick.sizeBytes).toBe(listed?.sizeBytes);
+
+    const settling = world.driver.settleSeed?.("seed_two", {
+      signal: new AbortController().signal,
+    });
+    await stepSettle(world, 100);
+    await settling;
+    await expect(ensureWorld(), "the settled seed").resolves.toMatchObject({
+      leases: 0,
+      settled: true,
+      sourceId: "seed_three",
+    });
   });
 });
