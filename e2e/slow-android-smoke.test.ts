@@ -452,6 +452,18 @@ describe.skipIf(ANDROID_SDK === undefined)(
           const before = await lease(unset, "cores-before", ["--device", "Pixel 9"]);
           expect(before.nproc).toBe("4");
           await unset.withConfig({ android: { emulator: { cores: 2 } } }, async () => {
+            // why: the restart leaves the lease's emulator running, but adb lists it again only a moment after the daemon answers (first run: `sync` found no `emulator-5588` 138 ms after the restart); a save made before that fails with BASELINE_SAVE_FAILED.
+            await waitFor(
+              async () =>
+                (
+                  await unset.cli(["adb", "-s", before.grant.device.address ?? "", "get-state"])
+                ).stdout.trim() === "device",
+              {
+                timeout: 60_000,
+                interval: 1_000,
+                label: "adb lists the lease's emulator again after the restart",
+              },
+            );
             const saved = await unset.cli(
               ["baseline", "save", "cores-baseline", "--lease", before.grant.lease.id],
               { timeout: 600_000 },
@@ -463,6 +475,68 @@ describe.skipIf(ANDROID_SDK === undefined)(
           });
         } finally {
           await nuke(unset);
+        }
+      },
+    );
+    // why: #1631: a snapshot saved before the guest has a default network restores offline; a settled seed is saved with one, so a lease of the kind has `Active default network: <number>` when `simlock lease` returns. The settle starts only after the worker has been quiet 5 minutes and is checked every 5 (ADR 0090 §2), so the case waits for it.
+    it(
+      "a lease of a kind whose seed was settled has a default network in dumpsys connectivity when simlock lease returns",
+      { timeout: 2_400_000 },
+      async () => {
+        const env = await withDaemon({
+          driver: "real",
+          configOverrides: { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } },
+        });
+        try {
+          const lease = async (agent: string) => {
+            const granted = await env.cli(
+              [
+                "lease",
+                "--platform",
+                "android",
+                "--device",
+                "Pixel 9",
+                "--agent-id",
+                agent,
+                "--detach",
+              ],
+              { timeout: DEVICE_READY_MS },
+            );
+            expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
+            return granted.json as { device: { address?: string }; lease: { id: string } };
+          };
+          const first = await lease("settle-first");
+          expect((await env.cli(["release", first.lease.id])).code).toBe(0);
+
+          const settledSeeds = async (): Promise<number> => {
+            const report = await env.cli(["doctor"]);
+            return (
+              report.json as { sources: { kind: string; platform: string; settled?: boolean }[] }
+            ).sources.filter(
+              (source) =>
+                source.platform === "android" && source.kind === "seed" && source.settled === true,
+            ).length;
+          };
+          await waitFor(async () => (await settledSeeds()) === 1, {
+            timeout: 1_800_000,
+            interval: 15_000,
+            label: "the quiet worker settled its Android seed",
+          });
+
+          const second = await lease("settle-second");
+          const dumpsys = await env.cli([
+            "adb",
+            "-s",
+            second.device.address ?? "",
+            "shell",
+            "dumpsys",
+            "connectivity",
+          ]);
+          expect(dumpsys.stdout).toMatch(/Active default network: \d+/);
+        } finally {
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
         }
       },
     );
