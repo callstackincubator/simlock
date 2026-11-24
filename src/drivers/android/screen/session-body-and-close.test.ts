@@ -27,12 +27,12 @@ async function settle(): Promise<void> {
 }
 
 describe("Android screen capture: the key frame bound", () => {
-  it("sends reset video on the control socket when no key frame came for 4 s", async () => {
-    // why: a still screen: one reset at 4 s, none before, and none again until its key frame arrives.
+  it("sends reset video on the control socket when no key frame came for 3 s", async () => {
+    // why: a still screen: one reset at 3 s, none before, and none again until its key frame arrives.
     const still = await setup();
     await opened(still);
     const stillControl = still.target.server.controls[0]!;
-    still.clock.advance(3_999);
+    still.clock.advance(2_999);
     await settle();
     expect(stillControl.written.slice(2)).toEqual([]);
     still.clock.advance(1);
@@ -42,18 +42,18 @@ describe("Android screen capture: the key frame bound", () => {
     await settle();
     expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO]);
 
-    // why: a key frame at 3 s moves the reset from 4 s to 7 s, and the session the reset starts is relayed whole.
+    // why: a key frame at 2 s moves the reset from 3 s to 5 s, and the session the reset starts is relayed whole.
     const moving = await setup();
     const feed = await opened(moving);
     const peer = moving.target.server.last;
     const control = moving.target.server.controls[0]!;
     const reader = feed.body.getReader();
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
-    moving.clock.advance(3_000);
+    moving.clock.advance(2_000);
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.description);
     expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.keyframe);
-    moving.clock.advance(3_999);
+    moving.clock.advance(2_999);
     await settle();
     expect(control.written.slice(2)).toEqual([]);
     moving.clock.advance(1);
@@ -82,11 +82,11 @@ describe("Android screen capture: the key frame bound", () => {
     expect(frameTag((await failingReader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
     failing.target.server.controls[0]!.failWrites = true;
     const ended = failingReader.read();
-    failing.clock.advance(4_000);
+    failing.clock.advance(3_000);
     await expect(ended).rejects.toBeInstanceOf(ScreenUnavailableError);
   });
 
-  it("relays a still screen's key frame 4 s plus the answer after the last one when the device takes 5 s to answer reset video", async () => {
+  it("relays a still screen's key frame 3 s plus the answer after the last one when the device takes 5 s to answer reset video", async () => {
     // why: scrcpy v5.0.1 answers reset video by preparing a new capture and encoder, and when another reset
     // came while it did, it sends nothing and prepares again (SurfaceEncoder.java:142,
     // `if (!captureControl.isResetRequested())`). This device takes 5 s to prepare, as a just-booted emulator
@@ -128,8 +128,8 @@ describe("Android screen capture: the key frame bound", () => {
       }
     }
     expect(keyFramesAt, "key frames, in ms after the open, of a still screen").toEqual([
-      4_000 + ANSWER_MS,
-      2 * (4_000 + ANSWER_MS),
+      3_000 + ANSWER_MS,
+      2 * (3_000 + ANSWER_MS),
     ]);
     await drive(still.clock, reader.cancel());
   });

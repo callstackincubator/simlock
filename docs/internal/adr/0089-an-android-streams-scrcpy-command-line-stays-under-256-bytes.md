@@ -67,7 +67,7 @@ for false and the untyped codec option, 261.
    `clipboard_autosync` are passed only because of it) and `cleanup=true`
    (it puts a phone's stay-awake setting back and deletes the jar). A
    scrcpy upgrade checks both, beside the launch.
-3. ADR 0079 §5 is unchanged: scrcpy's interval stays 2, and the 4 s reset
+3. ADR 0079 §5 is unchanged: scrcpy's interval stays 2, and the 3 s reset
    still bounds a still screen.
 
 ## Consequences
