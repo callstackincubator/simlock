@@ -84,6 +84,7 @@ describe("IosSimctlDriver seed throwaway", () => {
         ...(stdout === undefined ? {} : { result: { code: 0, stderr: "", stdout } }),
       });
       const inSet = (...args: string[]) => simctlIn(world, undefined, ...args);
+      const disableSync = (udid: string) => (world.isDefault ? deviceHubDisable(udid) : []);
       const hub = (command: string) =>
         world.isDefault ? deviceHubEdit(command).map((match) => ({ match })) : [];
       const database = await memorySourceDatabase();
@@ -100,7 +101,7 @@ describe("IosSimctlDriver seed throwaway", () => {
           inSet("create", name, driverData.deviceTypeId, driverData.runtimeId),
           `${throwawayUdid}\n`,
         ),
-        ...(world.isDefault ? deviceHubDisable(throwawayUdid) : []),
+        ...disableSync(throwawayUdid),
         {
           match: inSet("boot", throwawayUdid),
           onSpawn: () => {
