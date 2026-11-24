@@ -1,4 +1,4 @@
-import { lstat, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,10 +9,10 @@ import {
   ScriptedProcessRunner,
 } from "./index.js";
 
-// why: lets one test make a listed file vanish before it is sized; every other call goes to the real `lstat`.
+// why: lets one test make a listed file vanish before it is sized, and see the options a delete is given; every other call goes to the real `lstat` and `rm`.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, lstat: vi.fn(actual.lstat) };
+  return { ...actual, lstat: vi.fn(actual.lstat), rm: vi.fn(actual.rm) };
 });
 
 // why: Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
@@ -374,6 +374,27 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
 
     expect(resolved.endsWith("/devices/ios")).toBe(true);
     await expect(filesystem.realpath(resolved)).resolves.toBe(resolved);
+  });
+});
+
+describe("NodeFilesystem.rm", () => {
+  it("retries a delete that hits a file another process still holds, and removes the folder once it is free (#1765)", async () => {
+    const filesystem = new NodeFilesystem();
+    const root = `${temporaryDirectory}/busy`;
+    await filesystem.mkdirp(`${root}/inner`);
+    await filesystem.writeFileAtomic(`${root}/inner/disk.img`, "x");
+
+    await filesystem.rm(root);
+
+    const options = vi.mocked(rm).mock.calls.at(-1)?.[1];
+    // why: a busy file (EBUSY on Windows) cannot be made on every host, so the retries Node is asked for are what a held file's release is waited on with: 10 tries at 100 ms cover the 0.5 to 0.7 s a killed emulator's qemu child holds its disks.
+    expect(options).toMatchObject({
+      force: true,
+      maxRetries: 10,
+      recursive: true,
+      retryDelay: 100,
+    });
+    await expect(filesystem.exists(root)).resolves.toBe(false);
   });
 });
 

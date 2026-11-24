@@ -119,6 +119,16 @@ class BusySeedFilesystem extends MemoryFilesystem {
   }
 }
 
+/** why: the order of a delete against an emulator's exit is what a failed make's cleanup depends on on Windows (#1765). */
+class RecordingRemovalFilesystem extends MemoryFilesystem {
+  readonly removed: string[] = [];
+
+  override async rm(path: string): Promise<void> {
+    this.removed.push(path);
+    await super.rm(path);
+  }
+}
+
 // why: a part of a decomposed module (ADR 0063) is tested through its own surface: these build
 // `Seeds` directly over a memory filesystem and a scripted runner, with the real parts it takes.
 describe("Seeds", () => {
@@ -339,6 +349,57 @@ describe("Seeds", () => {
         await expect(harness.seeds.listSources()).resolves.toEqual([]);
         expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
       }
+    });
+
+    it("waits for the seed's emulator to exit after killing it before removing the folder of a failed make (#1765)", async () => {
+      const stage = seedStages();
+      const filesystem = new RecordingRemovalFilesystem();
+      const harness = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          ...stage.firstBoot,
+          stage.sync,
+          stage.powerOff,
+          ...bootingAt(seedHome, ["-no-snapshot-load"], true),
+          { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+        ],
+        { filesystem },
+      );
+      let released!: () => void;
+      const exitHeld = new Promise<void>((resolve) => {
+        released = resolve;
+      });
+      let boots = 0;
+      let killed = false;
+      const spawn = harness.runner.spawn.bind(harness.runner);
+      harness.runner.spawn = (...call: Parameters<typeof spawn>) => {
+        const handle = spawn(...call);
+        if (!call[1].includes("-avd") || ++boots !== 2) return handle;
+        // why: a real emulator's exit lags its SIGKILL (the qemu child holds the disks); this one exits only when the test lets it.
+        return {
+          kill: (signal) => {
+            killed = true;
+            handle.kill(signal);
+          },
+          pid: handle.pid,
+          stderr: handle.stderr,
+          stdout: handle.stdout,
+          unref: () => handle.unref(),
+          wait: () => exitHeld.then(() => handle.wait()),
+        };
+      };
+
+      const provisioning = harness.seeds.provision(harness.spec);
+      const outcome = expect(provisioning).rejects.toThrow("was not saved");
+      await vi.waitFor(() => expect(killed, "the seed's emulator was killed").toBe(true));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(filesystem.removed, "the folder is not removed while the emulator runs").toEqual([]);
+
+      released();
+      await outcome;
+      expect(filesystem.removed).toEqual([seedHome]);
     });
 
     it("throws the make's own error, not the removal's, when a failed seed's folder cannot be removed (#1700)", async () => {

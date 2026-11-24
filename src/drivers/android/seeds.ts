@@ -398,8 +398,6 @@ export class Seeds {
       });
       if (!(await this.#exitedWithin(data, state, SEED_POWER_OFF_TIMEOUT_MS))) {
         await this.#killAndAwait(state.handle);
-        if (state.handle !== undefined)
-          await this.#emulator.waitForExit(state.handle, SIGKILL_REAP_TIMEOUT_MS);
       }
     }
     state.handle = undefined;
