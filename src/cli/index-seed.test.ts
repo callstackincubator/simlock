@@ -20,6 +20,14 @@ function seedClient(stages: readonly Stage[], result: SeedMakeOutput) {
   return { calls, client };
 }
 
+// why: the fake connection reads the credential as the real one does, so the agent-fallback notice stays off stderr.
+const signedIn =
+  (client: ReturnType<typeof fakeClient>) =>
+  async (resolveCredential: () => Promise<string | undefined>) => {
+    await resolveCredential();
+    return client;
+  };
+
 describe("CLI: simlock seed", () => {
   it.each([
     {
@@ -72,7 +80,10 @@ describe("CLI: simlock seed", () => {
 
       const code = await runCli(
         ["seed", result.platform, result.model, "--os", result.osVersion],
-        output.environmentWith({ connectAdmin: async () => client }),
+        output.environmentWith({
+          connectAdmin: signedIn(client),
+          readAdminTokenFile: async () => "admin-secret",
+        }),
       );
 
       expect(code).toBe(0);
@@ -96,7 +107,10 @@ describe("CLI: simlock seed", () => {
 
     const code = await runCli(
       ["seed", "android", "Pixel 8", "--image-tag", "google_apis", "--json"],
-      output.environmentWith({ connectAdmin: async () => client }),
+      output.environmentWith({
+        connectAdmin: signedIn(client),
+        readAdminTokenFile: async () => "admin-secret",
+      }),
     );
 
     expect(code).toBe(0);
