@@ -174,7 +174,7 @@ sequenceDiagram
 - An H.264 viewer that joins a still device sees its first picture up to 5 s
   later than today, where it got a capture of its own. An MJPEG viewer sees
   its next picture, with no wait.
-- On a still Android screen, scrcpy's encoder restarts every 4 s.
+- On a still Android screen, scrcpy's encoder restarts every 3 s.
 - While moving, key frames come more often at the same bitrate, so the
   picture is slightly softer.
 - A viewer that joins a phone whose screen went dark mid-stream (off its
