@@ -27,13 +27,13 @@ const admin = {
 const ios = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 // why: a real daemon with HTTP on, a real data folder, and a lease its token holds, so lease end reaches the lease-files participant through the same path production uses.
-async function rig() {
+async function rig(filesystem: NodeFilesystem = new NodeFilesystem()) {
   const clock = new FakeClock(1_000);
   const drivers = [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })];
   const started = await start({
     clock,
     drivers,
-    filesystem: new NodeFilesystem(),
+    filesystem,
     withHttp: true,
   });
   const { secret, token } = await started.daemon.dispatch(
@@ -65,6 +65,25 @@ async function rig() {
   const folders = () => readdir(root).catch(() => []);
   return { ...started, clock, drivers, folders, headers, lease, list, origin, put, release, root };
 }
+
+// why: the free disk of the host that runs the tests, below the worker's default disk-pressure threshold (10 GiB).
+class LowDiskFilesystem extends NodeFilesystem {
+  override diskFree(): Promise<number> {
+    return Promise.resolve(5 * 1024 ** 3);
+  }
+}
+
+describe("the lease-files rig", () => {
+  it("stores an upload when the host has less free disk than the worker's default disk-pressure threshold", async () => {
+    const r = await rig(new LowDiskFilesystem());
+    const id = await r.lease();
+
+    const answer = await r.put(id, "fixture.bin", "bytes");
+
+    expect(answer.status).toBe(201);
+    expect(await answer.json()).toEqual({ name: "fixture.bin", size: 5 });
+  });
+});
 
 describe("a lease's files at lease end", () => {
   it("are gone once the lease is released, expires or is killed, and a new lease starts empty", async () => {
