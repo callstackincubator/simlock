@@ -448,7 +448,7 @@ export class IosSimctlDriver implements Driver {
 
   async destroy(device: DriverDevice): Promise<void> {
     const data = iosDriverData(device);
-    await this.#simctl.shutdown(data.udid);
+    await this.#simctl.bestEffortShutdown(data.udid);
     await this.#simctl.run(["delete", data.udid], COMMAND_TIMEOUT_MS);
     if (this.#rootOptions === undefined)
       await this.#deviceHub.removePasteboardPreference(data.udid);
