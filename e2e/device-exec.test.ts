@@ -58,7 +58,10 @@ interface Fleet {
  * makes. Factored out so each test reads as the thing it is proving rather than as setup. */
 async function fleet(): Promise<Fleet> {
   const { env, port } = await withHttpDaemon((port) => ({
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    configOverrides: {
+      http: { enabled: true, host: "127.0.0.1", port },
+      diskPressure: { freeBytesThreshold: 0 },
+    },
   }));
   await env.driverScript.set({
     android: { knownModels: ["Pixel 8"], availableOsVersions: ["35"] },
