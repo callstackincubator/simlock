@@ -200,12 +200,13 @@ describe("AndroidDriver settleSeed", () => {
     await runToEnd(settling, world, 60_000, () => undefined);
   });
 
-  it("throws and leaves the quick seed when the save does not list, the emulator exits, the settle is aborted or the source is no ready quick seed", async () => {
+  it("throws and leaves the quick seed when the save does not list, the emulator exits or the settle is aborted", async () => {
     const controller = new AbortController();
     const stopping = new Error("the daemon is stopping");
     const scenarios = [
       {
-        error: /boot snapshot simlock_boot was not saved/,
+        verify: (error: unknown) =>
+          expect((error as Error).message).toMatch(/boot snapshot simlock_boot was not saved/),
         name: "a snapshot that is not listed",
         prepare: (world: World) => {
           world.host.snapshotListing = "";
@@ -215,14 +216,14 @@ describe("AndroidDriver settleSeed", () => {
         atStep: (nowMs: number, world: World) => {
           if (nowMs === 10_000) world.host.crash("emulator-5586");
         },
-        error: /exited/,
+        verify: (error: unknown) => expect((error as Error).message).toMatch(/exited/),
         name: "an emulator that exits early",
       },
       {
         atStep: (nowMs: number) => {
           if (nowMs === 100_000) controller.abort(stopping);
         },
-        error: stopping,
+        verify: (error: unknown) => expect(error).toBe(stopping),
         name: "an abort",
       },
     ];
@@ -236,11 +237,7 @@ describe("AndroidDriver settleSeed", () => {
       await runToEnd(outcome, world, 60_000, (nowMs) => scenario.atStep?.(nowMs, world));
 
       const error = await outcome;
-      if (scenario.error instanceof RegExp) {
-        expect((error as Error | undefined)?.message, scenario.name).toMatch(scenario.error);
-      } else {
-        expect(error, scenario.name).toBe(scenario.error);
-      }
+      scenario.verify(error);
       await expect(
         world.filesystem.exists(`${sources}/seed_three`),
         `${scenario.name}: the settle's folder is deleted at once`,
@@ -255,7 +252,9 @@ describe("AndroidDriver settleSeed", () => {
         `${scenario.name}: nothing runs`,
       ).toBeUndefined();
     }
+  });
 
+  it("refuses a source that is no ready quick seed", async () => {
     const refused = await quickSeedWorld();
     const first = refused.driver.settleSeed?.("seed_two", { signal: new AbortController().signal });
     if (first === undefined) throw new Error("the driver offers no settleSeed");

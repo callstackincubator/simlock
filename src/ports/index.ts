@@ -156,7 +156,6 @@ export {
   PowerShellDirectoryAccessReader,
 } from "./directory-access.js";
 export {
-  // fallow-ignore-next-line unused-export -- the drivers' idle checks (ADR 0090) test against it.
   FakeProcessTable,
   NodeProcessTable,
   type ProcessEntry,

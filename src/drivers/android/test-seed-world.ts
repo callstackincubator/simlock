@@ -15,10 +15,10 @@ import { androidFilesystem } from "./test-seed-harness.js";
 
 export const sources = `${avdDirectory}/sources`;
 export const imageProperties = `${ANDROID_SDK_ROOT}/system-images/android-34/google_apis/arm64-v8a/source.properties`;
-export const request = { model: "Pixel 5", osVersion: "34", platform: "android" } as const;
+const request = { model: "Pixel 5", osVersion: "34", platform: "android" } as const;
 
 /** why: the first copy out of a folder stops at its copy, as a copy of a multi-gigabyte AVD is still running while other calls arrive, until the test opens it. */
-export class HeldCopies extends MemoryFilesystem {
+class HeldCopies extends MemoryFilesystem {
   #holdFrom: string | undefined;
   #reached = (): void => undefined;
   #opened: Promise<void> = Promise.resolve();

@@ -87,7 +87,6 @@ function psSeconds(text: string | undefined): number | undefined {
   return Number(days) * 86_400 + Number(hours) * 3_600 + Number(minutes) * 60 + Number(seconds);
 }
 
-// fallow-ignore-next-line unused-export -- the drivers' idle checks (ADR 0090) test against it.
 export class FakeProcessTable implements ProcessTable {
   #entries: readonly ProcessEntry[] = [];
   #failure: Error | undefined;
