@@ -12,6 +12,7 @@ import { promiseState } from "../../test-support/promise-state.js";
 import { plantReadySeed, plantSource, memorySourceDatabase } from "./testing.js";
 import { IosSimctlDriver } from "./index.js";
 import {
+  deviceHubDisable,
   deviceHubEdit,
   deviceRoot,
   driverData,
@@ -187,7 +188,7 @@ describe("IosSimctlDriver settleSeed", () => {
           match: inSources("clone", seedUdid, "simlock-device-1", world.devicesDir),
           result: { code: 0, stderr: "", stdout: `${copyUdid}\n` },
         },
-        ...hub(`Set :DevicePreferences:${copyUdid}:pasteboardSyncEnabled false`),
+        ...(world.isDefault ? deviceHubDisable(copyUdid) : []),
         {
           match: inSet("boot", copyUdid),
           onSpawn: () => {
