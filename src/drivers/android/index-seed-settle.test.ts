@@ -31,8 +31,12 @@ async function quickSeedWorld() {
 }
 
 /** why: the booted copy's tree as a process table prints it: the emulator the driver spawned and its qemu, using one core for the first minute and none after. */
-function emulatorTree(rootPid: number, nowMs: number): readonly ProcessEntry[] {
-  const busySeconds = Math.min(nowMs, 60_000) / 1_000;
+function emulatorTree(
+  rootPid: number,
+  nowMs: number,
+  busyUntilMs: number,
+): readonly ProcessEntry[] {
+  const busySeconds = Math.min(nowMs, busyUntilMs) / 1_000;
   return [
     { command: "emulator -avd simlock", cpuSeconds: 0.5, pid: rootPid, ppid: 1 },
     { command: "qemu-system", cpuSeconds: busySeconds, pid: 9_000, ppid: rootPid },
@@ -47,12 +51,14 @@ async function runToEnd(
     readonly host: EmulatorHost;
     readonly table: FakeProcessTable;
   },
+  busyUntilMs: number,
   atStep: (nowMs: number) => void,
 ): Promise<void> {
   const state = promiseState(settle);
   for (let step = 0; step < 600 && state.state === "pending"; step += 1) {
     const rootPid = world.host.pidAnswering("emulator-5586");
-    if (rootPid !== undefined) world.table.set(emulatorTree(rootPid, world.clock.now()));
+    if (rootPid !== undefined)
+      world.table.set(emulatorTree(rootPid, world.clock.now(), busyUntilMs));
     atStep(world.clock.now());
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (state.state === "pending") world.clock.advance(2_000);
@@ -64,21 +70,51 @@ async function runToEnd(
 const cases = [
   {
     announcedAtMs: 10_000,
+    busyUntilMs: 60_000,
+    reason: "idle",
     name: "idle at 180 s, the listener fired at 10 s",
     network: undefined,
     settledAfterMs: 180_000,
   },
   {
     announcedAtMs: undefined,
+    busyUntilMs: 60_000,
+    reason: "idle",
     name: "idle at 180 s, the listener never fired but dumpsys connectivity shows a default network",
     network: 100,
     settledAfterMs: 180_000,
   },
   {
     announcedAtMs: 300_000,
+    busyUntilMs: 60_000,
+    reason: "idle",
     name: "idle at 180 s with no default network yet: the save waits for the listener",
     network: undefined,
     settledAfterMs: 300_000,
+  },
+  {
+    announcedAtMs: undefined,
+    busyUntilMs: 60_000,
+    reason: "cap",
+    name: "idle at 180 s but no default network by the cap: saved at 900 s",
+    network: undefined,
+    settledAfterMs: 900_000,
+  },
+  {
+    announcedAtMs: undefined,
+    busyUntilMs: 850_000,
+    reason: "cap",
+    name: "idle only at the cap: saved at 900 s",
+    network: 100,
+    settledAfterMs: 900_000,
+  },
+  {
+    announcedAtMs: undefined,
+    busyUntilMs: Number.POSITIVE_INFINITY,
+    reason: "cap",
+    name: "still busy at the cap: saved at 900 s",
+    network: 100,
+    settledAfterMs: 900_000,
   },
 ] as const;
 
@@ -100,14 +136,14 @@ describe("AndroidDriver settleSeed", () => {
         signal: new AbortController().signal,
       });
       if (settle === undefined) throw new Error("the driver offers no settleSeed");
-      await runToEnd(settle, world, (nowMs) => {
+      await runToEnd(settle, world, scenario.busyUntilMs, (nowMs) => {
         if (nowMs !== scenario.announcedAtMs) return;
         savedBeforeAnnouncement = saved();
         world.host.announceDefaultNetwork();
       });
 
       await expect(settle, scenario.name).resolves.toMatchObject({
-        reason: "idle",
+        reason: scenario.reason,
         settledAfterMs: scenario.settledAfterMs,
         sourceId: "seed_three",
       });
