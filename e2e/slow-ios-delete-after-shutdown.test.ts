@@ -6,24 +6,24 @@ import { describe, expect, it } from "vitest";
 
 import { emptyDeviceSet, setDevices, simctlInSet } from "./helpers/ios-device-set.js";
 
+// why: a runtime only runs the device types it lists, so the pair comes from the runtime's own list.
 async function runtimeAndType(deviceSet: string): Promise<{ runtime: string; type: string }> {
   const runtimes = JSON.parse(
     (await simctlInSet(deviceSet, ["list", "runtimes", "-j"])).stdout,
   ) as {
-    runtimes: { identifier: string; isAvailable: boolean; platform?: string }[];
+    runtimes: {
+      identifier: string;
+      isAvailable: boolean;
+      platform?: string;
+      supportedDeviceTypes?: { identifier: string; productFamily: string }[];
+    }[];
   };
-  const types = JSON.parse(
-    (await simctlInSet(deviceSet, ["list", "devicetypes", "-j"])).stdout,
-  ) as {
-    devicetypes: { identifier: string; name: string }[];
-  };
-  const runtime = runtimes.runtimes.filter(
-    (candidate) => candidate.isAvailable && (candidate.platform ?? "iOS") === "iOS",
-  )[0];
-  const type = types.devicetypes.find((candidate) => candidate.name.startsWith("iPhone"));
-  expect(runtime, "this lane needs an installed iOS runtime").toBeDefined();
-  expect(type, "this lane needs an iPhone device type").toBeDefined();
-  return { runtime: runtime!.identifier, type: type!.identifier };
+  for (const candidate of runtimes.runtimes) {
+    if (!candidate.isAvailable || (candidate.platform ?? "iOS") !== "iOS") continue;
+    const type = candidate.supportedDeviceTypes?.find((t) => t.productFamily === "iPhone");
+    if (type) return { runtime: candidate.identifier, type: type.identifier };
+  }
+  throw new Error("this lane needs an installed iOS runtime that supports an iPhone type");
 }
 
 describe.skipIf(process.platform !== "darwin")(
@@ -50,6 +50,10 @@ describe.skipIf(process.platform !== "darwin")(
           await new Promise((resolve) => setTimeout(resolve, 200));
           shutdown.kill("SIGKILL");
           await killed;
+
+          // why: a shutdown that already finished would pass without the unfinished case.
+          const afterKill = (await setDevices(deviceSet)).find((d) => d.udid === udid);
+          expect(afterKill?.state, "the shutdown must still be unfinished").not.toBe("Shutdown");
 
           await simctlInSet(deviceSet, ["delete", udid]);
 
