@@ -179,8 +179,9 @@ export class Seeds {
       await this.#deleteLogFolder(data.udid);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
     } catch (error: unknown) {
-      if (cloneUdid !== undefined && cloneUdid !== "") {
-        await this.#deleteSeedSimulator(cloneUdid).catch(() => undefined);
+      const clone = cloneUdid;
+      if (clone !== undefined && clone !== "") {
+        await this.#cleanUp(clone, "baseline save", () => this.#deleteSeedSimulator(clone));
       }
       this.#sources.deleteRow(sourceId);
       throw error;
@@ -246,7 +247,7 @@ export class Seeds {
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
-      await this.#simctl.invoke(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      await this.#cleanUp(udid, "provision", () => this.#deleteIn(udid, undefined));
       throw error;
     }
     await this.#slimBoot.copyOverrides(seed.udid, udid);
@@ -420,7 +421,9 @@ export class Seeds {
     throwaway: string | undefined,
     keepRow: boolean,
   ): Promise<boolean> {
-    if (seedClone !== undefined) await this.#deleteSeedSimulator(seedClone).catch(() => undefined);
+    if (seedClone !== undefined) {
+      await this.#cleanUp(seedClone, "seed make", () => this.#deleteSeedSimulator(seedClone));
+    }
     if (throwaway === undefined) return keepRow;
     return !(await this.#deleteThrowaway(throwaway, true).then(
       () => true,
@@ -461,6 +464,17 @@ export class Seeds {
   async #destroySeed(seed: ReadySeed): Promise<void> {
     await this.#deleteSeedInTurn(seed.udid);
     this.#sources.deleteRow(seed.sourceId);
+  }
+
+  /** why: a clone a failed step could not delete has no record, so the log line naming its UDID is all that is left of it; the step's own error is still what the caller gets. */
+  async #cleanUp(udid: string, step: string, remove: () => Promise<void>): Promise<void> {
+    try {
+      await remove();
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not delete simulator ${udid} left by a failed ${step}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   async #deleteSeedSimulator(udid: string): Promise<void> {
