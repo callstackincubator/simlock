@@ -5,7 +5,7 @@ import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/
 import { promiseState } from "../../test-support/promise-state.js";
 import { IosSimctlDriver, type WindowFailedFact } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
-import { deviceHubEdit } from "./test-slim.js";
+import { deviceHubDisable } from "./test-slim.js";
 
 const instanceId = "instance-1";
 const overridesRoot = "/private/var/tmp";
@@ -80,7 +80,8 @@ describe("IosSimctlDriver simulator window", () => {
   const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
   const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
   const open = (...args: string[]) => ({ command: "open", args: ["-g", ...args] });
-  const clipboard = deviceHubEdit(`Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`);
+  const clipboardSteps = deviceHubDisable(udid);
+  const clipboard = clipboardSteps.map((step) => step.match);
   const renameCall = xcrun("rename", udid, driverData.name);
   const bootCalls = [xcrun("boot", udid), xcrun("bootstatus", udid, "-b"), xcrun("listapps", udid)];
   const deviceHub = open(
@@ -133,14 +134,16 @@ describe("IosSimctlDriver simulator window", () => {
     "shows a simulator in a window without taking focus when ios.simulator.headless is false: $name",
     async (c) => {
       const renamed = (c.options?.purpose ?? "prepare") === "prepare" ? [renameCall] : [];
-      const runner = new ScriptedProcessRunner(
-        [...renamed, ...clipboard, ...c.expected].map((match) => ({
+      const runner = new ScriptedProcessRunner([
+        ...renamed.map((match) => ({ match })),
+        ...clipboardSteps,
+        ...c.expected.map((match) => ({
           match,
           ...(match === deviceHub && c.deviceHubResult !== undefined
             ? { result: c.deviceHubResult }
             : {}),
         })),
-      );
+      ]);
       const driver = await IosSimctlDriver.create({
         clock: new FakeClock(),
         database: await memorySourceDatabase(),
@@ -212,7 +215,9 @@ describe("IosSimctlDriver simulator window", () => {
     "makes the simulator ready and reports the failure when opening its window fails: $name",
     async (c) => {
       const runner = new ScriptedProcessRunner([
-        ...[renameCall, ...clipboard, ...bootCalls].map((match) => ({ match })),
+        { match: renameCall },
+        ...clipboardSteps,
+        ...bootCalls.map((match) => ({ match })),
         ...c.script,
       ]);
       const clock = new FakeClock();
