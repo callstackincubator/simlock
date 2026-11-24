@@ -370,6 +370,8 @@ jobs:
               const kind = issue.labels
                 .map((l) => /^(bug|refactor|task):/.exec(typeof l === "string" ? l : l.name)?.[1])
                 .find(Boolean);
+              // why: coding rule 3 lets a bug/<n> PR close more bugs when the maintainer bundles them.
+              if (kind === "bug" && /^bug\/\d+$/.test(head)) continue;
               if (kind !== undefined && head !== `${kind}/${n}`) {
                 core.setFailed(`#${n} is a ${kind}, so the PR that closes it comes from ${kind}/${n}, not ${head} (coding rule 3).`);
                 return;
@@ -385,9 +387,15 @@ jobs:
               core.setFailed(`Branch ${pr.head.ref} must close #${expected}: add "Closes #${expected}" to the PR body.`);
               return;
             }
-            const others = closes.filter((n) => n !== expected);
+            const others = [];
+            for (const n of closes.filter((n) => n !== expected)) {
+              if (m[1] !== "bug") { others.push(n); continue; }
+              const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: n });
+              const bug = issue.labels.some((l) => (typeof l === "string" ? l : l.name).startsWith("bug:"));
+              if (!bug) others.push(n);
+            }
             if (others.length) {
-              core.setFailed(`Branch ${pr.head.ref} closes #${expected} but also ${others.map((n) => `#${n}`).join(", ")}; one branch closes one issue.`);
+              core.setFailed(`Branch ${pr.head.ref} closes #${expected} but also ${others.map((n) => `#${n}`).join(", ")}; one branch closes one issue, or a bug/<n> branch more bugs (coding rule 3).`);
             }
 
   pr-body:
