@@ -153,37 +153,43 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     });
   });
 
-  it("daemon start's wait for health to leave starting ends past the daemon's startup-read cap with DAEMON_STARTUP_FAILED, leaving the daemon running", async () => {
-    const daemon = new HelloThenDeathIpc("starting");
-    const clock = new FakeClock(0);
-    const launcher = new FakeDaemonLauncher(() => daemon.startListening());
-    const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, clock, launcher });
-    let settled = false;
-    const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
-      (code) => {
-        settled = true;
-        return code;
-      },
-    );
-    for (let tick = 0; tick < 3_000 && !settled; tick += 1) {
-      clock.advance(50);
-      await settle();
-    }
-    expect(settled, `daemon start still waiting at ${String(clock.now())}ms`).toBe(true);
-    expect(
-      clock.now(),
-      "the wait outlasts the daemon's own startup read by 30 s",
-    ).toBeGreaterThanOrEqual(STARTUP_READ_LIMIT_MS + 30_000);
-    expect(await run).toBe(1);
-    expect(daemon.frameTypes, "the CLI sends the daemon no stop").not.toContain("daemon.stop");
-    expect(daemon.deaths, "the daemon is not stopped by the CLI").toBe(0);
-    expect(JSON.parse(output.stderr)).toMatchObject({
-      error: {
-        code: "DAEMON_STARTUP_FAILED",
-        message: expect.stringContaining("still starting"),
-      },
-    });
-  });
+  // why: each of its 2,000-odd ticks waits one real `setTimeout(0)`, about 13 ms on a Windows PC and
+  // under 1 ms elsewhere, so the whole run takes 26 s there.
+  it(
+    "daemon start's wait for health to leave starting ends past the daemon's startup-read cap with DAEMON_STARTUP_FAILED, leaving the daemon running",
+    { timeout: 60_000 },
+    async () => {
+      const daemon = new HelloThenDeathIpc("starting");
+      const clock = new FakeClock(0);
+      const launcher = new FakeDaemonLauncher(() => daemon.startListening());
+      const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, clock, launcher });
+      let settled = false;
+      const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+        (code) => {
+          settled = true;
+          return code;
+        },
+      );
+      for (let tick = 0; tick < 3_000 && !settled; tick += 1) {
+        clock.advance(50);
+        await settle();
+      }
+      expect(settled, `daemon start still waiting at ${String(clock.now())}ms`).toBe(true);
+      expect(
+        clock.now(),
+        "the wait outlasts the daemon's own startup read by 30 s",
+      ).toBeGreaterThanOrEqual(STARTUP_READ_LIMIT_MS + 30_000);
+      expect(await run).toBe(1);
+      expect(daemon.frameTypes, "the CLI sends the daemon no stop").not.toContain("daemon.stop");
+      expect(daemon.deaths, "the daemon is not stopped by the CLI").toBe(0);
+      expect(JSON.parse(output.stderr)).toMatchObject({
+        error: {
+          code: "DAEMON_STARTUP_FAILED",
+          message: expect.stringContaining("still starting"),
+        },
+      });
+    },
+  );
 
   it("bounds the startup status probe by the original launch deadline and closes its client", async () => {
     const daemon = new HelloThenDeathIpc("silent");
