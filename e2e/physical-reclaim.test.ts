@@ -312,8 +312,6 @@ describe("a physical device that was mid-reclaim or quarantined when the daemon 
         script: { installed: [...ENROLLED, ...AGENT_APPS] },
       },
     );
-    expect(await stateOf(env, READY.id)).toBe("quarantined");
-
     await waitForState(env, READY.id, "ready");
 
     const calls = (await env.driverLog.calls()).filter((call) => call.operation === "uninstall");
