@@ -604,6 +604,10 @@ export class AndroidDriver implements Driver {
     return this.#seeds.destroySource(sourceId);
   }
 
+  async ensureSeed(spec: VirtualSpec): ReturnType<NonNullable<Driver["ensureSeed"]>> {
+    return this.#seeds.ensureSeed(spec);
+  }
+
   async provision(
     spec: VirtualSpec,
     options: { readonly source?: string } = {},

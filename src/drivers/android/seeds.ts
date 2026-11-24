@@ -630,6 +630,15 @@ export class Seeds {
     }
   }
 
+  async ensureSeed(_spec: VirtualSpec): Promise<{
+    sourceId: string;
+    settled: boolean;
+    leases: number;
+    sizeBytes?: number;
+  }> {
+    return { leases: 0, settled: false, sourceId: "" };
+  }
+
   async destroySource(sourceId: string): Promise<void> {
     const row = this.#sources.findRow(sourceId);
     if (row !== undefined) {
