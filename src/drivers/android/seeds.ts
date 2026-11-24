@@ -13,6 +13,8 @@ import type {
   Clock,
   Filesystem,
   IdGenerator,
+  Logger,
+  ProcessHandle,
   ProcessRunner,
   SqliteDatabase,
 } from "../../ports/index.js";
@@ -95,6 +97,7 @@ export interface SeedsOptions {
   readonly emulator: Emulator;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
+  readonly logger?: Logger | undefined;
   readonly ownership: Ownership;
   readonly processRunner: ProcessRunner;
   readonly systemImages: SystemImages;
@@ -116,6 +119,7 @@ export class Seeds {
   readonly #emulator: Emulator;
   readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
+  readonly #logger: Logger | undefined;
   readonly #ownership: Ownership;
   readonly #processRunner: ProcessRunner;
   readonly #sources: AndroidSourceTable;
@@ -143,6 +147,7 @@ export class Seeds {
     this.#emulator = options.emulator;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
+    this.#logger = options.logger;
     this.#ownership = options.ownership;
     this.#processRunner = options.processRunner;
     this.#sources = new AndroidSourceTable(options.database);
@@ -327,8 +332,7 @@ export class Seeds {
           ...(sizeBytes === undefined ? {} : { sizeBytes }),
         };
       } catch (error: unknown) {
-        await this.#filesystem.rm(folder);
-        this.#sources.remove(sourceId);
+        if (await this.#removeAfterFailure(folder)) this.#sources.remove(sourceId);
         throw error;
       } finally {
         this.#making.delete(sourceId);
@@ -394,9 +398,7 @@ export class Seeds {
         timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
       if (!(await this.#exitedWithin(data, state, SEED_POWER_OFF_TIMEOUT_MS))) {
-        state.handle?.kill("SIGKILL");
-        if (state.handle !== undefined)
-          await this.#emulator.waitForExit(state.handle, SIGKILL_REAP_TIMEOUT_MS);
+        await this.#killAndAwait(state.handle);
       }
     }
     state.handle = undefined;
@@ -603,8 +605,7 @@ export class Seeds {
       this.#sources.markReady(sourceId, configHash, sizeBytes);
       return { configHash, folder, sourceId };
     } catch (error: unknown) {
-      await this.#filesystem.rm(folder);
-      this.#sources.remove(sourceId);
+      if (await this.#removeAfterFailure(folder)) this.#sources.remove(sourceId);
       throw error;
     } finally {
       this.#making.delete(sourceId);
@@ -625,9 +626,30 @@ export class Seeds {
       await this.#awaitSeedPowerOff(sourceId, booted, state);
       await this.#bootToSnapshot(sourceId, "second boot", booted, state);
     } finally {
-      state.handle?.kill("SIGKILL");
+      await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
+  }
+
+  /** why: the operation's own error is the one the caller must see; a folder that cannot be removed (on Windows a killed emulator's qemu child still holds its disks) stays, as its `making` row for the next sweep to clear. */
+  async #removeAfterFailure(folder: string): Promise<boolean> {
+    try {
+      await this.#filesystem.rm(folder);
+      return true;
+    } catch (removal: unknown) {
+      this.#logger?.warn("android folder was not removed after a failed operation", {
+        error: String(removal),
+        folder,
+      });
+      return false;
+    }
+  }
+
+  /** why: on Windows the seed's folder cannot be removed while the emulator still holds its disks, so a kill is followed by the wait for the emulator to exit. */
+  async #killAndAwait(handle: ProcessHandle | undefined): Promise<void> {
+    if (handle === undefined) return;
+    handle.kill("SIGKILL");
+    await this.#emulator.waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
   }
 
   /** why: a source that already powered off cleanly is booted once cold, its boot snapshot saved, and shut down; it is never booted again. */
@@ -637,7 +659,7 @@ export class Seeds {
     try {
       await this.#bootToSnapshot(sourceId, "snapshot boot", booted, state);
     } finally {
-      state.handle?.kill("SIGKILL");
+      await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
   }
@@ -751,7 +773,7 @@ export class Seeds {
         timeoutMs: SEED_COPY_TIMEOUT_MS,
       });
     } catch (error: unknown) {
-      await this.#filesystem.rm(toHome);
+      await this.#removeAfterFailure(toHome);
       throw new DriverCrashError(
         `${failure}: ${error instanceof Error ? error.message : String(error)}`,
       );

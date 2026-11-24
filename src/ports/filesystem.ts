@@ -353,7 +353,8 @@ export class NodeFilesystem implements Filesystem {
   }
 
   async rm(path: string): Promise<void> {
-    await rm(path, { force: true, recursive: true });
+    // why: on Windows a killed emulator's qemu child holds its disk files for about a second after the kill, and `rm` fails with EBUSY until it exits (#1765).
+    await rm(path, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
   }
 
   async stat(path: string): Promise<FileStat> {
