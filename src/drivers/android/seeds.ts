@@ -676,6 +676,7 @@ export class Seeds {
     });
     const avdHome = join(this.#deviceRoot, deviceId);
     await this.#copySeed(seed, avdHome);
+    this.#sources.addLease(seed.sourceId);
     const driverData: AndroidDriverData = {
       avdHome,
       avdName: SEED_AVD_NAME,

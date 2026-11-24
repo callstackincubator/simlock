@@ -4,6 +4,7 @@ import { MemoryFilesystem, NodeSqliteOpener } from "../../ports/index.js";
 import {
   androidFilesystem,
   androidSourceDataOwner,
+  avdDirectory,
   createDriver,
   EmulatorHost,
   memoryAndroidSourceDatabase,
@@ -42,6 +43,11 @@ describe("AndroidDriver seed lease count", () => {
     await driver.provision(spec);
     expect(await leases(), "a second plain lease").toMatchObject({ leases: 2 });
 
+    // why: a saved device is typed by its own AVD's config, which the fake `avdmanager` writes only as far as RAM.
+    await filesystem.writeFileAtomic(
+      `${avdDirectory}/simlock_one/simlock.avd/config.ini`,
+      "hw.device.name=pixel_5\nimage.sysdir.1=system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize=2048\n",
+    );
     const ready = await driver.makeReady(first);
     const baseline = await driver.saveSource({ ...ready, physical: false as const });
     await driver.provision(spec, { source: baseline.sourceId });

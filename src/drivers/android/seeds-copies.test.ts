@@ -379,7 +379,7 @@ describe("Seeds", () => {
           id: "seed_two",
           imageTag: "google_apis",
           kind: "seed",
-          leases: 0,
+          leases: 1,
           model: "Pixel 5",
           osVersion: "34",
           settled: false,
