@@ -161,8 +161,9 @@ describe.skipIf(process.platform !== "darwin")(
             }
           }
         } finally {
-          await env.cli(["nuke", "--yes"], { timeout: 5 * MINUTE }).catch(() => undefined);
-          await env.stop();
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 5 * MINUTE })
+            .catch(() => undefined);
         }
       },
     );
