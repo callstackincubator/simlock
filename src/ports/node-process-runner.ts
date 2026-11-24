@@ -14,6 +14,7 @@ import { childLaunch, headlessLaunch, type ChildLaunch } from "./windows-command
 import {
   InputStreamFailedError,
   ProcessSpawnError,
+  type BoundedRunOptions,
   type LineEnd,
   type NodeProcessRunnerOptions,
   type ProcessHandle,
@@ -68,39 +69,34 @@ export class NodeProcessRunner implements ProcessRunner {
   async run(
     command: string,
     args: readonly string[],
-    options: ProcessRunOptions = {},
+    options: BoundedRunOptions,
   ): Promise<ProcessResult> {
     const process = this.#launch(command, args, options);
     let killTimeout: NodeJS.Timeout | undefined;
-    const timeout =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            try {
-              process.kill("SIGTERM", "timeout");
-            } catch {
-              // why: The child may have exited between the timer firing and the kill.
-            }
-            // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
-            // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
-            // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
-            // itself the moment `process.wait()` actually settles, so a child that does exit
-            // promptly after SIGTERM never sees the follow-up signal.
-            killTimeout = setTimeout(() => {
-              try {
-                process.kill("SIGKILL");
-              } catch {
-                // why: The child may have exited between the timer firing and the kill.
-              }
-            }, this.sigkillGraceMs);
-          }, options.timeoutMs);
+    const timeout = setTimeout(() => {
+      try {
+        process.kill("SIGTERM", "timeout");
+      } catch {
+        // why: The child may have exited between the timer firing and the kill.
+      }
+      // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
+      // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
+      // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
+      // itself the moment `process.wait()` actually settles, so a child that does exit
+      // promptly after SIGTERM never sees the follow-up signal.
+      killTimeout = setTimeout(() => {
+        try {
+          process.kill("SIGKILL");
+        } catch {
+          // why: The child may have exited between the timer firing and the kill.
+        }
+      }, this.sigkillGraceMs);
+    }, options.timeoutMs);
 
     try {
       return await process.wait();
     } finally {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       if (killTimeout !== undefined) {
         clearTimeout(killTimeout);
       }

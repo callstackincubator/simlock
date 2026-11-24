@@ -14,6 +14,8 @@ Does: one interface per external API, each with a Node adapter and a fake.
   (`TcpProbe.send` knows nothing of adb).
 - Every wait an adapter makes is bounded (architecture rule 11). One is not: `copyTree`'s
   fallback that runs no child process, where `timeoutMs` bounds nothing.
+- `ProcessRunner.run` requires `timeoutMs` on every call (`BoundedRunOptions`); there is no
+  default. `spawn` takes none: its caller holds the handle and ends the child.
 
 Lazy loading:
 

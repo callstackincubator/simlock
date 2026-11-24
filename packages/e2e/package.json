@@ -2,7 +2,7 @@
   "name": "@simlock/e2e",
   "version": "0.8.0",
   "description": "A device provider that leases iOS simulators and Android emulators from a simlock farm for the e2e test runner.",
-  "homepage": "https://github.com/callstackincubator/simlock",
+  "homepage": "https://incubator.callstack.com/simlock/docs/using-devices/ci",
   "bugs": {
     "url": "https://github.com/callstackincubator/simlock/issues"
   },

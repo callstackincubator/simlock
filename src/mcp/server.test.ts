@@ -185,6 +185,30 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("the lease tool lists label and sends the label a call names, and none when it names none", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
+      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("label");
+
+      const ask = { model: "iPhone 17 Pro", platform: "ios" } as const;
+      expect(
+        (await call(mcpClient, "lease_simulator", { ...ask, label: "feature-x" })).isError,
+      ).not.toBe(true);
+      const sent = client.calls.filter((entry) => entry.method === "requestLease");
+      expect(sent[0]?.input).toMatchObject({ label: "feature-x" });
+      await call(mcpClient, "release_simulator", { leaseId: "lease-1" });
+      expect((await call(mcpClient, "lease_simulator", ask)).isError).not.toBe(true);
+      const again = client.calls.filter((entry) => entry.method === "requestLease");
+      expect(again[1]?.input).not.toHaveProperty("label");
+    } finally {
+      await close();
+    }
+  });
+
   it("surfaces a daemon FORBIDDEN as-is when releasing a lease this session does not own -- no client-side pre-check", async () => {
     const client = new FakeSimlockClient();
     client.releaseLeaseImpl = () =>

@@ -318,7 +318,7 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
   });
   const leaseLines = leases.map(
     (lease) =>
-      `Lease ${esc(lease.id)}: ${esc(lease.requesterId)}${lease.workerId === undefined ? "" : ` on ${esc(lease.workerId)}`}${lease.runId === undefined ? "" : `, run ${esc(lease.runId)}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
+      `Lease ${esc(lease.id)}: ${esc(lease.requesterId)}${lease.workerId === undefined ? "" : ` on ${esc(lease.workerId)}`}${lease.runId === undefined ? "" : `, run ${esc(lease.runId)}`}${lease.label === undefined ? "" : `, label ${esc(lease.label)}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
     ...daemonLines(daemon, cliVersion),

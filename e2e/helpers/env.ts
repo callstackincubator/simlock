@@ -151,6 +151,8 @@ export interface WithDaemonOptions {
    * another set than the rows kept here name), leaves it out.
    */
   readonly keepSeeds?: boolean;
+  /** why: a daemon test hook (a `SIMLOCK_TEST_*` variable) reaches the daemon and the CLI through the env they start with. */
+  readonly extraEnv?: Readonly<Record<string, string>>;
 }
 
 export interface TestEnv {
@@ -228,6 +230,7 @@ function processEnv(
         }
       : {}),
     ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),
+    ...options.extraEnv,
   };
 }
 

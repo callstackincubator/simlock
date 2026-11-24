@@ -1,6 +1,8 @@
 import { basename, join } from "node:path";
 
 import {
+  BootTimeoutError,
+  DiskSpaceGuard,
   DriverCrashError,
   type DriverDevice,
   type DriverSource,
@@ -16,7 +18,12 @@ import type {
   ProcessRunner,
   SqliteDatabase,
 } from "../../ports/index.js";
-import { ADB_DEVICES_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
+import {
+  ADB_DEVICES_TIMEOUT_MS,
+  AVDMANAGER_TIMEOUT_MS,
+  SEED_AVD_NAME,
+  type AdbTools,
+} from "./adb-tools.js";
 import { assertLibraryProfileWritable, iniValues, type AvdConfig } from "./avd-config.js";
 import type { Catalog } from "./catalog.js";
 import type { ConsolePorts } from "./console-ports.js";
@@ -38,7 +45,7 @@ export const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
 const STALE_REASON_MAX_LENGTH = 300;
-// why: avdmanager create has no limit of its own, so this is the ceiling of one seed make: two boots plus the steps between them, which are bounded at 600 s in all.
+// why: the ceiling of one seed make: two boots plus avdmanager create and the steps between the boots, which are bounded at 600 s in all.
 const SEED_MAKE_MIN_CEILING_MS = 900_000;
 const SEED_MAKE_STEPS_MS = 600_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
@@ -103,6 +110,7 @@ export class Seeds {
   readonly #avdConfig: AvdConfig;
   readonly #avdmanager: string;
   readonly #makeCeilingMs: number;
+  readonly #bootTimeoutMs: number;
   readonly #catalog: Catalog;
   readonly #clock: Clock;
   readonly #consolePorts: ConsolePorts;
@@ -118,6 +126,8 @@ export class Seeds {
   readonly #systemImages: SystemImages;
   /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
   readonly #making = new Set<string>();
+  /** why: copies in flight each hold their full size here, so two copies cannot both see room that fits only one. */
+  readonly #copySpace = new DiskSpaceGuard();
 
   constructor(options: SeedsOptions) {
     this.#adb = options.adb;
@@ -128,6 +138,7 @@ export class Seeds {
       SEED_MAKE_MIN_CEILING_MS,
       2 * options.bootTimeoutMs + SEED_MAKE_STEPS_MS,
     );
+    this.#bootTimeoutMs = options.bootTimeoutMs;
     this.#catalog = options.catalog;
     this.#clock = options.clock;
     this.#consolePorts = options.consolePorts;
@@ -295,6 +306,7 @@ export class Seeds {
           kind.avdHome,
           folder,
           `copying Android device ${device.deviceId} to source ${sourceId} failed`,
+          "copy an Android device into a baseline",
         );
         const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
         await this.#avdConfig.applyCores(avdFolder);
@@ -500,6 +512,7 @@ export class Seeds {
       row.folder,
       avdHome,
       `copying Android source ${sourceId} to ${basename(avdHome)} failed`,
+      "copy an Android baseline",
     );
     const driverData: AndroidDriverData = {
       avdHome,
@@ -562,7 +575,10 @@ export class Seeds {
       await this.#adbTools.runOrThrow(
         this.#avdmanager,
         ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
-        { env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder } },
+        {
+          env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder },
+          timeoutMs: AVDMANAGER_TIMEOUT_MS,
+        },
       );
       if (profile.kind === "properties") {
         await this.#avdConfig.applyHardwareProperties(avdFolder, profile.hardwareProperties);
@@ -612,7 +628,7 @@ export class Seeds {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+      state.handle = await this.#startSeedEmulator(sourceId, "first boot", booted);
       await this.#adbTools.runOrThrow(this.#adb, ["-s", booted.serial, "shell", "sync"], {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
@@ -620,7 +636,7 @@ export class Seeds {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
       await this.#awaitSeedPowerOff(sourceId, booted, state);
-      await this.#bootToSnapshot(sourceId, booted, state);
+      await this.#bootToSnapshot(sourceId, "second boot", booted, state);
     } finally {
       await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
@@ -639,7 +655,7 @@ export class Seeds {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      await this.#bootToSnapshot(sourceId, booted, state);
+      await this.#bootToSnapshot(sourceId, "snapshot boot", booted, state);
     } finally {
       await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
@@ -650,12 +666,30 @@ export class Seeds {
     return { handle: undefined, imageIdentity: seed.imageIdentity ?? "", port: undefined };
   }
 
+  /** why: every seed AVD is named `simlock`, so a boot timeout names the seed and the boot, which the emulator's own error cannot. */
+  async #startSeedEmulator(
+    sourceId: string,
+    boot: string,
+    booted: AndroidDriverData,
+  ): ReturnType<Emulator["start"]> {
+    try {
+      return await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+    } catch (error: unknown) {
+      if (!(error instanceof BootTimeoutError)) throw error;
+      throw new BootTimeoutError(
+        sourceId,
+        `the ${boot} did not finish within ${this.#bootTimeoutMs} ms`,
+      );
+    }
+  }
+
   async #bootToSnapshot(
     sourceId: string,
+    boot: string,
     booted: AndroidDriverData,
     state: DeviceState,
   ): Promise<void> {
-    state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+    state.handle = await this.#startSeedEmulator(sourceId, boot, booted);
     await this.#saveBootSnapshot(sourceId, booted);
     await this.#emulator.shutdown(booted, state.handle);
     state.handle = undefined;
@@ -717,22 +751,32 @@ export class Seeds {
       seed.folder,
       avdHome,
       `copying Android seed ${seed.sourceId} to ${basename(avdHome)} failed`,
+      "copy an Android seed",
     );
   }
 
-  async #copyAvd(fromHome: string, toHome: string, failure: string): Promise<void> {
+  async #copyAvd(fromHome: string, toHome: string, failure: string, action: string): Promise<void> {
+    const avdFolder = join(fromHome, `${SEED_AVD_NAME}.avd`);
+    // why: a clone (APFS, reflink) costs less than the folder's size, but the check cannot tell one from a full copy, so it asks for the whole size on every filesystem (#1750); a folder that cannot be measured reserves nothing.
+    const release = await this.#copySpace.reserve(
+      this.#filesystem,
+      "android",
+      await this.#filesystem.directorySize(avdFolder).catch(() => 0),
+      this.#deviceRoot,
+      action,
+    );
     try {
       await this.#filesystem.mkdirp(toHome, { mode: 0o700 });
-      await this.#filesystem.copyTree(
-        join(fromHome, `${SEED_AVD_NAME}.avd`),
-        join(toHome, `${SEED_AVD_NAME}.avd`),
-        { timeoutMs: SEED_COPY_TIMEOUT_MS },
-      );
+      await this.#filesystem.copyTree(avdFolder, join(toHome, `${SEED_AVD_NAME}.avd`), {
+        timeoutMs: SEED_COPY_TIMEOUT_MS,
+      });
     } catch (error: unknown) {
       await this.#filesystem.rm(toHome);
       throw new DriverCrashError(
         `${failure}: ${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      release();
     }
     const ini = await this.#filesystem.readFile(join(fromHome, `${SEED_AVD_NAME}.ini`));
     await this.#filesystem.writeFileAtomic(

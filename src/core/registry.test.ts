@@ -257,6 +257,113 @@ describe("Registry", () => {
     }
   });
 
+  it("a state.db at registry version 8 migrates to 9, loads its leases with no label, and then keeps the label of a labelled lease across a reopen", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
+    try {
+      const clock = new FakeClock(1_000);
+      let next = 0;
+      const deviceData = new Map<Platform, DeviceDataTable>([
+        ["android", fakeDeviceDataTable],
+        ["ios", fakeDeviceDataTable],
+      ]);
+      const openState = (owner: typeof registryOwner) =>
+        openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [owner, fakeDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+      const loadRegistry = (state: StateDatabase) =>
+        Registry.load({
+          clock,
+          deviceData,
+          eventBus: new EventBus(clock),
+          idGenerator: { generate: () => String((next += 1)) },
+          state,
+        });
+      const old = await openState({
+        ...registryOwner,
+        migrations: registryOwner.migrations.slice(0, 8),
+        version: 8,
+      });
+      old.database
+        .prepare(
+          "INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version, class, created_at) VALUES ('dev_old', 'android', 1, 'R58Y61A60HN', 'leased', 'Pixel 8', '15', 'phone', 5)",
+        )
+        .run();
+      old.database
+        .prepare(
+          "INSERT INTO leases (id, device_id, requester_id, owner_id, granted_at, ttl_ms, ttl_deadline, last_renewed_at, id_chosen_by_requester, run_id) VALUES ('lse_old', 'dev_old', 'r', 'o', 5, 10, 15, 5, 0, '7-1')",
+        )
+        .run();
+      old.close();
+
+      const migrated = await openState(registryOwner);
+      const registry = await loadRegistry(migrated);
+      expect(registry.snapshot.leases.map((lease) => lease.id)).toEqual(["lse_old"]);
+      expect(registry.snapshot.leases[0]).not.toHaveProperty("label");
+      expect(registry.snapshot.leases[0]).toMatchObject({ runId: "7-1" });
+
+      const timing = {
+        estimatedBootMs: 2,
+        estimatedProvisionMs: 1,
+        estimatedReadyMs: 4,
+        estimatedReclaimMs: 3,
+      };
+      const lease = async (name: string, label: string | undefined) => {
+        const device = await registry.registerDevice({
+          driverData: { fakeDeviceId: name },
+          driverDeviceId: name,
+          provisionDuration: 5,
+          spec,
+        });
+        await registry.transitionDevice(device.id, "ready", {
+          event: "device.ready",
+          payload: { bootDuration: 7, deviceId: device.id },
+        });
+        const labelOption = label === undefined ? {} : { label };
+        await registry.createLeaseRequest({
+          id: `req_${name}`,
+          ownerId: "o",
+          request: { platform: "ios" },
+          requesterId: name,
+          ...labelOption,
+        });
+        return registry.createLease({
+          deviceId: device.id,
+          ownerId: "o",
+          request: { environment: {}, id: `req_${name}`, timing },
+          requesterId: name,
+          ttlDeadline: 2_000,
+          ttlMs: 1_000,
+          ...labelOption,
+        });
+      };
+      const labelled = await lease("labelled", "feature-x");
+      const plain = await lease("plain", undefined);
+      migrated.close();
+
+      const reopened = await loadRegistry(await openState(registryOwner));
+      const byId = (id: string) =>
+        reopened.snapshot.leases.find((candidate) => candidate.id === id);
+      expect(byId(labelled.id)).toMatchObject({ label: "feature-x" });
+      expect(byId(plain.id)).not.toHaveProperty("label");
+      expect(byId("lse_old")).not.toHaveProperty("label");
+      const stored = (id: string) =>
+        reopened.leaseRequests().find((record) => record.id === `req_${id}`);
+      expect(stored("labelled")).toMatchObject({
+        label: "feature-x",
+        grant: { lease: { label: "feature-x" } },
+      });
+      expect(stored("plain")?.grant?.lease).not.toHaveProperty("label");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("a registry restarted on the same state.db returns every record as committed, optional fields set and absent", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
     try {

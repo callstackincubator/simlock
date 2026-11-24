@@ -1,45 +1,47 @@
 ---
-title: CLI reference
-description: Every simlock command and subcommand, with its synopsis, every flag and its default, the global flags, the environment variables and the output format.
+title: CLI
+description: Every simlock command and subcommand, with its synopsis, flags and defaults, the global flags, environment variables, output and exit codes.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-This page lists what each command accepts. For when and why to use a command, follow the guide link in its row. For what an error code means and what to do about it, see the [errors reference](/simlock/docs/reference/errors).
+What each command accepts. The **Guide** column links the task page that uses it. Error codes: [Errors](/simlock/docs/reference/errors).
 
 ## Commands at a glance
 
 | Command | What it does | Guide |
 | --- | --- | --- |
-| [`simlock lease`](#simlock-lease) | Lease a device and hold it until the command exits | [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) |
-| [`simlock release`](#simlock-release) | Give a lease back | [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) |
-| [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
-| [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
-| [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | — |
-| [`simlock files`](#simlock-files) | Move files to and from your lease's folder on its worker, from another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#lease-files) |
-| [`simlock tunnel`](#simlock-tunnel) | Connect ports between your machine and a leased Android device or iOS simulator on another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#tunnels) |
-| [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
-| [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
-| [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
-| [`simlock setup`](#simlock-setup) | Install the Simlock skill into Claude Code and Codex | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
-| [`simlock status`](#simlock-status) | Show the daemon, its devices and its leases | [Monitoring](/simlock/docs/worker/monitoring) |
-| [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [Monitoring](/simlock/docs/worker/monitoring) |
-| [`simlock events`](#simlock-events) | Print what happened: leases, devices, workers, installs | [Events reference](/simlock/docs/reference/events) |
-| [`simlock stats`](#simlock-stats) | Show usage figures for a time window | [Monitoring](/simlock/docs/worker/monitoring) |
-| [`simlock update`](#simlock-update) | Install the newest Simlock (or a named version) and restart the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
-| [`simlock whoami`](#simlock-whoami) | Show who the daemon thinks you are | [Access control](/simlock/docs/gateway/access-control) |
-| [`simlock daemon`](#simlock-daemon) | Start, stop and inspect the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
-| [`simlock config`](#simlock-config) | Read and change the daemon's configuration | [Configuration](/simlock/docs/worker/configuration) |
-| [`simlock doctor`](#simlock-doctor) | Check the machine and fix Simlock's records | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
-| [`simlock cleanup`](#simlock-cleanup) | Run the cleanup rules now | [Cleanup](/simlock/docs/worker/cleanup) |
-| [`simlock nuke`](#simlock-nuke) | End every lease and stop every device at once | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
-| [`simlock warm`](#simlock-warm) | Forget a kind the warm pool learned from a lease | [Capacity and the warm pool](/simlock/docs/worker/capacity#forget-a-learned-kind) |
-| [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Runtimes and images](/simlock/docs/worker/runtimes-and-images) |
-| [`simlock baseline`](#simlock-baseline) | Save a held device as a named baseline, list baselines, remove one | [Baselines](/simlock/docs/worker/baselines) |
-| [`simlock device`](#simlock-device) | Enrol or forget a physical device | [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices) |
-| [`simlock token`](#simlock-token) | Create, list and revoke access tokens | [Access control](/simlock/docs/gateway/access-control) |
-| [`simlock worker`](#simlock-worker) | List and manage a gateway's workers | [Managing workers](/simlock/docs/gateway/managing-workers) |
-| [`simlock alerts`](#simlock-alerts) | Send a sample message to an alert destination | [Alerts](/simlock/docs/gateway/alerts) |
+| [`simlock lease`](#simlock-lease) | Lease a device and hold it until the command exits | [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device) |
+| [`simlock release`](#simlock-release) | Give a lease back | [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device) |
+| [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands) |
+| [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands) |
+| [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands) |
+| [`simlock files`](#simlock-files) | Move files to and from your lease's folder on its worker, from another machine | [Copy files to and from a device](/simlock/docs/using-devices/copy-files) |
+| [`simlock tunnel`](#simlock-tunnel) | Connect ports between your machine and a leased Android device or iOS simulator on another machine | [Use your own tools through a tunnel](/simlock/docs/using-devices/tunnels) |
+| [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Lease a specific model or OS](/simlock/docs/using-devices/lease-a-specific-device) |
+| [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Give your agent the MCP server](/simlock/docs/getting-started/mcp-server) |
+| [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent) |
+| [`simlock setup`](#simlock-setup) | Install the Simlock skill into Claude Code and Codex | [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent) |
+| [`simlock status`](#simlock-status) | Show the daemon, its devices and its leases | [See what the worker is doing](/simlock/docs/worker/monitoring) |
+| [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [See what the worker is doing](/simlock/docs/worker/monitoring) |
+| [`simlock events`](#simlock-events) | Print what happened: leases, devices, workers, installs | [See what the worker is doing](/simlock/docs/worker/monitoring) |
+| [`simlock stats`](#simlock-stats) | Show usage figures for a time window | [See what the worker is doing](/simlock/docs/worker/monitoring) |
+| [`simlock update`](#simlock-update) | Install the newest Simlock (or a named version) and restart the daemon | [Start, stop and update the daemon](/simlock/docs/worker/daemon) |
+| [`simlock whoami`](#simlock-whoami) | Show who the daemon thinks you are | [Tokens and roles](/simlock/docs/concepts/tokens-and-roles) |
+| [`simlock daemon`](#simlock-daemon) | Start, stop and inspect the daemon | [Start, stop and update the daemon](/simlock/docs/worker/daemon) |
+| [`simlock config`](#simlock-config) | Read and change the daemon's configuration | [Change a setting](/simlock/docs/worker/change-a-setting) |
+| [`simlock doctor`](#simlock-doctor) | Check the machine and fix Simlock's records | [A worker misbehaves](/simlock/docs/troubleshooting/worker) |
+| [`simlock cleanup`](#simlock-cleanup) | Run the cleanup rules now | [Free disk space](/simlock/docs/worker/free-disk) |
+| [`simlock nuke`](#simlock-nuke) | End every lease and stop every device at once | [Free disk space and reset a machine](/simlock/docs/worker/free-disk) |
+| [`simlock warm`](#simlock-warm) | Forget a kind the warm pool learned from a lease | [Make leases start faster](/simlock/docs/worker/warm-pool) |
+| [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images) |
+| [`simlock baseline`](#simlock-baseline) | Save a held device as a named baseline, list baselines, remove one | [Save a prepared device](/simlock/docs/worker/save-a-prepared-device) |
+| [`simlock device`](#simlock-device) | Enrol or forget a physical device | [Enrol a phone](/simlock/docs/worker/enrol-phones) |
+| [`simlock token`](#simlock-token) | Create, list and revoke access tokens | [Give agents and people access](/simlock/docs/gateway/access) |
+| [`simlock worker`](#simlock-worker) | List and manage a gateway's workers | [Maintain workers](/simlock/docs/gateway/maintain-workers) |
+| [`simlock alerts`](#simlock-alerts) | Send a sample message to an alert destination | [Send alerts](/simlock/docs/gateway/alerts) |
 
 `simlock --version` (or `-v`) prints the installed Simlock version and exits 0, without contacting a daemon.
 
@@ -111,7 +113,7 @@ A command that needs the daemon starts it when nothing is listening. The CLI che
 
 ## simlock lease
 
-Lease a device. The command waits for a device, prints the grant, then stays running: it renews the lease and releases it when the command ends. See [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) and [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+Lease a device. The command waits for a device, prints the grant, then stays running: it renews the lease and releases it when the command ends. See [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device) and [Lease a specific model or OS](/simlock/docs/using-devices/lease-a-specific-device).
 
 ```text
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
@@ -119,7 +121,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
-              [--run <id>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
+              [--run <id>] [--label <text>] [--meta <key=value>]... [--export-env] [--bind-pid <pid>]
 ```
 
 | Flag | Meaning | Default |
@@ -129,13 +131,14 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--class <class>` | Any model of this class: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`. | `phone` when `--device` is not given |
 | `--os <version or range>` | An exact OS version (`18.4`, `35`), or a range such as `>=18 <26` or `18 - 26`. A range never downloads. | The newest runtime installed for the platform |
 | `--mode <slim or full>` | The device mode. `full` is guaranteed; `slim` is best effort and falls back to `full`. | The serving worker's default mode (`full` unless configured) |
-| `--except <category,...>` | iOS only: keep these slim categories running on a slim simulator, such as `store,other`. One to 16 names, each lowercase letters, digits and `-`, starting with a letter, none twice. Needs a slim lease: a `--mode full`, a worker whose default mode is `full` with no `--mode`, a full `--baseline`, `--physical` and `--platform android` are each a `BAD_REQUEST`. The grant's `device.except` lists them; on a runtime older than iOS 18.5 you get a `full` device with no `except`. See [Keep a category running](/simlock/docs/using-devices/choosing-a-device#keep-a-category-running). | None: the worker's whole slim set is turned off |
+| `--except <category,...>` | iOS only: keep these slim categories running on a slim simulator, such as `store,other`. One to 16 names, each lowercase letters, digits and `-`, starting with a letter, none twice. Needs a slim lease: a `--mode full`, a worker whose default mode is `full` with no `--mode`, a full `--baseline`, `--physical` and `--platform android` are each a `BAD_REQUEST`. The grant's `device.except` lists them; on a runtime older than iOS 18.5 you get a `full` device with no `except`. See [Slim iOS simulators](/simlock/docs/concepts/slim-simulators). | None: the worker's whole slim set is turned off |
 | `--image-tag <tag>` | Android only: the system image type, such as `google_apis_playstore`. Never downloads. | Simlock picks an installed image |
-| `--baseline <name>` | Start from a saved baseline: the device is a new copy of it, with the operator's apps, files and settings. The `SIMLOCK_BASELINE` environment variable sets it when the flag is absent; an empty value sends nothing. Cannot be combined with `--class` or `--physical`. See [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline). | None: a plain device |
+| `--baseline <name>` | Start from a saved baseline: the device is a new copy of it, with the operator's apps, files and settings. The `SIMLOCK_BASELINE` environment variable sets it when the flag is absent; an empty value sends nothing. Cannot be combined with `--class` or `--physical`. See [Lease a prepared device](/simlock/docs/using-devices/lease-a-prepared-device). | None: a plain device |
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
 | `--run <id>` | The run id the lease carries: a name a CI job gives every lease it takes, 1 to 128 letters, digits, `.`, `_` or `-`, such as `123-1`. A gateway passes it to its worker and its admission command. `simlock status` shows it on the lease line. A bad value exits 2, before the command connects. The `SIMLOCK_RUN` environment variable sets it when the flag is absent; an empty value is unset. | `SIMLOCK_RUN`, else on GitHub Actions `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` (`-1` when the attempt is unset), else none |
+| `--label <text>` | A name for the lease, such as `feature-x`: 1 to 64 characters, none of them a control character. It is display-only: nothing routes or limits by it. `simlock status` shows it on the lease line after the run id, and every lease read answers it as `label`. An iOS simulator booted for the lease takes the label as its name before it boots, so with `drivers.ios.deviceSet: "default"` and `ios.simulator.headless: false` DeviceHub and Simulator.app show it; the next boot of that simulator for any other lease names it back. A warm simulator granted without a boot keeps its name. On Android and physical devices the label shows on the lease only. A bad value is refused by the daemon with `BAD_REQUEST` (exit 2). | None |
 | `--meta <key=value>` | Repeatable. Context for the gateway's admission command, such as `--meta project=checkout-app --meta role=ci`. The key is the text before the first `=`; the value is everything after it. The same key twice keeps the last. At most 16 keys; a key is 1 to 64 characters, a value 0 to 256, and keys and values together at most 2048. A gateway passes it to its admission command only: it is stored nowhere, in no event, and a worker ignores it. A flag with no `=`, or a bound broken, exits 2. | None |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
@@ -168,7 +171,7 @@ Prints the renewed lease as one JSON line.
 
 ## simlock release
 
-Give a lease back. The command returns as soon as the lease ends; the device is cleaned in the background. See [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
+Give a lease back. The command returns as soon as the lease ends; the device is cleaned in the background. See [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device).
 
 ```text
 simlock release <lease-id>
@@ -187,7 +190,7 @@ Releasing a lease taken under a different [requester identity](#requester-identi
 
 ## simlock simctl
 
-Run `xcrun simctl` against Simlock's iOS device set. Under `drivers.ios.deviceSet` `simlock` (the default), Simlock's simulators live in their own set, so a bare `xcrun simctl` does not see them; under `default` this runs plain `xcrun simctl` in Xcode's set. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
+Run `xcrun simctl` against Simlock's iOS device set. Under `drivers.ios.deviceSet` `simlock` (the default), Simlock's simulators live in their own set, so a bare `xcrun simctl` does not see them; under `default` this runs plain `xcrun simctl` in Xcode's set. See [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands).
 
 ```text
 simlock simctl [--lease <lease-id>] [--stdin] <simctl-args...>
@@ -199,11 +202,17 @@ simlock simctl [--lease <lease-id>] [--stdin] <simctl-args...>
 | `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command, at most 8,388,608 characters; more is refused with `BAD_REQUEST`. Must come before the simctl arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<simctl-args...>` | Passed to `xcrun simctl` as written. | — |
 
-Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back. Stdin is sent only with `--stdin`; without it the command gets empty input and a pipe that never closes does not hold it up. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `USAGE` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back. On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to the tool, and `simlock` waits for the tool to finish and exits with its code, so `simctl io recordVideo` finishes its file before the command returns (`recordVideo` only finalizes on `SIGINT`, so `simlock` passes it a `SIGTERM` as `SIGINT`). In a terminal, Ctrl-C reaches the tool directly, so `simlock` does not pass `SIGINT` on a second time: it waits for the tool and exits with its code. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead.
+- Every other argument goes to `simctl`, `--help` included. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr.
+- On a worker it runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, and its output is streamed back.
+- Stdin is sent only with `--stdin`. Without it the command gets empty input, so a pipe that never closes does not hold it up.
+- Through a gateway the worker puts the lease's UDID into a command that leaves the device out: write `simlock --gateway simctl install ./MyApp.app`.
+- Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `USAGE` (exit 2). Give devices back with `simlock release` and `simlock cleanup`.
+- On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to the tool, and `simlock` waits for it and exits with its code. So `simctl io recordVideo` finishes its file before the command returns (`recordVideo` finalizes only on `SIGINT`, so a `SIGTERM` is passed to it as `SIGINT`).
+- In a terminal, Ctrl-C reaches the tool directly, so `simlock` does not pass `SIGINT` on a second time. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead.
 
 ## simlock adb
 
-Run `adb` against Simlock's adb server, which is where Simlock's emulators are. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
+Run `adb` against Simlock's adb server, which is where Simlock's emulators are. See [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands).
 
 ```text
 simlock adb [--lease <lease-id>] [--stdin] <adb-args...>
@@ -215,7 +224,11 @@ simlock adb [--lease <lease-id>] [--stdin] <adb-args...>
 | `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command, at most 8,388,608 characters; more is refused with `BAD_REQUEST`. Must come before the adb arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<adb-args...>` | Passed to `adb` as written. | — |
 
-The command exits with `adb`'s own exit code. Through a gateway, stdin is sent only with `--stdin`; without it the command gets empty input. Simlock refuses `adb kill-server`, `adb disconnect`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `USAGE` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. On a worker, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to `adb`, and `simlock` waits for it to finish and exits with its code. In a terminal, Ctrl-C reaches `adb` directly, so `simlock` does not pass `SIGINT` on a second time: it waits for `adb` and exits with its code. A `SIGINT` sent to `simlock` alone while it runs in a terminal is therefore not passed on; send `SIGTERM` instead. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
+- The command exits with `adb`'s own exit code.
+- Through a gateway, stdin is sent only with `--stdin`; without it the command gets empty input.
+- Simlock refuses `adb kill-server`, `adb disconnect`, flags that move adb to another server, and (through a gateway) `adb shell` with no command, with `USAGE` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand on a worker.
+- Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
+- Signals work as for [`simlock simctl`](#simlock-simctl): on a worker `SIGINT` and `SIGTERM` are passed on to `adb`, and in a terminal Ctrl-C reaches `adb` directly, so send `SIGTERM` to stop it from outside.
 
 ## simlock rotate
 
@@ -249,11 +262,11 @@ simlock files rm <name> [--lease <lease-id>]
 | `-o <file>` | Write the downloaded file here, whole or not at all | The file's bytes go to stdout |
 | `--lease <lease-id>` | The lease whose folder to use | The only lease held by your requester id |
 
-`put` prints `{"lease","name","size"}` as one JSON line; `list` prints the route's JSON, `{"files":[{"name","size"}]}`; `rm` prints nothing. A transfer has no size limit and no total time limit: it ends only when no byte has moved for 60 seconds, with `REMOTE_UNREACHABLE` (exit 1). The worker's limits and refusals keep their codes: `FILE_TOO_LARGE`, `LEASE_FILES_FULL`, `FILE_BUSY`, `UPLOAD_STALLED`, `UNKNOWN_LEASE` and `UNKNOWN_FILE` exit 1, `INSUFFICIENT_DISK_SPACE` exits 12. A missing file or a folder is a usage error (exit 2): a folder cannot be uploaded yet. After `simlock files put app-debug.apk`, `simlock adb install app-debug.apk` finds the file, because every command runs with the lease's folder as its working folder. A `simlock simctl` or `simlock adb` that fails after naming a path that exists on this machine prints one `notice` line on stderr saying the command ran on the worker; for a file it names the `simlock files put` command that uploads it, for a folder it says a folder cannot be uploaded yet.
+`put` prints `{"lease","name","size"}` as one JSON line; `list` prints the route's JSON, `{"files":[{"name","size"}]}`; `rm` prints nothing. A transfer has no size limit and no total time limit: it ends only when no byte has moved for 60 seconds, with `REMOTE_UNREACHABLE` (exit 1). The worker's limits and refusals keep their codes: `FILE_TOO_LARGE`, `LEASE_FILES_FULL`, `FILE_BUSY`, `UPLOAD_STALLED`, `UNKNOWN_LEASE` and `UNKNOWN_FILE` exit 1, `INSUFFICIENT_DISK_SPACE` exits 12. A missing file or a folder is a usage error (exit 2): upload files one at a time. After `simlock files put app-debug.apk`, `simlock adb install app-debug.apk` finds the file, because every command runs with the lease's folder as its working folder. A `simlock simctl` or `simlock adb` that fails after naming a path that exists on this machine prints one `notice` line on stderr saying the command ran on the worker; for a file it names the `simlock files put` command that uploads it, for a folder it says a folder cannot be uploaded yet.
 
 ## simlock tunnel
 
-While the command runs, connect ports between your machine and a leased Android device that sits on another machine: `reverse` lets the device reach a server on your machine (such as Metro), `forward` lets your machine reach a port on the device. It talks to the worker or gateway over HTTP, so it needs no daemon on your machine.
+While the command runs, connect ports between your machine and a leased Android emulator or phone, or iOS simulator, that sits on another machine (a physical iPhone takes no tunnel): `reverse` lets the device reach a server on your machine (such as Metro), `forward` lets your machine reach a port on the device. It talks to the worker or gateway over HTTP, so it needs no daemon on your machine.
 
 ```text
 simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<caller-port>] [reverse|forward ...] [--lease <lease-id>] [--url <url>]
@@ -268,11 +281,41 @@ simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<ca
 | `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. A `--url` that is not, is a usage error. | `SIMLOCK_URL` |
 | `--token <secret>` | The bearer token, 1 to 4096 characters. | `SIMLOCK_TOKEN` |
 
-It prints one line per tunnel, `reverse device:<device-port> -> localhost:<caller-port> (lease <lease-id>)` `forward localhost:<caller-port> -> device:<device-port> (lease <lease-id>)` or `emulator localhost:<caller-port> -> emulator:adb (lease <lease-id>)`, and runs until you press Ctrl-C or the process gets SIGTERM, which close the tunnels and exit 0. A reverse tunnel whose caller port has nothing listening writes a warning to stderr at most once every 10 seconds and stays open. A connection to a forward tunnel waits until the worker confirms the tunnels, and closes if the worker refuses; one to a device port with nothing listening is closed, and on an iOS simulator so is one to a port no process of the lease's simulator listens on. A forward connection the worker closes writes `warning: forward <device-port>: <reason>` to stderr, at most once every 10 seconds per tunnel, and the tunnel stays open. For an emulator tunnel, `adb: connected to 127.0.0.1:<caller-port>` follows the line. The command finds `adb` on your `PATH`, then in `$ANDROID_HOME`, `$ANDROID_SDK_ROOT` and the default SDK folder (`~/Library/Android/sdk`; on Windows `%LOCALAPPDATA%\Android\Sdk`). When it cannot connect, it writes a warning to stderr, the tunnel stays open, and you run `adb connect 127.0.0.1:<caller-port>` yourself: `adb was not found`, `adb answered: <adb's first line>` (a Play Store image answers `failed to authenticate` and shows `unauthorized`; lease a `google_apis` image), or `adb did not answer in 10 s`. `adb disconnect` gets 2 seconds when the command ends and never changes its exit code. An emulator connection the worker closes writes `warning: emulator adb: <reason>` to stderr, at most once every 10 seconds, and the tunnel stays open. A forward or emulator caller port already in use exits 1 with `TUNNEL_CALLER_PORT_IN_USE` before anything is set up on the device. Every caller port is closed when the command ends. A missing `--url`, token or lease, an invalid port, a forward or emulator caller port below 1024, an emulator port other than `adb`, `emulator adb` named twice, or a repeated caller port is a usage error (exit 2). A refusal exits 1 with its code, for example `TUNNEL_BAD_PORT` for a device port below 1024. A lost connection, 45 seconds with no message or ping, or 90 seconds with no answer to the request exits 1 with `TUNNEL_DISCONNECTED`; the lease ending exits 14 with `TUNNEL_LEASE_ENDED`.
+It prints one line per tunnel, and runs until Ctrl-C or SIGTERM, which close the tunnels and exit 0:
+
+```text
+reverse device:8081 -> localhost:8081 (lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35)
+forward localhost:9222 -> device:9222 (lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35)
+emulator localhost:5585 -> emulator:adb (lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35)
+```
+
+While it runs:
+
+- A reverse tunnel whose caller port has nothing listening writes a warning to stderr, at most once every 10 seconds, and stays open.
+- A connection to a forward tunnel waits until the worker confirms the tunnels, and closes if the worker refuses. One to a device port with nothing listening is closed; on an iOS simulator, so is one to a port no process of the lease's simulator listens on.
+- A forward connection the worker closes writes `warning: forward <device-port>: <reason>` to stderr, at most once every 10 seconds per tunnel. The tunnel stays open.
+- Every caller port is closed when the command ends.
+
+For `emulator adb`:
+
+- `adb: connected to 127.0.0.1:<caller-port>` follows the tunnel's line.
+- The command finds `adb` on your `PATH`, then in `$ANDROID_HOME`, `$ANDROID_SDK_ROOT` and the default SDK folder (`~/Library/Android/sdk`; on Windows `%LOCALAPPDATA%\Android\Sdk`).
+- When it cannot connect, it writes a warning to stderr, the tunnel stays open, and you run `adb connect 127.0.0.1:<caller-port>` yourself. The warning is `adb was not found`, `adb answered: <adb's first line>` (a Play Store image answers `failed to authenticate` and shows `unauthorized`: lease a `google_apis` image), or `adb did not answer in 10 s`.
+- `adb disconnect` gets 2 seconds when the command ends and never changes its exit code.
+- An emulator connection the worker closes writes `warning: emulator adb: <reason>` to stderr, at most once every 10 seconds. The tunnel stays open.
+
+| Exit | When |
+| --- | --- |
+| 0 | Ctrl-C or SIGTERM. |
+| 1, `TUNNEL_CALLER_PORT_IN_USE` | A forward or emulator caller port is in use, before anything is set up on the device. |
+| 1, the refusal's code | The worker refused, such as `TUNNEL_BAD_PORT` for a device port below 1024. |
+| 1, `TUNNEL_DISCONNECTED` | The connection was lost: 45 seconds with no message or ping, or 90 seconds with no answer to the request. |
+| 2 | A missing `--url`, token or lease, an invalid port, a forward or emulator caller port below 1024, an emulator port other than `adb`, `emulator adb` named twice, or a repeated caller port. |
+| 14, `TUNNEL_LEASE_ENDED` | The lease ended. |
 
 ## simlock catalog
 
-Show what you can lease on each platform: the installed OS versions and which one is the default, the models grouped by class with each class's default model, and, on Android, the installed system images. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+Show what you can lease on each platform: the installed OS versions and which one is the default, the models grouped by class with each class's default model, and, on Android, the installed system images. See [Lease a specific model or OS](/simlock/docs/using-devices/lease-a-specific-device).
 
 ```text
 simlock catalog [--platform <ios|android>] [--json]
@@ -285,7 +328,7 @@ simlock catalog [--platform <ios|android>] [--json]
 
 ## simlock mcp
 
-Start Simlock's MCP server on stdin and stdout, for an agent to call. It offers the tools `list_devices`, `lease_simulator`, `release_simulator`, `lease_status`, `run_on_device` and `rotate_device`. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+Start Simlock's MCP server on stdin and stdout, for an agent to call. Its tools: [MCP tools](/simlock/docs/reference/mcp-tools). Setup: [Give your agent the MCP server](/simlock/docs/getting-started/mcp-server).
 
 ```text
 simlock mcp
@@ -295,7 +338,7 @@ Takes no flags other than the [global flags](#global-flags). Stdout carries only
 
 ## simlock instructions
 
-Print the rules for using Simlock as one Markdown text: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it into your agent's instructions. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+Print the rules for using Simlock as one Markdown text: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it into your agent's instructions. See [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent).
 
 ```text
 simlock instructions [--json]
@@ -309,7 +352,7 @@ The text is the same on every machine, and the command never contacts a daemon, 
 
 ## simlock setup
 
-Install a small `simlock` skill into Claude Code and Codex, so every later agent session there knows what Simlock is, checks its setup with `simlock whoami` and reads the rules with `simlock instructions`. The skill holds no rules itself, so it stays right after you update Simlock. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+Install a small `simlock` skill into Claude Code and Codex, so every later agent session there knows what Simlock is, checks its setup with `simlock whoami` and reads the rules with `simlock instructions`. The skill holds no rules itself, so it stays right after you update Simlock. See [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent).
 
 ```text
 simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]
@@ -354,7 +397,7 @@ With `--json`, `machine` is `{"summary": "ios ok, android missing: android-sdk",
 
 ## simlock status
 
-Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. With an agent token, the leases and waiting requests are only your own. See [Monitoring](/simlock/docs/worker/monitoring).
+Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. With an agent token, the leases and waiting requests are only your own. See [See what the worker is doing](/simlock/docs/worker/monitoring).
 
 The `CLI:` line below `Simlock:` is the version of the `simlock` command you ran, so an upgrade that has not restarted the daemon shows as two different versions. `--json` carries it as `cliVersion`.
 
@@ -363,6 +406,8 @@ When the daemon has seen a newer Simlock version on npm, the `Simlock:` line say
 While an update runs, the line below `CLI:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
 
 A lease that carries a run id (`simlock lease --run`) shows it on its line: `Lease <id>: <requester> on <worker>, run <run id> since …`. `--json` carries it as the lease's `runId`.
+
+A lease that carries a label (`simlock lease --label`) shows it after the run id: `Lease <id>: <requester> on <worker>, run <run id>, label <label> since …`. `--json` carries it as the lease's `label`.
 
 ```text
 simlock status [--json]
@@ -374,7 +419,7 @@ simlock status [--json]
 
 ## simlock list
 
-List one kind of record as JSON. Needs the admin role. See [Monitoring](/simlock/docs/worker/monitoring).
+List one kind of record as JSON. Needs the admin role. See [See what the worker is doing](/simlock/docs/worker/monitoring).
 
 ```text
 simlock list [--devices|--leases|--rules|--requests]
@@ -406,7 +451,7 @@ simlock events [--follow] [--since <duration>]
 
 ## simlock stats
 
-Show usage figures for a time window: requests, wait and hold times, provisioning and boot times, capacity and incidents, split by platform, worker and requester. Needs the admin role. See [Monitoring](/simlock/docs/worker/monitoring).
+Show usage figures for a time window: requests, wait and hold times, provisioning and boot times, capacity and incidents, split by platform, worker and requester. Needs the admin role. See [See what the worker is doing](/simlock/docs/worker/monitoring).
 
 ```text
 simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]
@@ -424,7 +469,7 @@ The CSV holds at most the newest requests of the window up to a fixed limit; whe
 
 ## simlock whoami
 
-Show the identity your connection has: principal, name, role and how it was resolved. See [Access control](/simlock/docs/gateway/access-control).
+Show the identity your connection has: principal, name, role (`admin` or `agent`) and how it was resolved (`token`, `proxy`, `socket` or `uplink`). See [Tokens and roles](/simlock/docs/concepts/tokens-and-roles).
 
 ```text
 simlock whoami [--json]
@@ -436,7 +481,7 @@ simlock whoami [--json]
 
 ## simlock daemon
 
-Start, stop and inspect the daemon. See [Running the daemon](/simlock/docs/worker/running-the-daemon).
+Start, stop and inspect the daemon. See [Start, stop and update the daemon](/simlock/docs/worker/daemon).
 
 ```text
 simlock daemon start [--json]
@@ -453,7 +498,7 @@ simlock daemon uninstall [--json]
 | `stop` | Ask the daemon to stop, wait until it has exited (up to 300 s, then `SERVICE_FAILED`) and print `Daemon stopping`. With no daemon running it prints `Daemon not running` and exits 0. Before it exits the daemon shuts down every idle device it booted; leased devices keep running. Needs the admin role. Never starts a daemon. |
 | `status` | Print the daemon's status, or `Daemon stopped` when none is running, then one `Service:` line: `not installed`, `installed (launchd, <name>)`, `not loaded (launchd, <name>): commands start the daemon without it` or `broken (launchd, <name>): <path> is gone; run simlock daemon install` (`<path>, <path> are gone` for two). The manager is `launchd` on macOS, `systemd` on Linux and `task-scheduler` on Windows, where not loaded means the user has no desktop session or the task is disabled. Never starts a daemon. Exits 1 when a daemon answers but refuses the connection, with no `Service:` line. |
 | `logs` | Print the last 100 lines of `daemon.log`. |
-| `install` | macOS, Linux and Windows only. A `config.json` the CLI refuses is a usage error (exit 2) before anything else, so no service is added and a running daemon keeps running. Otherwise stop a running daemon (leases are kept), add a LaunchAgent (macOS), a systemd user unit at `$XDG_CONFIG_HOME/systemd/user/<name>.service`, else `~/.config/systemd/user/<name>.service` (Linux) or a per-user logon task in Task Scheduler (Windows) for this role and start the daemon through it. Prints `Service installed: <name> (launchd)`, `(systemd)` or `(task-scheduler)`, `Daemon running` and a hint: `To start after a reboot, turn on automatic login for this user.` on macOS and Windows, `To start after a reboot without logging in, run: loginctl enable-linger <user>` on Linux. Without linger the last logout stops the user's systemd, the daemon and its emulators with it. On another platform it is a usage error: `daemon install is supported on macOS, Linux and Windows only`. |
+| `install` | macOS, Linux and Windows only. `simlock --gateway daemon install` installs the gateway's own service. A `config.json` the CLI refuses is a usage error (exit 2) before anything else, so no service is added and a running daemon keeps running. Otherwise stop a running daemon (leases are kept), add a LaunchAgent (macOS), a systemd user unit at `$XDG_CONFIG_HOME/systemd/user/<name>.service`, else `~/.config/systemd/user/<name>.service` (Linux) or a per-user logon task in Task Scheduler (Windows) for this role and start the daemon through it. Prints `Service installed: <name> (launchd)`, `(systemd)` or `(task-scheduler)`, `Daemon running` and a hint: `To start after a reboot, turn on automatic login for this user.` on macOS and Windows, `To start after a reboot without logging in, run: loginctl enable-linger <user>` on Linux. Without linger the last logout stops the user's systemd, the daemon and its emulators with it. On another platform it is a usage error: `daemon install is supported on macOS, Linux and Windows only`. |
 | `uninstall` | Stop a running daemon, unload the LaunchAgent or systemd unit and delete its file, or delete the Windows task. Prints `Service removed: <name> (launchd)`, or `Service not installed: <name>` when there is none (exit 0). |
 
 | Flag | Meaning | Default |
@@ -463,7 +508,7 @@ simlock daemon uninstall [--json]
 
 ## simlock config
 
-Read or change the daemon's configuration. See [Configuration](/simlock/docs/worker/configuration) and the [configuration reference](/simlock/docs/reference/configuration) for every key.
+Read or change the daemon's configuration. See [Change a setting](/simlock/docs/worker/change-a-setting) and the [configuration reference](/simlock/docs/reference/configuration) for every key.
 
 ```text
 simlock config [--show-secrets]
@@ -485,7 +530,7 @@ simlock config set <key> <value>
 
 ## simlock doctor
 
-Check this machine's prerequisites and compare the daemon's records with the devices that exist. Findings you must act on go to stderr as text; the full report goes to stdout as one JSON line. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
+Check this machine's prerequisites and compare the daemon's records with the devices that exist. Findings you must act on go to stderr as text; the full report goes to stdout as one JSON line. See [A worker misbehaves](/simlock/docs/troubleshooting/worker).
 
 ```text
 simlock doctor [--fix] [--purge-orphans] [--yes]
@@ -505,7 +550,7 @@ A gateway refuses `doctor` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2): run it o
 
 ## simlock cleanup
 
-Run the cleanup rules now, in place of waiting for their next pass. Needs the admin role. See [Cleanup](/simlock/docs/worker/cleanup).
+Run the cleanup rules now, in place of waiting for their next pass. Needs the admin role. See [Free disk space](/simlock/docs/worker/free-disk).
 
 ```text
 simlock cleanup [--dry-run] [--rule <name>]
@@ -520,7 +565,7 @@ A gateway refuses `cleanup` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
 ## simlock update
 
-Install the newest Simlock, or a named version, on this machine and restart its daemon once the leases it holds have ended. Needs the admin role. See [Running the daemon](/simlock/docs/worker/running-the-daemon#update-simlock).
+Install the newest Simlock, or a named version, on this machine and restart its daemon once the leases it holds have ended. Needs the admin role. See [Start, stop and update the daemon](/simlock/docs/worker/daemon).
 
 ```text
 simlock update [--version <version>] [--force] [--json]
@@ -553,7 +598,7 @@ simlock 0.4.0 is running
 
 ## simlock nuke
 
-Emergency reset: end every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
+Emergency reset: end every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Free disk space and reset a machine](/simlock/docs/worker/free-disk).
 
 <Aside type="danger">
 `nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline. A source with no record (an orphan) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
@@ -574,7 +619,7 @@ A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
 ### simlock warm forget
 
-Forget the kinds the warm pool learned for one model, baseline kinds included, so it stops keeping their devices booted. Use it after a lease of the wrong model. Needs the admin role. See [Capacity and the warm pool](/simlock/docs/worker/capacity#forget-a-learned-kind).
+Forget the kinds the warm pool learned for one model, baseline kinds included, so it stops keeping their devices booted. Use it after a lease of the wrong model. Needs the admin role. See [Make leases start faster](/simlock/docs/worker/warm-pool).
 
 ```text
 simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]
@@ -599,7 +644,7 @@ When the pool has learned no kind that matches, it prints the kind it was asked 
 
 ## simlock component
 
-Install, list and remove iOS simulator runtimes and Android system images. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+Install, list and remove iOS simulator runtimes and Android system images. See [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images).
 
 ```text
 simlock component install <ios|android> <version> [--worker <id>... | --all-workers]
@@ -641,7 +686,7 @@ Simlock refuses to remove a component it did not install (`COMPONENT_NOT_OWNED`)
 
 ## simlock baseline
 
-Save a prepared simulator or emulator as a named baseline, list the baselines on this worker, and remove one. See [Baselines](/simlock/docs/worker/baselines).
+Save a prepared simulator or emulator as a named baseline, list the baselines on this worker, and remove one. See [Save a prepared device](/simlock/docs/worker/save-a-prepared-device).
 
 ```text
 simlock baseline save <name> --lease <id> [--note <text>]
@@ -704,7 +749,7 @@ When idle devices were made from it, the line ends with ` Deleted 2 idle devices
 
 ## simlock device
 
-Enrol a physical device plugged into this machine, or forget one. Needs the admin role. See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
+Enrol a physical device plugged into this machine, or forget one. Needs the admin role. See [Enrol a phone](/simlock/docs/worker/enrol-phones).
 
 ```text
 simlock device add --platform <ios|android> <id> [--json]
@@ -721,7 +766,7 @@ simlock device remove <id> [--json]
 
 ## simlock token
 
-Create, list and revoke the tokens that agents, operators and workers use to connect. Needs the admin role. See [Access control](/simlock/docs/gateway/access-control).
+Create, list and revoke the tokens that agents, operators and workers use to connect. Needs the admin role. See [Give agents and people access](/simlock/docs/gateway/access) and [Add a worker](/simlock/docs/gateway/add-a-worker).
 
 ```text
 simlock token create --role <agent|operator|worker> [--label <text>]
@@ -739,7 +784,7 @@ Every subcommand prints one JSON line. `create` prints the secret once; it canno
 
 ## simlock worker
 
-List the workers of a gateway and take them in and out of service. See [Managing workers](/simlock/docs/gateway/managing-workers).
+List the workers of a gateway and take them in and out of service. See [Maintain workers](/simlock/docs/gateway/maintain-workers).
 
 ```text
 simlock worker list [--json]
@@ -778,7 +823,7 @@ A worker that shows `incompatible` can be updated this way too. A worker that is
 
 ## simlock alerts
 
-Send one sample message to one of the gateway's alert destinations, to check it works. Needs the admin role. See [Alerts](/simlock/docs/gateway/alerts).
+Send one sample message to one of the gateway's alert destinations, to check it works. Needs the admin role. See [Send alerts](/simlock/docs/gateway/alerts).
 
 ```text
 simlock alerts test <destination> [--json]

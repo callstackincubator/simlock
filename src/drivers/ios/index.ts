@@ -38,9 +38,9 @@ import {
   type VirtualSpec,
   type ScreenCapture,
 } from "../../core/index.js";
-import type { Clock, ProcessRunner } from "../../ports/index.js";
+import type { Clock, Logger, ProcessRunner } from "../../ports/index.js";
 import { runAfterBoot, type AfterBoot } from "./boot-courtesies.js";
-import { runCommand } from "./command-run.js";
+import { errorMessage, runCommand } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl } from "./simctl.js";
 import { DeviceMarks } from "./marks.js";
@@ -108,11 +108,15 @@ const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]
   ],
 };
 
+/** why: a rename is cosmetic, so a hung `simctl rename` must not hold a lease's boot for as long as other commands get. */
+const RENAME_TIMEOUT_MS = 5_000;
+
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly rebootReadyBeforeGrant: boolean;
   readonly defaultModels = IOS_DEFAULT_MODELS;
   readonly #clock: Clock;
+  readonly #logger: Logger | undefined;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly #processRunner: ProcessRunner;
   readonly #physical: IosPhysicalHandler;
@@ -139,6 +143,7 @@ export class IosSimctlDriver implements Driver {
   ) {
     this.rebootReadyBeforeGrant = rootOptions === undefined;
     this.#clock = options.clock;
+    this.#logger = options.logger;
     this.componentFootprint = {
       bytes: IOS_RUNTIME_MIN_FREE_BYTES,
       path: options.coreSimulatorRoot ?? ".",
@@ -375,9 +380,13 @@ export class IosSimctlDriver implements Driver {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
       readonly except?: readonly string[];
+      readonly label?: string;
     },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
+    if (options.purpose === "prepare") {
+      await this.#rename(data.udid, options.label ?? data.name);
+    }
     if (this.#rootOptions === undefined) await this.#deviceHub.disablePasteboardSync(data.udid);
     const { plan, bootstatusTimeoutMs } = this.#slimBoot.plan(data, options);
     const write =
@@ -394,6 +403,27 @@ export class IosSimctlDriver implements Driver {
     );
     await runAfterBoot(this.#afterBoot, data.udid, device.deviceId);
     return this.#slimBoot.settle(device, data, plan, write);
+  }
+
+  /**
+   * why: a lease's label is the simulator's name while the lease boots it, and any other prepare
+   * boot names it back to its own stored name, so a label never outlives its lease. A rename
+   * that fails or hangs is logged only: the lease must not wait on a cosmetic name.
+   */
+  async #rename(udid: string, name: string): Promise<void> {
+    const args = ["rename", udid, name];
+    const warn = (reason: string): void =>
+      this.#logger?.warn(`could not rename ${udid} to ${name}: ${reason}`);
+    try {
+      const outcome = await this.#simctl.invoke(args, RENAME_TIMEOUT_MS);
+      if (outcome.kind === "timed-out") {
+        warn(`timed out after ${String(RENAME_TIMEOUT_MS)}ms`);
+      } else if (outcome.result.code !== 0) {
+        warn(outcome.result.stderr.trim());
+      }
+    } catch (error: unknown) {
+      warn(errorMessage(error));
+    }
   }
 
   async reclaim(
@@ -418,7 +448,7 @@ export class IosSimctlDriver implements Driver {
 
   async destroy(device: DriverDevice): Promise<void> {
     const data = iosDriverData(device);
-    await this.#simctl.shutdown(data.udid);
+    await this.#simctl.bestEffortShutdown(data.udid);
     await this.#simctl.run(["delete", data.udid], COMMAND_TIMEOUT_MS);
     if (this.#rootOptions === undefined)
       await this.#deviceHub.removePasteboardPreference(data.udid);

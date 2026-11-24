@@ -1,0 +1,70 @@
+---
+title: Baselines
+description: What a baseline is, what it saves your agents, how copies and versions behave, and when not to use one.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **baseline** is a simulator or emulator that an operator prepared once and saved under a name. An agent that leases the baseline gets its own copy of that device.
+
+## Why use one
+
+Without a baseline, every lease starts from a factory-fresh device. Before an agent can test anything, it repeats the same setup, for example:
+
+- install the app;
+- sign in a test user;
+- accept permission prompts;
+- set the language, region or feature flags.
+
+With a baseline you do that setup once. Each agent starts at the point where testing begins. You save the setup time on every lease, and every agent starts from the same state.
+
+## How it works
+
+```text
+operator:  lease ─► prepare ─► save "checkout" (v1)
+                                    │
+agents:              lease --baseline checkout
+                     ├─► copy A ─► used ─► deleted at lease end
+                     └─► copy B ─► used ─► deleted at lease end
+```
+
+- **Saving ends the operator's lease.** The prepared device becomes the baseline and is no longer leasable itself.
+- **Every lease gets a new copy.** Agents never share a device, and a copy never changes the baseline.
+- **Changes are thrown away.** A copy is deleted when its lease ends, like any simulator or emulator. Nothing an agent does reaches the next lease.
+- **The baseline fixes the device.** Platform, model, OS version, iOS mode and Android image tag come from the baseline. A lease cannot change them.
+- **Busy baselines start faster.** A baseline leased several times within a day is kept booted and ready in the [warm pool](/simlock/docs/concepts/warm-pool), like any other device kind.
+
+## Versions
+
+Saving again under the same name makes the next version: `checkout v1`, then `checkout v2`.
+
+- New leases get the newest version, including requests already waiting.
+- Leases on an older copy keep it until they end.
+- Older versions are deleted. There is no rollback; to go back, prepare and save again.
+
+## Where a baseline lives
+
+A baseline lives on the worker that saved it, in Simlock's data folder. It takes the disk space of a whole device, often several gigabytes.
+
+Behind a gateway, each worker holds its own baselines. Simlock does not copy them between workers. A lease that names a baseline goes only to a worker that holds it, so save it on every worker that should serve it.
+
+## When a baseline stops working
+
+A baseline depends on the iOS runtime, Android system image and emulator it was saved with. When one of them is removed or changed on the worker, the baseline is **stale**. Leases that name it fail with `BASELINE_STALE` until the runtime is back or a new version is saved.
+
+## Limits
+
+- Simulators and emulators only. A physical phone cannot be saved.
+- An agent cannot save a baseline. Saving and removing need the admin role.
+- A baseline is not a snapshot of a running app. Apps start fresh on each copy; only what is on disk is saved.
+
+<Aside type="caution">
+Every copy holds what the baseline holds, including signed-in accounts and tokens. Anyone who can lease on the worker can get a copy. Save only credentials you would give to every agent.
+</Aside>
+
+## Use it
+
+- Operators: [Save a prepared device for agents](/simlock/docs/worker/save-a-prepared-device)
+- Agents: [Lease a copy of a prepared device](/simlock/docs/using-devices/lease-a-prepared-device)

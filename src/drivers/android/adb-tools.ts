@@ -11,6 +11,10 @@ import { type AndroidDriverData, isAndroidDriverData } from "./data.js";
  */
 export const ADB_DEVICES_TIMEOUT_MS = 30_000;
 export const SEED_AVD_NAME = "simlock";
+// why: `avdmanager create` and `delete` write or remove a config and an empty data image, in seconds; past this the call is taken as hung.
+export const AVDMANAGER_TIMEOUT_MS = 60_000;
+// why: the same bound `emulator -help` has; `-version` only prints.
+const EMULATOR_VERSION_TIMEOUT_MS = 30_000;
 
 export interface AdbToolsOptions {
   readonly adb: string;
@@ -53,7 +57,7 @@ export class AdbTools {
   async runOrThrow(
     command: string,
     args: readonly string[],
-    options: { readonly timeoutMs?: number; readonly env?: NodeJS.ProcessEnv } = {},
+    options: { readonly timeoutMs: number; readonly env?: NodeJS.ProcessEnv },
   ): Promise<ProcessResult> {
     // why: The scoped environment unless a caller supplies its own: destroyLegacy points avdmanager
     // at the legacy AVD home, and the seed avdmanager call at its scratch folder.
@@ -90,21 +94,19 @@ export class AdbTools {
 
   async shellOrUndefined(
     args: readonly string[],
-    timeoutMs?: number,
+    timeoutMs: number,
   ): Promise<ProcessResult | undefined> {
     try {
-      return await this.runOrThrow(
-        this.#options.adb,
-        args,
-        timeoutMs === undefined ? {} : { timeoutMs },
-      );
+      return await this.runOrThrow(this.#options.adb, args, { timeoutMs });
     } catch {
       return undefined;
     }
   }
 
   async emulatorVersion(): Promise<string> {
-    const result = await this.runOrThrow(this.#options.emulator, ["-version"]);
+    const result = await this.runOrThrow(this.#options.emulator, ["-version"], {
+      timeoutMs: EMULATOR_VERSION_TIMEOUT_MS,
+    });
     return result.stdout.trim();
   }
 

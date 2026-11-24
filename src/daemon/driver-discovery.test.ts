@@ -780,7 +780,9 @@ describe("processRunnerFor", () => {
       { match: { args: ["devices"], command: "adb" }, result: { code: 0, stderr: "", stdout: "" } },
     ]);
 
-    await processRunnerFor(level, inner, logger, clock).run("adb", ["devices"]);
+    await processRunnerFor(level, inner, logger, clock).run("adb", ["devices"], {
+      timeoutMs: 1_000,
+    });
     return sink.records.filter((record) => record.message === "process");
   }
 

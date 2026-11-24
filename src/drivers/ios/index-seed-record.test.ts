@@ -39,6 +39,17 @@ function utf16be(text: string): Buffer {
 
 class UnreadableFiles extends MemoryFilesystem {
   readonly unreadable = new Set<string>();
+  /** why: CoreSimulator's atomic write lists a `*.sb-*` temp file and renames it away before the walk reaches it. */
+  readonly vanishing = new Set<string>();
+  /** why: the same rename can land just after the walk's lstat, before the file is read. */
+  readonly vanishingAfterLstat = new Set<string>();
+
+  override async lstat(path: string): ReturnType<MemoryFilesystem["lstat"]> {
+    if (this.vanishing.has(path)) await this.rm(path);
+    const details = await super.lstat(path);
+    if (this.vanishingAfterLstat.has(path)) await this.rm(path);
+    return details;
+  }
 
   override async openFile(path: string): ReturnType<MemoryFilesystem["openFile"]> {
     if (this.unreadable.has(path)) {
@@ -117,11 +128,17 @@ const baselineUdid = "EEEEEEEE-7777-8888-9999-FFFFFFFFFFFF";
 async function saveBaseline(options: {
   readonly lineage?: readonly string[];
   readonly plant: (filesystem: UnreadableFiles) => Promise<void>;
+  readonly vanishingPaths?: readonly string[];
+  readonly vanishingAfterLstatPaths?: readonly string[];
 }): Promise<Made> {
   const database = await memorySourceDatabase();
   const filesystem = new UnreadableFiles();
   await plantManagedDevice(filesystem);
   await options.plant(filesystem);
+  for (const path of options.vanishingPaths ?? []) filesystem.vanishing.add(path);
+  for (const path of options.vanishingAfterLstatPaths ?? []) {
+    filesystem.vanishingAfterLstat.add(path);
+  }
   const opener = new FakeSqliteOpener(filesystem);
   const logger = new RecordingLogger();
   const runner = new ScriptedProcessRunner([
@@ -307,5 +324,56 @@ describe("IosSimctlDriver source records", () => {
       saved_without_lineage: 1,
     });
     expect(recorded(fromOldDevice.database)).toEqual([]);
+  });
+
+  it("a baseline is saved when files listed in its clone are gone before the walk reaches them, and only the files still there are recorded", async () => {
+    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const lease = driverData.udid.toUpperCase();
+    const topTemp = `${baselineFolder}/device.plist.sb-55c05b11-ISuHtw`;
+    const nestedTemp = `${baselineFolder}/data/Library/Preferences/app.plist.sb-0a1b2c3d-QwErTy`;
+
+    const saved = await saveBaseline({
+      lineage: [lineageUdid],
+      plant: async (filesystem) => {
+        await plantBytes(filesystem, `${baselineFolder}/device.plist`, Buffer.from(lease));
+        await plantBytes(filesystem, topTemp, Buffer.from(lease));
+        await plantBytes(
+          filesystem,
+          `${baselineFolder}/data/Library/Preferences/app.plist`,
+          Buffer.from(lease),
+        );
+        await plantBytes(filesystem, nestedTemp, Buffer.from(lease));
+      },
+      vanishingPaths: [topTemp, nestedTemp],
+    });
+
+    expect(saved.error).toBeUndefined();
+    expect(saved.database.prepare("SELECT state FROM ios_source_data").all()).toEqual([
+      { state: "ready" },
+    ]);
+    expect(recorded(saved.database)).toEqual([
+      { kind: "file", relative_path: "data/Library/Preferences/app.plist" },
+      { kind: "file", relative_path: "device.plist" },
+    ]);
+    expect(saved.logger.warnings).toEqual([]);
+  });
+
+  it("a baseline is saved when a file in its clone is renamed away after the walk reaches it but before it is read, and the file is not recorded", async () => {
+    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const lease = driverData.udid.toUpperCase();
+    const temp = `${baselineFolder}/device.plist.sb-55c05b11-ISuHtw`;
+
+    const saved = await saveBaseline({
+      lineage: [lineageUdid],
+      plant: async (filesystem) => {
+        await plantBytes(filesystem, `${baselineFolder}/device.plist`, Buffer.from(lease));
+        await plantBytes(filesystem, temp, Buffer.from(lease));
+      },
+      vanishingAfterLstatPaths: [temp],
+    });
+
+    expect(saved.error).toBeUndefined();
+    expect(recorded(saved.database)).toEqual([{ kind: "file", relative_path: "device.plist" }]);
+    expect(saved.logger.warnings).toEqual([]);
   });
 });

@@ -1,13 +1,23 @@
 ---
 title: Lease your first device
 description: Lease an iOS simulator or Android emulator from the command line, install and launch an app on it, and release it.
+sidebar:
+  order: 5
 ---
 
 import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-You lease a device from your terminal, install and launch an app on it, and give it back.
+**Result:** you leased a device from your terminal, installed and launched an app on it, and gave it back.
 
-You need a machine where `simlock doctor` reports no missing tools for the platform you want. See [Install and check your machine](/simlock/docs/getting-started).
+What a lease is and how it ends: [Leases and requesters](/simlock/docs/concepts/leases).
+
+## Before you start
+
+- `simlock doctor` reports no missing tools for the platform you want, and an OS is installed. See [Install on macOS](/simlock/docs/getting-started/macos), [Linux](/simlock/docs/getting-started/linux) or [Windows](/simlock/docs/getting-started/windows).
+- iOS needs a Mac. Linux and Windows lease Android only.
+- On a machine without devices, against a farm, see [Use an existing farm](/simlock/docs/getting-started/existing-farm).
+
+## Lease, use and release a device
 
 <Steps>
 
@@ -37,6 +47,8 @@ You need a machine where `simlock doctor` reports no missing tools for the platf
    {"push":"progress","stage":"booting","etaMs":60000}
    ```
 
+   Every stage: [Leases and requesters](/simlock/docs/concepts/leases#how-a-lease-runs).
+
    When the device is ready, Simlock prints the lease on stdout as one line of JSON. This is an iOS one:
 
    ```json
@@ -55,6 +67,10 @@ You need a machine where `simlock doctor` reports no missing tools for the platf
 2. **Install and launch your app.**
 
    A plain `xcrun simctl` or `adb` cannot see Simlock's devices. Put `simlock` in front of the command, and name your device by its `device.address`:
+
+   <Aside type="caution" title="Always name the device">
+   These commands also see other agents' devices. `booted`, or a missing `-s`, can reach a device that is not yours.
+   </Aside>
 
    <Tabs syncKey="platform">
    <TabItem label="iOS">
@@ -75,11 +91,7 @@ You need a machine where `simlock doctor` reports no missing tools for the platf
    </TabItem>
    </Tabs>
 
-   <Aside type="caution" title="Always name the device">
-   These commands also see other agents' devices. `booted`, or a missing `-s`, can reach a device that is not yours.
-   </Aside>
-
-   Simlock refuses commands that would break its devices, such as `simctl erase`, `simctl delete` or `adb kill-server`. See [Work with a leased device](/simlock/docs/using-devices/working-with-a-device).
+   Simlock refuses commands that would break its devices, such as `simctl erase`, `simctl delete` or `adb kill-server`. See [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands).
 
 3. **Release the device.**
 
@@ -95,21 +107,15 @@ You need a machine where `simlock doctor` reports no missing tools for the platf
 
 </Steps>
 
-## Keep the lease longer
+**Check:** `simlock status` no longer lists your lease.
 
-With `--detach`, the lease lasts 15 minutes unless you renew it. Renew before `ttlDeadline` to get another full TTL:
+With `--detach`, the lease ends 15 minutes after it starts unless you renew it with `simlock lease renew <lease-id>`. Leave out `--detach` and `simlock lease` keeps running, renews the lease, and releases it when you press Ctrl-C or the process that started it exits. Longer TTLs and the rest: [Keep a device for a long task](/simlock/docs/using-devices/keep-a-device).
 
-```sh
-simlock lease renew lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35
-```
+<Aside>
+In a terminal, each `simlock` command gets its own identity, so the lease belongs to no particular agent. Agents get one identity per session. See [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent).
+</Aside>
 
-To ask for a longer TTL from the start, add `--ttl 1h` to `simlock lease`. The longest TTL is 4 hours by default.
-
-## Tie the lease to your terminal or script
-
-Leave out `--detach` and `simlock lease` keeps running after it prints the lease. It renews the lease for you, and releases it when you press Ctrl-C, when it gets `SIGTERM`, or when the process that started it exits.
-
-## If the lease fails
+## When it fails
 
 Simlock prints the error on stderr as one line of JSON, and the exit code tells you the kind of failure:
 
@@ -117,15 +123,11 @@ Simlock prints the error on stderr as one line of JSON, and the exit code tells 
 {"error":{"code":"RUNTIME_MISSING","message":"Runtime missing for ios 17.5"}}
 ```
 
-| Code | Exit | What to do |
-| --- | --- | --- |
-| `UNKNOWN_MODEL` | 12 | This machine does not know the model name. Run `simlock catalog --platform ios` to see the models and OS versions you can lease. |
-| `RUNTIME_MISSING` | 12 | The OS version is not installed. Pick an installed one from `simlock catalog`, or add `--allow-download`. |
-| `NO_DRIVER` | 12 | The platform is not available on this machine. Run `simlock doctor`. |
-| `QUEUE_TIMEOUT` | 10 | You set `--timeout` and no device freed up in time. |
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `UNKNOWN_MODEL` | 12 | This machine does not know the model name. | Run `simlock catalog --platform ios` to see the models and OS versions you can lease. |
+| `RUNTIME_MISSING` | 12 | The OS version is not installed. | Pick an installed one from `simlock catalog`, or add `--allow-download`. |
+| `NO_DRIVER` | 12 | The platform is not available on this machine. | Run `simlock doctor`. |
+| `QUEUE_TIMEOUT` | 10 | You set `--timeout` and no device freed up in time. | Try again, or leave out `--timeout` to wait. |
 
-If the command seems stuck, it is probably waiting in the queue. Without `--timeout`, it waits until a device frees up. The full list of errors is in [When a lease fails](/simlock/docs/using-devices/errors).
-
-<Aside>
-In a terminal, each `simlock` command gets its own identity, so the lease belongs to no particular agent. Agents get one identity per session. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
-</Aside>
+If the command seems stuck, it is probably waiting in the queue. Without `--timeout`, it waits until a device frees up. More failures: [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails).

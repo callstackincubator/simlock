@@ -28,7 +28,7 @@ grounds for rejecting a change even if the prose reads well.
    that file may not exist for someone who installed from a package registry
    rather than cloned the repo, and even when it does, a bare relative path
    means nothing outside a checkout. Point at a page of the website docs by
-   its full URL (under `https://callstackincubator.github.io/simlock/docs/`)
+   its full URL (under `https://incubator.callstack.com/simlock/docs/`)
    if a pointer is useful at all, or say the thing directly instead of
    pointing anywhere. A change that moves or renames a page a message points
    at updates the message in the same change.
@@ -47,7 +47,7 @@ grounds for rejecting a change even if the prose reads well.
    style.
 6. **Links between the two audiences run one way.** A maintainer doc may
    link to a website page for the same feature (by its full URL under
-   `https://callstackincubator.github.io/simlock/docs/`); a website page
+   `https://incubator.callstack.com/simlock/docs/`); a website page
    never links into `docs/internal/` (see rule 2).
 7. **A manual says what the code cannot, or it goes.**
    `src/<module>/AGENTS.md` (and `ui/AGENTS.md`) opens with one `Does:`

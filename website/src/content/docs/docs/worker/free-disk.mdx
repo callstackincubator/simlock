@@ -1,0 +1,181 @@
+---
+title: Free disk space and reset a machine
+description: Run cleanup now, keep devices longer or shorter, delete orphaned devices, move Simlock's device folders to another disk, and start over with nuke.
+sidebar:
+  order: 9
+  label: "Free disk space"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** the worker has disk space back, or starts over with no stuck leases or devices.
+
+Simlock shuts down and deletes its own devices on timers, and sooner when the disk runs low. When that happens and what cleanup never touches: [Cleanup and disk](/simlock/docs/concepts/cleanup).
+
+## Before you start
+
+- Run these commands on the worker, from the user account that runs the daemon. They need the admin role. A gateway refuses `cleanup` and `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE`: run them on each worker.
+- Cleanup and nuke touch only simulators and emulators Simlock created. Your own devices and physical phones are never deleted.
+
+## Free disk space now
+
+<Steps>
+
+1. Preview what cleanup would do:
+
+   ```sh
+   simlock cleanup --dry-run
+   ```
+
+   ```json
+   [{"action":"destroy","reason":"idle 95m > T2=60m","rule":"idle-destroy","target":"dev_3f1c9a52-6b0e-4d7a-9c21-8e4f5b7a2d10"},{"action":"shutdown","reason":"idle 14m > T1=10m","rule":"idle-shutdown","target":"dev_a81e44d0-2c9b-4f6e-b3a7-51d0c8e9f264"}]
+   ```
+
+   Each entry names the device (`target`), whether it is shut down (`shutdown`) or deleted (`destroy`), and why. `T1` is the shutdown timer and `T2` the delete timer. `[]` means nothing is due.
+
+2. Run it:
+
+   ```sh
+   simlock cleanup
+   ```
+
+   It prints the same list for what it did. Add `--rule idle-shutdown` or `--rule idle-destroy` to run only one of them.
+
+</Steps>
+
+**Check:** `simlock cleanup --dry-run` prints `[]`.
+
+Cleanup still waits for the timers: it does not delete a device shut down for less than the delete time. For more space:
+
+- **Remove runtimes and images you no longer need.** List them with `simlock component list`; see [Remove a runtime or image](/simlock/docs/worker/runtimes-and-images#remove-a-runtime-or-image). Low disk never removes them.
+- **Remove baselines you no longer need.** Each takes the space of a whole device. See [Save a prepared device](/simlock/docs/worker/save-a-prepared-device#remove-a-baseline).
+- **Delete orphaned devices**, below.
+- **Delete every device at once** with [nuke](#reset-a-machine-with-nuke).
+
+## Keep devices longer
+
+Raise the timers, then restart the daemon:
+
+```sh
+simlock config set idle.shutdownAfterMs 1800000
+simlock config set idle.deleteAfterMs 14400000
+simlock daemon stop
+simlock daemon start
+```
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `idle.shutdownAfterMs` | How long a booted device nobody leases stays booted. | `600000` (10 min) |
+| `idle.deleteAfterMs` | How long a shut-down device stays on disk. | `3600000` (60 min) |
+| `diskPressure.freeBytesThreshold` | Free space below which shut-down devices are deleted after `idle.shutdownAfterMs` instead. | `10737418240` (10 GiB) |
+
+**Check:** `simlock config get idle` shows your values.
+
+## Delete orphaned devices
+
+An orphan is a device in Simlock's folders that Simlock has no record of, usually left by a daemon that stopped while creating one, or after you moved `state.db` away. It takes disk and is never leased. Leftover baseline files and copies Simlock creates devices from show up the same way, under `sources` with `orphan: true`.
+
+<Steps>
+
+1. Find them. `simlock doctor` reports each one as `orphan-device`:
+
+   ```sh
+   simlock doctor
+   ```
+
+   <Aside type="caution">
+   The next step permanently deletes every orphaned device and orphan source, with everything installed on it. It reaches only into Simlock's own device folders, and stops without deleting anything if it can no longer prove a folder is Simlock's.
+   </Aside>
+
+2. Delete them. It asks `Destroy every orphaned device? [y/N]`; in a script, add `--yes`.
+
+   ```sh
+   simlock doctor --purge-orphans
+   ```
+
+</Steps>
+
+**Check:** `simlock doctor` reports no `orphan-device`. `simlock doctor --fix` never deletes orphans.
+
+## Move the device folders
+
+To keep devices on another disk:
+
+| Platform | Default folder | Key |
+| --- | --- | --- |
+| iOS | `~/.simlock/devices/ios` | `drivers.ios.deviceRoot` |
+| Android | `~/.simlock/devices/android` | `drivers.android.deviceRoot` |
+
+With `drivers.ios.deviceSet` set to `default`, iOS simulators live in Xcode's own device set and `drivers.ios.deviceRoot` cannot be set. See [iOS device sets](/simlock/docs/concepts/ios-device-sets).
+
+<Steps>
+
+1. Point the key at an absolute path that does not exist yet:
+
+   ```sh
+   simlock config set drivers.ios.deviceRoot /Volumes/Devices/simlock-ios
+   ```
+
+2. Restart the daemon. Simlock creates the folder:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock doctor` reports no `driver-unavailable` for the platform, and new devices appear in the folder.
+
+Simlock uses only a folder it created itself, so it can never delete someone else's files. If it refuses the folder, that platform stays off and `simlock doctor` names the reason:
+
+| Reason | Cause | Fix |
+| --- | --- | --- |
+| `not-absolute` | The path is relative. | Use an absolute path. |
+| `missing-marker` | The folder exists, but Simlock did not create it. | Remove the empty folder and restart, or pick a path that does not exist. |
+| `non-empty-unowned-root` | The folder has files in it, and Simlock did not create it. | Pick another path. |
+| `invalid-marker`, `wrong-instance` | The folder belongs to another Simlock installation, or its marker is damaged. | Pick another path. |
+| `symlink` | The path is a symbolic link. | Point the key at the real folder. |
+| `wrong-owner`, `wrong-permissions` | Another user owns the folder, or other users can read it. | Fix the owner, or run `chmod 700` on it. |
+
+Restart the daemon after a fix.
+
+## Reset a machine with nuke
+
+Use `simlock nuke` when leases or devices are stuck and you want to start over on this machine. It:
+
+- ends every lease, including leases on physical devices, whose apps are uninstalled as after any lease;
+- cancels every waiting request;
+- shuts down every simulator and emulator Simlock created;
+- makes the warm pool forget what it learned, so it does not boot those devices again by itself. Your `warmPool.targets` stay.
+
+With `--delete-devices` it also deletes every simulator and emulator Simlock created, and every baseline. It never touches devices Simlock did not create, and never deletes or unenrols a physical device.
+
+<Aside type="danger" title="Nuke ends every lease on this machine">
+Every agent holding a device here loses it at once, mid-task. With `--delete-devices`, every device Simlock created is deleted with its apps and data, and every baseline with it. There is no undo. Tell the agents using this machine first.
+</Aside>
+
+```sh
+simlock nuke --delete-devices
+```
+
+```text
+Nuke Simlock-managed devices? [y/N] y
+{"deletedDevices":["dev_3f1c9a52-6b0e-4d7a-9c21-8e4f5b7a2d10"],"releasedLeaseIds":["lse_7d2c41e8-93a5-4b1f-8e60-2fa9c3d5b174"]}
+```
+
+**Check:** `simlock status` lists no leases and no Simlock devices.
+
+In a script, pass `--yes`. Without a terminal and without `--yes`, the command stops with `nuke requires confirmation or --yes`.
+
+## When it fails
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `INSUFFICIENT_DISK_SPACE` on an install or lease | Less free disk than the download needs. | Free space as above, then try again. |
+| `disk.pressure-detected` events | Free space dropped below `diskPressure.freeBytesThreshold`. Simlock already deletes shut-down devices sooner. | Free space as above. |
+| `UNSUPPORTED_IN_GATEWAY_MODE`, exit 2 | You ran `cleanup` or `nuke` on a gateway. | Run it on each worker. |
+| `FORBIDDEN` | The session lacks the admin role. | Run it on the worker as the user that runs the daemon. |
+| A platform stays off after moving its folder | Simlock refused the folder. | See the reason table above. |
+
+Flags: [`simlock cleanup`](/simlock/docs/reference/cli#simlock-cleanup), [`simlock nuke`](/simlock/docs/reference/cli#simlock-nuke), [`simlock doctor`](/simlock/docs/reference/cli#simlock-doctor).

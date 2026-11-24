@@ -50,9 +50,8 @@ export interface ErrorDetailsMap {
   QUEUE_TIMEOUT: { readonly requestId: string };
   PROVISION_FAILED: Record<string, never>;
   REQUESTER_ALREADY_LEASED: { readonly requesterId: string; readonly existingLeaseId?: string };
-  /** `lease.request` repeated an `idempotencyKey` its requester already used for a different
-   * device or a different `leaseId` (a missing one on either side counts as different). The
-   * stored request is untouched; a new request needs a new key. */
+  /** why: a missing `leaseId`, `runId` or `label` on either side counts as different, so a retry
+   * that adds or drops one conflicts instead of replaying. */
   IDEMPOTENCY_CONFLICT: Record<string, never>;
   /** `lease.request` named a `leaseId` an active lease or a waiting request already holds
    * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the

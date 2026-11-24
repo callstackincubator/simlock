@@ -34,6 +34,7 @@ import {
   type AcquisitionWaiter,
   blockedReason,
   exceptOption,
+  labelOption,
   type GrantingPlanKind,
   type OperationPlan,
   operationPlan,
@@ -258,6 +259,7 @@ export class AcquisitionWorkflow {
       handoff = await this.options.provisioner.provision(spec, {
         claim: { kind: "boot", owner: waiter.id },
         ...exceptOption(waiter),
+        ...labelOption(waiter),
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -461,7 +463,12 @@ export class AcquisitionWorkflow {
         etaMs: waiter.timing.estimatedBootMs,
       });
       const except = exceptOption(waiter).except ?? [];
-      const ready = await this.options.lifecycle.rebootForLease(device, claim, except);
+      const ready = await this.options.lifecycle.rebootForLease(
+        device,
+        claim,
+        except,
+        waiter.options.label,
+      );
       if (ready === undefined) throw new Error(`Reboot target is no longer safe: ${device.id}`);
       handoff = ready;
     } catch (error: unknown) {
@@ -570,6 +577,7 @@ export class AcquisitionWorkflow {
         device,
         claim,
         exceptOption(waiter).except,
+        waiter.options.label,
       );
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
       handoff = ready;

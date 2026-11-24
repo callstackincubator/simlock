@@ -7,11 +7,11 @@ const STORAGE_KEY = "simlock.operatorToken";
 type Storage = Pick<globalThis.Storage, "getItem" | "removeItem" | "setItem">;
 
 export type SessionState =
-  | { readonly kind: "none"; readonly refusedReason?: string }
+  | { readonly kind: "none"; readonly refusedReason?: string; readonly signInUrl?: string }
   | { readonly kind: "checking" }
   | { readonly kind: "token"; readonly token: string }
   | { readonly kind: "proxy"; readonly name: string; readonly signOutUrl?: string }
-  | { readonly kind: "ended" };
+  | { readonly kind: "ended"; readonly signInUrl?: string };
 
 export interface SessionDeps {
   readonly fetch: Fetch;
@@ -67,13 +67,17 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
       case "proxy":
         return set(proxyState(outcome));
       case "refused":
-        return set({ kind: "none", refusedReason: outcome.reason });
+        return set({
+          kind: "none",
+          refusedReason: outcome.reason,
+          ...(outcome.signInUrl === undefined ? {} : { signInUrl: outcome.signInUrl }),
+        });
       case "ended":
-        return atLoad ? set({ kind: "none" }) : ended();
+        return atLoad ? set({ ...outcome, kind: "none" }) : ended(outcome.signInUrl);
       case "unreachable":
         return atLoad ? set({ kind: "none" }) : undefined;
       case "none":
-        return set({ kind: "none" });
+        return set(outcome);
     }
   };
   const opening = async (atLoad: boolean) => {
@@ -88,14 +92,18 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
   // why: a proxy's login page cannot be drawn in this page, so the page reloads to let the proxy
   // show it; a second ending within a minute of the reload would loop, and a browser that keeps no
   // storage could never tell, so both stop at the ended screen.
-  const ended = () => {
-    if (deps === undefined) return set({ kind: "ended" });
+  const ended = (signInUrl?: string) => {
+    const endedState = {
+      kind: "ended" as const,
+      ...(signInUrl === undefined ? {} : { signInUrl }),
+    };
+    if (deps === undefined) return set(endedState);
     const reloadedAt = Number(attempt(() => storage().getItem(RELOAD_KEY)));
     const recent = deps.now() - reloadedAt < RELOAD_GAP_MS;
     const stored =
       !recent && attempt(() => (storage().setItem(RELOAD_KEY, String(deps.now())), true)) === true;
     if (stored) deps.reload();
-    else set({ kind: "ended" });
+    else set(endedState);
   };
   return {
     state: () => state,

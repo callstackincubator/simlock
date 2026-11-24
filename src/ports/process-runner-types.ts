@@ -148,12 +148,17 @@ export class ProcessSpawnError extends Error {
   }
 }
 
+/**
+ * why: `run` waits for its child to end, so every call names its deadline (architecture rule 11):
+ * a call without one would wait for ever on a child that never exits. `spawn` takes none: its
+ * caller holds the handle and ends the child itself.
+ */
+export interface BoundedRunOptions extends ProcessRunOptions {
+  readonly timeoutMs: number;
+}
+
 export interface ProcessRunner {
-  run(
-    command: string,
-    args: readonly string[],
-    options?: ProcessRunOptions,
-  ): Promise<ProcessResult>;
+  run(command: string, args: readonly string[], options: BoundedRunOptions): Promise<ProcessResult>;
   spawn(command: string, args: readonly string[], options?: ProcessRunOptions): ProcessHandle;
   spawnStreaming(
     command: string,

@@ -1,0 +1,148 @@
+---
+title: Run simctl or adb on a device
+description: Run simctl and adb against your leased simulator or emulator, hand the lease's environment to other tools, run commands through a gateway, and know what Simlock refuses.
+sidebar:
+  order: 7
+  label: "Run simctl or adb"
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+**Result:** your `simctl` and `adb` commands, and the tools that call them, reach your leased device and no other.
+
+## Before you start
+
+- You hold a lease on a simulator or emulator. For a real phone, use `devicectl` or plain `adb`: see [Lease a real iPhone or Android phone](/simlock/docs/using-devices/lease-a-phone).
+- Simlock keeps its devices apart from your own, so a plain `xcrun simctl` or `adb` does not see the device you leased. `simlock simctl` and `simlock adb` point the real tools at Simlock's devices. They take the same arguments, print the same output and exit with the same code. On iOS, a worker set to Xcode's `default` device set is the exception: see [iOS device sets](/simlock/docs/concepts/ios-device-sets).
+- Take your device's id from the grant: `device.driverDeviceId` (UDID) on iOS, `device.address` (serial, such as `emulator-5556`) on Android.
+
+## Run a command
+
+<Tabs syncKey="platform">
+  <TabItem label="iOS">
+
+```sh
+simlock simctl listapps 6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90
+```
+
+  </TabItem>
+  <TabItem label="Android">
+
+```sh
+simlock adb -s emulator-5556 shell getprop ro.build.version.release
+```
+
+`simlock adb -s emulator-5556 shell` with no command opens an interactive shell.
+
+  </TabItem>
+</Tabs>
+
+**Check:** the output is the real tool's output for your device.
+
+On the worker's machine, `SIGINT` and `SIGTERM` sent to `simlock` are passed on to the tool, so `simctl io recordVideo` finishes its file before the command returns.
+
+## Let other tools reach the device
+
+When a build tool or test runner calls `xcrun simctl` or `adb` itself, give it the lease's environment.
+
+<Steps>
+
+1. Lease with `--export-env`. It prints the grant's `environment` as `export` lines instead of the JSON grant:
+
+   ```sh
+   eval "$(simlock lease --platform android --device "Pixel 8" --detach --export-env)"
+   ```
+
+2. Run the tool. `adb` reads `ANDROID_ADB_SERVER_PORT` by itself:
+
+   ```sh
+   adb -s emulator-5556 shell getprop ro.build.version.release
+   ```
+
+   `simctl` reads no variable for its device set, so pass the folder yourself:
+
+   ```sh
+   xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
+   ```
+
+3. Find the lease id with `simlock status`, so you can renew and release it. With `--export-env`, stdout holds only the export lines.
+
+</Steps>
+
+**Check:** `adb devices` or `xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices` lists your device.
+
+| Variable | When it is set | What it is |
+| --- | --- | --- |
+| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator, unless the worker uses the `default` set | Folder of Simlock's simulators, for `simctl --set` |
+| `ANDROID_ADB_SERVER_PORT` | Android | Port of the adb server that sees the device. `adb` reads it by itself. |
+| `SIMLOCK_DEVICE_UDID` | Physical iPhone or iPad | The device's UDID |
+| `ANDROID_SERIAL` | Physical Android phone | The phone's serial. `adb` reads it by itself. |
+
+The paths and ports in `environment` work only on the worker's own machine. From another machine, use the next section.
+
+## Run commands through a gateway or a farm URL
+
+When you lease through a gateway (`simlock --gateway …`) or with `SIMLOCK_URL` set, the device is on a worker. `simlock simctl` and `simlock adb` run your command there and stream the output back. The worker adds your device, so leave it out:
+
+```sh
+simlock --gateway simctl --lease 3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c6a1d install ./MyApp.app
+```
+
+- `--lease <lease-id>` says which lease the command runs under. Put it right after `simctl` or `adb`. You can leave it out when you hold exactly one lease. On the worker's own daemon it is accepted and ignored.
+- Paths in the arguments are paths on the worker. Upload files first with [`simlock files put`](/simlock/docs/using-devices/copy-files).
+- Commands that need a terminal, such as a bare `adb shell`, are refused.
+- The command gets no input unless you pass `--stdin`, which sends everything you pipe in (or type, up to Ctrl-D) once, up to 8,388,608 characters. Put it before the command's own arguments, next to `--lease`.
+- A command that names another device, such as `booted`, another UDID, or `adb -s` with another serial, `-e`, `-d` or `-t`, is refused.
+
+**Check:** the command prints the same output it would on the worker.
+
+<Aside type="caution" title="Right after a worker restarts">
+For up to about a minute after a worker restarts, a command without `--lease` can fail with `No lease is held by <your id>`, even though your lease still stands. Do not request a new device on that message. Wait a minute and run it again, or pass `--lease <lease-id>`: then the command waits for the worker to finish starting.
+</Aside>
+
+## Commands Simlock refuses
+
+These would break a device behind Simlock's back, or hit every agent at once. `simlock simctl` and `simlock adb` refuse them with exit 2 and a message that says what to run instead:
+
+| Tool | Refused | Why |
+| --- | --- | --- |
+| simctl | `create`, `erase`, `delete` | Simlock creates and deletes devices itself. |
+| simctl | `shutdown all` | Stops every agent's device. `shutdown <udid>` on your own device is allowed. |
+| simctl | `runtime delete` | Deletes an OS version other devices use. |
+| simctl | `--set` or `--profiles` before the subcommand | Simlock chooses where simulators live. |
+| adb | `kill-server` | Disconnects every leased emulator. |
+| adb | `disconnect`, with or without an address | Drops other leases' emulators. (`adb shell echo disconnect` still runs.) |
+| adb | `emu kill`, `emu avd stop` | Stops a device Simlock thinks is running. |
+| adb | `emu avd snapshot`, except `list` | Can replace or delete the snapshot Simlock starts the device from. |
+| adb | any option before the subcommand except `-s`, `-t`, `-d`, `-e` | `-P`, `-H`, `-L` and others point adb at another server. |
+
+```json
+{"error":{"code":"USAGE","message":"Refusing `simlock simctl erase`: it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead."}}
+```
+
+To get a clean device, release the lease and lease again. Every lease starts on a new simulator or emulator.
+
+## Rules to give your agent
+
+Simlock keeps devices apart from careless tools; it does not stop an agent that sets out to reach another device.
+
+- **Use only the device your lease names.** Name it by UDID or serial in every command. Never use `booted`, or `adb` without `-s`, when other agents may be running.
+- **Never erase, delete, create or shut down devices yourself.** Release the lease instead.
+- **Never stop or restart the adb server, and never point `adb` or `simctl` at another server or simulator folder.**
+- **Release the lease when you are done.** A lease nobody releases holds the device until its TTL runs out, while other agents wait.
+- **Do not rely on anything surviving a release.** Apps, files, settings and logs go with the device.
+
+Phones are not kept apart at all: every tool on the worker sees them.
+
+## When it fails
+
+| What you see | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `USAGE` with `Refusing …` | 2 | A command from the table above. | Run what the message suggests. |
+| A usage error about several leases | 2 | No `--lease`, and you hold more than one lease. | Pass `--lease <lease-id>`. |
+| `No lease is held by <your id>` | 2 | You hold no lease under this requester, or the worker restarted less than a minute ago. | Check `simlock status`; pass `--lease`, or wait and retry. |
+| A `notice` on stderr naming `simlock files put` | the tool's | The command ran on the worker and named a path that exists only on your machine. | Upload the file first. |
+| `BAD_REQUEST` | 2 | `--stdin` input over 8,388,608 characters. | Upload the input as a file. |
+| The plain tool lists no device | — | It is not pointed at Simlock's devices. | Use `simlock simctl` / `simlock adb`, or the lease's environment. |
+
+Every `simctl` and `adb` flag: [CLI reference](/simlock/docs/reference/cli#simlock-simctl).

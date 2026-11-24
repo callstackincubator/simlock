@@ -48,6 +48,7 @@ export interface Rig {
     readonly retention?: number;
     readonly maxBytes?: number;
     readonly projections?: readonly HistoryProjectionDefinition[];
+    readonly beforeRebuild?: (isStopped: () => boolean) => Promise<void>;
   }): ReturnType<typeof createEventHistory>;
 }
 
@@ -89,6 +90,9 @@ export async function rig(
         projectionOptions: { fleet: false, metricsRetentionMs: 90 * 24 * HOUR },
         projections: overrides.projections ?? [],
         sqlite: overrides.sqlite ?? sqlite,
+        ...(overrides.beforeRebuild === undefined
+          ? {}
+          : { beforeRebuild: overrides.beforeRebuild }),
       }),
     logs,
     sqlite,

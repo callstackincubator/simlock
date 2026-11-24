@@ -23,6 +23,7 @@ import { UDID_PATTERN } from "./device-set-leftovers.js";
 import {
   IosSourceTable,
   type ReadySeed,
+  type SourceFile,
   type SourceRecord,
   type SourceRow,
 } from "./source-data.js";
@@ -224,13 +225,15 @@ export class Seeds {
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
-    const result = await this.#seedTurns.take(seed.udid, () =>
-      this.#simctl.createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
+    const cloned = await this.#seedTurns.take(seed.udid, async () => ({
+      result: await this.#simctl.createSimulator(["clone", seed.udid, name, this.#deviceRoot], {
         seedUdid: seed.udid,
         source: this.#sourcesSet,
       }),
-    );
-    const udid = result.stdout.trim();
+      // why: the seed's deletion drops its file rows once the turn ends, so a copy reads them before leaving it.
+      files: seed.lineage === undefined ? [] : this.#sources.filesOf(seed.sourceId),
+    }));
+    const udid = cloned.result.stdout.trim();
 
     if (udid === "") {
       throw new DriverCrashError("simctl clone returned no device UDID");
@@ -239,7 +242,7 @@ export class Seeds {
     try {
       await this.#marks.writeMark(udid);
       await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
-      if (seed.lineage !== undefined) await this.#swapLineage(seed.sourceId, seed.lineage, udid);
+      if (seed.lineage !== undefined) await this.#swapLineage(cloned.files, seed.lineage, udid);
     } catch (error: unknown) {
       // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
       // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
@@ -463,6 +466,8 @@ export class Seeds {
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#simctl.bestEffortShutdown(udid, this.#sourcesSet);
     await this.#deleteIn(udid, this.#sourcesSet);
+    // why: the overrides folder lives outside the device set, so `simctl delete` leaves it; a failed delete throws before this and keeps it.
+    await this.#slimBoot.removeOverrides(udid);
   }
 
   /** why: ADR 0076 §1: the throwaway lives in the device set and is deleted only through the `making` row that names it (ADR 0001 §6), with its log folder, which `simctl delete` leaves behind. */
@@ -505,19 +510,21 @@ export class Seeds {
     });
   }
 
-  async #swapLineage(sourceId: string, lineage: readonly string[], udid: string): Promise<void> {
+  async #swapLineage(
+    recorded: readonly SourceFile[],
+    lineage: readonly string[],
+    udid: string,
+  ): Promise<void> {
     const started = this.#clock.now();
     const counts = await swapCopyFiles(
       this.#filesystem,
       join(this.#deviceRoot, udid),
       // why: the copy's LaunchServices database was dropped just before, so a seed that recorded one has nothing of it left to swap.
-      this.#sources
-        .filesOf(sourceId)
-        .filter((file) => !LAUNCH_SERVICES_PATH.test(file.relativePath)),
+      recorded.filter((file) => !LAUNCH_SERVICES_PATH.test(file.relativePath)),
       { lineage, own: udid },
     );
     this.#logger?.debug(
-      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable`,
+      `swapped ${String(counts.files)} files and ${String(counts.links)} links in ${String(this.#clock.now() - started)} ms for ${udid}; ${String(counts.unreadable)} unreadable, ${String(counts.missing)} missing`,
     );
   }
 

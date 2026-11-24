@@ -42,7 +42,10 @@ describe("the children the ports start ask Windows for no console window", () =>
   }
 
   it.each([
-    ["NodeProcessRunner.run", async () => new NodeProcessRunner().run(...quiet)],
+    [
+      "NodeProcessRunner.run",
+      async () => new NodeProcessRunner().run(...quiet, { timeoutMs: 30_000 }),
+    ],
     [
       "NodeProcessRunner.spawnStreaming",
       async () =>

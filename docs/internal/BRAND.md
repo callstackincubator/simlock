@@ -154,7 +154,7 @@ The scenes are generated in `website/src/components/site/dither.ts`.
 ## Website
 
 `website/` is an Astro and Starlight site served from GitHub Pages at
-`https://callstackincubator.github.io/simlock/`, under the base path
+`https://incubator.callstack.com/simlock/`, under the base path
 `/simlock` (`BASE` and `at()` in `website/src/site/content.ts`).
 
 - **Home** (`src/pages/index.astro`): nav, hero, marquee, then [01] How it

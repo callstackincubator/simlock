@@ -18,16 +18,16 @@ simlock lease --platform ios --device "iPhone 16"
 
 ## Documentation
 
-Everything is on the website: **https://callstackincubator.github.io/simlock/docs/introduction**
+Everything is on the website: **https://incubator.callstack.com/simlock/docs/introduction**
 
-- [Getting started](https://callstackincubator.github.io/simlock/docs/getting-started): install,
+- [Getting started](https://incubator.callstack.com/simlock/docs/getting-started/macos): install,
   lease a first device, connect your agent
-- [Using devices](https://callstackincubator.github.io/simlock/docs/using-devices/lease-lifecycle):
+- [Using devices](https://incubator.callstack.com/simlock/docs/using-devices/lease-a-specific-device):
   for agents and the people who set them up
-- [Worker](https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon): run the
+- [Worker](https://incubator.callstack.com/simlock/docs/worker/daemon): run the
   machine that owns the devices
-- [Gateway](https://callstackincubator.github.io/simlock/docs/gateway): one URL for a fleet
-- [Reference](https://callstackincubator.github.io/simlock/docs/reference/cli): every command,
+- [Gateway](https://incubator.callstack.com/simlock/docs/gateway/setup): one URL for a fleet
+- [Reference](https://incubator.callstack.com/simlock/docs/reference/cli): every command,
   configuration key, event and error
 
 ## Made with ❤️ at Callstack

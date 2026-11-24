@@ -1,7 +1,7 @@
 # HTTP frontend
 
 Does: the network API — `/v1` routes, bearer token → session, SSE, lease-request resources, console files.
-Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/remote-agents.mdx), [console.mdx](../../website/src/content/docs/docs/worker/console.mdx).
+Surface: [http-api.mdx](../../website/src/content/docs/docs/using-devices/http-api.mdx), [console.mdx](../../website/src/content/docs/docs/reference/console.mdx).
 
 ## Rules
 
