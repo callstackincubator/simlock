@@ -26,12 +26,25 @@ export class EmulatorHost {
   readonly #listening = new Map<number, string>();
   readonly #exits = new Map<number, () => void>();
   readonly #pids = new Map<number, number>();
+  /** why: the `logcat` listeners a driver has open; a default network that comes up is announced to each. */
+  readonly #logcats = new Set<(line: string) => void>();
   #nextPid = 1;
+  /** why: the network id `dumpsys connectivity` names as the default one; `undefined` before the guest has one. A real emulator has one almost at once, so a test that is about the wait sets it to `undefined`. */
+  defaultNetwork: number | undefined = 100;
 
   constructor(private readonly filesystem: MemoryFilesystem) {}
 
   pathAnswering(serial: string | undefined): string | undefined {
     return this.#listening.get(consolePortOf(serial));
+  }
+
+  /** why: the guest's ConnectivityService picking a default network: the line `logcat` prints for it, to every open listener. */
+  announceDefaultNetwork(): void {
+    for (const announce of this.#logcats) {
+      announce(
+        "ConnectivityService: Sending CONNECTED broadcast for type 1 [100 WIFI] isDefaultNetwork=true",
+      );
+    }
   }
 
   /** why: the pid the runner gave the emulator listening on a serial, which is what a process table names as the root of its tree. */
@@ -104,6 +117,9 @@ export class EmulatorHost {
       this.#exit(port);
       return ok("OK: killing emulator, bye bye\n");
     }
+    if (rest === "shell dumpsys connectivity") {
+      return ok(`Active default network: ${this.defaultNetwork ?? "none"}\n`);
+    }
     if (rest.startsWith("shell echo ")) return ok();
     if (rest.startsWith("shell getprop ro.boot.qemu.avd_name; head -c ")) {
       return ok(`${basename(this.#listening.get(port) ?? "", ".avd")}\n`);
@@ -120,6 +136,7 @@ export class EmulatorHost {
     args: readonly string[],
     env: NodeJS.ProcessEnv | undefined,
   ): ProcessHandle {
+    if (command === binaries.adb && args.includes("logcat")) return this.#logcat();
     if (command !== binaries.emulator || args[0] !== "-avd") {
       throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
     }
@@ -148,6 +165,30 @@ export class EmulatorHost {
       stdout: emptyLines(),
       unref: () => undefined,
       wait: () => exited,
+    };
+  }
+
+  /** why: a one-shot `logcat -m 1`: it ends with the first line it prints, or when it is killed. */
+  #logcat(): ProcessHandle {
+    let end!: (result: ProcessResult) => void;
+    const ended = new Promise<ProcessResult>((resolve) => {
+      end = resolve;
+    });
+    const announce = (line: string) => {
+      this.#logcats.delete(announce);
+      end({ code: 0, stderr: "", stdout: `${line}\n` });
+    };
+    this.#logcats.add(announce);
+    return {
+      kill: () => {
+        this.#logcats.delete(announce);
+        end({ code: null, stderr: "", stdout: "" });
+      },
+      pid: this.#nextPid++,
+      stderr: emptyLines(),
+      stdout: emptyLines(),
+      unref: () => undefined,
+      wait: () => ended,
     };
   }
 

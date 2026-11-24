@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  FakeClock,
-  FakeProcessTable,
-  type MemoryFilesystem,
-  type ProcessEntry,
-} from "../../ports/index.js";
+import { FakeClock, FakeProcessTable, type ProcessEntry } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
 import {
   androidFilesystem,
@@ -44,7 +39,7 @@ function emulatorTree(rootPid: number, nowMs: number): readonly ProcessEntry[] {
   ];
 }
 
-/** why: the fake clock never moves by itself; the poll waits on a timer, so the test steps it until the settle ends. */
+/** why: the fake clock never moves by itself; the poll waits on a timer, so the test steps it until the settle ends, and hands each step's time to the case. */
 async function runToEnd(
   settle: Promise<unknown>,
   world: {
@@ -52,59 +47,98 @@ async function runToEnd(
     readonly host: EmulatorHost;
     readonly table: FakeProcessTable;
   },
+  atStep: (nowMs: number) => void,
 ): Promise<void> {
   const state = promiseState(settle);
   for (let step = 0; step < 600 && state.state === "pending"; step += 1) {
     const rootPid = world.host.pidAnswering("emulator-5586");
     if (rootPid !== undefined) world.table.set(emulatorTree(rootPid, world.clock.now()));
+    atStep(world.clock.now());
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (state.state === "pending") world.clock.advance(2_000);
   }
   expect(state.state, "the settle ended within 20 simulated minutes").toBe("fulfilled");
 }
 
-async function exists(filesystem: MemoryFilesystem, path: string): Promise<boolean> {
-  return filesystem.exists(path);
-}
+/** why: how the guest's network comes up in each case: `dumpsys connectivity` names a default network from the start, or the log announces one at a time while `dumpsys` still says none. */
+const cases = [
+  {
+    announcedAtMs: 10_000,
+    name: "idle at 180 s, the listener fired at 10 s",
+    network: undefined,
+    settledAfterMs: 180_000,
+  },
+  {
+    announcedAtMs: undefined,
+    name: "idle at 180 s, the listener never fired but dumpsys connectivity shows a default network",
+    network: 100,
+    settledAfterMs: 180_000,
+  },
+  {
+    announcedAtMs: 300_000,
+    name: "idle at 180 s with no default network yet: the save waits for the listener",
+    network: undefined,
+    settledAfterMs: 300_000,
+  },
+] as const;
 
 describe("AndroidDriver settleSeed", () => {
   it("saves an idle copy's snapshot as the seed", async () => {
-    const world = await quickSeedWorld();
-    const callsBefore = world.runner.calls.length;
+    for (const scenario of cases) {
+      const world = await quickSeedWorld();
+      world.host.defaultNetwork = scenario.network;
+      const callsBefore = world.runner.calls.length;
+      const saved = () =>
+        world.runner.calls
+          .slice(callsBefore)
+          .some(
+            (call) => call.args.join(" ") === "-s emulator-5586 emu avd snapshot save simlock_boot",
+          );
+      let savedBeforeAnnouncement: boolean | undefined;
 
-    const settle = world.driver.settleSeed?.("seed_two", { signal: new AbortController().signal });
-    if (settle === undefined) throw new Error("the driver offers no settleSeed");
-    await runToEnd(settle, world);
+      const settle = world.driver.settleSeed?.("seed_two", {
+        signal: new AbortController().signal,
+      });
+      if (settle === undefined) throw new Error("the driver offers no settleSeed");
+      await runToEnd(settle, world, (nowMs) => {
+        if (nowMs !== scenario.announcedAtMs) return;
+        savedBeforeAnnouncement = saved();
+        world.host.announceDefaultNetwork();
+      });
 
-    await expect(settle).resolves.toMatchObject({
-      reason: "idle",
-      settledAfterMs: 180_000,
-      sourceId: "seed_three",
-    });
-    const listed = await world.driver.listSources();
-    expect(listed).toHaveLength(1);
-    expect(listed[0]).toMatchObject({ id: "seed_three", kind: "seed", settled: true });
-    expect(listed[0]).not.toHaveProperty("staleReason");
-    await expect(exists(world.filesystem, `${sources}/seed_two`)).resolves.toBe(false);
-    await expect(exists(world.filesystem, `${sources}/seed_three/simlock.avd`)).resolves.toBe(true);
-    const after = world.runner.calls.slice(callsBefore);
-    expect(
-      after.some(
-        (call) =>
-          call.args.includes("-snapshot") &&
-          call.args[call.args.indexOf("-snapshot") + 1] === "simlock_boot",
-      ),
-      "the copy booted from the quick seed's snapshot",
-    ).toBe(true);
-    expect(
-      after.some(
-        (call) => call.args.join(" ") === "-s emulator-5586 emu avd snapshot save simlock_boot",
-      ),
-      "the snapshot was saved again in the booted copy",
-    ).toBe(true);
-    expect(
-      world.host.pathAnswering("emulator-5586"),
-      "the copy's emulator was stopped",
-    ).toBeUndefined();
+      await expect(settle, scenario.name).resolves.toMatchObject({
+        reason: "idle",
+        settledAfterMs: scenario.settledAfterMs,
+        sourceId: "seed_three",
+      });
+      if (scenario.announcedAtMs !== undefined && scenario.announcedAtMs > 180_000) {
+        expect(
+          savedBeforeAnnouncement,
+          `${scenario.name}: nothing was saved before the log line`,
+        ).toBe(false);
+      }
+      const listed = await world.driver.listSources();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ id: "seed_three", kind: "seed", settled: true });
+      expect(listed[0]).not.toHaveProperty("staleReason");
+      await expect(world.filesystem.exists(`${sources}/seed_two`)).resolves.toBe(false);
+      await expect(world.filesystem.exists(`${sources}/seed_three/simlock.avd`)).resolves.toBe(
+        true,
+      );
+      const after = world.runner.calls.slice(callsBefore);
+      expect(
+        after.some(
+          (call) =>
+            call.args.includes("-snapshot") &&
+            call.args[call.args.indexOf("-snapshot") + 1] === "simlock_boot",
+        ),
+        "the copy booted from the quick seed's snapshot",
+      ).toBe(true);
+      expect(saved(), "the snapshot was saved again in the booted copy").toBe(true);
+      expect(
+        world.host.pathAnswering("emulator-5586"),
+        "the copy's emulator was stopped",
+      ).toBeUndefined();
+    }
   });
 });
