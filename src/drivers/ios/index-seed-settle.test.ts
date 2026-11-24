@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BootTimeoutError, DriverCrashError } from "../../core/index.js";
 import {
@@ -41,10 +42,10 @@ const settledUdid = "00000000-0000-0000-0000-0000000000dd";
 const otherUdid = "00000000-0000-0000-0000-0000000000ee";
 const quickSourceId = `planted-${seedUdid}-${driverData.runtimeId}`;
 
-/** why: a launchd_sim as `ps` prints it: the program, then the bootstrap file inside the simulator's own folder. */
+/** why: a launchd_sim as `ps` prints it: the program, then the bootstrap file inside the simulator's own folder, spelled as the driver's `join` spells it so the Windows runner matches it too. */
 function launchd(world: World, pid: number, udid: string): ProcessEntry {
   return {
-    command: `/Runtimes/iOS.simruntime/usr/libexec/launchd_sim ${world.devicesDir}/${udid}/data/var/run/launchd_bootstrap.plist`,
+    command: `/Runtimes/iOS.simruntime/usr/libexec/launchd_sim ${join(world.devicesDir, udid)}/data/var/run/launchd_bootstrap.plist`,
     cpuSeconds: 1,
     pid,
     ppid: 1,
