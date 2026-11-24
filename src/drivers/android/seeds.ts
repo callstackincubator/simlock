@@ -2,6 +2,7 @@ import { basename, join } from "node:path";
 
 import {
   DriverCrashError,
+  IdleWatch,
   type DriverDevice,
   type DriverSettleResult,
   type DriverSource,
@@ -42,6 +43,9 @@ const STALE_REASON_MAX_LENGTH = 300;
 const SEED_MAKE_MIN_CEILING_MS = 900_000;
 const SEED_MAKE_STEPS_MS = 600_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
+/** why: ADR 0090 §3: the cores a copy's whole tree may use over two minutes and still count as quiet, and how often the tree is read. */
+const ANDROID_IDLE_CORES = 0.35;
+const IDLE_POLL_MS = 2_000;
 /** why: a device found after a restart has no process handle, so its exit is seen by listing adb's devices. */
 const SAVE_EXIT_POLL_INTERVAL_MS = 1_000;
 // why: adb shell sync and reboot -p have no limit of their own; a wedged adbd would hold the kind's lock.
@@ -159,6 +163,7 @@ export class Seeds {
         kind: row.kind,
         model: row.model,
         osVersion: row.osVersion,
+        ...(row.kind === "seed" ? { leases: row.leaseCount, settled: row.settled } : {}),
         ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
         ...(staleReason === undefined ? {} : { staleReason }),
       });
@@ -412,12 +417,134 @@ export class Seeds {
     }
   }
 
+  /**
+   * why: ADR 0090 §3: under the kind's lock the quick seed is checked and a `making` row for its
+   * settled copy is written; the lock is then let go, so a provision of the kind is served from the
+   * quick seed at once. The copy is made in its own source folder, booted from `simlock_boot`, read
+   * until its own processes are idle and saved again; under the lock once more the new row
+   * becomes the kind's ready seed in one transaction, and the quick seed is deleted.
+   */
   async settleSeed(
-    _processTable: ProcessTable,
+    processTable: ProcessTable,
     sourceId: string,
-    _options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal },
   ): Promise<DriverSettleResult> {
-    return { reason: "idle", settledAfterMs: 0, sourceId };
+    const settleId = `seed_${this.#idGenerator.generate()}`;
+    const folder = join(this.#deviceRoot, SOURCES_DIRECTORY, settleId);
+    const quick = await this.#deviceTable.withLock(
+      `seed:${this.#quickSeed(sourceId).specKey}`,
+      async () => {
+        const row = this.#quickSeed(sourceId);
+        this.#sources.insertMaking({
+          avdName: row.avdName,
+          createdAt: this.#clock.now(),
+          emulatorVersion: row.emulatorVersion,
+          folder,
+          imageIdentity: row.imageIdentity,
+          imageTag: row.imageTag,
+          kind: "seed",
+          model: row.model,
+          osVersion: row.osVersion,
+          settleOf: row.sourceId,
+          sourceId: settleId,
+          specKey: row.specKey,
+        });
+        return row;
+      },
+    );
+    this.#making.add(settleId);
+    try {
+      await this.#copyAvd(
+        quick.folder,
+        folder,
+        `copying Android seed ${sourceId} to ${settleId} failed`,
+      );
+      const settled = await this.#settleCopy(processTable, settleId, quick, folder, options.signal);
+      const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
+      const configHash = await this.#avdConfig.currentConfigHash(
+        avdFolder,
+        quick.imageIdentity,
+        "seed",
+        quick.emulatorVersion,
+      );
+      const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
+      await this.#deviceTable.withLock(`seed:${quick.specKey}`, async () => {
+        this.#sources.promoteSettled(settleId, quick.sourceId, configHash, sizeBytes);
+      });
+      await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
+      return {
+        reason: settled.reason,
+        settledAfterMs: settled.settledAfterMs,
+        sourceId: settleId,
+        ...(sizeBytes === undefined ? {} : { sizeBytes }),
+      };
+    } finally {
+      this.#making.delete(settleId);
+    }
+  }
+
+  #quickSeed(sourceId: string): SourceRow {
+    const row = this.#sources.findRow(sourceId);
+    if (row?.kind !== "seed" || row.settled) {
+      throw new DriverCrashError(`Android keeps no ready quick seed ${sourceId}`);
+    }
+    return row;
+  }
+
+  /** why: the copy boots as a lease's copy does, never the seed itself; its own processes are read until they are idle, then `simlock_boot` is saved in it again and it is stopped. */
+  async #settleCopy(
+    processTable: ProcessTable,
+    settleId: string,
+    quick: SourceRow,
+    folder: string,
+    signal: AbortSignal,
+  ): Promise<{ reason: "idle" | "cap"; settledAfterMs: number }> {
+    const copy: AndroidDriverData = {
+      avdHome: folder,
+      avdName: SEED_AVD_NAME,
+      configHash: "",
+      imageIdentity: quick.imageIdentity,
+      port: 0,
+      serial: "",
+    };
+    const state = this.#coldState(copy);
+    const booted = await this.#consolePorts.withReservedPort(copy, state);
+    try {
+      state.handle = await this.#emulator.start(booted, ["-snapshot", BOOT_SNAPSHOT], true);
+      const readyAt = this.#clock.now();
+      const reason = await this.#waitUntilIdle(processTable, state.handle.pid, readyAt, signal);
+      const settledAfterMs = this.#clock.now() - readyAt;
+      await this.#saveBootSnapshot(settleId, booted);
+      await this.#emulator.shutdown(booted, state.handle);
+      state.handle = undefined;
+      return { reason, settledAfterMs };
+    } finally {
+      state.handle?.kill("SIGKILL");
+      if (state.port !== undefined) this.#consolePorts.release(state.port);
+    }
+  }
+
+  /** why: ADR 0090 §3: idle is judged from the copy's own processes, never host load; the tree's root is the emulator process the driver spawned. */
+  async #waitUntilIdle(
+    processTable: ProcessTable,
+    rootPid: number,
+    readyAt: number,
+    signal: AbortSignal,
+  ): Promise<"idle" | "cap"> {
+    const watch = new IdleWatch({
+      idleCores: ANDROID_IDLE_CORES,
+      readyAt,
+      root: (processes) => processes.find((entry) => entry.pid === rootPid),
+    });
+    for (;;) {
+      signal.throwIfAborted();
+      // why: a read that fails counts as no reading (the `ProcessTable` port), so the cap still ends the wait.
+      const processes = await processTable.list().catch(() => undefined);
+      if (processes !== undefined) watch.observe(processes, this.#clock.now());
+      const state = watch.state(this.#clock.now());
+      if (state !== "busy") return state;
+      await this.#adbTools.delay(IDLE_POLL_MS);
+    }
   }
 
   async destroySource(sourceId: string): Promise<void> {

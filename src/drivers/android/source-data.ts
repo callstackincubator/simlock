@@ -1,4 +1,4 @@
-import type { SqliteDatabase, SqliteSchemaOwner } from "../../ports/index.js";
+import { inTransaction, type SqliteDatabase, type SqliteSchemaOwner } from "../../ports/index.js";
 
 export const androidSourceDataOwner: SqliteSchemaOwner = {
   migrations: [
@@ -28,9 +28,13 @@ export const androidSourceDataOwner: SqliteSchemaOwner = {
              OR (newer.created_at = android_source_data.created_at AND newer.source_id > android_source_data.source_id)));
      CREATE UNIQUE INDEX android_source_data_ready_seed ON android_source_data (spec_key)
        WHERE kind = 'seed' AND state = 'ready';`,
+    // why: ADR 0090: the plain leases copied from a seed, whether it is a settled copy, and, on the row of a settle and of the quick seed it retires, the seed the settle replaces or was replaced by.
+    `ALTER TABLE android_source_data ADD COLUMN lease_count INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE android_source_data ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE android_source_data ADD COLUMN settle_of TEXT;`,
   ],
   name: "android-source-data",
-  version: 2,
+  version: 3,
 };
 
 export interface NewSourceRow {
@@ -45,6 +49,8 @@ export interface NewSourceRow {
   readonly imageIdentity: string;
   readonly emulatorVersion: string;
   readonly createdAt: number;
+  /** why: the quick seed a settle replaces; set on the row of a settle only. */
+  readonly settleOf?: string;
 }
 
 export interface SourceRow {
@@ -62,6 +68,9 @@ export interface SourceRow {
   readonly imageIdentity: string;
   readonly sizeBytes: number | undefined;
   readonly staleReason: string | undefined;
+  readonly settled: boolean;
+  readonly leaseCount: number;
+  readonly settleOf: string | undefined;
 }
 
 /** why: the one place that reads or writes `android_source_data`; nothing outside the Android driver does (ADR 0036 §2). */
@@ -76,8 +85,8 @@ export class AndroidSourceTable {
     this.#database
       .prepare(
         `INSERT INTO android_source_data (source_id, kind, state, spec_key, model, os_version, image_tag,
-           folder, avd_name, image_identity, emulator_version, created_at)
-         VALUES (?, ?, 'making', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           folder, avd_name, image_identity, emulator_version, created_at, settle_of)
+         VALUES (?, ?, 'making', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.sourceId,
@@ -91,7 +100,36 @@ export class AndroidSourceTable {
         row.imageIdentity,
         row.emulatorVersion,
         row.createdAt,
+        row.settleOf ?? null,
       );
+  }
+
+  /** why: one statement, so two leases at once both count. */
+  addLease(sourceId: string): void {
+    this.#database
+      .prepare("UPDATE android_source_data SET lease_count = lease_count + 1 WHERE source_id = ?")
+      .run(sourceId);
+  }
+
+  /** why: ADR 0090 §3: one transaction, so a reader sees the quick seed or the settled one as the kind's ready seed, never both and never neither; the retired row stays, `making`, until its folder is gone. */
+  promoteSettled(
+    settleId: string,
+    retiredId: string,
+    configHash: string,
+    sizeBytes: number | undefined,
+  ): void {
+    inTransaction(this.#database, () => {
+      this.#database
+        .prepare(
+          "UPDATE android_source_data SET state = 'making', settle_of = ? WHERE source_id = ?",
+        )
+        .run(settleId, retiredId);
+      this.#database
+        .prepare(
+          "UPDATE android_source_data SET state = 'ready', settled = 1, settle_of = NULL, config_hash = ?, size_bytes = ? WHERE source_id = ?",
+        )
+        .run(configHash, sizeBytes ?? null, settleId);
+    });
   }
 
   markReady(sourceId: string, configHash: string, sizeBytes: number | undefined): void {
@@ -138,7 +176,7 @@ export class AndroidSourceTable {
     return this.#database
       .prepare(
         `SELECT source_id, kind, spec_key, model, os_version, image_tag, folder, avd_name, config_hash, size_bytes,
-           emulator_version, image_identity, stale_reason, created_at
+           emulator_version, image_identity, stale_reason, created_at, settled, lease_count, settle_of
          FROM android_source_data ${where}`,
       )
       .all(...parameters)
@@ -157,6 +195,9 @@ export class AndroidSourceTable {
         imageIdentity: row["image_identity"] as string,
         sizeBytes: (row["size_bytes"] as number | null) ?? undefined,
         staleReason: (row["stale_reason"] as string | null) ?? undefined,
+        settled: row["settled"] === 1,
+        leaseCount: row["lease_count"] as number,
+        settleOf: (row["settle_of"] as string | null) ?? undefined,
       }));
   }
 }
