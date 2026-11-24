@@ -20,7 +20,10 @@ import {
 export const phoneSerial = "R58Y61A60HN";
 
 // why: one Android driver serving a virtual Pixel 8 and an enrolled, present phone, so a test can lease either through the same worker.
-export async function setUpWithPhone(options: SetUpOptions = {}): Promise<Rig> {
+export async function setUpWithPhone({
+  phoneModel = "Pixel 8",
+  ...options
+}: SetUpOptions & { readonly phoneModel?: string } = {}): Promise<Rig> {
   const rig = await setUp({
     ...options,
     drivers: (clock) => [
@@ -31,7 +34,7 @@ export async function setUpWithPhone(options: SetUpOptions = {}): Promise<Rig> {
         knownModels: ["Pixel 8"],
         modelClasses: { "Pixel 8": "phone" },
         physicalDevices: [
-          { class: "phone", ids: [phoneSerial], model: "Pixel 8", osVersion: "15" },
+          { class: "phone", ids: [phoneSerial], model: phoneModel, osVersion: "15" },
         ],
         platform: "android",
       }),
