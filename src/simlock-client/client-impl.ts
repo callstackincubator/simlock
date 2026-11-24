@@ -58,6 +58,9 @@ import type {
   IdentityOutput,
   InstallComponentOnWorkersOptions,
   InstallComponentOptions,
+  MakeSeedOptions,
+  SeedMakeInput,
+  SeedMakeOutput,
   LeaseCancelInput,
   LeaseCancelOutput,
   LeaseGrant,
@@ -365,6 +368,13 @@ class SimlockClientImpl {
       { onComponentProgress: options.onProgress },
     );
     return this.#parseOutput("component.install", payload);
+  }
+
+  async makeSeed(input: SeedMakeInput, options: MakeSeedOptions = {}): Promise<SeedMakeOutput> {
+    const payload = await this.#callRaw("seed.make", this.#parseInput("seed.make", input), {
+      onSeedProgress: options.onProgress,
+    });
+    return this.#parseOutput("seed.make", payload);
   }
 
   async installComponentOnWorkers(
