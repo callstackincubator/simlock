@@ -28,7 +28,7 @@ async function settle(): Promise<void> {
 
 describe("Android screen capture: the key frame bound", () => {
   it("sends reset video on the control socket when no key frame came for 4 s", async () => {
-    // why: a still screen: a reset at 4 s and again at 8 s, none before.
+    // why: a still screen: one reset at 4 s, none before, and none again until its key frame arrives.
     const still = await setup();
     await opened(still);
     const stillControl = still.target.server.controls[0]!;
@@ -38,9 +38,9 @@ describe("Android screen capture: the key frame bound", () => {
     still.clock.advance(1);
     await settle();
     expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO]);
-    still.clock.advance(4_000);
+    still.clock.advance(20_000);
     await settle();
-    expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO, RESET_VIDEO]);
+    expect(stillControl.written.slice(2)).toEqual([RESET_VIDEO]);
 
     // why: a key frame at 3 s moves the reset from 4 s to 7 s, and the session the reset starts is relayed whole.
     const moving = await setup();
