@@ -16,20 +16,20 @@ Resolve and boot:
 
 - A slim spec is returned only for a slim request the driver will slim. The registry alone records a device's mode.
 - `RuntimeMissingError` is only for what a download can fix: an OS outside the device type's range, an installed runtime not paired with the type, and anything below iOS 16 are refused instead.
-- A boot is `simctl boot`, `bootstatus -b`, then `listapps` until it succeeds, on one deadline: bootstatus can finish before the installer is ready.
+- A boot is `simctl rename` (prepare only: label, else stored name), `simctl boot`, `bootstatus -b`, then `listapps` until it succeeds, on one deadline: bootstatus can finish before the installer is ready.
 - Slim (ADR 0060), on `prepare` of a slim spec only: the managed labels are merged into the simulator's `disabled.plist` before the boot (other entries kept; a failed write is logged), and `launchctl print-disabled system` is read back after it. A label not as written is `full`; a failed readback is `slim`; both call `onSlimSkipped`, logged only. All as written and the write ok: `slim`, and `onSlimmed` is `device.slimmed`. Nothing written off and no kept category: `full`, no readback.
 - Named services (ADR 0083): `exclude` beats `include` beats a category; `simlock-managed.json` records the names, so one dropped from both is written back on. A baseline saved before it keeps a dropped name off; `include` it.
 - Slim `except` (ADR 0066): an excepted category's labels are written `false`; an unknown name is `BAD_REQUEST`; a kept label not read back throws `KeptCategoriesError`.
-- A recovery boot writes no slim overrides and reads nothing back. DeviceHub clipboard isolation is configured before preparation and recovery boots; ready default-set simulators reboot under the lease claim before a grant. Active leases at upgrade keep clipboard sync until a later boot or lease end.
-- The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it after `simctl delete`.
-- After every boot and before the readback, the volume step runs, then the window step; each only reports its failure.
+- A recovery boot writes no slim overrides and reads nothing back. DeviceHub clipboard isolation is set, read back, before preparation and recovery boots (not `false`: refused); ready default-set simulators reboot under the claim before a grant.
+- `launchdOverridesRoot` is outside the device set: `destroy` and each seed deletion remove their folder after `simctl delete`.
+- After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step.
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached.
 
 Seeds (ADR 0061):
 
 - A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` or `simlock simctl list`.
-- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder; `saveSource` deletes the saved-from lease's log folder too. A log folder that cannot be deleted is logged and the make or save goes on; a throwaway that cannot be deleted fails the make.
+- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder; `saveSource` deletes the saved-from lease's log folder too. A log folder that cannot be deleted is logged; a throwaway that cannot fails the make.
 - A source records its lineage and, in `ios_source_files`, the files and links naming it, after flushing its WALs. A clone keeps its source's lineage and, before its first boot, has its `com.apple.LaunchServices-*.csstore` deleted and those files and links swapped to its own UDID; a failed drop or swap deletes it. No lineage: a seed is remade, a baseline stale.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
 - A settle (ADR 0090) swaps a ready quick seed for its idle copy; a simulator it cannot delete keeps a `making` row for the next start's sweep.

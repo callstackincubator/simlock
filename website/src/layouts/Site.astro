@@ -9,7 +9,7 @@ import geistMono from '../fonts/GeistMono-Regular.woff2?url';
 import switzerMedium from '../fonts/Switzer-Medium.woff2?url';
 import switzerRegular from '../fonts/Switzer-Regular.woff2?url';
 import { brandCss } from '../site/brand';
-import { at, site } from '../site/content';
+import { at, BASE, site } from '../site/content';
 import { fullTitle } from '../site/meta';
 
 interface Props {
@@ -30,12 +30,13 @@ interface Props {
 const { title: pageTitle, description, noindex = false, canonicalPath, jsonLd } = Astro.props;
 const title = fullTitle(pageTitle);
 // Pages are built as files (`build.format: 'file'`), and GitHub Pages serves them without `.html`
-// or a trailing slash, so the canonical drops both.
+// or a trailing slash, so the canonical drops both. The home page is the exception: the host
+// redirects `/simlock` to `/simlock/`, so its canonical keeps the slash (`at('/')`).
 const path = (canonicalPath ?? Astro.url.pathname)
   .replace(/\.html$/, '')
   .replace(/(^|\/)index$/, '$1')
   .replace(/(.)\/$/, '$1');
-const canonical = new URL(path, Astro.site).href;
+const canonical = new URL(path === BASE ? at('/') : path, Astro.site).href;
 const ogImage = new URL(at('/og-image.jpg'), Astro.site).href;
 ---
 

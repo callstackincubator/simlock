@@ -1,0 +1,229 @@
+---
+title: Change a setting
+description: Change a worker setting with simlock config set or by editing config.json, see the values the daemon uses, go back to a default, and make the changes most machines need.
+sidebar:
+  order: 2
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** the daemon runs with your setting. A worker runs fine with no config file; change only what you need.
+
+## Before you start
+
+- Run the commands on the worker, as the user that runs the daemon. `config` and `config get` need the admin role.
+- Every key, with its default and allowed values: [Configuration reference](/simlock/docs/reference/configuration).
+
+## Set a value
+
+<Steps>
+
+1. Set the key:
+
+   ```sh
+   simlock config set idle.shutdownAfterMs 1800000
+   ```
+
+   ```text
+   Updated idle.shutdownAfterMs in /Users/dana/.simlock/config.json; takes effect on daemon restart.
+   ```
+
+2. Restart the daemon. It reads `config.json` only when it starts.
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock config get idle.shutdownAfterMs` prints `1800000`.
+
+How to write keys and values:
+
+- **Keys use dots.** `idle.shutdownAfterMs` is the `shutdownAfterMs` key inside `idle`.
+- **Times are in milliseconds, sizes in bytes.** 1 GiB is `1073741824`.
+- **Values are read as JSON when they parse.** `true`, `4`, `["iPhone 17"]` and `{"phone":"iPhone 17"}` become a boolean, a number, a list and an object. Anything else is stored as text. Put quotes around JSON values so your shell passes them as they are. On Windows PowerShell 5.1, see [Install on Windows](/simlock/docs/getting-started/windows) for how to quote JSON.
+- **`config set` does not need the daemon.** It writes the file only.
+
+### When a value is refused
+
+`config set` checks the whole file before it saves anything. A wrong value or an unknown key is refused with exit code 2, and the file stays as it was:
+
+```json
+{"error":{"code":"USAGE","message":"Invalid config after setting idle.shutdownAfter: Unknown config key: \"idle.shutdownAfter\""}}
+```
+
+## Edit the file by hand
+
+The file is `config.json` in the data folder: `~/.simlock/config.json`, or in the folder `SIMLOCK_HOME` names. It is plain JSON:
+
+```json title="~/.simlock/config.json"
+{
+  "http": { "enabled": true },
+  "idle": { "shutdownAfterMs": 1800000 }
+}
+```
+
+Restart the daemon after you save. The CLI checks the file before it starts the daemon:
+
+| What you wrote | What happens |
+| --- | --- |
+| A wrong value | The daemon does not start. The command fails with `USAGE`, exit 2, and names the key, such as `Invalid config value for "http.port": expected ...`. |
+| An unknown key | Ignored, with a warning in the daemon log. Check `simlock daemon logs` after you edit. |
+| Invalid JSON | Fails with `Invalid JSON in config file`. |
+| A `mode` key | Refused. A daemon started with `--gateway` is a gateway; any other is a worker. Remove the key. |
+
+`simlock config set` saves the file readable by your user only, because it can hold secrets such as a gateway join token. A file you create yourself keeps the permissions you give it.
+
+## See the values the daemon uses
+
+```sh
+simlock config                        # every setting, as one JSON line
+simlock config get idle               # one group
+simlock config get lease.maxTtlMs     # one value
+```
+
+```text
+14400000
+```
+
+- These show what the **running** daemon uses: your values plus the defaults. A value you set but have not restarted for still shows the old value. To see what you wrote, open `config.json`.
+- Secrets read `[redacted]`: `gateway.token`, every `gateway.headers` value, and every alert destination's `url` and `secret`. Add `--show-secrets` to print them as written.
+- `config get` with a key that does not exist fails with `Unknown config key: <key>`.
+
+<Aside type="caution">
+Output with `--show-secrets` holds working credentials. Do not paste it anywhere public.
+</Aside>
+
+## Go back to a default
+
+No command removes a key. Delete the key from `config.json`, or set the default value with `simlock config set`. Then restart the daemon.
+
+**Check:** `simlock config get <key>` prints the default from the [Configuration reference](/simlock/docs/reference/configuration).
+
+## Settings most machines change
+
+Each change needs a daemon restart.
+
+| You want to | Key | Where |
+| --- | --- | --- |
+| Turn off the HTTP API and the console | `http.enabled` | [Below](#turn-off-http) |
+| Change the HTTP address or port | `http.host`, `http.port` | [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http) |
+| Choose which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | [Below](#choose-default-models) |
+| Run Android emulators without a window | `android.emulator.headless` | [Below](#run-android-emulators-without-a-window) |
+| Give new Android emulators fewer CPU cores | `android.emulator.cores` | [Below](#give-android-emulators-fewer-cores) |
+| Put Simlock's simulators in Xcode's own list | `drivers.ios.deviceSet` | [Below](#switch-the-ios-device-set) |
+| Watch iOS simulators in a window | `ios.simulator.headless`, `drivers.ios.deviceSet` | [Below](#watch-ios-simulators-in-a-window) |
+| Change how long a lease lasts | `lease.defaultTtlMs`, `lease.maxTtlMs` | [Leases and requesters](/simlock/docs/concepts/leases) |
+| Serve only enrolled phones on a platform | `android.virtualDevices`, `ios.virtualDevices` | [Enrol phones](/simlock/docs/worker/enrol-phones#serve-enrolled-phones-only) |
+| Let one agent hold several devices | `lease.maxPerRequester` | [Use several devices at once](/simlock/docs/using-devices/several-devices) |
+| Keep idle devices longer | `idle.shutdownAfterMs`, `idle.deleteAfterMs` | [Free disk space](/simlock/docs/worker/free-disk#keep-devices-longer) |
+| Let Simlock download runtimes and images | `downloads.policy`, `downloads.acceptAndroidLicenses` | [Install runtimes and images](/simlock/docs/worker/runtimes-and-images) |
+| Run more or fewer devices | `capacity.strategy`, `capacity.config` | [Run more devices at once](/simlock/docs/worker/capacity) |
+| Keep devices booted and ready | `warmPool.targets` | [Make leases start faster](/simlock/docs/worker/warm-pool) |
+| Make iOS devices slim by default, or serve one mode | `ios.defaultMode`, `ios.modes` | [Run more devices at once](/simlock/docs/worker/capacity#fit-more-ios-simulators-with-slim) |
+| Turn on screen streaming | `capabilities.stream.enabled` | [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http#turn-on-screen-streaming) |
+| Keep more or less history, or log more | `eventLog.*`, `metrics.retention`, `log.level` | [See what the worker is doing](/simlock/docs/worker/monitoring) |
+
+### Turn off HTTP
+
+A standalone worker serves the HTTP API and the web console on `127.0.0.1:4701`. To turn both off:
+
+```sh
+simlock config set http.enabled false
+```
+
+**Check:** after a restart, `simlock daemon start` prints no `Console:` line.
+
+A worker that has joined a gateway always has HTTP off and refuses `true`: use the gateway instead.
+
+### Choose default models
+
+When an agent asks for a class such as `phone` instead of a model, Simlock tries your list first, in order:
+
+```sh
+simlock config set ios.defaultModels '{"phone":["iPhone 17","iPhone 16"],"tablet":"iPad Air 11-inch (M2)"}'
+```
+
+Each key is a device class: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`. `simlock catalog` shows the models in each class.
+
+**Check:** after a restart, `simlock catalog --platform ios` shows `phone (default: iPhone 17)`.
+
+### Run Android emulators without a window
+
+```sh
+simlock config set android.emulator.headless true
+```
+
+This suits a machine nobody watches. It applies the next time each emulator boots.
+
+### Give Android emulators fewer cores
+
+```sh
+simlock config set android.emulator.cores 2
+```
+
+Emulators made from then on get that many CPU cores. Unset, each gets its device profile's own count.
+
+### Watch iOS simulators in a window
+
+macOS only. You need both settings:
+
+```sh
+simlock config set drivers.ios.deviceSet default
+simlock config set ios.simulator.headless false
+```
+
+**Check:** after a restart, the next simulator Simlock gets ready opens in DeviceHub, or in a Simulator.app window when DeviceHub is not installed.
+
+How the windows behave, and what `drivers.ios.deviceSet default` changes for Xcode and your own tools: [iOS device sets](/simlock/docs/concepts/ios-device-sets#simulator-windows).
+
+### Switch the iOS device set
+
+macOS only. Do it when no lease is active: the old set must be empty.
+
+<Aside type="caution">
+`simlock nuke --delete-devices` ends every lease and deletes every simulator and emulator Simlock made.
+</Aside>
+
+<Steps>
+
+1. With the old setting still in place, clear the old set. If you set `drivers.ios.deviceRoot`, keep it set for these two commands:
+
+   ```sh
+   simlock nuke --delete-devices
+   simlock doctor --purge-orphans
+   ```
+
+2. Set the key, and remove `drivers.ios.deviceRoot` if you switch to `default`:
+
+   ```sh
+   simlock config set drivers.ios.deviceSet default
+   ```
+
+3. Restart the daemon:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock catalog --platform ios` lists iOS, and `simlock doctor` prints no `Unavailable [ios]` line.
+
+The leftover check looks only in `~/.simlock/devices/ios`, so simulators in a custom `drivers.ios.deviceRoot` are not reported; step 1 still clears them. What each setting means: [iOS device sets](/simlock/docs/concepts/ios-device-sets).
+
+## When it fails
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `Invalid config after setting <key>: ...`, exit 2 | The value or key is wrong. The file did not change. | Check the key and its allowed values in the [Configuration reference](/simlock/docs/reference/configuration). |
+| A command fails with `Invalid config value for "<key>": ...`, exit 2 | You edited the file by hand with a wrong value. | Fix the key, or set it with `simlock config set`. |
+| The setting has no effect | The daemon was not restarted, or the key is unknown and ignored. | Restart the daemon. Look for `Unknown config key` in `simlock daemon logs`. |
+| `simlock doctor` shows `invalid-device-set` and iOS is off | The value is not exactly `simlock` or `default`; or `ios.simulator.headless` is `false` but `drivers.ios.deviceSet` is not `default`; or `default` is set together with `drivers.ios.deviceRoot`. | Fix the value, or remove one of the clashing keys. |
+| `simlock doctor` shows `device-set-changed` and iOS is off | Simulators from the old setting are still there. | Set the key back, then follow [Switch the iOS device set](#switch-the-ios-device-set) from step 1. The message names any simulator that remains, with the `xcrun simctl delete` command for it. |
+| `FORBIDDEN` | `config` or `config get` ran from an agent session. | Run it on the worker as the user that runs the daemon. |
+
+Flags: [CLI reference](/simlock/docs/reference/cli#simlock-config).

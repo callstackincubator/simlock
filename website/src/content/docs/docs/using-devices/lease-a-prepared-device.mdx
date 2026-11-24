@@ -1,0 +1,54 @@
+---
+title: Lease a copy of a prepared device
+description: Lease a fresh copy of a baseline, a simulator or emulator an operator saved with apps, files and settings already on it.
+sidebar:
+  order: 2
+  label: "Lease a prepared device"
+---
+
+**Result:** you hold your own copy of a prepared device, for example with the app installed and a test user signed in.
+
+What a baseline is and how copies behave: [Baselines](/simlock/docs/concepts/baselines).
+
+## Before you start
+
+- Simulators and emulators only. `--baseline` cannot be combined with `--class` or `--physical`.
+- Through a gateway, only a worker that holds the baseline can serve the lease.
+
+## Lease the copy
+
+1. Find the name:
+
+   ```sh
+   simlock baseline list
+   ```
+
+   ```text
+   NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE
+   checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40  app 4.2, test user
+   ```
+
+2. Lease it:
+
+   ```sh
+   simlock lease --platform android --baseline checkout --detach
+   ```
+
+**Check:** `simlock status` shows the baseline and version your device came from.
+
+To name the baseline for every lease in a shell or CI job, set `SIMLOCK_BASELINE=checkout`. `--baseline` wins over the variable. An empty variable is ignored.
+
+## Options you can still pass
+
+The baseline fixes platform, model, OS, mode and image tag. Options you pass must match it: `--device "pixel 9"` or `--os ">=35"` match a Pixel 9 baseline on Android 36.
+
+## When it fails
+
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `UNKNOWN_BASELINE` | 12 | No baseline has that name. | Check `simlock baseline list`. |
+| `BASELINE_MISMATCH` | 2 | An option you passed differs from the baseline. The message names the option. | Drop the option, or change it to match. |
+| `BASELINE_STALE` | 12 | The OS or system image the baseline was saved on is gone from the worker. | Ask the operator to install it again, or to save a new version. |
+| `MODE_UNAVAILABLE` | 12 | The baseline is a slim or full iOS simulator, and the worker no longer serves that mode. | Ask the operator to serve that mode again (`ios.modes`). |
+
+All errors: [Errors reference](/simlock/docs/reference/errors).

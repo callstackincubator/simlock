@@ -1,7 +1,7 @@
 # Web console
 
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
-Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
+Surface: [console.mdx](../website/src/content/docs/docs/reference/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 Paths below start at `ui/`.
 

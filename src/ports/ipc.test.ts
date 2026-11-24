@@ -18,7 +18,7 @@ describe.each(implementations)("IpcTransport contract: $name", ({ create }) => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "simlock-ipc-"));
-    endpoint = join(directory, "daemon.sock");
+    endpoint = resolveDaemonSocketPath(directory);
   });
 
   afterEach(async () => {

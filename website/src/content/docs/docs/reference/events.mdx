@@ -1,6 +1,8 @@
 ---
 title: Events
 description: Every event a worker or a gateway records, when it fires, what it carries, and how to watch it.
+sidebar:
+  order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -41,7 +43,7 @@ With `--follow`, each line that arrives live wraps the event in an `event` field
 | ----------------------------- | --------------------------------------------------------------------------------------------- |
 | `GET /v1/events`              | `{"events": [...]}`: the recent events kept in memory.                                        |
 | `GET /v1/events?since=2h`     | `{"events": [...]}`: events from the history, same duration format as the CLI.                |
-| `GET /v1/events?before=evt_…&limit=100` | `{"events": [...]}`: the `limit` events just older than that event, oldest first. Fewer than `limit` means the history ends there. |
+| `GET /v1/events?before=evt_…&limit=100` | `{"events": [...]}`: the `limit` events right before that event, oldest first. Fewer than `limit` means the history ends there. |
 | `GET /v1/events?worker=w1&limit=100` | `{"events": [...]}`: only the events of that worker, with `before`, `limit` or `since` as above. |
 | `GET /v1/events/stream`       | A server-sent event stream. Each message's `event` is the event name and its `data` the event as JSON. |
 
@@ -54,7 +56,7 @@ curl -N -H "Authorization: Bearer $SIMLOCK_TOKEN" https://simlock-gw.example.com
 ### In the console
 
 The console's **Activity** page lists the last hour, adds new events as they arrive, and loads older ones as you scroll down. Filter by Leases,
-Devices, Workers, Components or Other. See [Console](/simlock/docs/worker/console).
+Devices, Workers, Components or Other. See [Web console](/simlock/docs/reference/console).
 
 ## What every event carries
 
@@ -211,4 +213,4 @@ Running a command on a device and watching its screen record no event. Each scre
 `simlock daemon logs`.
 </Aside>
 
-To have a gateway post some of these events to a webhook, see [Alerts](/simlock/docs/gateway/alerts).
+To have a gateway post some of these events to a webhook, see [Send alerts](/simlock/docs/gateway/alerts).

@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,13 +13,12 @@ import {
   type SqliteSchemaOwner,
 } from "../ports/index.js";
 import { openStateDatabase, STATE_DB_NAME } from "./index.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 const directories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    directories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  await Promise.all(directories.splice(0).map((path) => removeDirectory(path)));
 });
 
 const sqlite = new NodeSqliteOpener();
@@ -65,7 +64,8 @@ describe("openStateDatabase", () => {
 
     const first = await open(directory);
     expect(existsSync(path)).toBe(true);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // why: Windows has no owner-only file mode.
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(
       first.database.prepare("SELECT owner, version FROM schema_versions ORDER BY owner").all(),
     ).toEqual([
@@ -90,7 +90,7 @@ describe("openStateDatabase", () => {
 
 describe("openStateDatabase refusals", () => {
   const SEE =
-    "See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.";
+    "See https://incubator.callstack.com/simlock/docs/worker/daemon#from-a-version-that-used-statejson.";
 
   async function seeded(directory: string): Promise<string> {
     const path = join(directory, STATE_DB_NAME);

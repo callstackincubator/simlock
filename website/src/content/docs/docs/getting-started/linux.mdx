@@ -1,0 +1,192 @@
+---
+title: Install on Linux
+description: Install Simlock on a Linux machine, set up the Android SDK, a JDK and KVM for Android emulators, and confirm the machine with simlock doctor.
+sidebar:
+  order: 2
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** `simlock doctor` reports nothing missing, and the machine has an Android system image installed that agents can lease.
+
+<Aside type="tip" title="For agents">
+`simlock setup` checks the machine itself. Install the tools below first, then run:
+
+```sh
+npm i -g simlock
+simlock setup --project --tool claude-code --mcp --json   # or --user, --tool codex, --no-mcp
+```
+</Aside>
+
+## Before you start
+
+| You need | For |
+| --- | --- |
+| Node.js 22.13 or later | The `simlock` CLI |
+| The Android SDK command-line tools, `emulator` and `platform-tools` | Android emulators |
+| A JDK 17 or later | Running `sdkmanager` |
+| KVM, with your user allowed to open `/dev/kvm` | Running the emulator at full speed |
+| About 2 GiB free disk per Android system image | Installing an OS |
+
+Linux runs Android emulators only. iOS simulators need a Mac: an iOS lease on Linux fails with `NO_DRIVER`.
+
+Install the tools **before** you run any `simlock` command except `--help`. The daemon looks for them only when it starts. If you add a tool later, see [A tool you installed is not found](#a-tool-you-installed-is-not-found).
+
+The commands below use `apt` (Debian, Ubuntu). On another distribution, install the same packages with its package manager.
+
+## 1. Install Simlock
+
+```sh
+npm i -g simlock
+simlock --help
+```
+
+**Check:** `simlock --help` prints the command list.
+
+## 2. Set up Android emulators
+
+<Steps>
+
+1. Install a JDK:
+
+   ```sh
+   sudo apt install openjdk-17-jdk-headless
+   ```
+
+2. Download the [command-line tools for Linux](https://developer.android.com/studio#command-line-tools-only) and unpack them to `~/Android/Sdk/cmdline-tools/latest`:
+
+   ```sh
+   mkdir -p ~/Android/Sdk/cmdline-tools
+   unzip commandlinetools-linux-*_latest.zip -d ~/Android/Sdk/cmdline-tools
+   mv ~/Android/Sdk/cmdline-tools/cmdline-tools ~/Android/Sdk/cmdline-tools/latest
+   ```
+
+3. Add these lines to `~/.bashrc`, then open a new terminal. Change the paths if your SDK or JDK is elsewhere:
+
+   ```sh
+   export ANDROID_HOME="$HOME/Android/Sdk"
+   export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+   export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+   ```
+
+   `ANDROID_HOME` is required on Linux: Simlock has no default SDK location there. It reads `ANDROID_HOME`, then `ANDROID_SDK_ROOT`.
+
+4. Install the emulator and platform tools, and accept the Android SDK licences. Simlock cannot install a system image until you do:
+
+   ```sh
+   sdkmanager --install emulator platform-tools
+   sdkmanager --licenses
+   ```
+
+</Steps>
+
+With Android Studio instead: it installs the SDK in `~/Android/Sdk` and a JDK in its own `jbr` folder. Set `ANDROID_HOME` and `JAVA_HOME` to those, and install **Android SDK Command-line Tools** in its SDK Manager.
+
+## 3. Turn on KVM
+
+`simlock doctor` does not check hardware acceleration. Check it yourself:
+
+```sh
+emulator -accel-check
+```
+
+**Check:** the output has a line that ends with `is installed and usable.`
+
+If it does not:
+
+<Steps>
+
+1. Check that `/dev/kvm` exists. If it does not, turn on virtualization in the machine's firmware settings (Intel VT-x, AMD-V or SVM). On a virtual machine or cloud host, it needs nested virtualization.
+
+2. Let your user open it, then log out and in again:
+
+   ```sh
+   sudo usermod -aG kvm "$USER"
+   ```
+
+3. Run `emulator -accel-check` again.
+
+</Steps>
+
+## 4. Check the machine
+
+```sh
+simlock doctor
+```
+
+**Check:** stderr is empty and stdout is:
+
+```json
+{"findings":[],"sources":[]}
+```
+
+Each problem prints one line on stderr with the platform and the fix:
+
+```text
+Missing [android] android-emulator: The Android emulator package is not installed in /home/dana/Android/Sdk. Run `sdkmanager --install emulator`.
+```
+
+Run the fix, then see [A tool you installed is not found](#a-tool-you-installed-is-not-found).
+
+## 5. Install an OS to lease
+
+Simlock creates emulators only on a system image that is installed. Install the API levels your agents use:
+
+```sh
+simlock component install android 36
+```
+
+An install downloads about 2 GiB; progress prints on stderr.
+
+**Check:** the OS appears in the catalog:
+
+```sh
+simlock catalog --platform android
+```
+
+```text
+Platform: android
+  Runtimes: 36 (default: 36)
+```
+
+To start Simlock at login, see [Start, stop and update the daemon](/simlock/docs/worker/daemon). Run `simlock daemon install` from a shell where `ANDROID_HOME` and `JAVA_HOME` are set: the service keeps the values it sees when you install it.
+
+## Troubleshooting
+
+### A tool you installed is not found
+
+The daemon was already running when you installed it, or it started from a shell without `ANDROID_HOME`. Stop it; the next command starts it again from this shell:
+
+```sh
+simlock daemon stop
+simlock doctor
+```
+
+### Doctor findings
+
+Every line ends with its fix. These need more than the line says:
+
+| Line starts with | Fix |
+| --- | --- |
+| `Missing [android] android-sdk: No Android SDK found` | Set `ANDROID_HOME` to the SDK folder (step 2). |
+| `Missing [android] android-jdk: sdkmanager cannot run` | Install a JDK and set `JAVA_HOME` to it (step 2). |
+| `Missing [android] android-cmdline-tools:` | Unpack the command-line tools to `$ANDROID_HOME/cmdline-tools/latest` (step 2). |
+| `Missing [android] android-emulator: The installed Android emulator does not accept` | The emulator is too old for Simlock. Run `sdkmanager --install emulator`. |
+
+### Install fails
+
+| Error | Fix |
+| --- | --- |
+| `LICENSE_NOT_ACCEPTED` | `sdkmanager --licenses`, then install again. |
+| `INSUFFICIENT_DISK_SPACE` | Free disk. Nothing was downloaded. |
+| `DOWNLOAD_TIMEOUT` | Run the install again. |
+
+### The emulator does not boot
+
+Run `emulator -accel-check`. Without KVM the emulator does not start; see [step 3](#3-turn-on-kvm). More: [A worker misbehaves](/simlock/docs/troubleshooting/worker).
+
+## Next
+
+- [Lease your first device](/simlock/docs/getting-started/first-lease)
+- [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent)
+- [Start Simlock at login](/simlock/docs/worker/daemon)

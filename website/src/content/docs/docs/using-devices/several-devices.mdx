@@ -1,0 +1,99 @@
+---
+title: Use several devices at once
+description: Give each agent its own requester id, or let one agent hold several leases with lease.maxPerRequester, overall or per platform.
+sidebar:
+  order: 5
+  label: "Use several devices"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** several agents each hold their own device, or one agent holds more than one, without `REQUESTER_ALREADY_LEASED`.
+
+By default each requester holds one lease, or has one request waiting, at a time. Who counts as a requester: [Leases](/simlock/docs/concepts/leases).
+
+## Pick the way
+
+| You want | Do |
+| --- | --- |
+| Several agents, one device each | [Give each agent its own requester id](#give-each-agent-its-own-requester-id). |
+| One agent with several devices | [Raise the limit on the worker](#let-one-requester-hold-several-leases) (operator). |
+
+## Give each agent its own requester id
+
+`simlock lease` takes the first of these that is set:
+
+1. `--agent-id <id>` on the command.
+2. The `SIMLOCK_AGENT_ID` environment variable.
+3. The agent session: `claude-code:<session id>` under Claude Code, `codex:<session id>` under Codex, `pi:<session id>` under pi. Every command and sub-agent in one session shares that id, and so shares one lease.
+4. The process id of that one `simlock` command.
+
+Set a different `SIMLOCK_AGENT_ID` in each agent's environment:
+
+```sh
+SIMLOCK_AGENT_ID=checkout-agent simlock lease --platform ios --detach
+SIMLOCK_AGENT_ID=search-agent simlock lease --platform ios --detach
+```
+
+The id is at most 256 characters with no control characters.
+
+**Check:** `simlock status` shows two leases, each with its own requester.
+
+<Aside type="caution">
+Outside an agent session, with nothing set, each `simlock` command is a different requester, so the limit never applies between commands, and a later `simlock simctl` cannot tell which lease is yours. Agents that share an id share one lease.
+</Aside>
+
+Over HTTP and with a farm URL, the token is the requester. Agents that share a token share its limit, and `SIMLOCK_AGENT_ID` picks the lease within it. One token per agent: [Tokens and roles](/simlock/docs/concepts/tokens-and-roles).
+
+## Let one requester hold several leases
+
+This is a worker setting. On a fleet, set it on the gateway.
+
+<Steps>
+
+1. Allow two leases of any platform:
+
+   ```sh
+   simlock config set lease.maxPerRequester 2
+   ```
+
+   Or allow one iOS and one Android lease, never two of one platform. A platform you leave out keeps a limit of `1`:
+
+   ```sh
+   simlock config set lease.maxPerRequester '{"ios":1,"android":1}'
+   ```
+
+2. Restart the daemon:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** a second `simlock lease` from the same requester is granted.
+
+With a limit per platform, a requester can also wait for an iOS and an Android device at the same time, one request per platform, and the error message names the platform. Cancelling a waiting request (`lease.cancel`) then takes an optional `platform` to say which one.
+
+## Use the right device
+
+With more than one lease, commands that find "your lease" need to be told which:
+
+- `simlock simctl` and `simlock adb` through a gateway or a farm URL take `--lease <lease-id>`.
+- `simlock rotate`, `simlock files` and `simlock tunnel` take `--lease <lease-id>`.
+- Name the device by its UDID or serial in every command. See [Run simctl or adb on a device](/simlock/docs/using-devices/run-commands).
+
+## When it fails
+
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `REQUESTER_ALREADY_LEASED` | 13 | The requester holds or waits for as many leases as it may. The message names the lease it holds. | Use that lease, release it, or set a different `SIMLOCK_AGENT_ID`. |
+| A usage error naming several leases | 2 | A command without `--lease` found more than one lease for you. | Pass `--lease <lease-id>`. |
+| `BAD_REQUEST` | 2 | An agent id over 256 characters, or with control characters. | Shorten it. |
+
+```json
+{"error":{"code":"REQUESTER_ALREADY_LEASED","message":"Requester claude-code:0f4c2a91-6d1e-4b8a-a3f7-92c5e8d10b46 already holds lease lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3; release it (`simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3`) before requesting another device"}}
+```
+
+Every lease setting: [Configuration reference](/simlock/docs/reference/configuration#leases).

@@ -1,6 +1,8 @@
 import { basename, join } from "node:path";
 
 import {
+  BootTimeoutError,
+  DiskSpaceGuard,
   DriverCrashError,
   IdleWatch,
   type DriverDevice,
@@ -13,12 +15,18 @@ import type {
   Clock,
   Filesystem,
   IdGenerator,
+  Logger,
   ProcessHandle,
   ProcessRunner,
   ProcessTable,
   SqliteDatabase,
 } from "../../ports/index.js";
-import { ADB_DEVICES_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
+import {
+  ADB_DEVICES_TIMEOUT_MS,
+  AVDMANAGER_TIMEOUT_MS,
+  SEED_AVD_NAME,
+  type AdbTools,
+} from "./adb-tools.js";
 import { assertLibraryProfileWritable, iniValues, type AvdConfig } from "./avd-config.js";
 import type { Catalog } from "./catalog.js";
 import type { ConsolePorts } from "./console-ports.js";
@@ -41,7 +49,7 @@ export const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
 const STALE_REASON_MAX_LENGTH = 300;
-// why: avdmanager create has no limit of its own, so this is the ceiling of one seed make: two boots plus the steps between them, which are bounded at 600 s in all.
+// why: the ceiling of one seed make: two boots plus avdmanager create and the steps between the boots, which are bounded at 600 s in all.
 const SEED_MAKE_MIN_CEILING_MS = 900_000;
 const SEED_MAKE_STEPS_MS = 600_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
@@ -96,6 +104,7 @@ export interface SeedsOptions {
   readonly emulator: Emulator;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
+  readonly logger?: Logger | undefined;
   readonly ownership: Ownership;
   readonly processRunner: ProcessRunner;
   readonly systemImages: SystemImages;
@@ -108,6 +117,7 @@ export class Seeds {
   readonly #avdConfig: AvdConfig;
   readonly #avdmanager: string;
   readonly #makeCeilingMs: number;
+  readonly #bootTimeoutMs: number;
   readonly #catalog: Catalog;
   readonly #clock: Clock;
   readonly #consolePorts: ConsolePorts;
@@ -116,6 +126,7 @@ export class Seeds {
   readonly #emulator: Emulator;
   readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
+  readonly #logger: Logger | undefined;
   readonly #ownership: Ownership;
   readonly #processRunner: ProcessRunner;
   readonly #sources: AndroidSourceTable;
@@ -123,6 +134,8 @@ export class Seeds {
   readonly #systemImages: SystemImages;
   /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
   readonly #making = new Set<string>();
+  /** why: copies in flight each hold their full size here, so two copies cannot both see room that fits only one. */
+  readonly #copySpace = new DiskSpaceGuard();
 
   constructor(options: SeedsOptions) {
     this.#adb = options.adb;
@@ -133,6 +146,7 @@ export class Seeds {
       SEED_MAKE_MIN_CEILING_MS,
       2 * options.bootTimeoutMs + SEED_MAKE_STEPS_MS,
     );
+    this.#bootTimeoutMs = options.bootTimeoutMs;
     this.#catalog = options.catalog;
     this.#clock = options.clock;
     this.#consolePorts = options.consolePorts;
@@ -141,6 +155,7 @@ export class Seeds {
     this.#emulator = options.emulator;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
+    this.#logger = options.logger;
     this.#ownership = options.ownership;
     this.#processRunner = options.processRunner;
     this.#sources = new AndroidSourceTable(options.database);
@@ -310,6 +325,7 @@ export class Seeds {
           kind.avdHome,
           folder,
           `copying Android device ${device.deviceId} to source ${sourceId} failed`,
+          "copy an Android device into a baseline",
         );
         const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
         await this.#avdConfig.applyCores(avdFolder);
@@ -335,8 +351,7 @@ export class Seeds {
           ...(sizeBytes === undefined ? {} : { sizeBytes }),
         };
       } catch (error: unknown) {
-        await this.#filesystem.rm(folder);
-        this.#sources.remove(sourceId);
+        if (await this.#removeAfterFailure(folder)) this.#sources.remove(sourceId);
         throw error;
       } finally {
         this.#making.delete(sourceId);
@@ -355,7 +370,9 @@ export class Seeds {
         `Android device ${deviceId} cannot be saved: it has no copy folder or image`,
       );
     }
-    const config = await this.#filesystem.readFile(`${this.#adbTools.avdFolder(data)}/config.ini`);
+    const config = await this.#filesystem.readFile(
+      join(this.#adbTools.avdFolder(data), "config.ini"),
+    );
     const kind = savedKindOf(config);
     if (kind === undefined) {
       throw new DriverCrashError(
@@ -400,9 +417,7 @@ export class Seeds {
         timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
       if (!(await this.#exitedWithin(data, state, SEED_POWER_OFF_TIMEOUT_MS))) {
-        state.handle?.kill("SIGKILL");
-        if (state.handle !== undefined)
-          await this.#emulator.waitForExit(state.handle, SIGKILL_REAP_TIMEOUT_MS);
+        await this.#killAndAwait(state.handle);
       }
     }
     state.handle = undefined;
@@ -476,6 +491,7 @@ export class Seeds {
         quick.folder,
         folder,
         `copying Android seed ${sourceId} to ${settleId} failed`,
+        "copy an Android seed for a settle",
       );
       const settled = await this.#settleCopy(processTable, settleId, quick, folder, options.signal);
       const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
@@ -776,6 +792,7 @@ export class Seeds {
       row.folder,
       avdHome,
       `copying Android source ${sourceId} to ${basename(avdHome)} failed`,
+      "copy an Android baseline",
     );
     const driverData: AndroidDriverData = {
       avdHome,
@@ -838,7 +855,10 @@ export class Seeds {
       await this.#adbTools.runOrThrow(
         this.#avdmanager,
         ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
-        { env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder } },
+        {
+          env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder },
+          timeoutMs: AVDMANAGER_TIMEOUT_MS,
+        },
       );
       if (profile.kind === "properties") {
         await this.#avdConfig.applyHardwareProperties(avdFolder, profile.hardwareProperties);
@@ -866,8 +886,7 @@ export class Seeds {
       this.#sources.markReady(sourceId, configHash, sizeBytes);
       return { configHash, folder, sourceId };
     } catch (error: unknown) {
-      await this.#filesystem.rm(folder);
-      this.#sources.remove(sourceId);
+      if (await this.#removeAfterFailure(folder)) this.#sources.remove(sourceId);
       throw error;
     } finally {
       this.#making.delete(sourceId);
@@ -878,7 +897,7 @@ export class Seeds {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+      state.handle = await this.#startSeedEmulator(sourceId, "first boot", booted);
       await this.#adbTools.runOrThrow(this.#adb, ["-s", booted.serial, "shell", "sync"], {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
@@ -886,11 +905,32 @@ export class Seeds {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
       await this.#awaitSeedPowerOff(sourceId, booted, state);
-      await this.#bootToSnapshot(sourceId, booted, state);
+      await this.#bootToSnapshot(sourceId, "second boot", booted, state);
     } finally {
-      state.handle?.kill("SIGKILL");
+      await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
+  }
+
+  /** why: the operation's own error is the one the caller must see; a folder that cannot be removed (on Windows a killed emulator's qemu child still holds its disks) stays, as its `making` row for the next sweep to clear. */
+  async #removeAfterFailure(folder: string): Promise<boolean> {
+    try {
+      await this.#filesystem.rm(folder);
+      return true;
+    } catch (removal: unknown) {
+      this.#logger?.warn("android folder was not removed after a failed operation", {
+        error: String(removal),
+        folder,
+      });
+      return false;
+    }
+  }
+
+  /** why: on Windows the seed's folder cannot be removed while the emulator still holds its disks, so a kill is followed by the wait for the emulator to exit. */
+  async #killAndAwait(handle: ProcessHandle | undefined): Promise<void> {
+    if (handle === undefined) return;
+    handle.kill("SIGKILL");
+    await this.#emulator.waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
   }
 
   /** why: a source that already powered off cleanly is booted once cold, its boot snapshot saved, and shut down; it is never booted again. */
@@ -898,9 +938,9 @@ export class Seeds {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      await this.#bootToSnapshot(sourceId, booted, state);
+      await this.#bootToSnapshot(sourceId, "snapshot boot", booted, state);
     } finally {
-      state.handle?.kill("SIGKILL");
+      await this.#killAndAwait(state.handle);
       if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
   }
@@ -909,12 +949,30 @@ export class Seeds {
     return { handle: undefined, imageIdentity: seed.imageIdentity ?? "", port: undefined };
   }
 
+  /** why: every seed AVD is named `simlock`, so a boot timeout names the seed and the boot, which the emulator's own error cannot. */
+  async #startSeedEmulator(
+    sourceId: string,
+    boot: string,
+    booted: AndroidDriverData,
+  ): ReturnType<Emulator["start"]> {
+    try {
+      return await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+    } catch (error: unknown) {
+      if (!(error instanceof BootTimeoutError)) throw error;
+      throw new BootTimeoutError(
+        sourceId,
+        `the ${boot} did not finish within ${this.#bootTimeoutMs} ms`,
+      );
+    }
+  }
+
   async #bootToSnapshot(
     sourceId: string,
+    boot: string,
     booted: AndroidDriverData,
     state: DeviceState,
   ): Promise<void> {
-    state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
+    state.handle = await this.#startSeedEmulator(sourceId, boot, booted);
     await this.#saveBootSnapshot(sourceId, booted);
     await this.#emulator.shutdown(booted, state.handle);
     state.handle = undefined;
@@ -976,22 +1034,32 @@ export class Seeds {
       seed.folder,
       avdHome,
       `copying Android seed ${seed.sourceId} to ${basename(avdHome)} failed`,
+      "copy an Android seed",
     );
   }
 
-  async #copyAvd(fromHome: string, toHome: string, failure: string): Promise<void> {
+  async #copyAvd(fromHome: string, toHome: string, failure: string, action: string): Promise<void> {
+    const avdFolder = join(fromHome, `${SEED_AVD_NAME}.avd`);
+    // why: a clone (APFS, reflink) costs less than the folder's size, but the check cannot tell one from a full copy, so it asks for the whole size on every filesystem (#1750); a folder that cannot be measured reserves nothing.
+    const release = await this.#copySpace.reserve(
+      this.#filesystem,
+      "android",
+      await this.#filesystem.directorySize(avdFolder).catch(() => 0),
+      this.#deviceRoot,
+      action,
+    );
     try {
       await this.#filesystem.mkdirp(toHome, { mode: 0o700 });
-      await this.#filesystem.copyTree(
-        join(fromHome, `${SEED_AVD_NAME}.avd`),
-        join(toHome, `${SEED_AVD_NAME}.avd`),
-        { timeoutMs: SEED_COPY_TIMEOUT_MS },
-      );
+      await this.#filesystem.copyTree(avdFolder, join(toHome, `${SEED_AVD_NAME}.avd`), {
+        timeoutMs: SEED_COPY_TIMEOUT_MS,
+      });
     } catch (error: unknown) {
-      await this.#filesystem.rm(toHome);
+      await this.#removeAfterFailure(toHome);
       throw new DriverCrashError(
         `${failure}: ${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      release();
     }
     const ini = await this.#filesystem.readFile(join(fromHome, `${SEED_AVD_NAME}.ini`));
     await this.#filesystem.writeFileAtomic(

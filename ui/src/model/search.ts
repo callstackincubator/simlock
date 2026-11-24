@@ -66,7 +66,9 @@ export function buildResults(input: SearchInput): readonly SearchResult[] {
     ...input.leases.map((lease): SearchResult => ({
       group: "Leases",
       id: `lease:${lease.key}`,
-      label: `${lease.holder} · ${lease.model}`,
+      label: [lease.label, lease.holder, lease.model]
+        .filter((part) => part !== undefined)
+        .join(" · "),
       target: { kind: "go", to: lease.to as `/${string}` },
     })),
     ...input.requests.map((request): SearchResult => ({

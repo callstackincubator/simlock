@@ -1,3 +1,4 @@
+import { resolve, win32 } from "node:path";
 import {
   MemoryFilesystem,
   NodeSqliteOpener,
@@ -10,6 +11,7 @@ import {
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { type LibraryDeviceProfile } from "./profiles/index.js";
+import { adbPath, emulatorPath, withWindowsExtension } from "./sdk-paths.js";
 import { androidSourceDataOwner } from "./source-data.js";
 
 export const ANDROID_SDK_ROOT = "/android-sdk";
@@ -246,13 +248,29 @@ export const simlockHome = "/home/simlock/.simlock";
 
 export const instanceId = "instance-1";
 
-export const avdDirectory = `${simlockHome}/devices/android`;
+// why: the canonical alias an emulator on macOS reports for a path (`/var` is `/private/var`), in `/` form on every host.
+export function privateAliasOf(path: string): string {
+  return `/private${path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")}`;
+}
 
+// why: `ensureOwnedRoot` resolves the configured root, so on Windows the driver reads `D:\home\...`.
+export const avdDirectory = resolve(simlockHome, "devices", "android");
+
+// why: the driver's SDK search runs with the host's platform, so the fake SDK holds the names
+// that platform has (`adb.exe`, `avdmanager.bat` on Windows).
 export const binaries = {
-  adb: `${ANDROID_SDK_ROOT}/platform-tools/adb`,
-  avdmanager: `${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/avdmanager`,
-  emulator: `${ANDROID_SDK_ROOT}/emulator/emulator`,
-  sdkmanager: `${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager`,
+  adb: adbPath(ANDROID_SDK_ROOT),
+  avdmanager: withWindowsExtension(
+    `${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/avdmanager`,
+    process.platform,
+    ".bat",
+  ),
+  emulator: emulatorPath(ANDROID_SDK_ROOT),
+  sdkmanager: withWindowsExtension(
+    `${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager`,
+    process.platform,
+    ".bat",
+  ),
 } as const;
 
 export function ok(stdout = ""): ProcessResult {
@@ -264,7 +282,8 @@ export class WorkingDirectoryFilesystem extends MemoryFilesystem {
     super();
   }
 
+  // why: `win32.isAbsolute` reads `/x` and `D:\x` alike, so a path in either style is not joined to the folder.
   override async realpath(path: string): Promise<string> {
-    return super.realpath(path.startsWith("/") ? path : `${this.workingDirectory}/${path}`);
+    return super.realpath(win32.isAbsolute(path) ? path : `${this.workingDirectory}/${path}`);
   }
 }

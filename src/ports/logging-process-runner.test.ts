@@ -41,6 +41,7 @@ describe("LoggingProcessRunner", () => {
     const result = await runner.run("xcrun", ["simctl", "boot", "ABC"], {
       env: { SECRET_TOKEN: "env-secret" },
       input: "stdin-secret",
+      timeoutMs: 1_000,
     });
 
     expect(result.code).toBe(3);
@@ -68,7 +69,7 @@ describe("LoggingProcessRunner", () => {
       },
     });
 
-    await expect(runner.run("adb", ["devices"])).rejects.toBe(failure);
+    await expect(runner.run("adb", ["devices"], { timeoutMs: 1_000 })).rejects.toBe(failure);
 
     expect(sink.records).toEqual([
       expect.objectContaining({

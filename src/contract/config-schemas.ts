@@ -50,6 +50,7 @@ const proxyAuthSchema = z.object({
   issuer: z.string(),
   audience: z.string(),
   signOutUrl: z.string().optional(),
+  signInUrl: z.string().max(2048).optional(),
 });
 
 const memoryPressureRuleSchema = z.object({

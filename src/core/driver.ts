@@ -351,6 +351,8 @@ export interface Driver {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
       readonly except?: readonly string[];
+      /** why: the lease's label, given on a `prepare` boot made for a lease; a driver that can name its device by it does. */
+      readonly label?: string;
     },
   ): Promise<DriverDevice>;
   reclaim(
@@ -766,9 +768,10 @@ export class InsufficientDiskSpaceError extends Error {
     readonly platform: Platform,
     readonly requiredBytes: number,
     readonly availableBytes: number,
+    action = `install a ${platform} component`,
   ) {
     super(
-      `Not enough free disk space to install a ${platform} component: needs ~` +
+      `Not enough free disk space to ${action}: needs ~` +
         `${formatGibibytes(requiredBytes)} free, only ${formatGibibytes(availableBytes)} available`,
     );
     this.name = "InsufficientDiskSpaceError";
@@ -813,6 +816,7 @@ export class DiskSpaceGuard {
     platform: Platform,
     requiredBytes: number,
     path = ".",
+    action?: string,
   ): Promise<() => void> {
     const availableBytes = await filesystem.diskFree(path);
     const outstandingBytes = this.#outstandingBytesByPath.get(path) ?? 0;
@@ -822,6 +826,7 @@ export class DiskSpaceGuard {
         platform,
         requiredBytes,
         Math.max(0, effectivelyAvailableBytes),
+        action,
       );
     }
     this.#outstandingBytesByPath.set(path, outstandingBytes + requiredBytes);

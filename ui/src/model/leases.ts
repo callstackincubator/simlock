@@ -125,6 +125,9 @@ export interface LeaseRowView {
   readonly model: string;
   readonly worker?: string;
   readonly sub: string;
+  // why: the side list's second line leads with the label, the table's device title does not.
+  readonly listSub: string;
+  readonly label?: string;
   // why: the OS the device runs, as the table's second line names it ("iOS 18.4").
   readonly runtime?: string;
   readonly platform?: string;
@@ -164,8 +167,10 @@ export function leaseRows(input: {
       remaining: formatCountdown(lease.ttlDeadline - now),
       remainingMs: lease.ttlDeadline - now,
       renewedAgo: `${formatAgo(now - lease.lastRenewedAt)}`,
+      listSub: [lease.label, sub].filter((part) => part !== undefined).join(" · "),
       sub,
       to: leasePath(lease.id),
+      ...(lease.label === undefined ? {} : { label: lease.label }),
       ...(worker === undefined ? {} : { worker }),
       ...(device === undefined ? {} : { platform: device.spec.platform }),
       ...runtimeOf(device),
@@ -199,7 +204,7 @@ export function searchLeaseRows(
   const wanted = query.toLowerCase();
   if (wanted === "") return rows;
   return rows.filter((row) =>
-    [row.holder, row.model, row.worker, row.id].some((field) =>
+    [row.holder, row.label, row.model, row.worker, row.id].some((field) =>
       field?.toLowerCase().includes(wanted),
     ),
   );
@@ -232,6 +237,7 @@ export interface LeaseInspection {
     readonly udid: string;
   };
   readonly holder?: Holder;
+  readonly label?: string;
   readonly ownerId?: string;
   readonly requestId?: string;
 }
@@ -303,13 +309,14 @@ function recordFacts(
   id: string,
 ): Pick<
   LeaseInspection,
-  "renewed" | "title" | "kind" | "percent" | "holder" | "ownerId" | "ttl" | "token"
+  "renewed" | "title" | "kind" | "percent" | "holder" | "label" | "ownerId" | "ttl" | "token"
 > {
   if (record === undefined) return { kind: "unknown", renewed: "—", title: id };
   const holder = holderOf(record.requesterId, tokens);
   return {
     holder,
     kind: agentKind(record.requesterId),
+    ...(record.label === undefined ? {} : { label: record.label }),
     percent: percentLeft(deadline, now, record.ttlMs),
     token: record.ownerId,
     ttl: formatDuration(record.ttlMs),

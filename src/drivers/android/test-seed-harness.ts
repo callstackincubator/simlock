@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   type DriverCatalogEntry,
   type DriverDevice,
@@ -81,7 +82,7 @@ export const emulatorHelpListing = [
   .map((flag) => `  ${flag} <value>  described`)
   .join("\n");
 
-const defaultSeedHome = `${avdDirectory}/sources/seed_two`;
+const defaultSeedHome = join(avdDirectory, "sources", "seed_two");
 
 /** why: the calls of making and booting a seed, shared by the seed tests and the harness every driver test starts from. */
 export const seedEmulatorLine = [
@@ -487,7 +488,7 @@ export async function libraryHarness(
     await writeDevicesXml(filesystem, options.devicesXml);
   }
   // why: the profile is applied to the seed's AVD, which `avdmanager create` writes in the seed's own folder.
-  const seedFolder = `${avdDirectory}/sources/seed_two`;
+  const seedFolder = join(avdDirectory, "sources", "seed_two");
   const avd = `${seedFolder}/simlock.avd`;
   const configPath = `${avd}/config.ini`;
   const bootPropPath = `${avd}/boot.prop`;
@@ -564,7 +565,7 @@ export async function taggedHarness(
   const runner = new EmulatorExitingRunner([
     processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ...makingASeedFrom(defaultSeedHome, "pixel_5"),
-    ...copyBootExpectations({ copyHome: `${avdDirectory}/simlock_one` }),
+    ...copyBootExpectations({ copyHome: join(avdDirectory, "simlock_one") }),
     markWriteExpectation("emulator-5586", "device-3"),
   ]);
   const driver = await build(filesystem, runner, { hostAbi, ids: ["one", "two"] });

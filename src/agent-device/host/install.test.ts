@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,7 +142,8 @@ describe("findAgentDevice", () => {
 
 describe.runIf(process.platform === "win32")("findAgentDevice on Windows", () => {
   it("finds a local install from a PATH entry that is a project's node_modules .bin, written with backslashes", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock agent-device "));
+    // why: the CI runner's temporary folder has a short 8.3 name, while the install resolves to the long one.
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "simlock agent-device ")));
     const modules = join(directory, "node_modules");
     const packageRoot = join(modules, "agent-device");
     try {

@@ -71,7 +71,10 @@ describe("AgentDeviceSupervisor state directory", () => {
     },
   );
 
-  it.each([
+  const stateDirCases: readonly (readonly [
+    string,
+    (filesystem: MemoryFilesystem) => Promise<void>,
+  ])[] = [
     [
       "a symlink",
       async (filesystem: MemoryFilesystem) => {
@@ -91,7 +94,13 @@ describe("AgentDeviceSupervisor state directory", () => {
         filesystem.defineAttributes(stateDir, { uid: (process.getuid?.() ?? 0) + 1 });
       },
     ],
-  ])(
+  ];
+  it.each(
+    // why: Windows has no owner uid to differ: the supervisor checks one only where `process.getuid` exists.
+    stateDirCases.filter(
+      ([name]) => process.platform !== "win32" || !name.includes("another user"),
+    ),
+  )(
     "treats %s as the state directory as state-dir, naming the path, and spawns nothing",
     async (_case, stateDirContents) => {
       const harness = await run({ expectations: [versionRun()], stateDirContents });

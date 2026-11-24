@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -547,7 +548,7 @@ describe("DeviceTable", () => {
 
     await expect(table.findLegacy("simlock_old")).resolves.toMatchObject({
       device: { deviceId: "simlock_old" },
-      path: `${home}/.android/avd/simlock_old.avd`,
+      path: join(home, ".android", "avd", "simlock_old.avd"),
     });
     await expect(table.findLegacy("simlock_never_existed")).resolves.toBeUndefined();
   });

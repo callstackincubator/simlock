@@ -3,16 +3,18 @@
 
 import type { IconName } from "../components/site/icons";
 
-// why: GitHub Pages serves the repo at /simlock. Astro's `base` and every internal link read
-// this, so moving the site to its own domain is a one-line change.
+// why: the site is served under /simlock. Astro's `base` and every internal link read this, so
+// moving the site to its own domain is a one-line change.
 export const BASE = "/simlock";
-export const at = (path: string) => (path === "/" ? BASE : `${BASE}${path}`);
+// why: the home page is the only URL with a trailing slash; the host redirects `/simlock` to it.
+export const at = (path: string) => `${BASE}${path}`;
 
 export const site = {
   name: "Simlock",
   wordmark: "Simlock",
   // why: no trailing slash, because canonicals, the sitemap and robots.txt append paths to it.
-  url: "https://callstackincubator.github.io",
+  // Callstack's custom domain for its GitHub Pages; the github.io address only redirects here.
+  url: "https://incubator.callstack.com",
   repo: "https://github.com/callstackincubator/simlock",
   // why: the home page title is "Name: subtitle" (src/site/meta.ts), and it must stay within
   // 60 characters in all.
@@ -34,21 +36,23 @@ export const site = {
   },
   npm: "https://www.npmjs.com/package/simlock",
   platforms: ["iOS", "Android"],
+  // why: the systems Simlock itself runs on, for structured data; `platforms` are the devices it serves.
+  hosts: ["macOS", "Linux", "Windows"],
   language: "TypeScript",
   mark: undefined as string[] | undefined,
 };
 
 export const docs = {
   intro: at("/docs/introduction"),
-  start: at("/docs/getting-started"),
+  start: at("/docs/introduction/pick-your-setup"),
   connect: at("/docs/getting-started/connect-your-agent"),
-  lifecycle: at("/docs/using-devices/lease-lifecycle"),
-  physical: at("/docs/using-devices/physical-devices"),
-  http: at("/docs/using-devices/remote-agents"),
-  client: at("/docs/using-devices/programmatic-client"),
+  lifecycle: at("/docs/concepts/leases"),
+  physical: at("/docs/using-devices/lease-a-phone"),
+  http: at("/docs/using-devices/http-api"),
+  client: at("/docs/using-devices/node-client"),
   capacity: at("/docs/worker/capacity"),
-  cleanup: at("/docs/worker/cleanup"),
-  console: at("/docs/worker/console"),
+  cleanup: at("/docs/concepts/cleanup"),
+  console: at("/docs/reference/console"),
   gateway: at("/docs/gateway/setup"),
   cli: at("/docs/reference/cli"),
   llms: at("/llms.txt"),
@@ -241,7 +245,7 @@ export const home = {
         icon: "grid",
         title: "Workers",
         body: "Every worker that joined: its CPU, memory and disk, and a square for each device slot.",
-        href: `${docs.console}#workers`,
+        href: `${docs.console}#fleet`,
       },
       {
         icon: "lock",
@@ -253,7 +257,7 @@ export const home = {
         icon: "stack",
         title: "Waiting",
         body: "Each request still in line, how long it has waited, and why no worker has taken it yet.",
-        href: `${docs.console}#waiting`,
+        href: `${docs.console}#queue`,
       },
       {
         icon: "flag",

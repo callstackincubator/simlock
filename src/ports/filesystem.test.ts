@@ -1,4 +1,4 @@
-import { lstat, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,10 +9,10 @@ import {
   ScriptedProcessRunner,
 } from "./index.js";
 
-// why: lets one test make a listed file vanish before it is sized; every other call goes to the real `lstat`.
+// why: lets one test make a listed file vanish before it is sized, and see the options a delete is given; every other call goes to the real `lstat` and `rm`.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, lstat: vi.fn(actual.lstat) };
+  return { ...actual, lstat: vi.fn(actual.lstat), rm: vi.fn(actual.rm) };
 });
 
 // why: Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
@@ -58,7 +58,13 @@ describe("NodeFilesystem.writeFileAtomic encoding", () => {
   });
 });
 
-describe.each(implementations)("Filesystem contract: $name", ({ create, link }) => {
+// why: the real filesystem on Windows has no mode bits, no owner ids and a different errno for some failures, so a test of those facts runs on the memory filesystem only there.
+const posixOnly = (name: string) => name === "node filesystem" && process.platform === "win32";
+
+// why: the memory filesystem keeps a link target as a `/` path without a drive, and the real one as the host spells it.
+const targetOf = (path: string) => path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/");
+
+describe.each(implementations)("Filesystem contract: $name", ({ name, create, link }) => {
   it("atomically writes and overwrites a complete file", async () => {
     const filesystem = create();
     const file = `${temporaryDirectory}/devices/registry.json`;
@@ -84,7 +90,7 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
 
     await expect(filesystem.readFile(file)).resolves.toBe("");
     expect((await filesystem.stat(file)).identity).toBe(before);
-    expect((await filesystem.stat(file)).mode).toBe(0o600);
+    if (!posixOnly(name)) expect((await filesystem.stat(file)).mode).toBe(0o600);
 
     await filesystem.writeFileInPlace(`${temporaryDirectory}/new.log`, "text", { mode: 0o600 });
     await expect(filesystem.readFile(`${temporaryDirectory}/new.log`)).resolves.toBe("text");
@@ -154,9 +160,14 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
       await filesystem.mkdirp(directory, { mode: 0o750 });
       await filesystem.mkdirp(existing, { mode: 0o750 });
 
-      expect((await filesystem.stat(directory)).mode).toBe(0o750);
-      expect((await filesystem.stat(`${temporaryDirectory}/home`)).mode).toBe(0o750);
-      expect((await filesystem.stat(existing)).mode).toBe(0o755);
+      expect((await filesystem.stat(directory)).kind).toBe("directory");
+      expect((await filesystem.stat(`${temporaryDirectory}/home`)).kind).toBe("directory");
+      // why: the real filesystem on Windows has no mode bits, so only the memory one can show them.
+      if (!posixOnly(name)) {
+        expect((await filesystem.stat(directory)).mode).toBe(0o750);
+        expect((await filesystem.stat(`${temporaryDirectory}/home`)).mode).toBe(0o750);
+        expect((await filesystem.stat(existing)).mode).toBe(0o755);
+      }
     } finally {
       process.umask(previousUmask);
     }
@@ -190,8 +201,13 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
       await filesystem.writeFileExclusive(asked, "{}", { mode: 0o600 });
       await filesystem.writeFileExclusive(unasked, "{}");
 
-      expect((await filesystem.stat(asked)).mode).toBe(0o600);
-      expect((await filesystem.stat(unasked)).mode).toBe(0o644);
+      await expect(filesystem.readFile(asked)).resolves.toBe("{}");
+      await expect(filesystem.readFile(unasked)).resolves.toBe("{}");
+      // why: the real filesystem on Windows has no mode bits, so only the memory one can show them.
+      if (!posixOnly(name)) {
+        expect((await filesystem.stat(asked)).mode).toBe(0o600);
+        expect((await filesystem.stat(unasked)).mode).toBe(0o644);
+      }
     } finally {
       process.umask(previousUmask);
     }
@@ -220,9 +236,10 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await filesystem.mkdirp(occupied);
     await filesystem.writeFileAtomic(`${occupied}/someone-elses-work.txt`, "");
 
-    await expect(filesystem.rename(staging, occupied)).rejects.toMatchObject({
-      code: "ENOTEMPTY",
-    });
+    const refused = expect(filesystem.rename(staging, occupied)).rejects;
+    // why: Windows refuses with EPERM where POSIX says ENOTEMPTY, so only the refusal is common.
+    await (posixOnly(name) ? refused.toThrow() : refused.toMatchObject({ code: "ENOTEMPTY" }));
+    await expect(filesystem.exists(`${occupied}/someone-elses-work.txt`)).resolves.toBe(true);
   });
 
   it("reports whether a path is there", async () => {
@@ -276,9 +293,9 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     const modifiedBefore = (await filesystem.stat(`${dir}/file`)).modifiedAtMs;
     await link(filesystem, `${dir}/link`, `${dir}/old`);
 
-    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/old`);
+    expect(targetOf(await filesystem.readlink(`${dir}/link`))).toBe(targetOf(`${dir}/old`));
     await filesystem.replaceSymlink(`${dir}/link`, `${dir}/new`);
-    await expect(filesystem.readlink(`${dir}/link`)).resolves.toBe(`${dir}/new`);
+    expect(targetOf(await filesystem.readlink(`${dir}/link`))).toBe(targetOf(`${dir}/new`));
     await filesystem.writeAt(`${dir}/file`, 2, new TextEncoder().encode("XY"));
     await expect(filesystem.readFile(`${dir}/file`)).resolves.toBe("abXYef");
     expect((await filesystem.stat(`${dir}/file`)).modifiedAtMs).toBe(modifiedBefore);
@@ -295,6 +312,9 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await filesystem.mkdirp(temporaryDirectory);
     await filesystem.writeFileAtomic(`${temporaryDirectory}/notes.txt`, "");
 
+    // why: Windows reports a path that runs through a file as ENOENT, the same errno as a missing
+    // one, so the claim cannot hold there.
+    if (posixOnly(name)) return;
     await expect(filesystem.exists(`${temporaryDirectory}/notes.txt/ios`)).rejects.toMatchObject({
       code: "ENOTDIR",
     });
@@ -322,7 +342,7 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
   });
 });
 
-describe.each(implementations)("Filesystem ownership contract: $name", ({ create }) => {
+describe.each(implementations)("Filesystem ownership contract: $name", ({ name, create }) => {
   it("reports what a path is, who owns it, and how exposed it is", async () => {
     const filesystem = create();
     const root = `${temporaryDirectory}/devices/ios`;
@@ -330,11 +350,15 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
     await filesystem.mkdirp(root);
     await filesystem.chmod(root, 0o700);
 
-    await expect(filesystem.lstat(root)).resolves.toEqual({
-      kind: "directory",
-      mode: 0o700,
-      uid: process.getuid?.() ?? 0,
-    });
+    // why: the real filesystem on Windows has no mode bits or owner ids, so only its kind is common.
+    if (posixOnly(name))
+      await expect(filesystem.lstat(root)).resolves.toMatchObject({ kind: "directory" });
+    else
+      await expect(filesystem.lstat(root)).resolves.toEqual({
+        kind: "directory",
+        mode: 0o700,
+        uid: process.getuid?.() ?? 0,
+      });
   });
 
   it("reports the permission bits a path was last given, not the ones it was created with", async () => {
@@ -345,7 +369,10 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
     await filesystem.mkdir(root, { mode: 0o777 });
     await filesystem.chmod(root, 0o700);
 
-    await expect(filesystem.lstat(root)).resolves.toMatchObject({ mode: 0o700 });
+    // why: the real filesystem on Windows has no mode bits, so only its kind is common.
+    await expect(filesystem.lstat(root)).resolves.toMatchObject(
+      posixOnly(name) ? { kind: "directory" } : { mode: 0o700 },
+    );
   });
 
   it("refuses to create a directory that already exists", async () => {
@@ -372,8 +399,29 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
     await filesystem.mkdirp(root);
     const resolved = await filesystem.realpath(root);
 
-    expect(resolved.endsWith("/devices/ios")).toBe(true);
+    expect(targetOf(resolved).endsWith("/devices/ios")).toBe(true);
     await expect(filesystem.realpath(resolved)).resolves.toBe(resolved);
+  });
+});
+
+describe("NodeFilesystem.rm", () => {
+  it("retries a delete that hits a file another process still holds, and removes the folder once it is free (#1765)", async () => {
+    const filesystem = new NodeFilesystem();
+    const root = `${temporaryDirectory}/busy`;
+    await filesystem.mkdirp(`${root}/inner`);
+    await filesystem.writeFileAtomic(`${root}/inner/disk.img`, "x");
+
+    await filesystem.rm(root);
+
+    const options = vi.mocked(rm).mock.calls.at(-1)?.[1];
+    // why: a busy file (EBUSY on Windows) cannot be made on every host, so the retries Node is asked for are what a held file's release is waited on with: 10 tries at 100 ms cover the 0.5 to 0.7 s a killed emulator's qemu child holds its disks.
+    expect(options).toMatchObject({
+      force: true,
+      maxRetries: 10,
+      recursive: true,
+      retryDelay: 100,
+    });
+    await expect(filesystem.exists(root)).resolves.toBe(false);
   });
 });
 
@@ -489,7 +537,7 @@ describe("Filesystem.copyTree", () => {
     await real.mkdirp(source);
     await writeFile(`${source}/disk.img`, "image");
     await utimes(`${source}/disk.img`, modifiedAt, modifiedAt);
-    for (const platform of ["win32", process.platform] as const) {
+    for (const platform of new Set(["win32", process.platform] as const)) {
       const target = `${temporaryDirectory}/copy-tree/${platform}`;
       await new NodeFilesystem({ platform }).copyTree(source, target, { timeoutMs: 600_000 });
       await expect(real.readFile(`${target}/disk.img`)).resolves.toBe("image");

@@ -7,6 +7,7 @@ import {
   MemoryFilesystem,
   NodeFilesystem,
   NodeIpcTransport,
+  resolveDaemonSocketPath,
 } from "../ports/index.js";
 import type { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -27,8 +28,10 @@ describe("DaemonServer", () => {
   it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
-    await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
+    const socketPath = resolveDaemonSocketPath(directory);
+    // why: a stale socket file is a POSIX fact; a Windows pipe leaves nothing behind.
+    if (process.platform !== "win32")
+      await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
     const first = await createHarness({ socketPath });
     let convergeCalls = 0;
     const second = await createHarness({
@@ -65,8 +68,10 @@ describe("DaemonServer", () => {
   it("never touches admin.token on the daemon instance that loses the start race", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-stale-admin-"));
     temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
-    await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
+    const socketPath = resolveDaemonSocketPath(directory);
+    // why: a stale socket file is a POSIX fact; a Windows pipe leaves nothing behind.
+    if (process.platform !== "win32")
+      await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
 
     const secrets = new CryptoTokenSecrets();
     const winnerFilesystem = new MemoryFilesystem();
@@ -98,7 +103,7 @@ describe("DaemonServer", () => {
     async (removalFails) => {
       const directory = await mkdtemp(join(tmpdir(), "simlock-admin-restart-"));
       temporaryDirectories.push(directory);
-      const socketPath = join(directory, "daemon.sock");
+      const socketPath = resolveDaemonSocketPath(directory);
       const filesystem = new MemoryFilesystem();
       const secrets = new CryptoTokenSecrets();
       const oldSecret = await adminAuth(filesystem, secrets);
@@ -171,7 +176,10 @@ describe("DaemonServer", () => {
     expect(harness.state.database.prepare("SELECT id FROM leases").all()).toEqual([
       { id: leaseId },
     ]);
-    expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");
+    // why: the server answers `daemon.stop` before it starts stopping, so the fact follows the reply.
+    await vi.waitFor(() =>
+      expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping"),
+    );
     expect(harness.eventBus.replay().map((event) => event.event)).not.toContain("lease.released");
   });
 });

@@ -137,6 +137,7 @@ export {
   exitCodeOf,
   ExecOutputDeliveryStalledError,
   InputStreamFailedError,
+  type BoundedRunOptions,
   NodeProcessRunner,
   type ProcessHandle,
   ProcessSpawnError,

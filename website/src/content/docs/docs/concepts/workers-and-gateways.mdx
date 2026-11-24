@@ -1,0 +1,146 @@
+---
+title: Workers and gateways
+description: How workers and a gateway fit together, which daemon a command reaches, how the gateway picks a worker, and what happens when a worker or the gateway goes away.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **worker** is a machine that runs Simlock and owns devices. Every Simlock install is a worker. A **gateway** is a Simlock daemon that owns no devices: workers join it, and agents get one address for the whole fleet. Whether you need one: [Pick your setup](/simlock/docs/introduction/pick-your-setup).
+
+## How they fit
+
+```text
+agents ──HTTPS──► gateway ◄──outbound── worker A  (simulators, emulators, phones)
+                     ▲   ◄──outbound── worker B
+                     │
+          one queue, one address
+```
+
+- **Workers own the devices.** A joined worker is the same daemon as a standalone one, and keeps serving agents on its own machine.
+- **The gateway owns no devices.** It needs Node.js 22.13 or later, and no Xcode or Android SDK. It can run on its own machine or beside a worker.
+- **Workers connect out to the gateway.** They need no open inbound port and no public address. Only the gateway must be reachable, by workers and agents.
+- **Agents use only the gateway's address.** Renewing, releasing and running commands on a lease all go through the gateway to the worker that holds it.
+- **The gateway keeps its own data** (configuration, tokens, log, usage history) in `~/.simlock/gateway`, apart from a worker on the same machine.
+
+## Which daemon a command reaches
+
+Every `simlock` command talks to one daemon on the machine where you run it.
+
+| You run | It reaches |
+| --- | --- |
+| `simlock --gateway <command>` | The gateway on this machine. |
+| `simlock --local <command>` | The worker on this machine, even when only a gateway has run here. |
+| `simlock <command>` | The worker, unless this machine has a gateway and has never run a worker. Then the gateway. |
+
+- `--gateway` and `--local` together are refused.
+- `--gateway` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` and starts nothing.
+- A gateway-only command, such as `simlock worker drain`, sent to a worker fails with `UNSUPPORTED_IN_WORKER_MODE`. When a gateway runs on the same machine, the message says to run it again with `--gateway`.
+
+From another machine, agents reach the gateway over HTTP, or with the CLI pointed at its URL, with a [token](/simlock/docs/concepts/tokens-and-roles).
+
+## What runs where
+
+- **Device commands run on the worker that holds the lease.** `simlock simctl` and `simlock adb` run there, so a file path in the command is a path on that worker, not on your machine. `simlock --gateway simctl install ./MyApp.app` fails unless `MyApp.app` exists on the worker.
+- **The gateway never downloads** an iOS runtime or Android system image while granting a lease. A request for an OS version no worker has installed fails with `RUNTIME_MISSING`.
+- **Commands that manage one machine run on the worker.** `cleanup`, `nuke`, `doctor`, `device add`, `device remove`, `component list`, `component remove`, `warm forget`, and `component install` without `--worker` or `--all-workers` fail on a gateway with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+- **Each worker keeps its own settings**: capacity, warm pool, cleanup, downloads, baselines. The gateway's `lease.*` settings decide the TTL of leases made through it, and each worker's own `lease.maxTtlMs` still applies. Keep the gateway's `lease.maxTtlMs` at or below every worker's.
+
+## Which worker gets a request
+
+A worker can take a request only when it:
+
+- is connected, not drained, healthy, and has finished reporting its devices;
+- offers the model or device class asked for, with a matching OS version already installed;
+- serves the iOS mode the request or its baseline names (see [Slim iOS simulators](/simlock/docs/concepts/slim-simulators#modes-a-worker-serves)), and slims every category in its `except` list;
+- holds a current copy of the baseline the request names;
+- has every optional capability the request needs, such as the agent-device integration;
+- makes simulators or emulators, for a request without `--physical` (a worker that serves only phones on a platform is skipped);
+- has no requests waiting in its own queue, for example from agents on that machine. This does not apply to physical devices.
+
+Among those, the gateway prefers:
+
+1. **A worker with a warm device** that matches, mode included, so the agent skips the boot. For a baseline, only a copy of its newest version counts. On Android, a worker's default image tag decides which ready emulator counts as a match.
+2. **A worker with room to boot one**: calm workers before those whose new devices are paused by [memory pressure](/simlock/docs/concepts/queue-and-capacity#memory-pressure), then workers under their RAM budget, then the one with the most free device slots.
+
+A request for a physical device goes only to a worker with a matching enrolled device that is free now.
+
+A worker can still turn a request down, for example when a local agent took its last slot a moment earlier. The gateway then tries another worker, or puts the request back in the queue.
+
+## The fleet queue
+
+A request no worker can take now waits at the gateway, oldest first. Virtual and physical requests wait in separate lines, and a request one worker can serve is not held up by an older one that needs a different worker. `--timeout` and `--no-wait` work as on a single worker. An [admission command](/simlock/docs/gateway/admission) can give requests a priority, or refuse them, before they wait.
+
+`simlock --gateway status` prints `Queue depth`, and the console's **Queue** page shows why each worker did not take each waiting request.
+
+### When no worker can serve a request
+
+The gateway does not queue a request no worker could ever serve. It fails at once, with the code a single worker would give:
+
+| Code | Why |
+| --- | --- |
+| `NO_CAPACITY` | Workers could serve it, but none is connected and taking requests: all disconnected, drained or incompatible. |
+| `NO_DRIVER` | No worker supports the platform. |
+| `MODE_UNAVAILABLE` | Every worker that could serve it serves only the other iOS mode. |
+| `UNKNOWN_MODEL` | No worker offers that model or class, or no worker has a matching phone enrolled, or every worker with the platform serves only phones and the request did not ask for one. |
+| `RUNTIME_MISSING` | Workers offer the model, but none has a matching OS version installed. |
+| `CAPABILITY_MISSING` | No worker that could serve it has the optional capability it needs. |
+| `BAD_REQUEST` | No worker slims every `except` category, or none would give a slim device. |
+| `UNKNOWN_BASELINE` | No worker holds the baseline. |
+| `BASELINE_MISMATCH` | Every copy of the baseline differs from a field the request names. |
+| `BASELINE_STALE` | Every copy that fits is stale. |
+
+While a connected worker that is not drained has not sent its catalog yet, as just after a gateway restart, the request waits instead of failing with `UNKNOWN_MODEL`, `NO_DRIVER` or `RUNTIME_MISSING`: that worker may be the one that can serve it.
+
+The gateway checks again while a request waits. If the last worker that could serve it disconnects or is drained, even for a moment, the request fails with `NO_CAPACITY`. If every worker that tries fails to create the device, it fails with `PROVISION_FAILED`. Exit codes are in [Errors](/simlock/docs/reference/errors).
+
+## The lease limit across the fleet
+
+A requester holds at most `lease.maxPerRequester` leases through the gateway (1 by default), counted across all workers, and per platform when the limit is per platform. A lease on a disconnected worker stops counting once its TTL has run out, since nobody can have renewed it through the gateway.
+
+## Drained workers
+
+A drained worker gets no new requests from the gateway. Its leases keep running, and agents can renew and release them. Agents on the worker's own machine can still lease its devices. A worker stays drained across a gateway restart.
+
+## What changes on a joined worker
+
+<Aside type="caution" title="The gateway gets admin rights on the worker">
+A joined worker gives its gateway the rights of an operator on that worker. Anyone who controls the gateway, or holds an operator token for it, can lease and release any device on the worker, install and remove runtimes there, and read its configuration. Join a worker only to a gateway you trust as much as the worker itself.
+</Aside>
+
+- **Local agents keep working**, and share the worker's devices with the fleet: a device a local agent holds is not free for the gateway, and the other way round.
+- **The worker starts without the gateway.** If the gateway is down, the worker serves local agents and keeps trying to join.
+- **The worker's own HTTP API and console stay off.** Use the gateway's. A worker with `gateway.url` set refuses `http.enabled: true`.
+- **One join token belongs to one worker.** The first worker that joins with a token keeps it; any other machine is refused. A reinstalled worker gets a new id and needs a new token.
+
+## When a worker's connection drops
+
+The worker reconnects by itself, waiting a little longer after each failed try, up to 30 seconds apart. While it is away:
+
+- The gateway shows it `disconnected` and sends it no new requests.
+- Its leases keep running, and the devices stay booted.
+- A renew, release or command on such a lease through the gateway gets `WORKER_UNREACHABLE` (exit 1). Retry until the worker is back. A lease not renewed before its TTL runs out expires on the worker.
+
+If the connection drops while the worker grants a lease, the agent gets `WORKER_UNREACHABLE`, but the worker may have granted it anyway. That lease runs until its TTL runs out.
+
+A worker whose Simlock version cannot talk to the gateway's shows as `incompatible` and gets no requests until one of them is updated.
+
+## When the gateway restarts
+
+The gateway keeps waiting requests in memory only.
+
+- **Waiting requests are lost.** A held `simlock --gateway lease` gets `DAEMON_CONNECTION_LOST`. Over HTTP, the request's id answers `404`, and the same `Idempotency-Key` starts a new request. Ask again.
+- **Granted leases survive.** They live on the workers. While the gateway is down, nothing can renew them through it, so a lease whose TTL runs out meanwhile expires. In the first minute after a start, a call on a lease whose worker has not reported yet answers `WORKER_UNREACHABLE`, which clients retry.
+- **New requests wait for the workers' catalogs.** Until a connected worker has reported what it offers, a request it might serve waits rather than failing.
+- **A request sent again may get `REQUESTER_ALREADY_LEASED`**, naming the lease the requester already holds. Use that lease or release it.
+- **A chosen lease id stays refused** with `LEASE_ENDED` for 24 hours after its lease ended, across a restart. A lease that ended while the gateway was down is refused by its own worker only.
+
+## Use it
+
+- [Pick your setup](/simlock/docs/introduction/pick-your-setup)
+- [Set up a gateway behind HTTPS](/simlock/docs/gateway/setup)
+- [Add a worker](/simlock/docs/gateway/add-a-worker)
+- [Maintain workers](/simlock/docs/gateway/maintain-workers): drain, update, forget.
+- [Rank or refuse requests with an admission command](/simlock/docs/gateway/admission)
+- [Use an existing farm](/simlock/docs/getting-started/existing-farm)

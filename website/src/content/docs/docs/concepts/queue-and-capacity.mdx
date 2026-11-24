@@ -1,0 +1,94 @@
+---
+title: Queue and capacity
+description: What happens when no device is free, how a worker counts how many devices fit, and how host memory pressure pauses new devices.
+sidebar:
+  order: 2
+---
+
+**Capacity** is how many simulators and emulators one worker may keep and run. When a request finds no free device and no room for one, it waits in the **queue** until a device frees up.
+
+## The queue
+
+- **First come, first served.** A request waits behind older ones.
+- **Physical devices have their own line.** A simulator request never waits behind a physical one, and a request for one phone model never waits behind a request for another.
+- **A request waits as long as it takes**, unless it says otherwise:
+
+  | The request sets | It fails with | Exit |
+  | --- | --- | --- |
+  | `--timeout 10m` | `QUEUE_TIMEOUT` once 10 minutes pass | 10 |
+  | `--no-wait` | `NO_CAPACITY` at once, when no device can start now | 11 |
+
+- **Stopping the command does not leave the queue.** A killed `simlock lease --detach` leaves its request waiting; it is granted later and holds the device until its TTL runs out. Without `--detach`, Ctrl-C or the parent exiting cancels the request. Set `--timeout` if you might stop waiting.
+- **A request that can never be served fails at once**, without waiting: an unknown model (`UNKNOWN_MODEL`), a platform with no tools (`NO_DRIVER`), or an OS version that is not installed (`RUNTIME_MISSING`).
+
+`simlock status` and `simlock list --requests` show each waiting request, its place, and why it waits, such as `full: running limit` or `behind an earlier request`.
+
+Through a gateway, requests wait in one fleet queue instead. See [Workers and gateways](/simlock/docs/concepts/workers-and-gateways#the-fleet-queue).
+
+## Two limits per platform
+
+A worker has two limits for each platform:
+
+- **Devices**: how many simulators or emulators may exist, booted or shut down.
+- **Running**: how many may be booted at the same time.
+
+A third limit caps the running devices of both platforms together. Physical devices never count against any limit.
+
+## How a worker finds room
+
+When a lease needs a device, the worker tries these in order:
+
+1. Hand over a ready device that fits, or one the [warm pool](/simlock/docs/concepts/warm-pool) is already booting.
+2. Boot a shut-down device that fits, if a running slot is free.
+3. Create a device, if the device limit and the RAM budget allow it.
+4. At the device limit, delete an idle device of the same platform to make room.
+5. At the running limit, shut down an idle device to make room.
+6. Otherwise, wait in the queue.
+
+What this means for you:
+
+- **A leased device is never shut down or deleted to make room.**
+- **When RAM is the only thing in the way, nothing is shut down.** The request waits until RAM frees up, for example when an idle device shuts down on its own.
+- **The first lease of an iOS model and version is slower.** Later leases of the same kind start faster.
+- **Idle devices only match their own kind.** A slim request does not reuse an idle full simulator, and the other way round. A request can wait for a new device while devices of another kind sit idle.
+
+## How capacity is counted
+
+A worker uses one of two strategies, set with `capacity.strategy`.
+
+**`resource`** (the default) sizes the limits from the machine's CPU cores and RAM, so most machines need no change:
+
+| Limit | Default |
+| --- | --- |
+| iOS devices | half the CPU cores, at least 1 |
+| Android devices | a quarter of the CPU cores, or one per 8 GiB of RAM, whichever is lower; at least 1 |
+| Running, per platform | the same as that platform's devices |
+| Running, both platforms | iOS devices plus Android devices |
+
+It adds a **RAM budget**: the machine's total RAM minus 4 GiB for everything else. Every device that is not shut down counts at a fixed size: 1.5 GiB for an iOS simulator, 4 GiB for an Android emulator. Simlock does not create a device that would go over the budget. It does not measure what a device really uses; an operator sets the sizes to match. A slim simulator can be given a smaller size, but every device counts at the full size until it has booted and been checked as slim.
+
+Each default comes from the machine, not from the other limits. Raising one limit leaves the others at the machine's defaults, and they can still hold you back.
+
+**`fixed`** uses the same numbers on every machine and has no RAM budget. A running limit alone is enough; per-platform limits split it.
+
+## Memory pressure
+
+A worker watches how short of memory its host is, and steps down in two stages:
+
+| Step | When (by default) | What stops |
+| --- | --- | --- |
+| Warming paused | macOS reports `warn` pressure, or available memory falls below 20% | The warm pool boots nothing, and shuts down one idle device at each new memory reading. |
+| New devices paused | macOS reports `critical` pressure, or available memory falls below 10% | No device is created or booted for a lease. |
+
+- **At "new devices paused", a request waits** for the pressure to lift, or fails with `NO_CAPACITY` when it cannot wait. A ready device that fits is still handed over, and nothing is shut down for the wait.
+- **A step stays on for a minute** after the memory recovers, so it does not flap.
+- **Linux and Windows report no pressure level**; only the available-memory floors apply there.
+
+`simlock status` shows the step while one is on. Through a gateway, a worker under pressure gets new requests only after calmer workers. The thresholds are the `memoryPressure.*` keys in the [configuration reference](/simlock/docs/reference/configuration#cleanup-and-health).
+
+## Use it
+
+- [Run more devices at once](/simlock/docs/worker/capacity)
+- [Make leases start faster](/simlock/docs/worker/warm-pool)
+- [See what the worker is doing](/simlock/docs/worker/monitoring)
+- [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails)

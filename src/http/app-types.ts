@@ -45,7 +45,7 @@ export interface HttpGatewayDeps {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
-  readonly auth: Pick<Auth, "authenticateRequest">;
+  readonly auth: Pick<Auth, "authenticateRequest" | "signInUrl">;
   readonly answerDownloadsEarly?: boolean | undefined;
   readonly mounts?: readonly HttpMount[];
   readonly leaseRoutes?: readonly HttpLeaseRoute[];

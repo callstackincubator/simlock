@@ -343,4 +343,40 @@ describe("createEventHistory", () => {
     expect(await readFile(join(rigged.directory, `history.db.damaged-${NOW}`), "utf8")).toBe(JUNK);
     expect(rigged.filesystem.renames).toHaveLength(1);
   });
+
+  it("a stop while the rebuild hold waits makes the hold's stopped check true and runs no rebuild", async () => {
+    const rigged = await rig();
+    let rebuilt = 0;
+    let holdEnded = false;
+    const history = rigged.history({
+      beforeRebuild: async (isStopped) => {
+        while (!isStopped()) await new Promise<void>((next) => setImmediate(next));
+        holdEnded = true;
+      },
+      projections: [
+        {
+          check: () => false,
+          create: () => ({
+            apply: () => undefined,
+            prune: () => undefined,
+            rebuild: () => {
+              rebuilt += 1;
+            },
+          }),
+          migrations: [],
+          name: "stale",
+          version: 0,
+        },
+      ],
+    });
+    const starting = history.start();
+    await settle();
+
+    await history.stop();
+    await settle();
+    await starting;
+
+    expect(holdEnded).toBe(true);
+    expect(rebuilt).toBe(0);
+  });
 });

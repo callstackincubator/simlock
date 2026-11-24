@@ -1,0 +1,59 @@
+---
+title: Cleanup and disk
+description: When Simlock shuts down and deletes devices on its own, what it never deletes, where its devices live, and what changes when the disk runs low.
+sidebar:
+  order: 4
+---
+
+Simlock shuts down and deletes its own simulators and emulators, so a worker does not fill its RAM and disk with devices nobody uses. You clean up by hand only when you want the space back now, or want to start over.
+
+## When devices are shut down and deleted
+
+```text
+lease ends ───────────────────────────────────────────► deleted
+idle, booted ─► 10 min ─► shut down ─► 60 min ─► deleted
+                (frees RAM)                  (frees disk)
+```
+
+- **When a lease ends**, its simulator or emulator is deleted. The next lease gets a new one.
+- **A booted device nobody leases** is shut down after 10 minutes (`idle.shutdownAfterMs`). Devices the [warm pool](/simlock/docs/concepts/warm-pool) keeps ready, and devices a waiting request is about to get, are not shut down.
+- **A shut-down device** is deleted 60 minutes after it was shut down (`idle.deleteAfterMs`).
+- **When the daemon stops**, it shuts down every idle device it booted. Leased devices keep running.
+
+A deleted device stays listed in `simlock status` and the console for an hour (`devices.deletedRetentionMs`), then is forgotten.
+
+## When the disk runs low
+
+When free space on the disk that holds Simlock's data drops below 10 GiB (`diskPressure.freeBytesThreshold`), shut-down devices are deleted 10 minutes after shutdown instead of 60. Each time free space drops below the threshold, Simlock records a `disk.pressure-detected` event.
+
+Low disk never removes iOS runtimes, Android system images or baselines. Those you remove yourself.
+
+## What cleanup never touches
+
+- A leased device.
+- Simulators and emulators Simlock did not create: your own emulators in `~/.android/avd`, and your own simulators in Xcode's device set.
+- A physical phone or tablet. Cleanup, `simlock nuke` and `simlock nuke --delete-devices` never delete or unenrol one.
+
+## Where devices live
+
+| Platform | Folder |
+| --- | --- |
+| iOS | `~/.simlock/devices/ios` (`drivers.ios.deviceRoot`) |
+| iOS, with `drivers.ios.deviceSet` set to `default` | Xcode's own device set. Simlock marks each simulator it creates and touches only those. See [iOS device sets](/simlock/docs/concepts/ios-device-sets). |
+| Android | `~/.simlock/devices/android` (`drivers.android.deviceRoot`) |
+
+The folders move with `SIMLOCK_HOME`. A device takes several gigabytes; a [baseline](/simlock/docs/concepts/baselines) as much as a whole device.
+
+Simlock uses only a device folder it created itself, so it can never delete someone else's files. Point a folder key at a path that already holds files Simlock did not create, and that platform stays off; `simlock doctor` names the reason.
+
+**Orphans** are devices in Simlock's folders that it has no record of, usually left by a daemon that stopped while creating one. Cleanup does not remove them; `simlock doctor` reports them, and an operator deletes them.
+
+## Resetting a machine
+
+`simlock nuke` is the reset for when leases or devices are stuck. It ends every lease on that worker, including other agents' leases, cancels every waiting request, shuts down Simlock's simulators and emulators, and makes the warm pool forget what it learned. With `--delete-devices` it also deletes them and every baseline. It runs on one worker at a time, never on a gateway.
+
+## Use it
+
+- [Free disk space and reset a machine](/simlock/docs/worker/free-disk): free space now, move the device folders, nuke.
+- [Change a setting](/simlock/docs/worker/change-a-setting): keep idle devices longer.
+- [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images): remove runtimes you no longer need.

@@ -234,7 +234,10 @@ function pinText(path) {
 }
 
 function prepare(commit) {
-  const dir = execFileSync(join(HERE, "worktree.sh"), ["--detach", commit, "--prepare"], {
+  // why: a .sh file starts through bash on Windows, where spawn has no shebang to read.
+  const script = join(HERE, "worktree.sh");
+  const [file, ...head] = process.platform === "win32" ? ["bash", script] : [script];
+  const dir = execFileSync(file, [...head, "--detach", commit, "--prepare"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   })
@@ -280,6 +283,8 @@ function put(dir, path) {
 
 function pnpm(dir, argv) {
   return spawnSync("pnpm", argv, {
+    // why: pnpm is a .cmd shim on Windows, which spawn starts only through a shell.
+    shell: process.platform === "win32",
     cwd: dir,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,

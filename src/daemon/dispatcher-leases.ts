@@ -62,6 +62,7 @@ export class LeaseHandlers {
           ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
           ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
           ...(input.runId === undefined ? {} : { runId: input.runId }),
+          ...(input.label === undefined ? {} : { label: input.label }),
           ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
           ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),

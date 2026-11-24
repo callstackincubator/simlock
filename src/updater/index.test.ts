@@ -24,7 +24,8 @@ import {
 } from "./index.js";
 
 const PACKAGE_ROOT = "/global/node_modules/simlock";
-const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
+// why: the updater joins the package root with the host's `join`, so a Windows host has backslashes.
+const CLI = join(PACKAGE_ROOT, "dist", "cli", "main.js");
 const PID = 4242;
 const EPOCH = 1_700_000_000_000;
 
@@ -761,7 +762,8 @@ describe("createDaemonProbe", () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp(dataDirectory);
     await filesystem.writeFileAtomic(`${dataDirectory}/admin.token`, "token\n");
-    await filesystem.writeFileAtomic(endpoint, "");
+    // why: the endpoint is a named pipe on Windows, which leaves no file behind.
+    if (process.platform !== "win32") await filesystem.writeFileAtomic(endpoint, "");
     const ipc = new MemoryIpcTransport();
     return { ipc, probe: createDaemonProbe({ dataDirectory, filesystem, ipc }) };
   };

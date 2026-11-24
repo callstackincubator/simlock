@@ -3,6 +3,7 @@ import { constants } from "node:os";
 import type { StreamingProcessResult } from "./process-runner-types.js";
 
 export type {
+  BoundedRunOptions,
   ProcessHandle,
   ProcessResult,
   ProcessRunner,

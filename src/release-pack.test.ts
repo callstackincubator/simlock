@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+
+import { BASH, fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..");
 const VERSION = "0.0.0-pack";
@@ -27,8 +29,12 @@ function write(path: string, content: string, mode: number): void {
   chmodSync(path, mode);
 }
 
+// why: a tar that reads "C:" as a host name cannot open a Windows path, so it runs in the folder.
 function listing(tarball: string): string {
-  return spawnSync("tar", ["tvzf", tarball], { encoding: "utf8" }).stdout;
+  return spawnSync("tar", ["tvzf", basename(tarball)], {
+    cwd: dirname(tarball),
+    encoding: "utf8",
+  }).stdout;
 }
 
 // why: the bits that matter are the ones in the tarballs users install, so the claims are checked
@@ -71,38 +77,54 @@ describe("the Release workflow's Pack step (.github/workflows/release.yml)", () 
     write(join(project, "packages/e2e/dist/index.test.d.ts"), "export {};\n", 0o644);
     write(join(project, "packages/e2e/dist/config.sample.js"), "export {};\n", 0o644);
 
+    // why: Git Bash ships sha256sum but not the shasum the Pack step calls.
+    const shims = join(root, "shims");
+    mkdirSync(shims);
+    if (process.platform === "win32") {
+      writeFakeCommand(shims, "shasum", '#!/bin/sh\nshift 2\nexec sha256sum --text "$@"\n');
+    }
     const result = spawnSync(
-      "bash",
+      BASH,
       ["--noprofile", "--norc", "-eo", "pipefail", "-c", packStepScript()],
       {
         cwd: project,
         encoding: "utf8",
-        env: { ...process.env, RUNNER_TEMP: root, VERSION },
+        env: {
+          ...process.env,
+          ...(process.platform === "win32" ? fakeCommandEnv(shims) : {}),
+          RUNNER_TEMP: root,
+          VERSION,
+        },
       },
     );
     expect(result.stderr).not.toContain("::error::");
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     return join(root, "package");
   }
 
-  it("keeps both iOS capture programs executable in the tarball, as it keeps the CLI entry", () => {
-    const modes = Object.fromEntries(
-      listing(join(pack(), `simlock-${VERSION}.tgz`))
-        .split("\n")
-        .map((line) => line.trim().split(/\s+/))
-        .filter((fields) => fields.length > 1)
-        .map((fields) => [fields.at(-1), fields[0]]),
-    );
-    expect({
-      cli: modes["package/dist/cli/main.js"],
-      deviceCapture: modes["package/dist/bin/simlock-device-capture"],
-      screenCapture: modes["package/dist/bin/simlock-screen-capture"],
-    }).toEqual({
-      cli: "-rwxr-xr-x",
-      deviceCapture: "-rwxr-xr-x",
-      screenCapture: "-rwxr-xr-x",
-    });
-  });
+  // why: NTFS has no executable bit, so a Windows host cannot make the tarball's modes; the
+  // Release workflow packs on a macOS runner.
+  it.skipIf(process.platform === "win32")(
+    "keeps both iOS capture programs executable in the tarball, as it keeps the CLI entry",
+    () => {
+      const modes = Object.fromEntries(
+        listing(join(pack(), `simlock-${VERSION}.tgz`))
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/))
+          .filter((fields) => fields.length > 1)
+          .map((fields) => [fields.at(-1), fields[0]]),
+      );
+      expect({
+        cli: modes["package/dist/cli/main.js"],
+        deviceCapture: modes["package/dist/bin/simlock-device-capture"],
+        screenCapture: modes["package/dist/bin/simlock-screen-capture"],
+      }).toEqual({
+        cli: "-rwxr-xr-x",
+        deviceCapture: "-rwxr-xr-x",
+        screenCapture: "-rwxr-xr-x",
+      });
+    },
+  );
 
   it("packs simlock and @simlock/e2e at one version, the second with its built files and no test file, and lists both in SHA256SUMS.txt", () => {
     const folder = pack();

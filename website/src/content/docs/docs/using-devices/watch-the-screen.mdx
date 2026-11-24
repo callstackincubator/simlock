@@ -1,0 +1,73 @@
+---
+title: Watch a device's screen
+description: Watch the live screen of a simulator, emulator or phone in the web console, one device or up to four side by side.
+sidebar:
+  order: 10
+  label: "Watch the screen"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** you see a device's screen live in the web console: an iOS simulator, an Android emulator, an Android phone or an iPhone.
+
+In the console you can only watch; you cannot tap or type. To stream and send input from your own tool, see [Stream the screen and send input from your own tool](/simlock/docs/using-devices/screen-and-input-api).
+
+## Before you start
+
+- You can sign in to the console with an operator token, and screen streaming is on for the worker that holds the device (it is off by default). Both are set up in [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http).
+- For a physical iPhone: the worker runs Xcode 27 or later, and the iPhone runs iOS 27 or later. Simulators stream on any Xcode the worker supports.
+- Nothing is captured until someone watches a device. Capture stops when the last viewer selects **Stop watching**, leaves the page, or the device stops running.
+
+## Watch one device
+
+<Steps>
+
+1. Open the console, go to **Fleet** and select the worker that holds the device.
+2. Select the device.
+3. Select **Watch** in the drawer.
+
+</Steps>
+
+**Check:** the picture starts by itself, with two pills over it showing frame rate, codec, size and bandwidth.
+
+A device that is not running has no picture, and the page says why: shut down, starting, being reset, quarantined or not connected. The picture starts by itself once the device is `ready` again. Someone taking a lease on the device while you watch does not interrupt the picture.
+
+## Watch devices side by side
+
+<Steps>
+
+1. Select **Screens** under **Observe**. It lists running devices across workers, with who holds each one. It opens on leased devices; **Ready** and **All** show the others.
+2. Select **Watch** on up to four devices.
+
+</Steps>
+
+**Check:** each watched device shows its screen. Only watched devices stream, and watched screens pause while the browser tab is hidden. This view never boots or leases a device.
+
+## What to expect
+
+- **The first picture can take a while.** A simulator usually shows within seconds; a physical Android phone takes longer. The console waits up to 200 seconds.
+- **A phone with its screen off is woken first.** If it does not wake, you are told to turn it on. While a phone streams and charges, it is kept awake; its setting is put back when the stream ends. A phone that went dark off its charger shows no picture to a viewer who joins later.
+- **The picture ends when the device stops or is handed back.** When the device shuts down, loses its connection, is quarantined or deleted, or its lease ends, the stream stops, so nobody watches a device after it is handed back. A lease end shows why: "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost."
+- **A dropped stream reconnects.** If the stream ends without a reason, such as when your sign-in through a proxy expires, the page opens it again.
+- **A frozen device does not look live.** A stream with no new frame for 30 seconds ends with an error.
+- **Viewers share one capture.** Two tabs on one device capture it once. A viewer who joins can wait up to 5 seconds for its first picture. A slow tab, such as one in the background, skips frames and slows nobody else.
+- **Rotation.** An Android device's picture follows its rotation, and so does an iOS simulator's or an iPhone's whenever its picture changes size.
+- **Foldables.** An iPhone Duo simulator shows the panel in use, upright, and switches panels within about 5 seconds after it folds or unfolds. A stream opened while the screen is all black can show the cover for a few seconds first.
+
+## When it fails
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` is not `true` on that worker. | Ask the operator to [turn streaming on](/simlock/docs/worker/console-and-http). |
+| The panel says the screen cannot be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker on Xcode older than 27. | Update the iPhone or the worker's Xcode. |
+| "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone, then select **Stop watching** and **Watch** again. |
+| The page gives up waiting for the first picture | The device showed nothing in time. | Select **Stop watching**, then **Watch** again. |
+| The picture stops on a device that is still running | The device stopped sending frames for 30 seconds. | Select **Stop watching**, then **Watch** again. |
+
+A physical iPhone that cannot stream says why, for example:
+
+```text
+Physical iPhone streams need iOS 27 or later on the iPhone; 00008110-001A2B3C4D5E801E runs iOS 18.6. Update the iPhone and ask for the stream again.
+```
+
+Every console page: [Web console reference](/simlock/docs/reference/console).
