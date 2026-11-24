@@ -57,7 +57,9 @@ list and this one the same.
   e2e typecheck. A test that reads the repository's files instead of
   importing code is named `*.repo.test.ts` and runs in about a second:
   `pnpm test:changed` selects it only when the branch edits the test
-  itself, so the hook runs every one.
+  itself, so the hook runs every one, except on `bug/<n>-repro` and
+  `wip/<n>-repro`, where a triage's reproduction fails by design; CI runs
+  them all.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. CI's Fallow
   (`fallow --ci`) checks the whole tree and fails on any dead-code finding
   or clone group, `warn` rules included; complexity fails above the
