@@ -10,6 +10,7 @@ import { type SilenceFailedFact, IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 import {
   deviceRoot,
+  sourcesSetPath,
   driverData,
   simctlArgs,
   simctl,
@@ -36,7 +37,7 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesSetPath]).toContain(call.args[2]);
   }
 });
 
