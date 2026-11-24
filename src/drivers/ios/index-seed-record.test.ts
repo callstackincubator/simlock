@@ -37,6 +37,10 @@ function utf16be(text: string): Buffer {
   return Buffer.from(text, "utf16le").swap16();
 }
 
+// why: the walk asks for a path in the memory filesystem's own `/` spelling, which on Windows has
+// no drive and no `\`, while a test names it as the host spells it.
+const walkSpelling = (path: string) => path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/");
+
 class UnreadableFiles extends MemoryFilesystem {
   readonly unreadable = new Set<string>();
   /** why: CoreSimulator's atomic write lists a `*.sb-*` temp file and renames it away before the walk reaches it. */
@@ -45,9 +49,9 @@ class UnreadableFiles extends MemoryFilesystem {
   readonly vanishingAfterLstat = new Set<string>();
 
   override async lstat(path: string): ReturnType<MemoryFilesystem["lstat"]> {
-    if (this.vanishing.has(path)) await this.rm(path);
+    if (this.vanishing.has(walkSpelling(path))) await this.rm(path);
     const details = await super.lstat(path);
-    if (this.vanishingAfterLstat.has(path)) await this.rm(path);
+    if (this.vanishingAfterLstat.has(walkSpelling(path))) await this.rm(path);
     return details;
   }
 
@@ -135,9 +139,9 @@ async function saveBaseline(options: {
   const filesystem = new UnreadableFiles();
   await plantManagedDevice(filesystem);
   await options.plant(filesystem);
-  for (const path of options.vanishingPaths ?? []) filesystem.vanishing.add(path);
+  for (const path of options.vanishingPaths ?? []) filesystem.vanishing.add(walkSpelling(path));
   for (const path of options.vanishingAfterLstatPaths ?? []) {
-    filesystem.vanishingAfterLstat.add(path);
+    filesystem.vanishingAfterLstat.add(walkSpelling(path));
   }
   const opener = new FakeSqliteOpener(filesystem);
   const logger = new RecordingLogger();
