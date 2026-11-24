@@ -454,6 +454,11 @@ export class Seeds {
       },
     );
     this.#making.add(settleId);
+    let swapped: {
+      readonly reason: "idle" | "cap";
+      readonly settledAfterMs: number;
+      readonly sizeBytes: number | undefined;
+    };
     try {
       await this.#copyAvd(
         quick.folder,
@@ -472,16 +477,20 @@ export class Seeds {
       await this.#deviceTable.withLock(`seed:${quick.specKey}`, async () => {
         this.#sources.promoteSettled(settleId, quick.sourceId, configHash, sizeBytes);
       });
-      await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
-      return {
-        reason: settled.reason,
-        settledAfterMs: settled.settledAfterMs,
-        sourceId: settleId,
-        ...(sizeBytes === undefined ? {} : { sizeBytes }),
-      };
+      swapped = { ...settled, sizeBytes };
+    } catch (error: unknown) {
+      await this.#removeSource(settleId, folder, SEED_AVD_NAME);
+      throw error;
     } finally {
       this.#making.delete(settleId);
     }
+    await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
+    return {
+      reason: swapped.reason,
+      settledAfterMs: swapped.settledAfterMs,
+      sourceId: settleId,
+      ...(swapped.sizeBytes === undefined ? {} : { sizeBytes: swapped.sizeBytes }),
+    };
   }
 
   #quickSeed(sourceId: string): SourceRow {
@@ -513,6 +522,10 @@ export class Seeds {
     let listener: ProcessHandle | undefined;
     try {
       state.handle = await this.#emulator.start(booted, ["-snapshot", BOOT_SNAPSHOT], true);
+      let exited = false;
+      void state.handle.wait().then(() => {
+        exited = true;
+      });
       const readyAt = this.#clock.now();
       const network = this.#watchDefaultNetwork(booted);
       listener = network.listener;
@@ -522,6 +535,13 @@ export class Seeds {
         readyAt,
         signal,
         network.has,
+        () => {
+          if (exited) {
+            throw new DriverCrashError(
+              `Android seed ${settleId}: its emulator exited while the seed settled`,
+            );
+          }
+        },
       );
       const settledAfterMs = this.#clock.now() - readyAt;
       await this.#saveBootSnapshot(settleId, booted);
@@ -591,6 +611,7 @@ export class Seeds {
     readyAt: number,
     signal: AbortSignal,
     hasDefaultNetwork: () => Promise<boolean>,
+    throwIfExited: () => void,
   ): Promise<"idle" | "cap"> {
     const watch = new IdleWatch({
       idleCores: ANDROID_IDLE_CORES,
@@ -599,6 +620,7 @@ export class Seeds {
     });
     for (;;) {
       signal.throwIfAborted();
+      throwIfExited();
       // why: a read that fails counts as no reading (the `ProcessTable` port), so the cap still ends the wait.
       const processes = await processTable.list().catch(() => undefined);
       if (processes !== undefined) watch.observe(processes, this.#clock.now());
