@@ -27,6 +27,7 @@ import {
   requesterIdSchema,
   type AuthorizeContext,
   type ComponentProgress,
+  type SeedProgress,
   type Effect,
   type OperationDefinition,
   type OperationName,
@@ -41,6 +42,14 @@ import {
  * through to the other -- but named from the contract here so this module stays core-free.
  */
 export type DispatchProgress = z.infer<typeof leaseProgressSchema>;
+
+/** why: the seed a `seed.make` call is about, as its `seed-progress` pushes name it. */
+export interface SeedKind {
+  readonly platform: "ios" | "android";
+  readonly model: string;
+  readonly osVersion: string;
+  readonly imageTag?: string;
+}
 
 export interface DispatchSession {
   readonly principal: string;
@@ -109,6 +118,8 @@ export interface DispatchSession {
    * `worker.install-component` calls it too, with the id of the worker the update came from
    * (ADR 0010 §7). */
   readonly onComponentProgress?: (progress: ComponentProgress, workerId?: string) => void;
+  /** why: called for each stage a `seed.make` call reports; the kind is the seed the call is about. Ignored by every other operation. */
+  readonly onSeedProgress?: (kind: SeedKind, progress: SeedProgress) => void;
   // why: set by the socket transport only; the relay operations are refused without `isGatewayUplink` before they read it.
   readonly relays?: RelayConnection;
   readonly onRelayHead?: (

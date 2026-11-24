@@ -2,7 +2,7 @@
  * why: server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`, `started`, `output`, `component-progress`, `relay-head`): carries the
+ * - Request-scoped (`progress`, `started`, `output`, `component-progress`, `seed-progress`, `relay-head`): carries the
  *   originating request's frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
@@ -15,7 +15,12 @@
 import { z } from "zod";
 
 import { relayHeadersSchema } from "./relay.js";
-import { eventEnvelopeSchema, leaseProgressSchema } from "./schemas.js";
+import {
+  eventEnvelopeSchema,
+  imageTagSchema,
+  leaseProgressSchema,
+  platformSchema,
+} from "./schemas.js";
 
 /**
  * why: Per-kind schemas are intentionally not exported individually -- `PUSH_SCHEMAS` (below) is the
@@ -94,6 +99,30 @@ const componentProgressPushSchema = z.object({
 /** One `component-progress` push's `progress`, as a `component.install` caller sees it. */
 export type ComponentProgress = z.infer<typeof componentProgressPushSchema>["progress"];
 
+/** why: ADR 0090 §4: what a running `seed.make` call hears, keyed by the originating request's frame id like `progress`; `kind` names the seed the call is about. */
+const seedProgressSchema = z.discriminatedUnion("stage", [
+  z.object({ stage: z.literal("making") }),
+  z.object({
+    stage: z.literal("waiting"),
+    reason: z.enum(["settle-running", "memory-pressure", "disk-pressure", "capacity"]),
+  }),
+  z.object({ stage: z.literal("settling") }),
+]);
+
+/** One `seed-progress` push's `progress`, as a `seed.make` caller sees it. */
+export type SeedProgress = z.infer<typeof seedProgressSchema>;
+
+const seedProgressPushSchema = z.object({
+  requestId: requestIdSchema,
+  kind: z.object({
+    platform: platformSchema,
+    model: z.string().min(1).max(200),
+    osVersion: z.string().min(1).max(64),
+    imageTag: imageTagSchema.optional(),
+  }),
+  progress: seedProgressSchema,
+});
+
 /**
  * why: `status` is one a `Response` can carry (ADR 0026), so a worker cannot send an interim 1xx; keyed by the
  * `relay.request` call's frame id like `output`, so a connection with more than one relay routes each head to its own call.
@@ -132,6 +161,7 @@ export const PUSH_SCHEMAS = {
   output: outputPushSchema,
   started: startedPushSchema,
   "component-progress": componentProgressPushSchema,
+  "seed-progress": seedProgressPushSchema,
   "relay-head": relayHeadPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
