@@ -27,6 +27,7 @@ import type { DeviceProfile } from "./device-profile-source.js";
 import type { DeviceTable } from "./device-table.js";
 import { SIGKILL_REAP_TIMEOUT_MS, type Emulator } from "./emulator.js";
 import { OWNERSHIP_PROBE_TIMEOUT_MS, type Ownership } from "./ownership.js";
+import { SeedTurns } from "./seed-turns.js";
 import { AndroidSourceTable, type SourceRow } from "./source-data.js";
 import { systemImagePackage, type SystemImages } from "./system-images.js";
 
@@ -118,6 +119,7 @@ export class Seeds {
   readonly #ownership: Ownership;
   readonly #processRunner: ProcessRunner;
   readonly #sources: AndroidSourceTable;
+  readonly #turns = new SeedTurns();
   readonly #systemImages: SystemImages;
   /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
   readonly #making = new Set<string>();
@@ -211,15 +213,17 @@ export class Seeds {
 
   /** why: the emulator running a source's AVD is found by its path and stopped before the folder goes, so nothing is deleted under a live process. */
   async #removeSource(sourceId: string, folder: string, avdName: string): Promise<void> {
-    await this.#emulator.stopUnowned({
-      avdHome: folder,
-      avdName,
-      configHash: "",
-      port: 0,
-      serial: "",
+    await this.#turns.delete(sourceId, async () => {
+      await this.#emulator.stopUnowned({
+        avdHome: folder,
+        avdName,
+        configHash: "",
+        port: 0,
+        serial: "",
+      });
+      await this.#filesystem.rm(folder);
+      this.#sources.remove(sourceId);
     });
-    await this.#filesystem.rm(folder);
-    this.#sources.remove(sourceId);
   }
 
   /**
@@ -259,8 +263,10 @@ export class Seeds {
   }
 
   async #removeSeed(row: SourceRow): Promise<void> {
-    await this.#filesystem.rm(row.folder);
-    this.#sources.remove(row.sourceId);
+    await this.#turns.delete(row.sourceId, async () => {
+      await this.#filesystem.rm(row.folder);
+      this.#sources.remove(row.sourceId);
+    });
   }
 
   /**
@@ -495,7 +501,7 @@ export class Seeds {
 
   #quickSeed(sourceId: string): SourceRow {
     const row = this.#sources.findRow(sourceId);
-    if (row?.kind !== "seed" || row.settled) {
+    if (row?.kind !== "seed" || row.state !== "ready" || row.settled) {
       throw new DriverCrashError(`Android keeps no ready quick seed ${sourceId}`);
     }
     return row;
@@ -630,6 +636,27 @@ export class Seeds {
     }
   }
 
+  /**
+   * why: a copy is made in its seed's turn, with the seed's folder known to be there: a seed
+   * deleted or swapped for a settled one while this call waited is not copied, and the kind's
+   * current seed is found, or made, instead.
+   */
+  async #copyFreshSeed(
+    spec: VirtualSpec,
+    avdHome: string,
+  ): Promise<{ image: SystemImage; seed: SeedRecord }> {
+    for (;;) {
+      const fresh = await this.#freshSeed(spec);
+      const copied = await this.#turns.copy(fresh.seed.sourceId, async () => {
+        if (this.#sources.findRow(fresh.seed.sourceId)?.state !== "ready") return false;
+        await this.#copySeed(fresh.seed, avdHome);
+        this.#sources.addLease(fresh.seed.sourceId);
+        return true;
+      });
+      if (copied) return fresh;
+    }
+  }
+
   /** why: a provision and `ensureSeed` find or make the kind's seed the same way: under the kind's lock, a stale one destroyed and made again. */
   async #freshSeed(spec: VirtualSpec): Promise<{ image: SystemImage; seed: SeedRecord }> {
     const profile = await this.#catalog.profileFor(spec.model);
@@ -697,10 +724,8 @@ export class Seeds {
     // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
     // folder. Nothing reads it back as evidence of anything -- ownership comes from the root.
     const deviceId = `simlock_${this.#idGenerator.generate()}`;
-    const { image, seed } = await this.#freshSeed(spec);
     const avdHome = join(this.#deviceRoot, deviceId);
-    await this.#copySeed(seed, avdHome);
-    this.#sources.addLease(seed.sourceId);
+    const { image, seed } = await this.#copyFreshSeed(spec, avdHome);
     const driverData: AndroidDriverData = {
       avdHome,
       avdName: SEED_AVD_NAME,

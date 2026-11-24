@@ -68,6 +68,7 @@ export interface SourceRow {
   readonly imageIdentity: string;
   readonly sizeBytes: number | undefined;
   readonly staleReason: string | undefined;
+  readonly state: "making" | "ready";
   readonly settled: boolean;
   readonly leaseCount: number;
   readonly settleOf: string | undefined;
@@ -176,7 +177,7 @@ export class AndroidSourceTable {
     return this.#database
       .prepare(
         `SELECT source_id, kind, spec_key, model, os_version, image_tag, folder, avd_name, config_hash, size_bytes,
-           emulator_version, image_identity, stale_reason, created_at, settled, lease_count, settle_of
+           emulator_version, image_identity, stale_reason, created_at, state, settled, lease_count, settle_of
          FROM android_source_data ${where}`,
       )
       .all(...parameters)
@@ -195,6 +196,7 @@ export class AndroidSourceTable {
         imageIdentity: row["image_identity"] as string,
         sizeBytes: (row["size_bytes"] as number | null) ?? undefined,
         staleReason: (row["stale_reason"] as string | null) ?? undefined,
+        state: row["state"] as "making" | "ready",
         settled: row["settled"] === 1,
         leaseCount: row["lease_count"] as number,
         settleOf: (row["settle_of"] as string | null) ?? undefined,
