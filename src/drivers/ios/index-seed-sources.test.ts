@@ -785,12 +785,7 @@ describe("IosSimctlDriver", () => {
           { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
           { match: simctl("shutdown", driverData.udid) },
           {
-            match: simctl(
-              "clone",
-              driverData.udid,
-              "simlock-baseline-device-1",
-              `${deviceRoot}/sources`,
-            ),
+            match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSetPath),
             result: { code: 0, stderr: "", stdout: `${baselineUdid}\n` },
           },
           { match: sourcesSimctl("shutdown", baselineUdid) },

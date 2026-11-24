@@ -8,13 +8,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const LEFTHOOK = join(ROOT, "node_modules", ".bin", "lefthook");
+// why: `.bin/lefthook` is a shell shim that Windows cannot start without a shell; the package's own entry
+// runs under node on every host.
+const LEFTHOOK = join(ROOT, "node_modules", "lefthook", "bin", "index.js");
 
 // why: the stand-in pnpm fails as `vitest run` does when the branch carries a failing
 // *.repo.test.ts, so the step's exit is the hook's verdict on such a push.
@@ -41,13 +43,17 @@ function pushRepoTests(branch: string) {
   const bin = join(repo, ".bin");
   mkdirSync(bin);
   const calls = join(repo, "pnpm-calls");
-  writeFileSync(join(bin, "pnpm"), `#!/bin/sh\necho "$@" >> "${calls}"\nexit 1\n`);
+  // why: the hook's shell is Git Bash on Windows, which reads a path with `/` but may not one with `\`.
+  writeFileSync(
+    join(bin, "pnpm"),
+    `#!/bin/sh\necho "$@" >> "${calls.replaceAll("\\", "/")}"\nexit 1\n`,
+  );
   chmodSync(join(bin, "pnpm"), 0o755);
   const { LEFTHOOK: _off, LEFTHOOK_EXCLUDE: _excluded, ...inherited } = process.env;
-  const env = { ...inherited, PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...inherited, PATH: `${bin}${delimiter}${process.env.PATH}` };
   const result = spawnSync(
-    LEFTHOOK,
-    ["run", "pre-push", "--force", "--no-auto-install", "--no-tty"],
+    process.execPath,
+    [LEFTHOOK, "run", "pre-push", "--force", "--no-auto-install", "--no-tty"],
     { cwd: repo, env, encoding: "utf8" },
   );
   return {
