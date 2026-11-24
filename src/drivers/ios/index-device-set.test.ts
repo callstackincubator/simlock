@@ -19,6 +19,7 @@ import {
   deviceRoot,
   sourcesSetPath,
   simctlArgs,
+  deviceHubDisable,
   deviceHubEdit,
   plantManagedDevice,
   instanceId,
@@ -121,9 +122,7 @@ describe("IosSimctlDriver device set", () => {
       const runner = new ScriptedProcessRunner(
         steps.flatMap((step) => [
           ...(!scoped && step.args[0] === "boot" && step.args[1] !== seedUdid
-            ? deviceHubEdit(
-                `Set :DevicePreferences:${String(step.args[1])}:pasteboardSyncEnabled false`,
-              ).map((match) => ({ match }))
+            ? deviceHubDisable(String(step.args[1]))
             : []),
           {
             match: { args: argvOf(step), command: "xcrun" },

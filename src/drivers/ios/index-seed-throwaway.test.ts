@@ -4,6 +4,7 @@ import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/
 import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase, plantSource } from "./testing.js";
 import {
+  deviceHubDisable,
   deviceHubEdit,
   deviceRoot,
   sourcesSetPath,
@@ -83,6 +84,7 @@ describe("IosSimctlDriver seed throwaway", () => {
         ...(stdout === undefined ? {} : { result: { code: 0, stderr: "", stdout } }),
       });
       const inSet = (...args: string[]) => simctlIn(world, undefined, ...args);
+      const disableSync = (udid: string) => (world.isDefault ? deviceHubDisable(udid) : []);
       const hub = (command: string) =>
         world.isDefault ? deviceHubEdit(command).map((match) => ({ match })) : [];
       const database = await memorySourceDatabase();
@@ -99,7 +101,7 @@ describe("IosSimctlDriver seed throwaway", () => {
           inSet("create", name, driverData.deviceTypeId, driverData.runtimeId),
           `${throwawayUdid}\n`,
         ),
-        ...hub(`Set :DevicePreferences:${throwawayUdid}:pasteboardSyncEnabled false`),
+        ...disableSync(throwawayUdid),
         {
           match: inSet("boot", throwawayUdid),
           onSpawn: () => {

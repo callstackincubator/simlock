@@ -289,6 +289,22 @@ export function deviceHubEdit(command: string) {
   ];
 }
 
+// why: turning clipboard sync off is read back from a fresh export (#1822), so its calls end with an export and a Print that answers false.
+export function deviceHubDisable(udid: string) {
+  const path = `:DevicePreferences:${udid}:pasteboardSyncEnabled`;
+  return [
+    ...deviceHubEdit(`Set ${path} false`).map((match) => ({ match })),
+    { match: { command: "defaults", args: ["export", "com.apple.dt.Devices", deviceHubStaging] } },
+    {
+      match: {
+        command: "/usr/libexec/PlistBuddy",
+        args: ["-c", `Print ${path}`, deviceHubStaging],
+      },
+      result: { code: 0, stderr: "", stdout: "false\n" },
+    },
+  ];
+}
+
 /** why: Lets queued continuations run, so a test can see that something has not happened yet. */
 export async function flushMicrotasks221(): Promise<void> {
   for (let count = 0; count < 100; count += 1) await Promise.resolve();
