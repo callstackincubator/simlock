@@ -1,0 +1,154 @@
+---
+title: MCP tools
+description: Every tool, resource and message of the simlock mcp server, with its inputs, its answer and the errors it returns.
+sidebar:
+  order: 3
+---
+
+`simlock mcp` serves one agent session over stdio. Setup: [Give your agent the MCP server](/simlock/docs/getting-started/mcp-server). Flags and remote use: [CLI](/simlock/docs/reference/cli#simlock-mcp).
+
+| Tool | Does |
+| --- | --- |
+| [`list_devices`](#list_devices) | Lists what you can lease, and the enrolled phones. |
+| [`lease_simulator`](#lease_simulator) | Leases one device for this session. |
+| [`lease_status`](#lease_status) | Reports this session's lease. |
+| [`run_on_device`](#run_on_device) | Runs one `simctl`, `adb` or `devicectl` command on the session's device. |
+| [`rotate_device`](#rotate_device) | Turns the session's iOS simulator. |
+| [`release_simulator`](#release_simulator) | Releases the session's lease. |
+
+Field names are camelCase, as in the HTTP API and the Node client. Every tool answers JSON, as `structuredContent` and as one text block.
+
+## How a session holds a lease
+
+- The session's requester is its identity: the agent tool's session id, else `SIMLOCK_AGENT_ID`, else `mcp:<pid>`. See [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent).
+- The server renews the session's lease while it runs, and releases it when the agent tool closes the connection.
+- `run_on_device` and `rotate_device` act on the session's lease: their input names no lease and no device.
+- The server starts the daemon on the first tool call that needs it. The renewal never starts one, so a `simlock daemon stop` sticks.
+- With `--url` or `SIMLOCK_URL` and a token, the tools run on that farm, and a dropped connection is ridden out until the lease's deadline.
+
+## list_devices
+
+Read-only. Never downloads anything. Call it once before `lease_simulator` to pick a model and OS that pair.
+
+| Input | Type | Meaning |
+| --- | --- | --- |
+| `platform` | `ios` or `android`, optional | One platform only. Default: both. |
+
+| Answer field | Meaning |
+| --- | --- |
+| `platforms[]` | One entry per platform this machine or fleet serves, as `simlock catalog --json` prints it. |
+| `platforms[].models`, `runtimes`, `defaultRuntime` | Model names, installed OS versions, and the one used when you name none (the newest). |
+| `platforms[].modelRuntimes` | For each model, the installed OS versions it pairs with. A listed model and a listed runtime don't always pair. |
+| `platforms[].modelAliases` | Other names a model answers to (on Android, the device profile id). |
+| `platforms[].modelClasses`, `classDefaults` | Each model's class, and the model Simlock makes for each class here. |
+| `platforms[].images` | Android only: installed system images with API level, tag and ABI. |
+| `physicalDevices[]` | Enrolled phones and tablets: `platform`, `model`, `osVersion`, `class`, `state` (`ready`, `leased`, `absent` or another device state), `absentReason` (`locked`, `untrusted` or `not-present`) when absent, and `workerId` through a gateway. Never says who holds one. Empty while the daemon starts. A snapshot: leasing decides. |
+
+## lease_simulator
+
+Leases one simulator, emulator or enrolled phone for this session, and waits for it. The same choices as [`simlock lease`](/simlock/docs/reference/cli#simlock-lease).
+
+| Input | Type | Meaning |
+| --- | --- | --- |
+| `platform` | `ios` or `android` | Required. |
+| `model` | string | An exact model, such as `iPhone 16`. Not with `class`. |
+| `class` | `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop` | Any model of the class. Default: `phone` when no `model`. |
+| `osVersion` | string | An exact version (`18.4`) or a range: `>=`, `>`, `<=` or `<` and a version, joined by single spaces (`>=18 <26`), or a hyphen range (`18 - 26`). A range never downloads. |
+| `mode` | `slim` or `full` | iOS device mode. Default: the worker's. |
+| `except` | list of 1 to 16 category names | iOS slim only: keep these slim categories running, such as `["store"]`. |
+| `imageTag` | string | Android system image type, such as `google_apis_playstore`. Uses only an installed image. |
+| `baseline` | string | A saved baseline's name: you get a new copy of it. Must match any `model`, `osVersion`, `mode` or `imageTag` you pass. Not with `class`. |
+| `physical` | boolean | Lease an enrolled phone or tablet. |
+| `allowDownload` | boolean | Let Simlock download a missing runtime or image. Default `false`. |
+| `noWait` | boolean | Fail with `NO_CAPACITY` instead of waiting. |
+| `timeoutMs` | number | Longest wait in the queue, then `QUEUE_TIMEOUT`. Default: no limit. |
+| `ttlMs` | number | The lease's time to live. Default `lease.defaultTtlMs`; above `lease.maxTtlMs` is `BAD_REQUEST`. |
+| `leaseId` | string | The lease's id, in place of a generated one: 1 to 64 letters, digits, `-` or `_`, starting with a letter or digit. Unique for all time. |
+| `label` | string | A display name for the lease, 1 to 64 characters, no control characters. On Android and phones it shows on the lease only. |
+| `idempotencyKey` | string, 1 to 200 characters | Sending the same key again joins the request already made. Against a farm the server sets its own key and ignores this one. |
+
+The answer is the grant, the same JSON `simlock lease` prints: `device` (with `driverDeviceId`, the UDID or serial), `environment`, `lease` and `timing`.
+
+While it waits, a client that sent a progress token gets progress notifications: `Queued behind 2 other requests`, `Next in queue`, `Downloading <component> (40%)`, `Waiting for another download before downloading <component>`, `Provisioning device (~45s remaining)`, `Booting device (~20s remaining)`. Cancelling the tool call cancels the waiting request.
+
+## lease_status
+
+Read-only. Safe to call any time, for example after the agent's context was compacted. Takes no input.
+
+| Answer field | Meaning |
+| --- | --- |
+| `held` | `true` when the session holds a lease, `false` when it holds none. |
+| `id`, `deviceId`, `requesterId`, `ownerId` | The lease, when held. |
+| `grantedAt`, `ttlMs`, `ttlDeadline`, `lastRenewedAt` | Times in milliseconds since the epoch, and the time to live. |
+| `idChosenByRequester`, `label`, `worker` | Whether you chose the id, the label, and through a gateway the worker that holds it. |
+
+The server asks the daemon every time; it keeps no copy. Through a gateway, `held: false` for up to about a minute after a worker restarts means the worker hasn't reported its leases yet: call again, and don't lease a new device.
+
+## run_on_device
+
+Runs one command on the session's device, on the machine that holds it.
+
+| Input | Type | Meaning |
+| --- | --- | --- |
+| `tool` | string | `simctl` or `adb`, or `devicectl` on an iPhone or iPad. |
+| `args` | list of strings | The arguments, such as `["install","/builds/App.app"]`. Leave the device out: Simlock fills in the lease's UDID or serial. |
+| `stdin` | string, optional | Sent to the command, then closed. At most 8,388,608 characters; a longer one fails input validation before Simlock sees it. |
+
+| Answer field | Meaning |
+| --- | --- |
+| `exitCode` | The command's exit code. Non-zero is the command's own answer, not a tool error. |
+| `stdout`, `stderr` | The last 32768 characters of each. |
+| `truncated` | `true` when either was cut. |
+
+- File paths are on the machine that holds the device.
+- There is no terminal. A bare `adb shell` is refused; a command that waits for input runs until the time limit (`exec.timeoutMs`, 10 minutes by default) stops it.
+- A command that names another device is refused before it runs.
+- A client that sent a progress token gets `Running simctl install` as progress, when output arrives and at least every 10 seconds.
+
+## rotate_device
+
+Turns the session's iPhone or iPad simulator.
+
+| Input | Type | Meaning |
+| --- | --- | --- |
+| `orientation` | string | `portrait`, `portrait-upside-down`, `landscape-left` or `landscape-right`. `left`, `right`, `upside-down` and the underscore spellings work too. |
+
+The answer is `{leaseId, orientation}`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An Android emulator, a phone, an Apple TV or a foldable iPhone Duo is refused with `ROTATION_UNSUPPORTED`; turn a Duo with `agent-device orientation`.
+
+## release_simulator
+
+| Input | Type | Meaning |
+| --- | --- | --- |
+| `leaseId` | string | Required. The session's lease id, from the grant or `lease_status`. |
+
+The answer is `{leaseId, released: true}`. It returns as soon as the lease ends; the device is deleted in the background, and never leased again. A session can release only its own lease.
+
+## Resource and messages
+
+| What | Holds |
+| --- | --- |
+| Server instructions | A short version of the rules, sent when the client connects. |
+| Resource `simlock://instructions` | The full rules, as Markdown: the same text `simlock instructions` prints. |
+| Logging message, `warning`: "Simlock lease ended; this session no longer holds the device." | Someone else ended the lease, such as an operator's release or its expiry. Carries `leaseId`, `deviceId` and `reason`. |
+| Logging message, `warning`: "Simlock's device crashed outside simlock; …" | The device crashed. Apps, log streams and port forwards inside it are gone. Recovery runs under the same lease. |
+| Logging message, `info`: "Simlock's device was rebooted and is ready again under the same lease." | Recovery worked. Install and launch your app again. |
+| Logging message, `warning`: `lost the connection to <url>; …` | Remote use only: the farm dropped. The server reconnects and keeps renewing until the lease's deadline. |
+
+## Errors
+
+A failed tool call is a tool error whose text is `{"code":"…","message":"…"}`. The codes are the daemon's, listed in [Errors](/simlock/docs/reference/errors), plus `NO_LEASE`.
+
+| Code | From | Cause | Fix |
+| --- | --- | --- | --- |
+| `NO_LEASE` | `run_on_device`, `rotate_device` | The session holds no lease. | Call `lease_simulator` first. |
+| `REQUESTER_ALREADY_LEASED` | `lease_simulator` | The session's requester already holds its limit of leases. | Use the lease you hold, or release it. |
+| `BAD_REQUEST` | any | A value is wrong, such as `model` with `class`, or an unknown orientation. The message names it. | Fix the value. |
+| `PASSTHROUGH_REFUSED` | `run_on_device` | The command names another device, or a verb Simlock refuses. | Leave the device out, or drop the verb. |
+| `EXEC_TIMEOUT` | `run_on_device` | The command ran past the time limit. | Split the work. |
+| `ROTATION_UNSUPPORTED` | `rotate_device` | The lease isn't on an iPhone or iPad simulator. | Rotate only those. |
+| `UNKNOWN_LEASE`, `FORBIDDEN` | `release_simulator` | The lease is gone, or isn't this session's. | Check `lease_status`. |
+| `DAEMON_STARTUP_FAILED` | any | The server started the daemon, and it failed. | Read `simlock daemon logs`. |
+| `GATEWAY_NOT_PRESENT` | any | `simlock --gateway mcp` on a machine with no gateway. | Start the gateway, or drop `--gateway`. |
+| `INTERNAL` | any | Something unexpected failed. | Check `simlock daemon logs`. |
+
+Errors a lease request can end with, such as `NO_CAPACITY`, `RUNTIME_MISSING` or `UNKNOWN_MODEL`: [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails).

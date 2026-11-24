@@ -18,7 +18,7 @@ dry=${2:-}
 case $top in '' | *[!0-9]*) echo "usage: stack-sync.sh <top pr> [--dry-run]" >&2; exit 64 ;; esac
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(git rev-parse --show-toplevel)
-nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
+nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\\#/#g; s#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
 say() { echo "stack-sync: $*" >&2; }
 
 # why: a cloud session's GitHub proxy refuses GraphQL, so the chain comes from REST, one PR at a time.

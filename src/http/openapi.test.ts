@@ -6,6 +6,18 @@ import { optionalModules } from "../module-registry/index.js";
 import { buildOpenApiDocument } from "./openapi.js";
 
 describe("buildOpenApiDocument", () => {
+  it("documents the optional sign-in URL only on the identity route's 401", () => {
+    const paths = buildOpenApiDocument([]).paths ?? {};
+
+    expect(replySchema(paths["/v1/identity"]?.get, "401")).toMatchObject({
+      properties: { error: { properties: { signInUrl: { type: "string" } } } },
+    });
+    expect(JSON.stringify(replySchema(paths["/v1/status"]?.get, "401"))).not.toContain("signInUrl");
+    expect(JSON.stringify(replySchema(paths["/v1/identity"]?.get, "403"))).not.toContain(
+      "signInUrl",
+    );
+  });
+
   it("an integrator builds the document and gets valid OpenAPI 3.1", async () => {
     const document = buildOpenApiDocument([]);
 

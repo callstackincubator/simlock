@@ -1,0 +1,161 @@
+---
+title: Install on macOS
+description: Install Simlock on a Mac, set up Xcode for iOS simulators and the Android SDK for Android emulators, and confirm the machine with simlock doctor.
+sidebar:
+  order: 1
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** `simlock doctor` reports nothing missing, and the Mac has an OS installed that agents can lease.
+
+<Aside type="tip" title="For agents">
+`simlock setup` checks the machine itself. Install the tools below first, then run:
+
+```sh
+npm i -g simlock
+simlock setup --project --tool claude-code --mcp --json   # or --user, --tool codex, --no-mcp
+```
+</Aside>
+
+## Before you start
+
+| You need | For |
+| --- | --- |
+| Node.js 22.13 or later | The `simlock` CLI |
+| Xcode | iOS simulators |
+| Android Studio, or the Android SDK command-line tools, and a JDK | Android emulators |
+| About 8 GiB free disk per iOS runtime, 2 GiB per Android system image | Installing an OS |
+| macOS 14 or later | Watching a simulator's screen in the console only |
+
+Set up one platform or both. Skip the section for the platform you don't need.
+
+Install the platform tools **before** you run any `simlock` command except `--help`. The daemon looks for the tools only when it starts. If you add a tool later, see [A tool you installed is not found](#a-tool-you-installed-is-not-found).
+
+## 1. Install Simlock
+
+```sh
+npm i -g simlock
+simlock --help
+```
+
+**Check:** `simlock --help` prints the command list.
+
+## 2. Set up iOS simulators
+
+<Steps>
+
+1. Install Xcode from the App Store.
+
+2. Select it, accept its licence and run its first-launch setup:
+
+   ```sh
+   sudo xcode-select -s /Applications/Xcode.app
+   sudo xcodebuild -license accept
+   sudo xcodebuild -runFirstLaunch
+   ```
+
+</Steps>
+
+## 3. Set up Android emulators
+
+<Steps>
+
+1. Install [Android Studio](https://developer.android.com/studio). It installs the SDK in `~/Library/Android/sdk` and includes a JDK.
+
+2. In Android Studio, open **Settings → Languages & Frameworks → Android SDK → SDK Tools**. Select **Android SDK Command-line Tools (latest)**, **Android Emulator** and **Android SDK Platform-Tools**. Click **Apply**.
+
+3. Add these lines to `~/.zshrc`, then open a new terminal:
+
+   ```sh
+   export ANDROID_HOME="$HOME/Library/Android/sdk"
+   export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+   export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+   ```
+
+4. Accept the Android SDK licences. Simlock cannot install a system image until you do:
+
+   ```sh
+   sdkmanager --licenses
+   ```
+
+</Steps>
+
+Without Android Studio: unpack the [command-line tools](https://developer.android.com/studio#command-line-tools-only) to `$ANDROID_HOME/cmdline-tools/latest`, install any JDK, point `JAVA_HOME` at it, then run `sdkmanager --install emulator platform-tools`.
+
+## 4. Check the machine
+
+```sh
+simlock doctor
+```
+
+**Check:** stderr is empty and stdout is:
+
+```json
+{"findings":[],"sources":[]}
+```
+
+Each problem prints one line on stderr with the platform and the fix:
+
+```text
+Missing [ios] xcode-license: The Xcode license is not accepted. Run `sudo xcodebuild -license accept`.
+```
+
+Run the fix, then see [A tool you installed is not found](#a-tool-you-installed-is-not-found). A line for a platform you skipped is expected; ignore it.
+
+## 5. Install an OS to lease
+
+Simlock creates devices only on an OS that is installed. Install the versions your agents use:
+
+```sh
+simlock component install ios 26.0
+simlock component install android 36
+```
+
+Give an iOS version or an Android API level. An install downloads several gigabytes; progress prints on stderr.
+
+**Check:** the OS appears in the catalog:
+
+```sh
+simlock catalog --platform ios
+```
+
+```text
+Platform: ios
+  Runtimes: 26.0 (default: 26.0)
+```
+
+## Troubleshooting
+
+### A tool you installed is not found
+
+The daemon was already running when you installed it. Stop it; the next command starts it again with the new tool:
+
+```sh
+simlock daemon stop
+simlock doctor
+```
+
+### Doctor findings
+
+Every line ends with its fix. These need more than the line says:
+
+| Line starts with | Fix |
+| --- | --- |
+| `Missing [android] android-sdk: No Android SDK found` | Set `ANDROID_HOME` to the SDK folder (step 3). |
+| `Missing [android] android-jdk: sdkmanager cannot run` | Set `JAVA_HOME` to a JDK (step 3). |
+| `Missing [android] android-cmdline-tools:` | Install **Android SDK Command-line Tools** (step 3). |
+
+### Install fails
+
+| Error | Fix |
+| --- | --- |
+| `LICENSE_NOT_ACCEPTED` | `sdkmanager --licenses`, then install again. |
+| `INSUFFICIENT_DISK_SPACE` | Free disk. Nothing was downloaded. |
+| `DOWNLOAD_TIMEOUT` | Run the install again. |
+
+## Next
+
+- [Lease your first device](/simlock/docs/getting-started/first-lease)
+- [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent)
+- [Start Simlock at login](/simlock/docs/worker/daemon#start-it-at-login)

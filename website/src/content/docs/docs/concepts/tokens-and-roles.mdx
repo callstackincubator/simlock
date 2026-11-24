@@ -1,0 +1,54 @@
+---
+title: Tokens and roles
+description: The agent, operator and worker token roles, the admin role on the daemon's own machine, what each may do, and why an agent token is shell access to a worker.
+sidebar:
+  order: 10
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything that reaches a worker or gateway over the network (an agent, a person, a joining worker) needs a **token** made on that daemon, or a sign-in through a sign-in proxy. A token's **role** decides what it may do.
+
+## The roles
+
+| Role | Made for | May |
+| --- | --- | --- |
+| `agent` | A coding agent or CI job that leases devices. | Read the catalog, list installed runtimes, and see its own leases and waiting requests. Request, renew and release its own leases, cancel its own waiting requests, run commands on its leased devices, watch their screens and send them input. |
+| `operator` | A person, or a script that manages the fleet. | Everything an agent may, for every requester's leases, plus the console, events, usage figures, tokens, worker commands and runtime installs. |
+| `worker` | A worker machine joining a gateway. | Connect one worker to the gateway, and nothing else. |
+
+A session with an operator token has the **admin** role, the role every page means when it says a command "needs the admin role". The CLI on the daemon's own machine is admin with no token: as the user who runs the daemon, it reads a credential the daemon writes into its data folder each time it starts. Any other user passes an operator token's secret. A CLI with no admin credential connects as an agent, and admin commands fail with `FORBIDDEN`.
+
+## How tokens behave
+
+- **A token works only on the daemon that made it.** A gateway's tokens do not work on its workers, and a worker's tokens do not work on the gateway.
+- **The secret is shown once**, when the token is made. A lost secret cannot be shown again: make a new token and revoke the old one.
+- **A wrong role answers `403 FORBIDDEN`. An unknown or revoked token answers `401 UNAUTHENTICATED`.**
+- **Revoking takes effect on the next request.** It also closes the token's open connections. Leases made with a revoked agent token stay until their TTL runs out or an operator releases them; the agent can no longer renew or release them.
+- **A worker token is pinned to the first worker that joins with it.** Another machine trying it is refused, and the worker cannot join with a second token while the first is valid. Revoking it closes that worker's connection.
+- **A label** on a token shows wherever its leases are listed, such as the console's **Held by** column.
+
+## One token per agent
+
+Over HTTP, the token is the [requester](/simlock/docs/concepts/leases#requesters). Every lease made with one agent token belongs to the same requester, and a requester holds one lease at a time by default. Two agents sharing a token block each other. Give every agent its own token, with a label you will recognise.
+
+## An agent token reaches the worker machine
+
+<Aside type="caution">
+Treat an agent token like shell access to your workers. Commands an agent runs on its device, such as `adb pull` or `simctl` commands, run on the worker as the user who runs the daemon, and can read and write any file that user can. `simctl spawn` alone starts any program on the worker. Through a gateway, the command runs on the worker that holds the lease. Give an agent token only to something you would let run commands on your workers.
+</Aside>
+
+A command gets only a short, fixed list of the daemon's environment variables. That does not keep a secret safe: the command runs as the same user as the daemon, so it can still read the daemon's environment and files.
+
+Ownership checks stop one agent from using another's lease by accident, not by attack. Agents that do not trust each other need workers of their own.
+
+## Sign-in proxy
+
+A gateway or worker can trust a sign-in proxy, such as Cloudflare Access, for people opening the console. Every person the proxy signs in becomes an operator, with full rights on the daemon and, through a gateway, on every worker. When a request carries both a Simlock token and a proxy sign-in, the token wins.
+
+## Use it
+
+- [Give agents and people access](/simlock/docs/gateway/access): make, list and revoke tokens; admin commands from the CLI.
+- [Sign people in through a sign-in proxy](/simlock/docs/gateway/sign-in-proxy)
+- [Use an existing farm](/simlock/docs/getting-started/existing-farm): lease with an agent token.
+- [Add a worker](/simlock/docs/gateway/add-a-worker): join tokens.

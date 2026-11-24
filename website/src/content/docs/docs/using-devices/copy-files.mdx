@@ -1,0 +1,116 @@
+---
+title: Copy files to and from a device
+description: Upload a build or fixture to your lease's folder on a remote worker, use it in simctl and adb commands, and download results, with simlock files or HTTP.
+sidebar:
+  order: 8
+  label: "Copy files"
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** a file from your machine sits in your lease's folder on the worker, where `simlock adb` and `simlock simctl` find it, and files the device wrote come back to you.
+
+## Before you start
+
+- You lease from another machine, with `SIMLOCK_URL` and `SIMLOCK_TOKEN` set (see [Use an existing farm](/simlock/docs/getting-started/existing-farm)). On the worker's own machine, commands read your local files directly, and `simlock files` exits 2.
+- Set `SIMLOCK_AGENT_ID` to the id that holds the lease, or pass `--lease <lease-id>` to every command.
+- Files are deleted when the lease ends.
+
+## Upload, use and download
+
+<Steps>
+
+1. Upload the file:
+
+   ```sh
+   simlock files put app-debug.apk
+   ```
+
+   ```json
+   {"lease":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","name":"app-debug.apk","size":48213760}
+   ```
+
+   `--name <name>` stores it under another name.
+
+2. Use it by name. Every command runs with the lease's folder as its working folder, so a relative path finds the file:
+
+   ```sh
+   simlock adb install app-debug.apk
+   ```
+
+3. Have the device write a file into the folder, then download it:
+
+   ```sh
+   simlock adb pull /sdcard/Pictures/result.png result.png
+   simlock files get result.png -o result.png
+   ```
+
+   Without `-o`, the bytes go to stdout. With `-o`, the file is written whole or not at all.
+
+4. List and remove files:
+
+   ```sh
+   simlock files list
+   simlock files rm app-debug.apk
+   ```
+
+</Steps>
+
+**Check:** `simlock files list` prints `{"files":[{"name":"app-debug.apk","size":48213760}]}`.
+
+A `simlock simctl` or `simlock adb` that fails after naming a path that exists on your machine prints a `notice` on stderr with the `simlock files put` command to run. A folder cannot be uploaded; pack it into one file first.
+
+## Over HTTP
+
+The same calls, with raw bytes in the body. They work on a worker and on a gateway, which relays each one to the lease's worker.
+
+```sh
+curl -X PUT "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" \
+  -H "Authorization: Bearer $SIMLOCK_TOKEN" --data-binary @fixture.tar
+# {"name":"fixture.tar","size":70000000}   (201)
+
+curl "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Range: bytes=0-99" \
+  -H "Authorization: Bearer $SIMLOCK_TOKEN" -o head.bin
+# 206, Content-Range: bytes 0-99/70000000
+
+curl "$SIMLOCK_URL/v1/leases/$LEASE/files" -H "Authorization: Bearer $SIMLOCK_TOKEN"
+# {"files":[{"name":"fixture.tar","size":70000000}]}
+
+curl -X DELETE "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $SIMLOCK_TOKEN"
+# 204
+```
+
+- The lease's holder and an operator can use the files.
+- The body streams to disk; the file appears under its name once the whole body has arrived. A `PUT` that is cut leaves the previous file untouched.
+- `GET` answers the whole file, or one `Range` (`bytes=a-b`, `a-` or `-n`) as `206`. A start past the end is `416`.
+- An `exec` call can send a stored file as the command's input with `stdinFile`: see [Lease over the HTTP API](/simlock/docs/using-devices/http-api#run-a-command-on-the-device).
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Name | 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit. `.hidden`, `-rf` and `my file.tar` are refused. |
+| Letter case | Names match ignoring case: `A.tar` and `a.tar` are one file, and a second `PUT` replaces it. |
+| One file | 2 GiB. |
+| One lease folder | 4 GiB, counting files a command wrote there. |
+| Uploads per name | One at a time. |
+| Time | No total limit. An HTTP upload is cut when no byte arrives for 330 seconds. `simlock files` gives up when no byte moves for 60 seconds. |
+| Disk | Nothing is stored while the worker's free disk is under its `diskPressure.freeBytesThreshold`. |
+
+## When it fails
+
+| Error | HTTP | Exit | Cause | Fix |
+| --- | --- | --- | --- | --- |
+| `BAD_REQUEST` | 400 | 2 | The name breaks the rules above. | Rename with `--name`. |
+| `FILE_TOO_LARGE` | 413 | 1 | The file is over 2 GiB. Through a gateway, a `Content-Length` over 2 GiB is refused at the gateway. | Split or shrink it. |
+| `LEASE_FILES_FULL` | 413 | 1 | The folder would pass 4 GiB. | Remove files with `simlock files rm`. |
+| `FILE_BUSY` | 409 | 1 | Another upload to that name is running. | Wait for it, or use another name. |
+| `UPLOAD_STALLED` | 408 | 1 | No byte arrived for 330 seconds. | Retry on a steadier link. |
+| `UNKNOWN_FILE` | 404 | 1 | No file has that name. | Check `simlock files list`. |
+| `UNKNOWN_LEASE` | 404 | 1 | The lease ended or is not yours. | Lease again. |
+| `INSUFFICIENT_DISK_SPACE` | 422 | 12 | The worker's disk is nearly full. | Ask the operator to [free disk space](/simlock/docs/worker/free-disk). |
+| `REMOTE_UNREACHABLE` | — | 1 | No byte moved for 60 seconds. | Retry. |
+| `WORKER_UNREACHABLE` | 503 | 1 | Through a gateway, the lease's worker is not connected. | Retry; the lease is still yours. |
+| A usage error | — | 2 | No `SIMLOCK_URL`, a missing local file, or a folder. | Set the farm, or pack the folder. |
+
+All errors: [Errors reference](/simlock/docs/reference/errors#lease-files).

@@ -1,14 +1,17 @@
 # Simlock website
 
-The site at https://callstackincubator.github.io/simlock/: the home page, a 404 page and the
+The site at https://incubator.callstack.com/simlock/: the home page, a 404 page and the
 docs, in the Callstack product look. Astro and Starlight, its own package (run everything from
 this folder), deployed to GitHub Pages by `.github/workflows/website.yml` on every push to
 `main` that changes `website/`, `docs/*.md`, `src/`, `package.json` or `pnpm-lock.yaml` (the HTTP API
 reference is built from the code); a pull request that changes them builds it without deploying.
 
 The look, the scenes and the words are in [BRAND.md](../docs/internal/BRAND.md). The end-user
-docs live only here, in `src/content/docs/docs/`, one `.mdx` page each; the sidebar is in
-`astro.config.mjs`.
+docs live only here, in `src/content/docs/docs/`, one `.mdx` page each. A page's sidebar group is
+its folder (the groups are `sections` in `src/site/pages.ts`) and its place in the group is its
+frontmatter `sidebar.order`. The sidebar, `llms.txt`, each page's Markdown copy (its URL plus
+`.md`) and the sitemap are built from the pages on every build, so adding, moving or renaming a
+page edits no list. The build fails on a link to a page or a heading that does not exist.
 
 ## Commands
 
@@ -44,7 +47,8 @@ pnpm og           # public/og-image.jpg, banner.jpg, favicon.svg, favicon-32.png
 | `src/components/site/dither.ts`                                                | Dithered scenes: `fleet` (the signature), `hollow` (404), `flow`, `mark`                          |
 | `src/components/site/`                                                         | Nav, Lockup, Mark, Window, CodeBlock, CopyCommand, Tabs, Marquee, Faq, PixelIcon, Closing, Footer |
 | `src/pages/404.astro`                                                          | Not found, on the `hollow` scene                                                                  |
-| `src/pages/robots.txt.ts`                                                      | robots.txt from the site URL                                                                      |
+| `src/pages/robots.txt.ts`                                                      | robots.txt from the site URL; crawlers read only the domain's root one, which Callstack manages   |
+| `src/site/pages.ts`, `src/site/check-links.ts`                                 | The docs pages on disk, for the sidebar, llms.txt and sitemap dates; the link check after a build |
 | `src/layouts/Site.astro`                                                       | Head, SEO and social tags for pages outside the docs                                              |
 | `src/components/starlight/`                                                    | Docs header lockup, header links, footer, dark default                                            |
 | `src/styles/`                                                                  | `landing.css` (tokens, building blocks), `theme.css` and `docs.css` (docs)                        |

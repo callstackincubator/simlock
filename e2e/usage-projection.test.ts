@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -9,7 +11,7 @@ import { type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
 const LEASE_ARGS = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
 const ALL = Number.MAX_SAFE_INTEGER;
 const MINUTE = 60_000;
-const SEEDED = 300_000;
+const SEEDED = 1_000;
 
 async function prepare(env: TestEnv): Promise<void> {
   await env.driverScript.set({
@@ -156,12 +158,13 @@ describe("usage projection", () => {
   }, 90_000);
 
   it("a history.db whose projection table lost a column while the daemon was stopped is rebuilt at the next start, a lease is granted meanwhile, and simlock status prints the rebuilt line", async () => {
-    const env = await withDaemon();
+    const release = join(await mkdtemp(join(tmpdir(), "simlock-rebuild-")), "release");
+    const env = await withDaemon({ extraEnv: { SIMLOCK_TEST_HOLD_HISTORY_REBUILD: release } });
     await prepare(env);
     expect((await env.cli([...LEASE_ARGS, "--agent-id", "a", "--detach"])).code).toBe(0);
     const before = (await usageOf(env)).requests;
     await stopDaemon(env);
-    // why: enough kept events that the rebuild is still running when the daemon answers and a lease is granted.
+    // why: kept events for the rebuild to replay; the daemon holds it until the file `release` exists.
     const now = Date.now();
     await editHistory(
       env,
@@ -182,6 +185,7 @@ describe("usage projection", () => {
     const meanwhile = await env.cli(["status"]);
 
     expect(meanwhile.stdout).not.toContain("History: figures were rebuilt");
+    await writeFile(release, "");
     await waitFor(async () => (await env.cli(["status"])).stdout.includes("figures were rebuilt"), {
       label: "history rebuilt",
       timeout: 60_000,

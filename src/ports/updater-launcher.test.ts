@@ -20,8 +20,9 @@ describe("NodeUpdaterLauncher", () => {
     await writeFile(
       entry,
       `const { execFileSync } = require("node:child_process");
-const group = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)]));
-console.log(JSON.stringify({ argv: process.argv.slice(2), home: process.env.SIMLOCK_HOME, leader: group === process.pid }));
+// why: Windows has no process groups, so there the entry reports no leader.
+const leader = process.platform === "win32" ? null : Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)])) === process.pid;
+console.log(JSON.stringify({ argv: process.argv.slice(2), home: process.env.SIMLOCK_HOME, leader }));
 console.log("second");
 console.error("to the log");
 process.exit(3);`,
@@ -45,7 +46,7 @@ process.exit(3);`,
       JSON.stringify({
         argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "4242", "--gateway"],
         home: "/home/.simlock",
-        leader: true,
+        leader: process.platform === "win32" ? null : true,
       }),
       "second",
     ]);

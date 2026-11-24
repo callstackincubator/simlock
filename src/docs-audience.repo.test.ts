@@ -123,7 +123,7 @@ const REPO_PATH =
 const printingSources = trackedFiles.filter(
   (name) =>
     /^(?:src|ui\/src)\/.+\.tsx?$/.test(name) &&
-    !/\.test\.tsx?$|(?:^|\/)testing\.ts$|(?:^|\/)test-[^/]*$/.test(name),
+    !/\.test\.tsx?$|(?:^|\/)testing\.ts$|(?:^|\/)test-[^/]*$|^src\/test-support\//.test(name),
 );
 
 function repoPaths(name: string, text: string): string[] {

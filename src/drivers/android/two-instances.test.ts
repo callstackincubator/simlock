@@ -14,7 +14,7 @@ import {
   type TcpProbe,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
-import { memoryAndroidSourceDatabase } from "./testing.js";
+import { binaries, memoryAndroidSourceDatabase } from "./testing.js";
 
 // Two Simlock instances on one machine, set up the way CLI.md and CONFIGURATION.md say to:
 // a distinct `SIMLOCK_HOME` each, and a distinct `drivers.android.adbServerPort` each.
@@ -22,12 +22,6 @@ import { memoryAndroidSourceDatabase } from "./testing.js";
 
 const sdk = "/android-sdk";
 const home = "/home/simlock";
-const binaries = {
-  adb: `${sdk}/platform-tools/adb`,
-  avdmanager: `${sdk}/cmdline-tools/latest/bin/avdmanager`,
-  emulator: `${sdk}/emulator/emulator`,
-  sdkmanager: `${sdk}/cmdline-tools/latest/bin/sdkmanager`,
-} as const;
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
 const spec = { physical: false, model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 

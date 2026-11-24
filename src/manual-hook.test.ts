@@ -15,7 +15,8 @@ const SCRIPT = join(
 );
 
 function checkout(label: string): string {
-  const root = mkdtempSync(join(tmpdir(), "manual-hook-repo-"));
+  // why: a command line names a path with "/" on every host, as a shell does.
+  const root = mkdtempSync(join(tmpdir(), "manual-hook-repo-")).replaceAll("\\", "/");
   for (const dir of ["src/a/b", "src/c", "ui/src"]) mkdirSync(join(root, dir), { recursive: true });
   writeFileSync(join(root, "AGENTS.md"), "# Root\n");
   writeFileSync(join(root, "src/a/AGENTS.md"), `# A of ${label}\n`);
@@ -28,7 +29,7 @@ function call(state: string, input: object): string {
   const out = spawnSync("node", [SCRIPT], {
     input: JSON.stringify(input),
     encoding: "utf8",
-    env: { ...process.env, TMPDIR: state },
+    env: { ...process.env, TMPDIR: state, TEMP: state, TMP: state },
   }).stdout;
   return out === "" ? "" : JSON.parse(out).hookSpecificOutput.additionalContext;
 }

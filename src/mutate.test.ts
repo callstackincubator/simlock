@@ -1,17 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "mutate.mjs");
 
@@ -40,11 +35,11 @@ function repo(): Repo {
   const log = join(root, "stryker.log");
   mkdirSync(dir);
   mkdirSync(bin);
-  writeFileSync(
-    join(bin, "pnpm"),
+  writeFakeCommand(
+    bin,
+    "pnpm",
     `#!/bin/sh\necho "$@" >> "${log}"\nif [ -n "$CRASH" ]; then echo "$CRASH" >&2; exit 1; fi\nmkdir -p .stryker-tmp/report\ncase "$*" in *--testFiles*) [ -n "$NEAR_REPORT" ] && { echo "$NEAR_REPORT" > .stryker-tmp/report/mutation.json; exit 0; } ;; esac\n[ -n "$WIDE_REPORT" ] && { echo "$WIDE_REPORT" > .stryker-tmp/report/mutation.json; exit 0; }\necho '${REPORT}' > .stryker-tmp/report/mutation.json\n`,
   );
-  chmodSync(join(bin, "pnpm"), 0o755);
   const git = (...args: string[]) =>
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
       cwd: dir,
@@ -78,7 +73,7 @@ function mutate(
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${r.bin}:/usr/bin:/bin`,
+      ...fakeCommandEnv(r.bin, "/usr/bin:/bin"),
       CRASH: crash,
       NEAR_REPORT: nearReport,
       WIDE_REPORT: wideReport,

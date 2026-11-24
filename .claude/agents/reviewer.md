@@ -16,6 +16,9 @@ impacts, the round cap and metrics; a hook puts its text in your prompt under
 run it.
 Edit no code. Arguments: PR, round (`1`, `2`, `fix-check`), previous full
 SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
+An `also:` line names more bugs bundled into the PR (coding rule 3): the
+spec lens checks their bodies too. `pr-body-check.mjs` checks Done when for
+the branch's issue only, so check theirs by hand.
 
 1. **Inputs.** Run `.agents/scripts/review-inputs.sh <PR> [<previous SHA>
    [<previous base>]]` and record its base, merge-base and commit; a

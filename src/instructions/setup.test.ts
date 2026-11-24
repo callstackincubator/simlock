@@ -111,7 +111,7 @@ describe("setupAgentTools", () => {
 
         expect(report.scope).toBe(scope);
         expect(report.tools).toEqual([
-          { tool, skill: { status: "wrote", path: `${base}/${skills}/simlock` } },
+          { tool, skill: { status: "wrote", path: join(base, skills, "simlock") } },
         ]);
         expect(await filesystem.readFile(`${base}/${skills}/simlock/SKILL.md`), tool).toBe(
           renderSkill(),
@@ -126,8 +126,14 @@ describe("setupAgentTools", () => {
     await claudeOnly.mkdirp(`${HOME}/.claude`);
 
     expect((await setup(claudeOnly)).tools).toEqual([
-      { tool: "claude-code", skill: { status: "wrote", path: `${HOME}/.claude/skills/simlock` } },
-      { tool: "codex", skill: { status: "skipped", path: `${HOME}/.agents/skills/simlock` } },
+      {
+        tool: "claude-code",
+        skill: { status: "wrote", path: join(HOME, ".claude", "skills", "simlock") },
+      },
+      {
+        tool: "codex",
+        skill: { status: "skipped", path: join(HOME, ".agents", "skills", "simlock") },
+      },
     ]);
     expect(await claudeOnly.exists(`${HOME}/.claude/skills/simlock/SKILL.md`)).toBe(true);
     expect(await claudeOnly.exists(`${HOME}/.agents`)).toBe(false);
@@ -156,7 +162,10 @@ describe("setupAgentTools", () => {
     const bare = await withBases();
     const named = await setup(bare, { tool: "codex" });
     expect(named.tools).toEqual([
-      { tool: "codex", skill: { status: "wrote", path: `${HOME}/.agents/skills/simlock` } },
+      {
+        tool: "codex",
+        skill: { status: "wrote", path: join(HOME, ".agents", "skills", "simlock") },
+      },
     ]);
     expect(await tree(bare, HOME)).toEqual([
       `${HOME}/.agents`,
@@ -285,7 +294,7 @@ describe("setupAgentTools", () => {
     const skippedSkill = await setup(notInstalled, { mcp: true, runTool: unrequested.runTool });
     expect(skippedSkill.tools[1]).toEqual({
       tool: "codex",
-      skill: { status: "skipped", path: `${HOME}/.agents/skills/simlock` },
+      skill: { status: "skipped", path: join(HOME, ".agents", "skills", "simlock") },
     });
     expect(unrequested.calls.map(({ bin }) => bin)).toEqual(["claude"]);
     expect(projectCodex.calls).toEqual([]);
@@ -478,7 +487,7 @@ describe("setupAgentTools", () => {
 
       expect(error, kind).toBeInstanceOf(SetupRefusedError);
       expect(error.message, kind).toBe(
-        `Refusing to install: ${HOME}/.agents/skills/simlock exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
+        `Refusing to install: ${join(HOME, ".agents", "skills", "simlock")} exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
       );
       expect(await tree(filesystem, "/"), kind).toEqual(before);
       expect(tools.calls, kind).toEqual([]);

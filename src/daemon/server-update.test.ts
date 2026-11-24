@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import {
@@ -104,7 +104,7 @@ describe("daemon.update", () => {
     expect(idle.npm.calls[0]).toEqual({ method: "view", spec: "simlock@latest" });
     expect(idle.launcher.launches).toEqual([
       {
-        entry: "/opt/simlock/dist/updater/main.js",
+        entry: join("/opt/simlock", "dist", "updater", "main.js"),
         from: "0.3.0",
         to: "0.4.0",
         role: "worker",
@@ -249,7 +249,7 @@ describe("daemon.update", () => {
     });
     await client.close();
 
-    const dataDirectory = dirname(admin.socketPath);
+    const dataDirectory = admin.directory as string;
     await writeFile(join(dataDirectory, "admin.token"), "token\n");
     const probe = createDaemonProbe({ dataDirectory, filesystem: new NodeFilesystem() });
     await expect(probe.state()).resolves.toEqual({ health: "running", version: "0.3.0" });

@@ -175,6 +175,8 @@ function ruleDeviceSet(unit: Unit): void {
 
 async function namesLeasedModel(check: Check, leased: TokenDevice, name: string): Promise<boolean> {
   if (leased.platform === undefined || leased.model === undefined) return false;
+  // why: an enrolled phone's model need not be in the virtual catalog, and the lease already fixes the device, so its own model names it.
+  if (name.toLowerCase() === leased.model.toLowerCase()) return true;
   try {
     const { platforms } = await check.context.dispatch(
       "catalog.get",

@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, scriptCommand, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -40,7 +42,7 @@ interface Fleet {
   readonly statusReadsPending?: number;
   readonly flakyIssues?: readonly { title: string; body: string; pull_request?: object }[];
   readonly failedJobLog?: string;
-  readonly repoFromOrigin?: boolean;
+  readonly repoFromOrigin?: string;
   readonly refusedAsStacked?: boolean;
   readonly stacks?: readonly {
     open: boolean;
@@ -234,7 +236,7 @@ function fleetFile(fleet: Fleet) {
 
 function runScript(target: number, env: NodeJS.ProcessEnv, cwd: string | undefined) {
   try {
-    const output = execFileSync("sh", [SCRIPT, String(target)], {
+    const output = execFileSync(...scriptCommand(SCRIPT, [String(target)]), {
       cwd,
       env,
       encoding: "utf8",
@@ -250,21 +252,20 @@ function runScript(target: number, env: NodeJS.ProcessEnv, cwd: string | undefin
 function gate(fleet: Fleet = {}) {
   const dir = mkdtempSync(join(tmpdir(), "merge-pr-"));
   writeFileSync(join(dir, "fleet.json"), JSON.stringify(fleetFile(fleet)));
-  writeFileSync(join(dir, "gh"), FAKE_GH);
-  chmodSync(join(dir, "gh"), 0o755);
+  writeFakeCommand(dir, "gh", FAKE_GH);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PATH: `${dir}:${process.env.PATH}`,
+    ...fakeCommandEnv(dir),
     FAKE_GH_DIR: dir,
     MERGE_PR_POLL_SECONDS: "0",
     GH_REPO: "o/r",
   };
   let cwd: string | undefined;
-  if (fleet.repoFromOrigin === true) {
+  if (fleet.repoFromOrigin !== undefined) {
     delete env.GH_REPO;
     cwd = join(dir, "clone");
     execFileSync("git", ["init", "-q", cwd]);
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:o/r.git"], { cwd });
+    execFileSync("git", ["remote", "add", "origin", fleet.repoFromOrigin], { cwd });
   }
   const { status, output } = runScript(fleet.target ?? 7, env, cwd);
   const read = (name: string) =>
@@ -288,7 +289,11 @@ const FLAKY_ISSUE = {
   body: "Fails under load on main.\nTest: `e2e/gateway-fast-fail.test.ts` > a gateway fails fast\n",
 };
 
-describe("merge-pr.sh gates on the PR", { timeout: 20_000 }, () => {
+// why: a gate starts the script, its fake gh and git many times, 3 to 12 s on a Windows runner and
+// more under load, where it is 1 s elsewhere.
+const TIMEOUT = 90_000;
+
+describe("merge-pr.sh gates on the PR", { timeout: TIMEOUT }, () => {
   it("merges an open, ready PR with a valid body, green CI and no conflict, through the REST merge", () => {
     const result = gate();
     expect(result.output).toContain("merged #7");
@@ -296,8 +301,12 @@ describe("merge-pr.sh gates on the PR", { timeout: 20_000 }, () => {
     expect(result.status).toBe(0);
   });
 
-  it("takes the repo from the origin remote when GH_REPO is unset", () => {
-    const result = gate({ repoFromOrigin: true });
+  it.each([
+    ["an ssh URL", "git@github.com:o/r.git"],
+    ["an https URL", "https://github.com/o/r.git"],
+    ["a path with backslashes", "C:\\work\\o\\r.git"],
+  ])("takes the repo from the origin remote when GH_REPO is unset, from %s", (_, origin) => {
+    const result = gate({ repoFromOrigin: origin });
     expect(result.merged).toBe(true);
   });
 
@@ -369,7 +378,7 @@ describe("merge-pr.sh gates on the PR", { timeout: 20_000 }, () => {
   });
 });
 
-describe("merge-pr.sh reading CI", { timeout: 20_000 }, () => {
+describe("merge-pr.sh reading CI", { timeout: TIMEOUT }, () => {
   it("does not merge a PR whose head has no check runs and no statuses", () => {
     const result = gate({ runs: [] });
     expect(result.merged).toBe(false);
@@ -418,7 +427,7 @@ describe("merge-pr.sh reading CI", { timeout: 20_000 }, () => {
   });
 });
 
-describe("merge-pr.sh re-run of red CI", { timeout: 20_000 }, () => {
+describe("merge-pr.sh re-run of red CI", { timeout: TIMEOUT }, () => {
   it("re-runs a job that failed only in a test an open flaky-test issue names, once, and merges when the re-run passes", () => {
     const result = gate({
       runs: [run("failure")],
@@ -511,7 +520,7 @@ describe("merge-pr.sh re-run of red CI", { timeout: 20_000 }, () => {
   });
 });
 
-describe("merge-pr.sh on a stack's last open PR", { timeout: 20_000 }, () => {
+describe("merge-pr.sh on a stack's last open PR", { timeout: TIMEOUT }, () => {
   it("merges it with gh stack merge when GitHub refuses a plain merge of a stacked PR", () => {
     expect(gate().merged).toBe(true);
     const result = gate({ refusedAsStacked: true });
@@ -528,7 +537,7 @@ const STACK = [
 const stackRuns = (ci: Record<number, "success" | "failure">) =>
   Object.fromEntries(Object.entries(ci).map(([pr, c]) => [pr, [run(c)]]));
 
-describe("merge-pr.sh on a stacked PR", { timeout: 20_000 }, () => {
+describe("merge-pr.sh on a stacked PR", { timeout: TIMEOUT }, () => {
   it("gates every PR from the bottom of the stack up to the one asked for, then merges them with gh stack merge", () => {
     const result = gate({
       target: 12,

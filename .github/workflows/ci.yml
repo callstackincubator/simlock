@@ -68,6 +68,36 @@ jobs:
       - name: Unit tests
         run: pnpm run test:unit
 
+  # why: the Windows paths are otherwise tested only by passing `platform: "win32"` on Linux;
+  # bash is Git Bash, which the repository's tooling needs on Windows (ADR 0087 section 6).
+  windows-unit:
+    name: Unit tests (Windows)
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.8.1+sha512.f64ba907507f5ceafe06c8d38e6052d0179444580ec1279ddd5bfc11cb48aa8a2644b66598e07e761da84872a9fc57d5f902b87fa49d024198d558612aabbe45 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Unit tests
+        run: pnpm run test:unit
+
   timing:
     name: Timing tests
     runs-on: ubuntu-24.04
@@ -126,7 +156,7 @@ jobs:
   # by a failed need would count as passed.
   quality:
     name: Quality
-    needs: [static, unit, timing, e2e]
+    needs: [static, unit, windows-unit, timing, e2e]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}

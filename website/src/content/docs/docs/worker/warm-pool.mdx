@@ -1,0 +1,130 @@
+---
+title: Make leases start faster
+description: Keep chosen devices booted with warm pool targets, forget a kind the warm pool learned by mistake, and read why a warm pool line stays short.
+sidebar:
+  order: 5
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+**Result:** the devices your agents lease are already booted when they ask, so a lease starts without waiting for a boot.
+
+The warm pool is on by default and learns from your leases with no setup. What it keeps ready and what it never does: [Warm pool](/simlock/docs/concepts/warm-pool).
+
+## Before you start
+
+- Settings go in the worker's `config.json` and apply after a daemon restart. See [Change a setting](/simlock/docs/worker/change-a-setting).
+- The warm pool uses only free running slots. To keep more devices booted, you may need [higher limits](/simlock/docs/worker/capacity).
+- The runtime or system image of each target must be installed. The warm pool never downloads one. See [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images).
+
+## Keep chosen devices booted
+
+<Steps>
+
+1. Add targets to `config.json`:
+
+   ```json title="~/.simlock/config.json"
+   {
+     "warmPool": {
+       "targets": [
+         { "platform": "ios", "model": "iPhone 16", "osVersion": "26.0", "count": 2 },
+         { "platform": "android", "model": "Pixel 8", "count": 1 }
+       ]
+     }
+   }
+   ```
+
+2. Restart the daemon:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+**Check:** `simlock status` shows each target under `warm pool` as `configured`, and its `ready` count rises to `wanted` within a few minutes.
+
+| Target key | Rule |
+| --- | --- |
+| `platform` | Required. `ios` or `android`. |
+| `model` | Required. An exact model name, as `simlock catalog` lists it. A class such as `phone` is refused. |
+| `count` | Required. How many to keep ready. |
+| `osVersion` | A version, or a range such as `">=18"`, which picks the newest installed runtime in it. |
+| `mode` | `slim` or `full`. |
+
+Any other key stops the daemon from starting.
+
+## Tune the warm pool
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `warmPool.enabled` | `false` keeps nothing booted. | `true` |
+| `warmPool.learn` | `false` keeps only your targets warm. Simlock still records leases, so turning it back on starts from the last 24 hours. | `true` |
+| `warmPool.baselineLearnAfter` | Leases of one baseline within 24 hours that make the warm pool learn it. | `3` |
+| `warmPool.reserveRunning.ios`, `.android` | Running slots idle warm devices may not fill, so a lease for another kind never waits for a shutdown. Leases can still use them. | `0` |
+| `warmPool.maxConcurrentBoots` | Boots and creations under way at once. | a quarter of the CPU cores, at least 1 |
+
+## Forget a learned kind
+
+A lease of the wrong model, such as `--device Pixel` instead of `Pixel 9`, teaches the warm pool that model too. Its device then stays booted and holds a running slot.
+
+<Steps>
+
+1. Forget the model:
+
+   ```sh
+   simlock warm forget android Pixel
+   ```
+
+   ```text
+   Forgot android Pixel 36 (full).
+   Its idle devices are no longer kept warm: the idle rules shut them down and delete them, unless a configured warmPool.targets entry keeps them.
+   ```
+
+</Steps>
+
+**Check:** `simlock status` no longer lists `Pixel` under `warm pool`.
+
+- Add the OS version, `--mode` or `--image-tag` to forget only one kind of the model, for example `simlock warm forget ios "iPhone 16" 18.4 --mode slim`.
+- With no match, it prints `The warm pool has learned no kind matching ...` and exits 0.
+- It does not change a `warmPool.targets` entry: remove that from the config.
+- The next lease of the model teaches the kind again.
+- It needs the admin role, and runs on the worker. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+## Read the warm pool in `simlock status`
+
+```text
+warm pool: enabled, reserve ios 1 android 0
+  iPhone 16 / 26.0 / full   configured   wanted 2  ready 1  booting 1
+  iPhone 15 / 18.4 / full   learned   wanted 1  ready 1  booting 0
+  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 0  booting 0  short: running-limit
+  iPhone 16 / 26.0 / full / baseline checkout   learned   wanted 1  ready 1  booting 0
+```
+
+- `configured` is one of your targets; `learned` is a kind the worker leased. A kind that is both shows once, as `configured`, with the larger count.
+- An Android image tag and a baseline name show at the end of the kind.
+- A line that is filling, or waiting behind a queued lease, shows no reason.
+
+## When it fails
+
+`short:` says why a line is not full:
+
+| Reason | Fix |
+| --- | --- |
+| `disabled` | `warmPool.enabled` is `false`. Set it to `true`. |
+| `runtime-missing` | Install the runtime or system image. See [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images). |
+| `unknown-model` | The model does not exist on this machine, or `<platform>.virtualDevices` is `false`. Check `simlock catalog`. |
+| `mode-unavailable` | The target's mode is not in `ios.modes`, or it is a slim target on iOS below 18.5 (always full) and `ios.modes` has no `full`. Remove the target, or add the mode to `ios.modes`. |
+| `unresolvable` | No device can be made for it. Check its OS version and mode. |
+| `no-driver` | The platform's tools are missing. Run `simlock doctor`. |
+| `boot-failed` | The last boot failed, or did not finish within `ios.full.bootTimeoutMs`, `ios.slim.bootTimeoutMs` or `android.bootTimeoutMs`. Simlock tries again after 1, 2, 4 and so on minutes, at most 10 apart. Check `simlock daemon logs`. |
+| `running-limit` | No running slot is free. Raise the [running limits](/simlock/docs/worker/capacity) or lower `count`. |
+| `device-limit` | The platform is at its device limit. Raise it, or lower `count`. |
+| `reserve` | `warmPool.reserveRunning` holds the slot back. A platform with `<platform>.virtualDevices` set to `false` holds none. |
+| `ram-budget` | The device would not fit in the RAM budget. See [Run more devices at once](/simlock/docs/worker/capacity). |
+| `memory-pressure` | The host is short of memory and warming is paused (`memoryPressure.*`). It fills again when the pause lifts. |
+
+`simlock doctor` warns with `warm-pool-target-unreachable` when a target can never be filled, and when your targets add up to more devices than the running limit allows.
+
+Flags: [`simlock warm forget`](/simlock/docs/reference/cli#simlock-warm). Keys: [Configuration reference](/simlock/docs/reference/configuration#warm-pool).

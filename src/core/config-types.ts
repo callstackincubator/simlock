@@ -153,6 +153,7 @@ export interface Config {
       readonly issuer: string;
       readonly audience: string;
       readonly signOutUrl?: string;
+      readonly signInUrl?: string;
     };
   };
   readonly health: {

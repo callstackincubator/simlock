@@ -42,10 +42,16 @@ function agent(toolInput: object, agentId: string | null = null) {
   return call({ tool_name: "Agent", tool_input: toolInput, ...(agentId && { agent_id: agentId }) });
 }
 
+// why: a command line names a path with "/" on every host, as a shell does; the guard reads "\\"
+// as an escape.
+function slashed(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
 function bodyFile(body: string): string {
   const file = join(mkdtempSync(join(tmpdir(), "tool-guard-")), "body.md");
   writeFileSync(file, body);
-  return file;
+  return slashed(file);
 }
 
 const OK = { status: 0, stderr: "" };
@@ -224,7 +230,7 @@ describe("tool-guard.mjs", () => {
 
   it("refuses a sub-agent's PR that is not a draft, or comes from a -repro branch, and its gh pr ready", () => {
     const body = bodyFile(`Closes #1\n\n${FOOTER}\n`);
-    const repro = mkdtempSync(join(tmpdir(), "tool-guard-repro-"));
+    const repro = slashed(mkdtempSync(join(tmpdir(), "tool-guard-repro-")));
     execFileSync("git", ["init", "-q", "-b", "bug/5-repro", repro]);
 
     expect(
@@ -583,7 +589,7 @@ describe("tool-guard.mjs", () => {
   it("reads the body from every place gh takes it, and refuses one it cannot read", () => {
     const good = `Done.\n\n${FOOTER}`;
     const file = bodyFile(good);
-    const scratch = join(mkdtempSync(join(tmpdir(), "tool-guard-")), "new.md");
+    const scratch = slashed(join(mkdtempSync(join(tmpdir(), "tool-guard-")), "new.md"));
 
     expect(bash(`gh issue comment 9 --body "${good}"`, null)).toEqual(OK);
     expect(bash(`gh issue comment 9 --body "$(cat <<'EOF'\n${good}\nEOF\n)"`, null)).toEqual(OK);
@@ -609,7 +615,7 @@ describe("tool-guard.mjs", () => {
   it("reads a body file named through a variable the call sets once, to a literal, before the use", () => {
     const good = `Done.\n\n${FOOTER}`;
     const file = bodyFile(good);
-    const scratch = join(mkdtempSync(join(tmpdir(), "tool-guard-")), "new.md");
+    const scratch = slashed(join(mkdtempSync(join(tmpdir(), "tool-guard-")), "new.md"));
 
     expect(bash(`F=${file}; gh issue comment 9 --body-file "$F"`, null)).toEqual(OK);
     expect(bash(`export F="${file}"\ngh issue comment 9 --body-file \${F}`, null)).toEqual(OK);

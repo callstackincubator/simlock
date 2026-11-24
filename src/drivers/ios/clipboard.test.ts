@@ -139,6 +139,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     const exportDomain = ["defaults", "export", "com.apple.dt.Devices", expect.any(String)];
     const importDomain = ["defaults", "import", "com.apple.dt.Devices", expect.any(String)];
 
+    const rename = ["xcrun", "simctl", "rename", udid, driverData.name];
     const syncOffThenBoot = [
       exportDomain,
       staged(`Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`),
@@ -158,6 +159,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     expect(hub.domain).toEqual({ other: { pasteboardSyncEnabled: true, windowScale: 50 } });
 
     expect(calls).toEqual([
+      rename,
       ...syncOffThenBoot,
       ...syncOffThenBoot,
       ["xcrun", "simctl", "shutdown", udid],
@@ -200,14 +202,16 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     await expect(driver.makeReady(device, prepareFull)).rejects.toThrow(
       "Could not disable DeviceHub clipboard sync",
     );
-    expect(calls.every((call) => call[0] === "defaults")).toBe(true);
+    expect(calls[0]).toEqual(rename);
+    expect(calls.slice(1).every((call) => call[0] === "defaults")).toBe(true);
     expect(hub.domain[udid]?.pasteboardSyncEnabled).toBe(true);
 
     calls.length = 0;
     hub.failing = "";
     hub.warm = true;
     await driver.makeReady(device, prepareFull);
-    expect(calls.slice(0, 6)).toEqual([
+    expect(calls.slice(0, 7)).toEqual([
+      rename,
       ...syncOffThenBoot.slice(0, 4),
       ["xcrun", "simctl", "shutdown", udid],
       ["xcrun", "simctl", "boot", udid],

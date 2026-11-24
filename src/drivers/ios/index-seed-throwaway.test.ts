@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
@@ -5,10 +6,12 @@ import { memorySourceDatabase, plantSource } from "./testing.js";
 import {
   deviceHubEdit,
   deviceRoot,
+  sourcesSetPath,
   driverData,
   instanceId,
   plantManagedDevice,
   simctl,
+  unownedSourcesSet,
 } from "./test-slim.js";
 import {
   RecordingLogger,
@@ -53,14 +56,14 @@ const worlds: readonly World[] = [
     devicesDir: deviceRoot,
     isDefault: false,
     label: "simlock set",
-    sourcesSet: `${deviceRoot}/sources`,
+    sourcesSet: sourcesSetPath,
   },
   {
     config: { deviceSet: "default" },
-    devicesDir: `${coreSimulatorRoot}/Devices`,
+    devicesDir: join(coreSimulatorRoot, "Devices"),
     isDefault: true,
     label: "default set",
-    sourcesSet: "/home/.simlock/devices/ios-sources",
+    sourcesSet: unownedSourcesSet,
   },
 ];
 
@@ -125,7 +128,7 @@ describe("IosSimctlDriver seed throwaway", () => {
       if (!world.isDefault) await plantManagedDevice(filesystem);
       await filesystem.mkdirp(`${world.devicesDir}/${throwawayUdid}/data`);
       await filesystem.mkdirp(`${world.devicesDir}/${copyUdid}/data`);
-      await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+      await filesystem.mkdirp(join(logsRoot, throwawayUdid));
       const driver = await IosSimctlDriver.create({
         clock: new FakeClock(),
         coreSimulatorRoot,
@@ -148,7 +151,7 @@ describe("IosSimctlDriver seed throwaway", () => {
         database.prepare("SELECT state, udid, throwaway_udid FROM ios_source_data").all(),
         world.label,
       ).toEqual([{ state: "ready", throwaway_udid: throwawayUdid, udid: seedUdid }]);
-      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), world.label).resolves.toBe(
+      await expect(filesystem.exists(join(logsRoot, throwawayUdid)), world.label).resolves.toBe(
         false,
       );
     }
@@ -213,12 +216,30 @@ describe("IosSimctlDriver seed throwaway", () => {
         warnings: [],
       },
       {
+        label: "throwaway and seed clone deletes both fail",
+        steps: [
+          create,
+          boot,
+          bootstatus,
+          listapps,
+          shutdown,
+          clone,
+          { ...remove, result: failed },
+          { match: sourcesSimctl("shutdown", seedUdid) },
+          { match: sourcesSimctl("delete", seedUdid), result: failed },
+        ],
+        error: /boom/,
+        rows: [{ state: "making", throwaway_udid: throwawayUdid, udid: seedUdid }],
+        logFolder: true,
+        warnings: [expect.stringMatching(new RegExp(`${seedUdid}.*boom`))],
+      },
+      {
         label: "log folder delete fails",
         steps: [...whole, copy],
         filesystem: new BrokenLogRemoval(),
         rows: [{ state: "ready", throwaway_udid: throwawayUdid, udid: seedUdid }],
         logFolder: true,
-        warnings: [`could not delete log folder ${logsRoot}/${throwawayUdid}: denied`],
+        warnings: [`could not delete log folder ${join(logsRoot, throwawayUdid)}: denied`],
       },
       {
         label: "log folder absent",
@@ -241,7 +262,7 @@ describe("IosSimctlDriver seed throwaway", () => {
       await plantManagedDevice(filesystem);
       await plantSeedClone(filesystem);
       await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
-      if (failure.absent !== true) await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+      if (failure.absent !== true) await filesystem.mkdirp(join(logsRoot, throwawayUdid));
       const driver = await IosSimctlDriver.create({
         clock: new FakeClock(),
         database,
@@ -266,7 +287,7 @@ describe("IosSimctlDriver seed throwaway", () => {
         database.prepare("SELECT state, udid, throwaway_udid FROM ios_source_data").all(),
         failure.label,
       ).toEqual(failure.rows);
-      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), failure.label).resolves.toBe(
+      await expect(filesystem.exists(join(logsRoot, throwawayUdid)), failure.label).resolves.toBe(
         failure.logFolder,
       );
       expect(logger.warnings, failure.label).toEqual(failure.warnings);
@@ -387,7 +408,7 @@ describe("IosSimctlDriver seed throwaway", () => {
       scopedRunners.push(runner);
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
-      await filesystem.mkdirp(`${logsRoot}/${throwawayUdid}`);
+      await filesystem.mkdirp(join(logsRoot, throwawayUdid));
       const driver = await IosSimctlDriver.create({
         clock: new FakeClock(),
         database,
@@ -406,14 +427,14 @@ describe("IosSimctlDriver seed throwaway", () => {
       expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get(), label).toEqual({
         n: 0,
       });
-      await expect(filesystem.exists(`${logsRoot}/${throwawayUdid}`), label).resolves.toBe(false);
+      await expect(filesystem.exists(join(logsRoot, throwawayUdid)), label).resolves.toBe(false);
     }
   });
 
   it("baseline.save deletes the saved-from lease's log folder", async () => {
     const baselineName = "simlock-baseline-device-1";
-    const leaseLogs = `${logsRoot}/${driverData.udid}`;
-    const clone = simctl("clone", driverData.udid, baselineName, `${deviceRoot}/sources`);
+    const leaseLogs = join(logsRoot, driverData.udid);
+    const clone = simctl("clone", driverData.udid, baselineName, sourcesSetPath);
     const cloneUdid = "00000000-0000-0000-0000-0000000000cc";
     const cases = [
       { label: "present", plant: true, clone: "ok", logs: false, warnings: [] },

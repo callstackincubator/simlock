@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,60 +61,68 @@ describe("NodeDaemonLauncher", () => {
     }
   });
 
-  it("creates the daemon log it hands the child, and the data directory it lives in, owner-only", async () => {
-    // why: #685: when the CLI or MCP server auto-launches the daemon, this `open(path, "a")` is
-    // what first creates `daemon.log` -- the daemon's own sink only appends afterwards -- and on
-    // a fresh machine the launch creates the data directory too. A restrictive umask in the test
-    // environment would mask what the code asks for, so pin the one every real host starts from.
-    const previousUmask = process.umask(0o022);
-    const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
-    const logPath = join(directory, "home", "daemon.log");
-    const launcher = new NodeDaemonLauncher({
-      args: ["-e", "console.log('out')"],
-      command: process.execPath,
-      logPath,
-      simlockHome: directory,
-    });
-    try {
-      await launcher.launch();
-      await expect.poll(async () => (await readFile(logPath, "utf8")).trim()).toBe("out");
+  // why: Windows has no owner-only file mode.
+  it.skipIf(process.platform === "win32")(
+    "creates the daemon log it hands the child, and the data directory it lives in, owner-only",
+    async () => {
+      // why: #685: when the CLI or MCP server auto-launches the daemon, this `open(path, "a")` is
+      // what first creates `daemon.log` -- the daemon's own sink only appends afterwards -- and on
+      // a fresh machine the launch creates the data directory too. A restrictive umask in the test
+      // environment would mask what the code asks for, so pin the one every real host starts from.
+      const previousUmask = process.umask(0o022);
+      const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+      const logPath = join(directory, "home", "daemon.log");
+      const launcher = new NodeDaemonLauncher({
+        args: ["-e", "console.log('out')"],
+        command: process.execPath,
+        logPath,
+        simlockHome: directory,
+      });
+      try {
+        await launcher.launch();
+        await expect.poll(async () => (await readFile(logPath, "utf8")).trim()).toBe("out");
 
-      expect((await stat(logPath)).mode & 0o777).toBe(0o600);
-      expect((await stat(join(directory, "home"))).mode & 0o777).toBe(0o700);
-    } finally {
-      process.umask(previousUmask);
-      await rm(directory, { force: true, recursive: true });
-    }
-  });
-
-  it("creates SIMLOCK_HOME 0700 under umask 002, and leaves an existing one's mode", async () => {
-    const previousUmask = process.umask(0o002);
-    const root = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
-    try {
-      const modes: Record<string, number> = {};
-      for (const [name, existing] of [
-        ["created", undefined],
-        ["existing", 0o775],
-      ] as const) {
-        const home = join(root, name);
-        if (existing !== undefined) {
-          await mkdir(home);
-          await chmod(home, existing);
-        }
-        await new NodeDaemonLauncher({
-          args: ["-e", "0"],
-          command: process.execPath,
-          logPath: join(home, "gateway", "daemon.log"),
-          simlockHome: home,
-        }).launch();
-        modes[name] = (await stat(home)).mode & 0o777;
+        expect((await stat(logPath)).mode & 0o777).toBe(0o600);
+        expect((await stat(join(directory, "home"))).mode & 0o777).toBe(0o700);
+      } finally {
+        process.umask(previousUmask);
+        await rm(directory, { force: true, recursive: true });
       }
-      expect(modes).toEqual({ created: 0o700, existing: 0o775 });
-    } finally {
-      process.umask(previousUmask);
-      await rm(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
+
+  // why: Windows has no directory modes or umask.
+  it.skipIf(process.platform === "win32")(
+    "creates SIMLOCK_HOME 0700 under umask 002, and leaves an existing one's mode",
+    async () => {
+      const previousUmask = process.umask(0o002);
+      const root = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+      try {
+        const modes: Record<string, number> = {};
+        for (const [name, existing] of [
+          ["created", undefined],
+          ["existing", 0o775],
+        ] as const) {
+          const home = join(root, name);
+          if (existing !== undefined) {
+            await mkdir(home);
+            await chmod(home, existing);
+          }
+          await new NodeDaemonLauncher({
+            args: ["-e", "0"],
+            command: process.execPath,
+            logPath: join(home, "gateway", "daemon.log"),
+            simlockHome: home,
+          }).launch();
+          modes[name] = (await stat(home)).mode & 0o777;
+        }
+        expect(modes).toEqual({ created: 0o700, existing: 0o775 });
+      } finally {
+        process.umask(previousUmask);
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("starts the daemon when the folder holding SIMLOCK_HOME exists but refuses mkdir", async () => {
     // why: #1663: on Windows `mkdir('D:\\')`, recursive or not, rejects EPERM though the root exists
@@ -228,7 +235,8 @@ describe("NodeDaemonLauncher's LaunchedDaemon", () => {
 describe("NodeDaemonLauncher in a parent that awaits nothing", () => {
   it("lets the parent process exit while the launched daemon keeps running", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
-    const launcherModule = fileURLToPath(new URL("./daemon-launcher.ts", import.meta.url));
+    // why: a `file:` URL imports on Windows, where a drive path is read as a URL scheme.
+    const launcherModule = new URL("./daemon-launcher.ts", import.meta.url).href;
     const parentScript = `
       const { NodeDaemonLauncher } = await import(${JSON.stringify(launcherModule)});
       const launcher = new NodeDaemonLauncher({
@@ -356,8 +364,8 @@ describe("launcherFor's fallback to spawning", () => {
       const notices: string[] = [];
       const launcher = launcherFor({
         role: "worker",
-        root: "/Users/me/.simlock",
-        dataDirectory: "/Users/me/.simlock",
+        root: join("/Users/me", ".simlock"),
+        dataDirectory: join("/Users/me", ".simlock"),
         mainPath: "/opt/simlock/dist/daemon/main.js",
         nodePath: "/opt/node/bin/node",
         home: "/Users/me",
@@ -390,8 +398,8 @@ describe("launcherFor with an installed service", () => {
       const spawner = new FakeDaemonLauncher();
       const launcher = launcherFor({
         role: "worker",
-        root: "/home/me/.simlock",
-        dataDirectory: "/home/me/.simlock",
+        root: join("/home/me", ".simlock"),
+        dataDirectory: join("/home/me", ".simlock"),
         mainPath: "/opt/simlock/dist/daemon/main.js",
         nodePath: "/opt/node/bin/node",
         home: "/home/me",
@@ -408,7 +416,10 @@ describe("launcherFor with an installed service", () => {
         serviceManager.starts.map((definition) => definition.path),
         testCase.manager,
       ).toEqual([
-        `${testCase.path}com.callstack.simlock.worker.${testCase.manager === "systemd" ? "service" : "plist"}`,
+        join(
+          testCase.path,
+          `com.callstack.simlock.worker.${testCase.manager === "systemd" ? "service" : "plist"}`,
+        ),
       ]);
     }
   });
@@ -460,8 +471,9 @@ describe("launcherFor with the Windows task (#1698)", () => {
     const notices: string[] = [];
     const launcher = launcherFor({
       role: "worker",
-      root: "/Users/me/.simlock",
-      dataDirectory: "/Users/me/.simlock",
+      // why: the default root is join(home, ".simlock"); on Windows join uses backslashes, and any other root gets a hash suffix on the task name.
+      root: join("/Users/me", ".simlock"),
+      dataDirectory: join("/Users/me", ".simlock"),
       mainPath: "/opt/simlock/dist/daemon/main.js",
       nodePath,
       home: "/Users/me",

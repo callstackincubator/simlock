@@ -1,0 +1,103 @@
+---
+title: Use an existing farm
+description: Point the simlock CLI at a worker or gateway another machine runs, with an agent token, and lease a device there with no Xcode or Android SDK on your machine.
+sidebar:
+  order: 4
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Result:** you lease a device on a farm from your machine, run `adb` or `simctl` on it and release it. Your machine needs no Xcode, Android SDK or daemon of its own.
+
+What a farm, a worker and a gateway are: [Workers and gateways](/simlock/docs/concepts/workers-and-gateways).
+
+## Before you start
+
+| You need | From |
+| --- | --- |
+| Node.js 22.13 or later | Your machine |
+| The farm's URL, such as `https://simlock.example.com` | The operator. A gateway, or a standalone worker. A worker that has joined a gateway does not take connections: use the gateway. |
+| An agent token, `slk_...` | The operator, made on the gateway (or on the worker, for a standalone one) |
+
+The operator makes one token per agent or CI job:
+
+```sh
+simlock token create --role agent --label ci-runner-3
+```
+
+The secret is shown once. A token works only on the daemon that made it: a gateway's tokens do not work on its workers. More: [Give agents and people access](/simlock/docs/gateway/access).
+
+<Aside type="danger">
+An agent token reaches the whole worker, not only one device. A command run on a leased device runs on the worker as the daemon's user, and can read and write files anywhere that user can. Give agent tokens only to agents you would let run commands on those machines.
+</Aside>
+
+## Lease a device on the farm
+
+<Steps>
+
+1. Install Simlock:
+
+   ```sh
+   npm i -g simlock
+   ```
+
+2. Set the farm, the token and who the leases are for:
+
+   ```sh
+   export SIMLOCK_URL=https://simlock.example.com
+   export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
+   export SIMLOCK_AGENT_ID=ci-job-42
+   ```
+
+   Store the token as a secret of your CI system or shell, never in a file in a repository. `SIMLOCK_AGENT_ID` lets later commands find your lease; see step 4.
+
+3. Check the connection:
+
+   ```sh
+   simlock whoami
+   ```
+
+   ```text
+   Principal: tok_9f2c71e4-5a3b-4c8d-b1e6-0d7a2f4c9e15
+   Name:      ci-runner-3
+   Role:      agent
+   Via:       token
+   ```
+
+4. Lease a device, use it and release it:
+
+   ```sh
+   simlock lease --platform android --detach
+   simlock adb shell getprop ro.build.version.release
+   simlock release <lease-id>
+   ```
+
+   `simlock adb` and `simlock simctl` run on the worker that holds the lease, on the lease that `SIMLOCK_AGENT_ID` took. Leave the device out; Simlock fills it in. Without `SIMLOCK_AGENT_ID`, each command is its own requester: `simlock lease` prints a notice, and later commands need `--lease <id>`.
+
+</Steps>
+
+**Check:** `simlock adb shell getprop ro.build.version.release` prints the Android version, and after the release `simlock status` lists no lease of yours.
+
+Every command runs on the farm with the token's role and starts no daemon on your machine. `--url` and `--token` do the same as the variables, for one command. `--local` or `--gateway` beats `SIMLOCK_URL`, to reach a daemon on this machine instead. Full rules: [Remote mode](/simlock/docs/reference/cli#remote-mode).
+
+## Things to know
+
+- **The token is the requester.** Its leases belong to it, and by default it holds one lease at a time. Agents that share a token share that limit, unless each sets its own `SIMLOCK_AGENT_ID` and the operator allows several leases. See [Use several devices at once](/simlock/docs/using-devices/several-devices).
+- **Paths are on the worker.** `simlock adb install app-debug.apk` installs a file on the worker. Upload it first: see [Copy files to and from a device](/simlock/docs/using-devices/copy-files).
+- **A dropped connection does not end the lease.** A held `simlock lease` (without `--detach`) reconnects and keeps renewing until the lease's deadline.
+- **Some commands act on this machine only.** `daemon start`, `daemon stop`, `daemon status`, `daemon logs`, `daemon install`, `daemon uninstall`, `config set` and `setup` exit 2 with `SIMLOCK_URL` set. Unset it to run them.
+
+For an agent that uses MCP, give the server the same URL and token: see [Give your agent the MCP server](/simlock/docs/getting-started/mcp-server#use-a-farms-devices). For test runners, see [Run e2e tests from CI](/simlock/docs/using-devices/ci).
+
+## When it fails
+
+| Error | Exit | Cause | Fix |
+| --- | --- | --- | --- |
+| `No token: pass --token or set SIMLOCK_TOKEN` (`USAGE`) | 2 | A farm URL with no token. | Set `SIMLOCK_TOKEN`. |
+| `UNAUTHENTICATED` | 1 | The farm does not know the token: a typo, a revoked token, or a worker's token sent to the gateway. | Ask the operator for a token made on this farm. |
+| `REMOTE_UNREACHABLE` | 1 | The farm does not answer. | Check `SIMLOCK_URL` and that the farm is reachable from your machine. |
+| `REQUESTER_ALREADY_LEASED` | 13 | This requester already holds a lease. | Release it, or give each agent its own `SIMLOCK_AGENT_ID`. |
+| `` `simlock <command>` acts on this machine `` | 2 | A local-only command with `SIMLOCK_URL` set. | Run it on the daemon's machine, or unset `SIMLOCK_URL`. |
+| A usage error from `simlock adb` or `simctl` about the lease | 2 | This requester holds no lease, or several. | Set `SIMLOCK_AGENT_ID` before `simlock lease`, or pass `--lease <id>`. |
+
+More: [A lease fails or never starts](/simlock/docs/troubleshooting/lease-fails).

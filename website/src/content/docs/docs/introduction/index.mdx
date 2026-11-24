@@ -1,11 +1,13 @@
 ---
 title: What is Simlock
 description: Simlock hands each coding agent its own iOS simulator or Android emulator, so parallel agents stop breaking each other's devices.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Simlock gives each of your coding agents its own iOS simulator or Android emulator. An agent asks for a device and gets one that no other agent touches until it gives it back.
+Simlock gives each of your coding agents its own iOS simulator, Android emulator or enrolled phone. An agent asks for a device and gets one that no other agent touches until it gives it back.
 
 ## The problem it solves
 
@@ -13,37 +15,38 @@ Run two or three coding agents on one Mac and they all see the same simulators. 
 
 ## What your agent gets
 
-Your agent asks Simlock for a device, for example "an iPhone 16 on iOS 18.4". It gets back a **lease**: a device that is booted, checked and its alone.
+Your agent asks for a device, for example "an iPhone 16 on iOS 18.4". It gets back a **lease**: a device that is booted, checked and its alone.
 
 - If a matching device is free, the agent gets it at once.
-- If none is free, Simlock creates one, as long as your machine has room.
+- If none is free, Simlock creates one, as long as the machine has room.
 - If the machine is full, the request waits in a queue until a device frees up.
 - When the agent releases the device, Simlock deletes it. The next agent gets a fresh one.
 - If the agent crashes without releasing, the lease runs out on its own after its time to live (TTL), so the device never stays stuck.
 
 <Aside type="note" title="Simlock relies on your agents' cooperation">
-Simlock does not hide other devices or block `xcrun simctl`. It works because you tell your agents to use only the device their lease gives them. [Connect your agent](/simlock/docs/getting-started/connect-your-agent) shows how.
+Simlock does not hide other devices or block `xcrun simctl`. It works because you tell your agents to use only the device their lease gives them. [Connect your coding agent](/simlock/docs/getting-started/connect-your-agent) shows how.
 </Aside>
 
 ## One machine or a fleet
 
-**One machine.** Install Simlock on the Mac, Linux or Windows machine where your agents run. Simlock runs a background process, the daemon, which starts by itself the first time you run a command. This machine is a **worker**: it owns its devices.
+- **One machine.** Install Simlock on the Mac, Linux or Windows machine where your agents run. A background process, the daemon, starts by itself the first time you run a command. This machine is a **worker**: it owns its devices.
+- **A fleet.** When one machine is not enough, run a **gateway** and join several workers to it. Agents use the gateway's one address, and the gateway sends each request to a worker that can serve it.
 
-**A fleet.** When one machine is not enough, run a **gateway** and join several workers to it. Agents talk to the gateway's single address, and the gateway sends each request to a worker that can serve it. Workers connect out to the gateway, so they need no open inbound port. See [When you need a gateway](/simlock/docs/gateway).
+Which one you need: [Pick your setup](/simlock/docs/introduction/pick-your-setup).
 
 ## How your agents reach Simlock
 
 | Use | When |
 | --- | --- |
-| CLI (`simlock lease`, `simlock release`) | Your agent can run shell commands, or you are at a terminal. |
-| MCP server (`simlock mcp`) | Your agent uses the Model Context Protocol. Its tools list, lease and release devices and run commands on them. |
-| HTTP API | Your agent runs on another machine. It needs a token from the operator. |
-| Programmatic client (`simlock/client`) | You write a Node.js tool on the same machine and want to lease devices without the CLI. |
+| CLI (`simlock lease`, `simlock release`) | Your agent can run shell commands, or you are at a terminal. On another machine, the CLI talks to the farm with a token. |
+| MCP server (`simlock mcp`) | Your agent uses the Model Context Protocol. Its tools lease and release a device and run commands on it. |
+| HTTP API | Your tool runs on another machine and makes its own HTTP calls. It needs a token from the operator. |
+| Node client (`simlock/client`) | You write a Node.js tool and want to lease devices without the CLI. |
 
-Simlock also has a web console that shows devices, leases and the queue. See [Web console](/simlock/docs/worker/console).
+A web console shows devices, leases and the queue in your browser. See [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http).
 
 ## Next
 
-- [How it works](/simlock/docs/introduction/how-it-works) explains leases, the queue and what Simlock does with idle devices.
-- [Requirements](/simlock/docs/introduction/requirements) lists what your machine needs.
-- [Install and check your machine](/simlock/docs/getting-started) gets you to your first lease.
+- [How it works](/simlock/docs/introduction/how-it-works): the ideas on one screen.
+- [Pick your setup](/simlock/docs/introduction/pick-your-setup): one machine, an existing farm or a fleet.
+- Install on [macOS](/simlock/docs/getting-started/macos), [Linux](/simlock/docs/getting-started/linux) or [Windows](/simlock/docs/getting-started/windows).

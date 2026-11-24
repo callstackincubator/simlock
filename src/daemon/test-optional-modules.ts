@@ -6,7 +6,13 @@ import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import { type FakeModule } from "../modules/testing.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  resolveDaemonSocketPath,
+} from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 
@@ -120,7 +126,7 @@ export async function prepare(options: RigOptions, port?: number) {
     hostLoadProbe: null,
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: options.modules,
-    socketPath: join(directory, "daemon.sock"),
+    socketPath: resolveDaemonSocketPath(directory),
     deviceDataTables: fakeDeviceDataTables,
     version: "1.2.3",
     ...options.extra,

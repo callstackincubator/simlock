@@ -71,6 +71,7 @@ describe("IosSimctlDriver boot deadline", () => {
     async ({ budgetMs, config, data, options }) => {
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
+        { match: { command: "xcrun", args: simctlArgs("rename", data.udid, driverData.name) } },
         { hangs: true, match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
       ]);
       const driver = await bootBudgetDriver(runner, clock, config);
@@ -80,10 +81,10 @@ describe("IosSimctlDriver boot deadline", () => {
         options,
       );
       void ready.catch(() => undefined);
-      await waitForCalls(runner, 1);
+      await waitForCalls(runner, 2);
       const readyState = promiseState(ready);
 
-      expect(runner.calls[0]?.options).toEqual({ timeoutMs: budgetMs });
+      expect(runner.calls[1]?.options).toEqual({ timeoutMs: budgetMs });
       clock.advance(budgetMs - 1);
       await flushMicrotasks221();
       expect(readyState.state).toBe("pending");
@@ -98,6 +99,7 @@ describe("IosSimctlDriver boot deadline", () => {
     async ({ budgetMs, config, data, options }) => {
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
+        { match: { command: "xcrun", args: simctlArgs("rename", data.udid, driverData.name) } },
         {
           match: { command: "xcrun", args: simctlArgs("boot", data.udid) },
           onSpawn: () => clock.advance(100_000),
@@ -115,10 +117,10 @@ describe("IosSimctlDriver boot deadline", () => {
         options,
       );
       void ready.catch(() => undefined);
-      await waitForCalls(runner, 2);
+      await waitForCalls(runner, 3);
       const readyState = promiseState(ready);
 
-      expect(runner.calls[1]?.options).toEqual({ timeoutMs: budgetMs - 100_000 });
+      expect(runner.calls[2]?.options).toEqual({ timeoutMs: budgetMs - 100_000 });
       clock.advance(budgetMs - 100_000 - 1);
       await flushMicrotasks221();
       expect(readyState.state).toBe("pending");
@@ -126,6 +128,7 @@ describe("IosSimctlDriver boot deadline", () => {
       clock.advance(1);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
       expect(runner.calls.map((call) => call.args)).toEqual([
+        simctlArgs("rename", data.udid, driverData.name),
         simctlArgs("boot", data.udid),
         simctlArgs("bootstatus", data.udid, "-b"),
         simctlArgs("shutdown", data.udid),

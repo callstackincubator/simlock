@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -301,9 +303,10 @@ describe("delivery-stats.mjs", () => {
       ],
     } as Record<string, object[][]>;
     writeFileSync(join(dir, "pages.json"), JSON.stringify(pages));
-    writeFileSync(
-      join(dir, "gh"),
-      `#!${process.execPath}
+    writeFakeCommand(
+      dir,
+      "gh",
+      `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("--paginate")) { console.error("HTTP 403: numeric-ID path"); process.exit(1); }
@@ -312,11 +315,10 @@ const page = Number((args.find((a) => a.startsWith("page=")) ?? "page=1").slice(
 for (const item of (pages[args[3]] ?? [])[page - 1] ?? []) console.log(JSON.stringify(item));
 `,
     );
-    chmodSync(join(dir, "gh"), 0o755);
 
     const output = execFileSync(process.execPath, [SCRIPT, "--repo", "o/r", "--weeks", "1"], {
       encoding: "utf8",
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      env: { ...process.env, ...fakeCommandEnv(dir) },
     });
 
     expect(section(output, "## Handoffs this week")).toEqual([

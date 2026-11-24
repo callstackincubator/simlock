@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -23,7 +23,8 @@ describe("the sqlite port", () => {
           ) || SQLITE_LOADERS.test(source)
         );
       })
-      .map((file) => posix.relative(srcDir, file));
+      // why: `join` and `srcDir` use `\` on Windows, so the names are joined with `/` before they are compared.
+      .map((file) => relative(srcDir, file).replaceAll("\\", "/"));
 
     expect(naming).toEqual(["ports/sqlite.ts"]);
   });

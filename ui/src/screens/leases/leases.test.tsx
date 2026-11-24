@@ -33,6 +33,7 @@ function row(overrides: Partial<LeaseRowView> = {}): LeaseRowView {
     renewedAgo: "30 s ago",
     runtime: "iOS 18.4",
     worker: "mac-mini-1",
+    listSub: "iPhone 16 · mac-mini-1",
     sub: "iPhone 16 · mac-mini-1",
     to: "/leases/lse_1/",
     ...overrides,

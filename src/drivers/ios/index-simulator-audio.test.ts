@@ -10,6 +10,7 @@ import { type SilenceFailedFact, IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 import {
   deviceRoot,
+  sourcesSetPath,
   driverData,
   simctlArgs,
   simctl,
@@ -36,9 +37,16 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesSetPath]).toContain(call.args[2]);
   }
 });
+
+/** why: only a prepare boot renames the simulator, so only its script holds the rename. */
+function renameStep(purpose: "prepare" | "recover") {
+  return purpose === "prepare"
+    ? [{ match: simctl("rename", driverData.udid, driverData.name) }]
+    : [];
+}
 
 describe("IosSimctlDriver simulator audio", () => {
   const volumeState = "com.apple.springboard.volumestate";
@@ -49,6 +57,7 @@ describe("IosSimctlDriver simulator audio", () => {
     simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
     simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
   ];
+  const renameCall = simctlArgs("rename", udid, driverData.name);
   const bootCalls = [
     simctlArgs("boot", udid),
     simctlArgs("bootstatus", udid, "-b"),
@@ -60,7 +69,7 @@ describe("IosSimctlDriver simulator audio", () => {
     {
       name: "prepare",
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: [...bootCalls, ...silence],
+      expected: [renameCall, ...bootCalls, ...silence],
     },
     {
       name: "recover",
@@ -71,26 +80,26 @@ describe("IosSimctlDriver simulator audio", () => {
       name: "a slim prepare, silenced before the readback",
       data: slimData,
       options: { mode: "slim", purpose: "prepare" } as const,
-      expected: [...bootCalls, ...silence, readbackCall],
+      expected: [renameCall, ...bootCalls, ...silence, readbackCall],
     },
     {
       name: "the setting true",
       audio: true,
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: bootCalls,
+      expected: [renameCall, ...bootCalls],
     },
     {
       name: "a volume command that fails",
       volume: { code: 1, stderr: "boom", stdout: "" },
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: [...bootCalls, silence[0]],
+      expected: [renameCall, ...bootCalls, silence[0]],
       failure: "boom",
     },
     {
       name: "a volume command that times out",
       volume: "hangs" as const,
       options: { mode: "full", purpose: "prepare" } as const,
-      expected: [...bootCalls, silence[0]],
+      expected: [renameCall, ...bootCalls, silence[0]],
       failure: "timed out",
     },
   ])(
@@ -102,6 +111,7 @@ describe("IosSimctlDriver simulator audio", () => {
         ...(result === undefined ? {} : { result }),
       });
       const runner = new ScriptedProcessRunner([
+        ...renameStep(c.options.purpose),
         { match: simctl("boot", udid) },
         { match: simctl("bootstatus", udid, "-b") },
         { match: simctl("listapps", udid) },

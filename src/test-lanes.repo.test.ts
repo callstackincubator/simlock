@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -209,5 +209,36 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
     for (const bad of ["success failure", "cancelled", "skipped failure skipped"]) {
       expect(verdict(bad), `results ${bad}`).toBe(1);
     }
+  });
+});
+
+describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
+  it("runs `pnpm run test:unit` as `Unit tests (Windows)` on windows-2025 under bash with a 30 minute limit, `quality` needs it, and text files check out with LF", () => {
+    const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+    const attributes = readFileSync(join(REPO_ROOT, ".gitattributes"), "utf8");
+    const jobs = ciJobs(ci);
+    const windows = jobs.get("windows-unit") ?? "";
+
+    expect(windows, "a job `windows-unit`").not.toBe("");
+    expect(windows).toMatch(/\n {4}name: Unit tests \(Windows\)\n/);
+    expect(windows).toContain("runs-on: windows-2025");
+    expect(windows).toMatch(/\n {6}shell: bash\n|\n {4}defaults:\n {6}run:\n {8}shell: bash\n/);
+    expect(windows).toContain("timeout-minutes: 30");
+    expect(windows).toMatch(/run: pnpm run test:unit\n/);
+    expect(jobs.get("quality")).toMatch(/needs:\s*\[[^\]]*\bwindows-unit\b/);
+    expect(attributes.split("\n")).toContain("* text=auto eol=lf");
+  });
+});
+
+describe("the Windows job runs every unit test file", () => {
+  it("no list of Windows-skipped files exists, `vitest.config.ts` gives the `unit` project the same excludes on every host, and `testing.md` holds no list exception", () => {
+    const config = readFileSync(join(REPO_ROOT, "vitest.config.ts"), "utf8");
+    const testing = readFileSync(join(REPO_ROOT, "docs/internal/agent-rules/testing.md"), "utf8");
+    const unitProject = /name:\s*"unit"[\s\S]*?name:\s*"ui-dom"/.exec(config)?.[0] ?? "";
+
+    expect(unitProject).toContain("*.timing.test.ts");
+    expect(existsSync(join(REPO_ROOT, "src/test-support/windows-skipped.ts"))).toBe(false);
+    expect(unitProject).not.toMatch(/win32|windows|platform/i);
+    expect(testing).not.toContain("windows-skipped");
   });
 });

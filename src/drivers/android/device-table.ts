@@ -8,7 +8,7 @@ import type {
   ObservedMark,
 } from "../../core/index.js";
 import type { Filesystem } from "../../ports/index.js";
-import { SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
+import { AVDMANAGER_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
 import {
   ERASABLE_MARK_PATH,
   ERASABLE_MARK_READ_BYTES,
@@ -142,6 +142,7 @@ export class DeviceTable {
     const { avdName } = this.#adbTools.dataFor(device);
     await this.#adbTools.runOrThrow(this.#options.avdmanager, ["delete", "avd", "-n", avdName], {
       env: { ...this.#options.baseEnv, ANDROID_AVD_HOME: this.#options.legacyAvdHome },
+      timeoutMs: AVDMANAGER_TIMEOUT_MS,
     });
   }
 
@@ -223,10 +224,10 @@ export class DeviceTable {
     for (const entry of await filesystem.readdir(deviceRoot)) {
       const old = /^(.+)\.avd$/.exec(entry);
       if (old?.[1] !== undefined) {
-        entries.push({ avdName: old[1], deviceId: old[1], folder: `${deviceRoot}/${entry}` });
+        entries.push({ avdName: old[1], deviceId: old[1], folder: join(deviceRoot, entry) });
         continue;
       }
-      const folder = `${deviceRoot}/${entry}/${SEED_AVD_NAME}.avd`;
+      const folder = join(deviceRoot, entry, `${SEED_AVD_NAME}.avd`);
       if (await this.#holdsAvd(folder)) {
         entries.push({ avdName: SEED_AVD_NAME, deviceId: entry, folder });
       }
@@ -319,7 +320,7 @@ export class DeviceTable {
         deviceId: owner.deviceId,
         driverData: {
           ...(owner.avdName === SEED_AVD_NAME
-            ? { avdHome: `${this.#options.deviceRoot}/${owner.deviceId}` }
+            ? { avdHome: join(this.#options.deviceRoot, owner.deviceId) }
             : {}),
           avdName: owner.avdName,
           configHash: "recovered",

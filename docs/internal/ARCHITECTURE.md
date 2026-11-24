@@ -71,7 +71,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
 | daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
 | test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |
-| `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [console.mdx](../../website/src/content/docs/docs/worker/console.mdx) |
+| `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [console.mdx](../../website/src/content/docs/docs/reference/console.mdx) |
 | `packages/e2e` | The `@simlock/e2e` package: the device provider the `e2e` test runner leases simulators and emulators through. A second npm package of this workspace, released with `simlock` under one version | [ADR 0077](adr/0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) · [README](../../packages/e2e/README.md) |
 
 ## Dependencies
