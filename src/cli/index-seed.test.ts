@@ -128,7 +128,7 @@ describe("CLI: simlock seed", () => {
     },
     { label: "settling", stage: { stage: "settling" } },
   ] as const)(
-    "stops waiting on Ctrl-C while $label, says the settle goes on, exits 0 and closes the client",
+    "stops waiting on Ctrl-C while $label, says the settle goes on, exits 0, closes the client and leaves doctor answering",
     async ({ stage }) => {
       const output = outputCapture();
       const signals = new EventEmitter();
@@ -155,6 +155,24 @@ describe("CLI: simlock seed", () => {
       await expect(running).resolves.toBe(0);
       expect(output.stderr).toContain("stopped waiting; the settle goes on in the daemon\n");
       expect(close).toHaveBeenCalledOnce();
+
+      // why: the daemon went on without the connection, so its settled seed is what the next command reads.
+      const report: Awaited<ReturnType<ReturnType<typeof fakeClient>["runDoctor"]>> = {
+        findings: [],
+        sources: [
+          { kind: "seed", model: "iPhone 17", osVersion: "26.5", platform: "ios", settled: true },
+        ],
+      };
+      const afterwards = outputCapture();
+      await expect(
+        runCli(
+          ["doctor"],
+          afterwards.environmentWith({
+            connectAdmin: async () => fakeClient({ runDoctor: async () => report }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(JSON.parse(afterwards.stdout)).toEqual(report);
     },
   );
 

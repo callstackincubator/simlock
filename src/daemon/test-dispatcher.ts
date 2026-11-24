@@ -423,6 +423,8 @@ export async function buildDispatcher(
   });
   return {
     clock,
+    /** why: the config the dispatcher and the settler share, so a test that lifts disk pressure changes the threshold they both read. */
+    config,
     components: wiring.components,
     dispatcher,
     doctor,

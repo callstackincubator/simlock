@@ -33,7 +33,8 @@ export class SeedHandlers {
         ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
       })
       .catch((error: unknown) => {
-        throw error instanceof RuntimeMissingError ? runtimeMissing(error, input.osVersion) : error;
+        if (!(error instanceof RuntimeMissingError)) throw error;
+        throw runtimeMissing(error, input.osVersion);
       });
     const kind: SeedKind = {
       model: spec.model,
@@ -59,17 +60,25 @@ export class SeedHandlers {
   };
 }
 
-/** why: `seed.make` never downloads, so the lease's "pass --allow-download" is no advice here; it names the command that installs the runtime (ADR 0090 §4). */
+/**
+ * why: `seed.make` never downloads, so the lease's "pass --allow-download" is no advice here; it names the command that installs the runtime (ADR 0090 §4).
+ * A refusal no download could fix for an exact version or the default (below iOS 16, out of range, an image tag) keeps the lease's own words, because that command would fail for it.
+ */
 function runtimeMissing(error: RuntimeMissingError, osVersion: string | undefined): DispatchError {
   const name = error.platform === "ios" ? "iOS" : "Android";
   const asked = osVersion === undefined ? undefined : parseOsConstraint(osVersion);
-  const message =
-    asked?.ok === true && asked.constraint.kind === "exact"
-      ? `${name} ${asked.constraint.version} is not installed; install it with simlock component install ${error.platform} ${asked.constraint.version}`
-      : `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`;
-  return new DispatchError("RUNTIME_MISSING", message, {
-    downloadable: error.downloadable,
-    osVersion: error.osVersion,
-    platform: error.platform,
-  });
+  const exact = asked?.ok === true && asked.constraint.kind === "exact";
+  const ranged = asked?.ok === true && !exact;
+  const message = exact
+    ? `${name} ${asked.constraint.version} is not installed; install it with simlock component install ${error.platform} ${asked.constraint.version}`
+    : `no installed ${name} runtime fits ${osVersion ?? "the default"}; install one with simlock component install ${error.platform} and a version`;
+  return new DispatchError(
+    "RUNTIME_MISSING",
+    error.downloadable || ranged ? message : error.message,
+    {
+      downloadable: error.downloadable,
+      osVersion: error.osVersion,
+      platform: error.platform,
+    },
+  );
 }

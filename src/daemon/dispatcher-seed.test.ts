@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Driver } from "../core/index.js";
+import { RuntimeMissingError, UnsupportedRequestOptionError, type Driver } from "../core/index.js";
 import { classifyError } from "./error-code.js";
 import { buildDispatcher, flushPromises, session } from "./test-dispatcher.js";
 
 const admin = session({ principal: "tok_admin", role: "admin" });
+/** why: the driver's refusal of a runtime no download can supply, as the iOS driver words it. */
+function unfixable(message: string): RuntimeMissingError {
+  const error = new RuntimeMissingError("ios", "15.0", { downloadable: false });
+  error.message = message;
+  return error;
+}
+type Built = Awaited<ReturnType<typeof buildDispatcher>>;
 
 describe("Dispatcher: seed.make", () => {
   it("makes and settles a kind's seed: a quick seed is settled and the answer names the settled seed", async () => {
@@ -84,6 +91,7 @@ describe("Dispatcher: seed.make", () => {
       },
     ]);
     settleSeed.mockClear();
+    const reserve = vi.spyOn(built.engine.core.capacity, "tryReserveProvisioning");
     const settled = built.dispatcher.dispatch(
       "seed.make",
       { model: "iPhone 17", platform: "ios" },
@@ -103,6 +111,7 @@ describe("Dispatcher: seed.make", () => {
       sourceId: "ready",
     });
     expect(settleSeed).not.toHaveBeenCalled();
+    expect(reserve, "an already settled seed takes no creation reservation").not.toHaveBeenCalled();
   });
 
   it.each([
@@ -168,6 +177,34 @@ describe("Dispatcher: seed.make", () => {
       });
     },
   );
+
+  it("leaves a settle the call started running when its 60 minutes pass, and answers the call timed-out", async () => {
+    let signal: AbortSignal | undefined;
+    const built = await buildDispatcher({
+      seedVerbs: {
+        ensureSeed: async () => ({ leases: 1, settled: false, sourceId: "quick" }),
+        settleSeed: (_sourceId, options) => {
+          signal = options.signal;
+          return new Promise<never>(() => undefined);
+        },
+      },
+    });
+    built.engine.core.seedSettler.start();
+    let error: unknown = "no answer yet";
+    void built.dispatcher
+      .dispatch("seed.make", { model: "iPhone 17", platform: "ios" }, admin)
+      .catch((caught: unknown) => {
+        error = caught;
+      });
+    await flushPromises();
+    expect(signal, "the settle is under way").toBeDefined();
+
+    built.clock.advance(60 * 60_000);
+    await flushPromises();
+
+    expect(error).toMatchObject({ details: { reason: "timed-out" } });
+    expect(signal?.aborted, "the settle goes on").toBe(false);
+  });
 
   it("fails a call queued behind another kind's settle with timed-out after 60 minutes from its arrival, and never makes its seed afterwards", async () => {
     let release: (() => void) | undefined;
@@ -278,27 +315,35 @@ describe("Dispatcher: seed.make", () => {
   });
 
   it.each([
-    { reason: "memory-pressure", options: { memoryPressureStep: "new-devices-paused" } },
-    { reason: "disk-pressure", options: { diskPressureThreshold: 2 ** 60 } },
+    {
+      reason: "memory-pressure",
+      // why: `arrange` puts the worker under the pressure and answers the call that lifts it.
+      arrange: (built: Built) => {
+        built.setMemoryPressure("new-devices-paused");
+        return () => built.setMemoryPressure("none");
+      },
+      options: {},
+    },
+    {
+      reason: "disk-pressure",
+      arrange: (built: Built) => () => {
+        Object.assign(built.config.diskPressure, { freeBytesThreshold: 0 });
+      },
+      options: { diskPressureThreshold: 2 ** 60 },
+    },
     {
       reason: "capacity",
-      options: {
-        capacity: {
-          strategy: "resource",
-          config: {
-            limits: {
-              android: { maxDevices: 1, maxRunning: 1 },
-              ios: { maxDevices: 1, maxRunning: 1 },
-              maxRunning: 2,
-            },
-            ramBudget: { androidBytesPerDevice: 2 ** 50, iosBytesPerDevice: 2 ** 50 },
-          },
-        },
+      arrange: (built: Built) => {
+        const refusing = vi
+          .spyOn(built.engine.core.capacity, "tryReserveProvisioning")
+          .mockReturnValue({ ok: false, reason: "ram-budget" });
+        return () => refusing.mockRestore();
       },
+      options: {},
     },
   ] as const)(
-    "waits and starts nothing while the worker is under $reason",
-    async ({ reason, options }) => {
+    "waits and starts nothing while the worker is under $reason, then goes on and settles when it lifts",
+    async ({ arrange, options, reason }) => {
       const ensureSeed = vi.fn(async () => ({ leases: 0, settled: false, sourceId: "made" }));
       const settleSeed = vi.fn(async (sourceId: string) => ({
         reason: "idle" as const,
@@ -306,21 +351,28 @@ describe("Dispatcher: seed.make", () => {
         sourceId,
       }));
       const built = await buildDispatcher({ ...options, seedVerbs: { ensureSeed, settleSeed } });
+      const lift = arrange(built);
       built.engine.core.seedSettler.start();
       const heard: unknown[] = [];
 
-      void built.dispatcher
-        .dispatch(
-          "seed.make",
-          { model: "iPhone 17", platform: "ios" },
-          { ...admin, onSeedProgress: (_kind: unknown, progress: unknown) => heard.push(progress) },
-        )
-        .catch(() => undefined);
+      const answer = built.dispatcher.dispatch(
+        "seed.make",
+        { model: "iPhone 17", platform: "ios" },
+        { ...admin, onSeedProgress: (_kind: unknown, progress: unknown) => heard.push(progress) },
+      );
       await flushPromises();
 
       expect(heard).toEqual([{ reason, stage: "waiting" }]);
       expect(ensureSeed).not.toHaveBeenCalled();
       expect(settleSeed).not.toHaveBeenCalled();
+
+      lift();
+      built.clock.advance(5 * 60_000);
+      await flushPromises();
+
+      await expect(answer).resolves.toMatchObject({ outcome: "settled", sourceId: "made" });
+      expect(heard.at(-1), "it settles after the wait").toEqual({ stage: "settling" });
+      expect(ensureSeed).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -373,6 +425,30 @@ describe("Dispatcher: seed.make", () => {
       options: { driverOptions: { availableOsVersions: [] } },
     },
     {
+      code: "RUNTIME_MISSING",
+      input: { model: "iPhone 17", osVersion: ">=27", platform: "ios" },
+      label: "a range no installed runtime fits",
+      message:
+        "no installed iOS runtime fits >=27; install one with simlock component install ios and a version",
+      options: { driverOptions: { knownModels: ["iPhone 17"] } },
+    },
+    {
+      code: "BAD_REQUEST",
+      failure: new UnsupportedRequestOptionError("ios", "imageTag"),
+      input: { imageTag: "google_apis", model: "iPhone 17", platform: "ios" },
+      label: "an image tag on ios",
+      message: "ios lease requests do not take imageTag",
+      options: {},
+    },
+    {
+      code: "RUNTIME_MISSING",
+      failure: unfixable("iOS 15.0 predates the download floor; install it manually via Xcode"),
+      input: { model: "iPhone 17", osVersion: "15.0", platform: "ios" },
+      label: "an iOS below 16, in the lease's own words and not as an install command",
+      message: "iOS 15.0 predates the download floor; install it manually via Xcode",
+      options: {},
+    },
+    {
       code: "FORBIDDEN",
       input: { model: "iPhone 17", platform: "ios" },
       label: "an agent session",
@@ -388,7 +464,7 @@ describe("Dispatcher: seed.make", () => {
     },
   ])(
     "refuses $label with $code, before any seed is made",
-    async ({ code, input, message, options, session: asked, stopping }) => {
+    async ({ code, failure, input, message, options, session: asked, stopping }) => {
       const verbs = {
         ensureSeed: vi.fn(async () => ({ leases: 0, settled: false, sourceId: "made" })),
         settleSeed: vi.fn(async () => {
@@ -397,6 +473,7 @@ describe("Dispatcher: seed.make", () => {
       };
       const built = await buildDispatcher({ ...options, seedVerbs: verbs });
       if (stopping === true) built.engine.core.seedSettler.beginStop();
+      if (failure !== undefined) built.driver.failOn("resolveSpec", 1, failure);
 
       const error = await built.dispatcher
         .dispatch("seed.make", input, asked ?? admin)
