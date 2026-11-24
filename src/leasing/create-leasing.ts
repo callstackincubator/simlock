@@ -313,7 +313,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
       return acquisition.physicalQueueDepth;
     },
     waitingRequests: () => requests.waiting(queue.places()),
-    resolveSeedSpec: (request) => acquisition.resolveSeedSpec(request),
+    resolveSeedSpec: () => Promise.reject(new Error("resolveSeedSpec is not built")),
     cancelPending: async (requesterId: string, platform?: Platform) =>
       acquisition.cancelPending(requesterId, platform),
     pendingRequestOwner: (requesterId: string, platform?: Platform) =>

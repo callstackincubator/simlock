@@ -8,7 +8,9 @@ describe("Dispatcher: seed.make", () => {
   it("makes and settles a kind's seed: a quick seed is settled and the answer names the settled seed", async () => {
     const built = await buildDispatcher({
       seedVerbs: {
-        ensureSeed: async () => ({ leases: 1, settled: false, sourceId: "quick" }),
+        ensureSeed: async () => {
+          throw new Error("a quick seed is already there");
+        },
         settleSeed: async (sourceId) => ({
           reason: "idle",
           settledAfterMs: 181_000,

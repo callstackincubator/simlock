@@ -310,10 +310,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.#specs.resolve(request);
   }
 
-  resolveSeedSpec(request: Parameters<AcquisitionSpecResolver["resolveSeedSpec"]>[0]) {
-    return this.#specs.resolveSeedSpec(request);
-  }
-
   get maintenanceActive(): boolean {
     return this.#gates.admissionClosed;
   }

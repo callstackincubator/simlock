@@ -1,5 +1,4 @@
 import type { SeedSettler, VirtualSpec } from "../core/index.js";
-import { DispatchError, type SeedKind } from "./dispatch.js";
 import type { DispatcherOptions, Handler } from "./dispatcher-options.js";
 
 /** why: what `seed.make` needs of the worker: the lease's resolution of a kind, and the settler that makes and settles its seed (ADR 0090 §4). */
@@ -16,24 +15,11 @@ export interface SeedMaking {
 export class SeedHandlers {
   constructor(private readonly options: DispatcherOptions) {}
 
-  readonly seedMake: Handler<"seed.make"> = async (input, session) => {
-    const { seeds } = this.options;
-    if (seeds === undefined) throw new DispatchError("INTERNAL", "Seeds are unavailable");
-    const spec = await seeds.resolveSeedSpec({
-      model: input.model,
-      platform: input.platform,
-      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
-    });
-    const kind: SeedKind = {
-      model: spec.model,
-      osVersion: spec.osVersion,
-      platform: spec.platform,
-      ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
-    };
-    const result = await seeds.settler.settle(spec, {
-      onProgress: (progress) => session.onSeedProgress?.(kind, progress),
-    });
-    return { ...kind, ...result };
-  };
+  readonly seedMake: Handler<"seed.make"> = async (input) => ({
+    model: input.model,
+    outcome: "already-settled",
+    platform: input.platform,
+    osVersion: "",
+    sourceId: "",
+  });
 }
