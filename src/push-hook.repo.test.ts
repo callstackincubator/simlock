@@ -19,6 +19,10 @@ const LEFTHOOK = join(ROOT, "node_modules", ".bin", "lefthook");
 // why: the stand-in pnpm fails as `vitest run` does when the branch carries a failing
 // *.repo.test.ts, so the step's exit is the hook's verdict on such a push.
 function pushRepoTests(branch: string) {
+  // why: a git hook runs with GIT_DIR set, which would aim the scratch repo's git calls at this checkout.
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith("GIT_")) delete process.env[name];
+  }
   const repo = mkdtempSync(join(tmpdir(), "push-hook-"));
   execFileSync("git", ["init", "-q", "-b", branch, repo]);
   execFileSync(
@@ -28,14 +32,12 @@ function pushRepoTests(branch: string) {
       cwd: repo,
     },
   );
-  const config = JSON.parse(
-    execFileSync(LEFTHOOK, ["dump", "--format", "json"], { cwd: ROOT, encoding: "utf8" }),
+  // why: `lefthook dump` drops a skip it has judged against this checkout's branch, and `--command` ignores one, so the
+  // scratch repo gets the step's own block from lefthook.yml and the hook runs there on the scratch branch.
+  const block = /^ {4}repo-tests:\n(?: {5,}.*\n|\s*\n)*/m.exec(
+    readFileSync(join(ROOT, "lefthook.yml"), "utf8"),
   );
-  const repoTests = config["pre-push"].commands["repo-tests"];
-  writeFileSync(
-    join(repo, "lefthook.json"),
-    JSON.stringify({ "pre-push": { commands: { "repo-tests": repoTests } } }),
-  );
+  writeFileSync(join(repo, "lefthook.yml"), `pre-push:\n  commands:\n${block?.[0]}`);
   const bin = join(repo, ".bin");
   mkdirSync(bin);
   const calls = join(repo, "pnpm-calls");
