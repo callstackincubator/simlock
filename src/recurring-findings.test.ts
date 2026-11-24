@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -49,13 +51,12 @@ const fixed = (cls: string, path: string) => ({
 function recurring(github: Record<string, unknown>, ...args: string[]) {
   const dir = mkdtempSync(join(tmpdir(), "recurring-"));
   writeFileSync(join(dir, "github.json"), JSON.stringify(github));
-  writeFileSync(join(dir, "gh"), FAKE_GH);
-  chmodSync(join(dir, "gh"), 0o755);
+  writeFakeCommand(dir, "gh", FAKE_GH);
   const run = spawnSync(process.execPath, [SCRIPT, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${dir}:${process.env.PATH}`,
+      ...fakeCommandEnv(dir),
       FAKE_GH_FILE: join(dir, "github.json"),
       GH_REPO: "o/r",
     },

@@ -69,7 +69,7 @@ list and this one the same.
   check` steps run as parallel jobs (static checks, unit tests, the unit
   tests on Windows, the timing tests, the e2e lane in three shards); the
   Quality check passes only when all of them do. A contributor on Windows
-  runs the tests from Git Bash with Python 3 installed, never PowerShell. A
+  runs the tests from Git Bash with Python 3 and jq installed, never PowerShell. A
   failure only the `Unit tests (Windows)` job shows is reproduced by
   rerunning that job on the base commit's CI run (`gh run rerun <run> --job
   <job>`), not locally. The console DOM tests run with the unit tests. The console lane runs

@@ -40,9 +40,14 @@ min_free=${SIMLOCK_SLOW_MIN_FREE_GIB:-15}
 worker_lock=${SIMLOCK_SLOW_WORKER_LOCK:-/tmp/simlock-$(id -u)/worker.lock}
 root=$(git rev-parse --show-toplevel)
 
+# why: on Windows 11 `python3` is by default the Microsoft Store alias, which prints "Python was
+# not found" instead of a version; the first of the two that says "Python 3" is the interpreter.
+py=python3
+case $(python3 --version 2>&1) in "Python 3"*) ;; *) py=python ;; esac
+
 helper() {
-  python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
-import json, os, re, shutil, signal, subprocess, sys, time
+  $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
+import json, os, re, shutil, signal, subprocess, sys, tempfile, time
 lock, lane_tmp, root, min_free, worker_lock, command = sys.argv[1:7]
 
 def read(path, default=""):
@@ -131,8 +136,8 @@ def delete_marked_simulators():
             print(f"deleted simulator {udid}")
 
 def free_gib(path):
-    stats = os.statvfs(path)
-    return stats.f_bavail * stats.f_frsize / 2**30
+    # why: os.statvfs does not exist on Windows; disk_usage reports the same free bytes.
+    return shutil.disk_usage(path).free / 2**30
 
 if command == "clean":
     if holder():
@@ -154,7 +159,8 @@ elif command == "check":
             sys.exit(69)
     except (ValueError, KeyError, TypeError):
         pass
-    for path in ("/tmp", os.path.expanduser("~")):
+    # why: /tmp is not a folder for a Windows Python, which uses its own temp folder.
+    for path in ("/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir(), os.path.expanduser("~")):
         if free_gib(path) < float(min_free):
             problems.append(f"{free_gib(path):.1f} GiB free on the volume of {path}; the lane needs {min_free}")
     agent_device = os.environ.get("SIMLOCK_E2E_AGENT_DEVICE")
@@ -254,7 +260,7 @@ echo "$log" > "$lock/log"
 echo "$log" > "$lock.last"
 mkdir -p "$lane_tmp"
 
-SIMLOCK_E2E_LOG_DIR="${log%.log}-daemons" TMPDIR="$lane_tmp/" python3 - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
+SIMLOCK_E2E_LOG_DIR="${log%.log}-daemons" TMPDIR="$lane_tmp/" $py - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
 import os, subprocess, sys
 lock, log, root, script, args = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 child = os.fork()
