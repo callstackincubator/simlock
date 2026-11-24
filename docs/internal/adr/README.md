@@ -124,5 +124,3 @@ the status is stale.
 | [0087](0087-the-unit-tests-run-on-windows-in-ci-and-a-list-of-files-still-failing-there-only-shrinks.md) | The unit tests run on Windows in CI, and a list of files still failing there only shrinks | Accepted — not yet implemented; narrows testing rule 5 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
-| [0087](0087-the-unit-tests-run-on-windows-in-ci-and-a-list-of-files-still-failing-there-only-shrinks.md) | The unit tests run on Windows in CI, and a list of files still failing there only shrinks | Proposed; narrows testing rule 5 |
-| [0087](0087-the-unit-tests-run-on-windows-in-ci-and-a-list-of-files-still-failing-there-only-shrinks.md) | The unit tests run on Windows in CI, and a list of files still failing there only shrinks | Accepted — not yet implemented; narrows testing rule 5 |
