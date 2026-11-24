@@ -136,6 +136,18 @@ async function errorCodeOf(response: Response): Promise<string> {
   return ((await response.json()) as { error: { code: string } }).error.code;
 }
 
+describe("the device.exec fleet", () => {
+  // why: the worker refuses an upload while the host's free disk is under this threshold (ADR 0067 §4), so a default of 10 GiB makes the upload tests below pass or fail with the host's free disk.
+  it("keeps a disk-pressure threshold of 0 bytes, not the 10 GiB default", async () => {
+    const { env } = await fleet();
+
+    const threshold = await env.cli(["config", "get", "diskPressure.freeBytesThreshold"]);
+
+    expect(threshold.code, threshold.stderr).toBe(0);
+    expect(threshold.json).toBe(0);
+  });
+});
+
 describe("device.exec over HTTP", () => {
   it("runs the driver-scoped command on the daemon and streams both its output and its exit code", async () => {
     const { env, exec, lease, token } = await fleet();
