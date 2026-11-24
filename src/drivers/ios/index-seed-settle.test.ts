@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BootTimeoutError, DriverCrashError } from "../../core/index.js";
 import {
@@ -20,6 +20,7 @@ import {
   instanceId,
   plantManagedDevice,
   simctl,
+  sourcesSetPath,
   waitForCalls,
 } from "./test-slim.js";
 import {
@@ -34,8 +35,9 @@ import {
   spec,
 } from "./test-index.js";
 
-const sourcesSet = `${deviceRoot}/sources`;
-const coreSimulatorRoot = "/CoreSim";
+const sourcesSet = sourcesSetPath;
+const simlockHome = resolve("/home/.simlock");
+const coreSimulatorRoot = resolve("/CoreSim");
 const lineageUdid = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
 const copyUdid = "00000000-0000-0000-0000-0000000000cc";
 const settledUdid = "00000000-0000-0000-0000-0000000000dd";
@@ -68,7 +70,15 @@ async function runToEnd<T>(
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (state.state === "pending") clock.advance(2_000);
   }
-  expect(state.state, "the settle ended within 20 simulated minutes").toBe(ends);
+  // why: a settle that rejects when it should end well names its error in the failure, not only the state.
+  const reached =
+    state.state === "rejected" && ends === "fulfilled"
+      ? await settle.then(
+          () => state.state,
+          (error: unknown) => `rejected: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      : state.state;
+  expect(reached, "the settle ended within 20 simulated minutes").toBe(ends);
 }
 
 function selectRows(database: SqliteDatabase): unknown[] {
@@ -97,10 +107,10 @@ const simlockWorld: World = {
 
 const defaultWorld: World = {
   config: { deviceSet: "default" },
-  devicesDir: `${coreSimulatorRoot}/Devices`,
+  devicesDir: join(coreSimulatorRoot, "Devices"),
   isDefault: true,
   label: "default set",
-  sourcesSet: "/home/.simlock/devices/ios-sources",
+  sourcesSet: join(simlockHome, "devices", "ios-sources"),
 };
 
 function simctlIn(world: World, set: string | undefined, ...args: readonly string[]) {
@@ -227,7 +237,7 @@ describe("IosSimctlDriver settleSeed", () => {
         logsRoot,
         processRunner: runner,
         processTable: table,
-        simlockHome: "/home/.simlock",
+        simlockHome,
       });
       const settle = driver.settleSeed?.(quickSourceId, { signal: new AbortController().signal });
       expect(settle, "an iOS driver given a process table settles seeds").toBeDefined();
@@ -627,7 +637,7 @@ describe("IosSimctlDriver settleSeed", () => {
         instanceId,
         logsRoot,
         processRunner: restart,
-        simlockHome: "/home/.simlock",
+        simlockHome,
       });
       await next.listSources();
       expect(
