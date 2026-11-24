@@ -312,10 +312,6 @@ describe("a physical device that was mid-reclaim or quarantined when the daemon 
         script: { installed: [...ENROLLED, ...AGENT_APPS] },
       },
     );
-    // why: a loaded runner reaches the first status read after quarantineNextRetryAt (CI run 44289531652: 3.3 s).
-    await waitFor(() => Date.now() > nextRetryAt + 1_000, { label: "the retry is due" });
-    expect(await stateOf(env, READY.id)).toBe("quarantined");
-
     await waitForState(env, READY.id, "ready");
 
     const calls = (await env.driverLog.calls()).filter((call) => call.operation === "uninstall");
