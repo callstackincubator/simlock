@@ -34,6 +34,9 @@ export default defineConfig({
           // parallel run the default five seconds times three of them out (lint-rules, claim,
           // mutate) while each passes alone in under a second. A hang still fails within 20 s.
           testTimeout: 20_000,
+          // why: a cleanup hook stops daemons and removes their folders, and `removeDirectory`
+          // retries a busy folder for up to 10 s; the default 10 s would cut it short.
+          hookTimeout: 20_000,
         },
       },
       {
