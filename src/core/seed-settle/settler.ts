@@ -325,6 +325,7 @@ class SeedSettlerImpl implements SeedSettler {
     if (entry === undefined || driver === undefined) return;
     this.#operators.splice(index, 1);
     // why: a call that runs again after a wait reports its waits and its make afresh.
+    const waitedFor = entry.lastWaiting;
     entry.lastWaiting = undefined;
     const started = await this.#begin({
       driver,
@@ -334,7 +335,9 @@ class SeedSettlerImpl implements SeedSettler {
     });
     if (!started) {
       this.#operators.unshift(entry);
-      entry.onProgress({ reason: "capacity", stage: "waiting" });
+      // why: the check runs every 15 s, so a refused reservation is told once per wait, like every other wait.
+      entry.lastWaiting = "capacity";
+      if (waitedFor !== "capacity") entry.onProgress({ reason: "capacity", stage: "waiting" });
     }
   }
 
