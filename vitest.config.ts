@@ -37,7 +37,7 @@ export default defineConfig({
           // why: a cleanup hook stops daemons and removes their folders, and `removeDirectory`
           // retries a busy folder for up to 10 s; the default 10 s would cut it short.
           hookTimeout: 20_000,
-          setupFiles: ["src/test-support/windows-shell-env.ts"],
+          setupFiles: ["src/test-support/git-bash-env.ts"],
         },
       },
       {
