@@ -350,7 +350,8 @@ describe("Registry", () => {
       const plain = await lease("plain", undefined);
       migrated.close();
 
-      const reopened = await loadRegistry(await openState(registryOwner));
+      const reopenedState = await openState(registryOwner);
+      const reopened = await loadRegistry(reopenedState);
       const byId = (id: string) =>
         reopened.snapshot.leases.find((candidate) => candidate.id === id);
       expect(byId(labelled.id)).toMatchObject({ label: "feature-x" });
@@ -363,6 +364,7 @@ describe("Registry", () => {
         grant: { lease: { label: "feature-x" } },
       });
       expect(stored("plain")?.grant?.lease).not.toHaveProperty("label");
+      reopenedState.close();
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

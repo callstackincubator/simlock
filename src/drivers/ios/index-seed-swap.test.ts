@@ -253,7 +253,7 @@ describe("IosSimctlDriver copy swap", () => {
     const swapReleased = new Promise<void>((resolve) => {
       releaseSwap = resolve;
     });
-    const launchServicesFolder = `${deviceRoot}/${copyUdid}/data/var/db/lsd`;
+    const launchServicesFolder = join(deviceRoot, copyUdid, "data", "var", "db", "lsd");
     class HeldAfterClone extends MemoryFilesystem {
       override async exists(path: string): Promise<boolean> {
         if (path === launchServicesFolder) {

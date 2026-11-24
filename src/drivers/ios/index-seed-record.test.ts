@@ -327,10 +327,16 @@ describe("IosSimctlDriver source records", () => {
   });
 
   it("a baseline is saved when files listed in its clone are gone before the walk reaches them, and only the files still there are recorded", async () => {
-    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
     const lease = driverData.udid.toUpperCase();
-    const topTemp = `${baselineFolder}/device.plist.sb-55c05b11-ISuHtw`;
-    const nestedTemp = `${baselineFolder}/data/Library/Preferences/app.plist.sb-0a1b2c3d-QwErTy`;
+    const topTemp = join(baselineFolder, "device.plist.sb-55c05b11-ISuHtw");
+    const nestedTemp = join(
+      baselineFolder,
+      "data",
+      "Library",
+      "Preferences",
+      "app.plist.sb-0a1b2c3d-QwErTy",
+    );
 
     const saved = await saveBaseline({
       lineage: [lineageUdid],
@@ -359,9 +365,9 @@ describe("IosSimctlDriver source records", () => {
   });
 
   it("a baseline is saved when a file in its clone is renamed away after the walk reaches it but before it is read, and the file is not recorded", async () => {
-    const baselineFolder = `${sourcesSet}/${baselineUdid}`;
+    const baselineFolder = join(sourcesSetPath, baselineUdid);
     const lease = driverData.udid.toUpperCase();
-    const temp = `${baselineFolder}/device.plist.sb-55c05b11-ISuHtw`;
+    const temp = join(baselineFolder, "device.plist.sb-55c05b11-ISuHtw");
 
     const saved = await saveBaseline({
       lineage: [lineageUdid],
