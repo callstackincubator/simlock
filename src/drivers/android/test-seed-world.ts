@@ -1,3 +1,5 @@
+import { normalize } from "node:path";
+
 import {
   FakeClock,
   FakeProcessTable,
@@ -39,7 +41,8 @@ class HeldCopies extends MemoryFilesystem {
   }
 
   hold(from: string): Promise<void> {
-    this.#holdFrom = from;
+    // why: the driver joins its paths with the host's separator, so a folder named with `/` is compared in that form, or on Windows the hold is never reached.
+    this.#holdFrom = normalize(from);
     this.#opened = new Promise<void>((resolve) => {
       this.open = resolve;
     });
@@ -49,7 +52,7 @@ class HeldCopies extends MemoryFilesystem {
   }
 
   override async copyTree(from: string, to: string, options: { readonly timeoutMs: number }) {
-    if (this.#holdFrom !== undefined && from.startsWith(this.#holdFrom)) {
+    if (this.#holdFrom !== undefined && normalize(from).startsWith(this.#holdFrom)) {
       this.#holdFrom = undefined;
       this.#reached();
       await this.#opened;
