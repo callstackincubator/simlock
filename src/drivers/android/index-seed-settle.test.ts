@@ -121,6 +121,17 @@ const cases = [
   },
 ] as const;
 
+/** why: the settle of a source, as core asks for it. */
+function startSettle(world: World, sourceId: string): Promise<unknown> {
+  const started = world.driver.settleSeed?.(sourceId, { signal: new AbortController().signal });
+  if (started === undefined) throw new Error("the driver offers no settleSeed");
+  return started;
+}
+
+async function letGo(): Promise<void> {
+  for (let tick = 0; tick < 20; tick += 1) await new Promise<void>((r) => setImmediate(r));
+}
+
 describe("AndroidDriver settleSeed", () => {
   it("saves an idle copy's snapshot as the seed", async () => {
     for (const scenario of cases) {
@@ -260,28 +271,19 @@ describe("AndroidDriver settleSeed", () => {
 
   it("refuses a source that is no ready quick seed", async () => {
     const refused = await quickSeedWorld();
-    const first = refused.driver.settleSeed?.("seed_two", { signal: new AbortController().signal });
-    if (first === undefined) throw new Error("the driver offers no settleSeed");
-    await runToEnd(first, refused, 60_000, () => undefined);
+    await runToEnd(startSettle(refused, "seed_two"), refused, 60_000, () => undefined);
     for (const sourceId of ["seed_nope", "seed_three"]) {
-      await expect(
-        refused.driver.settleSeed?.(sourceId, { signal: new AbortController().signal }),
-        sourceId,
-      ).rejects.toThrow(`Android keeps no ready quick seed ${sourceId}`);
+      await expect(startSettle(refused, sourceId), sourceId).rejects.toThrow(
+        `Android keeps no ready quick seed ${sourceId}`,
+      );
     }
 
     const running = await quickSeedWorld();
-    const settling = running.driver.settleSeed?.("seed_two", {
-      signal: new AbortController().signal,
-    });
-    if (settling === undefined) throw new Error("the driver offers no settleSeed");
-    for (let tick = 0; tick < 20; tick += 1) await new Promise<void>((r) => setImmediate(r));
-    const second = running.driver.settleSeed?.("seed_three", {
-      signal: new AbortController().signal,
-    });
-    if (second === undefined) throw new Error("the driver offers no settleSeed");
+    const settling = startSettle(running, "seed_two");
+    await letGo();
+    const second = startSettle(running, "seed_three");
     const answer = promiseState(second.catch((error: unknown) => error));
-    for (let tick = 0; tick < 20; tick += 1) await new Promise<void>((r) => setImmediate(r));
+    await letGo();
     expect(answer.state, "a settle that is still making is refused at once").toBe("fulfilled");
     await expect(second).rejects.toThrow("Android keeps no ready quick seed seed_three");
     await runToEnd(settling, running, 60_000, () => undefined);
