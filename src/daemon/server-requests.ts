@@ -520,17 +520,6 @@ export class ConnectionRequests {
     });
   }
 
-  /**
-   * why: ADR 0010 §6: the counterpart of `#requestLease` for an install. Each progress update becomes
-   * a `component-progress` push carrying this call's frame id. A closed connection only
-   * silences the pushes (`writeFrame` writes nothing to a closed socket, and a write that fails
-   * is dropped): the install carries on for every call joined to it, and a client that
-   * reconnects repeats the request to join it again.
-   *
-   * A gateway's `worker.install-component` takes the same path: its progress names the worker
-   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher
-   * refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
-   */
   /** why: the counterpart of `#installComponent` for `seed.make`: each stage becomes a `seed-progress` push carrying this call's frame id; a closed connection only silences the pushes and the settle goes on. */
   #makeSeed(connection: Connection, requestId: RequestId, value: unknown): Promise<unknown> {
     return this.options.dispatcher.dispatch("seed.make", value ?? {}, {
@@ -543,6 +532,17 @@ export class ConnectionRequests {
     });
   }
 
+  /**
+   * why: ADR 0010 §6: the counterpart of `#requestLease` for an install. Each progress update becomes
+   * a `component-progress` push carrying this call's frame id. A closed connection only
+   * silences the pushes (`writeFrame` writes nothing to a closed socket, and a write that fails
+   * is dropped): the install carries on for every call joined to it, and a client that
+   * reconnects repeats the request to join it again.
+   *
+   * A gateway's `worker.install-component` takes the same path: its progress names the worker
+   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher
+   * refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
+   */
   #installComponent(
     connection: Connection,
     requestId: RequestId,

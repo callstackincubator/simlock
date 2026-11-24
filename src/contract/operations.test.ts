@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OPERATIONS,
+  PUSH_SCHEMAS,
   type Effect,
   type OperationName,
   requestedDevice,
@@ -478,5 +479,52 @@ describe("lease.request metadata", () => {
     const notText = parse({ n: 1 });
     expect(notText.success, "a value that is not text").toBe(false);
     expect(notText.error?.issues[0]?.path, "a value that is not text").toEqual(["metadata", "n"]);
+  });
+});
+
+describe("seed.make wire shapes", () => {
+  const ask = { model: "iPhone 17", platform: "ios" };
+  const input = OPERATIONS["seed.make"].input;
+
+  it("accepts the lease's OS words and image tag, and refuses an unknown key, a bad OS word, a model past 200 and a bad image tag, naming the field", () => {
+    expect(input.safeParse({ ...ask, osVersion: ">=18 <26", platform: "android" }).success).toBe(
+      true,
+    );
+    expect(input.safeParse({ ...ask, imageTag: "google_apis" }).success).toBe(true);
+    expect(input.safeParse({ ...ask, model: "m".repeat(200) }).success).toBe(true);
+    for (const [bad, path] of [
+      [{ ...ask, extra: 1 }, []],
+      [{ ...ask, osVersion: "^18" }, ["osVersion"]],
+      [{ ...ask, model: "m".repeat(201) }, ["model"]],
+      [{ ...ask, imageTag: "a b" }, ["imageTag"]],
+    ] as const) {
+      const result = input.safeParse(bad);
+      expect(result.success, JSON.stringify(bad)).toBe(false);
+      if (!result.success) expect(result.error.issues[0]?.path, JSON.stringify(bad)).toEqual(path);
+    }
+  });
+
+  it("bounds what a worker answers and pushes about a seed: the source id, the model and the OS version", () => {
+    const answer = {
+      model: "iPhone 17",
+      osVersion: "26.5",
+      outcome: "settled",
+      platform: "ios",
+      sourceId: "s",
+    };
+    const kind = { model: "iPhone 17", osVersion: "26.5", platform: "ios" };
+    const push = { kind, progress: { stage: "making" }, requestId: 1 };
+    const output = OPERATIONS["seed.make"].output;
+    const pushes = PUSH_SCHEMAS["seed-progress"];
+    expect(output.safeParse({ ...answer, sourceId: "s".repeat(256) }).success).toBe(true);
+    expect(output.safeParse({ ...answer, sourceId: "s".repeat(257) }).success).toBe(false);
+    expect(output.safeParse({ ...answer, osVersion: "9".repeat(65) }).success).toBe(false);
+    expect(pushes.safeParse(push).success).toBe(true);
+    expect(
+      pushes.safeParse({ ...push, kind: { ...kind, osVersion: "9".repeat(65) } }).success,
+    ).toBe(false);
+    expect(pushes.safeParse({ ...push, kind: { ...kind, model: "m".repeat(201) } }).success).toBe(
+      false,
+    );
   });
 });
