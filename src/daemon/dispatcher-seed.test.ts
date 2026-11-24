@@ -169,6 +169,26 @@ describe("Dispatcher: seed.make", () => {
     },
   );
 
+  it("makes a seed on a worker that serves only slim simulators, because a seed is made full and leased by no one", async () => {
+    const built = await buildDispatcher({
+      iosModes: ["slim"],
+      seedVerbs: {
+        ensureSeed: async () => ({ leases: 0, settled: false, sourceId: "made" }),
+        settleSeed: async (sourceId) => ({ reason: "idle", settledAfterMs: 1, sourceId }),
+      },
+    });
+    built.engine.core.seedSettler.start();
+
+    const answer = built.dispatcher.dispatch(
+      "seed.make",
+      { model: "iPhone 17", platform: "ios" },
+      admin,
+    );
+    await flushPromises();
+
+    await expect(answer).resolves.toMatchObject({ outcome: "settled", sourceId: "made" });
+  });
+
   it.each([
     {
       code: "UNKNOWN_MODEL",

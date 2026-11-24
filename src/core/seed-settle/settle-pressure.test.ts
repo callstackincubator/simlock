@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SeedSettleProgress } from "./index.js";
+import type { SeedSettleProgress } from "./types.js";
 import {
   deferred,
   expectSettled,

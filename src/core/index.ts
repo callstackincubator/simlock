@@ -119,7 +119,7 @@ export {
   SeedSettleFailedError,
   SeedSettlerStoppedError,
 } from "./driver.js";
-export type { SeedSettler, SeedSettleProgress, SeedSettleResult } from "./seed-settle/index.js";
+export type { SeedSettler } from "./seed-settle/index.js";
 export {
   DriverCatalog,
   NoDriverError,
