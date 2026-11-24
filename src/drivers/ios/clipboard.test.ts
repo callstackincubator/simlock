@@ -23,6 +23,8 @@ class FakeDeviceHubDomain {
   domain: Preferences = {};
   staged: Preferences = {};
   failing = "";
+  // why: a daemon that cannot reach DeviceHub's sandbox container (#1822): export sees an empty domain and import exits 0 but writes nothing.
+  containerBlocked = false;
   hold: Promise<void> | undefined;
 
   holdFirstImport(handle: { wait: () => Promise<unknown> }): void {
@@ -43,11 +45,27 @@ class FakeDeviceHubDomain {
     command: string,
     args: readonly string[],
   ): { code: number; stderr: string; stdout: string } {
+    const printed = command === "/usr/libexec/PlistBuddy" ? /^Print (.*)$/.exec(args[1]!) : null;
+    return printed === null ? this.exit(command, args) : this.print(printed[1]!);
+  }
+
+  private exit(
+    command: string,
+    args: readonly string[],
+  ): { code: number; stderr: string; stdout: string } {
     const warmBoot = this.warm && args[1] === "boot";
     if (warmBoot) this.warm = false;
     if (args[1] === "delete") this.sawDelete?.();
     const stderr = warmBoot ? "Unable to boot device in current state: Booted" : "failed";
     return { code: warmBoot || !this.succeeds(command, args) ? 1 : 0, stderr, stdout: "" };
+  }
+
+  // why: PlistBuddy's Print writes a boolean as true or false, and exits 1 on a key that does not exist.
+  private print(path: string): { code: number; stderr: string; stdout: string } {
+    const [, , udid = "", key = ""] = path.split(":");
+    const value = this.staged[udid]?.[key];
+    if (value === undefined) return { code: 1, stderr: "Does Not Exist", stdout: "" };
+    return { code: 0, stderr: "", stdout: `${String(value)}\n` };
   }
 
   succeeds(command: string, args: readonly string[]): boolean {
@@ -59,6 +77,10 @@ class FakeDeviceHubDomain {
   }
 
   private transfer(verb: string): void {
+    if (this.containerBlocked) {
+      if (verb === "export") this.staged = {};
+      return;
+    }
     if (verb === "export") this.staged = structuredClone(this.domain);
     if (verb === "import") this.domain = structuredClone(this.staged);
   }
@@ -144,6 +166,8 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
       exportDomain,
       staged(`Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`),
       importDomain,
+      exportDomain,
+      staged(`Print :DevicePreferences:${udid}:pasteboardSyncEnabled`),
       ["xcrun", "simctl", "boot", udid],
       ["xcrun", "simctl", "bootstatus", udid, "-b"],
       ["xcrun", "simctl", "listapps", udid],
@@ -210,9 +234,9 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     hub.failing = "";
     hub.warm = true;
     await driver.makeReady(device, prepareFull);
-    expect(calls.slice(0, 7)).toEqual([
+    expect(calls.slice(0, 9)).toEqual([
       rename,
-      ...syncOffThenBoot.slice(0, 4),
+      ...syncOffThenBoot.slice(0, 6),
       ["xcrun", "simctl", "shutdown", udid],
       ["xcrun", "simctl", "boot", udid],
     ]);
@@ -228,5 +252,52 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     hub.failing = "delete";
     await expect(driver.destroy(device)).rejects.toThrow();
     expect(calls.some((call) => call[0] === "defaults")).toBe(false);
+  });
+
+  it("refuses to boot a simulator, for preparation and recovery alike, when DeviceHub's preferences do not keep the pasteboard sync off", async () => {
+    const udid = driverData.udid;
+    const calls: string[][] = [];
+    const hub = new FakeDeviceHubDomain();
+    hub.domain = { [udid]: { pasteboardSyncEnabled: true, windowScale: 75 } };
+    hub.containerBlocked = true;
+    const answersEveryCall: ProcessRunner = {
+      run: () => Promise.reject(new Error("the driver runs commands through spawn")),
+      spawn(command, args, options) {
+        calls.push([command, ...args]);
+        return new ScriptedProcessRunner([
+          { match: { args: [...args], command }, result: hub.answer(command, args) },
+        ]).spawn(command, args, options);
+      },
+      spawnStreaming: () => {
+        throw new Error("the driver streams nothing here");
+      },
+    };
+    const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
+      clock: new FakeClock(),
+      coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
+      driverConfig: { deviceSet: "default" },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: answersEveryCall,
+      simlockHome: "/home/.simlock",
+    });
+    const device = { address: udid, deviceId: udid, driverData };
+    const boots = () => calls.filter((call) => call[1] === "simctl" && call[2] === "boot");
+
+    for (const purpose of ["prepare", "recover"] as const) {
+      calls.length = 0;
+      await expect(driver.makeReady(device, { mode: "full", purpose })).rejects.toThrow(
+        `Could not disable DeviceHub clipboard sync for ${udid}`,
+      );
+      expect(calls).toContainEqual([
+        "defaults",
+        "import",
+        "com.apple.dt.Devices",
+        expect.any(String),
+      ]);
+      expect(boots()).toEqual([]);
+    }
   });
 });
