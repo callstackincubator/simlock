@@ -23,6 +23,20 @@ class HeldCopies extends MemoryFilesystem {
   #reached = (): void => undefined;
   #opened: Promise<void> = Promise.resolve();
   open = (): void => undefined;
+  /** why: how many removals ran at the same moment at most, so a test can tell two deletions that took turns from two that overlapped. */
+  mostRemovingAtOnce = 0;
+  #removing = 0;
+
+  override async rm(path: string): Promise<void> {
+    this.#removing += 1;
+    this.mostRemovingAtOnce = Math.max(this.mostRemovingAtOnce, this.#removing);
+    try {
+      await letGo();
+      await super.rm(path);
+    } finally {
+      this.#removing -= 1;
+    }
+  }
 
   hold(from: string): Promise<void> {
     this.#holdFrom = from;

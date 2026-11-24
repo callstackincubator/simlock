@@ -71,4 +71,15 @@ describe("AndroidDriver seed turns", () => {
       ).resolves.toBe(false);
     }
   });
+
+  it("runs two deletions of one seed at once one after the other", async () => {
+    const w = await world();
+
+    await Promise.all([w.driver.destroySource("seed_two"), w.driver.destroySource("seed_two")]);
+
+    expect(w.filesystem.mostRemovingAtOnce, "the second deletion began while the first ran").toBe(
+      1,
+    );
+    await expect(w.filesystem.exists(`${sources}/seed_two`)).resolves.toBe(false);
+  });
 });
