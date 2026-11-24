@@ -49,11 +49,12 @@ export class DeviceHubPreferences {
   // to a scratch file, edited there with PlistBuddy, and imported back through cfprefsd.
   async #editDeviceHubPreferences(
     edit: (buddy: (command: string) => Promise<boolean>) => Promise<boolean>,
+    readBack?: string,
   ): Promise<boolean> {
     return await withPasteboardWrite(async () => {
       await this.#filesystem.mkdirp(this.#overridesRoot, { mode: 0o700 });
       const staged = join(this.#overridesRoot, DEVICEHUB_STAGING_FILE);
-      const run = async (command: string, args: string[]): Promise<boolean> => {
+      const output = async (command: string, args: string[]): Promise<string | undefined> => {
         const outcome = await runCommand(
           this.#processRunner,
           this.#clock,
@@ -61,12 +62,25 @@ export class DeviceHubPreferences {
           args,
           COMMAND_TIMEOUT_MS,
         );
-        return outcome.kind !== "timed-out" && outcome.result.code === 0;
+        if (outcome.kind === "timed-out" || outcome.result.code !== 0) return undefined;
+        return outcome.result.stdout;
       };
+      const run = async (command: string, args: string[]): Promise<boolean> =>
+        (await output(command, args)) !== undefined;
       try {
         if (!(await run("defaults", ["export", DEVICEHUB_DOMAIN, staged]))) return false;
         const buddy = (command: string) => run("/usr/libexec/PlistBuddy", ["-c", command, staged]);
-        return (await edit(buddy)) && (await run("defaults", ["import", DEVICEHUB_DOMAIN, staged]));
+        if (
+          !(await edit(buddy)) ||
+          !(await run("defaults", ["import", DEVICEHUB_DOMAIN, staged]))
+        ) {
+          return false;
+        }
+        if (readBack === undefined) return true;
+        // why: an import that exits 0 can still have written nothing (cfprefsd cannot reach DeviceHub's container from an ssh-started daemon), so the value is read from a fresh export.
+        if (!(await run("defaults", ["export", DEVICEHUB_DOMAIN, staged]))) return false;
+        const value = await output("/usr/libexec/PlistBuddy", ["-c", `Print ${readBack}`, staged]);
+        return value?.trim() === "false";
       } finally {
         await this.#filesystem.rm(staged).catch(() => undefined);
       }
@@ -80,7 +94,7 @@ export class DeviceHubPreferences {
       await buddy("Add :DevicePreferences dict");
       await buddy(`Add ${path} dict`);
       return await buddy(`Add ${path}:pasteboardSyncEnabled bool false`);
-    });
+    }, `${path}:pasteboardSyncEnabled`);
     if (!done) throw new DriverCrashError(`Could not disable DeviceHub clipboard sync for ${udid}`);
   }
 

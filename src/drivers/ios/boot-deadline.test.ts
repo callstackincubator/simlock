@@ -162,6 +162,10 @@ describe("IosSimctlDriver boot deadline", () => {
                 },
               }
             : {}),
+          // why: the clipboard read-back (#1822) needs PlistBuddy's Print to answer false.
+          ...(args[1]?.startsWith("Print ")
+            ? { result: { code: 0, stderr: "", stdout: "false\n" } }
+            : {}),
           ...(isShutdown ? { onSpawn: () => clock.advance(20_000) } : {}),
         };
         return new ScriptedProcessRunner([entry]).spawn(command, args, options);

@@ -166,6 +166,8 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
       exportDomain,
       staged(`Set :DevicePreferences:${udid}:pasteboardSyncEnabled false`),
       importDomain,
+      exportDomain,
+      staged(`Print :DevicePreferences:${udid}:pasteboardSyncEnabled`),
       ["xcrun", "simctl", "boot", udid],
       ["xcrun", "simctl", "bootstatus", udid, "-b"],
       ["xcrun", "simctl", "listapps", udid],
@@ -232,9 +234,9 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     hub.failing = "";
     hub.warm = true;
     await driver.makeReady(device, prepareFull);
-    expect(calls.slice(0, 7)).toEqual([
+    expect(calls.slice(0, 9)).toEqual([
       rename,
-      ...syncOffThenBoot.slice(0, 4),
+      ...syncOffThenBoot.slice(0, 6),
       ["xcrun", "simctl", "shutdown", udid],
       ["xcrun", "simctl", "boot", udid],
     ]);
