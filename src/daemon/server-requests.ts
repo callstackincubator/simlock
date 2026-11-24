@@ -336,6 +336,8 @@ export class ConnectionRequests {
         );
       case "component.install":
         return this.#installComponent(connection, frame.id, "component.install", frame.payload);
+      case "seed.make":
+        return this.#makeSeed(connection, frame.id, frame.payload);
       case "worker.install-component":
         return this.#installComponent(
           connection,
@@ -529,6 +531,18 @@ export class ConnectionRequests {
    * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher
    * refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
    */
+  /** why: the counterpart of `#installComponent` for `seed.make`: each stage becomes a `seed-progress` push carrying this call's frame id; a closed connection only silences the pushes and the settle goes on. */
+  #makeSeed(connection: Connection, requestId: RequestId, value: unknown): Promise<unknown> {
+    return this.options.dispatcher.dispatch("seed.make", value ?? {}, {
+      ...this.#session(connection),
+      onSeedProgress: (kind, progress) => {
+        void this.options.pushes
+          .seedProgress(connection.socket, requestId, kind, progress)
+          .catch(() => undefined);
+      },
+    });
+  }
+
   #installComponent(
     connection: Connection,
     requestId: RequestId,

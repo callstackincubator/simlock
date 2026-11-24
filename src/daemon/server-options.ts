@@ -66,6 +66,7 @@ export interface DaemonServerEngineOptions {
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
   readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
+  readonly seeds?: DispatcherOptions["seeds"];
   readonly passthrough?: PassthroughResolver;
   readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
@@ -230,6 +231,7 @@ export function buildDispatcher(
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
     ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
     ...(options.baselines === undefined ? {} : { baselines: options.baselines }),
+    ...(options.seeds === undefined ? {} : { seeds: options.seeds }),
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
     ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),

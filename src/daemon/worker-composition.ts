@@ -582,6 +582,10 @@ export async function composeWorker(
     registry,
     warmKinds: core.warmKinds,
     baselines: core.baselines,
+    seeds: {
+      resolveSeedSpec: (request) => leasing.resolveSeedSpec(request),
+      settler: core.seedSettler,
+    },
     stalls: { claims: core.claimReader, drivers },
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,
