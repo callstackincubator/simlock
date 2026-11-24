@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FakeClock, FakeProcessTable, type ProcessEntry } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
@@ -13,7 +13,7 @@ import {
 const sources = `${avdDirectory}/sources`;
 
 /** why: the quick seed `seed_two` is made and copied by a plain provision, as a first lease makes it; the settle's own folder is `seed_three`. */
-async function quickSeedWorld() {
+async function quickSeedWorld(platform?: NodeJS.Platform) {
   const filesystem = await androidFilesystem();
   const host = new EmulatorHost(filesystem);
   const runner = new RecordingRunner(host.runner());
@@ -22,6 +22,7 @@ async function quickSeedWorld() {
   const driver = await createDriver(filesystem, runner, {
     clock,
     ids: ["one", "two", "three", "four"],
+    ...(platform === undefined ? {} : { platform }),
     processTable: table,
   });
   await driver.provision(
@@ -266,6 +267,37 @@ describe("AndroidDriver settleSeed", () => {
         world.host.pathAnswering("emulator-5586"),
         `${scenario.name}: nothing runs`,
       ).toBeUndefined();
+    }
+  });
+
+  it("reads the process table every 2 s, and every 5 s on Windows where each read starts a PowerShell", async () => {
+    for (const [platform, pollMs] of [
+      ["darwin", 2_000],
+      ["win32", 5_000],
+    ] as const) {
+      const world = await quickSeedWorld(platform);
+      const readAt: number[] = [];
+      const list = world.table.list.bind(world.table);
+      vi.spyOn(world.table, "list").mockImplementation(() => {
+        readAt.push(world.clock.now());
+        return list();
+      });
+      const settle = startSettle(world, "seed_two");
+      const state = promiseState(settle);
+      for (let step = 0; step < 400 && state.state === "pending"; step += 1) {
+        const rootPid = world.host.pidAnswering("emulator-5586");
+        if (rootPid !== undefined)
+          world.table.set(emulatorTree(rootPid, world.clock.now(), 60_000));
+        await letGo();
+        world.clock.advance(1_000);
+      }
+      await settle;
+
+      const gaps = readAt.slice(1).map((at, index) => at - (readAt[index] ?? 0));
+      expect(gaps.length, `${platform}: the table was read many times`).toBeGreaterThan(10);
+      expect(new Set(gaps), `${platform}: every read follows the last by ${pollMs} ms`).toEqual(
+        new Set([pollMs]),
+      );
     }
   });
 

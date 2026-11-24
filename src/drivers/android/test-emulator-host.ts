@@ -8,7 +8,14 @@ import {
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
 import { basename, dirname, join } from "node:path";
-import { processResult, pixelDevices, avdDirectory, binaries, ok } from "./test-sdk-fixtures.js";
+import {
+  ANDROID_SDK_ROOT,
+  processResult,
+  pixelDevices,
+  avdDirectory,
+  binaries,
+  ok,
+} from "./test-sdk-fixtures.js";
 import { emulatorHelpListing, writeSeedFiles } from "./test-seed-harness.js";
 
 /**
@@ -102,6 +109,21 @@ export class EmulatorHost {
     return result;
   }
 
+  /** why: `sdkmanager --uninstall <package>` deletes the image's folder, as the real tool does; the driver runs it as a bounded spawn. */
+  #uninstall(packageName: string): ProcessHandle {
+    const exited = this.filesystem
+      .rm(join(ANDROID_SDK_ROOT, packageName.split(";").join("/")))
+      .then(() => ({ code: 0, stderr: "", stdout: "" }));
+    return {
+      kill: () => undefined,
+      pid: this.#nextPid++,
+      stderr: emptyLines(),
+      stdout: emptyLines(),
+      unref: () => undefined,
+      wait: () => exited,
+    };
+  }
+
   async #avdmanager(args: readonly string[], home: string): Promise<ProcessResult | undefined> {
     if (args[0] === "list") return ok(pixelDevices);
     const avdName = args[args.indexOf("-n") + 1] ?? "";
@@ -151,6 +173,9 @@ export class EmulatorHost {
     env: NodeJS.ProcessEnv | undefined,
   ): ProcessHandle {
     if (command === binaries.adb && args.includes("logcat")) return this.#logcat();
+    if (command === binaries.sdkmanager && args[0] === "--uninstall") {
+      return this.#uninstall(args[1] ?? "");
+    }
     if (command !== binaries.emulator || args[0] !== "-avd") {
       throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
     }

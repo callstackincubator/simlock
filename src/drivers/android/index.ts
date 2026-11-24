@@ -138,6 +138,8 @@ export interface AndroidDriverOptions {
   readonly processSupervisor: ProcessSupervisor;
   /** why: a settle judges its copy idle from the copy's own process tree (ADR 0090); with none given the driver offers no `settleSeed`. */
   readonly processTable?: ProcessTable | undefined;
+  /** why: Windows reads the process table through a PowerShell child, so a settle polls it less often there; the host's own unless a test says otherwise. */
+  readonly platform?: NodeJS.Platform | undefined;
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
   // why: both are optional so a host that leaves either out gets a driver without screen streams
@@ -326,6 +328,7 @@ export class AndroidDriver implements Driver {
       idGenerator: idGeneratorFor(options),
       logger: options.logger,
       ownership: this.#ownership,
+      platform: options.platform ?? process.platform,
       processRunner: options.processRunner,
       systemImages: this.#systemImages,
     });

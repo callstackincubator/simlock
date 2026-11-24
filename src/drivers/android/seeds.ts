@@ -56,6 +56,8 @@ const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 /** why: ADR 0090 §3: the cores a copy's whole tree may use over two minutes and still count as quiet, and how often the tree is read. */
 const ANDROID_IDLE_CORES = 0.35;
 const IDLE_POLL_MS = 2_000;
+/** why: on Windows each read of the process table starts a PowerShell child, so it is read less often. */
+const IDLE_POLL_WINDOWS_MS = 5_000;
 /** why: a device found after a restart has no process handle, so its exit is seen by listing adb's devices. */
 const SAVE_EXIT_POLL_INTERVAL_MS = 1_000;
 // why: adb shell sync and reboot -p have no limit of their own; a wedged adbd would hold the kind's lock.
@@ -106,6 +108,7 @@ export interface SeedsOptions {
   readonly idGenerator: IdGenerator;
   readonly logger?: Logger | undefined;
   readonly ownership: Ownership;
+  readonly platform?: NodeJS.Platform | undefined;
   readonly processRunner: ProcessRunner;
   readonly systemImages: SystemImages;
 }
@@ -128,6 +131,7 @@ export class Seeds {
   readonly #idGenerator: IdGenerator;
   readonly #logger: Logger | undefined;
   readonly #ownership: Ownership;
+  readonly #idlePollMs: number;
   readonly #processRunner: ProcessRunner;
   readonly #sources: AndroidSourceTable;
   readonly #turns = new SeedTurns();
@@ -157,6 +161,7 @@ export class Seeds {
     this.#idGenerator = options.idGenerator;
     this.#logger = options.logger;
     this.#ownership = options.ownership;
+    this.#idlePollMs = options.platform === "win32" ? IDLE_POLL_WINDOWS_MS : IDLE_POLL_MS;
     this.#processRunner = options.processRunner;
     this.#sources = new AndroidSourceTable(options.database);
     this.#systemImages = options.systemImages;
@@ -487,11 +492,13 @@ export class Seeds {
       readonly sizeBytes: number | undefined;
     };
     try {
-      await this.#copyAvd(
-        quick.folder,
-        folder,
-        `copying Android seed ${sourceId} to ${settleId} failed`,
-        "copy an Android seed for a settle",
+      await this.#turns.copy(quick.sourceId, () =>
+        this.#copyAvd(
+          quick.folder,
+          folder,
+          `copying Android seed ${sourceId} to ${settleId} failed`,
+          "copy an Android seed for a settle",
+        ),
       );
       const settled = await this.#settleCopy(processTable, settleId, quick, folder, options.signal);
       const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
@@ -504,6 +511,8 @@ export class Seeds {
       const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
       await this.#deviceTable.withLock(`seed:${quick.specKey}`, async () => {
         this.#sources.promoteSettled(settleId, quick.sourceId, configHash, sizeBytes);
+        // why: the retired quick seed's row is `making` until its folder is gone; named here, no sweep of this process deletes it first and waits for its copies.
+        this.#making.add(quick.sourceId);
       });
       swapped = { ...settled, sizeBytes };
     } catch (error: unknown) {
@@ -512,7 +521,11 @@ export class Seeds {
     } finally {
       this.#making.delete(settleId);
     }
-    await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
+    try {
+      await this.#removeSource(quick.sourceId, quick.folder, quick.avdName);
+    } finally {
+      this.#making.delete(quick.sourceId);
+    }
     return {
       reason: swapped.reason,
       settledAfterMs: swapped.settledAfterMs,
@@ -654,7 +667,7 @@ export class Seeds {
       if (processes !== undefined) watch.observe(processes, this.#clock.now());
       const state = watch.state(this.#clock.now());
       if (state === "cap" || (state === "idle" && (await hasDefaultNetwork()))) return state;
-      await this.#adbTools.delay(IDLE_POLL_MS);
+      await this.#adbTools.delay(this.#idlePollMs);
     }
   }
 

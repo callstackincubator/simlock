@@ -27,7 +27,7 @@ Seeds and copies (ADR 0061):
 - Every device is a copy of its kind's seed, or of the ready baseline source a lease names (`options.source`). A stale baseline source is refused, never copied.
 - A seed is never leased or booted after its snapshot save; a copy of it boots (ADR 0090 §3).
 - A seed is judged stale on every provision (its system image, the emulator's version, its launch settings), then destroyed and made again. `listSources` reports the reason, which clears when things match.
-- A settle (ADR 0090) boots a copy of the quick seed until its process tree is idle and it has a default network (#1631), saves `simlock_boot` again and swaps it in as the seed. A seed's copies and its deletion take turns (`SeedTurns`).
+- A settle (ADR 0090) swaps an idle copy of the quick seed in as the kind's seed. A seed's copies, a settle's own copy of it and its deletion take turns (`SeedTurns`).
 - One make per kind at a time. `Seeds` takes that lock (`seed:<spec key>`) and the device states from `DeviceTable`, never a lock of its own.
 - A `making` row of an earlier process, or a make's older than any make takes, is swept at the next listing or make of its kind; its emulator is stopped by its path first.
 - `removeComponent` destroys the image's seeds after the uninstall; one that fails stays, listed stale.

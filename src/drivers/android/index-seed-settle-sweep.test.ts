@@ -34,6 +34,12 @@ describe("AndroidDriver settle leftovers", () => {
     await reached;
     void settle(retiring);
     await stepSettle(retiring, 100);
+    const served = promiseState(retiring.driver.provision(retiring.spec));
+    await letGo();
+    expect(
+      served.state,
+      "a provision after the swap is served from the settled seed while the retired one's copy runs",
+    ).toBe("fulfilled");
     const afterRestart = await retiring.reopen();
     await expect(
       afterRestart.listSources(),

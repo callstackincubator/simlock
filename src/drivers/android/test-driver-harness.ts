@@ -150,6 +150,7 @@ export async function createDriver(
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly bootTimeoutMs?: number;
     /** why: a settle judges its copy idle from it; with none the driver offers no `settleSeed`. */
+    readonly platform?: NodeJS.Platform;
     readonly processTable?: ProcessTable;
     readonly scrcpyServerPath?: string;
     readonly tcpListener?: FakeTcpListenerFactory;
@@ -199,6 +200,7 @@ function onlyProvided(options: {
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly bootTimeoutMs?: number;
+  readonly platform?: NodeJS.Platform;
   readonly processTable?: ProcessTable;
   readonly scrcpyServerPath?: string;
   readonly tcpListener?: FakeTcpListenerFactory;
@@ -213,6 +215,7 @@ function onlyProvided(options: {
       acceptAndroidLicenses: options.acceptAndroidLicenses,
       deviceProfileSources: options.deviceProfileSources,
       onDiagnostic: options.onDiagnostic,
+      platform: options.platform,
       processTable: options.processTable,
     }),
     config: omitUndefined({ emulator: options.emulator, bootTimeoutMs: options.bootTimeoutMs }),

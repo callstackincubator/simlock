@@ -11,6 +11,11 @@ import {
   type SeedWorld,
 } from "./test-seed-world.js";
 
+/** why: a removal's own steps take more ticks than one `letGo`, so a wait that is not held would still be running after one. */
+async function letGoLong(): Promise<void> {
+  for (let round = 0; round < 10; round += 1) await letGo();
+}
+
 describe("AndroidDriver seed turns", () => {
   it("makes a seed's deletion wait for the copies in flight, and a copy asked for after it began copy the kind's current seed", async () => {
     const stale = async (w: SeedWorld) => {
@@ -70,6 +75,59 @@ describe("AndroidDriver seed turns", () => {
         `${name}: the seed's folder is gone once its copies ended`,
       ).resolves.toBe(false);
     }
+  });
+
+  it("makes the removal of a seed's image wait for the copy in flight, and a settle's own copy of a seed make its deletion wait", async () => {
+    const removing = await world();
+    const copying = removing.filesystem.hold(`${sources}/seed_two/`);
+    const copy = removing.driver.provision(removing.spec);
+    await copying;
+    const target = (await removing.driver.listComponents()).find(
+      (component) => component.variant === "google_apis/arm64-v8a",
+    );
+    const removal = removing.driver.removeComponent(target?.receipt ?? {}, {
+      signal: new AbortController().signal,
+    });
+    const removed = promiseState(removal);
+    await letGoLong();
+    expect(removed.state, "removeComponent waits for the copy in flight").toBe("pending");
+    await expect(
+      removing.filesystem.exists(`${sources}/seed_two/simlock.avd`),
+      "the seed's folder stays while a copy runs from it",
+    ).resolves.toBe(true);
+    removing.filesystem.open();
+    const device = await copy;
+    await removal;
+    await expect(
+      removing.filesystem.exists(`${avdDirectory}/${device.deviceId}/simlock.avd/config.ini`),
+      "the copy in flight completed",
+    ).resolves.toBe(true);
+    await expect(removing.filesystem.exists(`${sources}/seed_two`)).resolves.toBe(false);
+
+    const settling = await world();
+    const reached = settling.filesystem.hold(`${sources}/seed_two/`);
+    const settle = settling.driver.settleSeed?.("seed_two", {
+      signal: new AbortController().signal,
+    });
+    if (settle === undefined) throw new Error("the driver offers no settleSeed");
+    const ended = settle.catch((error: unknown) => error);
+    await reached;
+    const deleting = settling.driver.destroySource("seed_two");
+    const deleted = promiseState(deleting);
+    await letGoLong();
+    expect(deleted.state, "a deletion waits for the settle's copy of the seed").toBe("pending");
+    await expect(
+      settling.filesystem.exists(`${sources}/seed_two/simlock.avd`),
+      "the seed's folder stays while the settle copies it",
+    ).resolves.toBe(true);
+    settling.filesystem.open();
+    await deleting;
+    await expect(
+      settling.filesystem.exists(`${sources}/seed_three/simlock.avd/config.ini`),
+      "the settle's copy is whole",
+    ).resolves.toBe(true);
+    await stepSettle(settling, 100);
+    await ended;
   });
 
   it("runs two deletions of one seed at once one after the other", async () => {
