@@ -83,7 +83,10 @@ export class EmulatorHost {
   runner(): ProcessRunner {
     return {
       run: (command, args, options) => this.#run(command, args, options?.env),
-      spawn: (command, args, options) => this.#spawn(command, args, options?.env),
+      spawn: (command, args, options) =>
+        command === binaries.sdkmanager && args[0] === "--uninstall"
+          ? this.#uninstall(args[1] ?? "")
+          : this.#spawn(command, args, options?.env),
       spawnStreaming: (command, args) => {
         throw new Error(`Unexpected streaming invocation: ${command} ${args.join(" ")}`);
       },
@@ -173,9 +176,6 @@ export class EmulatorHost {
     env: NodeJS.ProcessEnv | undefined,
   ): ProcessHandle {
     if (command === binaries.adb && args.includes("logcat")) return this.#logcat();
-    if (command === binaries.sdkmanager && args[0] === "--uninstall") {
-      return this.#uninstall(args[1] ?? "");
-    }
     if (command !== binaries.emulator || args[0] !== "-avd") {
       throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
     }
