@@ -11,6 +11,7 @@ export type DeviceProfile =
       readonly names: readonly string[];
       readonly avdmanagerId: string;
       readonly custom: boolean;
+      /** why: From the entry's `Tag :` line (ADR 0015 §3); `undefined` for a tag the table does not know. */
       readonly deviceClass: DeviceClass | undefined;
       readonly tag?: string | undefined;
       readonly apiRange?: ApiRange | undefined;
@@ -67,7 +68,12 @@ export interface DeviceProfileSource {
 
 export interface DeviceProfileCatalog {
   readonly models: readonly string[];
+  /** why: Only models with another name appear, keyed by their spelling in `models`. */
   readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+  /**
+   * why: The listed models whose name resolves to a `properties` profile or a `custom` `builtin`
+   * one: a custom profile from this machine rather than one the SDK ships. In `models` order.
+   */
   readonly customModels: readonly string[];
   readonly modelClasses: Readonly<Record<string, DeviceClass>>;
 }
@@ -87,6 +93,11 @@ export class DeviceProfileRegistry {
     this.#sources = sources;
   }
 
+  /**
+   * why: `models` dedupes by name, case-insensitively, the earliest profile winning a collision. A
+   * profile whose name an earlier profile only answers to as another name stays listed, as it
+   * always has. A profile's other names are listed only where they resolve to that profile.
+   */
   async catalog(): Promise<DeviceProfileCatalog> {
     return (await this.catalogWithProfiles()).catalog;
   }
@@ -403,10 +414,15 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
 export interface AvdmanagerDeviceProfile {
   readonly id: string;
   readonly name: string;
+  /** why: The entry's `OEM :` line, or undefined without one. `User` marks a devices.xml profile. */
   readonly oem: string | undefined;
   readonly tag: string | undefined;
 }
 
+/**
+ * why: ADR 0015 §3: which avdmanager tag is which device class. No tag is a phone; a tag this table
+ * does not know has no class.
+ */
 function classOfTag(tag: string | undefined): DeviceClass | undefined {
   if (tag === undefined) return "phone";
   if (tag === "android-tv") return "tv";

@@ -508,6 +508,7 @@ describe("DeviceProfileRegistry", () => {
     const registry = new DeviceProfileRegistry([sdkSource(runner), user]);
 
     await expect(registry.resolve("pixel_8")).resolves.toMatchObject({ name: "Pixel 8" });
+    // why: A read of the malformed devices.xml would have reported it.
     expect(diagnostics).toEqual([]);
   });
 

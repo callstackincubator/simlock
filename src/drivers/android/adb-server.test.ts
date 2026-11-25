@@ -154,6 +154,7 @@ describe("AdbServerSupervisor.start", () => {
       record: { pid: recordedPid, port, startedAt: 1 },
       spawnStartsListening: true,
     });
+    // why: Dies only on the second signal, which is the case the escalation exists for.
     harness.supervisor.onSignal = (pid, signal) => {
       if (signal === "SIGKILL") harness.supervisor.markDead(pid);
     };

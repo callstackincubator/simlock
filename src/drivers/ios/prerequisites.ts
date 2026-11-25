@@ -21,6 +21,10 @@ const XCODE_FIRST_LAUNCH: MissingPrerequisite = {
   remedy: "Run `sudo xcodebuild -runFirstLaunch`.",
 };
 
+/**
+ * why: What the iOS driver needs and Simlock never installs: a selected Xcode whose license is
+ * accepted and whose first-launch setup is done. Runs `xcodebuild` and nothing else.
+ */
 export function iosPrerequisites(options: {
   readonly processRunner: ProcessRunner;
 }): PrerequisiteCheck {

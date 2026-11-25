@@ -116,6 +116,10 @@ async function sdkPathsAt(
   return { adb, emulator, root, ...tools };
 }
 
+/**
+ * why: The newest `cmdline-tools/<version>/bin` holding both `avdmanager` and `sdkmanager`, or the
+ * obsolete `tools/bin` when none does.
+ */
 export async function sdkToolBin(
   root: string,
   filesystem: Filesystem,

@@ -11,9 +11,14 @@ const OUTPUT_DRAIN_MS = 1_000;
 export interface InstallerProcessOptions {
   readonly onProgress: (progress: ComponentInstallProgress) => void;
   readonly signal: AbortSignal;
+  /** why: Written to stdin, then closed: `sdkmanager --licenses`'s `y` answers. */
   readonly input?: string;
 }
 
+/**
+ * why: How an installer process ended. `stopped` means `signal` fired and the process was ended for
+ * it; `result` is then whatever the killed process left.
+ */
 export interface InstallerProcessOutcome {
   readonly result: ProcessResult;
   readonly stopped: boolean;
