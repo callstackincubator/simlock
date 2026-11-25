@@ -517,7 +517,12 @@ describe("operation input/output round trips", () => {
       },
       { count: 1, mode: "full", model: "Pixel 9", platform: "android" },
     ];
-    const warmPool = { targets, maxConcurrentBoots: 3, baselineLearnAfter: 5 };
+    const warmPool = {
+      targets,
+      maxConcurrentBoots: 3,
+      baselineLearnAfter: 5,
+      refillDelayMs: 1500.5,
+    };
     const output = OPERATIONS["config.get"].output;
     const base = {
       capabilities: {},
@@ -592,6 +597,8 @@ describe("operation input/output round trips", () => {
       output.parse(config({ ...warmPool, targets: [{ ...targets[0], mode: "lean" }] })),
     ).toThrow();
     expect(() => output.parse(config({ maxConcurrentBoots: 1 }))).toThrow();
+    const { refillDelayMs: _omitted, ...withoutDelay } = warmPool;
+    expect(() => output.parse(config(withoutDelay))).toThrow();
     expect(() => output.parse(config({ targets: [] }))).toThrow();
   });
 
