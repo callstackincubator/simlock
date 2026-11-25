@@ -122,7 +122,7 @@ export type { RelayClientMethods, SimlockAdminClient, SimlockClient } from "./cl
 
 export interface ConnectOptions {
   /** why: Pre-connected transport (a scripted `IpcConnection` in tests, or the real result of an
-   * `IpcConnector`). Exactly one of `connection`/`connector` must be given. */
+   * `IpcConnector`). It wins when set; otherwise `connector` and `endpoint` are both needed. */
   readonly connection?: IpcConnection;
   readonly connector?: IpcConnector;
   readonly endpoint?: string;
