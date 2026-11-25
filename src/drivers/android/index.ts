@@ -44,6 +44,7 @@ import {
   type Logger,
   type ProcessRunner,
   type ProcessSupervisor,
+  type ProcessTable,
   type SqliteDatabase,
   type TcpListenerFactory,
   type TcpProbe,
@@ -135,6 +136,10 @@ export interface AndroidDriverOptions {
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly processRunner: ProcessRunner;
   readonly processSupervisor: ProcessSupervisor;
+  /** why: a settle judges its copy idle from the copy's own process tree (ADR 0090); with none given the driver offers no `settleSeed`. */
+  readonly processTable?: ProcessTable | undefined;
+  /** why: Windows reads the process table through a PowerShell child, so a settle polls it less often there; the host's own unless a test says otherwise. */
+  readonly platform?: NodeJS.Platform | undefined;
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
   // why: both are optional so a host that leaves either out gets a driver without screen streams
@@ -194,6 +199,7 @@ export class AndroidDriver implements Driver {
   readonly #seeds: Seeds;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
+  settleSeed?: NonNullable<Driver["settleSeed"]>;
   readonly input: DeviceInputFactory | undefined;
   readonly deviceTcp: AndroidDeviceTcp | undefined;
 
@@ -285,6 +291,7 @@ export class AndroidDriver implements Driver {
     const deviceTarget = this.#deviceTargetFor(options, sdk.adb, adbServerPort);
     const targetFor = this.#screenTargetFor(options, deviceTarget);
     this.screenCapture = this.#screenCaptureFor(options, targetFor);
+    this.#offerSettle(options.processTable);
     this.input = this.#inputFor(options, targetFor);
     this.deviceTcp = this.#deviceTcpFor(options, deviceTarget);
     this.#consolePorts = new ConsolePorts({
@@ -321,9 +328,17 @@ export class AndroidDriver implements Driver {
       idGenerator: idGeneratorFor(options),
       logger: options.logger,
       ownership: this.#ownership,
+      platform: options.platform ?? process.platform,
       processRunner: options.processRunner,
       systemImages: this.#systemImages,
     });
+  }
+
+  /** why: a settle judges its copy from the process table; a driver given none offers no `settleSeed`, so core never asks it. */
+  #offerSettle(processTable: ProcessTable | undefined): void {
+    if (processTable === undefined) return;
+    this.settleSeed = (sourceId, settleOptions) =>
+      this.#seeds.settleSeed(processTable, sourceId, settleOptions);
   }
 
   #physicalFor(options: AndroidDriverOptions, sdk: AndroidSdkPaths): AndroidPhysicalHandler {
@@ -591,6 +606,10 @@ export class AndroidDriver implements Driver {
 
   async destroySource(sourceId: string): Promise<void> {
     return this.#seeds.destroySource(sourceId);
+  }
+
+  async ensureSeed(spec: VirtualSpec): ReturnType<NonNullable<Driver["ensureSeed"]>> {
+    return this.#seeds.ensureSeed(spec);
   }
 
   async provision(
