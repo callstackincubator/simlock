@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { NodeProcessTable, ScriptedProcessRunner, type ProcessResult } from "./index.js";
@@ -50,17 +52,29 @@ describe("NodeProcessTable", () => {
     expect(runner.calls[0]?.options.timeoutMs).toBe(5_000);
   });
 
-  it("reads a PowerShell answer in 100-nanosecond units, with a process that has no command line", async () => {
-    const { table: processes, runner } = table(
-      "win32",
-      ok("4 0 25000000 System\r\n812 4 10000000 C:\\emu\\emulator.exe -avd x\r\n9 4 5 \r\n"),
+  it("reads a PowerShell answer captured on a real Windows host in 100-nanosecond units, with a process that has no command line", async () => {
+    // why: captured with the query NodeProcessTable runs, on Windows 11 (10.0.22631) via `ssh DesktopWindows`; the first 20 lines of 104.
+    const fixture = readFileSync(
+      new URL("./fixtures/win32-process-table.txt", import.meta.url),
+      "utf8",
     );
+    const { table: processes, runner } = table("win32", ok(fixture));
 
-    expect(await processes.list()).toEqual([
-      { command: "System", cpuSeconds: 2.5, pid: 4, ppid: 0 },
-      { command: "C:\\emu\\emulator.exe -avd x", cpuSeconds: 1, pid: 812, ppid: 4 },
-      { command: "", cpuSeconds: 5e-7, pid: 9, ppid: 4 },
+    const entries = await processes.list();
+
+    expect(entries).toHaveLength(20);
+    expect(entries.slice(0, 3)).toEqual([
+      { command: "", cpuSeconds: 1996.171875, pid: 0, ppid: 0 },
+      { command: "", cpuSeconds: 4.6875, pid: 4, ppid: 0 },
+      { command: "", cpuSeconds: 0, pid: 172, ppid: 4 },
     ]);
+    expect(entries.find((entry) => entry.pid === 1508)).toEqual({
+      command: "C:\\Windows\\system32\\svchost.exe -k DcomLaunch -p",
+      cpuSeconds: 0.015625,
+      pid: 1508,
+      ppid: 1276,
+    });
+    expect(entries.find((entry) => entry.pid === 1536)?.command).toBe('"fontdrvhost.exe"');
     expect(runner.calls[0]?.options.timeoutMs).toBe(15_000);
   });
 
