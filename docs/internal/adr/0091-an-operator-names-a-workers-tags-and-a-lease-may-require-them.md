@@ -53,8 +53,13 @@ every reader of capabilities serves tags without a change: the gateway's
 `has-capabilities` stage and its `CAPABILITY_MISSING` row, the worker's own
 check on a direct request, `simlock status` and the console. `requires`
 matches tags and module names alike. Users meet one word in `requires` and
-`CAPABILITY_MISSING`, as ADR 0030 §5 wants. `tags` is only the name of the
-key the operator writes.
+`CAPABILITY_MISSING`, the one word ADR 0030 §5 gives them. `tags` is only the
+name of the key the operator writes.
+
+This narrows ADR 0026 §1, which defines a capability as "an optional module a
+worker serves, by name": a capability is now also a tag the operator names.
+It narrows ADR 0030 §5, where users "turn a capability on" under
+`capabilities`: a tag is never turned on or off, it is listed under `tags`.
 
 A lease that requires nothing may still land on a tagged worker. A tag
 narrows where a lease that asks for it can go. It never keeps a worker for
@@ -74,8 +79,7 @@ with the stored request, so a replay after a restart is compared too.
 
 `simlock lease --requires <name,...>`, the MCP `lease_simulator` tool's
 `requires` and the `requires` field of `POST /v1/lease-requests` send the
-list as the contract takes it. This narrows ADR 0026
-§1, whose request carried no CLI flag, no MCP parameter and no HTTP field.
+list as the contract takes it.
 
 ## Consequences
 
