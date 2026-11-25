@@ -13,12 +13,12 @@ export { lineOf } from "../leasing/index.js";
 export type { LeaseRequestOptions } from "../leasing/index.js";
 export { RequestCancelledError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 
-/** `worker` is optional because this queue never grants; the coordinator stamps it later. */
+/** why: `worker` is optional because this queue never grants; the coordinator stamps it later. */
 export type FleetLeaseRecord = LeaseRecord & {
   readonly worker?: { readonly id: string; readonly label?: string };
 };
 
-/** `device` and `timing` are `unknown`: the gateway only relays them. */
+/** why: `device` and `timing` are `unknown`: the gateway only relays them. */
 export interface FleetLeaseGrant {
   readonly device: unknown;
   readonly environment: Readonly<Record<string, string>>;
@@ -37,12 +37,11 @@ export interface FleetWaiter {
 export interface FleetQueueOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
-  /** Reports the timeout only; it does not wake the dispatch loop for the waiters behind. */
   readonly onTimeout?: (waiter: FleetWaiter) => void;
   readonly onDepthChange?: ((depth: number, line: "virtual" | "physical") => void) | undefined;
 }
 
-/** `WaitQueue` has no fleet awareness; every waiter reaching here was minted by this queue, so the cast holds. */
+/** why: `WaitQueue` has no fleet awareness; every waiter reaching here was minted by this queue, so the cast holds. */
 function asFleet<Value>(value: Value): Value extends undefined ? undefined : FleetWaiter {
   return value as never;
 }

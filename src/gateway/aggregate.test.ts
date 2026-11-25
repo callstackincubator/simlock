@@ -44,8 +44,6 @@ describe("aggregateStatus", () => {
       queueDepth: 0,
     });
 
-    // The contract is the arbiter: a gateway's answer parses as `status.get`'s output or it is
-    // not the same shape.
     expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
     expect(status.daemon.mode).toBe("gateway");
     expect(status.workers).toEqual([]);
@@ -85,7 +83,7 @@ describe("aggregateStatus", () => {
     expect(status.workers?.map((worker) => worker.warmPool)).toEqual([block, block, undefined]);
   });
 
-  // Round 6 review: `aggregateStatus`'s whole `leaseIndex` branch was deletable with a green
+  // why: Round 6 review: `aggregateStatus`'s whole `leaseIndex` branch was deletable with a green
   // suite -- replacing it with the pre-#118 `{...lease, workerId}` passthrough broke nothing,
   // because every case here omitted the optional `leaseIndex` and so exercised only the
   // fallback. `lease.list`'s equivalent projection was covered; `status.get`'s was not.
@@ -116,11 +114,10 @@ describe("aggregateStatus", () => {
         workerId: "wrk_a",
       }),
     ]);
-    // Still the same shape a worker returns (ADR §20) with the projection applied.
     expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
   });
 
-  // The other half of the same contract: a lease this gateway never issued is a worker's own
+  // why: The other half of the same contract: a lease this gateway never issued is a worker's own
   // local one, and renaming it would invent a gateway id that `lease.renew` would then reject.
   it("leaves a worker's own local lease's id alone", () => {
     const leaseIndex = new FleetLeaseIndex("gw:instance-1:");
@@ -150,7 +147,7 @@ describe("aggregateStatus", () => {
   });
 
   it("leaves a disconnected worker's capacity out of the sum", () => {
-    // Free slots on a machine nobody can reach are not capacity: counting them would tell an
+    // why: Free slots on a machine nobody can reach are not capacity: counting them would tell an
     // operator the fleet can take work it cannot.
     const status = aggregateStatus(
       [
@@ -189,7 +186,6 @@ describe("aggregateStatus", () => {
       [
         view({ capacity: { ...capacity(1, 2), ramBudget: ramBudget(8, 3) }, id: "wrk_a" }),
         view({ capacity: { ...capacity(1, 2), ramBudget: ramBudget(4, 5) }, id: "wrk_b" }),
-        // A `fixed` worker reports no budget and adds nothing to the sum.
         view({ capacity: capacity(1, 2), id: "wrk_c" }),
         view({
           capacity: { ...capacity(1, 2), ramBudget: ramBudget(64, 1) },
@@ -200,7 +196,7 @@ describe("aggregateStatus", () => {
       { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
-    // 8 GiB used of a 12 GiB fleet limit, yet over: wrk_b is past its own 4 GiB.
+    // why: 8 GiB used of a 12 GiB fleet limit, yet over: wrk_b is past its own 4 GiB.
     expect(status.capacity?.ramBudget).toEqual({
       limitBytes: 12 * 1024 ** 3,
       overLimit: true,
@@ -266,7 +262,7 @@ describe("aggregateStatus", () => {
   });
 
   it("keeps a disconnected worker's leases in the aggregate", () => {
-    // The opposite call from capacity, and deliberately so: a lease on a machine that dropped
+    // why: The opposite call from capacity, and deliberately so: a lease on a machine that dropped
     // off is still holding a device, which is exactly what an operator needs to see.
     const status = aggregateStatus(
       [

@@ -16,8 +16,6 @@ import { GatewayService } from "./service.js";
 import { catalogFixture, protocolMismatchError, ScriptedWorkerClient } from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
 
-/** A real `GatewayService` with scripted workers behind its uplinks: the relay reads the same
- * views and drives the same links a gateway daemon does. */
 function fleet() {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -35,12 +33,11 @@ function fleet() {
     eventBus,
     leaseMaxTtlMs: 4 * 60 * 60_000,
     principal: "gw:instance-1",
-    // Far beyond every clock advance below: a periodic refresh must not be what makes a test pass.
+    // why: Far beyond every clock advance below: a periodic refresh must not be what makes a test pass.
     refreshIntervalMs: 24 * 60 * 60_000,
     retentionMs: 24 * 60 * 60_000,
     uplinks: transport,
   });
-  /** Connects a scripted worker's uplink, without waiting for anything. */
   const dial = async (workerId: string, client: ScriptedWorkerClient, label?: string) => {
     pending.push(client);
     return transport.connect({
@@ -54,7 +51,6 @@ function fleet() {
     clock,
     service,
     dial,
-    /** Connects a scripted worker and waits until its view carries its config. */
     join: async (workerId: string, client: ScriptedWorkerClient, label?: string) => {
       const workerEnd = await dial(workerId, client, label);
       await vi.waitFor(() =>
@@ -78,7 +74,6 @@ function fleet() {
   };
 }
 
-/** A `component.install` answer a test settles by hand. */
 function deferredInstall() {
   let resolve!: (output: ComponentInstallOutput) => void;
   let reject!: (error: Error) => void;
@@ -102,7 +97,6 @@ function installed(version = "35"): ComponentInstallOutput {
   return { component: version, outcome: "installed", platform: "android", version };
 }
 
-/** The runtimes a worker's view lists for Android; none for a worker with no catalog read yet. */
 function androidRuntimes(view: WorkerView | undefined) {
   return view?.catalog?.find((entry) => entry.platform === "android")?.runtimes;
 }
@@ -202,7 +196,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
 
     const { results } = await harness.install("all");
 
-    // In ascending worker id, skipped or not.
     expect(results).toEqual([
       {
         error: { code: "WORKER_UNREACHABLE", message: "Worker wrk_a is not connected" },
@@ -235,7 +228,7 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
     unread.installComponentHandler = async () => {
       throw new Error("a worker whose config has not been read was asked");
     };
-    // Neither ever carries a config, so neither can go through `join`'s wait.
+    // why: Neither ever carries a config, so neither can go through `join`'s wait.
     await joinWithoutConfig(harness, "wrk_b", old, "incompatible");
     await joinWithoutConfig(harness, "wrk_c", unread, "connected");
 
@@ -330,7 +323,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
 
     const relay = harness.install("all");
     await vi.waitFor(() => expect(installCalls(dropping)).toHaveLength(1));
-    // What the gateway's own client does to every call in flight when the uplink closes.
     await droppingEnd.close();
     dropped.reject(connectionLost());
 
@@ -347,7 +339,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
       },
     ]);
 
-    // The worker finished its install on its own; once it reconnects, the catalog says so.
     const back = new ScriptedWorkerClient();
     back.catalog = catalogFixture([{ models: ["Pixel 9"], platform: "android", runtimes: ["35"] }]);
     await harness.dial("wrk_b", back);
@@ -392,7 +383,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
         workerId: "wrk_a",
       },
     ]);
-    // Heard before the backstop, dropped after it.
     expect(progress).toEqual([{ stage: "waiting", workerId: "wrk_a" }]);
     await harness.service.stop();
   });
@@ -419,7 +409,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
       expect(installCalls(quick)).toHaveLength(1);
       expect(installCalls(patient)).toHaveLength(1);
     });
-    // Past the quick worker's backstop, short of the patient one's.
     harness.clock.advance(1_000 + INSTALL_BACKSTOP_MARGIN_MS);
     quickAnswer.progress({ stage: "waiting" });
     patientAnswer.progress({ stage: "waiting" });
@@ -528,7 +517,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
     release();
 
     await vi.waitFor(() => expect(waited).toBe(true));
-    // Released without a refresh: nothing more is read over a closed link.
     expect(worker.calls.filter((call) => call === "catalog.get")).toHaveLength(1);
     await harness.service.stop();
   });
@@ -593,7 +581,7 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
       worker.catalog = catalogFixture([
         { models: ["Pixel 9"], platform: "android", runtimes: ["34", "35"] },
       ]);
-      // A device event starts a refresh without the catalog, which then sits on `status.get`;
+      // why: A device event starts a refresh without the catalog, which then sits on `status.get`;
       // a second one queues another refresh without the catalog behind it.
       release = worker.holdStatus();
       worker.pushEvent({ event: "device.state-changed" });
@@ -642,8 +630,6 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
   });
 });
 
-/** Joins a worker that never ends up with a config in its view, and waits for its connection
- * state instead. */
 async function joinWithoutConfig(
   harness: ReturnType<typeof fleet>,
   workerId: string,
@@ -654,7 +640,7 @@ async function joinWithoutConfig(
   await vi.waitFor(() => {
     const view = harness.service.workers.view(workerId);
     expect(view?.connection).toBe(connection);
-    // A connected worker's first refresh has asked for its config, which never answers.
+    // why: A connected worker's first refresh has asked for its config, which never answers.
     if (connection === "connected") expect(client.calls).toContain("config.get");
   });
 }

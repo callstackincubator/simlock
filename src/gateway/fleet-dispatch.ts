@@ -21,7 +21,7 @@ import type { WorkerView } from "./worker-registry.js";
 import { errorMessage } from "../shared/index.js";
 
 /**
- * ## The dispatch race (see the module's own tests for the one that catches a naive fix)
+ * why: The dispatch race (see the module's own tests for the one that catches a naive fix)
  *
  * Dispatch re-runs on every worker-view change (`FleetViews#onViewsChanged`) and once more per
  * settled attempt. (C1/C2, round 3 review: `#attempt` now calls `#dispatch()` itself, right after

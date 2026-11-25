@@ -1,5 +1,5 @@
 /**
- * The fleet, expressed in the same shapes one machine uses (ADR 0005 §20/§21): pure functions
+ * why: The fleet, expressed in the same shapes one machine uses (ADR 0005 §20/§21): pure functions
  * over worker views, with no clock, no I/O and no state of their own, so what a gateway
  * reports is a function of what it currently knows and nothing else.
  */
@@ -54,12 +54,11 @@ export interface AggregateStatusOptions {
   readonly queueDepth: number;
   readonly physicalQueueDepth?: number;
   readonly waiting?: StatusOutput["waiting"];
-  /** A caller's `status.get`-derived lease id must round-trip into `lease.renew` as `lease.list`'s does. */
   readonly leaseIndex?: Pick<FleetLeaseIndex, "project">;
 }
 
 /**
- * Capacity sums connected workers only: an unreachable machine's last-known free slots are not capacity.
+ * why: Capacity sums connected workers only: an unreachable machine's last-known free slots are not capacity.
  * Devices and leases include every view: a lease on a machine that dropped off still holds a device.
  */
 export function aggregateStatus(
@@ -99,7 +98,6 @@ export function aggregateStatus(
   };
 }
 
-/** The fleet list has the same bound as one worker's, so it keeps the oldest. */
 function fleetInstalls(views: readonly WorkerView[]): NonNullable<StatusOutput["installs"]> {
   return views
     .flatMap((view) => (view.installs ?? []).map((install) => ({ ...install, workerId: view.id })))
@@ -119,14 +117,12 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
     if (reported === undefined) continue;
     for (const platform of PLATFORMS) {
       capacity[platform] = {
-        // True only when *every* reporting worker is at its budget: while one has room, the fleet
-        // does. The first reporter sets it, so an empty fleet stays false.
         atRamBudget: counted
           ? capacity[platform].atRamBudget && reported[platform].atRamBudget
           : reported[platform].atRamBudget,
         limit: capacity[platform].limit + reported[platform].limit,
         maxRunning: capacity[platform].maxRunning + reported[platform].maxRunning,
-        // True if *any* worker is over its own limit: the fleet has a machine in trouble, and
+        // why: True if *any* worker is over its own limit: the fleet has a machine in trouble, and
         // summing booleans any other way would hide it behind the ones that are fine.
         overLimit: capacity[platform].overLimit || reported[platform].overLimit,
         reserved: capacity[platform].reserved + reported[platform].reserved,
@@ -151,7 +147,6 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
 
 type RamBudget = NonNullable<StatusCapacity["ramBudget"]>;
 
-/** A worker under `fixed` reports no budget and adds nothing; none reporting leaves it absent. */
 function sumRamBudget(
   sum: RamBudget | undefined,
   reported: RamBudget | undefined,
@@ -160,7 +155,6 @@ function sumRamBudget(
   if (sum === undefined) return { ...reported };
   return {
     limitBytes: sum.limitBytes + reported.limitBytes,
-    // Over when any worker is, for the same reason as `overLimit` above.
     overLimit: sum.overLimit || reported.overLimit,
     usedBytes: sum.usedBytes + reported.usedBytes,
   };
@@ -195,7 +189,7 @@ function sumRamBudget(
 export function aggregateCatalog(views: readonly WorkerView[], platform?: Platform): CatalogOutput {
   const byPlatform = indexCatalogs(views, platform);
   const platforms: PlatformCatalog[] = [];
-  // Iterated over `PLATFORMS` rather than the map's own keys so the answer is ordered the same
+  // why: Iterated over `PLATFORMS` rather than the map's own keys so the answer is ordered the same
   // way a worker's own `catalog.get` orders it, whichever worker happened to connect first.
   for (const candidate of PLATFORMS) {
     const bucket = byPlatform.get(candidate);
@@ -204,21 +198,16 @@ export function aggregateCatalog(views: readonly WorkerView[], platform?: Platfo
   return { platforms };
 }
 
-/** One platform's models and runtimes, each mapped to the workers that reported it, plus every
+/** why: One platform's models and runtimes, each mapped to the workers that reported it, plus every
  * `defaultRuntime` seen for it -- which is what makes disagreement visible to `renderPlatform`
  * rather than resolved silently at insertion. */
 interface CatalogBucket {
   readonly models: Map<string, string[]>;
   readonly runtimes: Map<string, string[]>;
-  /** Each model's runtimes, as the union of what each worker pairs it with itself. */
   readonly modelRuntimes: Map<string, Set<string>>;
-  /** Each model's other names, keyed by the name lower-cased so a spelling is listed once. */
   readonly modelAliases: Map<string, Map<string, string>>;
-  /** Each model's class, as the first worker in id order that classes it says. */
   readonly modelClasses: Map<string, DeviceClass>;
-  /** Every image reported, keyed by runtime, tag, and ABI; `undefined` until one worker has the field. */
   images: Map<string, CatalogImage> | undefined;
-  /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly slimCategories: Set<string>;
   /** why: ADR 0082 §4: the modes the workers that list `modes` serve; `anyServesBoth` is set by the first worker with no field, and then the merged entry has none. */
@@ -229,7 +218,7 @@ interface CatalogBucket {
   readonly defaults: Set<string | undefined>;
   /** why: absent ones count as `undefined`, so one worker without a default image tag is a disagreement (ADR 0078 §3). */
   readonly imageTagDefaults: Set<string | undefined>;
-  /** Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
+  /** why: Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
   readonly classDefaults: Partial<Record<DeviceClass, string>>[];
 }
 
@@ -238,7 +227,7 @@ function indexCatalogs(
   platform: Platform | undefined,
 ): Map<Platform, CatalogBucket> {
   const byPlatform = new Map<Platform, CatalogBucket>();
-  // In id order, so a model two workers class differently keeps the first worker's class.
+  // why: In id order, so a model two workers class differently keeps the first worker's class.
   const inIdOrder = [...views].sort((left, right) => left.id.localeCompare(right.id));
   for (const view of inIdOrder) {
     if (view.connection !== "connected") continue;
@@ -251,7 +240,6 @@ function indexCatalogs(
   return byPlatform;
 }
 
-/** Folds one worker's catalog entry for one platform into that platform's bucket. */
 function addCatalogEntry(
   byPlatform: Map<Platform, CatalogBucket>,
   entry: PlatformCatalog,
@@ -299,7 +287,7 @@ function emptyBucket(): CatalogBucket {
 }
 
 /**
- * A worker's class defaults with any naming a model the worker does not list itself dropped, so
+ * why: A worker's class defaults with any naming a model the worker does not list itself dropped, so
  * the fleet never shows a default nobody can lease; a dropped class counts as the worker having none.
  */
 function listedClassDefaults(entry: PlatformCatalog): Partial<Record<DeviceClass, string>> {
@@ -311,7 +299,6 @@ function listedClassDefaults(entry: PlatformCatalog): Partial<Record<DeviceClass
   return listed;
 }
 
-/** Folds one worker's other names for `model` into the fleet's, once per spelling ignoring case. */
 function addAliases(
   index: Map<string, Map<string, string>>,
   entry: PlatformCatalog,
@@ -321,14 +308,13 @@ function addAliases(
   const aliases = index.get(model) ?? new Map<string, string>();
   for (const alias of own ?? []) {
     const key = alias.toLocaleLowerCase();
-    // The model's own name is not another name for it.
     if (key !== model.toLocaleLowerCase() && !aliases.has(key)) aliases.set(key, alias);
   }
   if (aliases.size > 0) index.set(model, aliases);
 }
 
 /**
- * Folds one worker's model classes into the fleet's. A model already classed by an earlier
+ * why: Folds one worker's model classes into the fleet's. A model already classed by an earlier
  * worker keeps that class, so the caller feeds workers in id order; a class for a name the
  * worker does not list itself is dropped.
  */
@@ -338,14 +324,12 @@ function addModelClasses(index: Map<string, DeviceClass>, entry: PlatformCatalog
   }
 }
 
-/** Folds one worker's custom models into the fleet's; a name the worker does not list itself is dropped. */
 function addCustomModels(index: Set<string>, entry: PlatformCatalog): void {
   for (const model of entry.customModels ?? []) {
     if (entry.models.includes(model)) index.add(model);
   }
 }
 
-/** Folds one worker's images into the fleet's; one whose runtime the worker does not list is dropped. */
 function addImages(
   index: Map<string, CatalogImage> | undefined,
   entry: PlatformCatalog,
@@ -360,20 +344,15 @@ function addImages(
   return merged;
 }
 
-/** Folds one worker's own pairings for `model` into the fleet's. */
 function addPairings(index: Map<string, Set<string>>, entry: PlatformCatalog, model: string): void {
   const paired = index.get(model) ?? new Set<string>();
-  // Own keys only: a model a worker names `constructor` must not read Object.prototype's.
+  // why: Own keys only: a model a worker names `constructor` must not read Object.prototype's.
   const own = Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined;
-  // A pairing is the worker's claim; one with a runtime it does not list itself is dropped.
+  // why: A pairing is the worker's claim; one with a runtime it does not list itself is dropped.
   for (const runtime of own ?? []) if (entry.runtimes.includes(runtime)) paired.add(runtime);
   index.set(model, paired);
 }
 
-/**
- * A class's default is kept when every worker reports the same model for it, as `defaultRuntime`
- * is; a worker with no entry for the class counts as disagreeing.
- */
 function agreedClassDefaults(
   workers: readonly Partial<Record<DeviceClass, string>>[],
 ): Partial<Record<DeviceClass, string>> {

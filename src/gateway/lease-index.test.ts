@@ -5,7 +5,6 @@ import { FleetLeaseIndex, type WorkerReportedLease } from "./lease-index.js";
 
 const PREFIX = "gw:instance-1:";
 
-/** Records every `warn` call. */
 class RecordingLogger implements Logger {
   readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 
@@ -184,7 +183,7 @@ describe("FleetLeaseIndex", () => {
     });
 
     it("does not let removing one requester's entry evict a different entry that raced it onto the same requester slot", () => {
-      // `#byRequester` is keyed by requesterId, one entry deep -- removing an id only clears the
+      // why: `#byRequester` is keyed by requesterId, one entry deep -- removing an id only clears the
       // requester slot when it still points at *that* gateway id, which is what protects a
       // requester who released and immediately re-leased from having the new lease's admission
       // slot wiped by the old one's removal landing late.
@@ -193,7 +192,6 @@ describe("FleetLeaseIndex", () => {
       index.remove("wrk_1.lse_1");
       index.add(entry({ gatewayLeaseId: "wrk_1.lse_2", workerLeaseId: "lse_2" }));
 
-      // A late `remove` for the first (already-gone) id must not disturb the second.
       index.remove("wrk_1.lse_1");
       expect(index.existingLeaseId("alice")).toBe("wrk_1.lse_2");
     });
@@ -229,7 +227,7 @@ describe("FleetLeaseIndex", () => {
       const index = new FleetLeaseIndex(PREFIX);
       index.add(entry({ ownerId: "granted-owner" }));
 
-      // A worker's own view reports the same lease with a *different* ownerId -- if this ever
+      // why: A worker's own view reports the same lease with a *different* ownerId -- if this ever
       // happened it would be the worker disagreeing with what the gateway itself granted, not
       // new information the rebuild should trust over the grant.
       index.rebuildFromWorker("wrk_1", [reported("lse_1", { ownerId: "different-owner" })]);
@@ -243,7 +241,7 @@ describe("FleetLeaseIndex", () => {
       const index = new FleetLeaseIndex(PREFIX);
       index.add(entry());
 
-      // First snapshot after reconnect: the worker no longer reports this lease at all. Without
+      // why: First snapshot after reconnect: the worker no longer reports this lease at all. Without
       // C3's fix this is where the old upsert-only index would stop -- the entry survives
       // forever, and `agent-1`'s next request is refused REQUESTER_ALREADY_LEASED against a
       // lease that exists nowhere.
@@ -251,7 +249,6 @@ describe("FleetLeaseIndex", () => {
       expect(index.resolve("wrk_1.lse_1")).toBeDefined();
       expect(index.existingLeaseId("alice")).toBe("wrk_1.lse_1");
 
-      // Second consecutive snapshot still does not report it -- now it is forgotten.
       index.rebuildFromWorker("wrk_1", []);
       expect(index.resolve("wrk_1.lse_1")).toBeUndefined();
       expect(index.existingLeaseId("alice")).toBeUndefined();
@@ -261,14 +258,12 @@ describe("FleetLeaseIndex", () => {
       const index = new FleetLeaseIndex(PREFIX);
       index.add(entry());
 
-      // A single missed snapshot -- the exact shape of a refresh that started before this
+      // why: A single missed snapshot -- the exact shape of a refresh that started before this
       // gateway's own grant landed on the worker (the race `rebuildFromWorker`'s own doc comment
       // describes) -- must not be enough to evict on its own.
       index.rebuildFromWorker("wrk_1", []);
       expect(index.resolve("wrk_1.lse_1")).toBeDefined();
 
-      // The lease is reported again on the very next snapshot: the miss really was a one-off,
-      // and the entry survives indefinitely from here, not just for one more generation.
       index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
       expect(index.resolve("wrk_1.lse_1")).toBeDefined();
 
@@ -301,17 +296,15 @@ describe("FleetLeaseIndex", () => {
       const index = new FleetLeaseIndex(PREFIX, logger);
       index.add(entry());
 
-      // The worker's own relayed `lease.expired`/`lease.released` forgets it...
       index.removeByWorkerLease("wrk_1", "lse_1");
       expect(index.resolve("wrk_1.lse_1")).toBeUndefined();
 
-      // ...but a snapshot that started gathering data before that fact landed completes after
+      // why: ...but a snapshot that started gathering data before that fact landed completes after
       // it and still reports the same worker lease id. The worker is the source of truth, so
       // the entry is still re-added (a caller must not lose a lease the worker still holds)...
       index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
       expect(index.resolve("wrk_1.lse_1")).toBeDefined();
 
-      // ...but this is not an ordinary addition, and round 2 flagged silently swallowing it.
       expect(
         logger.warnings.some(
           (warning) =>
@@ -349,7 +342,7 @@ describe("FleetLeaseIndex", () => {
       index.rebuildFromWorker("wrk_1", []); // one miss recorded, entry still protected
       index.forgetWorker("wrk_1"); // the worker's view disappeared entirely (retention)
 
-      // The same worker id reconnects and immediately reports the lease again (a worker that
+      // why: The same worker id reconnects and immediately reports the lease again (a worker that
       // never actually lost it -- only the gateway's view of it lapsed). A stale one-miss
       // generation surviving `forgetWorker` would have no way to hurt this case since the entry
       // itself is gone too, but the fresh add below must not be evicted by leftover bookkeeping.
@@ -390,7 +383,6 @@ describe("FleetLeaseIndex", () => {
   });
 
   describe("caller-chosen lease IDs", () => {
-    /** A lease a worker reports as named by its requester. */
     function chosen(id: string, overrides: Partial<WorkerReportedLease> = {}): WorkerReportedLease {
       return { ...reported(id, overrides), idChosenByRequester: true } as WorkerReportedLease;
     }
@@ -495,13 +487,10 @@ describe("FleetLeaseIndex", () => {
     it("a second worker reporting the same bare ID does not reset the first entry's missing count", () => {
       const index = new FleetLeaseIndex(PREFIX);
       index.rebuildFromWorker("wrk_1", [chosen("myid")]);
-      // wrk_1 stops reporting it: missing once.
       index.rebuildFromWorker("wrk_1", []);
       expect(index.resolve("myid")).toBeDefined();
 
-      // wrk_2 reports the same ID: that is not a report from wrk_1.
       index.rebuildFromWorker("wrk_2", [chosen("myid")]);
-      // wrk_1 omits it a second time in a row: gone.
       index.rebuildFromWorker("wrk_1", []);
 
       expect(index.resolve("myid")).toBeUndefined();
