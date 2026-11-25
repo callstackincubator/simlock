@@ -240,6 +240,8 @@ function processEnv(
 const STANDALONE_OFF: Record<string, unknown> = {
   capabilities: { "agent-device": { enabled: false } },
   http: { enabled: false },
+  // why: the e2e flows wait for a refill right after a grant; the wait itself is proven at the WarmPool seam.
+  warmPool: { refillDelayMs: 0 },
 };
 
 function seedConfig(

@@ -279,7 +279,7 @@ describe("Dispatcher: a baseline the driver calls stale", () => {
       clock,
       driverOptions: { knownModels: ["iPhone 17 Pro"] },
       ...(logger === undefined ? {} : { engine: { logger } }),
-      warmPool: { baselineLearnAfter: 1 },
+      warmPool: { baselineLearnAfter: 1, refillDelayMs: 0 },
     });
     const real = harness.driver.listSources.bind(harness.driver);
     return {

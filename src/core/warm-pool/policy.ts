@@ -105,6 +105,8 @@ export interface WarmPolicyView {
     readonly maxConcurrentBoots: number;
   };
   readonly now: number;
+  /** why: no target or learned kind is filled before this clock time, the wait after a grant (`warmPool.refillDelayMs`); absent or `<= now` holds nothing. */
+  readonly refillHeldUntil?: number;
   /** The targets to plan for this pass; the policy merges those of one spec (`mergeTargets`). */
   readonly targets: readonly ResolvedTarget[];
   /** Targets whose resolution failed and that keep a stale spec: their devices are spared. */
@@ -750,7 +752,7 @@ function heldByPressure(filling: boolean): { added: number; short?: TargetShort 
   return filling ? { added: 0 } : { added: 0, short: "memory-pressure" };
 }
 
-/** why: what stops a target from adding anything this pass (pressure, a waiter it could not serve, a retry delay), or undefined when it may add. */
+/** why: what stops a target from adding anything this pass (pressure, a waiter it could not serve, the wait after a grant, a retry delay), or undefined when it may add. */
 function holdFill(
   plan: TargetPlan,
   spec: VirtualSpec,
@@ -758,6 +760,9 @@ function holdFill(
 ): { added: number; short?: TargetShort } | undefined {
   if (plan.view.pressure.step !== "none") return heldByPressure(filling);
   if (plan.stuck.has(spec.platform)) return { added: 0 };
+  if (plan.view.refillHeldUntil !== undefined && plan.view.now < plan.view.refillHeldUntil) {
+    return { added: 0 };
+  }
   if (plan.view.retry.mayAttempt(spec, plan.view.now)) return undefined;
   return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
 }
