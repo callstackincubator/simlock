@@ -29,6 +29,7 @@ import { pruneHistory, totalEventBytes } from "./prune.js";
 import { rebuildProjections } from "./rebuild.js";
 import { setAsideDamagedHistory } from "./set-aside.js";
 import { isMarkedRebuilding, migrateProjection } from "./versions.js";
+import { errorMessage } from "../shared/index.js";
 
 export { HISTORY_DB_NAME } from "./names.js";
 export { HISTORY_PROJECTIONS, openUsageReads } from "./projections/index.js";
@@ -103,7 +104,7 @@ interface RunningProjection {
 }
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 class EventHistory implements EventHistoryHandle {

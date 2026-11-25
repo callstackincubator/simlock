@@ -3,6 +3,7 @@
 // already loaded the module that raises it, so the `../contract/index.js` lookup is a cache hit
 // whenever it matters.
 import { UsageError } from "./usage-error.js";
+import { errorMessage } from "../shared/index.js";
 
 export { UsageError, withHelpHint } from "./usage-error.js";
 
@@ -27,10 +28,6 @@ async function isSetupError(error: unknown, name: string): Promise<boolean> {
   if (!(error instanceof Error) || error.name !== name) return false;
   const { SetupMcpFailedError, SetupRefusedError } = await import("../instructions/index.js");
   return error instanceof (name === "SetupRefusedError" ? SetupRefusedError : SetupMcpFailedError);
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export async function writeError(

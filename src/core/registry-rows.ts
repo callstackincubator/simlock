@@ -20,6 +20,7 @@ import {
 } from "./domain.js";
 import type { DeviceDataTable, DeviceRequest } from "./driver.js";
 import type { ComponentRecord } from "./registry.js";
+import { errorMessage } from "../shared/index.js";
 
 type Row = Record<string, unknown>;
 
@@ -599,7 +600,7 @@ function readDeviceData(
     return table.read(database, id);
   } catch (error: unknown) {
     throw new RegistryLoadError(
-      `Invalid devices row ${id}: no row in ${table.name}: ${error instanceof Error ? error.message : String(error)}`,
+      `Invalid devices row ${id}: no row in ${table.name}: ${errorMessage(error)}`,
     );
   }
 }

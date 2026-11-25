@@ -48,6 +48,29 @@ describe("the typed client over a farm's session path", () => {
     await expect(operator).resolves.toMatchObject({ role: "admin" });
     expect(farm.connections[1]?.url).toBe("ws://127.0.0.1:7300/v1/session");
 
+    const insecureUrl = "http://100.75.181.35:7300";
+    const insecureAgent = connectSimlock({ ...options, allowInsecureHttp: true, url: insecureUrl });
+    await answerHello(farm, 2, "agent");
+    await expect(insecureAgent).resolves.toMatchObject({ role: "agent" });
+    expect(farm.connections[2]?.url).toBe("ws://100.75.181.35:7300/v1/session");
+    const insecureAdmin = connectSimlockAdmin({
+      ...options,
+      allowInsecureHttp: true,
+      url: insecureUrl,
+    });
+    await answerHello(farm, 3, "admin");
+    await expect(insecureAdmin).resolves.toMatchObject({ role: "admin" });
+    expect(farm.connections[3]?.url).toBe("ws://100.75.181.35:7300/v1/session");
+
+    // why: the option only matters with a `url`, as `token` does, so a local connect never reads it.
+    const localFailure = new Error("local connector reached");
+    const local = connectSimlock({
+      allowInsecureHttp: "yes" as never,
+      endpoint: "/s.sock",
+      ipc: { connect: () => Promise.reject(localFailure) },
+    });
+    await expect(local).rejects.toBe(localFailure);
+
     const farmUrl = "https://farm.example";
     const refused: [() => Promise<unknown>, RegExp][] = [
       [
@@ -56,7 +79,23 @@ describe("the typed client over a farm's session path", () => {
       ],
       [
         () => connectSimlock({ ...options, url: "http://farm.example" }),
-        /^`url` must be https:\/\//,
+        /^`url` must be https:\/\/.*set `allowInsecureHttp: true`$/,
+      ],
+      [
+        () => connectSimlock({ ...options, allowInsecureHttp: false, url: insecureUrl }),
+        /^`url` must be https:\/\/.*set `allowInsecureHttp: true`$/,
+      ],
+      [
+        () => connectSimlockAdmin({ ...options, url: insecureUrl }),
+        /^`url` must be https:\/\/.*set `allowInsecureHttp: true`$/,
+      ],
+      [
+        () => connectSimlock({ ...options, allowInsecureHttp: true, url: "ws://farm.example" }),
+        /^`url` must be https:\/\/, or http:\/\/ only for 127\.0\.0\.1, \[::1\] or localhost$/,
+      ],
+      [
+        () => connectSimlock({ ...options, allowInsecureHttp: "yes" as never, url: farmUrl }),
+        /^`allowInsecureHttp` must be true or false$/,
       ],
       [() => connectSimlock({ ...options, url: "farm.example" }), /^`url` must be https:\/\//],
       [
@@ -94,7 +133,7 @@ describe("the typed client over a farm's session path", () => {
       expect(error).toBeInstanceOf(TypeError);
       expect((error as Error).message).toMatch(message);
     }
-    expect(farm.connections).toHaveLength(2);
+    expect(farm.connections).toHaveLength(4);
   });
 
   it("fails to connect with a code a program can match, naming the farm: REMOTE_UNREACHABLE, UNAUTHENTICATED or FORBIDDEN", async () => {

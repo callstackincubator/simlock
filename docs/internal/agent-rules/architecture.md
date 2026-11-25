@@ -176,7 +176,9 @@ grounds for rejecting a change even if it works.
     its internal objects, the order to call them in or its shutdown order
     is the module's job. The test: the composition root imports from it
     only the factory and those types. An index that predates this rule is
-    not a finding until a change grows it.
+    not a finding until a change grows it. The exception is a module that
+    imports nothing and that no host wires, such as `shared` and
+    `agent-identity`: it exports its pure functions directly.
 19. **An extension point is added when a second implementation is named,
     not before.** Add an interface and a registry when a second
     implementation exists or is being built, or when an accepted ADR or

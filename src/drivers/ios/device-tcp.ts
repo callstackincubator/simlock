@@ -17,6 +17,7 @@ import {
   type TcpStream,
   type TcpStreamConnector,
 } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 export interface IosDeviceTcpOptions {
   readonly clock: Clock;
@@ -111,7 +112,7 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
     } catch (error) {
       throw new DeviceTcpError(
         "TUNNEL_FAILED",
-        `could not check the port's owner: ${cut(error instanceof Error ? error.message : String(error))}`,
+        `could not check the port's owner: ${cut(errorMessage(error))}`,
       );
     }
   }
@@ -206,10 +207,7 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
       } catch (error) {
         await Promise.all(bound.map((listener) => listener.close()));
         if (error instanceof DeviceTcpError) throw error;
-        throw new DeviceTcpError(
-          "TUNNEL_FAILED",
-          `${named}: ${cut(error instanceof Error ? error.message : String(error))}`,
-        );
+        throw new DeviceTcpError("TUNNEL_FAILED", `${named}: ${cut(errorMessage(error))}`);
       }
       // why: a connection that arrives before the tunnel has a handler, or after it is closing, is closed at once.
       let accept: ((stream: TcpStream) => void) | undefined;

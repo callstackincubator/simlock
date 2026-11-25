@@ -181,15 +181,15 @@ export default {
     ),
     direction(
       "host-load-imports-ports-only",
-      "host-load reads the machine through the HostLoadProbe port and imports no other component",
+      "host-load reads the machine through the HostLoadProbe port and imports no other component but shared",
       "^src/host-load/",
       { path: "^src/(core|leasing|gateway|drivers|contract|http|cli|mcp|daemon)/" },
     ),
     direction(
       "updater-imports-little",
-      "the updater imports only ports, contract and admin: it runs while its own files are being replaced, so it carries nothing else",
+      "the updater imports only ports, contract, admin and shared: it runs while its own files are being replaced, so it carries nothing else",
       "^src/updater/",
-      { path: "^src/", pathNot: "^src/(ports|contract|admin|updater)/" },
+      { path: "^src/", pathNot: "^src/(ports|contract|admin|shared|updater)/" },
     ),
     direction(
       "not-host-load",
@@ -248,10 +248,11 @@ export default {
     },
     {
       name: "modules-imports-little",
-      comment: "src/modules imports only ports, contract and core, plus the bus for its types",
+      comment:
+        "src/modules imports only ports, contract, core and shared, plus the bus for its types",
       severity: "error",
       from: { path: "^src/modules/", pathNot: linkTestFile },
-      to: { path: "^src/", pathNot: "^src/(modules|ports|contract|core|bus)/" },
+      to: { path: "^src/", pathNot: "^src/(modules|ports|contract|core|bus|shared)/" },
     },
     {
       name: "modules-imports-bus-types-only",
@@ -320,13 +321,13 @@ export default {
     ),
     direction(
       "cli-router-imports-no-component-values",
-      "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types, by dynamic import, or statically for agent-identity alone, so the fast paths load no component code",
+      "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types, by dynamic import, or statically for agent-identity and shared alone, so the fast paths load no component code",
       "^src/cli/(main|index|tree|errors|types|usage-error|environment|stdio|log-file|args|connect)\\.ts$",
       {
-        // why: every component but agent-identity, the one AGENTS.md carves out as the cheap
-        // static import, plus the command modules: a static edge to one of those from the
+        // why: every component but agent-identity and shared, the two that import nothing and so
+        // are the cheap static imports, plus the command modules: a static edge to one of those from the
         // router is the same eager load this rule exists to keep out
-        path: "^src/((?!agent-identity/|cli/)[a-z0-9-]+/)|^src/cli/commands/",
+        path: "^src/((?!agent-identity/|cli/|shared/)[a-z0-9-]+/)|^src/cli/commands/",
         dependencyTypesNot: ["type-only", "dynamic-import"],
       },
     ),
@@ -340,6 +341,18 @@ export default {
       "contract-imports-nothing-unresolved",
       "the contract imports nothing outside src/contract/",
       "^src/contract/",
+      { couldNotResolve: true, path: "^[./]" },
+    ),
+    direction(
+      "shared-imports-nothing",
+      "shared imports nothing: no component, no package and no Node module, so any component may depend on it",
+      "^src/shared/",
+      { path: "^[^.]", pathNot: "^src/shared/" },
+    ),
+    direction(
+      "shared-imports-nothing-unresolved",
+      "shared imports nothing: no component, no package and no Node module, so any component may depend on it",
+      "^src/shared/",
       { couldNotResolve: true, path: "^[./]" },
     ),
   ],

@@ -17,6 +17,7 @@ import {
   type StreamLink,
   type StreamTarget,
 } from "./service.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface FleetPort {
   knowsWorker(workerId: string): boolean;
@@ -307,9 +308,9 @@ async function fromResponse(
   } catch (error) {
     await response.body.cancel().catch(() => undefined);
     throw streamUnavailable(
-      `Worker ${workerId} answered the stream for ${subject} with a picture it cannot describe: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `Worker ${workerId} answered the stream for ${subject} with a picture it cannot describe: ${errorMessage(
+        error,
+      )}`,
     );
   }
   const body = response.body;

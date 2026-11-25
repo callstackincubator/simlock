@@ -11,4 +11,4 @@ Flows: [startup](../../docs/internal/flows/startup.md). Decision: [ADR 0036](../
 - A lock held past the busy timeout refuses with the lock message, never as damage.
 - Each owner creates only its own tables and keeps its own version in `schema_versions`, the one table this module has. This module never reads an owner's tables.
 - All owners migrate in one write transaction: a throw rolls back every owner's steps, and a stored version newer than the code's refuses. The version is read inside that transaction, so two daemons starting at once migrate once.
-- Imports ports only: never core, leasing, daemon, drivers or gateway.
+- Imports ports and `shared` only: never core, leasing, daemon, drivers or gateway.

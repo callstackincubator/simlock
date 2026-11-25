@@ -2,6 +2,7 @@ import { ScreenUnavailableError } from "../../../core/index.js";
 import type { Clock, ProcessHandle, TcpStream } from "../../../ports/index.js";
 import { ChunkReader, openDeviceSocket } from "./adb-socket.js";
 import type { ScreenTarget } from "./session.js";
+import { errorMessage } from "../../../shared/index.js";
 
 // why: the server refuses to start unless its first argument equals the version it was built as, so
 // this must match the vendored jar byte for byte.
@@ -18,10 +19,6 @@ export const REMOVE_TIMEOUT_MS = 3_000;
 export const CLOSE_DEADLINE_MS = 5_000;
 // why: scrcpy's own client retries its connection every 100 ms while the server starts.
 export const CONNECT_RETRY_MS = 100;
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 // why: a stream and a device input each push the one vendored jar to their own per-session path, so
 // the copy and its failure message are one function.

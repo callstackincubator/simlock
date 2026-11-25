@@ -13,6 +13,7 @@ import {
   resolveSimlockHome,
   SystemClock,
 } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface SupervisorDependencies {
   readonly argv: readonly string[];
@@ -125,7 +126,7 @@ export async function runSupervisor(dependencies: SupervisorDependencies): Promi
       if (result.code === 0) return 0;
       outcome = `Daemon exited (${describeExit(result)})`;
     } catch (error: unknown) {
-      outcome = `Daemon failed to start (${error instanceof Error ? error.message : String(error)})`;
+      outcome = `Daemon failed to start (${errorMessage(error)})`;
     }
     logger.warn(`${outcome}; the service starts it again in 10 s`);
     await sleep();

@@ -9,7 +9,6 @@ import {
 } from "../../core/index.js";
 import type { Clock, Filesystem, IdGenerator, Logger } from "../../ports/index.js";
 
-import { errorMessage } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl, unknownDevice } from "./simctl.js";
 import type { DeviceHubPreferences } from "./devicehub.js";
@@ -35,6 +34,7 @@ import { type SimctlCatalog } from "./simctl-parse.js";
 import { type IosDriverData, iosDriverData } from "./simulator-data.js";
 
 import type { SqliteDatabase, SqliteOpener } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;

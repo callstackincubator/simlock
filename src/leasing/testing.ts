@@ -37,6 +37,7 @@ import type {
   QueueControl,
 } from "./lease-ports.js";
 import type { LeaseHealthMonitor } from "./lease-health-monitor.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * Test-only: wiring other modules' tests use. Only a `*.test.ts` file or a `test-*.ts` helper may
@@ -187,6 +188,6 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
 function describeTestFailure(error: unknown): { code: string; message: string } {
   return {
     code: error instanceof NoCapacityError ? "NO_CAPACITY" : "INTERNAL",
-    message: error instanceof Error ? error.message : String(error),
+    message: errorMessage(error),
   };
 }
