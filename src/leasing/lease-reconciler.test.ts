@@ -306,7 +306,6 @@ describe("LeaseReconciler", () => {
   });
 
   it("ends the leases in deadline order, whatever order they were granted in", async () => {
-    // Ids are handed out device, lease, device, lease, ...: "z" is granted first but sorts last.
     const harness = await createHarness({ ids: ["a", "z", "b", "a", "c", "m"] });
     const late = await leaseOn(harness, "ios", "d1", 5_000);
     const middle = await leaseOn(harness, "ios", "d2", 3_000);
@@ -359,7 +358,7 @@ describe("LeaseReconciler", () => {
 
     await reconciler.run(read({ ios: reality(["d2", "stopped"]) }));
 
-    // The reconciler read the reloaded snapshot, where the orphan has no device; the ender acts on
+    // why: The reconciler read the reloaded snapshot, where the orphan has no device; the ender acts on
     // the harness's own registry, where it was never touched.
     expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual([orphan.id]);
     expect(

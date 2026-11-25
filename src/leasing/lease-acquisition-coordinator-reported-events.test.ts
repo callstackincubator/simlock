@@ -119,8 +119,6 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
       }),
     ]);
 
-    // The same position in the sequence, on a request that passes admission: that id is the one
-    // the stored request gets, and nothing mints a second.
     const mintedBeforeAdmitted = harness.requestIds.length;
     await harness.coordinator.request(request, owner("other"));
     expect(harness.requestIds).toHaveLength(mintedBeforeAdmitted + 1);

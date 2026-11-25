@@ -10,7 +10,7 @@ import { type WaitingReason } from "./acquisition-planner.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
-  /** ADR 0003 §4: the session principal the resulting lease is owned by -- distinct from
+  /** why: ADR 0003 §4: the session principal the resulting lease is owned by -- distinct from
    * `requesterId`, which is attribution and defaults to the principal but may be set to
    * something else per request. Required: every caller of `LeaseCommands.request` (the daemon
    * dispatcher) always knows its own session's principal. */
@@ -20,12 +20,12 @@ export interface LeaseRequestOptions {
   readonly allowDownload?: boolean;
   readonly requires?: readonly string[];
   readonly onProgress?: (progress: LeaseProgress) => void;
-  /** ADR 0004 §4: this lease's initial TTL, accepted on every request. Omitted means
+  /** why: ADR 0004 §4: this lease's initial TTL, accepted on every request. Omitted means
    * `lease.defaultTtlMs`; the cap against `lease.maxTtlMs` is applied at the daemon boundary
    * before a request ever reaches here, so this type trusts what it is given. */
   readonly ttlMs?: number;
   /**
-   * The caller's key for repeating this request (see `LeaseRequestBook`). Paired with
+   * why: The caller's key for repeating this request (see `LeaseRequestBook`). Paired with
    * `requesterId`; both are the caller's own claims, so a replay is authorized on `ownerId`.
    */
   readonly idempotencyKey?: string;
@@ -39,12 +39,10 @@ export interface LeaseRequestOptions {
   readonly runId?: string;
   readonly label?: string;
   /**
-   * ADR 0021: the gateway's request id. A request that has one is a probe: its refusals and
+   * why: ADR 0021: the gateway's request id. A request that has one is a probe: its refusals and
    * failures are `lease.declined`, and it is never queued. Set only for the gateway's uplink.
    */
   readonly fleetRequestId?: string;
-  /** Called with the stored request's id once it is admitted (`replayed` false), or once a
-   * repeat finds it (`replayed` true). */
   readonly onAdmitted?: (requestId: string, replayed: boolean) => void;
 }
 
@@ -172,7 +170,6 @@ function platformRefusalMessage(
   return `Requester ${requesterId} already holds ${String(context.held)} ${label} leases and lease.maxPerRequester.${platform} is ${String(context.limit)}; release one (\`simlock release ${String(existingLeaseId)}\`) before requesting another ${label} device`;
 }
 
-/** A request named a lease ID an active lease or a waiting request already holds (ADR 0020). */
 export class LeaseIdTakenError extends Error {
   constructor(readonly leaseId: string) {
     super(`lease ID ${leaseId} is already in use`);
@@ -180,7 +177,6 @@ export class LeaseIdTakenError extends Error {
   }
 }
 
-/** Thrown when a caller passes a waiter created by a different queue instance. */
 export class ForeignWaiterError extends Error {
   constructor() {
     super("Waiter does not belong to this queue");
@@ -190,7 +186,6 @@ export class ForeignWaiterError extends Error {
 
 export type WaiterState = "new" | "queued" | "processing" | "granted" | "rejected";
 
-/** Where a waiter stands (`WaitQueue#places`): `queuePosition` only while it is `queued`. */
 export interface QueuePlace {
   readonly id: string;
   readonly queuePosition?: number;
@@ -213,7 +208,7 @@ interface MutableWaiter extends Waiter {
   state: WaiterState;
   timer: TimerHandle | undefined;
   /**
-   * Fixed on the first arm and never moved, so a re-queue cannot restart the budget.
+   * why: Fixed on the first arm and never moved, so a re-queue cannot restart the budget.
    */
   deadlineAt: number | undefined;
 }
@@ -290,9 +285,6 @@ export class WaitQueue {
       .map((waiter) => waiter.request.platform);
   }
 
-  /**
-   * Includes a waiter driven straight to `processing`, which is never enqueued.
-   */
   findPendingWaiter(requesterId: string, platform?: Platform): Waiter | undefined {
     for (const waiter of this.#pendingWaiters) {
       if (
@@ -339,9 +331,6 @@ export class WaitQueue {
     return waiter;
   }
 
-  /**
-   * A re-queue keeps the first deadline (`deadlineAt`) instead of re-arming the full `timeoutMs`.
-   */
   enqueue(waiter: Waiter, reason?: WaitingReason): boolean {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
@@ -363,7 +352,7 @@ export class WaitQueue {
   markProcessing(waiter: Waiter): boolean {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
-    // A retry does not reset the deadline, so a waiter past it is not handed to the next worker.
+    // why: A retry does not reset the deadline, so a waiter past it is not handed to the next worker.
     if (this.#expireIfPastDeadline(mutable)) return false;
     mutable.state = "processing";
     return true;
@@ -377,7 +366,7 @@ export class WaitQueue {
       try {
         this.options.onTimeout?.(mutable);
       } catch {
-        // Queue wake-up is an observer of this committed timeout fact.
+        // why: Queue wake-up is an observer of this committed timeout fact.
       }
     }
     return true;
@@ -395,7 +384,7 @@ export class WaitQueue {
   }
 
   /**
-   * P3 (round 2 review): a terminal waiter never gets a push. Before this guard, `enqueue`
+   * why: P3 (round 2 review): a terminal waiter never gets a push. Before this guard, `enqueue`
    * rejecting synchronously (the deadline-check branch above) left a caller free to keep calling
    * `notifyProgress` on the same waiter regardless -- `LeaseAcquisitionCoordinator#defer`
    * unconditionally pushes a `reclaiming` progress right after its own `#enqueue` call, so a
@@ -408,7 +397,7 @@ export class WaitQueue {
     try {
       mutable.onProgress?.(progress);
     } catch {
-      // Client feedback must not affect lease acquisition.
+      // why: Client feedback must not affect lease acquisition.
     }
   }
 
@@ -492,7 +481,7 @@ export class WaitQueue {
         try {
           this.options.onTimeout?.(waiter);
         } catch {
-          // Queue wake-up is an observer of this committed timeout fact.
+          // why: Queue wake-up is an observer of this committed timeout fact.
         }
       }
     });

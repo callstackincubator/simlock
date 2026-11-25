@@ -71,7 +71,7 @@ describe("LeaseExpiryScheduler", () => {
 
     scheduler.dispose();
 
-    // Cancelled, not merely left to fire into a no-op: a live timer keeps the daemon's event loop
+    // why: Cancelled, not merely left to fire into a no-op: a live timer keeps the daemon's event loop
     // open for the rest of the lease's TTL.
     expect(clock.pendingTimerCount).toBe(0);
     clock.advance(20);

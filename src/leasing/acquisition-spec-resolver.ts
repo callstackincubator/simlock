@@ -118,7 +118,6 @@ export class AcquisitionSpecResolver {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
-    // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     this.#requireMode(request, mode, requireServed);
     const range = requestedRange(request);
@@ -126,7 +125,7 @@ export class AcquisitionSpecResolver {
       range === undefined
         ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
         : await this.#resolveRanged(request, mode, range);
-    // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
+    // why: A range was settled against the catalog above, so it never installs (ADR 0015 §5).
     const exact = defaultTag ? { ...target.exact, defaultTag: true as const } : target.exact;
     const resolved = await this.#resolveOrInstall(onProgress, driver, exact, {
       ...options,
@@ -227,7 +226,7 @@ export class AcquisitionSpecResolver {
   }
 
   /**
-   * The exact request an exact-model request already is, answered without awaiting anything so
+   * why: The exact request an exact-model request already is, answered without awaiting anything so
    * its path takes no extra turn of the event loop; `undefined` for one that names no model.
    */
   #exactTarget(request: DeviceRequest, mode: DeviceMode): ResolvedTarget | undefined {
@@ -235,17 +234,6 @@ export class AcquisitionSpecResolver {
     return model === undefined ? undefined : { exact: { ...rest, mode, model } };
   }
 
-  /**
-   * Turns a request that names no model, or names an OS range, into the exact one a driver
-   * resolves (ADR 0015 §5). A class, named or meant by naming nothing, becomes the first model
-   * on its preference list that this host's catalog lists, classes as that class, and pairs with
-   * an installed runtime (of the requested image tag, and in the requested range, when it names
-   * them); an exact model with a range must be listed, or the request fails as
-   * `UnknownModelError`. With a range the runtime is the newest paired one in it, passed on as an
-   * exact version. The catalog is read, and nothing is downloaded. A class with no listed model
-   * fails as `UnknownModelError`, and a model or class with no pairing as a `RuntimeMissingError`
-   * no download can fix.
-   */
   async #resolveClass(
     request: DeviceRequest,
     mode: DeviceMode,
@@ -281,7 +269,6 @@ export class AcquisitionSpecResolver {
     };
   }
 
-  /** A request that names a model and an OS range: the model must be listed (ADR 0015 §5). */
   async #resolveRanged(
     request: DeviceRequest,
     mode: DeviceMode,
@@ -302,7 +289,6 @@ export class AcquisitionSpecResolver {
     );
   }
 
-  /** The target for `model` once the request's runtime constraints are settled against `entry`. */
   #rangedTarget(
     entry: DriverCatalogEntry,
     model: string,
@@ -329,7 +315,7 @@ export class AcquisitionSpecResolver {
   }
 
   /**
-   * Resolves the request; when its runtime is missing, a download could supply it, and the
+   * why: Resolves the request; when its runtime is missing, a download could supply it, and the
    * request may download, asks the installer for it and resolves once more. The installer skips
    * the install when, by the time this call reaches the front of its queue, `resolveSpec` no
    * longer fails with `RuntimeMissingError` -- another install made the runtime available.
@@ -401,11 +387,6 @@ export class AcquisitionSpecResolver {
     return spec;
   }
 
-  /**
-   * Resolves a request to the spec it would be granted a device of, with downloads off, or says
-   * why there is none. A read: nothing is queued, reserved or installed. The warm pool resolves
-   * its targets here, so a target and a request become a spec in one place.
-   */
   async resolve(request: DeviceRequest): Promise<TargetResolution> {
     let driver: Driver;
     try {
@@ -441,7 +422,7 @@ export function baselineSpec(current: CurrentBaseline): VirtualSpec {
 }
 
 /**
- * The spec a driver resolved, held to what the request asked. The image tag is the request's, or
+ * why: The spec a driver resolved, held to what the request asked. The image tag is the request's, or
  * none: a driver that returns another, or one the request did not name, would plan the device
  * into a pool the request did not ask for. Full is a guarantee (ADR 0007 §5): a slim spec is
  * accepted only for a slim request, so a driver that returns the wrong thing still cannot put a
@@ -457,7 +438,6 @@ function checkedSpec(resolved: VirtualSpec, request: DeviceRequest, mode: Device
   return mode === "slim" ? resolved : fullSpec(resolved);
 }
 
-/** What a target's refusal is called: the kinds a pool can act on, and any other as is. */
 function refusalOf(error: unknown): Exclude<TargetResolution, { spec: VirtualSpec }>["refusal"] {
   if (error instanceof RuntimeMissingError) return "runtime-missing";
   if (error instanceof UnknownModelError) return "unknown-model";
@@ -465,7 +445,6 @@ function refusalOf(error: unknown): Exclude<TargetResolution, { spec: VirtualSpe
   return "unresolvable";
 }
 
-/** What `#resolveClass` settles on; an exact request has only `exact`. */
 interface ResolvedTarget {
   readonly exact: ExactDeviceRequest;
   readonly requirement?: DeviceRequirement;

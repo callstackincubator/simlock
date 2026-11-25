@@ -6,7 +6,6 @@ import { request, createHarness, seedReady } from "./test-lease-acquisition.js";
 
 describe("LeaseAcquisitionCoordinator", () => {
   describe("device mode", () => {
-    /** A driver that slims 26.5 and cannot slim 17.5, like iOS on either side of 18.5. */
     function slimmingDriver(options: { readonly mode?: DeviceMode } = {}): FakeDriver {
       return new FakeDriver({
         availableOsVersions: ["17.5", "26.5"],

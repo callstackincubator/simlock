@@ -39,11 +39,6 @@ import type {
 import type { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { errorMessage } from "../shared/index.js";
 
-/**
- * Test-only: wiring other modules' tests use. Only a `*.test.ts` file or a `test-*.ts` helper may
- * import this file, and `pnpm lint` enforces it. Anything production code also uses belongs on
- * `index.ts`.
- */
 export type TestEngineConfig = CoreConfig & LeasingConfig;
 
 export interface TestEngineOptions {
@@ -67,10 +62,6 @@ export interface TestEngineOptions {
   readonly leaseEndParticipants?: readonly LeaseEndParticipant[] | undefined;
 }
 
-/**
- * Test-only: `createCore` and `createLeasing` built the way the daemon builds them, behind one
- * handle that carries every port a test drives. `core` and `leasing` are the two real modules.
- */
 export interface TestEngine
   extends
     LeaseCommands,
@@ -88,10 +79,8 @@ export interface TestEngine
   readonly cleanup: Core["cleanup"];
   readonly healthMonitor: LeaseHealthMonitor;
   readonly requests: Leasing["requests"];
-  /** The daemon's startup order: settle requests, read, reconcile leases (timers for the rest), converge devices, then the first queue depth. */
   convergeRunningCapacity(): Promise<void>;
   settle(): Promise<void>;
-  /** Cancels leasing's timers: the lease expiry timers a test leaves armed. */
   dispose(): void;
   waitingRequests: Leasing["waitingRequests"];
 }
@@ -133,7 +122,6 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     leasing,
     claimReader: core.claimReader,
     cleanup: core.cleanup,
-    // `createLeasing` wires the monitor unless told not to, and this helper never tells it not to.
     healthMonitor: leasing.healthMonitor as LeaseHealthMonitor,
     requests: leasing.requests,
     request: (request, requestOptions) => leasing.request(request, requestOptions),

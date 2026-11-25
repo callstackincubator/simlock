@@ -94,8 +94,6 @@ describe("Registry lease requests", () => {
     const fourth = await registry.createLeaseRequest(newRequest("fourth"));
     expect(await storedRequestIds(clock, state)).toEqual([open.id, newerSettled.id, fourth.id]);
 
-    // Every other record left is open or newer: the cap evicts the last settled one, then
-    // admits past the cap rather than touch an open record.
     const fifth = await registry.createLeaseRequest(newRequest("fifth"));
     const sixth = await registry.createLeaseRequest(newRequest("sixth"));
     expect(await storedRequestIds(clock, state)).toEqual([open.id, fourth.id, fifth.id, sixth.id]);
@@ -319,7 +317,6 @@ describe("LeaseRequestBook", () => {
   it("lists an open request only while a wait drives it, never one left open with nothing behind it", async () => {
     const store = memoryStore();
     const book = bookOver(store);
-    // An open record no wait drives, as a restarted daemon finds one before settling it.
     const orphan = await store.createLeaseRequest({
       ownerId: "agent",
       request,

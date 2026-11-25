@@ -28,7 +28,7 @@ export class WaiterOutcomes {
     device: DeviceRecord,
     kind: GrantingPlanKind,
   ): Promise<void> {
-    // Built before the write: the grant a repeat of this request answers is stored with the lease.
+    // why: Built before the write: the grant a repeat of this request answers is stored with the lease.
     const granted = await this.options.leases.grant({
       deviceId: device.id,
       environment: this.options.drivers
@@ -60,8 +60,6 @@ export class WaiterOutcomes {
     }
   }
 
-  /** One `warn` line for a device step that failed in the background and is handled here by
-   * deferring the waiter or destroying the device. The waiter only ever sees a generic outcome. */
   // fallow-ignore-next-line unused-class-member -- AcquisitionWorkflow calls it through its options' outcomes.
   logFailure(
     message: string,
@@ -89,7 +87,7 @@ export class WaiterOutcomes {
   }
 
   /**
-   * A queued waiter whose spec matches a device already being reclaimed is waiting on that
+   * why: A queued waiter whose spec matches a device already being reclaimed is waiting on that
    * reclaim, not on nothing in particular: an iOS erase holds the only matching device for
    * tens of seconds, and reporting only `queued` leaves the requester with a position and no
    * sense of how long. Purely informational -- the plan is untouched. When the reclaim

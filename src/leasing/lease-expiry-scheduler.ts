@@ -6,7 +6,6 @@ export type LeaseExpiryHandler = (
   expectedDeadline: number,
 ) => void | Promise<void>;
 
-/** Owns TTL timers; expiry is delivered directly to the lease lifecycle. */
 export class LeaseExpiryScheduler {
   readonly #timers = new Map<string, TimerHandle>();
   #disposed = false;
@@ -47,7 +46,6 @@ export class LeaseExpiryScheduler {
     this.#timers.delete(leaseId);
   }
 
-  /** Restores timers in deadline/id order, processing expired leases immediately. */
   async restore(leases: readonly LeaseRecord[]): Promise<void> {
     if (this.#disposed) return;
     for (const lease of [...leases].sort(compareLeaseDeadlines)) {

@@ -155,7 +155,7 @@ export class LeaseReleaseCoordinator
   }
 
   /**
-   * Gives up a lease whose device could not be brought back. Internally
+   * why: Gives up a lease whose device could not be brought back. Internally
    * originated only -- no client can ask for it -- but it is an ordinary
    * release otherwise, so it takes the same maintenance admission and the same
    * reclaim as every other one.
@@ -273,7 +273,7 @@ export class LeaseReleaseCoordinator
     await this.options.decisions.run(() => {
       this.#maintenanceDepth += 1;
     });
-    // Backgrounded reclaims are drained alongside the workflows that started them:
+    // why: Backgrounded reclaims are drained alongside the workflows that started them:
     // a device still `reclaiming` is neither `ready` nor `shutdown`, so an operator
     // reset would silently skip it (`NukeService#canOperate`) and leave a device
     // running that the reset was supposed to take down.
@@ -292,7 +292,7 @@ export class LeaseReleaseCoordinator
         throw new Error("Maintenance-authorized release requires active maintenance");
       }
     });
-    // Awaited rather than backgrounded: the reset walks the device list straight
+    // why: Awaited rather than backgrounded: the reset walks the device list straight
     // afterwards and only acts on `ready`/`shutdown` records, so a reclaim still in
     // flight would take its device out of that walk entirely.
     return this.#releaseAll(reason, "await", platform);
@@ -333,7 +333,7 @@ export class LeaseReleaseCoordinator
       return;
     }
     if (options.reclaim === "background") {
-      // The registry-only half committed above is the whole of what a releasing
+      // why: The registry-only half committed above is the whole of what a releasing
       // caller needs: the lease record is gone, `lease.released` has been emitted,
       // and the device is `reclaiming` and therefore already ungrantable
       // (AcquisitionPlanner only ever selects `ready`). The slow part -- the

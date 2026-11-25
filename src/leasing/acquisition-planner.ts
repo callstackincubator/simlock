@@ -109,10 +109,6 @@ export type AcquisitionPlan =
   | { readonly kind: "wait"; readonly reason: WaitingReason }
   | { readonly kind: "no-capacity"; readonly reason: WaitingReason };
 
-/**
- * Read-only acquisition policy with short-lived, explicit capacity and device
- * operation reservations. The caller performs every resulting side effect.
- */
 export class AcquisitionPlanner {
   constructor(
     private readonly capacity: CapacityCoordinator,
@@ -123,8 +119,6 @@ export class AcquisitionPlanner {
     const { snapshot, spec } = input;
     const requirement = input.requirement ?? exactRequirement(spec);
     const classOf = input.classOf ?? (() => undefined);
-    // ADR 0015 §6: an idle device serves the request when it fits and is in the pool mode the
-    // new device would have. Among several that do, the first in snapshot order is taken.
     const serves = (device: DeviceRecord): boolean =>
       mayBeGranted(device) &&
       specMode(device.spec) === specMode(spec) &&
@@ -136,7 +130,7 @@ export class AcquisitionPlanner {
     );
     if (ready !== undefined) return this.#planReady(input, ready);
 
-    // A device the warm pool is booting for nobody in particular will serve this
+    // why: A device the warm pool is booting for nobody in particular will serve this
     // request when it is ready: waiting for it costs less than starting a second. A device
     // another request is booting or creating is its own, so it is left alone. Under `noWait`
     // the case is ignored and the request plans as it always did.
@@ -147,7 +141,7 @@ export class AcquisitionPlanner {
       return { kind: "wait", reason: "waiting-for-device" };
     }
 
-    // A spent fresh device sits `shutdown` until its delete; `mayBeGranted` keeps it from being booted again.
+    // why: A spent fresh device sits `shutdown` until its delete; `mayBeGranted` keeps it from being booted again.
     const shutdown = snapshot.virtualDevices.find(
       (device) => device.state === "shutdown" && servesRequest(device),
     );

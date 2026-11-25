@@ -54,7 +54,7 @@ function harness(
       run: async (read) => {
         order.push("reconcile");
         reads.push(read);
-        // The ending the real reconciler performs: a lease whose device is not running is gone.
+        // why: The ending the real reconciler performs: a lease whose device is not running is gone.
         // It takes a real turn to finish, as an ending that drives a driver does, so timers
         // restored alongside it, not after it, would still see the lease.
         await new Promise((resolve) => setImmediate(resolve));

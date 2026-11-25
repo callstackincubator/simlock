@@ -32,7 +32,7 @@ export interface DeviceLostReleaser {
 export interface LeaseHealthMonitorOptions {
   readonly clock: Clock;
   readonly config: Pick<Config, "health">;
-  /** Each registry write runs in it, so it neither undoes nor is undone by another writer's commit. */
+  /** why: Each registry write runs in it, so it neither undoes nor is undone by another writer's commit. */
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: DriverCatalog;
   readonly eventBus: EventBus;
@@ -63,7 +63,7 @@ export class LeaseHealthMonitor {
   }
 
   /**
-   * Arms the recurring probe tick. Deliberately not done in the constructor:
+   * why: Arms the recurring probe tick. Deliberately not done in the constructor:
    * `createLeasing` (and its tests) construct their dependencies while driving a
    * `FakeClock` directly, and a self-arming monitor would inject surprise
    * `listManaged()` driver calls into every one of those tests.
@@ -128,7 +128,7 @@ export class LeaseHealthMonitor {
   }
 
   /**
-   * One probe pass: poll each affected platform's driver once, classify every
+   * why: One probe pass: poll each affected platform's driver once, classify every
    * leased virtual device (a leased physical device is not observed), and kick off (but never await) recovery for the ones that
    * need it. Recovery runs detached so a slow reboot never blocks the next
    * tick -- only per-device dispatch is guarded, via `#inFlight`.
@@ -146,13 +146,13 @@ export class LeaseHealthMonitor {
       }
       const lease = snapshot.leases.find((candidate) => candidate.deviceId === device.id);
       if (lease === undefined) {
-        // A release is racing this tick; nothing to classify against.
+        // why: A release is racing this tick; nothing to classify against.
         this.#counters.delete(device.id);
         continue;
       }
       const observedDevices = observedByPlatform.get(device.spec.platform);
       if (observedDevices === undefined) {
-        // This platform's listManaged() failed this tick; skip rather than misread it as a crash.
+        // why: This platform's listManaged() failed this tick; skip rather than misread it as a crash.
         continue;
       }
       const observed = observedDevices.find(
@@ -164,7 +164,7 @@ export class LeaseHealthMonitor {
           this.#dispatchRecovery(device, lease);
         }
       } catch (error: unknown) {
-        // Classification writes to the registry (clearRecovery), which throws if the
+        // why: Classification writes to the registry (clearRecovery), which throws if the
         // device disappeared between this tick's snapshot and the write. One device's
         // bad luck must not cost the remaining leased devices their turn this tick.
         this.#logger.warn("failed to classify leased device", {
@@ -194,7 +194,7 @@ export class LeaseHealthMonitor {
         const reality = await this.options.drivers.get(platform).listManaged();
         observedByPlatform.set(platform, reality.devices);
       } catch (error: unknown) {
-        // One bad shell-out must never be read as evidence of a crash.
+        // why: One bad shell-out must never be read as evidence of a crash.
         this.#logger.warn("listManaged failed; skipping platform for this tick", {
           error: summarizeError(error),
           platform,
@@ -204,7 +204,6 @@ export class LeaseHealthMonitor {
     return observedByPlatform;
   }
 
-  /** Updates crash counters for one device and reports whether it needs a recovery attempt. */
   async #classify(
     device: VirtualDevice,
     lease: LeaseRecord,
@@ -220,7 +219,7 @@ export class LeaseHealthMonitor {
       return this.#classifyRunning(device, lease, counters, observed);
     }
     if (observed.runState === "transitioning") {
-      // `Booting` / `Shutting Down` / adb-offline: inconclusive, leave counters unchanged.
+      // why: `Booting` / `Shutting Down` / adb-offline: inconclusive, leave counters unchanged.
       return false;
     }
     return this.#classifyStopped(counters);
@@ -250,7 +249,7 @@ export class LeaseHealthMonitor {
     if (device.recoveringSince !== undefined || device.recoveryAttempts !== undefined) {
       await this.options.decisions.run(() => this.options.registry.clearRecovery(device.id));
     }
-    // A stopped device cannot be read reliably (Android's erasable mark lives on the
+    // why: A stopped device cannot be read reliably (Android's erasable mark lives on the
     // userdata partition, reachable only over adb while the emulator runs), so provenance
     // drift is only ever trusted while the device is running.
     const drift = observed.mark === undefined ? undefined : provenanceDrift(observed.mark);
@@ -271,7 +270,7 @@ export class LeaseHealthMonitor {
       return;
     }
     if (this.#inFlight.size >= this.options.config.health.maxConcurrentRecoveries) {
-      // Cap reached; this device's counters stay elevated and it is retried next tick.
+      // why: Cap reached; this device's counters stay elevated and it is retried next tick.
       return;
     }
     this.#inFlight.add(device.id);
@@ -300,7 +299,7 @@ export class LeaseHealthMonitor {
     const attempt = recorded.recoveryAttempts ?? attemptsSoFar + 1;
 
     if (attempt === 1) {
-      // A fact about the crash itself, not about each retry -- fired once per crash.
+      // why: A fact about the crash itself, not about each retry -- fired once per crash.
       this.options.eventBus.emit(
         "device.crash-detected",
         {
@@ -339,7 +338,7 @@ export class LeaseHealthMonitor {
     }
 
     if (recovered === undefined) {
-      // The world changed under us -- lease released, TTL expired, device claimed
+      // why: The world changed under us -- lease released, TTL expired, device claimed
       // elsewhere. Not a failure: nothing more to do for this device.
       this.#counters.delete(device.id);
       return;
@@ -383,7 +382,7 @@ export class LeaseHealthMonitor {
     try {
       await this.options.releaser.releaseDeviceLost(lease.id);
     } catch (releaseError: unknown) {
-      // Must never kill the tick loop; the lease stays live and is retried next tick.
+      // why: Must never kill the tick loop; the lease stays live and is retried next tick.
       this.#logger.error("releaseDeviceLost failed", {
         deviceId: device.id,
         error: summarizeError(releaseError),
@@ -394,7 +393,6 @@ export class LeaseHealthMonitor {
     this.#counters.delete(device.id);
   }
 
-  /** Cancellable backoff wait; `dispose()` resolves it immediately without further action. */
   #wait(ms: number): Promise<void> {
     return new Promise((resolve) => {
       const timer = this.options.clock.setTimer(ms, () => {
@@ -409,7 +407,7 @@ export class LeaseHealthMonitor {
 type ProvenanceDrift = "durable-mark-missing" | "erased" | "mark-mismatch";
 
 /**
- * Mirrors `provenanceDrift` in doctor.ts, which is not exported and this
+ * why: Mirrors `provenanceDrift` in doctor.ts, which is not exported and this
  * module may not edit that file. See its comment for the full reasoning on
  * `erased` / `mark-mismatch` / `durable-mark-missing`.
  */

@@ -170,7 +170,7 @@ describe("LeaseReleaseCoordinator", () => {
     expect(harness.reclaims).toEqual([]);
   });
 
-  // The reclaim runs after the release has committed and after its caller is gone, so
+  // why: The reclaim runs after the release has committed and after its caller is gone, so
   // its failure has nowhere to propagate to -- it is logged (see the background-failure
   // test below) rather than surfaced. What must still hold is that the registry-only
   // half committed first: the lease is gone and the device is `reclaiming`, which is
@@ -211,7 +211,6 @@ describe("LeaseReleaseCoordinator", () => {
       await blocked;
     };
 
-    // The release itself is already done -- its reclaim is still stuck on `blocked`.
     await harness.coordinator.release(first.lease.id, "explicit");
     await started;
 
@@ -222,7 +221,7 @@ describe("LeaseReleaseCoordinator", () => {
     const queuedRelease = harness.coordinator.release(second.lease.id, "explicit");
 
     await flush();
-    // Maintenance stays shut on the backgrounded reclaim, not just on the release that
+    // why: Maintenance stays shut on the backgrounded reclaim, not just on the release that
     // started it: an operator reset only ever acts on `ready`/`shutdown` records
     // (NukeService#canOperate), so a device left mid-reclaim would be skipped by the
     // very reset that was supposed to take it down.
@@ -320,7 +319,7 @@ describe("LeaseReleaseCoordinator", () => {
 
     await started;
     await flush();
-    // Unlike every client-reachable release, this one does not hand the reclaim off:
+    // why: Unlike every client-reachable release, this one does not hand the reclaim off:
     // the reset walks the device list the moment it resolves.
     expect(releaseSettled).toBe(false);
 
@@ -368,7 +367,7 @@ describe("LeaseReleaseCoordinator", () => {
           await blocked;
         };
 
-        // The registry-only half (device -> reclaiming, lease gone, `lease.released`
+        // why: The registry-only half (device -> reclaiming, lease gone, `lease.released`
         // emitted) is the whole of what the releasing caller needs -- an agent's MCP or CLI
         // release, an operator `release --all`, or a device recovery giving up. The
         // driver-side reclaim is still stuck on `blocked` and none of them may wait for it,
@@ -440,7 +439,7 @@ describe("LeaseReleaseCoordinator", () => {
 
       unblockReclaim();
       await settling;
-      // This is what keeps a graceful `daemon stop` finishing on a settled pool
+      // why: This is what keeps a graceful `daemon stop` finishing on a settled pool
       // rather than leaving devices `reclaiming` for the next startup to recover.
       expect(harness.reclaims.map((released) => released.lease.id)).toEqual(
         expect.arrayContaining([first.lease.id, second.lease.id]),
@@ -458,7 +457,7 @@ describe("LeaseReleaseCoordinator", () => {
       await harness.coordinator.release(granted.lease.id, "explicit");
       await harness.coordinator.settleBackgroundReclaims();
 
-      // ReclaimCoordinator already wakes the queue itself, so this notice is a safety
+      // why: ReclaimCoordinator already wakes the queue itself, so this notice is a safety
       // net: it runs after the claim is gone, so matching sees the device even if an
       // earlier wake-up raced the release.
       expect(claimedAtNotice.length).toBeGreaterThanOrEqual(1);
@@ -478,7 +477,7 @@ describe("LeaseReleaseCoordinator", () => {
 
       await harness.coordinator.release(granted.lease.id, "explicit");
 
-      // Claimed while the reclaim is in flight -- this is what keeps
+      // why: Claimed while the reclaim is in flight -- this is what keeps
       // StartupConverger#recoverInterruptedReclaims from treating a reclaim this
       // process just started as one orphaned by a *previous* crash, and what keeps
       // `simlock doctor` from reading a long-but-healthy erase as a stalled transition.
@@ -508,7 +507,7 @@ describe("LeaseReleaseCoordinator", () => {
         },
       });
 
-      // Vitest fails a test on an unhandled rejection, so simply not throwing here
+      // why: Vitest fails a test on an unhandled rejection, so simply not throwing here
       // already proves the background failure was caught, not just re-thrown late.
       await expect(
         failingCoordinator.release(granted.lease.id, "explicit"),
@@ -581,7 +580,7 @@ describe("LeaseReleaseCoordinator", () => {
       await flush();
 
       expect(harness.registry.snapshot.leases).toEqual([]);
-      // The device names the lease its wipe was put off for, so a later start runs that wipe.
+      // why: The device names the lease its wipe was put off for, so a later start runs that wipe.
       expect(harness.registry.snapshot.devices).toMatchObject([
         { deferredReclaimLeaseId: granted.lease.id, state: "reclaiming" },
       ]);
