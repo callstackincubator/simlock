@@ -143,6 +143,11 @@ export class WarmPool {
   /** why: every report of the last pass, learned kinds included, which `figures()` lists and the log and the event leave out. */
   #figured: readonly TargetReport[] = [];
   #passed = false;
+  /**
+   * why: The configured targets (by position in `warmPool.targets`) that missed their count and have
+   * not been met since: the event fires on entering this, and a target leaves it only when its
+   * ready devices reach its count.
+   */
   #missed = new Set<number>();
   #covers = new WeakMap<TargetReport, readonly number[]>();
   #owners: readonly { readonly index: number; readonly spec: VirtualSpec }[] = [];

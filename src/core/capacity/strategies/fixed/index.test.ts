@@ -93,6 +93,7 @@ describe("fixed strategy", () => {
       });
     }
     const shutdown: CapacityDevice = { mode: "slim", platform: "ios", state: "shutdown" };
+    // why: 1 GiB of RAM and three devices: a strategy with a RAM budget would refuse this boot.
     expect(fixed.canBoot(shutdown, [...mixed, shutdown])).toEqual({ ok: true });
     expect(fixed.ramBudget(mixed)).toBeUndefined();
   });

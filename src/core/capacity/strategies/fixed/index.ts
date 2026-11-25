@@ -15,6 +15,12 @@ import {
   type RunningCapacity,
 } from "../../strategy.js";
 
+/**
+ * why: A pinned number of devices, with no machine inspection at all: no RAM budget,
+ * no CPU-derived defaults. `maxRunning` alone is a complete configuration --
+ * the per-platform blocks exist only to carve that budget up, and each field
+ * falls back to the global number when omitted.
+ */
 export interface FixedStrategyOptions {
   readonly maxRunning: number;
   readonly ios?: PlatformOptions;

@@ -218,6 +218,11 @@ export function reserveOnVirtualPlatforms(
   return { android: kept("android"), ios: kept("ios") };
 }
 
+/**
+ * why: The running slots the operator's reserve holds back on each platform: `reserveRunning`, never
+ * more than that platform's own running limit. The one place the cap is decided; `doctor` reads it
+ * too, to tell whether the targets fit what the reserve leaves.
+ */
 export function reservedRunning(
   config: { readonly reserveRunning: { readonly ios: number; readonly android: number } },
   capacity: Pick<RunningCapacity, "ios" | "android">,
@@ -260,6 +265,13 @@ function servesSpec(spec: VirtualSpec, demand: WaitingDemand): boolean {
   return specMode(spec) === demand.mode && fits(demand.requirement, spec, demand.classOf);
 }
 
+/**
+ * why: Shutdowns that bring every over-budget platform and the global count back under, least
+ * recently used first, never a device that serves a waiting request. A platform that is over
+ * takes its own devices first; the global count then takes the least recently used of any.
+ * Each proposal gives its slot back in `room`, which the boots then read. The reserve in `held`
+ * is part of the budget: idle devices that fill a reserved slot are over it.
+ */
 function overBudget(
   view: WarmPolicyView,
   running: readonly VirtualDevice[],
