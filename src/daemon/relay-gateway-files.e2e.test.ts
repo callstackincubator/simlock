@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import type { LeaseFilesLimits } from "../lease-files/index.js";
 import { TYPE } from "../link/testing.js";
+import { NodeFilesystem } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import type { RelayTarget, TwoWayRelayTarget } from "./relay.js";
 import type { StartDaemonOptions } from "./main.js";
@@ -25,6 +26,13 @@ import {
   type FleetExec,
 } from "./test-relay-support.js";
 import { buildCall } from "./test-relay-gateway.js";
+
+// why: the free disk of the host that runs the tests, below the worker's default disk-pressure threshold (10 GiB).
+class LowDiskFilesystem extends NodeFilesystem {
+  override diskFree(): Promise<number> {
+    return Promise.resolve(5 * 1024 ** 3);
+  }
+}
 
 const poll = <T>(read: () => T | Promise<T>, timeout = 5_000) => expect.poll(read, { timeout });
 
@@ -88,9 +96,16 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     ...overrides,
   });
 
-  async function fileRig(limits?: LeaseFilesLimits, fileSilenceMs?: number) {
+  async function fileRig(
+    limits?: LeaseFilesLimits,
+    fileSilenceMs?: number,
+    filesystem?: NodeFilesystem,
+  ) {
     const fleet = await startFleet(undefined, {
-      ...(limits === undefined ? {} : { worker: { leaseFilesLimits: limits } }),
+      worker: {
+        ...(limits === undefined ? {} : { leaseFilesLimits: limits }),
+        ...(filesystem === undefined ? {} : { filesystem }),
+      },
       ...(fileSilenceMs === undefined ? {} : { gateway: { fileSilenceMs } }),
     });
     const { secret, token } = await fleet.gateway.dispatch(
@@ -215,6 +230,15 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const entries = await Promise.all(folders.map((folder) => readdir(join(root, folder))));
     return entries.flat().filter((entry) => entry.startsWith(".upload-")).length;
   }
+
+  it("the file rig's worker stores an upload when the host has less free disk than the worker's default disk-pressure threshold", async () => {
+    const { call } = await fileRig(undefined, undefined, new LowDiskFilesystem());
+
+    const put = await call("/fixture.bin", { body: "bytes", method: "PUT" });
+
+    expect(put.status).toBe(201);
+    expect(await put.json()).toEqual({ name: "fixture.bin", size: 5 });
+  }, 30_000);
 
   it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
     const { call, channelsOpened, declare } = await fileRig({

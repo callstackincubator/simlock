@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { FakeClock, FakeHttpStreamClient, MemoryFilesystem } from "../ports/index.js";
@@ -69,7 +70,7 @@ async function files(
     const pieces = options.pieces;
     const opened = filesystem.openFile.bind(filesystem);
     filesystem.openFile = async (path) =>
-      path.endsWith("/big.bin")
+      basename(path) === "big.bin"
         ? {
             close: async () => undefined,
             read: () => {
@@ -115,6 +116,17 @@ describe("CLI: simlock files", () => {
       name: "app-debug.apk",
       size: 9,
     });
+
+    const insecure = await files(["files", "list", "--allow-insecure-http"], undefined, {
+      env: { ...AGENT_A, SIMLOCK_URL: "http://100.75.181.35:7300" },
+    });
+    expect(insecure.code).toBe(0);
+    expect(insecure.farm.connections.map(({ url }) => url)).toEqual([
+      "ws://100.75.181.35:7300/v1/session",
+    ]);
+    expect(insecure.stream.requests.map(({ url }) => url)).toEqual([
+      "http://100.75.181.35:7300/v1/leases/lse_1/files",
+    ]);
 
     const named = await files(["files", "put", "app-debug.apk", "--name", "app.apk"], stored);
     expect(named.stream.requests.map(({ url }) => url)).toEqual([

@@ -183,7 +183,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
           expect(tags).toContain(TAG.keyframe);
 
           // why: ADR 0079 §5: the driver's reset video makes a still screen's encoder send a key frame
-          // at least every 5 s (it resets after 4 s of none), so a viewer that joins or resets its decoder
+          // at least every 5 s (it resets after 3 s of none), so a viewer that joins or resets its decoder
           // never waits longer. The first 15 s are left out: an emulator that has just booted is still
           // rendering and takes 2 to 5 s to answer its first resets (gaps of 6 to 9 s on this lane),
           // then 0.2 to 0.5 s, so only the settled gaps measure the bound.

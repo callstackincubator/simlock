@@ -16,6 +16,7 @@ import {
   awaitWithin,
   reconnectWhileWaiting,
   RELEASE_TIMEOUT_MS,
+  slimLeaseHint,
   startLeaseRenewal,
   startReconnect,
   UNREACHABLE_GIVE_UP_MS,
@@ -36,6 +37,7 @@ import type {
   RotateDeviceOutput,
   RunOnDeviceInput,
 } from "./contracts.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * why: How many ended leases `#announceLeaseLost` remembers, to keep one ending from reaching a
@@ -203,7 +205,8 @@ export class McpSession {
       }
       this.#heldLeaseId = grant.lease.id;
       this.#startRenewal(grant.lease);
-      return grant;
+      const hint = await slimLeaseHint({ clock: this.#clock, client, grant, frontend: "mcp" });
+      return hint === undefined ? grant : { ...grant, hint };
     });
   }
 
@@ -804,12 +807,7 @@ function noop(): void {}
 function asSimlockError(error: unknown): unknown {
   return isSimlockError(error)
     ? error
-    : new SimlockError(
-        "DAEMON_CONNECTION_LOST",
-        "transport",
-        error instanceof Error ? error.message : String(error),
-        {},
-      );
+    : new SimlockError("DAEMON_CONNECTION_LOST", "transport", errorMessage(error), {});
 }
 
 /**

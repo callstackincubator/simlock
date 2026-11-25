@@ -306,6 +306,14 @@ export function fakeClient(overrides: Partial<SimlockAdminClient> = {}): Simlock
         version: input.version,
       }),
     installComponentOnWorkers: () => Promise.resolve({ results: [] }),
+    makeSeed: (input) =>
+      Promise.resolve({
+        model: input.model,
+        osVersion: input.osVersion ?? "26.5",
+        outcome: "settled" as const,
+        platform: input.platform,
+        sourceId: "seed-1",
+      }),
     removeComponent: (input) =>
       Promise.resolve({
         outcome: input.dryRun === true ? ("would-remove" as const) : ("removed" as const),
@@ -438,6 +446,8 @@ export async function startInMemoryDaemon(options: {
   readonly adminTokenPath: string;
 }): Promise<{ daemon: DaemonServer; adminSecret: Auth["adminSecret"] }> {
   const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
+  // why: the host makes the endpoint's folder only for a socket file; on Windows the endpoint is a pipe, and the folder is the daemon's data directory, which the daemon's own start makes.
+  await filesystem.mkdirp(dirname(adminTokenPath));
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const registry = await loadTestRegistry({

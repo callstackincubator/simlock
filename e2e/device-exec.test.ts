@@ -58,7 +58,10 @@ interface Fleet {
  * makes. Factored out so each test reads as the thing it is proving rather than as setup. */
 async function fleet(): Promise<Fleet> {
   const { env, port } = await withHttpDaemon((port) => ({
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    configOverrides: {
+      http: { enabled: true, host: "127.0.0.1", port },
+      diskPressure: { freeBytesThreshold: 0 },
+    },
   }));
   await env.driverScript.set({
     android: { knownModels: ["Pixel 8"], availableOsVersions: ["35"] },
@@ -135,6 +138,18 @@ function chunksOf(frames: readonly SseFrame[], stream: "stdout" | "stderr"): str
 async function errorCodeOf(response: Response): Promise<string> {
   return ((await response.json()) as { error: { code: string } }).error.code;
 }
+
+describe("the device.exec fleet", () => {
+  // why: the worker refuses an upload while the host's free disk is under this threshold (ADR 0067 §4), so a default of 10 GiB makes the upload tests below pass or fail with the host's free disk.
+  it("keeps a disk-pressure threshold of 0 bytes, not the 10 GiB default", async () => {
+    const { env } = await fleet();
+
+    const threshold = await env.cli(["config", "get", "diskPressure.freeBytesThreshold"]);
+
+    expect(threshold.code, threshold.stderr).toBe(0);
+    expect(threshold.json).toBe(0);
+  });
+});
 
 describe("device.exec over HTTP", () => {
   it("runs the driver-scoped command on the daemon and streams both its output and its exit code", async () => {

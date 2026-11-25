@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import {
   FakeClock,
   FakeTcpProbe,
   MemoryFilesystem,
+  type Logger,
   type ProcessRunner,
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
@@ -47,6 +49,7 @@ export function createPart(
     readonly extraEnv?: Readonly<Record<string, string>>;
     readonly hostAbi?: string;
     readonly ids?: readonly string[];
+    readonly logger?: Logger;
     readonly seedLaunchInputs?: readonly string[];
     readonly seedOnlyInputs?: readonly string[];
   },
@@ -145,6 +148,7 @@ export function createPart(
     emulator,
     filesystem,
     idGenerator,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     ownership,
     processRunner,
     systemImages,
@@ -167,9 +171,9 @@ export const buildPart: BuildProvisioner = async (filesystem, processRunner, opt
 export const libraryHarness = (options?: Parameters<typeof libraryHarnessWith>[1]) =>
   libraryHarnessWith(buildPart, options);
 
-export const sources = `${avdDirectory}/sources`;
+export const sources = join(avdDirectory, "sources");
 
-export const seedHome = `${sources}/seed_two`;
+export const seedHome = join(sources, "seed_two");
 
 export async function seedHarness(
   expectations: readonly ScriptedProcessExpectation[],
@@ -179,6 +183,7 @@ export async function seedHarness(
     readonly config?: string;
     readonly filesystem?: MemoryFilesystem;
     readonly ids?: readonly string[];
+    readonly logger?: Logger;
   } = {},
 ) {
   const filesystem = await androidFilesystem({}, options.filesystem);
@@ -193,6 +198,7 @@ export async function seedHarness(
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     database,
     ids: options.ids ?? ["one", "two", "three"],
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
   const spec = await part.catalog.resolveSpec({
     model: "Pixel 5",

@@ -31,6 +31,7 @@ import { answerBoot, checkBootLease, isBootCall } from "./boot.js";
 import { answerOrientation, isOrientationCall } from "./orientation.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
+import { errorMessage } from "../../shared/index.js";
 
 type RpcRequest = RpcRead & { readonly kind: "request" };
 
@@ -139,7 +140,7 @@ async function routeCall(
   if (kind === "allocate") {
     const work = allocate(context, { call: read, identity, request }).catch((error: unknown) => {
       context.logger.error("agent-device allocate failed", {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
       return frontReply(failure("agent-device allocate failed"), read);
     });
@@ -296,7 +297,7 @@ async function passThrough(
     if (response.status >= 500) logFailedReply(context, response);
     return response;
   } catch (error) {
-    const reply = notAvailable(error instanceof Error ? error.message : String(error));
+    const reply = notAvailable(errorMessage(error));
     return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, rpc);
   }
 }

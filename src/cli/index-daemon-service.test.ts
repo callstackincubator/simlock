@@ -12,6 +12,7 @@ import {
   ScriptedProcessRunner,
   MemoryFilesystem,
   MemoryIpcTransport,
+  resolveDaemonSocketPath,
   serviceDefinition,
   type ProcessResult,
   type ServiceManager,
@@ -66,7 +67,7 @@ describe("CLI: daemon install (#830)", () => {
           adminTokenPath: join(dataDirectory, "admin.token"),
           filesystem,
           ipcTransport,
-          socketPath: join(dataDirectory, "daemon.sock"),
+          socketPath: resolveDaemonSocketPath(dataDirectory),
         });
       },
     });
@@ -80,7 +81,8 @@ describe("CLI: daemon install (#830)", () => {
         daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
-        hostPlatform: "linux",
+        // why: the CLI looks for the daemon at the endpoint of its host platform, and this daemon listens on the one the host gives (a pipe on Windows).
+        hostPlatform: process.platform,
         runTool: async () => ({ outcome: "not-found" }),
         service: {
           manager: serviceManager,
@@ -107,7 +109,7 @@ describe("CLI: daemon install (#830)", () => {
         root: join(home, ".simlock"),
         name: "com.callstack.simlock.worker",
         args: [mainPath],
-        logPath: "/Users/me/.simlock/daemon.log",
+        logPath: join(home, ".simlock", "daemon.log"),
       },
       {
         label: "gateway on a host with no gateway folder yet",
@@ -116,7 +118,7 @@ describe("CLI: daemon install (#830)", () => {
         root: join(home, ".simlock"),
         name: "com.callstack.simlock.gateway",
         args: [mainPath, "--gateway"],
-        logPath: "/Users/me/.simlock/gateway/daemon.log",
+        logPath: join(home, ".simlock", "gateway", "daemon.log"),
       },
       {
         label: "another SIMLOCK_HOME",
@@ -125,7 +127,7 @@ describe("CLI: daemon install (#830)", () => {
         root: "/tmp/x",
         name: "com.callstack.simlock.worker.2e56aa",
         args: [mainPath],
-        logPath: "/tmp/x/daemon.log",
+        logPath: join("/tmp/x", "daemon.log"),
       },
     ];
 
@@ -137,7 +139,7 @@ describe("CLI: daemon install (#830)", () => {
       expect(serviceManager.installs, label).toHaveLength(1);
       expect(serviceManager.installs[0], label).toMatchObject({
         name: testCase.name,
-        path: `/Users/me/Library/LaunchAgents/${testCase.name}.plist`,
+        path: join(home, "Library", "LaunchAgents", `${testCase.name}.plist`),
         command: nodePath,
         args: testCase.args,
         logPath: testCase.logPath,
@@ -176,7 +178,7 @@ describe("CLI: daemon install (#830)", () => {
         state: "installed",
         manager: "launchd",
         name: "com.callstack.simlock.worker",
-        path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+        path: join(home, "Library", "LaunchAgents", "com.callstack.simlock.worker.plist"),
       },
     });
   });
@@ -186,19 +188,25 @@ describe("CLI: daemon install (#830)", () => {
       {
         label: "default config directory",
         env: {},
-        unit: "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+        unit: join(
+          "/home/me",
+          ".config",
+          "systemd",
+          "user",
+          "com.callstack.simlock.worker.service",
+        ),
       },
       {
         label: "absolute XDG_CONFIG_HOME",
         env: { XDG_CONFIG_HOME: "/xdg" },
-        unit: "/xdg/systemd/user/com.callstack.simlock.worker.service",
+        unit: join("/xdg", "systemd", "user", "com.callstack.simlock.worker.service"),
       },
     ];
     for (const { label, env, unit } of cases) {
       const { exitCode, output, serviceManager } = await install({
         argv: ["daemon", "install"],
         role: "worker",
-        root: "/home/me/.simlock",
+        root: join("/home/me", ".simlock"),
         env,
         linux: true,
       });
@@ -222,7 +230,7 @@ describe("CLI: daemon install (#830)", () => {
     const lookupFails = await install({
       argv: ["daemon", "install"],
       role: "worker",
-      root: "/home/me/.simlock",
+      root: join("/home/me", ".simlock"),
       linux: true,
       user: unknownUser,
     });
@@ -500,7 +508,7 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
             adminTokenPath: join(root, "admin.token"),
             filesystem,
             ipcTransport,
-            socketPath: join(root, "daemon.sock"),
+            socketPath: resolveDaemonSocketPath(root, "linux"),
           });
         }
         // why: a daemon the service starts on a config it refuses exits at once and never answers.
@@ -512,7 +520,7 @@ describe("CLI: daemon install with a config the CLI refuses (#1760)", () => {
               adminTokenPath: join(root, "admin.token"),
               filesystem,
               ipcTransport,
-              socketPath: join(root, "daemon.sock"),
+              socketPath: resolveDaemonSocketPath(root, "linux"),
             });
           },
         });
@@ -586,7 +594,7 @@ describe("CLI: a start goes through the service (#830)", () => {
             adminTokenPath: join(root, "admin.token"),
             filesystem,
             ipcTransport,
-            socketPath: join(root, "daemon.sock"),
+            socketPath: resolveDaemonSocketPath(root),
           });
         },
       });
@@ -614,7 +622,8 @@ describe("CLI: a start goes through the service (#830)", () => {
         daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
-        hostPlatform: "linux",
+        // why: the CLI looks for the daemon at the endpoint of its host platform, and this daemon listens on the one the host gives (a pipe on Windows).
+        hostPlatform: process.platform,
         runTool: async () => ({ outcome: "not-found" }),
       });
 
@@ -685,8 +694,9 @@ describe("CLI: a start through a service that fails (#830)", () => {
             return code;
           },
         );
-        for (let tick = 0; tick < 500 && !settled; tick += 1) {
-          clock.advance(50);
+        // why: `settle` waits one timer tick, about 15 ms on Windows, so the clock moves in whole seconds to keep the 20 s deadline within a few hundred ticks.
+        for (let tick = 0; tick < 25 && !settled; tick += 1) {
+          clock.advance(1_000);
           await settle();
           await settle();
         }
@@ -719,7 +729,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
   const home = "/Users/me";
   const root = join(home, ".simlock");
   const name = "com.callstack.simlock.worker";
-  const plist = `${home}/Library/LaunchAgents/${name}.plist`;
+  const plist = join(home, "Library", "LaunchAgents", `${name}.plist`);
   const nodePath = "/opt/node/bin/node";
   const mainPath = "/opt/simlock/dist/daemon/main.js";
   const done = (code: number | null, stderr = "") => ({ code, stdout: "", stderr });
@@ -863,7 +873,8 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
 });
 
 describe("CLI: daemon service on Windows (#1698)", () => {
-  const root = "/Users/me/.simlock";
+  // why: `serviceDefinition` compares the root with `join(home, ".simlock")`, which uses `\` on Windows, so a literal POSIX root would give the task name a hash suffix there.
+  const root = join("/Users/me", ".simlock");
   const nodePath = "/opt/node/node.exe";
   const mainPath = "/opt/simlock/dist/daemon/main.js";
   const sid = "S-1-5-21-1-2-3-1001";
@@ -887,11 +898,12 @@ describe("CLI: daemon service on Windows (#1698)", () => {
       await filesystem.writeFileAtomic(file, "");
     }
     const startDaemon = async (): Promise<void> => {
+      // why: the CLI under test derives the endpoint for `hostPlatform: "linux"`, so a Windows host that joins with `\` would listen where the CLI never looks.
       await startInMemoryDaemon({
         adminTokenPath: join(dataDirectory, "admin.token"),
         filesystem,
         ipcTransport,
-        socketPath: join(dataDirectory, "daemon.sock"),
+        socketPath: resolveDaemonSocketPath(dataDirectory, "linux"),
       });
     };
     if (options.daemonRunning === true) await startDaemon();
@@ -1068,7 +1080,7 @@ describe("CLI: daemon service on Windows (#1698)", () => {
     const parts = supervisorArguments(xml);
     expect(parts?.slice(1, 5)).toEqual([
       nodePath,
-      "/opt/simlock/dist/daemon/service-main.js",
+      join(dirname(mainPath), "service-main.js"),
       undefined,
       name,
     ]);

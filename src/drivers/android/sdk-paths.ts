@@ -17,7 +17,7 @@ export interface AndroidSdkPaths {
  * why: The SDK's command-line tools are `.bat` scripts on Windows and its binaries `.exe`; a path
  * without the extension is not a file there, so a complete SDK would read as missing every tool.
  */
-function withWindowsExtension(
+export function withWindowsExtension(
   path: string,
   platform: NodeJS.Platform,
   extension: ".bat" | ".exe",

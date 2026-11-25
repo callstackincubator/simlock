@@ -14,6 +14,7 @@ import {
 import { LinkChannelError, type LinkChannel } from "../link/index.js";
 import type { Logger } from "../ports/index.js";
 import { DispatchError } from "./dispatch.js";
+import { errorMessage } from "../shared/index.js";
 
 export type RelayTarget = (
   request: Request,
@@ -465,5 +466,5 @@ function headerViolation(headers: readonly (readonly [string, string])[]): strin
 }
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }

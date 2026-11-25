@@ -1,7 +1,8 @@
 import { parseArgs } from "node:util";
 
-import { UsageError, errorMessage, withHelpHint } from "./errors.js";
+import { UsageError, withHelpHint } from "./errors.js";
 import type { Output } from "./types.js";
+import { errorMessage } from "../shared/index.js";
 
 export { UsageError, withHelpHint } from "./errors.js";
 

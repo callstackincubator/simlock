@@ -18,6 +18,7 @@ import {
 import { socketHeld } from "../updater/index.js";
 import { type UpdateCoordinatorOptions } from "./update-coordinator.js";
 import { type VersionCheck } from "./version-check.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface UpdateOptionsParts {
   readonly clock: Clock;
@@ -58,10 +59,6 @@ export function updateOptionsFor(
     simlockHome: resolveSimlockHome(),
     version: parts.version,
   };
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** why: a history that refuses to start is one a newer simlock wrote or a migration could not fix; the daemon stops rather than run without the figures it promises. */

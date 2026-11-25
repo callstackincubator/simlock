@@ -127,7 +127,9 @@ gh issue view <N> --json number,title,labels,assignees,body
 ```
 
 - `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`,
-  `refactor:ready`: one issue; go to step 2.
+  `refactor:ready`: one issue; go to step 2. Several bugs the maintainer
+  asked for in one PR (coding rule 3): claim each, deliver the first, and
+  give every stage `also: <the others>`.
 - `feature:planned`: walk its open sub-issues (step 3).
 - `bug:new`, unassigned: triage, then the fast track (delivery rules 8
   and 17). With no triage report on the thread, or a person's reply newer

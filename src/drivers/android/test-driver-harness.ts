@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   MemoryFilesystem,
   ScriptedProcessRunner,
@@ -6,6 +7,7 @@ import {
   type ScriptedProcessExpectation,
   FakeClock,
   FakeProcessSupervisor,
+  type ProcessTable,
   FakeTcpListenerFactory,
   FakeTcpProbe,
   FakeTcpStreamConnector,
@@ -93,8 +95,8 @@ export async function provisionedHarness(
 ) {
   const filesystem = await androidFilesystem({}, options.filesystem);
   const ids = options.ids ?? ["one", "two"];
-  const seedHome = `${avdDirectory}/sources/seed_${ids[1] ?? "two"}`;
-  const copyHome = `${avdDirectory}/simlock_${ids[0] ?? "one"}`;
+  const seedHome = join(avdDirectory, "sources", `seed_${ids[1] ?? "two"}`);
+  const copyHome = join(avdDirectory, `simlock_${ids[0] ?? "one"}`);
   await writeSeedFiles(filesystem, seedHome, options.config);
   const tcpProbe = new FakeTcpProbe([adbServerPort]);
   const clock = new FakeClock();
@@ -147,6 +149,9 @@ export async function createDriver(
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly bootTimeoutMs?: number;
+    /** why: a settle judges its copy idle from it; with none the driver offers no `settleSeed`. */
+    readonly platform?: NodeJS.Platform;
+    readonly processTable?: ProcessTable;
     readonly scrcpyServerPath?: string;
     readonly tcpListener?: FakeTcpListenerFactory;
     readonly tcpProbe?: FakeTcpProbe;
@@ -195,6 +200,8 @@ function onlyProvided(options: {
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly bootTimeoutMs?: number;
+  readonly platform?: NodeJS.Platform;
+  readonly processTable?: ProcessTable;
   readonly scrcpyServerPath?: string;
   readonly tcpListener?: FakeTcpListenerFactory;
   readonly tcpStreamConnector?: FakeTcpStreamConnector;
@@ -208,6 +215,8 @@ function onlyProvided(options: {
       acceptAndroidLicenses: options.acceptAndroidLicenses,
       deviceProfileSources: options.deviceProfileSources,
       onDiagnostic: options.onDiagnostic,
+      platform: options.platform,
+      processTable: options.processTable,
     }),
     config: omitUndefined({ emulator: options.emulator, bootTimeoutMs: options.bootTimeoutMs }),
   };

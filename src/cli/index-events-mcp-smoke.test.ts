@@ -16,6 +16,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  resolveDaemonSocketPath,
   FakeSystemStats,
 } from "../ports/index.js";
 import { createAuth, tokensOwner } from "../auth/index.js";
@@ -671,7 +672,7 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
 async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonServer }> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-cli-smoke-"));
   temporaryDirectories.push(directory);
-  const socketPath = join(directory, "daemon.sock");
+  const socketPath = resolveDaemonSocketPath(directory);
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const filesystem = new MemoryFilesystem();

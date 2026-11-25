@@ -10,6 +10,7 @@ import {
   type ProcessStreamOptions,
   type StreamingProcessHandle,
 } from "./process-runner.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface LoggingProcessRunnerOptions {
   readonly clock: Clock;
@@ -108,7 +109,7 @@ export class LoggingProcessRunner implements ProcessRunner {
     this.#logger.debug("process", {
       command,
       args: [...args],
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       durationMs: this.#clock.now() - startedAt,
     });
   }

@@ -17,9 +17,10 @@ name: Issue state
 # - a PR closed without merge releases the claim on the issue it would close;
 # - a claim with no activity for three days is released;
 # - bug:needs-info with no activity for two weeks closes as not planned;
-# - a PR from a <kind>/<n> branch must close issue <n> and no other; a branch starting with a
-#   kind prefix is exactly <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task,
-#   a bug or a refactor comes from that issue's <kind>/<n>;
+# - a PR from a <kind>/<n> branch must close issue <n> and no other, but a bug/<n> PR may also
+#   close other bug: issues (coding rule 3); a branch starting with a kind prefix is exactly
+#   <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task or a refactor comes
+#   from that issue's <kind>/<n>, a bug from its own bug/<n> or another bug/<m>;
 # - a PR body passes .agents/scripts/pr-body-check.mjs: warnings while it is a draft, a failed
 #   check once it is ready.
 # Actions taken with the workflow token do not trigger this workflow again,
@@ -370,6 +371,8 @@ jobs:
               const kind = issue.labels
                 .map((l) => /^(bug|refactor|task):/.exec(typeof l === "string" ? l : l.name)?.[1])
                 .find(Boolean);
+              // why: coding rule 3 lets a bug/<n> PR close more bugs when the maintainer bundles them.
+              if (kind === "bug" && /^bug\/\d+$/.test(head)) continue;
               if (kind !== undefined && head !== `${kind}/${n}`) {
                 core.setFailed(`#${n} is a ${kind}, so the PR that closes it comes from ${kind}/${n}, not ${head} (coding rule 3).`);
                 return;
@@ -385,9 +388,15 @@ jobs:
               core.setFailed(`Branch ${pr.head.ref} must close #${expected}: add "Closes #${expected}" to the PR body.`);
               return;
             }
-            const others = closes.filter((n) => n !== expected);
+            const others = [];
+            for (const n of closes.filter((n) => n !== expected)) {
+              if (m[1] !== "bug") { others.push(n); continue; }
+              const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: n });
+              const bug = issue.labels.some((l) => (typeof l === "string" ? l : l.name).startsWith("bug:"));
+              if (!bug) others.push(n);
+            }
             if (others.length) {
-              core.setFailed(`Branch ${pr.head.ref} closes #${expected} but also ${others.map((n) => `#${n}`).join(", ")}; one branch closes one issue.`);
+              core.setFailed(`Branch ${pr.head.ref} closes #${expected} but also ${others.map((n) => `#${n}`).join(", ")}; one branch closes one issue, or a bug/<n> branch more bugs (coding rule 3).`);
             }
 
   pr-body:

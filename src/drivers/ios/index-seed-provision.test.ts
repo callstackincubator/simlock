@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, expect, it, vi, describe } from "vitest";
 import { DriverCrashError } from "../../core/index.js";
 import {
@@ -14,11 +15,13 @@ import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 import {
   deviceRoot,
+  sourcesSetPath,
   driverData,
   plantManagedDevice,
   waitForCalls,
   simctl,
   instanceId,
+  unownedSourcesSet,
 } from "./test-slim.js";
 import {
   UNSCOPED_LEGACY_CALLS,
@@ -51,7 +54,7 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesSetPath]).toContain(call.args[2]);
   }
 });
 
@@ -131,7 +134,7 @@ describe("IosSimctlDriver", () => {
       "the seed's row is making, with no simulator yet, when create runs",
     ).toEqual([{ state: "making", udid: null }]);
     expect(
-      filesystem.mkdirpModes.get(`${deviceRoot}/sources`),
+      filesystem.mkdirpModes.get(sourcesSetPath),
       "under deviceSet simlock the sources set is asked for private to the user",
     ).toBe(0o700);
     expect(runner.calls).toEqual([
@@ -142,7 +145,7 @@ describe("IosSimctlDriver", () => {
       { ...simctl("listapps", throwawayUdid), options: { timeoutMs: 30_000 } },
       { ...simctl("shutdown", throwawayUdid), options: { timeoutMs: 30_000 } },
       {
-        ...simctl("clone", throwawayUdid, "simlock-seed-device-1", `${deviceRoot}/sources`),
+        ...simctl("clone", throwawayUdid, "simlock-seed-device-1", sourcesSetPath),
         options: { timeoutMs: 330_000 },
       },
       { ...simctl("delete", throwawayUdid), options: { timeoutMs: 30_000 } },
@@ -254,12 +257,7 @@ describe("IosSimctlDriver", () => {
         { match: simctl("shutdown", driverData.udid) },
         {
           hangs: true,
-          match: simctl(
-            "clone",
-            driverData.udid,
-            "simlock-baseline-device-1",
-            `${deviceRoot}/sources`,
-          ),
+          match: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSetPath),
         },
       ],
     },
@@ -313,11 +311,11 @@ describe("IosSimctlDriver", () => {
       hung: [
         "simctl",
         "--set",
-        "/home/.simlock/devices/ios-sources",
+        unownedSourcesSet,
         "clone",
         seedUdid,
         driverData.name,
-        `${coreSimulatorRoot}/Devices`,
+        join(coreSimulatorRoot, "Devices"),
       ],
       isDefault: true,
       seeded: true,
@@ -343,8 +341,7 @@ describe("IosSimctlDriver", () => {
           physical: false,
         }),
       deleteArgs: (udid: string) => sourcesSimctl("delete", udid).args,
-      hung: simctl("clone", driverData.udid, "simlock-baseline-device-1", `${deviceRoot}/sources`)
-        .args,
+      hung: simctl("clone", driverData.udid, "simlock-baseline-device-1", sourcesSetPath).args,
       isDefault: false,
       seeded: false,
       steps: [
@@ -355,7 +352,7 @@ describe("IosSimctlDriver", () => {
   ])(
     "a create or clone that answers after its limit deletes the simulator it names in its own set ($call)",
     async ({ act, deleteArgs, hung, isDefault, seeded, steps }) => {
-      const devicesDir = `${coreSimulatorRoot}/Devices`;
+      const devicesDir = join(coreSimulatorRoot, "Devices");
       const lateUdid = "00000000-0000-0000-0000-0000000000c1";
       const list = isDefault
         ? { args: ["simctl", "list", "-j", "devicetypes", "runtimes"], command: "xcrun" }

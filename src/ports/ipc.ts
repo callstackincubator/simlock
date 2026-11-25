@@ -1,4 +1,5 @@
 import { createServer, connect, type Server, type Socket } from "node:net";
+import { errorMessage } from "../shared/index.js";
 
 export type IpcErrorCode =
   | "address-in-use"
@@ -326,6 +327,6 @@ export function normalizeIpcError(error: unknown): IpcError {
         : nodeCode === "ENOENT" || nodeCode === "ENOTSOCK"
           ? "endpoint-not-found"
           : "unknown";
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return new IpcError(code, message, error);
 }

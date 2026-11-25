@@ -63,7 +63,7 @@ describe("Android physical handler: inspectPhysical", () => {
     expect(runner.commands.filter((call) => call.args.includes("-s"))).toEqual([]);
   });
 
-  it.each([
+  const networkOnlyRows: (readonly [string, string, string])[] = [
     [
       "a network serial",
       "192.168.1.5:5555 device product:o1s model:SM_G991B transport_id:4",
@@ -84,7 +84,15 @@ describe("Android physical handler: inspectPhysical", () => {
       `${PHONE} device product:o1s model:SM_G991B transport_id:3`,
       PHONE,
     ],
-  ])(
+  ];
+
+  // why: adb on Windows lists no `usb:` path for any USB device, so there a USB-shaped serial
+  // without one is a phone to enrol (`physical-handler-windows.test.ts`), not a network line.
+  it.each(
+    networkOnlyRows.filter(
+      ([name]) => process.platform !== "win32" || name !== "a USB-shaped serial on a network line",
+    ),
+  )(
     "refuses %s as network-only with the USB-only message, and runs no command naming it",
     async (_name, line, id) => {
       const { driver, runner } = await world();

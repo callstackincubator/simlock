@@ -49,7 +49,7 @@ unless the maintainer explicitly authorizes its amendment. See
 9. **A module keeps its surface.** A new component that is a directory
    exposes what others use from its `index.ts`, nothing outside reaches past
    it (architecture rule 14), a host wires it through one factory
-   (architecture rule 18), and a new module under `src/` gets its manual and
+   (architecture rule 18, unless it imports nothing and no host wires it), and a new module under `src/` gets its manual and
    a row in `docs/internal/ARCHITECTURE.md` (documentation rule 7).
 10. **Fallow stays green.** A new file that nothing imports statically — an
    entry point, a dynamically loaded module, a config file only a tool reads

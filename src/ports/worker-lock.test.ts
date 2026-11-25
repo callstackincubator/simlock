@@ -99,20 +99,24 @@ describe("NodeWorkerLock", () => {
     expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(holder);
   });
 
-  it("refuses a parent folder owned by another user and tightens one of its own to 0700", async () => {
-    const { path } = await lockInTemporaryFolder();
-    const parent = dirname(path);
-    await mkdir(parent, { mode: 0o755, recursive: true });
-    await chmod(parent, 0o755);
-    const uid = process.getuid?.() ?? 0;
+  // why: Windows has no owner ids and no directory modes.
+  it.skipIf(process.platform === "win32")(
+    "refuses a parent folder owned by another user and tightens one of its own to 0700",
+    async () => {
+      const { path } = await lockInTemporaryFolder();
+      const parent = dirname(path);
+      await mkdir(parent, { mode: 0o755, recursive: true });
+      await chmod(parent, 0o755);
+      const uid = process.getuid?.() ?? 0;
 
-    await expect(adapter(path, [], uid + 1).take(ME)).rejects.toThrow(
-      `${parent} cannot be used as the worker lock folder: owned by another user`,
-    );
-    await adapter(path, [], uid).take(ME);
+      await expect(adapter(path, [], uid + 1).take(ME)).rejects.toThrow(
+        `${parent} cannot be used as the worker lock folder: owned by another user`,
+      );
+      await adapter(path, [], uid).take(ME);
 
-    expect((await stat(parent)).mode & 0o777).toBe(0o700);
-  });
+      expect((await stat(parent)).mode & 0o777).toBe(0o700);
+    },
+  );
 
   it("a worker that wins the socket claim makes the lock again when it is missing and refuses when a live pid in another folder holds it", async () => {
     const { path } = await lockInTemporaryFolder();

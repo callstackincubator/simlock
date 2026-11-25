@@ -18,6 +18,7 @@ import { lineOf, type FleetQueue, type FleetWaiter } from "./queue.js";
 import type { RoutableRequest, RoutingDecision, RoutingPolicy } from "./routing.js";
 import type { Rejection, WorkerReason } from "./routing/index.js";
 import type { WorkerView } from "./worker-registry.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * ## The dispatch race (see the module's own tests for the one that catches a naive fix)
@@ -553,7 +554,7 @@ export class FleetDispatch {
     void target?.refresh(options).catch((error: unknown) => {
       this.options.logger.debug("Failed to refresh a worker's view after a worker's refusal", {
         workerId,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
     });
   }

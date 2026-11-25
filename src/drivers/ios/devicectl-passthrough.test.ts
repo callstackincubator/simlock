@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { PassthroughRefusedError } from "../../core/index.js";
@@ -5,7 +7,8 @@ import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/
 import { IosSimctlDriver } from "./index.js";
 import { memorySourceDatabase } from "./testing.js";
 
-const deviceRoot = "/Devices";
+// why: the driver passes `resolve(root)` to simctl, which puts a drive letter on a Windows host.
+const deviceRoot = resolve("/Devices");
 const UDID = "00008110-001A2B3C4D5E";
 const APP = "com.example.app";
 const BUILD = "/builds/App.app";

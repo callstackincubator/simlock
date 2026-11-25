@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { BASH } from "./test-support/fake-command.js";
+
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -31,9 +33,16 @@ async function call(activeMs: number, sinceLastCallMs: number) {
     JSON.stringify({ activeMs, lastSeen: Date.now() - sinceLastCallMs, files: {} }),
   );
   // The trailing `exit` keeps sh from exec-ing node, so sh stays the hook's parent.
-  const child = spawn("sh", ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
+  const child = spawn(BASH, ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
     detached: true,
-    env: { ...process.env, TMPDIR: dir, CLAUDE_BUDGET_TOKENS: "0", CLAUDE_BUDGET_HOURS: "1" },
+    env: {
+      ...process.env,
+      TMPDIR: dir,
+      TEMP: dir,
+      TMP: dir,
+      CLAUDE_BUDGET_TOKENS: "0",
+      CLAUDE_BUDGET_HOURS: "1",
+    },
   });
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
@@ -73,11 +82,13 @@ async function callAsAgent(agent: string, tool: string, command?: string) {
     JSON.stringify({ message: { id: "m1", usage } }) + "\n",
   );
   writeFileSync(join(dir, "session", "subagents", "agent-a2.jsonl"), "");
-  const child = spawn("sh", ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
+  const child = spawn(BASH, ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
     detached: true,
     env: {
       ...process.env,
       TMPDIR: dir,
+      TEMP: dir,
+      TMP: dir,
       CLAUDE_BUDGET_TOKENS: "0",
       CLAUDE_BUDGET_HOURS: "0",
       CLAUDE_BUDGET_AGENT_TOKENS: "1000",
@@ -119,7 +130,7 @@ async function callOnTranscript(lines: readonly string[], command: string, turns
   writeFileSync(transcript, "");
   mkdirSync(join(dir, "session", "subagents"), { recursive: true });
   writeFileSync(join(dir, "session", "subagents", "agent-a1.jsonl"), lines.join("\n") + "\n");
-  const child = spawn("sh", ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
+  const child = spawn(BASH, ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
     detached: true,
     env: {
       ...process.env,

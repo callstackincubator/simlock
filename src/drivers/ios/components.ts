@@ -13,8 +13,6 @@ import {
 } from "../../core/index.js";
 import type { Clock, Filesystem, ProcessRunner } from "../../ports/index.js";
 
-import { errorMessage } from "./command-run.js";
-
 import { COMMAND_TIMEOUT_MS, Simctl } from "./simctl.js";
 import { DeviceMarks } from "./marks.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
@@ -46,6 +44,7 @@ import {
   findInstalledRuntime,
   compareVersions,
 } from "./runtime-versions.js";
+import { errorMessage } from "../../shared/index.js";
 
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.

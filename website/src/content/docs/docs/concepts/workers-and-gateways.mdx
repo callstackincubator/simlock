@@ -44,7 +44,7 @@ From another machine, agents reach the gateway over HTTP, or with the CLI pointe
 
 - **Device commands run on the worker that holds the lease.** `simlock simctl` and `simlock adb` run there, so a file path in the command is a path on that worker, not on your machine. `simlock --gateway simctl install ./MyApp.app` fails unless `MyApp.app` exists on the worker.
 - **The gateway never downloads** an iOS runtime or Android system image while granting a lease. A request for an OS version no worker has installed fails with `RUNTIME_MISSING`.
-- **Commands that manage one machine run on the worker.** `cleanup`, `nuke`, `doctor`, `device add`, `device remove`, `component list`, `component remove`, `warm forget`, and `component install` without `--worker` or `--all-workers` fail on a gateway with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+- **Commands that manage one machine run on the worker.** `cleanup`, `nuke`, `doctor`, `device add`, `device remove`, `component list`, `component remove`, `warm forget`, `seed`, and `component install` without `--worker` or `--all-workers` fail on a gateway with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 - **Each worker keeps its own settings**: capacity, warm pool, cleanup, downloads, baselines. The gateway's `lease.*` settings decide the TTL of leases made through it, and each worker's own `lease.maxTtlMs` still applies. Keep the gateway's `lease.maxTtlMs` at or below every worker's.
 
 ## Which worker gets a request

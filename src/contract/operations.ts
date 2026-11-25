@@ -17,6 +17,7 @@ import {
   nukeRun,
   tokenCreate,
   tokenList,
+  seedMake,
   tokenRevoke,
   usageGet,
   warmForget,
@@ -114,6 +115,8 @@ export {
   cleanupRun,
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
   nukeRun,
+  // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+  seedMake,
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
   warmForget,
   // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -258,6 +261,7 @@ export const OPERATIONS = {
   "worker.remove": workerRemove,
   "worker.update": workerUpdate,
   "component.install": componentInstall,
+  "seed.make": seedMake,
   "component.list": componentList,
   "worker.install-component": workerInstallComponent,
   "component.remove": componentRemove,

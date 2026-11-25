@@ -1,5 +1,11 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
+import {
+  type Clock,
+  type IdGenerator,
+  type Logger,
+  MemoryFilesystem,
+  type SystemStats,
+} from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import {
   type CapacityReader,
@@ -31,6 +37,7 @@ import type {
   QueueControl,
 } from "./lease-ports.js";
 import type { LeaseHealthMonitor } from "./lease-health-monitor.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * Test-only: wiring other modules' tests use. Only a `*.test.ts` file or a `test-*.ts` helper may
@@ -97,6 +104,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     decisions: options.decisions,
     drivers: options.drivers,
     eventBus: options.eventBus,
+    filesystem: new MemoryFilesystem(),
     logger: options.logger,
     ...(options.memoryPressure === undefined ? {} : { memoryPressure: options.memoryPressure }),
     modelPreferences: options.modelPreferences,
@@ -180,6 +188,6 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
 function describeTestFailure(error: unknown): { code: string; message: string } {
   return {
     code: error instanceof NoCapacityError ? "NO_CAPACITY" : "INTERNAL",
-    message: error instanceof Error ? error.message : String(error),
+    message: errorMessage(error),
   };
 }

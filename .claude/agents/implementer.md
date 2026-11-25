@@ -152,6 +152,9 @@ Your prompt carries your mode's brief under `brief:` (a hook adds
 `.agents/briefs/implement-<mode>.md`); do what it says. Without it, read
 that file.
 
+An `also:` line names more bugs the maintainer bundled into this PR (coding
+rule 3): their bodies are spec too, and the PR body closes each.
+
 ## Report
 
 End with exactly this block and nothing else: no summary before it, no note

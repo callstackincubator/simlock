@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 
-import { FakeClock, MemoryFilesystem, type ScriptedProcessExpectation } from "../../ports/index.js";
+import {
+  FakeClock,
+  MemoryFilesystem,
+  NoopLogger,
+  type Logger,
+  type ScriptedProcessExpectation,
+} from "../../ports/index.js";
 
 import { createPart, sources, seedHome, seedHarness } from "./test-seeds.js";
 import {
@@ -19,7 +26,7 @@ import {
   writeSeedFiles,
 } from "./testing.js";
 
-const copyHome = `${avdDirectory}/simlock_one`;
+const copyHome = join(avdDirectory, "simlock_one");
 
 /** why: the daemon after a restart: a new part over the same device folders and the same source table. */
 function reopened(
@@ -99,12 +106,36 @@ class CopyFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+/** why: Windows refuses to delete a file a process still holds; a killed emulator's qemu child holds the seed's disks for a moment after the kill (#1700). */
+class BusySeedFilesystem extends MemoryFilesystem {
+  override async rm(path: string): Promise<void> {
+    if (path === seedHome) {
+      const error = new Error(
+        `EBUSY: resource busy or locked, unlink '${seedHome}/simlock.avd/cache.img'`,
+      ) as NodeJS.ErrnoException;
+      error.code = "EBUSY";
+      throw error;
+    }
+    await super.rm(path);
+  }
+}
+
+/** why: the order of a delete against an emulator's exit is what a failed make's cleanup depends on on Windows (#1765). */
+class RecordingRemovalFilesystem extends MemoryFilesystem {
+  readonly removed: string[] = [];
+
+  override async rm(path: string): Promise<void> {
+    this.removed.push(path);
+    await super.rm(path);
+  }
+}
+
 // why: a part of a decomposed module (ADR 0063) is tested through its own surface: these build
 // `Seeds` directly over a memory filesystem and a scripted runner, with the real parts it takes.
 describe("Seeds", () => {
   describe("seeds and copies", () => {
     it("makes one seed when two plain leases of one kind are provisioned at once", async () => {
-      const madeHome = `${sources}/seed_three`;
+      const madeHome = join(sources, "seed_three");
       const harness = await seedHarness([
         ...makingTheSeed(madeHome),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
@@ -120,7 +151,7 @@ describe("Seeds", () => {
       expect(harness.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
       expect([first.deviceId, second.deviceId]).toEqual(["simlock_one", "simlock_two"]);
       await expect(
-        harness.filesystem.exists(`${avdDirectory}/simlock_two/simlock.avd`),
+        harness.filesystem.exists(join(avdDirectory, "simlock_two", "simlock.avd")),
       ).resolves.toBe(true);
       const listed = await harness.seeds.listSources();
       expect(listed.filter((source) => source.orphan !== true)).toHaveLength(1);
@@ -192,7 +223,7 @@ describe("Seeds", () => {
     it("destroys a stale seed and makes it again at the next provision", async () => {
       const harness = await seedHarness(makingTheSeed());
       await harness.seeds.provision(harness.spec);
-      const newHome = `${sources}/seed_five`;
+      const newHome = join(sources, "seed_five");
       await writeSeedFiles(harness.filesystem, newHome);
       const newer = "Android emulator version 36.2.0";
       const later = await reopened(harness, [
@@ -321,6 +352,94 @@ describe("Seeds", () => {
       }
     });
 
+    it("waits for the seed's emulator to exit after killing it before removing the folder of a failed make (#1765)", async () => {
+      const stage = seedStages();
+      const filesystem = new RecordingRemovalFilesystem();
+      const harness = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          ...stage.firstBoot,
+          stage.sync,
+          stage.powerOff,
+          ...bootingAt(seedHome, ["-no-snapshot-load"], true),
+          { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+        ],
+        { filesystem },
+      );
+      let released!: () => void;
+      const exitHeld = new Promise<void>((resolve) => {
+        released = resolve;
+      });
+      let boots = 0;
+      let killed = false;
+      const spawn = harness.runner.spawn.bind(harness.runner);
+      harness.runner.spawn = (...call: Parameters<typeof spawn>) => {
+        const handle = spawn(...call);
+        if (!call[1].includes("-avd") || ++boots !== 2) return handle;
+        // why: a real emulator's exit lags its SIGKILL (the qemu child holds the disks); this one exits only when the test lets it.
+        return {
+          kill: (signal) => {
+            killed = true;
+            handle.kill(signal);
+          },
+          pid: handle.pid,
+          stderr: handle.stderr,
+          stdout: handle.stdout,
+          unref: () => handle.unref(),
+          wait: () => exitHeld.then(() => handle.wait()),
+        };
+      };
+
+      const provisioning = harness.seeds.provision(harness.spec);
+      const outcome = expect(provisioning).rejects.toThrow("was not saved");
+      await vi.waitFor(() => expect(killed, "the seed's emulator was killed").toBe(true));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(filesystem.removed, "the folder is not removed while the emulator runs").toEqual([]);
+
+      released();
+      await outcome;
+      expect(filesystem.removed).toEqual([seedHome]);
+    });
+
+    it("throws the make's own error, not the removal's, when a failed seed's folder cannot be removed (#1700)", async () => {
+      const stage = seedStages();
+      const warnings: { message: string; detail: unknown }[] = [];
+      const logger: Logger = new (class extends NoopLogger {
+        override warn(message: string, detail?: Record<string, unknown>): void {
+          warnings.push({ message, detail });
+        }
+      })();
+      const harness = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          ...stage.firstBoot,
+          stage.sync,
+          stage.powerOff,
+          ...bootingAt(seedHome, ["-no-snapshot-load"], true),
+          { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+        ],
+        { filesystem: new BusySeedFilesystem(), logger },
+      );
+
+      await expect(harness.seeds.provision(harness.spec)).rejects.toThrow(
+        "Android seed seed_two: boot snapshot simlock_boot was not saved",
+      );
+      expect(warnings).toEqual([
+        {
+          message: "android folder was not removed after a failed operation",
+          detail: expect.objectContaining({ folder: seedHome }),
+        },
+      ]);
+      expect(
+        harness.database.prepare("SELECT state FROM android_source_data").all(),
+        "the row stays for the next sweep",
+      ).toEqual([{ state: "making" }]);
+    });
+
     it("names the seed and which of its two boots ran out of android.bootTimeoutMs when making a seed times out", async () => {
       const stage = seedStages();
       const serial = "emulator-5586";
@@ -407,7 +526,7 @@ describe("Seeds", () => {
 
       const fits = await provisionWith(seedBytes);
       await expect(fits.provision).resolves.toMatchObject({ deviceId: "simlock_one" });
-      expect(fits.filesystem.copies).toEqual([`${copyHome}/simlock.avd`]);
+      expect(fits.filesystem.copies).toEqual([join(copyHome, "simlock.avd")]);
       // why: a finished copy gives its reservation back, so the next copy of the same size is not refused for it.
       await expect(fits.harness.seeds.provision(fits.harness.spec)).resolves.toMatchObject({
         deviceId: "simlock_three",
@@ -462,7 +581,7 @@ describe("Seeds", () => {
     });
 
     it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
-      const makingHome = `${sources}/seed_device-4`;
+      const makingHome = join(sources, "seed_device-4");
       const harness = await seedHarness([
         ...makingTheSeed(),
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -507,7 +626,7 @@ describe("Seeds", () => {
       );
       const second = await provisioning;
 
-      expect(second.driverData).toMatchObject({ avdHome: expect.stringContaining("/simlock_") });
+      expect(second.driverData).toMatchObject({ avdHome: expect.stringContaining("simlock_") });
       expect(
         harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
       ).toEqual([{ state: "making" }, { state: "ready" }]);
@@ -533,7 +652,7 @@ describe("Seeds", () => {
 
     it("lists each ready seed with its size, reports a sources folder no row names as an orphan, and destroys a source by id after stopping its emulator by path", async () => {
       const serial = "emulator-5586";
-      const orphanHome = `${sources}/seed_orphan`;
+      const orphanHome = join(sources, "seed_orphan");
       const harness = await seedHarness([
         ...makingTheSeed(),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
@@ -551,8 +670,10 @@ describe("Seeds", () => {
           id: "seed_two",
           imageTag: "google_apis",
           kind: "seed",
+          leases: 1,
           model: "Pixel 5",
           osVersion: "34",
+          settled: false,
           sizeBytes: 16,
         },
         { id: "seed_orphan", kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
@@ -563,7 +684,7 @@ describe("Seeds", () => {
       await harness.seeds.destroySource("seed_orphan");
       await harness.seeds.destroySource("seed_two");
 
-      expect(await harness.filesystem.exists(`${sources}/seed_two`)).toBe(false);
+      expect(await harness.filesystem.exists(join(sources, "seed_two"))).toBe(false);
       expect(await harness.filesystem.exists(orphanHome)).toBe(false);
       expect(
         harness.runner.calls

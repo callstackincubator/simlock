@@ -11,6 +11,7 @@ import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-opera
 import { DeviceBusyError } from "./physical-enrollment.js";
 import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import type { SerializedDecision } from "./serialized-decision.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface BaselineSaveRequest {
   readonly leaseId: string;
@@ -160,11 +161,7 @@ export class BaselineService {
           );
         } catch (error: unknown) {
           if (recorded.entry !== undefined) throw error;
-          throw new BaselineSaveFailedError(
-            request.name,
-            request.leaseId,
-            error instanceof Error ? error.message : String(error),
-          );
+          throw new BaselineSaveFailedError(request.name, request.leaseId, errorMessage(error));
         }
         if (recorded.entry === undefined) throw new Error("A saved baseline was not recorded");
         return recorded.entry;
@@ -174,9 +171,7 @@ export class BaselineService {
     try {
       await this.checkStale();
     } catch (error: unknown) {
-      this.options.logger?.warn(
-        `could not check baselines after a save: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.options.logger?.warn(`could not check baselines after a save: ${errorMessage(error)}`);
     }
     return { baseline, leaseId: request.leaseId };
   }

@@ -23,7 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +35,7 @@ import type { AlertDestination, PassthroughCommand } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { Filesystem, IpcConnector, IpcListenerFactory, NpmCli } from "../ports/index.js";
 import {
+  FakeDirectoryAccessReader,
   FakeHostInfo,
   FakeNpmCli,
   FakeUpdaterLauncher,
@@ -51,6 +52,7 @@ import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 function passthroughOptions(command: PassthroughCommand): object {
   return { passthrough: () => command, passthroughTools: ["adb"] };
@@ -123,10 +125,15 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
+    // why: worker-b's directory stays busy on Windows for a few seconds after its daemon stopped (a leftover handle nobody could name), longer than `removeDirectory` waits, so the removal is tried again until it goes through, for less than the hook's own 30 s so a handle that stays held fails with the removal's own error.
     await Promise.all(
-      directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
+      directories
+        .splice(0)
+        .map((directory) =>
+          vi.waitFor(() => removeDirectory(directory), { interval: 250, timeout: 25_000 }),
+        ),
     );
-  });
+  }, 30_000);
 
   async function startGateway(
     alerts: {
@@ -157,6 +164,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         },
         role: "gateway",
         dataDirectory: directory,
+        // why: on Windows the daemon reads the data directory's ACL through the process runner, which a scripted one refuses.
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         filesystem: new MemoryFilesystem(),
         hostInfo: new FakeHostInfo(GATEWAY_HOST),
         logger: new NoopLogger(),
@@ -299,12 +311,15 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       stdout: "old",
       token,
     });
-    const incompatible = await vi.waitFor(async () => {
-      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
-      const found = workers.find((worker) => worker.connection === "incompatible");
-      if (found === undefined) throw new Error("the old worker never showed incompatible");
-      return found;
-    });
+    const incompatible = await vi.waitFor(
+      async () => {
+        const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+        const found = workers.find((worker) => worker.connection === "incompatible");
+        if (found === undefined) throw new Error("the old worker never showed incompatible");
+        return found;
+      },
+      { timeout: 15_000 },
+    );
 
     const answer = await gateway.dispatch(
       "worker.update",
@@ -416,7 +431,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       token: tokenA,
       stdout: "hello-from-a",
     });
-    await startWorker({
+    const workerB = await startWorker({
       label: "worker-b",
       model: "Pixel-B",
       token: tokenB,
@@ -465,6 +480,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     expect(chunks.join("")).toBe("hello-from-b");
 
     await gateway.dispatch("lease.release", { leaseId: grant.lease.id }, agentSession());
+
+    // why: the lease's folder is removed after `lease.release` answers, and Windows refuses to remove the
+    // worker's directory while that removal is still running, so the test waits for it.
+    await vi.waitFor(async () => {
+      expect(await readdir(join(workerB.directory, "lease-files"))).toEqual([]);
+    });
   }, 30_000);
 
   /**

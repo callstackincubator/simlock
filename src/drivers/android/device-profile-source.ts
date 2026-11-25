@@ -2,6 +2,7 @@ import { dirname } from "node:path";
 
 import { DriverCrashError, UnknownModelError, type DeviceClass } from "../../core/index.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 export type DeviceProfile =
   | {
@@ -868,8 +869,4 @@ const XML_ENTITIES: Readonly<Record<string, string>> = {
 
 function unescapeXml(value: string): string {
   return value.replace(/&(?:amp|apos|gt|lt|quot);/g, (entity) => XML_ENTITIES[entity] ?? entity);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

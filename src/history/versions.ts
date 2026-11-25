@@ -1,6 +1,7 @@
 import type { SqliteDatabase } from "../ports/index.js";
 import { inTransaction } from "./database.js";
 import type { HistoryProjectionDefinition } from "./index.js";
+import { errorMessage } from "../shared/index.js";
 
 const SET_VERSION_SQL = `INSERT INTO projection_versions (name, version) VALUES (?, ?)
   ON CONFLICT (name) DO UPDATE SET version = excluded.version`;
@@ -35,7 +36,7 @@ export function migrateProjection(
       });
     } catch (error: unknown) {
       throw new Error(
-        `History projection ${projection.name} could not move from version ${from} to ${from + 1}: ${error instanceof Error ? error.message : String(error)}. Upgrade simlock, or move history.db away.`,
+        `History projection ${projection.name} could not move from version ${from} to ${from + 1}: ${errorMessage(error)}. Upgrade simlock, or move history.db away.`,
         { cause: error },
       );
     }

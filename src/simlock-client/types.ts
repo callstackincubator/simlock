@@ -93,6 +93,8 @@ export type WorkerUpdateOutput = OpOutput<"worker.update">;
 export type AlertsTestInput = OpInput<"alerts.test">;
 export type AlertsTestOutput = OpOutput<"alerts.test">;
 
+export type SeedMakeInput = OpInput<"seed.make">;
+export type SeedMakeOutput = OpOutput<"seed.make">;
 export type ComponentInstallInput = OpInput<"component.install">;
 export type ComponentInstallOutput = OpOutput<"component.install">;
 export type ComponentListInput = OpInput<"component.list">;
@@ -116,6 +118,9 @@ export type EventPush = z.infer<(typeof PUSH_SCHEMAS)["event"]>;
 export type ComponentInstallProgress = z.infer<
   (typeof PUSH_SCHEMAS)["component-progress"]
 >["progress"];
+
+/** One `seed-progress` push a running `makeSeed` call heard: the seed it is about and its stage. */
+export type SeedProgressUpdate = Omit<z.infer<(typeof PUSH_SCHEMAS)["seed-progress"]>, "requestId">;
 
 /**
  * One chunk of a running `device.exec` command's output. The `requestId` the push carries on
@@ -163,6 +168,10 @@ export interface ExecOptions {
    * output. A transport chooses its response shape on this, which is why a gateway forwarding
    * the command relays it rather than inferring one. */
   readonly onStarted?: () => void;
+}
+
+export interface MakeSeedOptions {
+  readonly onProgress?: (update: SeedProgressUpdate) => void;
 }
 
 export interface InstallComponentOptions {

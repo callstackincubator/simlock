@@ -5,6 +5,7 @@ import type { FleetForwarding } from "./fleet-forwarding.js";
 import type { FleetFacts, FleetOutcomes } from "./fleet-facts.js";
 import type { FleetLeaseEntry, FleetLeaseIndex } from "./lease-index.js";
 import type { FleetLeaseGrant, FleetQueue, FleetWaiter } from "./queue.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface FleetGrantsOptions {
   readonly forwarding: FleetForwarding;
@@ -91,7 +92,7 @@ export class FleetGrants {
       if (this.options.queue.releasesAtGrant(waiter)) {
         this.options.forwarding.release(gatewayLeaseId).catch((error: unknown) => {
           this.options.logger.warn("A run release could not end a lease granted after it", {
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
             gatewayLeaseId,
           });
         });
