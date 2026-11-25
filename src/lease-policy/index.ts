@@ -531,6 +531,9 @@ export interface SlimHintGrant {
   };
 }
 
+/** why: the hint is a courtesy, so a catalog that does not answer in this long never holds up a grant. */
+const SLIM_HINT_TIMEOUT_MS = 2_000;
+
 export async function slimLeaseHint(input: {
   readonly clock: Clock;
   readonly client: SlimHintClient;
@@ -538,7 +541,17 @@ export async function slimLeaseHint(input: {
 }): Promise<string | undefined> {
   const { device } = input.grant;
   if (device.physical || device.mode !== "slim" || device.spec.platform !== "ios") return undefined;
-  const catalog = await input.client.getCatalog();
+  let catalog: Awaited<ReturnType<SlimHintClient["getCatalog"]>>;
+  try {
+    catalog = await awaitWithin(
+      input.clock,
+      SLIM_HINT_TIMEOUT_MS,
+      input.client.getCatalog(),
+      "Timed out reading the catalog for the slim hint",
+    );
+  } catch {
+    return undefined;
+  }
   const ios = catalog.platforms.find((entry) => entry.platform === "ios");
   const kept = new Set(device.except ?? []);
   const off = (ios?.slimCategories ?? []).filter((name) => !kept.has(name));
