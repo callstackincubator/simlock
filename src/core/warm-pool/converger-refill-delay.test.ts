@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VirtualDevice } from "../domain.js";
-import { device, fakeMemoryPressure, harness, iphone15, now } from "./test-fixtures.js";
+import { device, fakeMemoryPressure, harness, iosListing, iphone15, now } from "./test-fixtures.js";
 
 type Rig = ReturnType<typeof harness>;
 
@@ -61,7 +61,7 @@ describe("warm pool refill delay", () => {
         at: 60_000,
         devices: [leased("l1"), device("s1", "shutdown", 0)],
         grants: [[0, "l1"]],
-        options: {},
+        options: { catalog: async () => [iosListing] },
       },
       {
         name: "a second grant at 30 000 ms moves it to 90 000 ms",
