@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 import { promiseState } from "../../test-support/promise-state.js";
 import {
   FakeClock,
@@ -33,6 +34,7 @@ import {
   RecordingRunner,
   consolePortOf,
   copyPathExpectation,
+  withWindowsExtension,
 } from "./testing.js";
 import { sdk, home, buildDriver } from "./test-index.js";
 
@@ -109,16 +111,30 @@ describe("AndroidDriver", () => {
     const versionedTools = `${sdk}/cmdline-tools/19.0/bin`;
     await filesystem.rm(`${sdk}/cmdline-tools/latest`);
     await filesystem.mkdirp(versionedTools);
-    await filesystem.writeFileAtomic(`${versionedTools}/avdmanager`, "binary");
-    await filesystem.writeFileAtomic(`${versionedTools}/sdkmanager`, "binary");
+    const versionedAvdmanager = withWindowsExtension(
+      `${versionedTools}/avdmanager`,
+      process.platform,
+      ".bat",
+    );
+    await filesystem.writeFileAtomic(versionedAvdmanager, "binary");
+    await filesystem.writeFileAtomic(
+      withWindowsExtension(`${versionedTools}/sdkmanager`, process.platform, ".bat"),
+      "binary",
+    );
 
     const legacyTools = `${sdk}/tools/bin`;
     await filesystem.mkdirp(legacyTools);
-    await filesystem.writeFileAtomic(`${legacyTools}/avdmanager`, "binary");
-    await filesystem.writeFileAtomic(`${legacyTools}/sdkmanager`, "binary");
+    await filesystem.writeFileAtomic(
+      withWindowsExtension(`${legacyTools}/avdmanager`, process.platform, ".bat"),
+      "binary",
+    );
+    await filesystem.writeFileAtomic(
+      withWindowsExtension(`${legacyTools}/sdkmanager`, process.platform, ".bat"),
+      "binary",
+    );
 
     const runner = new EmulatorExitingRunner([
-      processResult(`${versionedTools}/avdmanager`, ["list", "device"], pixelDevices),
+      processResult(versionedAvdmanager, ["list", "device"], pixelDevices),
     ]);
     const driver = await createDriver(filesystem, runner);
 
@@ -336,9 +352,9 @@ describe("AndroidDriver", () => {
     await driver.makeReady(await driver.provision(spec));
 
     expect(crashDatabases).toEqual([
-      `${avdDirectory}/emu-crash.db`,
-      `${avdDirectory}/emu-crash.db`,
-      `${avdDirectory}/emu-crash.db`,
+      join(avdDirectory, "emu-crash.db"),
+      join(avdDirectory, "emu-crash.db"),
+      join(avdDirectory, "emu-crash.db"),
     ]);
     const crashReportMode = (args: readonly string[]) => {
       const flag = args.indexOf("-crash-report-mode");
@@ -600,7 +616,7 @@ describe("AndroidDriver", () => {
 
   it("sends the emulator's output to <avd folder>/emulator.log, mode 0600, emptied in place at each start", async () => {
     const harness = await provisionedHarness();
-    const logPath = `${avdDirectory}/simlock_one/simlock.avd/emulator.log`;
+    const logPath = join(avdDirectory, "simlock_one", "simlock.avd", "emulator.log");
     await harness.filesystem.writeFileAtomic(logPath, "left by an earlier start\n", {
       mode: 0o644,
     });

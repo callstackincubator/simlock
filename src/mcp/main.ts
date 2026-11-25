@@ -57,7 +57,11 @@ export interface McpStdioEnvironment {
   readonly env?: NodeJS.ProcessEnv;
   readonly daemonFlag?: DaemonFlag;
   readonly requesterId?: string;
-  readonly remote?: { readonly url: string; readonly token: string };
+  readonly remote?: {
+    readonly url: string;
+    readonly token: string;
+    readonly allowInsecureHttp: boolean;
+  };
   readonly webSocket?: WebSocketClientConnector;
   readonly serviceManager?: ServiceManager;
   readonly signals?: Signals;
@@ -173,11 +177,22 @@ export async function startMcpStdio(
 
 // why: against a farm both triggers connect the same way and nothing launches, so a tool call and a renewal cannot differ in power (ADR 0081 §3).
 function farmEnvironment(
-  remote: { readonly url: string; readonly token: string },
+  remote: {
+    readonly url: string;
+    readonly token: string;
+    readonly allowInsecureHttp: boolean;
+  },
   clock: Clock,
   webSocket: WebSocketClientConnector | undefined,
 ): Required<Pick<McpStdioEnvironment, "connect" | "connectForRenew" | "createTransport">> {
-  const connect = () => connectToFarm({ clock, token: remote.token, url: remote.url, webSocket });
+  const connect = () =>
+    connectToFarm({
+      allowInsecureHttp: remote.allowInsecureHttp,
+      clock,
+      token: remote.token,
+      url: remote.url,
+      webSocket,
+    });
   return { connect, connectForRenew: connect, createTransport: () => new StdioServerTransport() };
 }
 

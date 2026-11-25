@@ -40,6 +40,7 @@ import {
   NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   type ProcessRunner,
+  type ProcessTable,
   type ProcessSupervisor,
   type TcpProbe,
   type SqliteDatabase,
@@ -82,6 +83,8 @@ export interface DriverDiscoveryContext {
   readonly instanceId: string;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
+  /** why: the drivers' idle check reads the booted tree's CPU from it (ADR 0090). */
+  readonly processTable?: ProcessTable;
   readonly processSupervisor: ProcessSupervisor;
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
@@ -220,6 +223,7 @@ async function discoverIosDriver(
         });
       },
       processRunner: options.processRunner,
+      ...(options.processTable === undefined ? {} : { processTable: options.processTable }),
       simlockHome: options.simlockHome,
       tcpListener: new NodeTcpListenerFactory(),
       tcpProbe: options.tcpProbe,
@@ -290,6 +294,7 @@ async function discoverAndroidDriver(
       logger: logger.child("android"),
       onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
       processRunner: options.processRunner,
+      processTable: options.processTable,
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,

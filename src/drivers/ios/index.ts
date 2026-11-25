@@ -38,9 +38,9 @@ import {
   type VirtualSpec,
   type ScreenCapture,
 } from "../../core/index.js";
-import type { Clock, Logger, ProcessRunner } from "../../ports/index.js";
+import type { Clock, Logger, ProcessRunner, ProcessTable } from "../../ports/index.js";
 import { runAfterBoot, type AfterBoot } from "./boot-courtesies.js";
-import { errorMessage, runCommand } from "./command-run.js";
+import { runCommand } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl } from "./simctl.js";
 import { DeviceMarks } from "./marks.js";
@@ -74,6 +74,7 @@ import { parseManagedDevices } from "./simctl-parse.js";
 import { type IosDriverData, iosDriverData, requireIosPlatform } from "./simulator-data.js";
 import { IOS_PASSTHROUGH_TOOLS, passthroughCommand } from "./passthrough-rules.js";
 import { IOS_RUNTIME_MIN_FREE_BYTES } from "./runtime-images.js";
+import { errorMessage } from "../../shared/index.js";
 
 const DEFAULT_FULL_BOOT_TIMEOUT_MS = 300_000;
 const PROVISION_ESTIMATE_MS = 500;
@@ -240,7 +241,15 @@ export class IosSimctlDriver implements Driver {
       (udid) => this.#physical.osVersion(udid),
     );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
+    this.#offerSettle(options.processTable);
     this.deviceTcp = createIosDeviceTcpFor(options);
+  }
+
+  /** why: a settle judges its copy from the process table; a driver given none offers no `settleSeed`, so core never asks it. */
+  #offerSettle(processTable: ProcessTable | undefined): void {
+    if (processTable === undefined) return;
+    this.settleSeed = (sourceId, settleOptions) =>
+      this.#seeds.settleSeed(processTable, sourceId, settleOptions);
   }
 
   #afterBootFor(options: IosSimctlDriverOptions): AfterBoot {
@@ -258,6 +267,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   readonly screenCapture: ScreenCapture | undefined;
+  settleSeed?: NonNullable<Driver["settleSeed"]>;
   readonly input: DeviceInputFactory | undefined;
   readonly deviceTcp: DeviceTcp | undefined;
 
@@ -351,6 +361,11 @@ export class IosSimctlDriver implements Driver {
         return this.#components.removeImage(listed, options.signal);
       },
     });
+  }
+
+  async ensureSeed(spec: VirtualSpec): ReturnType<NonNullable<Driver["ensureSeed"]>> {
+    requireIosPlatform(spec.platform);
+    return this.#seeds.ensureSeed(await this.#catalog.resolvedSpec(spec));
   }
 
   listSources(): Promise<readonly DriverSource[]> {
@@ -448,7 +463,7 @@ export class IosSimctlDriver implements Driver {
 
   async destroy(device: DriverDevice): Promise<void> {
     const data = iosDriverData(device);
-    await this.#simctl.shutdown(data.udid);
+    await this.#simctl.bestEffortShutdown(data.udid);
     await this.#simctl.run(["delete", data.udid], COMMAND_TIMEOUT_MS);
     if (this.#rootOptions === undefined)
       await this.#deviceHub.removePasteboardPreference(data.udid);

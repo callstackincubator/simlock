@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect } from "vitest";
@@ -10,15 +10,14 @@ import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../
 import { seedTokensDatabase } from "../auth/testing.js";
 import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
 import { sleep } from "../daemon/test-relay-support.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 import type { AgentDeviceUpstream } from "./host/upstream.js";
 
 // why: the edge tests and the baseline tests share one daemon rig; its daemons and data directories are cleaned after each test of whichever file imports it.
 afterEach(async () => {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
-  await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
-  );
+  await Promise.all(temporaryDirectories.splice(0).map((path) => removeDirectory(path)));
 });
 
 const runningDaemons: DaemonServer[] = [];
@@ -180,6 +179,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
         ...(options.downloads === undefined ? {} : { downloads: { policy: options.downloads } }),
         http: { enabled: true, host: "127.0.0.1", port },
+        warmPool: { refillDelayMs: 0 },
         lease: {
           defaultTtlMs,
           maxTtlMs,

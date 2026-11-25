@@ -9,26 +9,27 @@ Containment:
 
 - Ownership is root membership, proven at boot and in running observations by `emu avd path` against the device's own folder, never a name. Every copy's AVD is named `simlock`, so the name is never evidence.
 - The gate (`ownership.ts`): before any `emu kill`, `adb emu avd path` must name this device's own AVD folder. It is asked every time, never cached; unreachable, timed out or another path sends nothing.
-- Every `adb`, `emulator` and `avdmanager` call carries `ANDROID_AVD_HOME` (the root; a seed's folder while it is made; a copy's own folder at its boot) and `ANDROID_ADB_SERVER_PORT`. Without them a call reaches the user's AVD home and the shared adb server.
+- Every `adb`, `emulator` and `avdmanager` call carries `ANDROID_AVD_HOME` (the root; a seed's or settle's folder while it is made; a copy's at its boot) and `ANDROID_ADB_SERVER_PORT`. Without them a call reaches the user's AVD home and the shared adb server.
 - The user's AVD home and devices.xml are only read, except `destroyLegacy` for an AVD the registry names (safety rule 1).
-- A stored port is not trusted after a restart (#52); pinned by `two-instances.test.ts`. A `destroy` after a restart stops each attached emulator whose `emu avd path` names this AVD; a serial that cannot answer refuses the delete, and another path is left alone.
+- A stored port is not trusted after a restart (#52). A `destroy` after a restart stops each attached emulator whose `emu avd path` names this AVD; a serial that cannot answer refuses the delete, and another path is left alone.
 - `listManaged` never lists `<root>/sources/`: a seed is never a device.
 
 Simlock's adb server:
 
-- It runs with the emulator scanner, USB and mDNS off (`ADB_EMU=0`, `ADB_USB=0`, `ADB_MDNS=0`), so nothing attaches unless it is announced. At start the driver announces every console port of its range (`PORT_MIN` to `PORT_MAX` in `console-ports.ts`), so emulators that outlived the last daemon reattach. A serial that stays silent during a boot is announced again.
+- It runs with the emulator scanner, USB and mDNS off (`ADB_EMU=0`, `ADB_USB=0`, `ADB_MDNS=0`). At start the driver announces every console port of its range, so emulators that outlived the last daemon reattach.
 - `drivers.android.adbServerPort` is never 5037.
-- The server is reaped by pid, and only when that pid's command line shows `adb`, `-P <port>` and `nodaemon`. An unreadable command line kills nothing and keeps the record.
-- `dispose` leaves the server and its record when `adb devices` still lists an emulator, for the next daemon to adopt: an emulator whose server is gone starts an adb `fork-server` on the port, which the next start refuses as `occupied`. Emulators are spawned unref'd and outlive the daemon.
-- A server that cannot start is `AdbServerUnavailableError`: Android is skipped with `driver.adb-server-rejected`. No SDK is `SdkMissingError`: Android is absent, with no rejection.
+- The server is reaped by pid, and only when that pid's command line shows `adb`, `-P <port>` and `nodaemon`. An unreadable one kills nothing.
+- `dispose` leaves the server and its record when `adb devices` still lists an emulator, for the next daemon to adopt: an emulator whose server is gone starts an adb `fork-server` on the port, which the next start refuses as `occupied`.
+- A server that cannot start is `AdbServerUnavailableError`: Android is skipped with `driver.adb-server-rejected`. No SDK is `SdkMissingError`: Android is absent.
 
 Seeds and copies (ADR 0061):
 
 - Every device is a copy of its kind's seed, or of the ready baseline source a lease names (`options.source`). A stale baseline source is refused, never copied.
-- A seed is never leased or booted after its snapshot save.
+- A seed is never leased or booted after its snapshot save; a copy of it boots (ADR 0090 §3).
 - A seed is judged stale on every provision (its system image, the emulator's version, its launch settings), then destroyed and made again. `listSources` reports the reason, which clears when things match.
+- A settle (ADR 0090) swaps an idle copy of the quick seed in as the kind's seed. A seed's copies, a settle's own copy of it and its deletion take turns (`SeedTurns`).
 - One make per kind at a time. `Seeds` takes that lock (`seed:<spec key>`) and the device states from `DeviceTable`, never a lock of its own.
-- A `making` row of an earlier process, or one older than any make takes, is swept at the next listing or make of its kind; its emulator is stopped by its path first.
+- A `making` row of an earlier process, or a make's older than any make takes, is swept at the next listing or make of its kind; its emulator is stopped by its path first.
 - `removeComponent` destroys the image's seeds after the uninstall; one that fails stays, listed stale.
 - The driver counts the user's own AVDs that name an image (`foreignDevices`), and core refuses the removal while there are any.
 
@@ -36,7 +37,7 @@ Boot:
 
 - A copy boots from `simlock_boot`. When the snapshot does not load, the emulator cold-boots the same disk itself: not an error, only the logged diagnostic `snapshot-cold-boot`.
 - Never `-wipe-data`, except once for a device made before copies. Always `-no-snapshot-save`. A recovery boot never wipes and never loads a snapshot.
-- `-grpc` always goes with `-port`: without it the emulator opens no gRPC endpoint and writes no `avd/running` discovery file. So a console port claims three ports: itself, the adb port above it and the gRPC port (`GRPC_PORT_OFFSET`).
+- `-grpc` always goes with `-port` (else no gRPC endpoint and no `avd/running` file), so a console port claims three ports: itself, the adb port above it and the gRPC port (`GRPC_PORT_OFFSET`).
 - `-crash-report-mode never` (a stale dump opens a boot-blocking dialog) is passed only when `emulator -help` lists it: 36.1.9 exits on it (#1297). It deletes the dumps in the database the emulator reads, so `ANDROID_EMU_CRASH_REPORTING_DATABASE` names a file in the root.
 - `-feature -WiFiPacketStream` is on every launch (#1586): copies share their seed's Wi-Fi MAC, so on netsim's one Wi-Fi network all but one are dropped. A seed made without it is stale.
 - Ready is more than `sys.boot_completed`: `emu avd path` must name the device's own folder (else `DriverCrashError`), and `pm path android` must answer, since after a snapshot load the boot properties pass before `pm` does.

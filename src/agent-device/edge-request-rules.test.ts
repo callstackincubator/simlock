@@ -289,6 +289,28 @@ describe("the agent-device front's request rules", () => {
       expect(reached()).toBe(1);
     });
 
+    it("`--device` naming the leased phone's own model, which the catalog does not list, reaches the phone daemon as `serial` of the phone, with no `device`", async () => {
+      const rig = await setUpWithPhone({ phoneModel: "SM-S911U" });
+      await granted(rig, 1, { physical: true, platform: "android" });
+      const snapshots = () =>
+        rig.phone
+          .rpcRequests("agent_device.command")
+          .filter((request) => request.params?.["command"] === "snapshot");
+
+      await runCommand(rig, "snapshot", 1, { flags: { device: "sm-s911u" } });
+
+      const sent = snapshots();
+      expect(sent).toHaveLength(1);
+      const flags = flagsOf(sent[0]?.params ?? {});
+      expect(flags["serial"]).toBe(phoneSerial);
+      expect(flags).not.toHaveProperty("device");
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { device: "SM-S918U" } }),
+        simlockPicks,
+      );
+    });
+
     it("`--device` with the leased device's id, and its name with `_` for a space, extra spaces and other letter case, are forwarded unchanged", async () => {
       const rig: Rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });

@@ -25,8 +25,9 @@ Give `endpoint` for the daemon on this machine, or `url` and `token` for a worke
 | `endpoint` | string | The daemon's socket: `~/.simlock/daemon.sock`, `$SIMLOCK_HOME/daemon.sock`, or a gateway's `~/.simlock/gateway/daemon.sock`. On Windows, the named pipe `\\.\pipe\simlock-` followed by the first 16 hex characters of the SHA-256 of the data folder's full path in lower case (for `~/.simlock`, of `c:\users\<you>\.simlock`). |
 | `principal` | string | With `endpoint`: your requester id. Your leases belong to it. At most 256 characters, no control characters, else a lease request fails with `BAD_REQUEST`. Leave it out and you share the daemon's default id, and its lease. |
 | `credential` | string | `simlock/admin` with `endpoint` only: the contents of the daemon's `admin.token` file, or an operator token's secret. Missing or wrong: the connection fails with `ADMIN_AUTHENTICATION_FAILED`. |
-| `url` | string | A farm's origin, with no path, query or fragment: `https://`, or `http://` for `127.0.0.1`, `[::1]` and `localhost`, at most 2,048 characters. Not with `endpoint`, `principal` or `credential`. |
+| `url` | string | A farm's origin, with no path, query or fragment: `https://`, or `http://` for `127.0.0.1`, `[::1]` and `localhost` (any other host needs `allowInsecureHttp: true`), at most 2,048 characters. Not with `endpoint`, `principal` or `credential`. |
 | `token` | string | With `url`: a token the farm knows, 1 to 4,096 characters. Its role is the session's role, and its id is the principal. |
+| `allowInsecureHttp` | boolean | With `url`: `true` lets it be `http://` to any host; the token then travels unencrypted. Default `false`; ignored without `url`; anything but `true` or `false` throws a `TypeError`. |
 | `signal` | `AbortSignal` | Aborting it while the client connects stops the attempt, and the call rejects with the signal's reason. After the connect it ends nothing. |
 
 A `url`, `token` or mix of options that breaks these rules throws a `TypeError` before anything is sent. The daemon's `admin.token` changes each time it starts: read it again after a restart.

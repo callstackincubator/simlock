@@ -271,7 +271,7 @@ export function refuseBadLabel(): <T extends { readonly label?: string | undefin
   };
 }
 
-function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
 ) => void {

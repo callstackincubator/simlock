@@ -512,3 +512,55 @@ export function reconnectWhileWaiting<T>(options: {
     );
   });
 }
+
+export interface SlimHintClient {
+  getCatalog(): Promise<{
+    readonly platforms: readonly {
+      readonly platform: string;
+      readonly slimCategories?: readonly string[] | undefined;
+    }[];
+  }>;
+}
+
+export interface SlimHintGrant {
+  readonly device: {
+    readonly physical: boolean;
+    readonly mode?: string | undefined;
+    readonly except?: readonly string[] | undefined;
+    readonly spec: { readonly platform: string };
+  };
+}
+
+/** why: the hint is a courtesy, so a catalog that does not answer in this long never holds up a grant. */
+const SLIM_HINT_TIMEOUT_MS = 2_000;
+
+export async function slimLeaseHint(input: {
+  readonly clock: Clock;
+  readonly client: SlimHintClient;
+  readonly grant: SlimHintGrant;
+  /** why: each frontend names its own way out; a flag means nothing to an MCP caller. */
+  readonly frontend: "cli" | "mcp";
+}): Promise<string | undefined> {
+  const { device } = input.grant;
+  if (device.physical || device.mode !== "slim" || device.spec.platform !== "ios") return undefined;
+  let catalog: Awaited<ReturnType<SlimHintClient["getCatalog"]>>;
+  try {
+    catalog = await awaitWithin(
+      input.clock,
+      SLIM_HINT_TIMEOUT_MS,
+      input.client.getCatalog(),
+      "Timed out reading the catalog for the slim hint",
+    );
+  } catch {
+    return undefined;
+  }
+  const ios = catalog.platforms.find((entry) => entry.platform === "ios");
+  const kept = new Set(device.except ?? []);
+  const off = (ios?.slimCategories ?? []).filter((name) => !kept.has(name));
+  if (off.length === 0) return undefined;
+  const wayOut =
+    input.frontend === "cli"
+      ? "use --except <name> or --mode full"
+      : 'pass except: ["<name>"] or mode: "full"';
+  return `slim: ${off.join(", ")} off; ${wayOut}`;
+}

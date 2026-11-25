@@ -8,6 +8,7 @@ import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import {
   FakeClock,
+  FakeDirectoryAccessReader,
   FakeHostInfo,
   FakeProcessSupervisor,
   FakeTcpProbe,
@@ -78,7 +79,8 @@ describe("startDaemon with the agent-device edge", () => {
         JSON.stringify({ entry, pid: options.record.pid, startedAt: 1 }),
       );
     }
-    return { directory, filesystem };
+    // why: the daemon names its home by the filesystem's real path, which the in-memory one spells with `/` and no drive.
+    return { directory, filesystem, home: await filesystem.realpath(directory) };
   }
 
   /** why: pid 900 answers as this home's own agent-device daemon, so a supervisor that ran would read its command line and SIGTERM it. */
@@ -128,6 +130,7 @@ describe("startDaemon with the agent-device edge", () => {
     const daemon = await startDaemon({
       clock,
       dataDirectory: setup.directory,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       ...(ports.role === undefined ? {} : { role: ports.role }),
       deviceDataTables: fakeDeviceDataTables,
       drivers: ports.drivers ?? [
@@ -157,7 +160,7 @@ describe("startDaemon with the agent-device edge", () => {
     });
     const events: string[] = [];
     const processSupervisor = new KillingSupervisor();
-    const runner = versionAndDaemon(setup.directory);
+    const runner = versionAndDaemon(setup.home);
     const spawn = runner.spawn.bind(runner);
     vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
       const handle = spawn(spawned, args, options);
@@ -214,7 +217,7 @@ describe("startDaemon with the agent-device edge", () => {
     const daemonAt = (stateDirName: string, pid: number, port: number, marker: string[]) => ({
       hangs: true,
       match: {
-        args: [entry, `--simlock-home=${setup.directory}`, ...marker],
+        args: [entry, `--simlock-home=${setup.home}`, ...marker],
         command: process.execPath,
       },
       onSpawn: async () => {
@@ -267,7 +270,7 @@ describe("startDaemon with the agent-device edge", () => {
   it("resolves and grants a lease to an ordinary client while agent-device's /health never answers", async () => {
     const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const processSupervisor = new KillingSupervisor();
-    const runner = versionAndDaemon(setup.directory);
+    const runner = versionAndDaemon(setup.home);
     const spawn = runner.spawn.bind(runner);
     vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
       const handle = spawn(spawned, args, options);
@@ -296,7 +299,7 @@ describe("startDaemon with the agent-device edge", () => {
 
   async function spawnedEnvironment(drivers: (clock: FakeClock) => StartDaemonOptions["drivers"]) {
     const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
-    const runner = versionAndDaemon(setup.directory);
+    const runner = versionAndDaemon(setup.home);
     await startEdge(setup, {
       drivers: drivers(new FakeClock(1_000)),
       processRunner: runner,
@@ -317,7 +320,7 @@ describe("startDaemon with the agent-device edge", () => {
       const setup = await setUp({
         capabilities: { "agent-device": { command, enabled: true, ios: { [key]: value } } },
       });
-      const runner = versionAndDaemon(setup.directory, "phones");
+      const runner = versionAndDaemon(setup.home, "phones");
       const clock = new FakeClock(1_000);
       await startEdge(setup, {
         clock,
@@ -332,7 +335,7 @@ describe("startDaemon with the agent-device edge", () => {
 
       expect(runner.calls[3]?.args).toEqual([
         entry,
-        `--simlock-home=${setup.directory}`,
+        `--simlock-home=${setup.home}`,
         "--simlock-role=phones",
       ]);
       expect(runner.calls[3]?.options.env?.[envName]).toBe(value);
@@ -408,7 +411,7 @@ describe("startDaemon with the agent-device edge", () => {
       const { started } = await startOnFreePort(async (port) => {
         const setup = await setUp(config(port), { record: { pid: 900 } });
         const runner = new ScriptedProcessRunner([]);
-        const processSupervisor = recordedDaemonAlive(setup.directory);
+        const processSupervisor = recordedDaemonAlive(setup.home);
         const { clock } = await startEdge(setup, {
           ...(drivers === undefined ? {} : { drivers: [...drivers] }),
           processRunner: runner,
@@ -473,7 +476,7 @@ describe("startDaemon with the agent-device edge", () => {
     const on = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     await startEdge(on, {
       agentDevice: spying,
-      processRunner: versionAndDaemon(on.directory),
+      processRunner: versionAndDaemon(on.home),
       processSupervisor: new FakeProcessSupervisor(),
     });
     expect(loads).toBe(1);
@@ -490,7 +493,7 @@ describe("startDaemon with the agent-device edge", () => {
       { directory: first.directory, record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
-    const processSupervisor = recordedDaemonAlive(second.directory);
+    const processSupervisor = recordedDaemonAlive(second.home);
     const clock = new FakeClock(1_000);
 
     await expect(
@@ -568,7 +571,7 @@ describe("startDaemon with the agent-device edge", () => {
         version(simulator === "running" ? "0.21.28\n" : simulator),
         {
           hangs: true,
-          match: { args: [entry, `--simlock-home=${setup.directory}`], command: process.execPath },
+          match: { args: [entry, `--simlock-home=${setup.home}`], command: process.execPath },
           onSpawn: async () => {
             await setup.filesystem.writeFileAtomic(
               join(setup.directory, "agent-device", "daemon.json"),
@@ -723,7 +726,7 @@ describe("startDaemon with the agent-device edge", () => {
 
     it("reports no module-unavailable finding while agent-device's /health never answers and the readiness budget has not run out", async () => {
       const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
-      const runner = versionAndDaemon(setup.directory);
+      const runner = versionAndDaemon(setup.home);
       const { daemon } = await startEdge(setup, {
         processRunner: runner,
         processSupervisor: new FakeProcessSupervisor(),

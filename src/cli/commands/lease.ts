@@ -3,6 +3,7 @@ import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
+  slimLeaseHint,
   startReconnect,
   UNREACHABLE_GIVE_UP_MS,
   type LeaseRenewal,
@@ -16,7 +17,7 @@ import {
 } from "../../contract/index.js";
 import type { LeaseGrant, SimlockAdminClient } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
-import { connectDaemonClient } from "../connect.js";
+import { checkedFarmOrigin, connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
 import { checkedRunId } from "./run-id.js";
@@ -24,6 +25,7 @@ import { writeError } from "../errors.js";
 import { reconnectToFarm } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
+import { errorMessage } from "../../shared/index.js";
 
 /**
  * why: A key that is safe to the left of `=` in a shell `export`. Anything else is a command
@@ -148,10 +150,7 @@ async function runLease(
   const farmOrigin =
     environment.remote === undefined
       ? undefined
-      : (await import("../../simlock-client/farm-url.js")).checkedFarmUrl(
-          environment.remote.url,
-          "--url",
-        );
+      : (await checkedFarmOrigin(environment.remote.url, environment.remote)).url;
   let leaseLost = false;
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
@@ -299,7 +298,7 @@ async function runLease(
       if (disconnected) {
         endHoldingLease(
           "DAEMON_CONNECTION_LOST",
-          `could not release the lease: ${error instanceof Error ? error.message : String(error)}`,
+          `could not release the lease: ${errorMessage(error)}`,
         );
       } else {
         queueErrorWrite(error);
@@ -396,7 +395,20 @@ async function runLease(
     const result = { ...grant, role: client.role };
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult((value) => environment.stdout.write(value), result);
-    if (termination === undefined) return 0;
+    // why: the hint is a courtesy that may wait up to 2 s for the catalog; the grant is already out.
+    const writeHint = async (): Promise<void> => {
+      const hint = await slimLeaseHint({
+        clock: environment.clock,
+        client,
+        grant,
+        frontend: "cli",
+      });
+      if (hint !== undefined) environment.stderr.write(`${JSON.stringify({ notice: hint })}\n`);
+    };
+    if (termination === undefined) {
+      await writeHint();
+      return 0;
+    }
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
     const grantedLease = grant.lease;
     const beginRenewal = (ttlMs: number, ttlDeadline: number): void => {
@@ -475,6 +487,8 @@ async function runLease(
       };
     }
     beginRenewal(grant.lease.ttlMs, grant.lease.ttlDeadline);
+    // why: after onDropped is set, so a drop during the catalog wait reconnects like a full lease.
+    await writeHint();
     await Promise.race([termination.settled, leaseLostSignal, connectionLostSignal]);
     if (leaseLost) return LEASE_LOST_EXIT_CODE;
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;

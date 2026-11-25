@@ -7,8 +7,15 @@ import {
   type ProcessRunOptions,
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
-import { basename } from "node:path";
-import { processResult, pixelDevices, avdDirectory, binaries, ok } from "./test-sdk-fixtures.js";
+import { basename, dirname, join } from "node:path";
+import {
+  ANDROID_SDK_ROOT,
+  processResult,
+  pixelDevices,
+  avdDirectory,
+  binaries,
+  ok,
+} from "./test-sdk-fixtures.js";
 import { emulatorHelpListing, writeSeedFiles } from "./test-seed-harness.js";
 
 /**
@@ -26,7 +33,14 @@ export class EmulatorHost {
   /** why: the AVD folder each console port's emulator runs, as its `emu avd path` answers it. */
   readonly #listening = new Map<number, string>();
   readonly #exits = new Map<number, () => void>();
+  readonly #pids = new Map<number, number>();
+  /** why: the `logcat` listeners a driver has open; a default network that comes up is announced to each. */
+  readonly #logcats = new Set<(line: string) => void>();
   #nextPid = 1;
+  /** why: the network id `dumpsys connectivity` names as the default one; `undefined` before the guest has one. A real emulator has one almost at once, so a test that is about the wait sets it to `undefined`. */
+  defaultNetwork: number | undefined = 100;
+  /** why: what `emu avd snapshot list` prints; a test of a save that did not take empties it. */
+  snapshotListing = "simlock_boot\n";
 
   constructor(private readonly filesystem: MemoryFilesystem) {}
 
@@ -34,18 +48,45 @@ export class EmulatorHost {
     return this.#listening.get(consolePortOf(serial));
   }
 
+  /** why: how many `logcat` listeners are still open; a settle that ends leaves none. */
+  get openLogcats(): number {
+    return this.#logcats.size;
+  }
+
+  /** why: the guest's ConnectivityService picking a default network: the line `logcat` prints for it, to every open listener. */
+  announceDefaultNetwork(): void {
+    for (const announce of this.#logcats) {
+      announce(
+        "ConnectivityService: Sending CONNECTED broadcast for type 1 [100 WIFI] isDefaultNetwork=true",
+      );
+    }
+  }
+
+  /** why: an emulator that dies on its own, as one does when the guest crashes or the host runs out of memory. */
+  crash(serial: string): void {
+    this.#exit(consolePortOf(serial));
+  }
+
+  /** why: the pid the runner gave the emulator listening on a serial, which is what a process table names as the root of its tree. */
+  pidAnswering(serial: string | undefined): number | undefined {
+    return this.#pids.get(consolePortOf(serial));
+  }
+
   /** why: the id of the device whose AVD answers: a copy's folder name, or an old-layout AVD's name. */
   avdAnswering(serial: string | undefined): string | undefined {
     const folder = this.#listening.get(consolePortOf(serial));
     if (folder === undefined) return undefined;
-    const home = folder.slice(0, folder.lastIndexOf("/"));
+    const home = dirname(folder);
     return home === avdDirectory ? basename(folder, ".avd") : basename(home);
   }
 
   runner(): ProcessRunner {
     return {
       run: (command, args, options) => this.#run(command, args, options?.env),
-      spawn: (command, args, options) => this.#spawn(command, args, options?.env),
+      spawn: (command, args, options) =>
+        command === binaries.sdkmanager && args[0] === "--uninstall"
+          ? this.#uninstall(args[1] ?? "")
+          : this.#spawn(command, args, options?.env),
       spawnStreaming: (command, args) => {
         throw new Error(`Unexpected streaming invocation: ${command} ${args.join(" ")}`);
       },
@@ -69,6 +110,21 @@ export class EmulatorHost {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }
     return result;
+  }
+
+  /** why: `sdkmanager --uninstall <package>` deletes the image's folder, as the real tool does; the driver runs it as a bounded spawn. */
+  #uninstall(packageName: string): ProcessHandle {
+    const exited = this.filesystem
+      .rm(join(ANDROID_SDK_ROOT, packageName.split(";").join("/")))
+      .then(() => ({ code: 0, stderr: "", stdout: "" }));
+    return {
+      kill: () => undefined,
+      pid: this.#nextPid++,
+      stderr: emptyLines(),
+      stdout: emptyLines(),
+      unref: () => undefined,
+      wait: () => exited,
+    };
   }
 
   async #avdmanager(args: readonly string[], home: string): Promise<ProcessResult | undefined> {
@@ -99,6 +155,10 @@ export class EmulatorHost {
       this.#exit(port);
       return ok("OK: killing emulator, bye bye\n");
     }
+    if (rest === "emu avd snapshot list") return ok(this.snapshotListing);
+    if (rest === "shell dumpsys connectivity") {
+      return ok(`Active default network: ${this.defaultNetwork ?? "none"}\n`);
+    }
     if (rest.startsWith("shell echo ")) return ok();
     if (rest.startsWith("shell getprop ro.boot.qemu.avd_name; head -c ")) {
       return ok(`${basename(this.#listening.get(port) ?? "", ".avd")}\n`);
@@ -115,18 +175,21 @@ export class EmulatorHost {
     args: readonly string[],
     env: NodeJS.ProcessEnv | undefined,
   ): ProcessHandle {
+    if (command === binaries.adb && args.includes("logcat")) return this.#logcat();
     if (command !== binaries.emulator || args[0] !== "-avd") {
       throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
     }
-    const avdName = `${env?.["ANDROID_AVD_HOME"] ?? avdDirectory}/${args[1] ?? ""}.avd`;
+    const avdName = join(env?.["ANDROID_AVD_HOME"] ?? avdDirectory, `${args[1] ?? ""}.avd`);
     const port = Number(args[args.indexOf("-port") + 1]);
     let exit!: (result: ProcessResult) => void;
     const exited = new Promise<ProcessResult>((resolve) => {
       exit = resolve;
     });
     const bound = !this.#listening.has(port);
+    const pid = this.#nextPid++;
     if (bound) {
       this.#listening.set(port, avdName);
+      this.#pids.set(port, pid);
       this.#exits.set(port, () => exit({ code: 0, stderr: "", stdout: "" }));
     } else {
       exit({ code: 1, stderr: `console port ${port} is already used`, stdout: "" });
@@ -136,11 +199,35 @@ export class EmulatorHost {
       kill: () => {
         if (bound && this.#listening.get(port) === avdName) this.#exit(port);
       },
-      pid: this.#nextPid++,
+      pid,
       stderr: emptyLines(),
       stdout: emptyLines(),
       unref: () => undefined,
       wait: () => exited,
+    };
+  }
+
+  /** why: a one-shot `logcat -m 1`: it ends with the first line it prints, or when it is killed. */
+  #logcat(): ProcessHandle {
+    let end!: (result: ProcessResult) => void;
+    const ended = new Promise<ProcessResult>((resolve) => {
+      end = resolve;
+    });
+    const announce = (line: string) => {
+      this.#logcats.delete(announce);
+      end({ code: 0, stderr: "", stdout: `${line}\n` });
+    };
+    this.#logcats.add(announce);
+    return {
+      kill: () => {
+        this.#logcats.delete(announce);
+        end({ code: null, stderr: "", stdout: "" });
+      },
+      pid: this.#nextPid++,
+      stderr: emptyLines(),
+      stdout: emptyLines(),
+      unref: () => undefined,
+      wait: () => ended,
     };
   }
 
@@ -194,7 +281,7 @@ export function copyPathExpectation(
   return processResult(
     binaries.adb,
     ["-s", serial, "emu", "avd", "path"],
-    `${avdDirectory}/${folder}/simlock.avd\r\nOK\r\n`,
+    `${join(avdDirectory, folder, "simlock.avd")}\r\nOK\r\n`,
   );
 }
 

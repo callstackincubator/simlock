@@ -596,7 +596,8 @@ describe("a lease's tunnel socket", () => {
         started = true;
         return daemon;
       });
-      await vi.waitFor(() => expect(idle.sweeps).toHaveLength(1));
+      // why: a daemon start on a loaded Windows runner takes longer than the default 1 s wait.
+      await vi.waitFor(() => expect(idle.sweeps).toHaveLength(1), { timeout: 10_000 });
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(started).toBe(false);
       releaseSweep();

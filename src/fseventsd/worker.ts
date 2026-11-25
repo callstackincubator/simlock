@@ -1,5 +1,6 @@
 import type { WorkerContext, WorkerModule } from "../modules/index.js";
 import type { FseventsdModuleConfig } from "./definition.js";
+import { errorMessage } from "../shared/index.js";
 
 const LIMIT_BYTES = 2 * 1024 ** 3;
 const UNITS: Readonly<Record<string, number>> = {
@@ -73,7 +74,7 @@ export function createWorker(ctx: WorkerContext<FseventsdModuleConfig>): WorkerM
     capability: { name: ctx.name, read: () => Promise.resolve({ state: "available" }) },
     findings: async () => {
       const reading = await read().catch((error: unknown) => ({
-        failed: error instanceof Error ? error.message : String(error),
+        failed: errorMessage(error),
       }));
       if ("failed" in reading) {
         ctx.logger.warn(`Could not read fseventsd's memory: ${reading.failed}`);

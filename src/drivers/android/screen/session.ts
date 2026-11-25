@@ -25,7 +25,6 @@ import {
   connectScrcpyControl,
   connectScrcpySocket,
   DEVICE_DIRECTORY,
-  errorMessage,
   exitsWithin,
   pushScrcpyServer,
   REMOVE_TIMEOUT_MS,
@@ -36,6 +35,7 @@ import {
 
 export { CLOSE_DEADLINE_MS, CONNECT_RETRY_MS, START_DEADLINE_MS } from "./scrcpy-link.js";
 import { ScrcpyVideoParser } from "./scrcpy-video.js";
+import { errorMessage } from "../../../shared/index.js";
 
 // why: a phone's screen state is read before anything is pushed, and read again only after a wake; a read that outlives this
 // goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
@@ -51,8 +51,10 @@ export const ALIVE_AFTER_MS = 5_000;
 const ALIVE_FRAME = encodeScreenFrame(SCREEN_FRAME_TAG.alive, new Uint8Array(0));
 // why: ADR 0079 §5 bounds the gap between key frames at 5 s; scrcpy's encoder sends none for a still screen
 // and the reset (control message 17) makes it send a session, parameters and a key frame at once. The reset
-// waits 4 s, not 5, because an emulator takes about a second to answer it and the answer must land inside the 5 s.
-const RESET_VIDEO_AFTER_MS = 4_000;
+// waits 3 s, not 5, because an emulator takes about two seconds to answer it and the answer must land inside the 5 s.
+// A reset is not sent again until the key frame it asks for arrives: scrcpy answers by building a new capture and
+// encoder, and a reset that comes meanwhile cancels that answer, so a slow answer would never land (#1762).
+const RESET_VIDEO_AFTER_MS = 3_000;
 const RESET_VIDEO = new Uint8Array([17]);
 const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
@@ -376,7 +378,7 @@ class ScrcpySession {
     if (this.#closing !== undefined) return;
     if (this.#resetTimer !== undefined) this.#clock.cancel(this.#resetTimer);
     this.#resetTimer = this.#clock.setTimer(RESET_VIDEO_AFTER_MS, () => {
-      this.#armReset();
+      this.#resetTimer = undefined;
       this.#control?.write(RESET_VIDEO).catch(() => this.#abort.abort());
     });
   }

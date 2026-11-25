@@ -124,6 +124,47 @@ describe("DaemonServer", () => {
     ]);
   });
 
+  it("pushes seed.make stages keyed by the request id with the seed's kind, then replies with the outcome", async () => {
+    const clock = new FakeClock(1_000);
+    class SeedingDriver extends FakeDriver {
+      ensureSeed() {
+        return Promise.resolve({ leases: 0, settled: false, sourceId: "made" });
+      }
+
+      settleSeed(sourceId: string) {
+        return Promise.resolve({ reason: "idle" as const, settledAfterMs: 5, sourceId });
+      }
+    }
+    const harness = await createHarness({
+      clock,
+      driver: new SeedingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request(
+      "seed.make",
+      { model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+      "seed-frame",
+    );
+
+    expect(response).toMatchObject({
+      ok: true,
+      payload: { outcome: "settled", sourceId: "made" },
+    });
+    const kind = { model: "iPhone 17", osVersion: "26.5", platform: "ios" };
+    expect(client.frames().filter((frame) => frame.push === "seed-progress")).toEqual([
+      {
+        payload: { kind, progress: { stage: "making" }, requestId: "seed-frame" },
+        push: "seed-progress",
+      },
+      {
+        payload: { kind, progress: { stage: "settling" }, requestId: "seed-frame" },
+        push: "seed-progress",
+      },
+    ]);
+  });
+
   it("routes two commands on one connection by frame id, and pushes to no other connection", async () => {
     const clock = new FakeClock(1_000);
     const driver = passthroughDriver(clock);

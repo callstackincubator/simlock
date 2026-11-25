@@ -172,6 +172,13 @@ release and records nothing.
 | `baseline.removed` | One version of a baseline was deleted, by `baseline remove`, by `nuke --delete-devices` or because a newer save of the name replaced it. | `name`, `version`, `reason` (`operator`, `nuke` or `replaced`), `requesterId` when someone asked | Relayed |
 | `baseline.stale` | A baseline became stale: the runtime, system image or emulator it was made with changed, or an iOS baseline was saved in a way that cannot be copied safely and must be saved again. A check runs after a save too. | `name`, `version`, `reason` | Relayed |
 
+## Seeds
+
+| Event | When it fires | Payload | Gateway |
+| --- | --- | --- | --- |
+| `seed.settle-started` | Simlock began settling a quick seed in the background, or because `simlock seed` asked for it. | `platform`, `model`, `osVersion`, `imageTag` when the seed has one, `sourceId` (the quick seed), `leases` (the leases copied from it), `trigger` (`background` or `operator`) | Relayed |
+| `seed.settle-ended` | A settle that started has ended. | `platform`, `model`, `osVersion`, `imageTag` when the seed has one, `sourceId` (the quick seed), `outcome` (`settled`, `cap` when the device never went idle within 15 minutes and was saved anyway, `failed` or `aborted`), `reason` on `aborted` (`memory-pressure`, `daemon-stopping` or `nuke`), `message` on `failed`, `newSourceId` and `sizeBytes` on `settled` and `cap`, `durationMs` | Relayed |
+
 ## Workers
 
 | Event | When it fires | Payload | Gateway |

@@ -2,8 +2,6 @@ import { join } from "node:path";
 import { KeptCategoriesError, type DriverDevice, type DeviceMode } from "../../core/index.js";
 import type { Clock, Filesystem, Logger } from "../../ports/index.js";
 
-import { errorMessage } from "./command-run.js";
-
 import { Simctl } from "./simctl.js";
 
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
@@ -19,6 +17,7 @@ import { assertKeptEnabled, splitByExcept } from "./slim-except.js";
 
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 import { type IosDriverData } from "./simulator-data.js";
+import { errorMessage } from "../../shared/index.js";
 
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;

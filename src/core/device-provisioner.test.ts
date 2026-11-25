@@ -467,6 +467,7 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       [join("drivers", "ios", "index.ts")]: 1,
       [join("drivers", "android", "test-driver-harness.ts")]: 1,
       [join("drivers", "android", "test-seed-harness.ts")]: 1,
+      [join("drivers", "android", "test-seed-world.ts")]: 1,
       [join("drivers", "android", "test-seeds.ts")]: 1,
       // why: the harness's fixture devices, as for registerDevice above.
       [join("leasing", "test-lease-acquisition.ts")]: 1,

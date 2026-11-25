@@ -93,5 +93,6 @@ describe("protocol-bump-check.mjs", () => {
 
     expect(cases).toEqual([0, 0, 0]);
     expect(waived.status).toBe(0);
-  });
+    // why: each repo() spawns ~10 git processes, 4 repos here; a Windows runner needs over 20 s for that.
+  }, 90_000);
 });

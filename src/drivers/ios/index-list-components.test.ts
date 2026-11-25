@@ -1,7 +1,7 @@
 import { afterEach, expect, it, describe } from "vitest";
 import { DriverCrashError } from "../../core/index.js";
 import { ScriptedProcessRunner } from "../../ports/index.js";
-import { deviceRoot } from "./test-slim.js";
+import { deviceRoot, sourcesSetPath } from "./test-slim.js";
 import {
   Image,
   UNSCOPED_LEGACY_CALLS,
@@ -33,7 +33,7 @@ afterEach(() => {
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
-    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
+    expect([deviceRoot, sourcesSetPath]).toContain(call.args[2]);
   }
 });
 

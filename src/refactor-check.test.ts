@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
+
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -92,8 +94,8 @@ const SCRIPTS = ["refactor-check.mjs", "module-surface.mjs", "surface-paths.mjs"
 const FAKE_WORKTREE = `#!/bin/sh
 dir=$(mktemp -d "\${TMPDIR:-/tmp}/wt.XXXXXX"); rmdir "$dir"
 git worktree add -q --detach "$dir" "$2" >&2
-ln -s "$FAKE_NODE_MODULES" "$dir/node_modules"
-echo "$dir"
+cp -R "$FAKE_NODE_MODULES" "$dir/node_modules"
+cygpath -m "$dir" 2>/dev/null || echo "$dir"
 `;
 const FAKE_TSC = String.raw`#!/usr/bin/env node
 const fs = require("node:fs"); const path = require("node:path"); const { execFileSync } = require("node:child_process");
@@ -128,7 +130,7 @@ function fullRun(dir: string, env: Record<string, string> = {}) {
   const kit = mkdtempSync(join(tmpdir(), "refactor-kit-"));
   const scripts = join(kit, ".agents", "scripts");
   const bin = join(kit, "bin");
-  const modules = join(kit, "node_modules", ".bin");
+  const modules = join(kit, "node_modules", "typescript", "bin");
   for (const d of [scripts, bin, modules]) mkdirSync(d, { recursive: true });
   for (const f of SCRIPTS) copyFileSync(join(dirname(SCRIPT), f), join(scripts, f));
   const tool = (path: string, text: string) => {
@@ -137,7 +139,7 @@ function fullRun(dir: string, env: Record<string, string> = {}) {
   };
   tool(join(scripts, "worktree.sh"), FAKE_WORKTREE);
   tool(join(modules, "tsc"), FAKE_TSC);
-  tool(join(bin, "pnpm"), FAKE_PNPM);
+  writeFakeCommand(bin, "pnpm", FAKE_PNPM);
   const log = join(kit, "pnpm.log");
   const run = spawnSync(
     process.execPath,
@@ -147,7 +149,7 @@ function fullRun(dir: string, env: Record<string, string> = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+        ...fakeCommandEnv(bin, `${dirname(process.execPath)}:/usr/bin:/bin`),
         FAKE_NODE_MODULES: join(kit, "node_modules"),
         FAKE_LOG: log,
         ...env,

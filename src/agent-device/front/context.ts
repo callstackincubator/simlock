@@ -8,6 +8,7 @@ import { readReply, type CallClass, type ReplyReading } from "../shared/rpc.js";
 import type { FrontMap } from "./front-map.js";
 import type { HostLink } from "./host-link.js";
 import type { Renewals } from "./renewals.js";
+import { errorMessage } from "../../shared/index.js";
 
 export interface FrontContext {
   readonly leaseTtlCapMs?: number;
@@ -51,7 +52,7 @@ export async function exchange(
     }
     return { reading, response, text };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     context.logger.warn("agent-device lease call got no usable reply", { message });
     return {
       reading: { kind: "unusable" },
@@ -118,7 +119,7 @@ export async function releaseSimlock(
     const code = mapError(error).code;
     if (code === "UNKNOWN_LEASE") return { kind: "unknown" };
     if (code === "FORBIDDEN") return { kind: "forbidden" };
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     context.logger.warn("agent-device front could not release a simlock lease", {
       leaseId,
       message,

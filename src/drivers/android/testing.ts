@@ -17,11 +17,14 @@ export {
   answeringAvdPath,
   simlockHome,
   instanceId,
+  privateAliasOf,
   avdDirectory,
   binaries,
   ok,
   WorkingDirectoryFilesystem,
 } from "./test-sdk-fixtures.js";
+
+export { androidSourceDataOwner } from "./source-data.js";
 
 export type { FitImage, Refusal } from "./test-sdk-fixtures.js";
 
@@ -66,4 +69,4 @@ export {
   copyPathExpectation,
 } from "./test-emulator-host.js";
 
-export { locateSdk, type AndroidSdkPaths } from "./sdk-paths.js";
+export { locateSdk, withWindowsExtension, type AndroidSdkPaths } from "./sdk-paths.js";

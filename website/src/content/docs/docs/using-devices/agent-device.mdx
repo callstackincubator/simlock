@@ -148,7 +148,7 @@ If every matching device is taken, `open` waits up to 330 seconds, then fails wi
 - **`close` gives the device back.** Simlock ends the lease and deletes the device; the next agent gets a new one.
 - **`install` sends the app from your machine.** agent-device uploads it. A path on the worker is refused.
 - **`devices` lists only your devices**, and nothing before `open`.
-- **Simlock picks the device.** Do not pass `--udid` or `--serial`. Simlock answers `boot` on a leased device itself; its `id` is the device's UDID on iOS or serial on Android. The agent-device `leaseId` is the Simlock lease id, usable with `/v1/leases/<id>/…`.
+- **Simlock picks the device.** Do not pass `--udid` or `--serial`. After `open`, `--device` may name only the leased device: its name, its model in any letter case (an enrolled phone's model too, even when the catalog does not list it), or a catalog alias of that model. `test --device` takes only the names or ids of devices you hold. Simlock answers `boot` on a leased device itself; its `id` is the device's UDID on iOS or serial on Android. The agent-device `leaseId` is the Simlock lease id, usable with `/v1/leases/<id>/…`.
 - **A `batch`** can nest at most 8 levels deep and hold at most 1000 steps in all.
 - **`orientation` on an iPhone or iPad simulator** (not a foldable iPhone Duo) is done by Simlock, and replies `Rotation requested: landscape-left (unconfirmed)`: it was sent, but nothing confirms it happened. Use `portrait`, `portrait-upside-down`, `landscape-left` or `landscape-right`, or `upside-down`, `left` and `right`. On every other device, and as a `batch` step, agent-device rotates as it normally does.
 
@@ -239,7 +239,7 @@ Sign-in errors (`UNAUTHENTICATED`, `FORBIDDEN`) and errors from outside Simlock,
 | `refused: name --platform ios or android` | Pass `--platform` to `open`. |
 | `refused: boot names no lease; open a device first` | Run `open` before `boot`. |
 | `refused: this lease has ended; open a device` | Run `open` again. |
-| `refused: simlock picks the device` | Drop `--udid`, `--serial` or a `--device` that names another device. |
+| `refused: simlock picks the device` | Drop `--udid`, `--serial` or a `--device` that names another device. The leased device's name or model is accepted, except by `test`, which takes names and ids only. |
 | `refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set` | Do as the message says. |
 | `refused: send the app from your machine as an upload` | Give `install` a path on your machine. |
 | `No active proxy device lease for this session; run open first.` | The session has no lease, often because parallel agents share one session. Set `AGENT_DEVICE_SESSION` per agent, then `open`. |

@@ -18,8 +18,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { blankSource } from "./test-support/source-text.js";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const oxlint = join(repoRoot, "node_modules", ".bin", "oxlint");
-const depcruise = join(repoRoot, "node_modules", ".bin", "depcruise");
+// why: node_modules/.bin holds .cmd shims on Windows, which spawn cannot start; node running each
+// tool's entry file starts the same everywhere.
+const oxlint = join(repoRoot, "node_modules", "oxlint", "bin", "oxlint");
+const depcruise = join(
+  repoRoot,
+  "node_modules",
+  "dependency-cruiser",
+  "bin",
+  "dependency-cruiser.mjs",
+);
 const scratch = mkdtempSync(join(tmpdir(), "simlock-lint-rules-"));
 let counter = 0;
 
@@ -36,7 +44,10 @@ function lint(path: string, source: string): { passes: boolean; rules: string[];
   const names = [...source.matchAll(/import (?:type )?\{ (\w+) \}/g)].map((match) => match[1]);
   writeFileSync(join(dir, path), `${source}export { ${names.join(", ")} };\n`);
   copyFileSync(join(repoRoot, ".oxlintrc.json"), join(dir, ".oxlintrc.json"));
-  const result = spawnSync(oxlint, ["--format", "json", "."], { cwd: dir, encoding: "utf8" });
+  const result = spawnSync(process.execPath, [oxlint, "--format", "json", "."], {
+    cwd: dir,
+    encoding: "utf8",
+  });
   const parsed = JSON.parse(result.stdout) as { diagnostics: { code: string }[] };
   return {
     passes: result.status === 0,
@@ -92,7 +103,7 @@ interface Violation {
 }
 
 function cruise(dir: string, args: readonly string[]): Violation[] {
-  const result = spawnSync(depcruise, [...args, "--output-type", "json"], {
+  const result = spawnSync(process.execPath, [depcruise, ...args, "--output-type", "json"], {
     cwd: dir,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -285,6 +296,25 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     [
       ["passes", "src/contract/x.ts", "zod", "unbuilt"],
       ["passes", "src/contract/x.ts", "./y.js"],
+    ],
+  ],
+  [
+    "fails a shared file importing a component, a package or a Node module, and passes its own siblings",
+    [
+      ["fails", "src/shared/x.ts", "../core/index.js"],
+      ["fails", "src/shared/x.ts", "zod", "unbuilt"],
+      ["fails", "src/shared/x.ts", "node:path"],
+      ["passes", "src/shared/x.ts", "./y.js"],
+    ],
+  ],
+  [
+    "passes the CLI router, the updater and modules importing shared's index, and fails the router importing ports",
+    [
+      ["passes", "src/cli/errors.ts", "../shared/index.js"],
+      ["passes", "src/cli/errors.ts", "../agent-identity/index.js"],
+      ["fails", "src/cli/errors.ts", "../ports/index.js"],
+      ["passes", "src/updater/x.ts", "../shared/index.js"],
+      ["passes", "src/modules/x.ts", "../shared/index.js"],
     ],
   ],
   [
@@ -932,5 +962,50 @@ describe("the time outside src/ports/", () => {
 
     expect(sources).toEqual(expect.arrayContaining(["src/core/registry.ts", "src/daemon/main.ts"]));
     expect(found).toEqual(KNOWN_TIME_READS);
+  });
+});
+
+// why: architecture rule 10 for the error-message unwrap, which no import rule can see: src/shared
+// holds the one `errorMessage`, so no other source of src/ writes its own copy or its inline form.
+const ERROR_MESSAGE_COPY =
+  /\binstanceof\s+Error\s*\?\s*[\w$.]+\.message\s*:\s*String\s*\(|\bfunction\s+errorMessage\b/g;
+
+const errorMessageCopies = (text: string): number =>
+  blankSource(text, { strings: true }).match(ERROR_MESSAGE_COPY)?.length ?? 0;
+
+describe("the error-message unwrap outside src/shared/", () => {
+  it("is written nowhere but in src/shared/, as a copy of errorMessage or inline", () => {
+    expect(
+      errorMessageCopies(
+        [
+          "const one = e instanceof Error ? e.message : String(e);",
+          "const dotted = r.error instanceof Error ? r.error.message : String(r.error);",
+          "const split = e instanceof Error\n  ? e.message\n  : String(e);",
+          "const inside = `failed: ${e instanceof Error ? e.message : String(e)}`;",
+          ["function", "errorMessage(error: unknown): string { return ''; }"].join(" "),
+          "// e instanceof Error ? e.message : String(e)",
+          "const quoted = 'e instanceof Error ? e.message : String(e)';",
+          "const other = e instanceof Error ? e.stack : String(e);",
+        ].join("\n"),
+      ),
+    ).toBe(5);
+    const sources = spawnSync("git", ["ls-files", "src/*.ts", "src/*.tsx"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+      .stdout.split("\n")
+      .filter(
+        (name) => name !== "" && !name.startsWith("src/shared/") && !/\.test\.tsx?$/.test(name),
+      );
+    const found = Object.fromEntries(
+      sources
+        .map(
+          (name) => [name, errorMessageCopies(readFileSync(join(repoRoot, name), "utf8"))] as const,
+        )
+        .filter(([, count]) => count > 0),
+    );
+
+    expect(sources).toEqual(expect.arrayContaining(["src/cli/errors.ts", "src/mcp/connect.ts"]));
+    expect(found).toEqual({});
   });
 });

@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { fakeCommandEnv, writeFakeCommand } from "./test-support/fake-command.js";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -33,8 +35,9 @@ function ciFailures(runs: readonly Run[], logs: Record<number, string>, jobs: st
     join(dir, "jobs.json"),
     JSON.stringify({ jobs: jobs.map((name) => ({ name, conclusion: "failure" })) }),
   );
-  writeFileSync(
-    join(dir, "gh"),
+  writeFakeCommand(
+    dir,
+    "gh",
     `#!/bin/sh
 d=${JSON.stringify(dir)}
 case "$*" in
@@ -46,10 +49,9 @@ case "$*" in
 esac
 `,
   );
-  chmodSync(join(dir, "gh"), 0o755);
   const run = spawnSync(process.execPath, [SCRIPT, "7"], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:/usr/bin:/bin` },
+    env: { ...process.env, ...fakeCommandEnv(dir, "/usr/bin:/bin") },
   });
   return run.stdout + run.stderr;
 }

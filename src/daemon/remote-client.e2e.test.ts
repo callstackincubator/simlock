@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
+import { removeDirectory } from "../test-support/remove-directory.js";
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -25,9 +26,7 @@ describe("the typed client over a worker's session path", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
-    await Promise.all(
-      directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
-    );
+    await Promise.all(directories.splice(0).map((directory) => removeDirectory(directory)));
   });
 
   it("connectSimlock with a URL and a token reaches a worker with fake drivers over its real session path: it leases, renews, releases and hears lease-lost", async () => {

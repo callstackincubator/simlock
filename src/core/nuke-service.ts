@@ -2,6 +2,7 @@ import type { LeaseRecord, VirtualDevice } from "./domain.js";
 import type { Driver } from "./driver.js";
 import { type Logger, NoopLogger } from "../ports/index.js";
 import type { NukeExecutor } from "./core-ports.js";
+import type { SeedSettler } from "./seed-settle/index.js";
 import { stableError } from "./stable-error.js";
 
 /** Release maintenance boundary required by an operator reset. */
@@ -56,6 +57,8 @@ export interface NukeServiceOptions {
   /** why: nuke --delete-devices also deletes the seeds the drivers keep; it names no other source (ADR 0061 §1). */
   readonly drivers: readonly Pick<Driver, "platform" | "listSources" | "destroySource">[];
   readonly logger?: Logger;
+  /** why: a nuke deletes seeds, so no settle runs or swaps a seed while it does (ADR 0090 §2). */
+  readonly seedSettler: Pick<SeedSettler, "holdWhile">;
   /** why: nuke starts the warm pool over, so the kinds it learned are not booted back. */
   readonly warmPool: { forget(): void };
 }
@@ -83,7 +86,7 @@ export class NukeService implements NukeExecutor {
     });
     await previous;
     try {
-      return await this.#runNuke(deleteDevices);
+      return await this.options.seedSettler.holdWhile(() => this.#runNuke(deleteDevices));
     } finally {
       release();
     }

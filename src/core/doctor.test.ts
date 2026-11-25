@@ -127,6 +127,33 @@ describe("Doctor", () => {
     ]);
   });
 
+  it("lists a quick seed's settled flag and lease count as its driver reports them, and a baseline carries neither", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setSources([
+      { id: "q", kind: "seed", model: "iPhone 17", osVersion: "27.0", settled: false, leases: 3 },
+      { id: "s", kind: "seed", model: "iPad", osVersion: "27.0", settled: true, leases: 0 },
+      { id: "b", kind: "baseline", model: "iPhone 16", osVersion: "26.5" },
+    ]);
+
+    const report = await new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.sources.map(({ kind, settled, leases }) => ({ kind, settled, leases }))).toEqual([
+      { kind: "seed", settled: false, leases: 3 },
+      { kind: "seed", settled: true, leases: 0 },
+      { kind: "baseline", settled: undefined, leases: undefined },
+    ]);
+  });
+
   it("lists no sources for a driver whose listSources fails, still returns the report, and keeps the sources of the drivers that answer", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);

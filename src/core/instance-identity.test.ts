@@ -124,7 +124,8 @@ describe("loadInstanceId on a real filesystem", () => {
     await expect(filesystem.readdir(home)).resolves.toEqual(["instance.json"]);
   });
 
-  it("creates instance.json owner-only", async () => {
+  // why: ADR 0087 section 3: Windows has no mode 0600, so `stat` reports another mode there.
+  it.skipIf(process.platform === "win32")("creates instance.json owner-only", async () => {
     // why: #685: `writeFileExclusive` links a temp file into place, and that temp file is written
     // without a mode, so the identity the daemon stamps into every device root lands world-
     // readable under the umask every real host starts from. A restrictive umask here would

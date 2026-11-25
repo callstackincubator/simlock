@@ -1,10 +1,11 @@
 import type { ProcessOutcome } from "./boot-courtesies.js";
 import { DriverCrashError } from "../../core/index.js";
 import type { Clock, Logger, ProcessResult, ProcessRunner } from "../../ports/index.js";
-import { deleteLateSimulator, errorMessage, runCommand, type LateAnswer } from "./command-run.js";
+import { deleteLateSimulator, runCommand, type LateAnswer } from "./command-run.js";
 import type { SeedTurns } from "./seed-turns.js";
 import { parseCatalog, type SimctlCatalog } from "./simctl-parse.js";
 import { parseRuntimeImages, type RuntimeImage } from "./runtime-images.js";
+import { errorMessage } from "../../shared/index.js";
 
 interface SimctlOptions {
   readonly clock: Clock;
@@ -75,7 +76,8 @@ export class Simctl {
     try {
       await this.shutdown(udid, set);
     } catch {
-      // why: Boot failure cleanup must not obscure the timeout that triggered it.
+      // why: Boot failure cleanup must not obscure the timeout that triggered it, and a destroy
+      // lets `simctl delete` decide: a shutdown that timed out must not strand the simulator.
     }
   }
 

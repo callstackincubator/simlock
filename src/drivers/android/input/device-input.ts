@@ -33,6 +33,7 @@ import {
 } from "./keycodes.js";
 import { keycodePacket, scrollPacket, touchPacket } from "./packets.js";
 import { readScreenSize, type ScreenSize } from "./display-size.js";
+import { errorMessage } from "../../../shared/index.js";
 
 const BUTTON_KEYCODES = {
   app_switcher: KEYCODE_APP_SWITCH,
@@ -266,7 +267,7 @@ class AndroidDeviceInput implements DeviceInput {
       if (!this.#sizeFailing) {
         this.#sizeFailing = true;
         this.#options.logger?.warn("Could not read the screen size", {
-          reason: error instanceof Error ? error.message : String(error),
+          reason: errorMessage(error),
           serial: this.#target.serial,
         });
       }

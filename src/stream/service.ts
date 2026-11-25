@@ -2,6 +2,7 @@ import type { Clock, TimerHandle } from "../ports/index.js";
 import type { CapturedStream } from "./feed.js";
 import type { StreamCaller } from "./caller.js";
 import { noSuchStream, StreamRefusalError } from "./refusal.js";
+import { errorMessage } from "../shared/index.js";
 
 // why: a stream is asked for by the device it films; `workerId` is absent on the relay door, where the
 // gateway has already chosen the worker.
@@ -97,11 +98,7 @@ export async function handleStreamRequest(
     const refusal =
       error instanceof StreamRefusalError
         ? error
-        : new StreamRefusalError(
-            500,
-            "INTERNAL",
-            error instanceof Error ? error.message : String(error),
-          );
+        : new StreamRefusalError(500, "INTERNAL", errorMessage(error));
     options.logger?.warn("Screen stream refused", {
       ...targetFields(target),
       code: refusal.code,

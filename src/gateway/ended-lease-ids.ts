@@ -8,6 +8,7 @@
  */
 import type { Clock, Logger, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface EndedLeaseIds {
   /** why: remembers that the chosen `leaseId` ended at `endedAt` (milliseconds since the epoch); a newer end replaces an older one. */
@@ -71,7 +72,7 @@ export class StateEndedLeaseIds implements EndedLeaseIds {
       return run();
     } catch (error: unknown) {
       this.#logger.error(`Could not ${what} the gateway's ended lease ids`, {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
       return undefined;
     }

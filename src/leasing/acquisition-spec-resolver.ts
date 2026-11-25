@@ -68,6 +68,7 @@ export class AcquisitionSpecResolver {
     request: DeviceRequest,
     options: LeaseRequestOptions,
     onProgress: (progress: DownloadingProgress) => void,
+    requireServed = true,
   ): Promise<{
     readonly spec: VirtualSpec;
     readonly requirement: DeviceRequirement;
@@ -89,13 +90,14 @@ export class AcquisitionSpecResolver {
           { ...options, allowDownload: false },
           onProgress,
           true,
+          requireServed,
         );
       } catch (error: unknown) {
         // why: only a missing runtime says the tag cannot be met here; any other refusal is the request's answer (ADR 0078 §2).
         if (!(error instanceof RuntimeMissingError)) throw error;
       }
     }
-    return this.#resolveAttempt(driver, request, options, onProgress, false);
+    return this.#resolveAttempt(driver, request, options, onProgress, false, requireServed);
   }
 
   /** why: the image tag the worker gives this request, or none for a request the default does not apply to (ADR 0078 §1). */
@@ -110,6 +112,7 @@ export class AcquisitionSpecResolver {
     options: LeaseRequestOptions,
     onProgress: (progress: DownloadingProgress) => void,
     defaultTag: boolean,
+    requireServed: boolean,
   ): Promise<{
     readonly spec: VirtualSpec;
     readonly requirement: DeviceRequirement;
@@ -117,12 +120,7 @@ export class AcquisitionSpecResolver {
   }> {
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
-    if (request.except !== undefined && mode !== "slim") {
-      throw new BadDeviceRequestError(
-        "except needs a slim lease (this worker's default mode is full)",
-      );
-    }
-    this.#requireServed(request.platform, mode);
+    this.#requireMode(request, mode, requireServed);
     const range = requestedRange(request);
     const target =
       range === undefined
@@ -141,6 +139,16 @@ export class AcquisitionSpecResolver {
       requirement: target.requirement ?? exactRequirement(spec),
       spec,
     };
+  }
+
+  /** why: the mode checks that run before the spec is resolved, so a refused request downloads nothing; a seed is made in a mode no lease is asked for, so it skips the served check. */
+  #requireMode(request: DeviceRequest, mode: DeviceMode, requireServed: boolean): void {
+    if (request.except !== undefined && mode !== "slim") {
+      throw new BadDeviceRequestError(
+        "except needs a slim lease (this worker's default mode is full)",
+      );
+    }
+    if (requireServed) this.#requireServed(request.platform, mode);
   }
 
   /** why: the asked or default mode is checked before the spec is resolved, so a refused mode downloads nothing (ADR 0082 §2). */
@@ -371,6 +379,26 @@ export class AcquisitionSpecResolver {
       });
       return driver.resolveSpec(request);
     }
+  }
+
+  /**
+   * why: ADR 0090 §4: the spec `simlock seed` makes a seed for, resolved as a lease resolves it with downloads off, except that the
+   * served-mode check is skipped and the spec is full, because one seed serves every mode. Throws the lease's own refusals.
+   */
+  async resolveSeedSpec(request: {
+    readonly platform: Platform;
+    readonly model: string;
+    readonly osVersion?: string;
+    readonly imageTag?: string;
+  }): Promise<VirtualSpec> {
+    const { spec } = await this.resolveSpec(
+      this.options.drivers.get(request.platform),
+      { ...request, mode: "full" },
+      { allowDownload: false, ownerId: "seed", requesterId: "seed" },
+      () => undefined,
+      false,
+    );
+    return spec;
   }
 
   /**

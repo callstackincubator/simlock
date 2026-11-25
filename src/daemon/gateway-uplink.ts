@@ -10,6 +10,7 @@
 import { createLink, type LinkConnection } from "../link/index.js";
 import type { Clock, Logger, TimerHandle, UplinkConnector } from "../ports/index.js";
 import { NoopLogger, UplinkError } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface UplinkBackoff {
   /** Delay before the first retry. */
@@ -163,7 +164,7 @@ export class GatewayUplink {
       this.#logger.warn("Uplink to gateway failed; retrying", {
         url: this.options.url,
         reason: error instanceof UplinkError ? error.code : "unknown",
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
         retryInMs: delayMs,
       });
       this.#scheduleRetry(delayMs);

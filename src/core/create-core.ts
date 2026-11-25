@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, Logger, SystemStats } from "../ports/index.js";
+import type { Clock, Filesystem, Logger, SystemStats } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import {
   buildCapacityFigures,
@@ -44,9 +44,12 @@ import { StartupConverger } from "./startup-converger.js";
 import { stableError } from "./stable-error.js";
 import { readStartup, type StartupRead } from "./startup-read.js";
 import { BaselineService } from "./baselines.js";
+import { createSeedSettler, type SeedSettler } from "./seed-settle/index.js";
 import { WarmPool } from "./warm-pool/index.js";
+import { errorMessage } from "../shared/index.js";
 
-export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "devices" | "health" | "idle">;
+export type CoreConfig = DoctorConfig &
+  Pick<Config, "capacity" | "devices" | "diskPressure" | "health" | "idle">;
 
 interface CoreOptions {
   readonly clock: Clock;
@@ -69,6 +72,10 @@ interface CoreOptions {
   /** Drivers that refused to start, reported by `doctor` on every run. */
   readonly driverRejections?: readonly DriverRejection[] | undefined;
   readonly eventBus: EventBus;
+  /** why: the seed settler reads free disk, as the reaper does (ADR 0090 §2). */
+  readonly filesystem: Pick<Filesystem, "diskFree">;
+  /** why: the path the reaper reads free disk at, so both read the same disk. */
+  readonly diskPath?: string | undefined;
   /**
    * Where work core finishes off its callers' paths reports its failures. A backgrounded
    * reclaim has no caller left to reject to, so without this its only trace is the device's own
@@ -136,6 +143,8 @@ export interface Core {
   readonly enrollment: PhysicalEnrollment;
   readonly autoEnrollment: PhysicalAutoEnrollment;
   readonly nuke: NukeService;
+  /** why: ADR 0090: the daemon stops it before the drivers are disposed, and the operator's `seed` command settles through it. */
+  readonly seedSettler: SeedSettler;
   readonly provisioner: DeviceProvisioner;
   readonly quarantine: QuarantineCoordinator;
   readonly reclaim: ReclaimCoordinator;
@@ -293,15 +302,13 @@ export function createCore(options: CoreOptions): Core {
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {
       options.logger?.warn(
-        `could not check baselines after a component was removed: ${error instanceof Error ? error.message : String(error)}`,
+        `could not check baselines after a component was removed: ${errorMessage(error)}`,
       );
     });
   });
   const dropReplacedBaselines = (): Promise<void> =>
     baselines.dropReplaced().catch((error: unknown) => {
-      options.logger?.warn(
-        `could not drop a replaced baseline version: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      options.logger?.warn(`could not drop a replaced baseline version: ${errorMessage(error)}`);
     });
   // why: the last device of a replaced version leaving, by any path, is what lets its source go.
   options.eventBus.subscribe("device.deleted", () => {
@@ -357,6 +364,20 @@ export function createCore(options: CoreOptions): Core {
     registry,
     state: options.state,
   });
+  const seedSettler = createSeedSettler({
+    capacity,
+    clock: options.clock,
+    components: options.components,
+    decisions,
+    diskPressure: options.config.diskPressure,
+    drivers: options.drivers,
+    eventBus: options.eventBus,
+    filesystem: options.filesystem,
+    ...(options.diskPath === undefined ? {} : { diskPath: options.diskPath }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    memoryPressure,
+    registry,
+  });
   const nuke = new NukeService({
     acquisition: {
       // why: closing acquisition first makes the pool skip every new action; then a boot or shutdown it
@@ -376,6 +397,7 @@ export function createCore(options: CoreOptions): Core {
     leases: leaseMaintenance.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
+    seedSettler,
     warmPool: { forget: () => warmPool.forget() },
   });
   const doctor = new Doctor({
@@ -443,7 +465,7 @@ export function createCore(options: CoreOptions): Core {
         } catch (error: unknown) {
           options.logger?.error("startup delete of a spent device failed", {
             deviceId: device.id,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
           });
         }
       },
@@ -469,6 +491,7 @@ export function createCore(options: CoreOptions): Core {
     autoEnrollment,
     nuke,
     provisioner,
+    seedSettler,
     quarantine,
     reclaim,
     registry,
@@ -484,11 +507,10 @@ export function createCore(options: CoreOptions): Core {
       try {
         await baselines.checkStale();
       } catch (error: unknown) {
-        options.logger?.warn(
-          `could not check baselines at startup: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        options.logger?.warn(`could not check baselines at startup: ${errorMessage(error)}`);
       }
       warmPool.start();
+      seedSettler.start();
       capacityObserver.start();
     },
     async passWarmPool() {
@@ -512,7 +534,7 @@ export function createCore(options: CoreOptions): Core {
           } catch (error: unknown) {
             options.logger?.error("shutdown of an idle device at daemon stop failed", {
               deviceId: device.id,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage(error),
             });
           }
         }),

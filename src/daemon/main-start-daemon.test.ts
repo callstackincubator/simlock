@@ -404,7 +404,8 @@ describe("startDaemon", () => {
       const runner = new ScriptedProcessRunner([{ match: query, result }]);
       const host = {
         manager: new TaskSchedulerServiceManager({ runner, filesystem }),
-        root: "/Users/me/.simlock",
+        // why: the default root is join(home, ".simlock"); on Windows join uses backslashes, and any other root gets a hash suffix on the task name.
+        root: join("/Users/me", ".simlock"),
         home: "/Users/me",
         nodePath: "/gone/node.exe",
         mainPath: "/here/main.js",
@@ -429,9 +430,11 @@ describe("startDaemon", () => {
       uninstall: async () => undefined,
       start: async () => undefined,
     };
+    // why: the service name is the plain one when the root is `join(home, ".simlock")`, which is `\` on Windows.
+    const root = join("/Users/me", ".simlock");
     const host = {
       manager,
-      root: "/Users/me/.simlock",
+      root,
       home: "/Users/me",
       nodePath: "/gone/node",
       mainPath: "/gone/main.js",
@@ -445,8 +448,8 @@ describe("startDaemon", () => {
     expect(seen).toEqual([
       serviceDefinition({
         role: "worker",
-        root: "/Users/me/.simlock",
-        dataDirectory: daemonDataDirectory("/Users/me/.simlock", "worker"),
+        root,
+        dataDirectory: daemonDataDirectory(root, "worker"),
         home: "/Users/me",
         nodePath: "/gone/node",
         mainPath: "/gone/main.js",
@@ -486,11 +489,11 @@ describe("startDaemon", () => {
       ...host,
       manager: { ...manager, manager: "systemd" },
       home: "/home/me",
-      root: "/home/me/.simlock",
+      root: join("/home/me", ".simlock"),
     });
     await systemd.serviceCheck?.check();
     expect(seen.at(-1)?.path).toBe(
-      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+      join("/home/me", ".config", "systemd", "user", "com.callstack.simlock.worker.service"),
     );
   });
 
@@ -641,6 +644,56 @@ describe("startDaemon", () => {
 
     expect(events).toEqual(["install-started", "install-ended", "disposed"]);
     await expect(lease).resolves.toBeInstanceOf(Error);
+  });
+
+  it("ends a running seed settle on shutdown and waits for the driver to return, before the drivers are disposed", async () => {
+    const clock = new FakeClock(1_000);
+    const events: string[] = [];
+    class SettlingDriver extends FakeDriver {
+      override async listSources() {
+        return [
+          {
+            id: "quick",
+            kind: "seed" as const,
+            leases: 2,
+            model: "iPhone 17",
+            osVersion: "26.5",
+            settled: false,
+          },
+        ];
+      }
+
+      settleSeed(_sourceId: string, options: { readonly signal: AbortSignal }) {
+        events.push("settle-started");
+        return new Promise<never>((_resolve, reject) => {
+          options.signal.addEventListener(
+            "abort",
+            () => {
+              events.push("settle-aborted");
+              // why: a timer, not a microtask, so the driver returns after every
+              // await the dispose chain makes unless it waits for the settle.
+              setTimeout(() => {
+                events.push("settle-returned");
+                reject(new Error("aborted"));
+              }, 50);
+            },
+            { once: true },
+          );
+        });
+      }
+
+      async dispose(): Promise<void> {
+        events.push("disposed");
+      }
+    }
+    const driver = new SettlingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon } = await start({ clock, drivers: [driver] });
+
+    clock.advance(5 * 60_000);
+    await expect.poll(() => events).toEqual(["settle-started"]);
+    await daemon.stop("test");
+
+    expect(events).toEqual(["settle-started", "settle-aborted", "settle-returned", "disposed"]);
   });
 
   it("starts and reports no entry for a driver whose tool read fails, and every other tool", async () => {
