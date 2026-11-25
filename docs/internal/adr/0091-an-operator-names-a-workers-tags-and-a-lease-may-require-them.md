@@ -64,7 +64,8 @@ those leases alone.
 
 The refusal of `requires` with `idempotencyKey` is lifted, on a worker and
 on a gateway. A replay returns the stored answer and checks nothing again,
-which is the rule for every other field of a stored request. `requires`
+which is the rule for every other field of a stored request. A worker
+answers a replay before it checks capabilities, as a gateway already does. `requires`
 becomes part of what makes a replay the same request: the same key with a
 different set of names is `IDEMPOTENCY_CONFLICT`. A worker keeps the names
 with the stored request, so a replay after a restart is compared too.
@@ -86,9 +87,12 @@ with the stored request, so a replay after a restart is compared too.
   modules must raise that bound first.
 - A worker that predates this feature lists no tags, so a lease that
   requires one is never placed on it.
-- Lifting the refusal is a contract change and bumps the protocol by one.
-  A new client that sends `requires` with a key to an older gateway gets
-  that gateway's `BAD_REQUEST`.
+- Lifting the refusal is a contract change and bumps the protocol by one,
+  `min` with `max`. A newer client against an older gateway is refused
+  with `PROTOCOL_VERSION_UNSUPPORTED`, as after every such change.
+- A later build that ships a module named like an operator's tag refuses
+  that worker's config, so the worker does not start until the tag is
+  renamed. The maintainer chose this over dropping the tag in silence.
 
 ## Alternatives rejected
 
