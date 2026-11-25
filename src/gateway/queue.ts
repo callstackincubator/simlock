@@ -37,6 +37,7 @@ export interface FleetWaiter {
 export interface FleetQueueOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
+  /** why: Reports the timeout only; it does not wake the dispatch loop for the waiters behind. */
   readonly onTimeout?: (waiter: FleetWaiter) => void;
   readonly onDepthChange?: ((depth: number, line: "virtual" | "physical") => void) | undefined;
 }

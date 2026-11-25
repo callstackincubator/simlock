@@ -117,6 +117,8 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
     if (reported === undefined) continue;
     for (const platform of PLATFORMS) {
       capacity[platform] = {
+        // why: True only when *every* reporting worker is at its budget: while one has room, the fleet
+        // does. The first reporter sets it, so an empty fleet stays false.
         atRamBudget: counted
           ? capacity[platform].atRamBudget && reported[platform].atRamBudget
           : reported[platform].atRamBudget,

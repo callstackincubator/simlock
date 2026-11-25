@@ -22,6 +22,9 @@ import { NoopLogger } from "../ports/index.js";
  * (`FleetForwarding` splits only to name the worker in that `WORKER_UNREACHABLE` answer).
  */
 
+/** why: One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*
+ * identities -- `requesterId` with no `gw:<instance>:` prefix (what the client itself used),
+ * `ownerId` the real principal ADR §27a rescued from a round trip through the worker. */
 export interface FleetLeaseEntry {
   readonly gatewayLeaseId: string;
   readonly workerId: string;
