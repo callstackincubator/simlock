@@ -3,6 +3,7 @@ import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
+  slimLeaseHint,
   startReconnect,
   UNREACHABLE_GIVE_UP_MS,
   type LeaseRenewal,
@@ -393,6 +394,8 @@ async function runLease(
     ourLeaseId = grant.lease.id;
     ourLeaseDeadline = grant.lease.ttlDeadline;
     if (!detached) heldLeaseId = grant.lease.id;
+    const hint = await slimLeaseHint({ clock: environment.clock, client, grant });
+    if (hint !== undefined) environment.stderr.write(`${JSON.stringify({ notice: hint })}\n`);
     const result = { ...grant, role: client.role };
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult((value) => environment.stdout.write(value), result);

@@ -531,10 +531,14 @@ export interface SlimHintGrant {
   };
 }
 
-export async function slimLeaseHint(_input: {
+export async function slimLeaseHint(input: {
   readonly clock: Clock;
   readonly client: SlimHintClient;
   readonly grant: SlimHintGrant;
 }): Promise<string | undefined> {
-  return undefined;
+  const catalog = await input.client.getCatalog();
+  const ios = catalog.platforms.find((entry) => entry.platform === "ios");
+  const off = ios?.slimCategories ?? [];
+  if (off.length === 0) return undefined;
+  return `Slim simulator: ${off.join(", ")} are turned off. Lease again with except naming a category to keep it running, or with mode full to keep them all.`;
 }
