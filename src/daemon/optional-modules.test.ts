@@ -92,6 +92,48 @@ describe("optional modules: turning on", () => {
 });
 
 describe("optional modules: worker tags", () => {
+  it("status.get lists each configured tag as available after the modules, in config order", async () => {
+    const alpha = { name: "alpha", state: "off" };
+    const bravo = { name: "bravo", state: "available" };
+    const cases: readonly {
+      readonly tags: readonly string[] | undefined;
+      readonly on: readonly string[];
+      readonly expected: readonly unknown[];
+    }[] = [
+      { expected: [alpha, { name: "bravo", state: "off" }], on: [], tags: undefined },
+      { expected: [alpha, { name: "bravo", state: "off" }], on: [], tags: [] },
+      {
+        expected: [
+          alpha,
+          { name: "bravo", state: "off" },
+          { name: "bank-network", state: "available" },
+        ],
+        on: [],
+        tags: ["bank-network"],
+      },
+      {
+        expected: [
+          alpha,
+          bravo,
+          { name: "eu-west", state: "available" },
+          { name: "bank-network", state: "available" },
+        ],
+        on: ["bravo"],
+        tags: ["eu-west", "bank-network"],
+      },
+    ];
+
+    for (const { expected, on, tags } of cases) {
+      const { daemon } = await start({
+        modules: definitions(fakeModule({ name: "alpha" }), fakeModule({ name: "bravo" })),
+        on,
+        overrides: tags === undefined ? {} : { tags },
+      });
+
+      expect(await capabilities(daemon)).toEqual(expected);
+    }
+  });
+
   it("a lease whose requires names a tag is granted, and one naming a name no source has, or a module that is off, is CAPABILITY_MISSING naming only the missing names", async () => {
     const { daemon } = await start({
       modules: definitions(fakeModule({ name: "stream" })),
