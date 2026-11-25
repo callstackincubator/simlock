@@ -263,6 +263,6 @@ function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): vo
   try {
     handle.kill(signal);
   } catch {
-    // Already gone.
+    // why: Already gone.
   }
 }

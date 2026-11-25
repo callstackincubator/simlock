@@ -702,7 +702,7 @@ describe("startDaemon", () => {
       drivers: [
         new ToolsFakeDriver(
           { availableOsVersions: ["26.5"], clock, platform: "ios" },
-          // What an iOS driver whose `xcodebuild` fails looks like from here.
+          // why: What an iOS driver whose `xcodebuild` fails looks like from here.
           () => Promise.reject(new Error("xcodebuild -version exited with 1")),
         ),
         new ToolsFakeDriver({ availableOsVersions: ["35"], clock, platform: "android" }, () =>

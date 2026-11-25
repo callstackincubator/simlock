@@ -1,7 +1,7 @@
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 
 /**
- * The version of the newline-delimited JSON protocol spoken by daemon clients. Derived from
+ * why: The version of the newline-delimited JSON protocol spoken by daemon clients. Derived from
  * the contract's `PROTOCOL_VERSION_RANGE` (its `max`) rather than declared separately, so the
  * two constants cannot drift. See ADR 0003 §6: protocol versions are now negotiated as ranges;
  * this single-number export is what a legacy exact-match client/daemon (and this file's own
@@ -22,10 +22,6 @@ export type DaemonResponseFrame =
   | { readonly error: unknown; readonly id: number; readonly kind: "failure" }
   | { readonly id: number; readonly kind: "success"; readonly payload: unknown };
 
-/**
- * Parses the transport-independent envelope. Domain payload validation belongs
- * to the daemon command handler, not to this protocol module.
- */
 export function parseRequestFrame(value: unknown): RequestFrame | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const frame = value as Record<string, unknown>;
@@ -38,7 +34,6 @@ export function parseRequestFrame(value: unknown): RequestFrame | undefined {
   return { id: frame.id, payload: frame.payload, type: frame.type };
 }
 
-/** Parses a response or server push frame without applying domain semantics. */
 export function parseDaemonResponse(value: unknown): DaemonResponseFrame | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const frame = value as Record<string, unknown>;

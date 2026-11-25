@@ -167,7 +167,7 @@ describe("runDispatch's operation line", () => {
     expect(sink.records[1]?.fields).toMatchObject({ leaseId: "lse_4" });
     expect(JSON.stringify(sink.records)).not.toMatch(/iPhone 17|s3cret|60000/);
 
-    // Refused before validation: a `leaseId` the input only claimed is not "from the validated
+    // why: Refused before validation: a `leaseId` the input only claimed is not "from the validated
     // input", so the line omits it.
     await expect(
       runDispatch("lease.renew", { leaseId: "lse_raw", ttlMs: -1 }, session(), pipeline),

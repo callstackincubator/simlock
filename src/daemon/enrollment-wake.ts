@@ -3,7 +3,7 @@ import type { DispatcherOptions } from "./dispatcher.js";
 type Enrollment = NonNullable<DispatcherOptions["enrollment"]>;
 
 /**
- * At the composition root because the core cannot reach leasing: the wake is leasing's port, which
+ * why: At the composition root because the core cannot reach leasing: the wake is leasing's port, which
  * only the daemon holds.
  */
 export function wakingQueueAfter(enrollment: Enrollment, wake: () => void): Enrollment {
