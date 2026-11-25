@@ -61,9 +61,6 @@ describe("connectSimlock: handshake", () => {
     const hello = connection.lastSentOf("hello")!;
     connection.fail(hello.id, "PROTOCOL_VERSION_MISMATCH", "old daemon says no");
 
-    // Resolves rather than rejects: this maps onto the same `PROTOCOL_VERSION_UNSUPPORTED`
-    // code as a modern range mismatch, so it gets the same ADR §6 treatment -- the connection
-    // stays open, and the returned client's every operation rejects with the mapped error.
     const client = await connectPromise;
     expect(connection.closed).toBe(false);
     expect(connection.sent).toHaveLength(1);
@@ -71,8 +68,6 @@ describe("connectSimlock: handshake", () => {
     await expect(client.getStatus()).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
       details: {
-        // The range this client offered at hello; the legacy daemon's is the one that predates
-        // ranges.
         client: (hello.payload as { protocolRange: unknown }).protocolRange,
         daemon: { max: 2, min: 2 },
         daemonVersion: "unknown",
@@ -86,13 +81,10 @@ describe("connectSimlock: handshake", () => {
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
     const hello = connection.lastSentOf("hello")!;
-    // ADR 0004 §4 removed the daemon-initiated heartbeat and the capability that gated it;
-    // a lease stays alive because a client calls `lease.renew`, and nothing else.
     expect((hello.payload as { capabilities?: unknown }).capabilities).toBeUndefined();
     completeHello(connection);
     const client = await connectPromise;
 
-    // Renew policy stays a frontend's (ADR 0003 §10): connecting alone sends nothing further.
     const sentAfterHello = connection.sent.length;
     await flushMicrotasks();
     expect(connection.sent).toHaveLength(sentAfterHello);
@@ -109,7 +101,7 @@ describe("connectSimlock: handshake", () => {
 
     await expect(connectPromise).rejects.toMatchObject({ code: "ADMIN_AUTHENTICATION_FAILED" });
     expect(connection.sent).toHaveLength(1);
-    // Unlike a protocol-version mismatch (ADR §6's frozen exception), a bad credential is not
+    // why: Unlike a protocol-version mismatch (ADR §6's frozen exception), a bad credential is not
     // the escape hatch -- the connection closes and serves nothing.
     expect(connection.closed).toBe(true);
   });
@@ -137,7 +129,6 @@ describe("connectSimlock: handshake", () => {
     const client = await connectPromise;
 
     const before = connection.sent.length;
-    // `model`, when given, must be non-empty per the contract's input schema.
     await expect(client.requestLease({ model: "", platform: "ios" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
@@ -380,7 +371,7 @@ describe("connectSimlock: handshake", () => {
   );
 
   it("rejects status.get from a worker with an over-long host string by the gateway's schema", async () => {
-    // A gateway reads each worker through this client (`WorkerLink`), so this parse is where
+    // why: A gateway reads each worker through this client (`WorkerLink`), so this parse is where
     // a worker's host facts are bounded before they reach its view.
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection, principal: "gw:instance-1" });
@@ -483,7 +474,7 @@ describe("connection death", () => {
     connection.simulateDeath();
 
     await expect(statusPromise).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
-    // ADR 0004 §3 narrows ADR 0003 §10: a dead connection is not a dead lease. The daemon
+    // why: ADR 0004 §3 narrows ADR 0003 §10: a dead connection is not a dead lease. The daemon
     // released nothing, so `lease_held` is still granted and still counting down -- there is
     // nothing to report through `onLeaseLost`, which now only ever carries a lease the daemon
     // actually ended.

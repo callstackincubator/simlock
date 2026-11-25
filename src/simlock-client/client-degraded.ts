@@ -42,7 +42,7 @@ export function buildDegradedClient(
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
     onDeviceRecovered: () => () => {},
-    // The one live fact this connection can still report: it can still die later even though
+    // why: The one live fact this connection can still report: it can still die later even though
     // `hello` never fully succeeded (e.g. the daemon exits while this degraded client sits
     // idle).
     onConnectionLost: (listener) => wire.onDeath(listener),

@@ -52,7 +52,7 @@ describe("MCP stdio lifecycle", () => {
     expect(stdin.listener).toBeUndefined();
   });
 
-  // Regression for a real reentrancy bug: the SDK's transport.close() can invoke
+  // why: Regression for a real reentrancy bug: the SDK's transport.close() can invoke
   // `onclose` *synchronously*, inside the same call stack `shutdown()` is already
   // running in (via `server.close()` -> `transport.close()`). A `shutdownPromise ??=
   // (async () => {...})()` guard alone does not close that window -- the assignment
@@ -69,7 +69,6 @@ describe("MCP stdio lifecycle", () => {
       signals: new FakeSignals(),
     });
 
-    // This must not throw RangeError: Maximum call stack size exceeded.
     transport.onclose?.();
     await runner.finished;
 
@@ -117,7 +116,7 @@ describe("MCP stdio lifecycle", () => {
   });
 
   it("never renews over an embedder's connect, which may launch a daemon", async () => {
-    // ADR 0004 §2: the renew timer reaches only a daemon that is already listening, so an
+    // why: ADR 0004 §2: the renew timer reaches only a daemon that is already listening, so an
     // operator's `simlock daemon stop` is not undone by an idle session. An embedder that
     // supplies just `connect` must therefore get the non-launching default for renewals rather
     // than a second use of the one it supplied -- there is no way to tell whether *that* one
@@ -152,7 +151,6 @@ describe("MCP stdio lifecycle", () => {
       CallToolResultSchema,
     );
 
-    // The connection dies with no tool call in sight, and the renew timer comes due.
     toolCallClient.emitConnectionLost();
     clock.advance(4_115);
     // why: the renew connect looks the daemon's folder up on disk first, which takes more than microtasks.
@@ -376,7 +374,6 @@ describe("MCP stdio lifecycle", () => {
   });
 });
 
-/** The principal `startMcpStdio` connects under, read off the first daemon connection it makes. */
 async function principalFor(options: {
   readonly env: NodeJS.ProcessEnv;
   readonly requesterId?: string;
@@ -431,7 +428,7 @@ class FakeTransport implements McpTransport {
 }
 
 /**
- * Mirrors the real @modelcontextprotocol/sdk stdio transport's observed shutdown
+ * why: Mirrors the real @modelcontextprotocol/sdk stdio transport's observed shutdown
  * behaviour: `close()` invokes `onclose` synchronously (before its own first await),
  * from inside the same call stack a caller's `await transport.close()` is in.
  */

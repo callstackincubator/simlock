@@ -1,10 +1,3 @@
-/**
- * A scripted `IpcConnection` double for the typed client's unit tests (ADR §12: "client unit
- * tests against a scripted connection"). Records every frame the client writes (so a test can
- * assert exactly what was/wasn't sent -- the "zero requests after hello" and "mismatch rejected
- * before any request" conditions need this) and lets a test script arbitrary success/error/push
- * replies keyed by request id, or drive the connection dead on demand.
- */
 import type { IpcConnection } from "../ports/index.js";
 
 export interface SentFrame {
@@ -53,7 +46,6 @@ export class ScriptedConnection implements IpcConnection {
     return Promise.resolve();
   }
 
-  /** Feeds one JSON line to the client as if the daemon sent it. */
   receive(frame: unknown): void {
     for (const listener of this.#dataListeners) listener(`${JSON.stringify(frame)}\n`);
   }
@@ -63,12 +55,10 @@ export class ScriptedConnection implements IpcConnection {
     for (const listener of this.#dataListeners) listener(text);
   }
 
-  /** Feeds one raw line of text, for a wire value `JSON.stringify` cannot produce (`1e999`). */
   receiveLine(line: string): void {
     for (const listener of this.#dataListeners) listener(`${line}\n`);
   }
 
-  /** Replies success to the most recent (or a specific) sent frame id. */
   reply(id: number | string, payload: unknown): void {
     this.receive({ id, ok: true, payload });
   }
@@ -81,7 +71,6 @@ export class ScriptedConnection implements IpcConnection {
     this.receive({ payload, push: kind });
   }
 
-  /** Finds the most recent sent frame of a given type, e.g. for auto-replying to `hello`. */
   lastSentOf(type: string): SentFrame | undefined {
     for (let index = this.sent.length - 1; index >= 0; index -= 1) {
       const frame = this.sent[index];
@@ -90,7 +79,6 @@ export class ScriptedConnection implements IpcConnection {
     return undefined;
   }
 
-  /** Simulates the socket dying (not a graceful `close()`). */
   simulateDeath(): void {
     this.#simulateClose();
   }
@@ -102,11 +90,6 @@ export class ScriptedConnection implements IpcConnection {
   }
 }
 
-/** Replies to the connection's `hello` frame with a normal, matching-protocol, given-role
- * response -- the common setup step for every test that needs a connected client.
- * `principal` defaults to whatever the client itself sent (ADR §4: the daemon's default when
- * `hello` omits one is out of this test double's scope, so a test exercising that specific
- * fallback -- see `server.test.ts` -- passes an explicit `principal` here instead). */
 export function completeHello(
   connection: ScriptedConnection,
   options: {

@@ -529,7 +529,7 @@ describe("MCP server (smoke)", () => {
       onProgress!({ queuePosition: 2, stage: "queued" });
       onProgress!({ component: "26.4", stage: "downloading", waiting: true });
       onProgress!({ component: "26.4", stage: "downloading", waiting: false });
-      // Each stage at its highest value, then the next at its lowest: a stage whose base did not
+      // why: Each stage at its highest value, then the next at its lowest: a stage whose base did not
       // sit above the one before would land at or under it, and be lifted by one.
       onProgress!({ component: "26.4", percent: 100, stage: "downloading", waiting: false });
       onProgress!({ etaMs: 0, stage: "provisioning" });
@@ -555,7 +555,7 @@ describe("MCP server (smoke)", () => {
         number,
         number,
       ];
-      // The reporter lifts a value that would go down to one above the last, so a gap wider than
+      // why: The reporter lifts a value that would go down to one above the last, so a gap wider than
       // one is the stage's own placement, not that lift.
       expect(waiting - queued).toBeGreaterThan(1);
       expect(percent - started).toBeGreaterThan(1);

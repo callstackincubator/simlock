@@ -139,12 +139,10 @@ class SimlockClientImpl {
   }
 
   asAdmin(): SimlockAdminClient {
-    // `this` already implements every method the interface below needs (see the class body) --
+    // why: `this` already implements every method the interface below needs (see the class body) --
     // this cast documents that the split is purely at the type layer.
     return this as unknown as SimlockAdminClient;
   }
-
-  // ---- agent-visible operations --------------------------------------------------------------
 
   getCatalog(input: CatalogGetInput = {}): Promise<CatalogGetOutput> {
     return this.#call("catalog.get", input);
@@ -197,7 +195,7 @@ class SimlockClientImpl {
 
   async releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
     const parsed = this.#parseInput("lease.release", input);
-    // The daemon suppresses the matching `lease-lost` push to this connection itself (ADR
+    // why: The daemon suppresses the matching `lease-lost` push to this connection itself (ADR
     // §8) -- see the comment on `SimlockWire`'s `#deliveredLeaseLost`. Nothing to mark here.
     return this.#call("lease.release", parsed);
   }
@@ -271,8 +269,6 @@ class SimlockClientImpl {
   relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">> {
     return this.#call("relay.cancel", input);
   }
-
-  // ---- admin-only operations ------------------------------------------------------------------
 
   releaseAllLeases(): Promise<LeaseReleaseAllOutput> {
     return this.#call("lease.release-all", {});
@@ -386,7 +382,7 @@ class SimlockClientImpl {
       "worker.install-component",
       this.#parseInput("worker.install-component", input),
       {
-        // A gateway always names the worker; an update that names none cannot be attributed
+        // why: A gateway always names the worker; an update that names none cannot be attributed
         // to one, so it is dropped rather than guessed.
         onComponentProgress:
           onProgress === undefined
@@ -466,7 +462,7 @@ class SimlockClientImpl {
     try {
       outcome = (await this.#call("lease.cancel", cancel)).result;
     } catch (error: unknown) {
-      // Only a connection that actually died mid-cancel falls through to let awaiting
+      // why: Only a connection that actually died mid-cancel falls through to let awaiting
       // `requestPromise` below surface whatever that produces (most likely
       // `DAEMON_CONNECTION_LOST`, a more accurate rejection than a manufactured `CANCELLED`
       // would be here). Every other rejection -- `FORBIDDEN`, `BAD_REQUEST` -- is a real
@@ -480,27 +476,27 @@ class SimlockClientImpl {
     }
 
     if (outcome === "not-found") {
-      // Either genuinely never existed, or -- per ADR §10's fourth case -- the grant already
+      // why: Either genuinely never existed, or -- per ADR §10's fourth case -- the grant already
       // resolved before the cancel reached the daemon: "after the grant resolved -> ignored".
       // Both cases defer entirely to the original outcome.
       return requestPromise;
     }
 
     if (outcome === "cancelled") {
-      // Queued: the daemon rejects the original waiter; wait for that, then surface CANCELLED
+      // why: Queued: the daemon rejects the original waiter; wait for that, then surface CANCELLED
       // regardless of the rejection's own code/message.
       await requestPromise.catch(() => undefined);
       throw cancelledError();
     }
 
-    // "not-cancellable": device work already in flight. Wait for the outcome; a grant that
+    // why: "not-cancellable": device work already in flight. Wait for the outcome; a grant that
     // still arrives is abandoned immediately so the caller never holds a lease it walked away
     // from, then CANCELLED is surfaced either way.
     try {
       const grant = await requestPromise;
       await this.#releaseAbandonedGrant(grant);
     } catch {
-      // The request failed on its own (e.g. ran out of capacity mid-flight) -- nothing to
+      // why: The request failed on its own (e.g. ran out of capacity mid-flight) -- nothing to
       // release, and CANCELLED is still the right thing to tell a caller who asked to abort.
     }
     throw cancelledError();
@@ -510,12 +506,10 @@ class SimlockClientImpl {
     try {
       await this.releaseLease({ leaseId: grant.lease.id });
     } catch {
-      // Best-effort: the caller already gets CANCELLED either way. A failed release here means
+      // why: Best-effort: the caller already gets CANCELLED either way. A failed release here means
       // the daemon may still show the lease held -- see the PR report's weak-spots list.
     }
   }
-
-  // ---- pushes -----------------------------------------------------------------------------
 
   #handleLeaseScopedPush(push: LeaseScopedPush): void {
     switch (push.kind) {
@@ -538,7 +532,7 @@ class SimlockClientImpl {
   }
 
   /**
-   * ADR 0004 §3: a dead connection ends no lease, so nothing is synthesized here. The daemon
+   * why: ADR 0004 §3: a dead connection ends no lease, so nothing is synthesized here. The daemon
    * releases nothing on close, so every lease this client was holding is still granted, still
    * counting down its own TTL, and still renewable by whatever connects next -- which is the
    * frontend's decision to make, not this client's (ADR 0003 §10).
@@ -546,8 +540,6 @@ class SimlockClientImpl {
   #handleConnectionLost(error: AnySimlockError): void {
     for (const listener of this.#connectionLostListeners) listener(error);
   }
-
-  // ---- call plumbing --------------------------------------------------------------------------
 
   #parseInput<Name extends OperationName>(
     name: Name,

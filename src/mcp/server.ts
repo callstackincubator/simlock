@@ -30,7 +30,7 @@ import {
 const SERVER_INFO = { name: "simlock", version: "1.0.0" };
 
 /**
- * Progress is reported on a 4-stage scale (queued / downloading / provisioning-or-reclaiming /
+ * why: Progress is reported on a 4-stage scale (queued / downloading / provisioning-or-reclaiming /
  * booting), each worth 1000 units, so a fresh stage's base always exceeds the previous stage's
  * maximum.
  */
@@ -65,7 +65,6 @@ class TailBuffer {
   }
 }
 
-/** Maps a lease progress push onto an MCP progress notification's `params`. */
 function leaseProgressParams(progress: LeaseProgressNotice): {
   readonly message: string;
   readonly progress: number;
@@ -82,8 +81,6 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
     };
   }
   if (progress.stage === "downloading") {
-    // A request still behind another download sits at the stage's base; its own download climbs
-    // with the installer's percentage, reaching the next stage's base at 100.
     if (progress.waiting) {
       return {
         message: `Waiting for another download before downloading ${progress.component}`,
@@ -95,7 +92,6 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
       ? { message: `Downloading ${progress.component}`, progress: base }
       : {
           message: `Downloading ${progress.component} (${percent}%)`,
-          // The contract bounds `percent` to a whole number from 0 to 100.
           progress: base + percent * 10,
         };
   }
@@ -113,7 +109,7 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
 }
 
 /**
- * Climbs toward 1000 as `remaining` (a queue position or an ETA in seconds) shrinks toward 0,
+ * why: Climbs toward 1000 as `remaining` (a queue position or an ETA in seconds) shrinks toward 0,
  * staying at or below the next stage's base so stages never overlap.
  */
 function withinStageProgress(remaining: number): number {
@@ -121,7 +117,7 @@ function withinStageProgress(remaining: number): number {
 }
 
 /**
- * Builds a per-lease-request `onProgress` callback that relays daemon progress as
+ * why: Builds a per-lease-request `onProgress` callback that relays daemon progress as
  * `notifications/progress`, clamping so the value MCP requires to increase monotonically never
  * goes backwards even though queue position and ETAs can.
  */
@@ -133,7 +129,7 @@ function createLeaseProgressReporter(
   return (progress) => {
     const { message, progress: rawProgress } = leaseProgressParams(progress);
     lastProgress = Math.max(rawProgress, lastProgress + 1);
-    // Progress is advisory: a transport that went away mid-lease must not surface here as an
+    // why: Progress is advisory: a transport that went away mid-lease must not surface here as an
     // unhandled rejection and take the server down with it.
     void sendNotification({
       method: "notifications/progress",
@@ -178,7 +174,6 @@ function createRunProgressReporter(
   };
 }
 
-/** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(
   session: McpSession,
   options: { readonly clock: Clock },
@@ -378,7 +373,7 @@ export function createMcpServer(
 }
 
 /**
- * Whatever this session had running inside the device (a launched app, a log stream, an
+ * why: Whatever this session had running inside the device (a launched app, a log stream, an
  * Appium/XCUITest session, a port forward) died with the crash and simlock cannot restore it --
  * the lease survives, but the agent still needs to know its in-device state is gone.
  */

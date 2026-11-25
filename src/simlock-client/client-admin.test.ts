@@ -50,8 +50,6 @@ describe("simlock/admin", () => {
       leaseIds: ["lease_a", "lease_b"],
     });
 
-    // Both leases are no longer tracked as held -- a later connection death synthesizes no
-    // onLeaseLost for either of them.
     const leaseLost = vi.fn();
     admin.onLeaseLost(leaseLost);
     connection.simulateDeath();

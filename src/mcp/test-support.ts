@@ -1,8 +1,3 @@
-/**
- * A scripted `SimlockClient` double for MCP's own unit tests. MCP no longer talks to the
- * daemon directly (PR 4 moved it onto `simlock/client`), so its tests script the typed
- * client's surface instead of a raw `DaemonConnection`/`IpcConnection`.
- */
 import {
   SimlockError,
   type AnySimlockError,
@@ -51,14 +46,13 @@ function notStubbed(method: string): () => never {
   };
 }
 
-/** Records every call and lets a test script each method's response and fire pushes on demand. */
 export class FakeSimlockClient implements SimlockClient {
   readonly principal: string;
   readonly role: Role;
   readonly daemonVersion: string;
   closeCalls = 0;
   readonly calls: Array<{ readonly method: string; readonly input: unknown }> = [];
-  /** Set by `close()`. Every operation after it rejects, the way `SimlockWire` does once the
+  /** why: Set by `close()`. Every operation after it rejects, the way `SimlockWire` does once the
    * connection is gone (ADR 0003 §10) -- a fake that stayed usable would let a test pass on a
    * dead wire. */
   #dead = false;
@@ -199,7 +193,6 @@ export class FakeSimlockClient implements SimlockClient {
     for (const listener of this.#deviceRecoveredListeners) listener(push);
   }
 
-  /** Simulates the connection dying (a crash, not `close()`) without marking this fake closed. */
   emitConnectionLost(
     error: AnySimlockError = new SimlockError(
       "DAEMON_CONNECTION_LOST",
@@ -219,7 +212,6 @@ export class FakeSimlockClient implements SimlockClient {
     );
   }
 
-  /** The rejection every operation gets once this connection is closed. */
   #deadConnection<T>(): Promise<T> {
     return Promise.reject(
       new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Connection is closed", {}),

@@ -1,16 +1,3 @@
-/**
- * ADR 0003 §10/PR description: "the public surface must expose contract types only -- core
- * domain records (`DeviceRecord`, `LeaseRecord`, `LeaseGrant`) stay private". This compiles
- * `simlock/client`'s and `simlock/admin`'s entry points with declaration-only emit (via a
- * throwaway `tsc -p` invocation restricted to just those two root files, so only their actual
- * import closure gets emitted -- not a shelled-out `pnpm run build` of the whole package, and
- * not dependent on one having already run) and asserts none of the emitted `.d.ts` files ever
- * import from `src/core`, `src/daemon`, `src/drivers`, `src/http`, `src/cli`, or `src/mcp`.
- * Lint checks each contract file's own imports (`.oxlintrc.json`); this checks the compiled
- * public-surface boundary instead -- the actual guarantee
- * this test exists to prove is about what a *consumer* of the published package sees, which is
- * the emitted declarations, not the source.
- */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,8 +11,6 @@ import { importsOf, isUnder, sourceFilesRecursive } from "../test-support/import
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
-/** Top-level `src/` directories the emitted declarations must never reach, matched against each
- * specifier resolved relative to the emit root (which mirrors `src/`). */
 const FORBIDDEN_IMPORT_DIRS = ["core", "daemon", "drivers", "http", "cli", "mcp"];
 
 let outDir: string;
@@ -36,7 +21,7 @@ describe("public package surface (simlock/client, simlock/admin)", () => {
 
   beforeAll(() => {
     outDir = mkdtempSync(join(tmpdir(), "simlock-surface-"));
-    // Written inside the repo root (not the tmp outDir) so `"types": ["node"]` and everything
+    // why: Written inside the repo root (not the tmp outDir) so `"types": ["node"]` and everything
     // else in the extended `tsconfig.json` still resolves against this project's own
     // `node_modules` -- TS resolves package/type-root lookups relative to the config file's own
     // directory, not the directory of the config it extends.
@@ -74,8 +59,6 @@ describe("public package surface (simlock/client, simlock/admin)", () => {
 
   it("never imports a core/daemon/drivers-private module from the compiled public surface", () => {
     expect(dtsFiles.length).toBeGreaterThan(0);
-    // Reported where the surface first crosses into a private module, not once more for every
-    // import inside the module it reached.
     const leaks = importsOf(dtsFiles, outDir).filter(({ file, normalized }) =>
       FORBIDDEN_IMPORT_DIRS.some((dir) => isUnder(normalized, dir) && !isUnder(file, dir)),
     );

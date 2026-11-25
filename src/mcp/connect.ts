@@ -1,5 +1,5 @@
 /**
- * MCP's connection-lifecycle-only auto-launch (ADR 0003 §11: MCP keeps "connection lifecycle
+ * why: MCP's connection-lifecycle-only auto-launch (ADR 0003 §11: MCP keeps "connection lifecycle
  * (lazy reconnect, tool-call serialization)"). `simlock/client`'s `connectSimlock` deliberately
  * does not start the daemon itself -- it only ever connects to an already-listening socket
  * (ADR §10: the client "does not reconnect and does not retry"). MCP is the one frontend spawned
@@ -28,9 +28,6 @@ import {
 } from "../ports/index.js";
 import { errorMessage } from "../shared/index.js";
 
-/** What it takes to reach a daemon that is already listening -- no launcher anywhere in it,
- * which is the whole point of the type existing separately. The `heartbeat` option that used
- * to sit here is gone with the daemon's push (ADR 0004 §4). */
 export interface ConnectToRunningDaemonOptions {
   readonly ipc: IpcConnector;
   readonly principal: string;
@@ -45,7 +42,7 @@ export interface ConnectWithAutoLaunchOptions extends ConnectToRunningDaemonOpti
 }
 
 /**
- * Connects to the daemon, launching it first if nothing is listening yet. Never launches on
+ * why: Connects to the daemon, launching it first if nothing is listening yet. Never launches on
  * any other failure -- a version mismatch or a refused handshake is not "nothing is running",
  * and launching there would risk starting a second daemon instance or masking a real
  * incompatibility (mirrors `DaemonStartupCoordinator#isUnavailable`'s reasoning: "the client
@@ -118,7 +115,7 @@ async function connectStartingDaemon(
 }
 
 /**
- * Connects only to a daemon that is already listening, and never launches one -- which is
+ * why: Connects only to a daemon that is already listening, and never launches one -- which is
  * exactly `connectWithAutoLaunch` minus its one extra power, so the latter is written in terms
  * of this rather than beside it.
  *
@@ -138,7 +135,6 @@ export function connectToRunningDaemon(
   });
 }
 
-/** True only for "nothing is listening yet" -- a refused/missing socket. */
 function isUnavailable(error: unknown): boolean {
   return (
     error instanceof IpcError &&
