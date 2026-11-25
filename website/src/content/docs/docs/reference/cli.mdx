@@ -609,12 +609,13 @@ Emergency reset: end every lease, stop the simulators and emulators Simlock star
 </Aside>
 
 ```text
-simlock nuke [--delete-devices] [--yes]
+simlock nuke [--delete-devices] [--platform <ios|android>] [--yes]
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--delete-devices` | Also delete every device, seed and baseline Simlock manages. | Off |
+| `--platform` | Reset one platform, `ios` or `android`: end its leases, stop and delete its devices, seeds and baselines, and make the warm pool forget its kinds. The other platform is left as it is. Any other value is a usage error. | Both platforms |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
@@ -756,7 +757,7 @@ login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11
   stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
 ```
 
-A baseline is stale when the runtime, system image or emulator it was made with changed after the save; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.` On a gateway it lists every worker's baselines with the worker's id in a `WORKER` column first, and prints `No baselines on any worker.` for none.
+A baseline is stale when the runtime, system image or emulator it was made with changed after the save, or when an iOS simulator it was saved as was deleted by hand; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.` On a gateway it lists every worker's baselines with the worker's id in a `WORKER` column first, and prints `No baselines on any worker.` for none.
 
 ### simlock baseline remove
 
