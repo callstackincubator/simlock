@@ -12,7 +12,6 @@ function entry(figures: CapacityFiguresPayload): CapacityFiguresPayload {
   };
 }
 
-/** The part of the figures `capacity.changed` carries. */
 export function capacityChangedPayload(figures: CapacityFigures): CapacityChanged {
   return {
     android: entry(figures.android),
@@ -31,12 +30,11 @@ export function capacityChangedPayload(figures: CapacityFigures): CapacityChange
 
 export interface CapacityObserverOptions {
   readonly eventBus: Pick<EventBus, "emit">;
-  /** Builds the current figures; the same function `status.get` builds its own through. */
   readonly figures: () => CapacityFigures;
 }
 
 /**
- * Emits `capacity.changed` when the capacity figures differ from the last emitted. Callers tell
+ * why: Emits `capacity.changed` when the capacity figures differ from the last emitted. Callers tell
  * it a commit or a reservation change happened (`changed`); it decides whether anything moved.
  * Silent until `start`, which emits once so every run begins with a step.
  */

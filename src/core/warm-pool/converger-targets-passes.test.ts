@@ -16,7 +16,6 @@ describe("warm pool targets", () => {
 
     expect([...(await rig.pool.targeted())]).toEqual(["ready"]);
     expect(rig.resolveCalls).toHaveLength(1);
-    // Resolved once: a later ask reads what is there, and a pass resolves again on its own.
     await rig.pool.targeted();
     expect(rig.resolveCalls).toHaveLength(1);
   });
@@ -70,7 +69,6 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toHaveLength(1);
     rig.lease("new-1");
 
-    // The target is one short, but the spec it may no longer have plans no creation for it.
     answer = { message: "simctl timed out", refusal: "unresolvable" };
     await rig.pool.pass();
     await rig.pool.settle();
@@ -90,7 +88,6 @@ describe("warm pool targets", () => {
     expect(rig.shutdownCalls).toEqual(["stale"]);
     expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "runtime-missing" })]);
 
-    // The spec it once had is gone with a settled refusal: a later failed read has none to keep.
     answer = { message: "simctl timed out", refusal: "unresolvable" };
     rig.state.devices = rig.state.devices.map((item) =>
       item.id === "stale" ? { ...item, state: "ready" as const } : item,
@@ -155,7 +152,7 @@ describe("warm pool targets", () => {
     const rig = harness([], { reserveThrows: true, targets: [iphone17] });
 
     await rig.pool.pass();
-    // Bounded by turns, not by settle: a pool that retried at once would never settle.
+    // why: Bounded by turns, not by settle: a pool that retried at once would never settle.
     await flush();
 
     expect(rig.reserveAttempts.count).toBe(1);
@@ -270,8 +267,6 @@ describe("warm pool targets", () => {
     let rig: ReturnType<typeof harness> | undefined;
     rig = harness([], {
       provision: async (spec, attempt) => {
-        // Attempt 1 (iPhone 17) fails at once, attempt 2 (iPhone 16) fails ten seconds later,
-        // attempt 3 (iPhone 17 again) succeeds, attempt 4 (iPhone 16 again) is the one under test.
         if (attempt === 2) rig?.clock.advance(10_000);
         if (attempt <= 2) throw new Error(`no luck for ${spec.model}`);
       },
@@ -281,7 +276,6 @@ describe("warm pool targets", () => {
     await rig.pool.settle();
     expect(rig.provisionCalls.map((call) => call.spec.model)).toEqual(["iPhone 17", "iPhone 16"]);
 
-    // iPhone 17 may be tried at 60s and succeeds; iPhone 16 failed ten seconds later.
     rig.clock.advance(50_000);
     await rig.pool.settle();
     expect(rig.provisionCalls.map((call) => call.spec.model)).toEqual([
@@ -321,13 +315,10 @@ describe("warm pool targets", () => {
     await rig.pool.settle();
     expect(bootAttempts).toBe(1);
 
-    // The boot is retried after a minute and succeeds.
     rig.clock.advance(minute);
     await rig.pool.settle();
     expect(bootAttempts).toBe(2);
 
-    // The device is then leased, the target is short again, and a creation fails: one minute
-    // later it is tried again, not two.
     creating = true;
     rig.lease("shut");
     await rig.pool.pass();

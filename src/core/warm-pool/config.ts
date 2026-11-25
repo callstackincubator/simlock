@@ -14,15 +14,9 @@ import {
   type Validator,
 } from "../validation.js";
 
-/**
- * A kind of device the pool keeps booted, clean and unleased: written like a lease request, with
- * a count (`warmPool.targets`). The pool resolves it the way a request is resolved, every pass.
- */
 export interface WarmTarget {
   readonly platform: "ios" | "android";
-  /** An exact model; a target names no class. */
   readonly model: string;
-  /** A version or an OS range, the grammar `src/contract/os-range.ts` owns. */
   readonly osVersion?: string;
   readonly mode?: "slim" | "full";
   readonly count: number;
@@ -34,13 +28,9 @@ export const DEFAULT_BASELINE_LEARN_AFTER = 3;
 /** why: one round minute covers the lessee's install and first app start after a grant, when `warmPool.refillDelayMs` is not set. */
 const DEFAULT_REFILL_DELAY_MS = 60_000;
 
-/** The warm pool's operator-facing settings, the `warmPool` keys beside `quarantine`. */
 export interface WarmPoolConfig {
-  /** `false` keeps nothing warm: every idle running device is shut down. */
   readonly enabled: boolean;
-  /** Running slots per platform that idle warm devices may not fill. */
   readonly reserveRunning: { readonly ios: number; readonly android: number };
-  /** Kinds of device kept booted ahead of demand. */
   readonly targets: readonly WarmTarget[];
   /** why: `false` keeps only `targets` warm, not the kinds the pool learns from leases. */
   readonly learn?: boolean;
@@ -64,7 +54,6 @@ export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig 
   };
 }
 
-/** A non-empty string no longer than the bound the status answer carries. */
 function boundedName(value: unknown, path: string): string {
   const text = nonEmptyString(value, path);
   if (text.length > WARM_POOL_NAME_MAX) {
@@ -76,7 +65,6 @@ function boundedName(value: unknown, path: string): string {
 const targetPlatform = stringUnion(["ios", "android"] as const);
 const targetMode = stringUnion(["slim", "full"] as const);
 
-/** The keys a target may carry; any other fails the load naming it (a class, say). */
 const TARGET_VALIDATORS: Readonly<Record<keyof WarmTarget, Validator>> = {
   count: positiveInteger,
   mode: targetMode,
@@ -92,7 +80,7 @@ const TARGET_VALIDATORS: Readonly<Record<keyof WarmTarget, Validator>> = {
 const REQUIRED_TARGET_KEYS: readonly string[] = ["platform", "model", "count"];
 
 /**
- * One target. Unlike the rest of the config an unknown key is an error, not a warning: a target
+ * why: One target. Unlike the rest of the config an unknown key is an error, not a warning: a target
  * that names a class would otherwise load as something the operator did not write.
  */
 const targetValidator: Validator = (value, path, warn) => {
@@ -104,7 +92,6 @@ const targetValidator: Validator = (value, path, warn) => {
   }
   const result: Record<string, unknown> = {};
   for (const [key, validate] of Object.entries(TARGET_VALIDATORS)) {
-    // `model`, `platform` and `count` are required: validating an absent one names it.
     if (Object.hasOwn(object, key) || REQUIRED_TARGET_KEYS.includes(key)) {
       result[key] = validate(object[key], `${path}.${key}`, warn);
     }
@@ -120,7 +107,6 @@ const targetsValidator: Validator = (value, path, warn) => {
   return value.map((target: unknown, index) => targetValidator(target, `${path}[${index}]`, warn));
 };
 
-/** The validators for the keys this module owns, composed into the `warmPool` object. */
 export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Validator>> = {
   baselineLearnAfter: positiveInteger,
   enabled: booleanValue,

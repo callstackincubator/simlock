@@ -139,7 +139,6 @@ describe("warm pool targets", () => {
     await flush();
     expect(rig.provisionCalls).toHaveLength(1);
 
-    // A further pass while the first is still running starts no second one.
     await rig.pool.pass();
     await flush();
     expect(rig.provisionCalls).toHaveLength(1);
@@ -287,7 +286,6 @@ describe("warm pool targets", () => {
     await rig.pool.settle();
     expect(rig.provisionCalls).toHaveLength(1);
 
-    // Passes triggered by events and ticks within the minute change nothing.
     rig.eventBus.emit("device.shutdown", { deviceId: "d", initiator: "test" }, "test");
     await rig.pool.settle();
     rig.clock.advance(WARM_POOL_TICK_MS);
@@ -319,7 +317,6 @@ describe("warm pool targets", () => {
     await rig.pool.settle();
     expect(rig.provisionCalls).toHaveLength(1);
 
-    // `start()` was never called: no tick and no subscription, only the retry timer is armed.
     rig.clock.advance(minute);
     await rig.pool.settle();
 
@@ -397,7 +394,6 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toHaveLength(3);
     expect(rig.state.devices).toHaveLength(1);
 
-    // The device is leased: the target is short again, and now fails once more.
     failing = true;
     rig.lease("new-3");
     await rig.pool.pass();
@@ -547,9 +543,9 @@ describe("warm pool targets", () => {
 
     expect(rig.provisionCalls).toEqual([]);
     expect(rig.sink.records.filter((record) => record.level === "error")).toEqual([]);
-    // A declined creation asks for no pass of its own: the same view would propose it again.
+    // why: A declined creation asks for no pass of its own: the same view would propose it again.
     expect(rig.resolveCalls).toHaveLength(1);
-    // Not a failure: the target is not held back, and the next pass tries it again.
+    // why: Not a failure: the target is not held back, and the next pass tries it again.
     await rig.pool.pass();
     expect(rig.resolveCalls).toHaveLength(2);
     expect(rig.pool.targets()[0]?.short).toBeUndefined();

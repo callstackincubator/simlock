@@ -29,7 +29,6 @@ function coordinator(onReservationsChanged?: () => void): CapacityCoordinator {
   );
 }
 
-/** 12 GiB of RAM: an 8 GiB budget. Full iOS devices take 3 GiB, slim ones 1 GiB. */
 function sizedCoordinator(): CapacityCoordinator {
   return new CapacityCoordinator(
     resourceStrategy.create(
@@ -64,7 +63,6 @@ describe("CapacityCoordinator", () => {
     const capacity = sizedCoordinator();
     const iosFull = (count: number) =>
       Array.from({ length: count }, (_, index) => iosDevice(`d${index}`, "full", "ready"));
-    // 8 GiB budget, 3 GiB per full iOS device: two fit, a third does not.
     expect(capacity.atRamBudget("ios", iosFull(1))).toBe(false);
     expect(capacity.atRamBudget("ios", iosFull(2))).toBe(true);
     expect(capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, iosFull(2))).toEqual({
@@ -79,9 +77,7 @@ describe("CapacityCoordinator", () => {
   it("counts a full device, not a slim one, when it asks whether the budget is reached", () => {
     const capacity = sizedCoordinator();
     const slim = [iosDevice("a", "slim", "ready"), iosDevice("b", "slim", "ready")];
-    // Two slim devices use 2 GiB of 8: a full 3 GiB one fits. A third slim one is not asked.
     expect(capacity.atRamBudget("ios", slim)).toBe(false);
-    // 6 GiB used: another full device (3 GiB) does not fit although a slim one (1 GiB) would.
     const used = [iosDevice("a", "full", "ready"), iosDevice("b", "full", "ready")];
     expect(capacity.atRamBudget("ios", used)).toBe(true);
     expect(capacity.canProvision({ mode: "slim", platform: "ios" }, used).ok).toBe(true);
@@ -179,7 +175,6 @@ describe("CapacityCoordinator", () => {
     const first = capacity.tryReserveProvisioning(planned, []);
     const second = capacity.tryReserveProvisioning(planned, []);
     if (!first.ok || !second.ok) throw new Error("expected reservations");
-    // 6 GiB held by two reservations at 3 GiB each, where 1 GiB each would leave room for 6.
     expect(capacity.tryReserveProvisioning(planned, [])).toEqual({
       ok: false,
       reason: "ram-budget",
@@ -255,13 +250,11 @@ describe("CapacityCoordinator", () => {
   it("holds a rewarm's extra size until released, and takes no running slot", () => {
     const capacity = sizedCoordinator();
     const reclaiming = iosDevice("reclaiming-1", "slim", "reclaiming");
-    // 4 GiB used of 8: booting the slim device back to warm adds 2 GiB.
     const devices = [reclaiming, iosDevice("ready-1", "full", "ready")];
 
     const rewarm = capacity.tryReserveRewarm(reclaiming, devices);
     if (!rewarm.ok) throw new Error("expected a rewarm reservation");
     expect(capacity.runningCapacity(devices).ios.reserved).toBe(0);
-    // 6 GiB counted: a new device's 3 GiB no longer fits.
     expect(capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, devices)).toEqual({
       ok: false,
       reason: "ram-budget",
@@ -278,7 +271,6 @@ describe("CapacityCoordinator", () => {
   it("refuses a rewarm with ram-budget when the full size does not fit", () => {
     const capacity = sizedCoordinator();
     const reclaiming = iosDevice("reclaiming-1", "slim", "reclaiming");
-    // 7 GiB used of 8: the 2 GiB boot does not fit.
     const devices = [
       reclaiming,
       iosDevice("ready-1", "full", "ready"),

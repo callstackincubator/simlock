@@ -4,11 +4,6 @@ import type { CapacityStrategy, CapacityStrategyDefinition } from "../strategy.j
 import { fixedStrategy } from "./fixed/index.js";
 import { resourceStrategy } from "./resource/index.js";
 
-/**
- * The registry. Adding a strategy means adding a directory next to these and one
- * line here -- the config type, its validation, and the coordinator all follow
- * from this map.
- */
 export const capacityStrategies = {
   fixed: fixedStrategy,
   resource: resourceStrategy,
@@ -27,10 +22,6 @@ type OptionsFor<Name extends CapacityStrategyName> =
     ? Options
     : never;
 
-/**
- * Discriminated on `strategy`, so a config only ever carries the options block
- * belonging to the strategy it selected.
- */
 export type CapacityConfig = {
   [Name in CapacityStrategyName]: {
     readonly strategy: Name;

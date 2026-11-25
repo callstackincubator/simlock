@@ -285,8 +285,6 @@ describe("warm pool targets", () => {
       });
       const payloads = missed(rig);
 
-      // The first creation fails and the target is short `boot-failed`; the retry a minute later
-      // is a pass that is not short (a creation runs), and it fails again.
       await rig.pool.pass();
       await rig.pool.settle();
       expect(rig.pool.figures().targets[0]?.short).toBe("boot-failed");

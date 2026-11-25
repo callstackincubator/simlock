@@ -16,7 +16,7 @@ import {
 } from "../../strategy.js";
 
 /**
- * A pinned number of devices, with no machine inspection at all: no RAM budget,
+ * why: A pinned number of devices, with no machine inspection at all: no RAM budget,
  * no CPU-derived defaults. `maxRunning` alone is a complete configuration --
  * the per-platform blocks exist only to carve that budget up, and each field
  * falls back to the global number when omitted.
@@ -39,7 +39,6 @@ class FixedCapacityStrategy implements CapacityStrategy {
     this.#limits = resolveLimits(options);
   }
 
-  /** One slot per device, whatever its mode. */
   canProvision(
     device: PlannedCapacityDevice,
     devices: readonly CapacityDevice[],
@@ -49,7 +48,6 @@ class FixedCapacityStrategy implements CapacityStrategy {
       : { ok: false, reason: "device-limit" };
   }
 
-  /** No RAM budget, so a boot is limited by running slots alone. */
   canBoot(): CapacityDecision {
     return { ok: true };
   }

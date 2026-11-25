@@ -15,11 +15,6 @@ import {
 import { compareLeastRecentlyUsed } from "../idle-order.js";
 import type { LearnedKind } from "./learned.js";
 
-/**
- * What one pass acts on: shut a running device down, boot a shut-down one back, or create a new
- * one. A boot or creation for a target carries the target's spec, which the converger keys its
- * failure schedule and its boot cap by.
- */
 export type WarmProposal =
   | {
       readonly action: "shutdown" | "boot";
@@ -41,16 +36,13 @@ export type WarmProposal =
       readonly target: VirtualSpec;
     };
 
-/** A proposal that acts on a device already in the registry: a shutdown or a boot. */
 type DeviceProposal = Extract<WarmProposal, { readonly deviceId: string }>;
 
-/** A target that resolved: the spec a request for it resolves to, and how many to keep ready. */
 export interface ResolvedTarget {
   readonly spec: VirtualSpec;
   readonly count: number;
 }
 
-/** Why a target has fewer ready devices than its count, when nothing but time will not fix it. */
 export type TargetShort =
   | TargetRefusal
   | "disabled"
@@ -61,7 +53,6 @@ export type TargetShort =
   | "reserve"
   | "memory-pressure";
 
-/** A target's kind as reported: the platform, the exact model, and the OS and mode it names. */
 export interface TargetKind {
   readonly platform: "ios" | "android";
   readonly model: string;
@@ -69,23 +60,19 @@ export interface TargetKind {
   readonly mode: "slim" | "full";
 }
 
-/** One target as a pass left it: what it asked for, how many are ready, and why not more. */
 export interface TargetReport {
   readonly target: string;
-  /** The kind as resolved, or as configured for a target that did not resolve. */
   readonly kind: TargetKind;
   readonly spec?: VirtualSpec;
   readonly origin: "configured" | "learned";
   readonly count: number;
   readonly configuredCount: number;
   readonly ready: number;
-  /** Boots and creations of the kind running or proposed in the pass. */
   readonly booting: number;
   readonly short?: TargetShort;
   readonly message?: string;
 }
 
-/** What `evaluate` decides: the actions to run in order, and every resolved target's state. */
 export interface WarmPlan {
   readonly proposals: readonly WarmProposal[];
   readonly targets: readonly TargetReport[];
@@ -94,7 +81,6 @@ export interface WarmPlan {
 export interface WarmPolicyView {
   readonly devices: readonly VirtualDevice[];
   readonly leases: readonly LeaseRecord[];
-  /** The requests with no device yet, oldest first: waiting (`new`, `queued`) or in flight. */
   readonly waiting: readonly WaitingDemand[];
   readonly capacity: RunningCapacity;
   readonly isClaimed: (deviceId: string) => boolean;
@@ -107,9 +93,7 @@ export interface WarmPolicyView {
   readonly now: number;
   /** why: no target or learned kind is filled before this clock time, the wait after a grant (`warmPool.refillDelayMs`); absent or `<= now` holds nothing. */
   readonly refillHeldUntil?: number;
-  /** The targets to plan for this pass; the policy merges those of one spec (`mergeTargets`). */
   readonly targets: readonly ResolvedTarget[];
-  /** Targets whose resolution failed and that keep a stale spec: their devices are spared. */
   readonly spared: readonly ResolvedTarget[];
   readonly learned: readonly LearnedKind[];
   /** why: learned kinds kept but planned for nothing this pass, as no catalog read has listed their platform yet (ADR 0038 §4). */
@@ -117,22 +101,20 @@ export interface WarmPolicyView {
   /** why: the spec of each boot or creation of the pool still running, for a target or a waiter; they count toward the boot cap. */
   readonly inFlight: readonly VirtualSpec[];
   readonly onItsWay: readonly { readonly spec: VirtualSpec; readonly deviceId?: string }[];
-  /** The failure schedule: whether a spec may be tried now. */
   readonly retry: { mayAttempt(spec: VirtualSpec, now: number): boolean };
-  /** What the capacity strategy refuses besides the running slots `capacity` already totals. */
   readonly admit: {
     /** why: `down` names devices the plan has already shut down, which no longer hold their RAM. */
     create(spec: VirtualSpec, down?: ReadonlySet<string>): CapacityRefusalReason | undefined;
     boot(device: VirtualDevice, down?: ReadonlySet<string>): CapacityRefusalReason | undefined;
   };
   /**
-   * A device is on its way to a lease: booted, `ready` and claimed, still counted as running
+   * why: A device is on its way to a lease: booted, `ready` and claimed, still counted as running
    * and as reserved until the grant. The budget reads one over for that moment, so no shutdown
    * is proposed on it.
    */
   readonly handoffInFlight: boolean;
   /**
-   * Shut-down devices an operator reset (`nuke`) stopped. They were released a moment ago, but
+   * why: Shut-down devices an operator reset (`nuke`) stopped. They were released a moment ago, but
    * the reset's point is that they stay down, so they are never booted back unasked.
    */
   readonly resetDevices: ReadonlySet<string>;
@@ -217,7 +199,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
 }
 
 /**
- * The running slots idle warm devices may not fill: the operator's reserve for each platform,
+ * why: The running slots idle warm devices may not fill: the operator's reserve for each platform,
  * never more than that platform's own limit, and for the global budget their sum. A request is
  * not an idle warm device, so `room` itself does not carry it.
  */
@@ -237,7 +219,7 @@ export function reserveOnVirtualPlatforms(
 }
 
 /**
- * The running slots the operator's reserve holds back on each platform: `reserveRunning`, never
+ * why: The running slots the operator's reserve holds back on each platform: `reserveRunning`, never
  * more than that platform's own running limit. The one place the cap is decided; `doctor` reads it
  * too, to tell whether the targets fit what the reserve leaves.
  */
@@ -275,7 +257,6 @@ function hasRoom(room: Slots, device: VirtualDevice): boolean {
   return room.global >= 1 && room[device.spec.platform] >= 1;
 }
 
-/** Whether `device` is one a waiting request would be granted: it fits and is in the pool mode. */
 function serves(device: VirtualDevice, demand: WaitingDemand): boolean {
   return mayBeGranted(device) && servesSpec(device.spec, demand);
 }
@@ -285,7 +266,7 @@ function servesSpec(spec: VirtualSpec, demand: WaitingDemand): boolean {
 }
 
 /**
- * Shutdowns that bring every over-budget platform and the global count back under, least
+ * why: Shutdowns that bring every over-budget platform and the global count back under, least
  * recently used first, never a device that serves a waiting request. A platform that is over
  * takes its own devices first; the global count then takes the least recently used of any.
  * Each proposal gives its slot back in `room`, which the boots then read. The reserve in `held`
@@ -478,7 +459,6 @@ function leasedOfKind(view: WarmPolicyView, spec: VirtualSpec): number {
   return view.devices.filter((device) => ofKind(device) && leased.has(device.id)).length;
 }
 
-/** The targets with those that resolved to one spec merged into one, counts summed. */
 function mergeTargets(targets: readonly ResolvedTarget[]): ResolvedTarget[] {
   const merged: ResolvedTarget[] = [];
   for (const target of targets) {
@@ -490,11 +470,6 @@ function mergeTargets(targets: readonly ResolvedTarget[]): ResolvedTarget[] {
   return merged;
 }
 
-/**
- * A target's ready devices: of its kind (`sameSpec`), ready, with no lease and no claim, and not
- * a spent `fresh` one, oldest first. The count of them is what the target has; the first `count`
- * are the ones it keeps.
- */
 function readyOfKind(
   devices: readonly VirtualDevice[],
   isIdle: (device: VirtualDevice) => boolean,
@@ -511,7 +486,6 @@ function readyOfKind(
     .sort((left, right) => left.createdAt - right.createdAt);
 }
 
-/** Whether a device has no lease and no operation claim on it. */
 function idlePredicate(
   leases: readonly LeaseRecord[],
   isClaimed: (deviceId: string) => boolean,
@@ -526,7 +500,6 @@ interface DeviceCounts {
   readonly isClaimed: (deviceId: string) => boolean;
 }
 
-/** How many ready, unleased devices of `spec`'s kind there are: what a target report calls ready. */
 export function readyCount(input: DeviceCounts, spec: VirtualSpec): number {
   return readyOfKind(input.devices, idlePredicate(input.leases, input.isClaimed), spec).length;
 }
@@ -622,7 +595,6 @@ function shedForPressure(
     : [{ action: "shutdown", deviceId: victim.id, reason: "memory-pressure" }];
 }
 
-/** Why a slot of `platform` is not free for an idle warm device, when it is not. */
 function slotShort(
   room: Slots,
   held: Slots,
@@ -633,7 +605,6 @@ function slotShort(
   return undefined;
 }
 
-/** What the capacity strategy's refusal means for a target's report. */
 function shortOf(refusal: CapacityRefusalReason | undefined): TargetShort | undefined {
   if (refusal === undefined) return undefined;
   return refusal === "device-limit" || refusal === "ram-budget" || refusal === "memory-pressure"
@@ -641,7 +612,6 @@ function shortOf(refusal: CapacityRefusalReason | undefined): TargetShort | unde
     : "running-limit";
 }
 
-/** What `planTargets` shares across targets: the room left, the devices taken, the boots begun. */
 interface TargetPlan {
   readonly view: WarmPolicyView;
   readonly bootable: readonly VirtualDevice[];
@@ -656,7 +626,6 @@ interface TargetPlan {
   readonly displaced: Set<string>;
   /** why: idle and not displaced this pass: the devices a kind still counts as its own. */
   readonly isIdle: (device: VirtualDevice) => boolean;
-  /** Pool boots and creations running or proposed, which `maxConcurrentBoots` bounds. */
   started: number;
 }
 
@@ -896,7 +865,6 @@ function addOne(plan: TargetPlan, spec: VirtualSpec): TargetShort | undefined {
   return undefined;
 }
 
-/** A spec's kind as a report names it. */
 function kindOf(spec: VirtualSpec): TargetKind {
   return {
     mode: specMode(spec),
@@ -906,7 +874,6 @@ function kindOf(spec: VirtualSpec): TargetKind {
   };
 }
 
-/** A target or a spec as one line: platform, model, OS and mode, the parts it names. */
 export function describeTarget(target: {
   readonly platform: string;
   readonly model: string;

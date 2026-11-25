@@ -27,7 +27,6 @@ export const ofKind = (
   spec: kind,
   state,
 });
-/** A creation the test holds open until it calls `finish`, or fails with `fail`. */
 export function held() {
   let finish: () => void = () => undefined;
   let fail: (error: Error) => void = () => undefined;

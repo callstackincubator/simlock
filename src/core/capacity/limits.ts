@@ -6,11 +6,6 @@ import type {
   RunningCapacityEntry,
 } from "./strategy.js";
 
-/**
- * The running/device ceilings every strategy ultimately reduces to. Strategies
- * differ in how they arrive at these numbers and in what extra gates they apply
- * on top, not in how the ceilings themselves are enforced.
- */
 export interface CapacityLimits {
   readonly maxRunning: number;
   readonly ios: { readonly maxDevices: number; readonly maxRunning: number };

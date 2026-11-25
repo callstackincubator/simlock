@@ -17,7 +17,6 @@ const other: VirtualSpec = {
   platform: "ios",
 };
 
-/** Fails `times` in a row, each at the first moment a try is allowed; returns the last failure. */
 function failTimes(schedule: RetrySchedule, target: VirtualSpec, times: number): number {
   let at = 0;
   for (let failure = 0; failure < times; failure += 1) {
