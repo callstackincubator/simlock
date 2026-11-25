@@ -375,6 +375,31 @@ async function rideOutADropBeforeTheDeadline(): Promise<void> {
   expect(closedConnections(held), "every connection is closed at the end").toBe(true);
 }
 
+async function aSlimLeaseRidesOutADropDuringTheHintWait(): Promise<void> {
+  const slimGrant = {
+    ...detachedGrant,
+    device: { ...detachedGrant.device, mode: "slim" as const },
+  };
+  const held = holdRemoteLease((clock) => ({
+    "catalog.get": () => NO_REPLY,
+    "lease.renew": () => ({ ...detachedGrant.lease, ttlDeadline: clock.now() + 60_000 }),
+    "lease.request": () => slimGrant,
+  }));
+  await vi.waitFor(() =>
+    expect(held.farm.requestTypes()).toEqual(["lease.request", "catalog.get"]),
+  );
+  expect(held.stdout(), "the grant is out before the hint wait").toContain("lse_env");
+
+  held.farm.connections[0]?.peer.dropped(1006, "");
+  await vi.waitFor(() => expect(held.stderr()).toContain("lost the connection"));
+  held.clock.advance(1_000);
+  await vi.waitFor(() => expect(held.stderr()).toContain("reconnected"));
+  expect(held.stderr(), "a slim lease is not ended by the drop").not.toContain("error");
+
+  held.signals.emit("SIGINT");
+  expect(await ends(held)).toBe(0);
+}
+
 async function neverBackBeforeTheDeadline(): Promise<void> {
   const held = holdRemoteLease();
   await vi.waitFor(() => expect(held.farm.requestTypes()).toEqual(["lease.request"]));
@@ -397,6 +422,7 @@ async function neverBackBeforeTheDeadline(): Promise<void> {
 describe("CLI: a held remote lease across a network drop", () => {
   it("a held remote lease rides out a network drop: it reconnects, renews and holds on until its deadline, ends by what the farm answers, and a queued request asks again", async () => {
     await rideOutADropBeforeTheDeadline();
+    await aSlimLeaseRidesOutADropDuringTheHintWait();
     await neverBackBeforeTheDeadline();
     await reconnectAnswersDecideTheEnd();
     await silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound();

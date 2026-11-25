@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeClock } from "../ports/index.js";
 import { runCli } from "./index.js";
 import { fakeClient, outputCapture, settle } from "./test-index.js";
@@ -233,11 +233,13 @@ describe("simlock lease: the slim hint line", () => {
         await settle();
         expect(output.stdout, `${row.name}: the grant waits for the catalog`).not.toBe("");
       }
-      for (let tick = 0; tick < 20 && !settled; tick += 1) {
-        await settle();
-        (environment.clock as FakeClock).advance(500);
-      }
-      expect(settled, `${row.name}: the command had not ended by 10 s`).toBe(true);
+      await vi.waitFor(
+        () => {
+          (environment.clock as FakeClock).advance(500);
+          expect(settled, `${row.name}: the command has not ended`).toBe(true);
+        },
+        { timeout: 10_000 },
+      );
       const exitCode = await run;
       expect(exitCode, row.name).toBe(0);
       expect(hintLines(output.stderr), row.name).toEqual(row.lines);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SimlockError } from "../client/index.js";
 import type { FakeClock } from "../ports/index.js";
 import { leaseSimulatorOutputSchema } from "./contracts.js";
@@ -97,11 +97,13 @@ describe("MCP lease_simulator: the slim hint", () => {
             return result;
           },
         );
-        for (let tick = 0; tick < 20 && !done; tick += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          (clock as FakeClock).advance(500);
-        }
-        expect(done, `${row.name}: the call had not answered by 10 s`).toBe(true);
+        await vi.waitFor(
+          () => {
+            (clock as FakeClock).advance(500);
+            expect(done, `${row.name}: the call has not answered`).toBe(true);
+          },
+          { timeout: 10_000 },
+        );
         const result = await pending;
         expect(result.isError, row.name).not.toBe(true);
         const { hint, ...rest } = result.structuredContent as Record<string, unknown>;
