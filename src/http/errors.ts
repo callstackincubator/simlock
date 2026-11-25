@@ -197,6 +197,8 @@ function isDetailsObject(error: unknown): error is DispatchError & {
 /** Writes `mapError`'s result as the standard `{"error":{...}}` body, plus `Retry-After` for NO_CAPACITY. */
 export function errorResponse(c: Context, error: unknown): Response {
   const mapped = mapError(error);
+  // why: the request log step reads the code here, so it never reads a body, which on a gateway may stream from a worker.
+  c.set("errorCode", mapped.code);
   const response = c.json(
     { error: { code: mapped.code, message: mapped.message, ...mapped.extra } },
     mapped.status,

@@ -214,10 +214,17 @@ export class LearnedKinds {
     database.prepare(`DELETE FROM warm_kinds WHERE ${where}`).run(...key);
   }
 
-  clear(): void {
+  /** why: a platform nuke forgets only that platform's kinds; without one every kind goes. */
+  clear(platform?: Platform): void {
     this.#state.transaction(() => {
-      this.#state.database.exec("DELETE FROM warm_kind_leases");
-      this.#state.database.exec("DELETE FROM warm_kinds");
+      const { database } = this.#state;
+      const [where, key] = platform === undefined ? ["", []] : [" WHERE platform = ?", [platform]];
+      database
+        .prepare(
+          `DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds${where})`,
+        )
+        .run(...key);
+      database.prepare(`DELETE FROM warm_kinds${where}`).run(...key);
     });
   }
 

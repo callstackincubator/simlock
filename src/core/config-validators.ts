@@ -1,5 +1,6 @@
 import type { ZodType } from "zod";
 
+import { capabilityNameSchema } from "../contract/index.js";
 import type { LogLevel } from "../ports/index.js";
 import type { AuthStrategyDefinition } from "../auth/index.js";
 import {
@@ -160,6 +161,7 @@ export function configValidators(
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
+    tags: tagsValidator(modules),
     gateway: objectValidator({
       url: stringValue,
       token: stringValue,
@@ -323,6 +325,34 @@ function capabilitiesValidator(modules: readonly ModuleConfigEntry[]): Validator
       };
     }
     return result;
+  };
+}
+
+const MAX_TAGS = 8;
+
+/** why: ADR 0091 §1: a tag that names a module would hide that module's real state, so it is refused, also after an update adds such a module. */
+function tagsValidator(modules: readonly ModuleConfigEntry[]): Validator {
+  return (value, path) => {
+    if (!Array.isArray(value)) throw invalidValue(path, "a list of tag names");
+    value.forEach((name, index) => {
+      if (typeof name !== "string" || !capabilityNameSchema.safeParse(name).success) {
+        throw invalidValue(
+          `${path}[${String(index)}]`,
+          "a name of 1 to 32 lowercase letters, digits and hyphens that starts with a letter",
+        );
+      }
+    });
+    const names = value as readonly string[];
+    if (names.length > MAX_TAGS) throw invalidValue(path, `at most ${String(MAX_TAGS)} names`);
+    const twice = names.find((name, index) => names.indexOf(name) !== index);
+    if (twice !== undefined) {
+      throw invalidValue(path, `each name once, "${twice}" is listed twice`);
+    }
+    const moduleName = names.find((name) => modules.some((entry) => entry.name === name));
+    if (moduleName !== undefined) {
+      throw invalidValue(path, `no module name, "${moduleName}" names an optional module`);
+    }
+    return names;
   };
 }
 

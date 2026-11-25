@@ -50,7 +50,7 @@ Simlock uses only a device folder it created itself, so it can never delete some
 
 ## Resetting a machine
 
-`simlock nuke` is the reset for when leases or devices are stuck. It ends every lease on that worker, including other agents' leases, cancels every waiting request, shuts down Simlock's simulators and emulators, and makes the warm pool forget what it learned. With `--delete-devices` it also deletes them and every baseline. It runs on one worker at a time, never on a gateway.
+`simlock nuke` is the reset for when leases or devices are stuck. It ends every lease on that worker, including other agents' leases, cancels every waiting request, shuts down Simlock's simulators and emulators, and makes the warm pool forget what it learned. With `--delete-devices` it also deletes them and every baseline. `--platform ios` or `--platform android` limits the leases, devices, baselines and learned kinds it touches to that platform; waiting requests of both platforms are still cancelled. It runs on one worker at a time, never on a gateway.
 
 ## Use it
 

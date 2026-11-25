@@ -1,6 +1,8 @@
 import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
 import {
   type AbsentReason,
+  type DeviceRecord,
+  type Platform,
   type DeviceOperationClaims,
   type LeaseRecord,
   type ReleasedLease,
@@ -24,7 +26,7 @@ export interface LeaseExpirationAdmin {
 
 export interface LeaseReleaseMaintenance {
   beginMaintenance(): Promise<void>;
-  releaseAllDuringMaintenance(reason: "killed"): Promise<readonly string[]>;
+  releaseAllDuringMaintenance(reason: "killed", platform?: Platform): Promise<readonly string[]>;
   endMaintenance(): Promise<void>;
 }
 
@@ -51,7 +53,10 @@ export interface LeaseReleaseLifecycle {
 }
 
 export interface LeaseReleaseRegistry {
-  readonly snapshot: { readonly leases: readonly LeaseRecord[] };
+  readonly snapshot: {
+    readonly devices: readonly DeviceRecord[];
+    readonly leases: readonly LeaseRecord[];
+  };
 }
 
 export interface LeaseReleaseCoordinatorOptions {
@@ -278,7 +283,10 @@ export class LeaseReleaseCoordinator
     }
   }
 
-  async releaseAllDuringMaintenance(reason: "killed"): Promise<readonly string[]> {
+  async releaseAllDuringMaintenance(
+    reason: "killed",
+    platform?: Platform,
+  ): Promise<readonly string[]> {
     await this.options.decisions.run(() => {
       if (this.#maintenanceDepth === 0) {
         throw new Error("Maintenance-authorized release requires active maintenance");
@@ -287,7 +295,7 @@ export class LeaseReleaseCoordinator
     // Awaited rather than backgrounded: the reset walks the device list straight
     // afterwards and only acts on `ready`/`shutdown` records, so a reclaim still in
     // flight would take its device out of that walk entirely.
-    return this.#releaseAll(reason, "await");
+    return this.#releaseAll(reason, "await", platform);
   }
 
   async endMaintenance(): Promise<void> {
@@ -493,8 +501,16 @@ export class LeaseReleaseCoordinator
   async #releaseAll(
     reason: "explicit" | "killed",
     reclaim: ReclaimMode,
+    platform?: Platform,
   ): Promise<readonly string[]> {
-    const leaseIds = this.options.registry.snapshot.leases.map((lease) => lease.id);
+    const { devices, leases } = this.options.registry.snapshot;
+    const leaseIds = leases
+      .filter(
+        (lease) =>
+          platform === undefined ||
+          devices.find((device) => device.id === lease.deviceId)?.spec.platform === platform,
+      )
+      .map((lease) => lease.id);
     await Promise.all(leaseIds.map(async (leaseId) => this.#release(leaseId, reason, { reclaim })));
     return leaseIds;
   }

@@ -137,6 +137,70 @@ describe("Registry", () => {
     }
   });
 
+  it("a state.db at registry version 9 migrates to 10, keeps its requests without requires, and then stores a request's requires", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
+    try {
+      const clock = new FakeClock(1_000);
+      const deviceData = new Map<Platform, DeviceDataTable>([
+        ["android", fakeDeviceDataTable],
+        ["ios", fakeDeviceDataTable],
+      ]);
+      const openState = (owner: typeof registryOwner) =>
+        openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [owner, fakeDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+      const loadRegistry = (state: StateDatabase) =>
+        Registry.load({
+          clock,
+          deviceData,
+          eventBus: new EventBus(clock),
+          idGenerator: { generate: () => "id" },
+          state,
+        });
+      const old = await openState({
+        ...registryOwner,
+        migrations: registryOwner.migrations.slice(0, 9),
+        version: 9,
+      });
+      old.database
+        .prepare(
+          "INSERT INTO lease_requests (id, requester_id, owner_id, platform, model, created_at, state) VALUES ('req_old', 'agent', 'agent', 'ios', 'iPhone 16', 5, 'open')",
+        )
+        .run();
+      old.close();
+
+      const migrated = await openState(registryOwner);
+      const registry = await loadRegistry(migrated);
+      expect(registry.leaseRequests().map((record) => [record.id, record.request])).toEqual([
+        ["req_old", { model: "iPhone 16", platform: "ios" }],
+      ]);
+      await registry.createLeaseRequest({
+        id: "req_new",
+        ownerId: "agent",
+        request: { platform: "ios" },
+        requesterId: "agent",
+        requires: ["lab"],
+      });
+      migrated.close();
+
+      const reopenedState = await openState(registryOwner);
+      const reopened = await loadRegistry(reopenedState);
+      expect(reopened.leaseRequests().map((record) => record.requires)).toEqual([
+        undefined,
+        ["lab"],
+      ]);
+      reopenedState.close();
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("a state.db at registry version 4 with deleted rows migrates, keeps them for one retention period after the first start, then drops them", async () => {
     const MINUTE = 60_000;
     const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));

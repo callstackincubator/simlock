@@ -396,7 +396,7 @@ describe("IosSimctlDriver", () => {
       };
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
-      await plantSeedClone(filesystem);
+      await plantSeedClone(filesystem, isDefault ? unownedSourcesSet : sourcesSetPath);
       const clock = new FakeClock();
       const driver = await IosSimctlDriver.create({
         database: seeded ? await seededDatabase() : await memorySourceDatabase(),

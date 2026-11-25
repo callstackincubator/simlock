@@ -502,6 +502,8 @@ export interface LeaseRequestRecord<Grant = LeaseGrant> {
   readonly leaseId?: string;
   readonly runId?: string;
   readonly label?: string;
+  /** why: ADR 0091 §3: the capability names the request required, kept so a replay is compared on them; absent when it had none or an empty list. */
+  readonly requires?: readonly string[];
   /**
    * The gateway's request id (ADR 0021) when this request is a gateway dispatch, a probe. Kept so
    * a probe settled at the next start still names it.

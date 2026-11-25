@@ -166,6 +166,12 @@ Nuke Simlock-managed devices? [y/N] y
 
 **Check:** `simlock status` lists no leases and no Simlock devices.
 
+To reset one platform and leave the other alone, add `--platform ios` or `--platform android`. It ends only that platform's leases, and with `--delete-devices` deletes only that platform's devices, seeds and baselines and makes the warm pool forget only that platform's learned kinds. Waiting requests of both platforms are still cancelled.
+
+```sh
+simlock nuke --delete-devices --platform ios
+```
+
 In a script, pass `--yes`. Without a terminal and without `--yes`, the command stops with `nuke requires confirmation or --yes`.
 
 ## When it fails

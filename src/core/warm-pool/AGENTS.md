@@ -21,7 +21,7 @@ Passes:
 - One pass at a time; a trigger during a pass asks for one more pass.
 - The plan runs under the lock; driver work runs outside it. A boot takes `tryReserveBoot` and a `boot` claim under the lock. A creation takes `tryReserveProvisioning` and provisions with an ownerless `boot` claim, dropped once ready, so a request may wait on it.
 - Target and `waiting-request` boots and creations run beside the pass. Every attempted action ends in `kick()`, whether it worked or not.
-- While nuke holds acquisition closed the pool does nothing, and a device shut down then is never booted back unasked. Nuke also clears the learned record.
+- While nuke holds acquisition closed the pool does nothing, and a device shut down then is never booted back unasked. Nuke also clears the learned record, only the platform's kinds when it names one.
 - A device of a platform whose driver was refused at discovery is never proposed, boot or shutdown. It still holds its capacity slot, and `targeted()` still lists it to the reaper.
 - Stop: `close()` at stop start; `drain()` finishes the pass and running boots and starts nothing; `dispose()` cancels the timers.
 

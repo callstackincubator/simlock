@@ -106,7 +106,11 @@ export interface HttpMount {
   handle(request: Request, identity: Identity): Promise<Response>;
 }
 
-export type Env = AuthEnv;
+export interface Env {
+  readonly Variables: AuthEnv["Variables"] & {
+    errorCode?: string;
+  };
+}
 
 export interface HttpAppDisposable {
   readonly dispose: () => void;

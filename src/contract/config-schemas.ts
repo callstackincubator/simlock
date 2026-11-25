@@ -64,6 +64,8 @@ export const configSchema = z.object({
     capabilityNameSchema,
     z.object({ enabled: z.boolean() }).catchall(z.unknown()),
   ),
+  // why: optional, so a gateway still parses an older worker's `config.get` answer, which has no tags.
+  tags: z.array(capabilityNameSchema).optional(),
   capacity: capacityConfigSchema,
   downloads: z.object({
     policy: z.enum(["never", "on-request", "always"]),

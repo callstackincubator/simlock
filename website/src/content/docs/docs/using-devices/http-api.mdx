@@ -125,6 +125,7 @@ The body takes the same choices as `simlock lease` ([Lease a specific model or O
 | `leaseId` | Your own lease id. |
 | `runId` | The run id a CI job gives its leases, 1 to 128 letters, digits, `.`, `_` or `-`. The lease carries it as `runId`. |
 | `label` | A display-only name, 1 to 64 characters with no control character, such as `feature-x`. The lease carries it as `label`. |
+| `requires` | Up to 8 capability names the serving worker must have, each once: an optional module that is on, or a tag from the worker's `tags` configuration. No worker that has them: `CAPABILITY_MISSING`. With an `Idempotency-Key`, the same names in any order are the same request. |
 | `metadata` | An object of text values for a gateway's admission command ([Rank or refuse requests](/simlock/docs/gateway/admission)). |
 
 ## Run a command on the device
