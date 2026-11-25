@@ -69,6 +69,8 @@ export interface RemoteFarm {
 
 export interface CliEnvironment {
   readonly remote?: RemoteFarm | undefined;
+  /** why: the raw `SIMLOCK_ALLOW_INSECURE_HTTP`, unjudged: only a farm URL check reads it, so a leftover value never breaks a command that checks none. */
+  readonly allowInsecureHttpFromEnv?: string | undefined;
   readonly clock: Clock;
   readonly configPath: string;
   readonly daemonHome: DaemonHome;
