@@ -17,7 +17,7 @@ import {
 const gatewayDir = join(srcDir, "gateway");
 
 describe("sourceFilesRecursive", () => {
-  // A flat `readdirSync` never looked inside a subdirectory at all, so a module placed under one
+  // why: A flat `readdirSync` never looked inside a subdirectory at all, so a module placed under one
   // skipped a boundary suite silently rather than failing it.
   it("descends into a subdirectory, and still skips test files there", () => {
     const dir = mkdtempSync(join(tmpdir(), "simlock-boundary-test-"));
@@ -39,7 +39,7 @@ describe("sourceFilesRecursive", () => {
 });
 
 describe("normalizeSpecifier / isUnder", () => {
-  // A literal `"../core"` prefix check is only ever true for a file directly under one module
+  // why: A literal `"../core"` prefix check is only ever true for a file directly under one module
   // directory: `src/gateway/routing/policy.ts` reaches the same module as
   // `"../../core/registry.js"`, one `..` longer. Resolving both against the file's own directory
   // into a path relative to `src/` is what makes them compare equal.
@@ -52,7 +52,7 @@ describe("normalizeSpecifier / isUnder", () => {
     expect(isUnder(nested, "core")).toBe(true);
   });
 
-  // A `startsWith("./")` check reads this as "inside this directory"; it climbs straight out.
+  // why: A `startsWith("./")` check reads this as "inside this directory"; it climbs straight out.
   it("resolves a specifier that starts with ./ but climbs out of the directory", () => {
     const normalized = normalizeSpecifier(join(srcDir, "contract"), "./../core/index.js");
 
@@ -78,7 +78,7 @@ describe("normalizeSpecifier / isUnder", () => {
 });
 
 describe("importSpecifiers", () => {
-  // A dynamic `await import(...)` routed around every boundary check without this.
+  // why: A dynamic `await import(...)` routed around every boundary check without this.
   it("catches a dynamic import, not just a static `from`", () => {
     expect(importSpecifiers('const mod = await import("../core/registry.js");')).toContain(
       "../core/registry.js",

@@ -15,7 +15,7 @@ const UNIT_MS = {
 export function parseDurationMs(value: string): number | undefined {
   const match = /^(\d+)(ms|s|m|h|d)?$/.exec(value);
   if (match === null) return undefined;
-  // The pattern admits only the units in UNIT_MS, and only matches with an amount.
+  // why: The pattern admits only the units in UNIT_MS, and only matches with an amount.
   const [, amount, unit = "ms"] = match as unknown as [
     string,
     string,

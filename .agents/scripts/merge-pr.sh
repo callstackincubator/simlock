@@ -70,7 +70,7 @@ checks() {
     elif .state == "success" then "pass" else "fail" end) + " " + (.target_url // "-") + " " + .context'
 }
 
-# Waits for every check to settle, then sets `bad` to the ones that did not pass or skip.
+# why: Waits for every check to settle, then sets `bad` to the ones that did not pass or skip.
 # Called directly, never in $( ), so its exits end the script.
 red_checks() {
   started=$(date +%s)
@@ -92,9 +92,6 @@ red_checks() {
   bad=$(echo "$checks" | grep -v -e '^pass ' -e '^skipping ' || true)
 }
 
-# Prints, one per line, the Actions run id of each red check, or `none` for a red check this PR
-# must fix itself. A failed test is read from vitest's `FAIL` lines and Playwright's
-# `[browser] ›` lines; a failed job with neither is this PR's to fix.
 rerunnable_runs() {
   flaky=$(api issues -f labels=flaky-test -f state=open -f per_page=100 \
     -q '.[] | select(.pull_request == null) | .title, .body // ""' |

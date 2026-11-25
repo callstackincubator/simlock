@@ -1,5 +1,5 @@
 /**
- * The one place a worker's own reads become the fields of its worker view (ADR 0012 §1).
+ * why: The one place a worker's own reads become the fields of its worker view (ADR 0012 §1).
  *
  * A gateway reads `status.get`, `list.get` for devices, `catalog.get` and `config.get` over a
  * worker's uplink; a worker answering `worker.list` about itself reads the same four from its
@@ -80,7 +80,7 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
     >
   >;
 
-/** Narrowed so `driverData` -- an opaque, driver-defined blob -- stays out of every view. */
+/** why: Narrowed so `driverData` -- an opaque, driver-defined blob -- stays out of every view. */
 const viewDevicesSchema = z.array(statusDeviceSchema);
 
 export function workerViewFields(reads: WorkerReads): WorkerViewReport {

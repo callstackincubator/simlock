@@ -1,5 +1,5 @@
 /**
- * The one grammar for an OS constraint (ADR 0015 §2; architecture rule 10): a bare version, which
+ * why: The one grammar for an OS constraint (ADR 0015 §2; architecture rule 10): a bare version, which
  * is exact, or a range in a node-semver subset. Parses a string, tests a version against the
  * result, and orders versions. It lives in the contract so the `osVersion` schema can refine
  * through it and the core and the gateway can import it; no dependency is added.
@@ -9,7 +9,6 @@
  * `>=18 <=26`.
  */
 
-/** A version at or above `from`, and below `before` when it has one. */
 interface Bound {
   readonly from?: readonly number[];
   readonly before?: readonly number[];
@@ -17,7 +16,6 @@ interface Bound {
 
 export interface OsRange {
   readonly kind: "range";
-  /** The text as typed, so an event or an error can show it back. */
   readonly text: string;
   readonly bounds: readonly Bound[];
 }
@@ -28,7 +26,6 @@ export type ParsedOsConstraint =
   | { readonly ok: true; readonly constraint: OsConstraint }
   | { readonly ok: false; readonly message: string };
 
-/** The message a refused constraint carries, naming every accepted form. */
 const ACCEPTED_FORMS =
   "an OS constraint is an exact version (`18.4`), or a range: one or more of `>=`, `>`, `<=`, `<` " +
   "followed by a version, joined by single spaces (`>=18 <26`), or a hyphen range (`18 - 26`)";
@@ -37,7 +34,7 @@ const VERSION = /^\d+(?:\.\d+)*$/;
 const OPERATORS = [">=", ">", "<=", "<"] as const;
 
 /**
- * Whether a string is written as a range rather than a version: it starts with a comparator, or
+ * why: Whether a string is written as a range rather than a version: it starts with a comparator, or
  * has a hyphen range, a caret, a tilde, a star, `||`, or an `x` segment. Anything else is a bare
  * version, which stays exact as on `main`, so a runtime a driver lists as `Baklava` or `34-ext12`
  * still names itself.
@@ -59,7 +56,6 @@ export function parseOsConstraint(text: string): ParsedOsConstraint {
     : { constraint: { bounds, kind: "range", text }, ok: true };
 }
 
-/** `A - B` is `>=A <=B`. */
 function hyphenBounds(text: string): readonly Bound[] | undefined {
   const parts = text.split(" - ");
   if (parts.length !== 2 || !parts.every((part) => VERSION.test(part))) return undefined;
@@ -67,7 +63,6 @@ function hyphenBounds(text: string): readonly Bound[] | undefined {
   return [comparatorBound(">=", from), comparatorBound("<=", to)];
 }
 
-/** One or more comparators joined by single spaces. */
 function comparatorBounds(text: string): readonly Bound[] | undefined {
   const bounds: Bound[] = [];
   for (const token of text.split(" ")) {
@@ -97,7 +92,6 @@ function comparatorBound(operator: (typeof OPERATORS)[number], version: readonly
   }
 }
 
-/** The next version of the same precision: 18 -> 19, 18.4 -> 18.5. */
 function bump(version: readonly number[]): readonly number[] {
   return version.map((part, index) => (index === version.length - 1 ? part + 1 : part));
 }

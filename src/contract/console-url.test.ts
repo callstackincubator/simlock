@@ -11,7 +11,6 @@ describe("consoleUrl", () => {
     expect(at("::")).toBe("http://localhost:4700/");
     expect(at("::1")).toBe("http://[::1]:4700/");
     expect(at("fd7a:115c:a1e0::1")).toBe("http://[fd7a:115c:a1e0::1]:4700/");
-    // Written already bracketed, it is not bracketed twice.
     expect(at("[::1]")).toBe("http://[::1]:4700/");
     expect(at("127.0.0.1")).toBe("http://127.0.0.1:4700/");
     expect(at("mac-mini.tailnet.ts.net")).toBe("http://mac-mini.tailnet.ts.net:4700/");

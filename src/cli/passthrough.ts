@@ -1,7 +1,7 @@
 import type { PassthroughCommand } from "../client/index.js";
 
 /**
- * Runs a daemon-resolved `simlock simctl` / `simlock adb` command in this process's own
+ * why: Runs a daemon-resolved `simlock simctl` / `simlock adb` command in this process's own
  * terminal.
  *
  * Inherited stdio, so a passthrough behaves exactly as the bare tool would: `adb shell`
@@ -45,7 +45,7 @@ export async function spawnPassthrough(command: PassthroughCommand): Promise<num
     // why: a failed spawn emits close after error, so close alone detaches on every path.
     child.once("close", (code, signal) => {
       detach();
-      // A child killed by a signal has no exit code; report it the way a shell does, so a
+      // why: A child killed by a signal has no exit code; report it the way a shell does, so a
       // passthrough interrupted with ^C is distinguishable from one that simply failed.
       if (code !== null) resolve(code);
       else resolve(signal === null ? 1 : 128 + (constants.signals[signal] ?? 0));

@@ -70,7 +70,7 @@ head_ref=$(api "pulls/$pr" -q .head.ref)
 base_ref=$(api "pulls/$pr" -q .base.ref)
 pr_body=$(api "pulls/$pr" -q '.body // ""' | tr -d '\r')
 
-# The PR head through GitHub's pull ref, which outlives a deleted branch. The temporary ref is
+# why: The PR head through GitHub's pull ref, which outlives a deleted branch. The temporary ref is
 # per PR, so two reviews running at once do not overwrite each other's.
 
 # why: a replay (REVIEW_HEAD and REVIEW_BASE, full SHAs, both or neither) reviews a frozen
@@ -214,8 +214,6 @@ if [ -n "$issue" ]; then
     fi
   fi
 
-  # Rule files under a "Rules in play" heading of the issue or its parent, up to the next
-  # heading: `events.md`, or "architecture rule 13".
   for f in "$out/issue.md" "$out/feature.md"; do
     [ -f "$f" ] || continue
     play="$play$(awk '
@@ -261,9 +259,6 @@ for f in "$out/issue.md" "$out/feature.md"; do [ ! -f "$f" ] || set -- "$@" "$f"
 # why: always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
 [ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
 
-# ADRs by number, wherever the spec names them, or wherever the record an ADR diff adds or edits
-# names them: "ADR 0014", "ADR-0014", "ADRs 0004 and 0005", or a link to adr/0014-....md. Each
-# comes as the base has it; one this diff adds is in diff.patch alone.
 changed_adrs=$(git diff --name-only "$fork" "$head" -- docs/internal/adr/ \
   | grep -oE 'adr/[0-9]{4}-' | grep -oE '[0-9]{4}' || true)
 adrs=$({

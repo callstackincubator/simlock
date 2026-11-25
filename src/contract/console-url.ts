@@ -11,7 +11,7 @@ export interface ConsoleHttpConfig {
  */
 export const CONSOLE_URL_MAX_LENGTH = 512;
 
-/** Hosts that mean "every interface": a browser cannot open them, so the address names this machine. */
+/** why: Hosts that mean "every interface": a browser cannot open them, so the address names this machine. */
 const UNSPECIFIED_HOSTS = new Set(["0.0.0.0", "::"]);
 
 /**
