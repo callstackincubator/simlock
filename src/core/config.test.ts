@@ -27,10 +27,8 @@ describe("loadConfig", () => {
     });
 
     expect(config.capacity.strategy).toBe("resource");
-    expect(resourceOptions(config).limits.ios.maxDevices).toBe(Math.max(1, Math.floor(8 / 2)));
-    expect(resourceOptions(config).limits.android.maxDevices).toBe(
-      Math.max(1, Math.min(Math.floor(8 / 4), Math.floor(32 / 8))),
-    );
+    expect(resourceOptions(config).limits.ios.maxDevices).toBe(4);
+    expect(resourceOptions(config).limits.android.maxDevices).toBe(2);
     expect(resourceOptions(config).limits).toMatchObject({
       android: { maxRunning: 2 },
       ios: { maxRunning: 4 },
@@ -378,24 +376,12 @@ describe("loadConfig", () => {
     });
   });
 
-  it("rejects malformed values with the offending key", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ limits: { ios: { maxDevices: "many" } } }),
-    );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("limits.ios.maxDevices");
-  });
-
   it.each([
+    [{ limits: { ios: { maxDevices: "many" } } }, "limits.ios.maxDevices"],
     [{ limits: { maxRunning: 0 } }, "limits.maxRunning"],
     [{ limits: { ios: { maxRunning: 1.5 } } }, "limits.ios.maxRunning"],
     [{ limits: { android: { maxRunning: "many" } } }, "limits.android.maxRunning"],
-  ])("rejects invalid maxRunning values in every scope", async (contents, path) => {
+  ])("rejects an invalid limits value naming its key", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));

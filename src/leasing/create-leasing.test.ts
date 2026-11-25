@@ -351,7 +351,7 @@ describe("createLeasing", () => {
     ).rejects.toBeInstanceOf(NoCapacityError);
   });
 
-  it("never exposes a released device as ready: it is shut down, destroyed and deleted", async () => {
+  it("never exposes a released device as ready: it ends deleted, with no device.ready", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const harness = await createHarness({ driver });

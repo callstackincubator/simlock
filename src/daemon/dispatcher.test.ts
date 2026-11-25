@@ -66,7 +66,7 @@ describe("Dispatcher: parsing", () => {
     },
   );
 
-  it("rejects a requesterId with a control character or longer than 256 characters on lease.request, lease.cancel, device.exec and device.rotate with BAD_REQUEST, and accepts one at 256 or a gateway-namespaced one", async () => {
+  it("rejects a requesterId with a control character or longer than 256 characters on lease.request, lease.cancel, device.exec and device.rotate with BAD_REQUEST, and lease.cancel accepts one at 256 or a gateway-namespaced one", async () => {
     const { dispatcher, registry } = await buildDispatcher();
     const send = (
       operation: "lease.request" | "lease.cancel" | "device.exec" | "device.rotate",
@@ -112,19 +112,29 @@ describe("Dispatcher: parsing", () => {
     });
   });
 
-  it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it, and creates no lease", async () => {
-    const { dispatcher, registry } = await buildDispatcher({
-      lease: { defaultTtlMs: 1_000, maxTtlMs: 1_000 },
-    });
-    await expect(
-      dispatcher.dispatch(
+  it.each([
+    [1_001, "BAD_REQUEST", 0],
+    [1_000, "granted", 1],
+  ])(
+    "on a request with ttlMs %i against lease.maxTtlMs 1000, answers %s and leaves %i lease(s), never clamping (ADR 0004 §4)",
+    async (ttlMs, outcome, leases) => {
+      const { dispatcher, registry } = await buildDispatcher({
+        lease: { defaultTtlMs: 1_000, maxTtlMs: 1_000 },
+      });
+      const request = dispatcher.dispatch(
         "lease.request",
-        { model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_001 },
+        { model: "iPhone 17 Pro", platform: "ios", ttlMs },
         session(),
-      ),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(registry.snapshot.leases).toEqual([]);
-  });
+      );
+
+      if (outcome === "BAD_REQUEST") {
+        await expect(request).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      } else {
+        await expect(request).resolves.toMatchObject({ lease: { ttlMs: 1_000 } });
+      }
+      expect(registry.snapshot.leases).toHaveLength(leases);
+    },
+  );
 
   it("rejects a ttlMs above lease.maxTtlMs on a renew too, leaving the lease's deadline as it was", async () => {
     const { clock, dispatcher, registry } = await buildDispatcher({
@@ -141,19 +151,6 @@ describe("Dispatcher: parsing", () => {
       dispatcher.dispatch("lease.renew", { leaseId: grant.lease.id, ttlMs: 1_001 }, session()),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(registry.snapshot.leases).toMatchObject([{ ttlDeadline: grant.lease.ttlDeadline }]);
-  });
-
-  it("accepts a ttlMs at the cap on a request (ADR 0004 §4)", async () => {
-    const { dispatcher } = await buildDispatcher({
-      lease: { defaultTtlMs: 1_000, maxTtlMs: 1_000 },
-    });
-    await expect(
-      dispatcher.dispatch(
-        "lease.request",
-        { model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_000 },
-        session(),
-      ),
-    ).resolves.toMatchObject({ lease: { ttlMs: 1_000 } });
   });
 
   it("names the stored request to the session on lease.request, and replays it under the same idempotency key", async () => {
@@ -419,7 +416,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
   });
 
-  it("an admin reads the config and sees ios.full.bootTimeoutMs, android.bootTimeoutMs and ios.modes, both when unset", async () => {
+  it("an admin reads the config and sees ios.full.bootTimeoutMs, android.bootTimeoutMs and ios.modes when set, and ios.modes when unset", async () => {
     const configured = await buildDispatcher({
       bootTimeouts: { android: 600_000, iosFull: 400_000 },
       iosModes: ["slim"],
@@ -593,18 +590,18 @@ describe("Dispatcher: identity.get", () => {
 });
 
 describe("Dispatcher: role rejection", () => {
-  it("rejects an admin-only operation from an agent session with FORBIDDEN", async () => {
+  it.each([
+    ["an agent", "agent", "FORBIDDEN"],
+    ["an admin", "admin", "admitted"],
+  ] as const)("an admin-only operation from %s session is %s", async (_who, role, outcome) => {
     const { dispatcher } = await buildDispatcher();
-    await expect(
-      dispatcher.dispatch("list.get", { kind: "devices" }, session({ role: "agent" })),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
+    const call = dispatcher.dispatch("list.get", { kind: "devices" }, session({ role }));
 
-  it("admits the same admin-only operation for an admin session", async () => {
-    const { dispatcher } = await buildDispatcher();
-    await expect(
-      dispatcher.dispatch("list.get", { kind: "devices" }, session({ role: "admin" })),
-    ).resolves.toEqual([]);
+    if (outcome === "FORBIDDEN") {
+      await expect(call).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } else {
+      await expect(call).resolves.toEqual([]);
+    }
   });
 
   it("doctor.run forwards purgeOrphans to the Doctor, distinctly from fix, and always asks for prerequisites", async () => {
@@ -737,7 +734,7 @@ describe("Dispatcher: lease.release of a virtual device", () => {
 });
 
 describe("Dispatcher: nuke.run", () => {
-  it("rejects an agent session with FORBIDDEN, without deleting anything", async () => {
+  it("rejects an agent session with FORBIDDEN, without releasing its lease", async () => {
     const { dispatcher, registry } = await buildDispatcher({ includeNuke: true });
     await dispatcher.dispatch(
       "lease.request",
@@ -751,7 +748,7 @@ describe("Dispatcher: nuke.run", () => {
     expect(registry.snapshot.leases).toHaveLength(1);
   });
 
-  it("admin can run it, releasing every lease and reporting the deleteDevices flag it ran with", async () => {
+  it("admin can run it, releasing every lease", async () => {
     const { dispatcher, registry } = await buildDispatcher({ includeNuke: true });
     await dispatcher.dispatch(
       "lease.request",

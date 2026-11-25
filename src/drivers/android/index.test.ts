@@ -101,7 +101,7 @@ describe("AndroidDriver.create", () => {
     });
   });
 
-  it("refuses a deviceRoot that is not a path at all, costing android and not the daemon", async () => {
+  it("refuses a deviceRoot that is not a path at all with OwnedRootError not-absolute", async () => {
     const filesystem = await androidFilesystem({ withDeviceRoot: false });
 
     const refusal = await createDriver(filesystem, new EmulatorExitingRunner([]), {

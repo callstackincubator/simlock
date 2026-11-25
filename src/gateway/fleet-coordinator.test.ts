@@ -94,7 +94,7 @@ describe("FleetLeaseCoordinator stored requests", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
-  it("keeps a request out of the granted state in its book until the granting worker's view has been read, so a replay or a watcher never sees a grant before lease.list lists it", async () => {
+  it("keeps a request out of the granted state in its book until the granting worker's view has been read", async () => {
     const { coordinator, directory, workers } = buildFleet();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -151,7 +151,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
   async function excludedWorkerKeepsLeaseButGetsNoNewDispatch(
     exclude: (workers: WorkerRegistry) => unknown,
   ): Promise<void> {
-    const { coordinator, directory, leaseIndex, workers } = buildFleet();
+    const { coordinator, directory, workers } = buildFleet();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
@@ -166,7 +166,8 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
     await exclude(workers);
-    expect(leaseIndex.resolve(firstGrant.lease.id)).toBeDefined();
+    await coordinator.release(firstGrant.lease.id);
+    expect(clientB.calls).toContain(`lease.release:${firstGrant.lease.id.replace("wrk_b.", "")}`);
 
     workers.refresh("wrk_a", {
       capacity: {
@@ -187,15 +188,15 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   }
 
-  it("keeps a drained worker's existing lease and sends it no new dispatch, while an undrained sibling serves the next request (§9)", async () => {
-    await excludedWorkerKeepsLeaseButGetsNoNewDispatch((workers) =>
-      workers.setDrained("wrk_b", true),
-    );
-  });
-
-  it("keeps a disconnected worker's existing lease and sends it no new dispatch, while a connected sibling serves the next request (§6/§28)", async () => {
-    await excludedWorkerKeepsLeaseButGetsNoNewDispatch((workers) => workers.disconnected("wrk_b"));
-  });
+  it.each([
+    ["drained", (workers: WorkerRegistry) => workers.setDrained("wrk_b", true)],
+    ["disconnected", (workers: WorkerRegistry) => workers.disconnected("wrk_b")],
+  ] as const)(
+    "keeps a %s worker's existing lease and sends it no new dispatch, while a sibling serves the next request (§9/§6/§28)",
+    async (_label, exclude) => {
+      await excludedWorkerKeepsLeaseButGetsNoNewDispatch(exclude);
+    },
+  );
 
   it("answers WORKER_UNREACHABLE for a forwarded device.exec on a worker the directory reports unreachable, never a success (§28)", async () => {
     const { coordinator, directory, workers, leaseIndex } = buildFleet();
@@ -316,10 +317,9 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
       .catch((error: unknown) => error);
 
     expect(afterDeadline).toMatchObject({ lease: { id: "wrk_b.lse_1", worker: { id: "wrk_b" } } });
-    expect(leaseIndex.resolve("wrk_a.lse_old")).toMatchObject({
-      requesterId: "agent-1",
-      workerId: "wrk_a",
-    });
+    const routed = await coordinator.release("wrk_a.lse_old").catch((error: unknown) => error);
+    expect(routed).toBeInstanceOf(DispatchError);
+    expect((routed as DispatchError).code).toBe("WORKER_UNREACHABLE");
 
     connectWorker(workers, "wrk_d");
     leaseIndex.add({

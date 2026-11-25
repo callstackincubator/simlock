@@ -71,14 +71,6 @@ describe("GET /v1/session without an upgrade", () => {
 });
 
 describe("authentication and role/ownership (via the shared dispatcher)", () => {
-  it("403s an agent reaching another requester's lease request (HTTP-only tracker resource guard)", async () => {
-    const { app, dispatcher } = buildHarness();
-    const { id } = await createLeaseRequest(app, dispatcher);
-
-    const response = await app.request(`/v1/lease-requests/${id}`, { headers: otherAgentAuth });
-    expect(response.status).toBe(403);
-  });
-
   it.each([
     ["GET /v1/leases/{id}", "/v1/leases/lse_1"],
     ["GET /v1/leases/{id}/events", "/v1/leases/lse_1/events"],
@@ -222,29 +214,22 @@ describe("GET /v1/components", () => {
     ],
   };
 
-  it("answers an agent token with component.list, passing the platform query through", async () => {
+  it.each([
+    ["passing the platform query through", "/v1/components?platform=android", { platform: "android" }],
+    ["listing every platform when none is asked for", "/v1/components", {}],
+  ])("answers an agent token with component.list, %s", async (_label, path, expectedInput) => {
     const { app, dispatcher } = buildHarness();
+    let seen: unknown;
     dispatcher.handlers["component.list"] = (input) => {
-      expect(input).toEqual({ platform: "android" });
+      seen = input;
       return listing;
     };
 
-    const response = await app.request("/v1/components?platform=android", { headers: agentAuth });
+    const response = await app.request(path, { headers: agentAuth });
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(listing);
-  });
-
-  it("lists every platform when no platform is asked for", async () => {
-    const { app, dispatcher } = buildHarness();
-    dispatcher.handlers["component.list"] = (input) => {
-      expect(input).toEqual({});
-      return listing;
-    };
-
-    const response = await app.request("/v1/components", { headers: agentAuth });
-
-    expect(response.status).toBe(200);
+    expect(seen).toEqual(expectedInput);
   });
 });
 

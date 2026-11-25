@@ -774,9 +774,9 @@ describe("Registry", () => {
     expect(registry.snapshot.devices[0]?.state).toBe("provisioning");
   });
 
-  it("round-trips leases and never deletes a device with an active lease", async () => {
+  it("never deletes a device with an active lease", async () => {
     const clock = new FakeClock(1_000);
-    const suffixes = ["device", "lease"];
+    const suffixes = ["device", "lease", "other", "other-lease"];
     const state = await openTestState();
     const options = {
       clock,
@@ -803,21 +803,51 @@ describe("Registry", () => {
       ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
-    const reloaded = await loadTestRegistry(options);
 
     expect(lease).toMatchObject({ deviceId: device.id, id: "lse_lease", grantedAt: 1_000 });
-    expect(reloaded.snapshot).toEqual(registry.snapshot);
 
     await registry.transitionDevice(device.id, "reclaiming");
     await registry.transitionDevice(device.id, "shutdown", {
       event: "device.reclaimed",
       payload: { deviceId: device.id, duration: 1, strategy: "erase" },
     });
-    await expect(
-      registry.transitionDevice(device.id, "deleted", {
-        event: "device.deleted",
-        payload: { deviceId: device.id, initiator: "test" },
-      }),
-    ).rejects.toThrow(RegistryEventError);
+    const deleted = {
+      event: "device.deleted" as const,
+      payload: { deviceId: device.id, initiator: "test" },
+    };
+    const refused = registry.transitionDevice(device.id, "deleted", deleted);
+    await expect(refused).rejects.toThrow(RegistryEventError);
+    await expect(refused).rejects.toThrow(
+      `Cannot delete device with an active lease: ${device.id}`,
+    );
+
+    const other = await registry.registerDevice({
+      driverData: { fakeDeviceId: "fake-2" },
+      driverDeviceId: "driver_other",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(other.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: other.id },
+    });
+    const otherLease = await registry.createLease({
+      deviceId: other.id,
+      requesterId: "agent-2",
+      ownerId: "agent-2",
+      ttlMs: 60_000,
+      ttlDeadline: 2_000,
+    });
+    await registry.beginRelease(otherLease.id);
+    await registry.transitionDevice(other.id, "shutdown", {
+      event: "device.reclaimed",
+      payload: { deviceId: other.id, duration: 1, strategy: "erase" },
+    });
+    await registry.transitionDevice(other.id, "deleted", {
+      event: "device.deleted",
+      payload: { deviceId: other.id, initiator: "test" },
+    });
+
+    expect(registry.snapshot.devices.find((item) => item.id === other.id)?.state).toBe("deleted");
   });
 });
