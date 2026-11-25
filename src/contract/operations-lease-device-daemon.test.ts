@@ -301,16 +301,10 @@ describe("lease.request requires", () => {
     ).toBe(true);
   });
 
-  it("refuses requires together with idempotencyKey, naming both, where each alone is accepted", () => {
-    expect(parse({ idempotencyKey: "key-1" }).success).toBe(true);
-    expect(parse({ requires: ["agent-device"] }).success).toBe(true);
+  it("accepts requires together with idempotencyKey, and still refuses a bad name beside the key", () => {
+    expect(parse({ idempotencyKey: "key-1", requires: ["agent-device"] }).success).toBe(true);
 
-    const both = parse({ idempotencyKey: "key-1", requires: ["agent-device"] });
-
-    expect(both.success).toBe(false);
-    expect(!both.success && both.error.issues.map((issue) => issue.message)).toContain(
-      "requires cannot be combined with idempotencyKey",
-    );
+    expect(parse({ idempotencyKey: "key-1", requires: ["Agent-Device"] }).success).toBe(false);
   });
 });
 
