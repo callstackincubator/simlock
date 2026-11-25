@@ -23,6 +23,7 @@ import {
   SIMLOCK_HOME,
   STANDALONE_OFF,
   connectRetrying,
+  pollUntil,
   pollUntilListening,
   runningDaemons,
   start,
@@ -371,6 +372,32 @@ describe("startDaemon with HTTP off", () => {
       socket.once("error", () => resolve("refused"));
     });
     expect(outcome).toBe("refused");
+  });
+});
+
+class UnmeasurableDiskFilesystem extends MemoryFilesystem {
+  async diskFree(_path: string): Promise<number> {
+    throw Object.assign(new Error("statfs failed"), { code: "EIO" });
+  }
+}
+
+describe("startDaemon logger wiring", () => {
+  it("startDaemon hands its logger to the cleanup reaper: a scheduled cleanup run that fails is logged", async () => {
+    const { sink } = await start({ filesystem: new UnmeasurableDiskFilesystem() });
+
+    // why: `daemon.started` triggers a run nobody awaits; its failure has no caller to reach.
+    await pollUntil(() =>
+      sink.records.some((record) => record.message === "scheduled cleanup run failed"),
+    );
+    expect(
+      sink.records.filter((record) => record.message === "scheduled cleanup run failed"),
+    ).toMatchObject([
+      {
+        level: "error",
+        module: "daemon.reaper",
+        fields: { step: "cleanup", error: expect.stringContaining("statfs failed") },
+      },
+    ]);
   });
 });
 
