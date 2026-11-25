@@ -68,6 +68,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
 | instructions | The static rules text for agents: `simlock instructions`, the MCP server instructions and resource; `simlock setup`, which installs the router skill | [instructions](../../src/instructions/AGENTS.md) |
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
+| shared | Small pure helpers two or more components use; imports nothing | [shared](../../src/shared/AGENTS.md) |
 | daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
 | test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |
 | `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [console.mdx](../../website/src/content/docs/docs/reference/console.mdx) |
@@ -97,6 +98,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `only-main-knows-gateway` | In daemon, only `src/daemon/main.ts` imports the gateway |
 | `link-is-portable`, `link-imports-port-types-only` | The link uses no Node module or package, and only the types of ports |
 | `contract-imports-nothing` | The contract imports nothing outside itself |
+| `shared-imports-nothing` | `src/shared` imports nothing: no component, package or Node module |
 | `packages-not-from-root-code`, `packages-not-in-root-code` | Nothing under `packages/` imports `src/`, `ui/` or `e2e/`, and none of those imports `packages/`, except an `e2e/` test file driving a package (ADR 0077 §3) |
 
 A directory under `src/` with an index file is a component. Two components

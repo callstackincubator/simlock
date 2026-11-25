@@ -1,3 +1,3 @@
-export function errorMessage(_error: unknown): string {
-  return "";
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
