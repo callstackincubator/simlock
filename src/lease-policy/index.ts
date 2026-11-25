@@ -97,6 +97,16 @@ export interface RenewedLease {
   readonly ttlDeadline: number;
 }
 
+/**
+ * why: Why renewal ended for good. Both mean "this holder no longer has a lease", and both are told
+ * to `onLeaseGone`; they differ in what a reader should conclude:
+ *
+ * - `renew-rejected`: the daemon answered `UNKNOWN_LEASE`/`FORBIDDEN` -- the lease is gone, or
+ *   was never this principal's. Nothing was lost by this client.
+ * - `renew-failed`: renewal never got an answer it could use before the lease's own deadline
+ *   passed (or the daemon answered with a deadline already behind us). The lease may still be
+ *   alive on the daemon for a moment, but nothing here can keep it, and it will expire.
+ */
 export type LeaseGoneReason = "renew-rejected" | "renew-failed";
 
 export interface LeaseRenewalOptions {
