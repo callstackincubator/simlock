@@ -1,5 +1,6 @@
 import type { Identity } from "../auth/index.js";
 import { withCallersLeaseId } from "./callers-lease-id.js";
+import { DispatchError } from "./dispatch.js";
 import { MAX_FILE_BYTES } from "../lease-files/index.js";
 import type { HttpLeaseFiles } from "../http/app.js";
 
@@ -28,7 +29,7 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
     handle: async (request, identity: Identity, lease, name) => {
       const declared = request.headers.get("content-length");
       if (name !== undefined && declared !== null && Number(declared) > MAX_FILE_BYTES) {
-        return tooLarge(name);
+        throw tooLarge(name);
       }
       const workerLeaseId = lease.workerLeaseId ?? lease.id;
       const relayed = await options.relay(lease.workerId ?? "", {
@@ -45,17 +46,11 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
   };
 }
 
-function tooLarge(name: string): Response {
-  return Response.json(
-    {
-      error: {
-        code: "FILE_TOO_LARGE",
-        message: `File ${name} is over the 2 GiB limit for one file`,
-        name,
-      },
-    },
-    { status: 413 },
-  );
+// why: thrown, not answered, so the HTTP layer writes the 413 through `errorResponse` and its `request` line names the code.
+function tooLarge(name: string): DispatchError {
+  return new DispatchError("FILE_TOO_LARGE", `File ${name} is over the 2 GiB limit for one file`, {
+    name,
+  });
 }
 
 function workerRequest(request: Request, workerLeaseId: string, name: string | undefined): Request {
