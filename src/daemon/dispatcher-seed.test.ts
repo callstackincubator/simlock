@@ -458,6 +458,14 @@ describe("Dispatcher: seed.make", () => {
       options: {},
     },
     {
+      code: "RUNTIME_MISSING",
+      failure: unfixable("iOS 15.0 predates the download floor; install it manually via Xcode"),
+      input: { model: "iPhone 7", platform: "ios" },
+      label: "an iOS default below the download floor, in the lease's own words",
+      message: "iOS 15.0 predates the download floor; install it manually via Xcode",
+      options: {},
+    },
+    {
       code: "FORBIDDEN",
       input: { model: "iPhone 17", platform: "ios" },
       label: "an agent session",

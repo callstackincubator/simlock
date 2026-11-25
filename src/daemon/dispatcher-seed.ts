@@ -70,8 +70,9 @@ function runtimeMissing(
   imageTag: string | undefined,
 ): DispatchError {
   const asked = askedVersion(osVersion);
-  // why: the Android driver never marks a default request downloadable, yet a runtime installed by version fixes it, unless an image tag is what no image fits.
-  const defaultFixable = osVersion === undefined && imageTag === undefined;
+  // why: the Android driver never marks a default request downloadable, yet a runtime installed by version fixes it, unless an image tag is what no image fits; an iOS default refusal that is not downloadable is the download floor, which no install command fixes.
+  const defaultFixable =
+    error.platform === "android" && osVersion === undefined && imageTag === undefined;
   const advice = error.downloadable || asked.kind === "range" || defaultFixable;
   return new DispatchError(
     "RUNTIME_MISSING",
