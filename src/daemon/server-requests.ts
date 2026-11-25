@@ -1,12 +1,64 @@
 import { type DriverRejection, NoDriverError, UnknownPassthroughToolError } from "../core/index.js";
 import { type IpcConnection, type Logger } from "../ports/index.js";
 import { type RequestFrame, type RequestId } from "../daemon-protocol/index.js";
-import { leaseRelease, leaseReleaseRun, relayChannelSchema } from "../contract/index.js";
+import {
+  leaseRelease,
+  leaseReleaseRun,
+  type OperationName,
+  relayChannelSchema,
+} from "../contract/index.js";
 import { type LinkChannel } from "../link/index.js";
 import { type ContractDispatcher, type DispatchSession } from "./dispatcher.js";
 import { type Connection, errorMessage } from "./server-connection.js";
 import { parseInput, ProtocolError } from "./server-hello.js";
 import { ConnectionPushes } from "./server-pushes.js";
+
+// why: Operations the socket hands to the dispatcher unchanged, with the connection's session.
+// `driver.passthrough` is resolution only: the daemon never runs the command. Spawning it here
+// would attach a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
+// that actually has a terminal. ADR 0005 §23: the `worker.*` operations are listed like any
+// other, and what a *given* daemon answers is the dispatcher's business, not the transport's --
+// a worker's dispatcher answers `worker.list` about itself and refuses the rest with
+// `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012).
+const PASSTHROUGH_OPERATIONS: ReadonlySet<OperationName> = new Set<OperationName>([
+  "lease.renew",
+  "lease.cancel",
+  "lease.get",
+  "lease.list",
+  "status.get",
+  "list.get",
+  "catalog.get",
+  "cleanup.run",
+  "doctor.run",
+  "nuke.run",
+  "warm.forget",
+  "baseline.list",
+  "baseline.remove",
+  "baseline.save",
+  "events.replay",
+  "usage.get",
+  "inbox.get",
+  "events.subscribe",
+  "events.unsubscribe",
+  "driver.passthrough",
+  "device.rotate",
+  "relay.cancel",
+  "config.get",
+  "identity.get",
+  "token.create",
+  "token.list",
+  "token.revoke",
+  "worker.list",
+  "worker.drain",
+  "worker.undrain",
+  "worker.remove",
+  "worker.update",
+  "alerts.test",
+  "component.list",
+  "component.remove",
+  "device.add",
+  "device.remove",
+]);
 
 interface ConnectionRequestsOptions {
   readonly dispatcher: ContractDispatcher;
@@ -50,7 +102,7 @@ export class ConnectionRequests {
     return undefined;
   }
 
-  // fallow-ignore-next-line complexity -- one case per request type; the switch is the transport's whole surface.
+  // fallow-ignore-next-line complexity -- one case per request type; the arms that need a connection's own wiring are cases, the rest sit in `PASSTHROUGH_OPERATIONS`.
   async handle(
     connection: Connection,
     frame: RequestFrame,
@@ -123,217 +175,12 @@ export class ConnectionRequests {
           for (const leaseId of releasing) connection.selfInitiatedReleases.delete(leaseId);
         }
       }
-      case "lease.renew":
-        return this.options.dispatcher.dispatch(
-          "lease.renew",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "lease.cancel":
-        return this.options.dispatcher.dispatch(
-          "lease.cancel",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "lease.get":
-        return this.options.dispatcher.dispatch(
-          "lease.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "lease.list":
-        return this.options.dispatcher.dispatch(
-          "lease.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "status.get":
-        return this.options.dispatcher.dispatch(
-          "status.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "list.get":
-        return this.options.dispatcher.dispatch(
-          "list.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "catalog.get":
-        return this.options.dispatcher.dispatch(
-          "catalog.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "cleanup.run":
-        return this.options.dispatcher.dispatch(
-          "cleanup.run",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "doctor.run":
-        return this.options.dispatcher.dispatch(
-          "doctor.run",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "nuke.run":
-        return this.options.dispatcher.dispatch(
-          "nuke.run",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "warm.forget":
-        return this.options.dispatcher.dispatch(
-          "warm.forget",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "baseline.list":
-        return this.options.dispatcher.dispatch(
-          "baseline.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "baseline.remove":
-        return this.options.dispatcher.dispatch(
-          "baseline.remove",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "baseline.save":
-        return this.options.dispatcher.dispatch(
-          "baseline.save",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "events.replay":
-        return this.options.dispatcher.dispatch(
-          "events.replay",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "usage.get":
-        return this.options.dispatcher.dispatch(
-          "usage.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "inbox.get":
-        return this.options.dispatcher.dispatch(
-          "inbox.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "events.subscribe":
-        return this.options.dispatcher.dispatch(
-          "events.subscribe",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "events.unsubscribe":
-        return this.options.dispatcher.dispatch(
-          "events.unsubscribe",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "driver.passthrough":
-        // why: Resolution only: the daemon never runs the command. Spawning it here would attach
-        // a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
-        // that actually has a terminal.
-        return this.options.dispatcher.dispatch(
-          "driver.passthrough",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
       case "device.exec":
-        // why: Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
+        // why: Unlike `driver.passthrough` (in `PASSTHROUGH_OPERATIONS`), this one runs the command here -- so it needs the
         // per-call push wiring `lease.request` needs, and gets it the same way.
         return this.#execDevice(connection, frame.id, frame.payload);
-      case "device.rotate":
-        return this.options.dispatcher.dispatch(
-          "device.rotate",
-          frame.payload,
-          this.#session(connection),
-        );
       case "relay.request":
         return this.#relayRequest(connection, frame.id, frame.payload, relayChannel);
-      case "relay.cancel":
-        return this.options.dispatcher.dispatch(
-          "relay.cancel",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "config.get":
-        return this.options.dispatcher.dispatch(
-          "config.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "identity.get":
-        return this.options.dispatcher.dispatch(
-          "identity.get",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "token.create":
-        return this.options.dispatcher.dispatch(
-          "token.create",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "token.list":
-        return this.options.dispatcher.dispatch(
-          "token.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "token.revoke":
-        return this.options.dispatcher.dispatch(
-          "token.revoke",
-          frame.payload,
-          this.#session(connection),
-        );
-      // why: ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
-      // surface, and what a *given* daemon answers is the dispatcher's business, not the
-      // transport's -- a worker's dispatcher answers `worker.list` about itself and refuses the
-      // rest with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012).
-      case "worker.list":
-        return this.options.dispatcher.dispatch(
-          "worker.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "worker.drain":
-        return this.options.dispatcher.dispatch(
-          "worker.drain",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "worker.undrain":
-        return this.options.dispatcher.dispatch(
-          "worker.undrain",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "worker.remove":
-        return this.options.dispatcher.dispatch(
-          "worker.remove",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "worker.update":
-        return this.options.dispatcher.dispatch(
-          "worker.update",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "alerts.test":
-        return this.options.dispatcher.dispatch(
-          "alerts.test",
-          frame.payload,
-          this.#session(connection),
-        );
       case "component.install":
         return this.#installComponent(connection, frame.id, "component.install", frame.payload);
       case "worker.install-component":
@@ -343,41 +190,24 @@ export class ConnectionRequests {
           "worker.install-component",
           frame.payload,
         );
-      case "component.list":
-        return this.options.dispatcher.dispatch(
-          "component.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "component.remove":
-        return this.options.dispatcher.dispatch(
-          "component.remove",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "device.add":
-        return this.options.dispatcher.dispatch(
-          "device.add",
-          frame.payload,
-          this.#session(connection),
-        );
-      case "device.remove":
-        return this.options.dispatcher.dispatch(
-          "device.remove",
-          frame.payload,
-          this.#session(connection),
-        );
       case "daemon.update":
         return this.options.dispatcher.dispatch(
           "daemon.update",
           frame.payload,
           this.#session(connection),
         );
-      // why: "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
+      // why: "daemon.stop" is deliberately absent from this switch and from `PASSTHROUGH_OPERATIONS`: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`
-      // role there), so it never reaches `#handleRequest`.
+      // role there), so it never reaches `ConnectionRequests.handle`.
       default:
+        if ((PASSTHROUGH_OPERATIONS as ReadonlySet<string>).has(frame.type)) {
+          return this.options.dispatcher.dispatch(
+            frame.type as OperationName,
+            frame.payload,
+            this.#session(connection),
+          );
+        }
         throw new ProtocolError("UNKNOWN_REQUEST", `Unknown request type: ${frame.type}`);
     }
   }

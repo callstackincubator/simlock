@@ -162,7 +162,7 @@ export interface DaemonServerCommonOptions {
   readonly ownerRoutedFacts?: OwnerRoutedFacts & { dispose(): void };
   /**
    * why: #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
-   * suppression (`#handleRequest`'s `lease.release-all` case below). Worker mode reads its own
+   * suppression (`ConnectionRequests.handle`'s `lease.release-all` case below). Worker mode reads its own
    * registry directly and never needs this (`this.#engine?.registry` already answers it); a
    * gateway has no registry, so it supplies its fleet lease index's own entries here instead --
    * without it, a fleet client's own `lease.release-all` would push every one of its own
