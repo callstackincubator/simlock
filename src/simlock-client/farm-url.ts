@@ -10,7 +10,7 @@ export class FarmUrlError extends Error {
   }
 }
 
-// why: the one rule for a farm's URL, shared by `simlock tunnel` and the remote typed client (ADR 0081 §3): https, or http for loopback only, and the origin alone. The scheme is judged before the origin. `name` is how the caller calls the value (`--url`, `` `url` ``), and the result is the farm's origin.
+// why: the one rule for a farm's URL, shared by `simlock tunnel` and the remote typed client (ADR 0081 §3): https, or http for loopback, or for any host when the caller opts in (`insecure.allowed`), and the origin alone. The scheme is judged before the origin. `name` is how the caller calls the value (`--url`, `` `url` ``), `insecure.hint` is the opt-in the caller's refusal names, and the result is the farm's origin.
 export function checkedFarmUrl(
   text: string,
   name: string,

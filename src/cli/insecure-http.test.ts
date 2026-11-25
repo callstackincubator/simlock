@@ -93,6 +93,11 @@ describe("CLI: plain http to a remote farm by opt-in", () => {
         setup: {},
       },
       {
+        argv: ["whoami", "--url", `http://${"a".repeat(2042)}`],
+        message: scheme,
+        setup: {},
+      },
+      {
         argv: ["whoami", "--allow-insecure-http", "--url", "http://gw.example.com/v1"],
         message: origin,
         setup: {},
