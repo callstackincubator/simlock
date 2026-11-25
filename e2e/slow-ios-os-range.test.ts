@@ -7,7 +7,6 @@ import { sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
 
 const execFileAsync = promisify(execFile);
 
-/** The installed, available iOS runtimes' versions, as real simctl reports them. */
 async function installedRuntimes(): Promise<string[]> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"]);
   const parsed = JSON.parse(stdout) as {
@@ -18,12 +17,11 @@ async function installedRuntimes(): Promise<string[]> {
     .map((runtime) => runtime.version);
 }
 
-/** The major number of a dotted version. */
 function major(version: string): number {
   return Number.parseInt(version, 10);
 }
 
-// This lane needs the real simctl toolchain, hence darwin-only. It never installs a runtime:
+// why: This lane needs the real simctl toolchain, hence darwin-only. It never installs a runtime:
 // the RUNTIME_MISSING lines below run with --allow-download and must still not download.
 describe.skipIf(process.platform !== "darwin")(
   "iOS --os ranges (real simctl)",

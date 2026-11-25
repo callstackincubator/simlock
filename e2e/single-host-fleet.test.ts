@@ -5,13 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
-/**
- * A worker answers the fleet operations as a fleet of one: `worker list` and `GET /v1/workers`
- * show the host itself, and the operations that act on a gateway's workers refuse with
- * `UNSUPPORTED_IN_WORKER_MODE` rather than `UNKNOWN_REQUEST` or `404`.
- */
-
-/** The id this host presents to a gateway, as its own `instance.json` stores it. */
 async function instanceId(env: TestEnv): Promise<string> {
   const stored = JSON.parse(await readFile(join(env.home, "instance.json"), "utf8")) as {
     instanceId: string;
@@ -26,7 +19,6 @@ interface HttpHost {
   readonly agentAuth: { readonly authorization: string };
 }
 
-/** A single host with HTTP on, an operator token and an agent token, once it answers. */
 async function httpHost(): Promise<HttpHost> {
   const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },

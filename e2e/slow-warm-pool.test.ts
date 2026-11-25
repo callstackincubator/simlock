@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
  * Run only through `scripts/slow-e2e.sh e2e/slow-warm-pool.test.ts`, never in CI.
  */
 
-/** The ABI an emulator runs natively on this host; an image of the other ABI is listed but cannot boot. */
+/** why: The ABI an emulator runs natively on this host; an image of the other ABI is listed but cannot boot. */
 const HOST_ABI = process.arch === "arm64" ? "arm64-v8a" : "x86_64";
 
 type Platform = "ios" | "android";
@@ -68,7 +68,7 @@ const LEASE_TIMEOUT = 6 * MINUTE;
 const RELEASE_TIMEOUT = 2 * MINUTE;
 /** why: the driver gives an emulator 3 min to exit before it kills it, and only then deletes it. */
 const DELETED_TIMEOUT = 5 * MINUTE;
-/** Every call that asks the machine or the daemon a question (`simctl`, `adb`, the CLI), so one that never answers names itself. */
+/** why: Every call that asks the machine or the daemon a question (`simctl`, `adb`, the CLI), so one that never answers names itself. */
 const QUERY_TIMEOUT = MINUTE;
 /**
  * why: the step budgets of the pool-off test sum to 61.75 min, and so do the no-target test's.
@@ -78,13 +78,11 @@ const QUERY_TIMEOUT = MINUTE;
  * nothing.
  */
 const COLD_TEST_TIMEOUT = 80 * MINUTE;
-/** The pool-off test's first step, which brings the daemon up and reads its catalog. */
 const DAEMON_START_BUDGET = 5 * MINUTE;
 const READY_TIMEOUT = 8 * MINUTE;
-/** How long a shut-down device is watched: longer than one pool tick (30s, WARM_POOL_TICK_MS), so a pool still on would have booted it. */
+/** why: How long a shut-down device is watched: longer than one pool tick (30s, WARM_POOL_TICK_MS), so a pool still on would have booted it. */
 const HOLD = 45 * SECOND;
 
-/** The installed iOS runtimes; empty when `xcrun simctl` is missing or unusable, so the lane skips. */
 async function installedIosRuntimes(): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"], {
@@ -97,7 +95,7 @@ async function installedIosRuntimes(): Promise<string[]> {
       .filter((runtime) => runtime.isAvailable && (runtime.platform ?? "iOS") === "iOS")
       .map((runtime) => runtime.version);
   } catch (error: unknown) {
-    // A timed-out simctl is a hang to report, not "no iOS runtime installed".
+    // why: A timed-out simctl is a hang to report, not "no iOS runtime installed".
     if ((error as { killed?: boolean }).killed === true) throw error;
     return [];
   }
@@ -117,7 +115,6 @@ function installedAndroidImages(): boolean {
   }
 }
 
-/** The reason this machine cannot run the lane, naming the missing platform; undefined when it can. */
 async function missingPlatform(): Promise<string | undefined> {
   if (process.platform !== "darwin" || (await installedIosRuntimes()).length === 0) {
     return "iOS is missing: no macOS host with an installed iOS runtime";
@@ -128,7 +125,7 @@ async function missingPlatform(): Promise<string | undefined> {
   return undefined;
 }
 
-/** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
+/** why: Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
 async function onlineEmulators(adbServerPort: number): Promise<string[]> {
   const { stdout } = await runSdkTool(
     requireAndroidSdk().adb,
@@ -137,7 +134,7 @@ async function onlineEmulators(adbServerPort: number): Promise<string[]> {
       timeout: QUERY_TIMEOUT,
     },
   ).catch((error: unknown) => {
-    // A timed-out adb is a hang to report, not "no emulator online".
+    // why: A timed-out adb is a hang to report, not "no emulator online".
     if ((error as { killed?: boolean }).killed === true) throw error;
     return { stdout: "" };
   });
@@ -153,7 +150,6 @@ function newest(versions: readonly string[]): string | undefined {
   return [...versions].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0];
 }
 
-/** The newest installed runtime the phone-class default model pairs with, and that model. */
 function targetFor(catalog: CatalogPlatform, platform: Platform): Target {
   const runnable =
     platform === "android"
@@ -226,12 +222,10 @@ async function warmDaemon(
   return { adbServerPort, deviceSet: iosDeviceSet(env.home), env, targets };
 }
 
-/** The business-event history, bounded like every other question put to the daemon. */
 function recordedEvents(env: TestEnv): Promise<RecordedEvent[]> {
   return env.events(undefined, QUERY_TIMEOUT);
 }
 
-/** The two lines the verifier reads in the log: each device.ready event, with its time. */
 function logDeviceReady(ready: readonly RecordedEvent[]): void {
   for (const entry of ready) {
     console.info(
@@ -246,7 +240,6 @@ async function devices(env: TestEnv): Promise<Row[]> {
   return listed.json as Row[];
 }
 
-/** Waits until the device with this driver id is in `state`, naming the last rows seen on timeout. */
 async function untilState(
   env: TestEnv,
   driverDeviceId: string,
@@ -269,7 +262,7 @@ async function untilState(
 }
 
 /**
- * Runs `check` (which throws on a violation) at every poll for `duration`, and fails on the first
+ * why: Runs `check` (which throws on a violation) at every poll for `duration`, and fails on the first
  * poll that throws: waitFor swallows a throwing predicate and keeps polling, so the violation is
  * kept here, the predicate returns true so the loop stops at once, and the violation is rethrown
  * straight after, without waiting out the window.
@@ -348,7 +341,6 @@ async function untilEachPlatformHasReady(env: TestEnv): Promise<void> {
   );
 }
 
-/** Per platform, exactly one device, and it is ready. */
 function expectOneReadyPerPlatform(rows: readonly Row[]): void {
   for (const platform of ["ios", "android"] as const) {
     expect(
@@ -358,7 +350,6 @@ function expectOneReadyPerPlatform(rows: readonly Row[]): void {
   }
 }
 
-/** Waits for one ready device per platform, with no lease asked for yet. */
 async function untilBothReady(env: TestEnv): Promise<Row[]> {
   let last: Row[] = [];
   await waitFor(
@@ -406,7 +397,6 @@ async function release(env: TestEnv, grant: Grant): Promise<void> {
   expect(released.code, `release failed: ${released.stderr}`).toBe(0);
 }
 
-/** The `booting` progress lines a lease wrote to stderr; one per boot the lease waited on. */
 function bootingLines(stderr: string): string[] {
   return stderr.split("\n").filter((line) => {
     try {
@@ -441,7 +431,7 @@ async function expectGrantedWarm(
 }
 
 /**
- * Runs one named step of a long test with its own budget. It logs when the step starts and ends,
+ * why: Runs one named step of a long test with its own budget. It logs when the step starts and ends,
  * so the slow-lane log shows where a run is, and it fails with the step's name when the budget
  * runs out: a hang names itself long before the test's own timeout, which names nothing.
  */
@@ -465,7 +455,7 @@ async function step<T>(name: string, budget: number, run: () => Promise<T>): Pro
   }
 }
 
-/** On a failure, what the daemon last said and what it held: the log is all that is left of a torn-down home. */
+/** why: On a failure, what the daemon last said and what it held: the log is all that is left of a torn-down home. */
 async function diagnose(env: TestEnv): Promise<void> {
   try {
     const log = await readFile(env.logPath, "utf8");
@@ -515,7 +505,6 @@ function expectOnlyReleasedDevices(
   }
 }
 
-/** Both second leases hold their device, and the simulator and the emulator really are running. */
 async function expectSecondBootsRunning(
   env: TestEnv,
   deviceSet: string,
@@ -559,7 +548,6 @@ describe(
           const rows = await untilBothReady(env);
 
           expectOneReadyPerPlatform(rows);
-          // The end state holds: no extra device starts, and none of the two leaves ready, across a pool tick.
           await holds("one ready device per platform", HOLD, async () => {
             expectOneReadyPerPlatform(await devices(env));
           });
@@ -626,13 +614,12 @@ describe(
         // creates, and once released it is deleted, so the next lease has to create another.
         let lane: Lane | undefined;
         try {
-          // Inside the try and a step, so a hung setup names itself. `lane` is unset then, so
+          // why: Inside the try and a step, so a hung setup names itself. `lane` is unset then, so
           // `diagnose` and `nuke` are skipped; they run once `warmDaemon` has returned.
           lane = await step("start the daemon with the pool off", DAEMON_START_BUDGET, () =>
             warmDaemon({ enabled: false }),
           );
           const { adbServerPort, deviceSet, env, targets } = lane;
-          // Each first lease creates its device and boots it from nothing.
           const first = {
             android: await step(
               "first lease: create and boot the emulator",

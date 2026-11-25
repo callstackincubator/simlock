@@ -15,7 +15,7 @@ import { DEVICE_READY_MS, waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
 
-/** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
+/** why: Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
 async function adbDevices(sdk: AndroidSdkPaths, serverPort: number): Promise<string[]> {
   const { stdout } = await runSdkTool(sdk.adb, ["-P", String(serverPort), "devices"]).catch(() => ({
     stdout: "",
@@ -138,7 +138,6 @@ function checkCatalog(sdk: AndroidSdkPaths, output: AndroidCatalogOutput): void 
     throw new Error("simlock catalog reported no android platform -- SDK discovery failed");
   }
   expect(android.models.length).toBeGreaterThan(0);
-  // The class comes from the device profile's tag, read off this host's avdmanager.
   expect(android.modelClasses["Pixel 8"]).toBe("phone");
   expect(android.modelClasses["Television (1080p)"]).toBe("tv");
 
@@ -155,7 +154,7 @@ function checkCatalog(sdk: AndroidSdkPaths, output: AndroidCatalogOutput): void 
   expect(android.modelAliases["Pixel 9"]).toEqual(["pixel_9"]);
 }
 
-// Real emulator boots are slow and this SDK layout is host-specific, so this lane is
+// why: Real emulator boots are slow and this SDK layout is host-specific, so this lane is
 // gated on an actually-discoverable Android SDK rather than just `process.platform`.
 describe.skipIf(ANDROID_SDK === undefined)(
   "Android smoke (real emulator/adb)",
@@ -205,13 +204,13 @@ describe.skipIf(ANDROID_SDK === undefined)(
           const avdName = grant.device.driverDeviceId;
           const avdFolder = join(env.home, "devices", "android", avdName);
 
-          // Without this, a holder's `adb` talks to the shared server, which by design
+          // why: Without this, a holder's `adb` talks to the shared server, which by design
           // cannot see a Simlock emulator at all (ADR 0001, decision 7).
           expect(grant.environment).toEqual({
             ANDROID_ADB_SERVER_PORT: String(adbServerPort),
           });
 
-          // `simlock adb` is the same scoping, made for the caller, and the refusals are
+          // why: `simlock adb` is the same scoping, made for the caller, and the refusals are
           // what keep the wrapper from handing back the capability containment removed.
           const wrapped = await env.cli(["adb", "devices"]);
           expect(wrapped.code, `simlock adb failed: ${wrapped.stderr}`).toBe(0);
@@ -232,7 +231,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
           expect(refused.code, "simlock adb kill-server must be refused, not run").toBe(2);
           expect(refused.error?.code).toBe("USAGE");
 
-          // The adb serial (e.g. "emulator-5554") is a driver-internal detail simlock
+          // why: The adb serial (e.g. "emulator-5554") is a driver-internal detail simlock
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --
           // the grant names simlock's own AVD, not the adb serial, so this only
           // asserts that *an* emulator is actually online, not which one by serial.
@@ -242,7 +241,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
             "expected at least one booted emulator visible to Simlock's own adb server",
           ).toBeGreaterThan(0);
 
-          // Ownership is root membership, not a name: the AVD must be inside the root this
+          // why: Ownership is root membership, not a name: the AVD must be inside the root this
           // env's Simlock owns, and must not be in the user's own AVD home at all.
           expect(
             existsSync(join(avdFolder, "simlock.avd")),

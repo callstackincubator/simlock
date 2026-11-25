@@ -138,7 +138,6 @@ describe("lease lifecycle across both frontends", () => {
         ?.classDefaults;
     };
 
-    // The driver's list alone: iPhone 17 is not listed, so iPhone 16 is the first that counts.
     expect(await defaultsWith(undefined)).toEqual({ phone: "iPhone 16", tablet: "iPad Pro" });
     expect(await defaultsWith("iPhone 15")).toEqual({ phone: "iPhone 15", tablet: "iPad Pro" });
     expect(await defaultsWith("iPhone 99")).toEqual({ phone: "iPhone 16", tablet: "iPad Pro" });
@@ -187,7 +186,6 @@ describe("lease lifecycle across both frontends", () => {
       return result;
     }
 
-    /** The grant a `simlock lease` printed, after proving it exited 0. */
     function granted(result: { code: number | null; stderr: string; json: unknown }): Granted {
       expect(result.code, result.stderr).toBe(0);
       return result.json as Granted;

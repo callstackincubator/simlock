@@ -15,14 +15,13 @@ import { waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
 
-/** The machine's own device set -- the one Xcode shows. Simlock's devices must never be in it. */
 async function defaultSetDevices(): Promise<SimctlDevice[]> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "-j"]);
   const parsed = JSON.parse(stdout) as { devices: Record<string, SimctlDevice[]> };
   return Object.values(parsed.devices).flat();
 }
 
-/** Runtimes are global: a custom set lists the same ones the default set does. */
+/** why: Runtimes are global: a custom set lists the same ones the default set does. */
 async function simctlRuntimes(): Promise<string[]> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"]);
   const parsed = JSON.parse(stdout) as {
@@ -31,14 +30,12 @@ async function simctlRuntimes(): Promise<string[]> {
   return parsed.runtimes.filter((runtime) => runtime.isAvailable).map((runtime) => runtime.version);
 }
 
-/** Every runtime the catalog lists is one real simctl reports as installed. */
 function expectRuntimesAgree(reported: readonly string[] | undefined, available: string[]): void {
   for (const runtime of reported ?? []) {
     expect(available, "simlock catalog's runtimes must agree with real simctl").toContain(runtime);
   }
 }
 
-/** The catalog's default phone model, read through the CLI as the daemon currently reports it. */
 async function iosPhoneDefault(env: TestEnv): Promise<string | undefined> {
   const reported = await env.cli(["catalog", "--json", "--platform", "ios"]);
   expect(reported.code, `catalog failed: ${reported.stderr}`).toBe(0);
@@ -48,10 +45,6 @@ async function iosPhoneDefault(env: TestEnv): Promise<string | undefined> {
   return platforms.find((platform) => platform.platform === "ios")?.classDefaults["phone"];
 }
 
-/**
- * `ios.defaultModels` against a real catalog: a configured name the catalog lists is the shown
- * default, and one it does not list falls through to the built-in list.
- */
 async function expectConfiguredPhoneDefaults(
   env: TestEnv,
   models: readonly string[] | undefined,
@@ -70,7 +63,7 @@ async function expectConfiguredPhoneDefaults(
   );
 }
 
-// This lane needs the real simctl toolchain, hence darwin-only and gated on an
+// why: This lane needs the real simctl toolchain, hence darwin-only and gated on an
 // installed runtime -- it never installs one itself (no --allow-download).
 /**
  * `simlock simctl` against a real simctl, which is the only way to know the wrapper
@@ -122,10 +115,8 @@ describe.skipIf(process.platform !== "darwin")(
           iosCatalog?.models.length ?? 0,
           "simlock catalog reported no iOS models",
         ).toBeGreaterThan(0);
-        // The class comes from the device type's product family, read off this host's simctl.
         expect(iosCatalog?.modelClasses["iPhone 17"]).toBe("phone");
         expect(iosCatalog?.modelClasses["Apple Watch Series 11 (46mm)"]).toBe("watch");
-        // With no `ios.defaultModels`, the built-in list's first listed phone is the default.
         expect(iosCatalog?.classDefaults["phone"]).toBe("iPhone 17");
         await expectConfiguredPhoneDefaults(env, iosCatalog?.models);
         expectRuntimesAgree(iosCatalog?.runtimes, availableRuntimes);
@@ -141,10 +132,10 @@ describe.skipIf(process.platform !== "darwin")(
           environment: Record<string, string>;
           lease: { id: string };
         };
-        // On iOS the driver's device id is the simulator's UDID.
+        // why: On iOS the driver's device id is the simulator's UDID.
         const udid = grant.device.driverDeviceId;
 
-        // The grant has to say how to reach the device, because nothing else does: the
+        // why: The grant has to say how to reach the device, because nothing else does: the
         // UDID below resolves to nothing without this path (ADR 0001, decision 7).
         expect(grant.environment).toEqual({ SIMLOCK_IOS_DEVICE_SET: deviceSet });
 
@@ -157,7 +148,7 @@ describe.skipIf(process.platform !== "darwin")(
           `simctl --set ${deviceSet} does not know about udid ${udid}`,
         ).toBeDefined();
         expect(bootedDevice?.state).toBe("Booted");
-        // The naming is a label with no authority behind it (safety rule 8) -- what
+        // why: The naming is a label with no authority behind it (safety rule 8) -- what
         // proves ownership is the set the device was just found in -- but it is still
         // what a human reads in the simulator window title, so it stays checked.
         expect(
@@ -180,9 +171,6 @@ describe.skipIf(process.platform !== "darwin")(
         expect(safariData.code, `get_app_container failed: ${safariData.stderr}`).toBe(0);
         expect(safariData.stdout.trim()).toContain(`/${udid}/`);
 
-        // Provenance: both marks exist with the same token. `doctor` is the
-        // documented way to observe this -- a foreign-provenance-change finding
-        // for this device would mean the marks disagree or are missing.
         const doctorReport = await env.cli(["doctor"]);
         expect(doctorReport.code).toBe(0);
         const findings = (doctorReport.json as { findings: { kind: string; deviceId?: string }[] })

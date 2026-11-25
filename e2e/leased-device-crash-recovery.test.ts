@@ -68,7 +68,7 @@ describe("leased device crash recovery", () => {
     const grant = await grantOf(held);
     await waitForLeaseCount(env, 1);
 
-    // Simulate the Activity-Monitor kill: the simulator process is gone but the
+    // why: Simulate the Activity-Monitor kill: the simulator process is gone but the
     // device still exists. `managedReality` overrides the *whole* listManaged()
     // result, so every device that should still be visible must be listed here --
     // an omitted device reads as "missing", which is the unrecoverable branch, not
@@ -90,7 +90,7 @@ describe("leased device crash recovery", () => {
       timeout: 15_000,
     });
 
-    // Determinism note: while `managedReality` still says "stopped", every tick
+    // why: Determinism note: while `managedReality` still says "stopped", every tick
     // re-detects the same crash -- a scripted reality does not change just because
     // the fake driver rebooted the device -- so several device_unhealthy /
     // device_recovered pairs may already have landed. Restore "running" now that
@@ -119,8 +119,6 @@ describe("leased device crash recovery", () => {
 
     await env.expectEvents(["device.crash-detected", "device.recovered"]);
 
-    // The device really was rebooted, not just reported: a second makeReady call
-    // for this udid (the first was the original boot at grant time).
     const calls = await env.driverLog.calls();
     const makeReadyCallsForDevice = calls.filter(
       (call) =>
@@ -132,7 +130,6 @@ describe("leased device crash recovery", () => {
       `expected at least 2 makeReady calls for ${grant.device.driverDeviceId}, saw ${String(makeReadyCallsForDevice.length)}`,
     ).toBeGreaterThan(1);
 
-    // The whole point of the feature: the lease survives recovery.
     await waitForLeaseCount(env, 1);
     const leases = (await env.cli(["list", "--leases"])).json;
     expect(leases).toEqual(
@@ -148,7 +145,7 @@ describe("leased device crash recovery", () => {
     await held.waitForExit(15_000).catch(() => undefined);
   });
 
-  // Regression guard: writing this suite found that the held CLI never learned its
+  // why: Regression guard: writing this suite found that the held CLI never learned its
   // lease had died. The daemon has always pushed `lease-lost` for a `device-lost`
   // release -- the same push MCP's `#handleLeaseLost` reacts to -- but `runLease`'s
   // onPush handler ignored that kind, so the held process neither reported the loss
@@ -181,8 +178,6 @@ describe("leased device crash recovery", () => {
       },
     });
 
-    // Every reboot attempt fails and there is only one attempt to give, so recovery gives
-    // up and the lease ends with the device, not stuck leased to a dead device.
     const recorded = await env.expectEvents(["device.recovery-failed", "lease.released"]);
     expect(
       recorded.find((event) => event.event === "device.recovery-failed")?.payload,
@@ -196,14 +191,11 @@ describe("leased device crash recovery", () => {
     ).toMatchObject({ leaseId: grant.lease.id, reason: "device-lost" });
     await waitForLeaseCount(env, 0);
 
-    // Expected: the held process reports the lost lease on stderr (mirroring
-    // device_unhealthy/device_recovered) and exits on its own. Actual: it does
-    // neither -- this waitFor times out and the process is still alive afterwards.
     await waitFor(() => healthLines(held).some((line) => line.push === "lease-lost"), {
       label: "held CLI reports the lease ending",
       timeout: 5_000,
     });
-    // `deviceId` here is the registry device id (what `simlock list --devices` calls
+    // why: `deviceId` here is the registry device id (what `simlock list --devices` calls
     // `id`), not the driver's `driverDeviceId` the grant returns on stdout -- these
     // pushes carry the same identifier the event bus does.
     const lost = healthLines(held).find((line) => line.push === "lease-lost");
@@ -213,7 +205,7 @@ describe("leased device crash recovery", () => {
       reason: "device-lost",
     });
 
-    // It must also stop holding a lease it no longer has, with an exit code that
+    // why: It must also stop holding a lease it no longer has, with an exit code that
     // distinguishes "the daemon took it" from a holder ending its own lease.
     const exit = await held.waitForExit(5_000);
     expect(exit.code).toBe(14);

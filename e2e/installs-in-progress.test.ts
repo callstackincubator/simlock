@@ -13,14 +13,12 @@ interface WorkerView {
   readonly installs?: readonly Install[];
 }
 
-/** The installs a worker's own `simlock status --json` lists. */
 async function workerInstalls(worker: TestEnv): Promise<readonly Install[]> {
   const status = await worker.cli(["status", "--json"]);
   expect(status.code, status.stderr).toBe(0);
   return (status.json as { installs: readonly Install[] }).installs;
 }
 
-/** The installs the gateway's `simlock worker list --json` shows on its only worker's view. */
 async function viewInstalls(gateway: TestEnv): Promise<readonly Install[] | undefined> {
   const listed = await gateway.cli(["worker", "list", "--json"]);
   expect(listed.code, listed.stderr).toBe(0);
@@ -43,7 +41,7 @@ describe("installs in progress", () => {
         ios: {
           availableOsVersions: ["18.4"],
           knownModels: ["iPhone 16"],
-          // Held open long enough for both CLIs to look at it.
+          // why: Held open long enough for both CLIs to look at it.
           latencyMs: { installComponent: 8_000 },
         },
       },
@@ -59,7 +57,7 @@ describe("installs in progress", () => {
     expect(await workerInstalls(worker)).toEqual([]);
     expect(await viewInstalls(gateway)).toEqual([]);
 
-    // Through the worker's own socket: a gateway never asks a worker to download.
+    // why: Through the worker's own socket: a gateway never asks a worker to download.
     const lease = worker.cliBackground([
       "lease",
       "--platform",

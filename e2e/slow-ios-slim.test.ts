@@ -13,14 +13,12 @@ import {
   sweepStaleDeviceSets,
 } from "./helpers/ios-device-set.js";
 
-/** The fields of a `simlock lease --detach` grant this lane reads, flattened. */
 interface LeaseGrant {
   readonly lease: string;
   readonly udid: string;
   readonly mode: "slim" | "full";
   /** why: the categories the grant says the lease kept running; absent for a lease with no `--except`. */
   readonly except?: readonly string[];
-  /** The device set the grant says the device lives in; no simctl call reaches it without. */
   readonly deviceSet: string;
 }
 
@@ -31,24 +29,14 @@ interface CatalogPlatform {
   readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
 }
 
-/**
- * Every device set a test in this file handed to `withDaemon`, so the last test can check that
- * none of them still runs a simulator once teardown has emptied it.
- */
 const usedDeviceSets: string[] = [];
 
-/** Starts the real-driver daemon for one test and records its device set. */
 async function withRealDaemon(configOverrides: Record<string, unknown> = {}): Promise<TestEnv> {
   const env = await withDaemon({ driver: "real", configOverrides, keepSeeds: true });
   usedDeviceSets.push(iosDeviceSet(env.home));
   return env;
 }
 
-/**
- * Parses `xcrun simctl --set <set> spawn <udid> launchctl print-disabled system`, which prints lines like
- * `		"com.apple.foo" => disabled` / `=> enabled` (verified live on this machine, iOS 26.4.1).
- * Returns only the labels currently disabled.
- */
 async function printDisabled(grant: LeaseGrant): Promise<Set<string>> {
   const { stdout } = await simctlInSet(grant.deviceSet, [
     "spawn",
@@ -67,7 +55,7 @@ async function printDisabled(grant: LeaseGrant): Promise<Set<string>> {
 }
 
 /**
- * Count of launchd jobs the simulator's own launchd is managing, via `launchctl list` run
+ * why: Count of launchd jobs the simulator's own launchd is managing, via `launchctl list` run
  * *inside* the simulator through `simctl spawn` (not `ps` on the host, which would count host
  * processes across every booted simulator indiscriminately). One line per job plus a header
  * line; good enough as a relative, before/after comparison -- this test never asserts an
@@ -94,7 +82,7 @@ async function catalogModelAndOs(env: TestEnv): Promise<{ model: string; os: str
   const platforms = (catalog.json as { platforms: CatalogPlatform[] }).platforms;
   const iosCatalog = platforms.find((platform) => platform.platform === "ios");
   expect(iosCatalog, "simlock catalog reported no iOS platform").toBeDefined();
-  // A listed model and a listed runtime need not pair, so take a pair the catalog lists.
+  // why: A listed model and a listed runtime need not pair, so take a pair the catalog lists.
   const model = iosCatalog?.models.find(
     (name) => (iosCatalog.modelRuntimes[name]?.length ?? 0) > 0,
   );
@@ -163,10 +151,6 @@ async function leaseDetached(
   };
 }
 
-/**
- * The daemon's own account of every slim it skipped. A grant that comes back `full` where
- * `slim` was expected says nothing about why; these lines do, so they go in the message.
- */
 async function slimSkips(env: TestEnv): Promise<string> {
   const log = await readFile(env.logPath, "utf8").catch(() => "");
   const skips = log.split("\n").filter((line) => line.includes("Skipped iOS device slim"));
@@ -180,7 +164,7 @@ async function expectSlim(env: TestEnv, mode: LeaseGrant["mode"], message: strin
 const ALL_LABELS = new Set(labelsFor(SLIM_CATEGORIES));
 const ALL_CATEGORY_NAMES = new Set(SLIM_CATEGORIES.map((category) => category.name));
 
-// This lane needs the real simctl toolchain and real launchd behaviour inside the simulator,
+// why: This lane needs the real simctl toolchain and real launchd behaviour inside the simulator,
 // hence darwin-only. Never installs a runtime itself (no --allow-download).
 describe.skipIf(process.platform !== "darwin")(
   "iOS slim mode (real simctl)",
@@ -226,7 +210,7 @@ describe.skipIf(process.platform !== "darwin")(
             JSON.stringify(slimmedFact.unknownLabels),
         );
 
-        // The slim device stays leased, so the full one is a second device by construction.
+        // why: The slim device stays leased, so the full one is a second device by construction.
         const fullStart = Date.now();
         const fullGrant = await leaseDetached(env, model, os, "full-beside", ["--mode", "full"]);
         const fullDurationMs = Date.now() - fullStart;
@@ -238,7 +222,6 @@ describe.skipIf(process.platform !== "darwin")(
           `a full device must have none of the slim labels disabled, found: ${fullOverlap.join(", ")}`,
         ).toEqual([]);
 
-        // The reason slim mode exists: fewer jobs running inside the simulator.
         const slimProcessCount = await processCount(slimGrant);
         const fullProcessCount = await processCount(fullGrant);
         const reduction = 1 - slimProcessCount / fullProcessCount;
@@ -302,8 +285,6 @@ describe.skipIf(process.platform !== "darwin")(
           (event) => event.event === "device.slimmed",
         ).length;
 
-        // Pull the device out from under simlock, exactly as leased-device-crash-recovery.test.ts
-        // does with the fake driver -- here with the real simctl toolchain.
         await simctlInSet(grant.deviceSet, ["shutdown", grant.udid]);
 
         await env.expectEvents(["device.crash-detected", "device.recovered"], {

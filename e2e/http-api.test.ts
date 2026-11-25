@@ -64,8 +64,6 @@ describe("HTTP API", () => {
     expect(healthz.status).toBe(200);
     expect(await healthz.json()).toEqual({ ok: true });
 
-    // 3. `GET /v1/catalog` requires auth; unauthenticated and wrong-token requests
-    //    both come back 401 UNAUTHENTICATED.
     const catalogNoAuth = await fetch(`${baseUrl}/v1/catalog`);
     expect(catalogNoAuth.status).toBe(401);
     expect(((await catalogNoAuth.json()) as { error: { code: string } }).error.code).toBe(
@@ -88,7 +86,7 @@ describe("HTTP API", () => {
       ]),
     });
 
-    // 4. An admin-only route rejects an agent token with 403, not 401 -- the token
+    // why: 4. An admin-only route rejects an agent token with 403, not 401 -- the token
     //    is valid, it just doesn't carry the role this route requires. `GET /v1/devices`
     //    dispatches `list.get`, which the contract declares `role: "admin"` (ADR 0003 §3);
     //    `GET /v1/leases` dispatches `lease.list`, which is `role: "agent"` and so is not a
@@ -99,8 +97,6 @@ describe("HTTP API", () => {
       "FORBIDDEN",
     );
 
-    // 5. `POST /v1/lease-requests` enqueues a request resource; poll it (via the `wait`
-    //    long-poll param) until it reaches its terminal `granted` state.
     const created = await fetch(`${baseUrl}/v1/lease-requests`, {
       method: "POST",
       headers: { ...agentAuth, "content-type": "application/json" },
@@ -133,9 +129,6 @@ describe("HTTP API", () => {
       dataPlane: null,
     });
 
-    // 6. A second lease request from the same requester (same token) while the first
-    //    is still held is rejected -- 409, naming the existing lease id -- rather than
-    //    queueing a second device for one agent.
     const secondRequest = await fetch(`${baseUrl}/v1/lease-requests`, {
       method: "POST",
       headers: { ...agentAuth, "content-type": "application/json" },
@@ -148,7 +141,6 @@ describe("HTTP API", () => {
     expect(secondRequestError.error.code).toBe("REQUESTER_ALREADY_LEASED");
     expect(secondRequestError.error.existingLeaseId).toBe(lease.id);
 
-    // 7. Renew resets the deadline; the fetched lease also survives a `GET` re-fetch.
     const refetched = await fetch(`${baseUrl}/v1/leases/${lease.id}`, { headers: agentAuth });
     expect(refetched.status).toBe(200);
     expect(((await refetched.json()) as { lease: LeasePayload }).lease.id).toBe(lease.id);
@@ -167,7 +159,6 @@ describe("HTTP API", () => {
     expect(renewedBody).toMatchObject({ leaseId: lease.id, notices: [] });
     expect(renewedBody.expiresAt).not.toBe(lease.expiresAt);
 
-    // 8. Release: 202, purge continues in the background (existing release semantics).
     const released = await fetch(`${baseUrl}/v1/leases/${lease.id}`, {
       method: "DELETE",
       headers: agentAuth,
@@ -216,7 +207,7 @@ describe("HTTP API", () => {
       error: { code: "BAD_REQUEST" },
     });
 
-    // The same request with `allowDownload: true`, which settles its own `201` synchronously
+    // why: The same request with `allowDownload: true`, which settles its own `201` synchronously
     // rather than waiting on the dispatch -- the case that used to slip past the cap and fail
     // later on the request resource instead.
     const overCapWithDownload = await postJson("/v1/lease-requests", {
@@ -231,10 +222,8 @@ describe("HTTP API", () => {
       error: { code: "BAD_REQUEST" },
     });
 
-    // Nothing was admitted by either refusal.
     expect((await env.cli(["list", "--leases"])).json).toEqual([]);
 
-    // At the cap it is granted, and the width it asked for is what the lease carries.
     const granted = await postJson("/v1/lease-requests", {
       platform: "ios",
       device: "iPhone 16",
@@ -259,14 +248,12 @@ describe("HTTP API", () => {
     );
     expect(lease?.ttlMs).toBe(120_000);
 
-    // And the renew route answers the cap the same way.
     const renewOverCap = await postJson(`/v1/leases/${lease?.id ?? ""}/renew`, { ttlMs: 120_001 });
     expect(renewOverCap.status).toBe(400);
     expect((await renewOverCap.json()) as { error: { code: string } }).toMatchObject({
       error: { code: "BAD_REQUEST" },
     });
 
-    // A body-less renew still re-applies the lease's own width.
     const renewed = await fetch(`${baseUrl}/v1/leases/${lease?.id ?? ""}/renew`, {
       method: "POST",
       headers: agentAuth,
@@ -502,7 +489,7 @@ describe("HTTP API", () => {
 
     const first = await post(tokens[0] ?? "");
     expect(first.status).toBe(201);
-    // The 201 comes with the first progress push; wait for the grant so an active lease holds the ID.
+    // why: The 201 comes with the first progress push; wait for the grant so an active lease holds the ID.
     const firstId = ((await first.json()) as { request: { id: string } }).request.id;
     await waitFor(
       async () => {

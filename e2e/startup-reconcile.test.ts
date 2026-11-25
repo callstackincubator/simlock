@@ -55,7 +55,6 @@ async function lease(env: TestEnv, platform: Platform, ttl?: string): Promise<Le
   };
 }
 
-/** What the fake driver reports a platform's devices as, whatever the previous daemon knew. */
 async function script(
   env: TestEnv,
   platform: Platform,

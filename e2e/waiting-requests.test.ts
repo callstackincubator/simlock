@@ -2,19 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
-/**
- * `simlock list --requests`: every request waiting for a device, one line each, on a single host
- * and on a gateway, where a request in a worker's own queue names that worker.
- */
-
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
-/** One iOS device and no more, so a second request waits. */
 const ONE_DEVICE = { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 };
 const ONE_RUNNING = { ios: { maxDevices: 2, maxRunning: 1 }, maxRunning: 2 };
 
 /**
- * Waits until `simlock list --requests` prints exactly one line per pattern, each matching its
+ * why: Waits until `simlock list --requests` prints exactly one line per pattern, each matching its
  * own. A request that has just arrived is listed as `starting` until the daemon has placed it,
  * so a line is read again until it settles.
  */
@@ -91,8 +85,6 @@ describe("simlock list --requests", () => {
       { label: "the worker joined the gateway and its catalog arrived", timeout: 30_000 },
     );
 
-    // A local agent on the worker takes its one device, and a second one waits in the worker's
-    // own queue. A fleet request then waits in the gateway's.
     expect((await worker.cli([...LEASE, "--agent-id", "local-a", "--detach"])).code).toBe(0);
     worker.cliBackground([...LEASE, "--agent-id", "local-b"]);
     await untilListed(worker, [
