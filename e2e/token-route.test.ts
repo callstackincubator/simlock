@@ -28,7 +28,6 @@ interface HttpDaemon {
   readonly baseUrl: string;
 }
 
-/** A daemon in `mode` with HTTP on, once its listener answers. */
 async function httpDaemon(mode: "worker" | "gateway"): Promise<HttpDaemon> {
   const { env, port } = await withHttpDaemon((port) => {
     const http = { enabled: true, host: "127.0.0.1", port };
@@ -82,7 +81,6 @@ describe("GET /v1/tokens", () => {
     expect(body.tokens).toEqual(
       expect.arrayContaining([operator.token, agent.token, unlabelled.token, worker.token]),
     );
-    // The records `token create` printed, and nothing beside them.
     expect(agent.token).toEqual({
       createdAt: expect.any(Number),
       id: expect.stringMatching(/^tok_/),

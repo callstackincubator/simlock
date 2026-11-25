@@ -8,12 +8,12 @@ describe("status while the daemon is starting", () => {
     const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
     }));
-    // Minting a token is an operation that waits for a started daemon, so it comes first.
+    // why: Minting a token is an operation that waits for a started daemon, so it comes first.
     const minted = await env.cli(["token", "create", "--role", "agent"]);
     expect(minted.code, minted.stderr).toBe(0);
     const { secret } = minted.json as { secret: string };
 
-    // Restart the daemon with the fake driver holding its startup check (`listManaged`) open
+    // why: Restart the daemon with the fake driver holding its startup check (`listManaged`) open
     // long enough for every read below. `daemon start` returns once startup finishes, so it
     // runs in the background while the reads go to the socket it claims first.
     expect((await env.cli(["daemon", "stop"])).code).toBe(0);

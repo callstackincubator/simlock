@@ -54,7 +54,6 @@ async function granted(env: TestEnv, agentId: string, mode: "slim" | "full", os 
   return result.json as Grant;
 }
 
-/** Releases every grant and waits for its fresh device to be deleted, emptying the budget. */
 async function releaseAll(env: TestEnv, grants: readonly Grant[]): Promise<void> {
   for (const grant of grants) {
     const released = await env.cli(["release", grant.lease.id]);
@@ -68,7 +67,7 @@ async function releaseAll(env: TestEnv, grants: readonly Grant[]): Promise<void>
 describe("RAM budget by device mode", () => {
   it("counts each device by its mode once booted, needs full-size room for every new one, and goes over after a restart with larger sizes", async () => {
     const env = await withDaemon({
-      // Fresh devices are deleted on release, so each pass below starts from an empty budget.
+      // why: Fresh devices are deleted on release, so each pass below starts from an empty budget.
       configOverrides: { lease: { identity: { ios: "fresh" } }, warmPool: { enabled: false } },
       driverScript: {
         ios: {
@@ -78,7 +77,7 @@ describe("RAM budget by device mode", () => {
         },
       },
     });
-    // The limit is the host's RAM minus the reserve; the sizes are cut from it so that two
+    // why: The limit is the host's RAM minus the reserve; the sizes are cut from it so that two
     // full devices fill it exactly, whatever machine runs this. Every new device needs a
     // full device's room, so three slim ones fit: the third takes the last half.
     const { limitBytes } = await ramBudget(env);
@@ -88,7 +87,6 @@ describe("RAM budget by device mode", () => {
     await env.withConfig(
       { ramBudget: { iosBytesPerDevice: full, iosSlimBytesPerDevice: slim } },
       async () => {
-        // Full: two fit, the third crosses the limit and is refused.
         const fullGrants = [
           await granted(env, "full-1", "full"),
           await granted(env, "full-2", "full"),
@@ -98,7 +96,6 @@ describe("RAM budget by device mode", () => {
         expect(crossingFull.error).toMatchObject({ code: "NO_CAPACITY" });
         await releaseAll(env, fullGrants);
 
-        // Slim: three fit under the same budget, the fourth is refused.
         const slimGrants: Grant[] = [];
         for (const agent of ["slim-1", "slim-2", "slim-3"]) {
           slimGrants.push(await granted(env, agent, "slim"));
@@ -110,7 +107,7 @@ describe("RAM budget by device mode", () => {
         expect(crossingSlim.error).toMatchObject({ code: "NO_CAPACITY" });
         await releaseAll(env, slimGrants);
 
-        // `--mode slim` on an OS that cannot be slimmed is a full device: it counts at the full
+        // why: `--mode slim` on an OS that cannot be slimmed is a full device: it counts at the full
         // size once booted, so a second one no longer fits.
         const mixed = [
           await granted(env, "slimmable", "slim"),
@@ -123,7 +120,6 @@ describe("RAM budget by device mode", () => {
         expect(secondUnslimmable.error).toMatchObject({ code: "NO_CAPACITY" });
         await releaseAll(env, mixed);
 
-        // A failed slim pass: the device comes up full, keeps its lease, and counts as full.
         const slimGrantsBefore = [
           await granted(env, "before-1", "slim"),
           await granted(env, "before-2", "slim"),
@@ -141,7 +137,7 @@ describe("RAM budget by device mode", () => {
           expect.arrayContaining([...slimGrantsBefore, failed].map((grant) => grant.lease.id)),
         );
 
-        // Restarted with slim devices sized as full ones, the same three devices use 3/2 of
+        // why: Restarted with slim devices sized as full ones, the same three devices use 3/2 of
         // the limit. A restart keeps a lease only while its device is running, and the fake
         // driver forgets its devices with the process, so it is told they still are.
         await env.driverScript.merge({

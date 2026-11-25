@@ -36,7 +36,7 @@ describe("parallel contention invariant", () => {
 
     const servedDeviceByAgent = new Map<string, string>();
 
-    // As soon as each holder is granted, stop it -- releasing capacity so the remaining
+    // why: As soon as each holder is granted, stop it -- releasing capacity so the remaining
     // queued agents can be served in turn. All eight are started concurrently; none is
     // awaited before the next starts.
     //

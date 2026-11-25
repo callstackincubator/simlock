@@ -4,12 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { events, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
 
-/**
- * `warmPool.targets`: kinds of device the pool keeps booted ahead of demand. What the pool
- * decides is proven in the core; these flows prove what the CLI, the event log and the daemon
- * log show once a daemon runs with a target.
- */
-
 const IPHONE_17 = { count: 1, model: "iPhone 17", osVersion: "26.0", platform: "ios" } as const;
 const IOS = { availableOsVersions: ["26.0"], knownModels: ["iPhone 15", "iPhone 16", "iPhone 17"] };
 
@@ -98,7 +92,6 @@ describe("warm pool targets", () => {
     const [leased] = await named(env, "lease.granted");
     expect(leased?.payload).toMatchObject({ source: "warm" });
     expect(granted.device.spec.model).toBe("iPhone 17");
-    // The pool then creates a third in the background, to keep two ready.
     await untilDevices(
       env,
       (rows) =>

@@ -2,11 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { events, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
 
-/**
- * `warmPool.reserveRunning`, and a request that arrives while the warm pool is booting a device
- * that serves it. Both are decided in the core; these flows only prove what the CLI shows.
- */
-
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
 
@@ -30,7 +25,6 @@ async function makeReadyCalls(env: TestEnv): Promise<number> {
   return (await env.driverLog.calls()).filter((call) => call.operation === "makeReady").length;
 }
 
-/** Returns once no boot has started and no device has changed state for two seconds. */
 async function untilQuiet(env: TestEnv): Promise<void> {
   const snapshot = async () =>
     `${await makeReadyCalls(env)}:${(await deviceStates(env)).join(",")}`;
@@ -75,7 +69,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       await lease(env, "agent-c"),
     ];
     const readyBefore = (await eventsNamed(env, "device.ready")).length;
-    // A slow boot, so a pool boot that wrongly starts is still running, and logged, at the check.
+    // why: A slow boot, so a pool boot that wrongly starts is still running, and logged, at the check.
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 3_000 } } });
 
     // why: two leases still held leave no slot above the reserve, so no device is made for the first.
@@ -86,13 +80,12 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     expect(await makeReadyCalls(env)).toBe(3);
     expect(await eventsNamed(env, "device.ready")).toHaveLength(readyBefore);
 
-    // The check is made; boots now run at full speed, and the test waits for them to end.
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 0 } } });
     expect((await env.cli(["release", second.lease.id])).code).toBe(0);
     expect((await env.cli(["release", third.lease.id])).code).toBe(0);
     await untilQuiet(env);
 
-    // Exact counts: a third wrongful boot, or a missing one, changes them.
+    // why: Exact counts: a third wrongful boot, or a missing one, changes them.
     expect(await makeReadyCalls(env)).toBe(5);
     const states = await deviceStates(env);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
@@ -166,7 +159,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       });
       const first = await releasedAndReplacing(env);
 
-      // A bound shorter than the test timeout: a request nobody woke fails here, on QUEUE_TIMEOUT.
+      // why: A bound shorter than the test timeout: a request nobody woke fails here, on QUEUE_TIMEOUT.
       const second = await lease(env, "waiter", ["--timeout", "20s"]);
 
       // why: the pool's next spare, made once the waiter holds the first, may be provisioned too; the
