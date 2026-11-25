@@ -31,7 +31,7 @@ const TEST_TIMEOUT = 100 * MINUTE;
 type Platform = "ios" | "android";
 
 interface Grant {
-  readonly device: { readonly driverDeviceId: string };
+  readonly device: { readonly driverDeviceId: string; readonly address?: string };
   readonly lease: { readonly id: string };
 }
 
@@ -64,15 +64,29 @@ async function processTable(): Promise<Row[]> {
 }
 
 /**
- * why: a simulator's work is spread over its `launchd_sim` and its children, and an emulator's over one process and its helpers; every one of them
- * has the device's own folder or id in the command line of its root, so the device is the roots that name it and everything below them.
+ * why: an emulator's command line never names its device (every copy's AVD is called `simlock`, and its folder is
+ * only in the environment), but it always carries `-port <console port>`, which is the number in the lease's
+ * `emulator-<port>` address; a simulator's command line carries its own folder or id.
  */
-async function deviceCpuSeconds(driverDeviceId: string): Promise<number> {
+function namesDevice(command: string, grant: Grant): boolean {
+  const port = /^emulator-(\d+)$/.exec(grant.device.address ?? "")?.[1];
+  if (port !== undefined) return new RegExp(`(^|\\s)-port ${port}(\\s|$)`).test(command);
+  return command.includes(grant.device.driverDeviceId);
+}
+
+/**
+ * why: a simulator's work is spread over its `launchd_sim` and its children, and an emulator's over one process and its helpers; the device is
+ * the roots that name it and everything below them.
+ */
+async function deviceCpuSeconds(grant: Grant): Promise<number> {
   const table = await processTable();
   const members = new Set(
-    table.filter((row) => row.command.includes(driverDeviceId)).map((row) => row.pid),
+    table.filter((row) => namesDevice(row.command, grant)).map((row) => row.pid),
   );
-  expect(members.size, `no process names the device ${driverDeviceId}`).toBeGreaterThan(0);
+  expect(
+    members.size,
+    `no process names the device ${grant.device.driverDeviceId} (${grant.device.address ?? "no address"})`,
+  ).toBeGreaterThan(0);
   for (let grew = true; grew;) {
     grew = false;
     for (const row of table) {
@@ -85,9 +99,14 @@ async function deviceCpuSeconds(driverDeviceId: string): Promise<number> {
   return table.filter((row) => members.has(row.pid)).reduce((total, row) => total + row.seconds, 0);
 }
 
-async function lease(env: TestEnv, platform: Platform, agent: string): Promise<Grant> {
+async function lease(
+  env: TestEnv,
+  platform: Platform,
+  osFlags: readonly string[],
+  agent: string,
+): Promise<Grant> {
   const granted = await env.cli(
-    ["lease", "--platform", platform, "--agent-id", agent, "--detach"],
+    ["lease", "--platform", platform, ...osFlags, "--agent-id", agent, "--detach"],
     { timeout: DEVICE_READY_MS },
   );
   expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
@@ -95,15 +114,14 @@ async function lease(env: TestEnv, platform: Platform, agent: string): Promise<G
 }
 
 async function measure(grant: Grant): Promise<number[]> {
-  const id = grant.device.driverDeviceId;
-  const samples = [await deviceCpuSeconds(id)];
+  const samples = [await deviceCpuSeconds(grant)];
   for (let minute = 1; minute <= 5; minute += 1) {
     const mark = Date.now();
     await waitFor(async () => Date.now() - mark >= MINUTE, {
       interval: SECOND,
       timeout: 2 * MINUTE,
     });
-    samples.push(await deviceCpuSeconds(id));
+    samples.push(await deviceCpuSeconds(grant));
   }
   return samples.slice(1).map((value, index) => value - (samples[index] as number));
 }
@@ -121,12 +139,13 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios", "android"] },
   () => {
     it.each([
-      { platform: "android" as const, ratio: 0.25 },
-      { platform: "ios" as const, ratio: 0.75 },
+      // why: ADR 0090 measured Android 36; the newest image on a host (37, 16 KiB pages) idles at about one core whether settled or not, so the case pins the measured one.
+      { platform: "android" as const, ratio: 0.25, osFlags: ["--os", "36.1"] },
+      { platform: "ios" as const, ratio: 0.75, osFlags: [] },
     ])(
       "a copy of a $platform seed settled with simlock seed uses under $ratio of the CPU time of a copy of its quick seed in its first 5 minutes",
       { timeout: TEST_TIMEOUT },
-      async ({ platform, ratio }) => {
+      async ({ platform, ratio, osFlags }) => {
         if (platform === "ios") await sweepStaleDeviceSets();
         else requireAndroidSdk();
         const env = await withDaemon({
@@ -134,24 +153,24 @@ describe.skipIf(process.platform !== "darwin")(
           configOverrides: { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } },
         });
         try {
-          const quick = await lease(env, platform, "seed-quick");
+          const quick = await lease(env, platform, osFlags, "seed-quick");
           const model = await modelOf(env, quick);
           const quickMinutes = await measure(quick);
           await release(env, quick);
 
-          const seeded = await env.cli(["seed", platform, model, "--json"], {
+          const seeded = await env.cli(["seed", platform, model, ...osFlags, "--json"], {
             timeout: SEED_TIMEOUT,
           });
           expect(seeded.code, `seed failed: ${seeded.stderr}`).toBe(0);
           expect((seeded.json as { outcome: string }).outcome).toMatch(/settled/);
 
-          const settled = await lease(env, platform, "seed-settled");
+          const settled = await lease(env, platform, osFlags, "seed-settled");
           const settledMinutes = await measure(settled);
           await release(env, settled);
 
           expect(
             total(settledMinutes),
-            `quick copy ${JSON.stringify(quickMinutes)} s per minute, settled copy ${JSON.stringify(settledMinutes)}`,
+            `quick copy ${JSON.stringify(quickMinutes)} s per minute, settled copy ${JSON.stringify(settledMinutes)}, seed answered ${seeded.stdout.trim()}`,
           ).toBeLessThan(total(quickMinutes) * ratio);
           if (platform === "ios") {
             for (const seconds of settledMinutes.slice(2)) {
