@@ -120,12 +120,8 @@ import {
   serviceCheckFor,
   type ServiceCheckHost,
 } from "./entry-support.js";
-import {
-  updateOptionsFor,
-  errorMessage,
-  startHistory,
-  stopForRefusedHistory,
-} from "./composition-support.js";
+import { updateOptionsFor, startHistory, stopForRefusedHistory } from "./composition-support.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface StartDaemonOptions extends WorkerOptions {
   readonly clock?: Clock;
@@ -796,7 +792,7 @@ export function eventBusLogger(logger: Logger): EventBusLogger {
       bus.error(message, {
         event: envelope.event,
         seq: envelope.seq,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
     },
@@ -860,7 +856,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         if (error instanceof DaemonAlreadyRunningError) {
           logAlreadyRunning(role, error);
         } else {
-          logFatalStart(role, error instanceof Error ? error.message : String(error), {
+          logFatalStart(role, errorMessage(error), {
             stack: error instanceof Error ? error.stack : undefined,
           });
         }

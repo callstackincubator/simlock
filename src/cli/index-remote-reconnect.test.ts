@@ -92,6 +92,25 @@ async function advanceThroughTries(held: Held, steps: readonly number[]): Promis
   }
 }
 
+// why: `lease` checks the farm URL when it connects and again for the reconnect notice, and both must know the opt-in.
+async function aHeldLeaseOnAnHttpFarmReconnects(): Promise<void> {
+  const held = holdRemoteLease(
+    () => ({}),
+    ["--url", "http://100.75.181.35:7300", "--allow-insecure-http"],
+  );
+  await dropped(held);
+  await vi.waitFor(() => expect(held.stderr()).toContain("lost the connection"));
+  expect(held.stderr()).toContain("http://100.75.181.35:7300");
+  held.clock.advance(1_000);
+  await vi.waitFor(() => expect(held.stderr()).toContain("reconnected"));
+  expect(held.farm.connections.map(({ url }) => url)).toEqual([
+    "ws://100.75.181.35:7300/v1/session",
+    "ws://100.75.181.35:7300/v1/session",
+  ]);
+  held.signals.emit("SIGINT");
+  expect(await ends(held)).toBe(0);
+}
+
 async function reconnectAnswersDecideTheEnd(): Promise<void> {
   const gone = holdRemoteLease(() => ({ "lease.renew": () => fault("UNKNOWN_LEASE", "gone") }));
   await dropped(gone);
@@ -398,6 +417,7 @@ describe("CLI: a held remote lease across a network drop", () => {
   it("a held remote lease rides out a network drop: it reconnects, renews and holds on until its deadline, ends by what the farm answers, and a queued request asks again", async () => {
     await rideOutADropBeforeTheDeadline();
     await neverBackBeforeTheDeadline();
+    await aHeldLeaseOnAnHttpFarmReconnects();
     await reconnectAnswersDecideTheEnd();
     await silenceIsADropAndCtrlCWhileDisconnectedReleasesWithinABound();
     await dropWhileQueued();

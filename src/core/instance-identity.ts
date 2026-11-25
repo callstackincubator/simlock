@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 
 import type { Filesystem, IdGenerator } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 /** why: Owner-only, like the other files that hold secrets or state (`config.json`,
  * `state.db`, `admin.token`): the trust boundary is the OS user, and the id this
@@ -129,7 +130,7 @@ function serializeIdentity(instanceId: string): string {
 }
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 function isMissingPathError(error: unknown): boolean {

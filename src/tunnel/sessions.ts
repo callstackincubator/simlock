@@ -24,6 +24,7 @@ import {
 import type { ModuleDeviceTcp } from "../modules/index.js";
 import type { Clock, LeaseSocket, Logger, TcpStream, TimerHandle } from "../ports/index.js";
 import { pendingStream } from "./pending-stream.js";
+import { errorMessage } from "../shared/index.js";
 
 const CLOSE_LEASE_ENDED = 4001;
 const CLOSE_GOING_AWAY = 1001;
@@ -353,7 +354,7 @@ export function createTunnelSessions(options: {
           encodeTunnelFrame(
             TUNNEL_TAG.reset,
             conn,
-            JSON.stringify({ reason: error instanceof Error ? error.message : String(error) }),
+            JSON.stringify({ reason: errorMessage(error) }),
           ),
         );
       });
@@ -451,7 +452,7 @@ export function createTunnelSessions(options: {
           );
         } catch (error) {
           await finish(true);
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           refuse(
             error instanceof DeviceTcpError
               ? { code: error.code, message }

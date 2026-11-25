@@ -13,6 +13,7 @@ import { type AnySimlockError, SimlockError } from "../contract/index.js";
 import type { ConnectOptions } from "./client.js";
 import { MAX_WIRE_LINE_CHARS } from "./wire.js";
 import { checkedFarmUrl, FarmUrlError, farmTokenFits } from "./farm-url.js";
+import { errorMessage } from "../shared/index.js";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 // why: ADR 0081 §4: the farm pings every 15 s, so a session that hears nothing for 45 s has lost its network without a close.
@@ -34,6 +35,7 @@ export interface RemoteConnectInput {
   readonly webSocket?: WebSocketClientConnector;
   readonly clock?: Clock;
   readonly signal?: AbortSignal;
+  readonly allowInsecureHttp?: boolean;
   // why: the options of the local transport, which a URL replaces (the token's id is the principal) and so refuses to share a call with.
   readonly principal?: string;
   readonly connection?: unknown;
@@ -56,9 +58,15 @@ export function remoteConnectOptions(input: RemoteConnectInput): ConnectOptions 
       "`url` cannot be combined with `connection`, `endpoint`, `ipc`, `credential` or `principal`",
     );
   }
+  if (input.allowInsecureHttp !== undefined && typeof input.allowInsecureHttp !== "boolean") {
+    throw new TypeError("`allowInsecureHttp` must be true or false");
+  }
   let origin: string;
   try {
-    origin = checkedFarmUrl(input.url, "`url`");
+    origin = checkedFarmUrl(input.url, "`url`", {
+      allowed: input.allowInsecureHttp === true,
+      hint: "set `allowInsecureHttp: true`",
+    });
   } catch (error: unknown) {
     if (error instanceof FarmUrlError) throw new TypeError(error.message);
     throw error;
@@ -149,10 +157,7 @@ function refusalOf(origin: string, error: unknown): AnySimlockError {
         : `${origin} answered ${String(error.status)} to the session upgrade`,
     );
   }
-  return unreachable(
-    origin,
-    `No answer from ${origin}: ${error instanceof Error ? error.message : String(error)}`,
-  );
+  return unreachable(origin, `No answer from ${origin}: ${errorMessage(error)}`);
 }
 
 // why: the farm's refusal is its own JSON error body; a body of another shape (a proxy's page) falls back to a message that still names the farm.

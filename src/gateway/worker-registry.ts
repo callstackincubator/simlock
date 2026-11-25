@@ -10,6 +10,7 @@ import { DispatchError } from "../daemon/dispatch.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import type { DrainStore } from "./drain-store.js";
+import { errorMessage } from "../shared/index.js";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
 
@@ -203,7 +204,7 @@ export class WorkerRegistry {
         listener();
       } catch (error: unknown) {
         this.#logger.debug("A worker-views-changed listener threw", {
-          message: error instanceof Error ? error.message : String(error),
+          message: errorMessage(error),
         });
       }
     }

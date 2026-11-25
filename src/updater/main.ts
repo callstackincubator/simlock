@@ -11,9 +11,10 @@ import {
 } from "../ports/index.js";
 // why: every import here is static, so the whole updater is in memory before the install replaces its files on disk.
 import { createDaemonProbe, parseUpdaterArgs, runUpdater, type UpdaterArguments } from "./index.js";
+import { errorMessage } from "../shared/index.js";
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 async function update(args: UpdaterArguments): Promise<number> {

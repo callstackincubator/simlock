@@ -1,4 +1,5 @@
 import type { ProcessResult } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
@@ -118,6 +119,6 @@ async function failureDetail(
     if (outcome.kind === "timed-out") return { text: "timed out", refused: false };
     return outcome.result.code === 0 ? undefined : { text: outcome.result.stderr, refused: true };
   } catch (error: unknown) {
-    return { text: error instanceof Error ? error.message : String(error), refused: false };
+    return { text: errorMessage(error), refused: false };
   }
 }
