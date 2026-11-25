@@ -72,9 +72,10 @@ with the stored request, so a replay after a restart is compared too.
 
 ### 4. Every frontend can pass `requires`
 
-`simlock lease --requires <name,...>` and the MCP `lease_simulator` tool's
-`requires` send the list as the contract takes it. This narrows ADR 0026
-§1, whose request carried no CLI flag and no MCP parameter.
+`simlock lease --requires <name,...>`, the MCP `lease_simulator` tool's
+`requires` and the `requires` field of `POST /v1/lease-requests` send the
+list as the contract takes it. This narrows ADR 0026
+§1, whose request carried no CLI flag, no MCP parameter and no HTTP field.
 
 ## Consequences
 
