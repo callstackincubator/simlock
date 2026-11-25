@@ -36,7 +36,7 @@ function proxyDaemon(
   const refusals = { expired: { reason: "expired" }, "signed-out": {} };
 
   const behind =
-    (ok: (call: Call) => Answer): Handler =>
+    (ok: (call: Call) => Answer): ((call: Call) => Promise<Answer>) =>
     async (call) => {
       if (call.bearer !== undefined) {
         const name = state.operators[call.bearer];
@@ -59,8 +59,6 @@ function proxyDaemon(
             status: 401,
           };
         case "html":
-          // why: a loaded runner answers one read after the others.
-          if (call.path === options.lateRead?.path) await options.lateRead.until;
           return { body: "<h1>Proxy sign-in</h1>", status: 403 };
         case "redirect":
           throw new TypeError("Failed to fetch");
@@ -68,6 +66,17 @@ function proxyDaemon(
           if (call.path === "/v1/identity") await state.held;
           return ok(call);
       }
+    };
+
+  // why: a loaded runner delivers one read's answer after the others.
+  const late =
+    (handler: (call: Call) => Promise<Answer>): Handler =>
+    async (call) => {
+      const answer = await handler(call);
+      if (state.mode === "html" && call.path === options.lateRead?.path) {
+        await options.lateRead.until;
+      }
+      return answer;
     };
 
   const routes: Routes = {
@@ -86,7 +95,7 @@ function proxyDaemon(
     })),
     "/v1/inbox": behind(() => ({ body: { items: [] } })),
     "/v1/lease-requests": behind(() => ({ body: { requests: [] } })),
-    "/v1/leases": behind(() => ({ body: { leases: [] } })),
+    "/v1/leases": late(behind(() => ({ body: { leases: [] } }))),
     "/v1/workers": behind(() => ({ body: { workers: [] } })),
   };
   return { routes, state };
