@@ -394,11 +394,12 @@ async function runLease(
     ourLeaseId = grant.lease.id;
     ourLeaseDeadline = grant.lease.ttlDeadline;
     if (!detached) heldLeaseId = grant.lease.id;
-    const hint = await slimLeaseHint({ clock: environment.clock, client, grant });
-    if (hint !== undefined) environment.stderr.write(`${JSON.stringify({ notice: hint })}\n`);
     const result = { ...grant, role: client.role };
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult((value) => environment.stdout.write(value), result);
+    // why: the hint is a courtesy that may wait up to 2 s for the catalog; the grant is already out.
+    const hint = await slimLeaseHint({ clock: environment.clock, client, grant, frontend: "cli" });
+    if (hint !== undefined) environment.stderr.write(`${JSON.stringify({ notice: hint })}\n`);
     if (termination === undefined) return 0;
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
     const grantedLease = grant.lease;

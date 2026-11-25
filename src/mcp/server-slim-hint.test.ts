@@ -33,7 +33,7 @@ const slimGrant = (except?: string[]) => {
 };
 
 const hintFor = (names: readonly string[]): string =>
-  `Slim simulator: ${names.join(", ")} are turned off. Lease again with except naming a category to keep it running, or with mode full to keep them all.`;
+  `slim: ${names.join(", ")} off; pass except: ["<name>"] or mode: "full"`;
 
 describe("MCP lease_simulator: the slim hint", () => {
   it("answers hint naming the slim categories a slim iOS lease has off, and none otherwise, with the grant otherwise unchanged", async () => {

@@ -73,13 +73,11 @@ function hintLines(stderr: string): string[] {
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line) as { notice?: string })
-    .flatMap((line) => (line.notice?.startsWith("Slim simulator:") === true ? [line.notice] : []));
+    .flatMap((line) => (line.notice?.startsWith("slim:") === true ? [line.notice] : []));
 }
 
-const HINT_TAIL =
-  "are turned off. Lease again with except naming a category to keep it running, or with mode full to keep them all.";
 const hintFor = (names: readonly string[]): string =>
-  `Slim simulator: ${names.join(", ")} ${HINT_TAIL}`;
+  `slim: ${names.join(", ")} off; use --except <name> or --mode full`;
 
 type Grant = typeof grant;
 const withDevice = (device: Partial<Grant["device"]> & { except?: string[] }): Grant => ({
@@ -231,6 +229,10 @@ describe("simlock lease: the slim hint line", () => {
         settled = true;
         return code;
       });
+      if (row.read === "hang") {
+        await settle();
+        expect(output.stdout, `${row.name}: the grant waits for the catalog`).not.toBe("");
+      }
       for (let tick = 0; tick < 20 && !settled; tick += 1) {
         await settle();
         (environment.clock as FakeClock).advance(500);

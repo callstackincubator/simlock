@@ -538,6 +538,8 @@ export async function slimLeaseHint(input: {
   readonly clock: Clock;
   readonly client: SlimHintClient;
   readonly grant: SlimHintGrant;
+  /** why: each frontend names its own way out; a flag means nothing to an MCP caller. */
+  readonly frontend: "cli" | "mcp";
 }): Promise<string | undefined> {
   const { device } = input.grant;
   if (device.physical || device.mode !== "slim" || device.spec.platform !== "ios") return undefined;
@@ -556,5 +558,9 @@ export async function slimLeaseHint(input: {
   const kept = new Set(device.except ?? []);
   const off = (ios?.slimCategories ?? []).filter((name) => !kept.has(name));
   if (off.length === 0) return undefined;
-  return `Slim simulator: ${off.join(", ")} are turned off. Lease again with except naming a category to keep it running, or with mode full to keep them all.`;
+  const wayOut =
+    input.frontend === "cli"
+      ? "use --except <name> or --mode full"
+      : 'pass except: ["<name>"] or mode: "full"';
+  return `slim: ${off.join(", ")} off; ${wayOut}`;
 }

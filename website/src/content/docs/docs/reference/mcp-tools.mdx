@@ -69,7 +69,7 @@ Leases one simulator, emulator or enrolled phone for this session, and waits for
 
 The answer is the grant, the same JSON `simlock lease` prints: `device` (with `driverDeviceId`, the UDID or serial), `environment`, `lease` and `timing`.
 
-On a slim iOS simulator the answer also carries `hint`, one line that names the slim categories the lease has turned off, the same line `simlock lease` prints on stderr: `Slim simulator: <categories> are turned off. Lease again with except naming a category to keep it running, or with mode full to keep them all.` The categories are the iOS catalog's slim set minus the `except` the lease kept. `hint` is absent for a full, Android or physical lease, when `except` keeps every category, and when the catalog read fails or takes longer than 2 seconds. It never changes the lease.
+On a slim iOS simulator the answer also carries `hint`, one line that names the slim categories the lease has turned off, the same line `simlock lease` prints on stderr, with the way out in its own words (`use --except <name> or --mode full`): `slim: <categories> off; pass except: ["<name>"] or mode: "full"` The categories are the iOS catalog's slim set minus the `except` the lease kept. `hint` is absent for a full, Android or physical lease, when `except` keeps every category, and when the catalog read fails or takes longer than 2 seconds. It never changes the lease.
 
 While it waits, a client that sent a progress token gets progress notifications: `Queued behind 2 other requests`, `Next in queue`, `Downloading <component> (40%)`, `Waiting for another download before downloading <component>`, `Provisioning device (~45s remaining)`, `Booting device (~20s remaining)`. Cancelling the tool call cancels the waiting request.
 

@@ -204,7 +204,7 @@ export class McpSession {
       }
       this.#heldLeaseId = grant.lease.id;
       this.#startRenewal(grant.lease);
-      const hint = await slimLeaseHint({ clock: this.#clock, client, grant });
+      const hint = await slimLeaseHint({ clock: this.#clock, client, grant, frontend: "mcp" });
       return hint === undefined ? grant : { ...grant, hint };
     });
   }
