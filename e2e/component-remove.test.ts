@@ -130,6 +130,7 @@ describe("simlock component remove", () => {
   it("refuses an agent session with FORBIDDEN, removing nothing", async () => {
     const env = await withSimlockInstall();
 
+    // why: A credential the daemon rejects falls back to an agent session (with a notice).
     const result = await env.cli([
       "--token",
       "not-an-admin-credential",

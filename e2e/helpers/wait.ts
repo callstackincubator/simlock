@@ -3,6 +3,10 @@
 // turn ready shares this one limit.
 export const DEVICE_READY_MS = 330_000;
 
+/**
+ * why: The only timing primitive in this suite: no test or helper may `sleep`/fixed-delay.
+ * Everything that needs "wait until X" polls a predicate through this function.
+ */
 export async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   options: {

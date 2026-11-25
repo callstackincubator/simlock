@@ -178,6 +178,17 @@ export interface TestEnv {
   withConfig<T>(overrides: Record<string, unknown>, fn: () => Promise<T>): Promise<T>;
 }
 
+/**
+ * why: Allocates an isolated `SIMLOCK_HOME`, wires the fake driver in, and returns a
+ * `TestEnv`. Registers itself with the module-level `activeEnvs` registry so the one
+ * real `afterEach` above tears it down at the end of the current test: kills any
+ * backgrounded CLI/MCP processes this env spawned, gracefully stops the daemon, then
+ * verifies the pids that were observed holding the socket before that stop actually
+ * exited (not just that the socket file is gone -- see `isProcessAlive`),
+ * force-killing and failing the test if any survived. It does not independently
+ * assert lease/device state is clean on exit; a flow that cares about that asserts
+ * it itself (e.g. `waitForLeaseCount(env, 0)`).
+ */
 export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestEnv> {
   const { testEnv, state } = await buildEnv(options);
   activeEnvs.add(state);
@@ -319,7 +330,9 @@ async function buildEnv(
       for (const pid of pids) {
         try {
           process.kill(pid, signal);
-        } catch {}
+        } catch {
+          // why: Already gone.
+        }
       }
       await waitFor(async () => (await pidsHoldingSocket(socketPath)).length === 0, {
         timeout: 10_000,
@@ -720,7 +733,9 @@ async function killAndVerifyDaemonPids(
   for (const pid of strayPids) {
     try {
       process.kill(pid, "SIGKILL");
-    } catch {}
+    } catch {
+      // why: Already gone.
+    }
   }
   await waitFor(
     async () => !(await Promise.all(strayPids.map((pid) => isProcessAlive(pid)))).some(Boolean),
@@ -760,6 +775,11 @@ async function killLeftoverAgentDevice(
   }
 }
 
+/**
+ * why: Signal-0 liveness probe: sends no actual signal, just asks the kernel whether
+ * `pid` exists and is ours to signal. Throws ESRCH (gone) or EPERM (exists, not
+ * ours -- treated as alive since it did not exit) otherwise.
+ */
 async function isProcessAlive(pid: number): Promise<boolean> {
   try {
     process.kill(pid, 0);

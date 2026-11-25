@@ -105,7 +105,9 @@ export function cliBackground(
       if (line.trim() === "") continue;
       try {
         progress.push(JSON.parse(line));
-      } catch {}
+      } catch {
+        // why: Non-JSON stderr noise is preserved in `stderr` but not treated as progress.
+      }
     }
   });
 

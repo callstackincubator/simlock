@@ -262,6 +262,13 @@ describe("device.exec over HTTP", () => {
   });
 
   it("refuses through the fake driver's own mirrored list, and never runs what it refuses", async () => {
+    // why: The fake driver's refusal rules are its own mirror of the real Android/iOS drivers'
+    // (see `e2e/fake-driver/fake-driver.ts`'s own comment on `passthrough`), kept deliberately
+    // small and script-free so the wiring below is exercised the same way on every run. What
+    // this proves is that `device.exec` reaches a driver's refusal list *at all*, through both
+    // the exec route and the ordinary passthrough one -- never that the real driver's own list
+    // is correct, which is `src/drivers/android/index.test.ts` / `src/drivers/ios/index.test.ts`'s
+    // job.
     const { env, exec, lease, token } = await fleet();
     const auth = await token("agent");
     const leaseId = await lease({ device: "Pixel 8", platform: "android" }, auth);

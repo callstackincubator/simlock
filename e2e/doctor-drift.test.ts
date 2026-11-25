@@ -100,6 +100,7 @@ describe("doctor and drift", () => {
     const stagedDevices: ScriptedObservedDevice[] = [
       { deviceId: deviceA.device.driverDeviceId, runState: "stopped" },
       { deviceId: deviceB.device.driverDeviceId, runState: "stopped" },
+      // why: deviceC.device.driverDeviceId deliberately omitted.
       {
         deviceId: deviceD.device.driverDeviceId,
         runState: "running",

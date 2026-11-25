@@ -84,13 +84,30 @@ export interface ScriptedManagedReality {
 export interface FakeDriverPlatformScript {
   readonly knownModels?: readonly string[];
   readonly availableOsVersions?: readonly string[];
+  /**
+   * why: The OS versions this fake can slim. A slim request on one of them resolves to a slim spec,
+   * and a prepare boot of a slim-spec device reports `mode: "slim"`. Absent: every request
+   * resolves to a full spec and no boot reports a mode, as a driver that does not slim.
+   */
   readonly slimmableOsVersions?: readonly string[];
+  /**
+   * why: Makes the slim pass fail: a prepare boot of a slim-spec device reports `mode: "full"`, as
+   * the iOS driver does when it cannot slim a device it planned to. Needs `slimmableOsVersions`.
+   */
   readonly slimPassFails?: boolean;
+  /**
+   * why: What `listCatalog` reports a model pairs with. A model left out pairs with every available
+   * version, which is also the default for every model.
+   */
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
   readonly defaultModels?: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
   readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
   readonly customModels?: readonly string[];
+  /**
+   * why: What `listCatalog` reports as installed images; the field is absent unless set. A request
+   * naming an image tag resolves only to a runtime listed here with that tag.
+   */
   readonly images?: readonly {
     readonly runtime: string;
     readonly tag: string;
