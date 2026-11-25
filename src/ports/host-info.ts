@@ -9,6 +9,7 @@ export interface HostSystem {
 }
 
 export interface HostInfo {
+  /** why: Never throws: a fact that cannot be read falls back to what `node:os` reports. */
   read(): Promise<HostSystem>;
 }
 
@@ -17,6 +18,7 @@ const SW_VERS_TIMEOUT_MS = 5_000;
 
 export interface NodeHostInfoOptions {
   readonly processRunner: ProcessRunner;
+  /** why: `process.platform`; injected so the macOS path can be tested anywhere. */
   readonly platform: NodeJS.Platform;
 }
 

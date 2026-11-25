@@ -20,6 +20,7 @@ export interface LeaseRequestInput {
   readonly imageTag?: string;
   readonly baseline?: string;
   readonly physical?: boolean;
+  /** why: Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
   readonly leaseId?: string;
   readonly runId?: string;
@@ -262,6 +263,7 @@ export class LeaseRequestTracker {
         onProgress: () => settleCreated(),
         onRequestAdmitted: (id, replayed) => {
           requestId = id;
+          // why: A repeat names a request that already exists: answer with it, whatever its state.
           if (
             replayed ||
             (body.allowDownload === true && this.options.answerDownloadsEarly !== false)
@@ -303,6 +305,7 @@ export class LeaseRequestTracker {
     return toView(parsed.data, found.progress);
   }
 
+  /** why: Registers a listener for future state changes only -- it does not fire for the current state. */
   subscribe(id: string, listener: (state: RequestSnapshot) => void): (() => void) | undefined {
     return this.options.requests.watch(id, () => {
       const view = this.get(id);
@@ -410,6 +413,7 @@ export interface HttpLeaseDevice {
     readonly imageTag?: string | undefined;
     readonly baseline?: { readonly name: string; readonly version: number } | undefined;
   };
+  /** why: Absent only for a physical device, which has no mode. */
   readonly mode?: "slim" | "full" | undefined;
   /** why: absent when the lease keeps no category running. */
   readonly except?: readonly string[] | undefined;
@@ -458,6 +462,7 @@ function toSnapshot(
       stage: "failed",
     };
   }
+  // why: Open with no progress reported yet: the request is admitted and about to queue.
   if (progress === undefined) return { queuePosition: 1, stage: "queued" };
   return openSnapshot(progress);
 }

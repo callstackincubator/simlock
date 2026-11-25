@@ -14,6 +14,16 @@ export interface SseEvent {
   readonly id?: string;
 }
 
+/**
+ * why: One live feed. `subscribe` is called once per connection; it must invoke `send` for every
+ * event to emit (in order) and `end` exactly once the stream should close after flushing
+ * whatever `send` calls are already queued. The returned function unsubscribes.
+ *
+ * `send` returns a promise that resolves when *that* event has been written -- after the ones
+ * queued before it, and after the client's stream has accepted the bytes. A source that
+ * produces faster than the client reads awaits it and stops producing; one that cannot slow
+ * down (a lease notice, a bus event) ignores it exactly as before.
+ */
 export interface SseSource {
   subscribe(send: (event: SseEvent) => Promise<void>, end: () => void): () => void;
 }

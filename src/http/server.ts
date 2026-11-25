@@ -169,7 +169,9 @@ export class HttpGateway {
     this.#clock = options.clock;
   }
 
+  /** why: Resolves once listening, with the actual bound port (matches the configured one in v1, since port 0 is never used here). */
   start(): Promise<{ readonly port: number }> {
+    // why: ADR 0011 §3: the console is served whenever HTTP is, in both modes; no key turns it off.
     const site = withConsole(this.#app, { logger: this.#logger, root: this.#consoleRoot });
     return new Promise((resolve, reject) => {
       let settled = false;

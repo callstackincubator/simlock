@@ -2,6 +2,11 @@ import { createConnection, type Socket } from "node:net";
 
 import type { LoopbackHost } from "./tcp-stream.js";
 
+/**
+ * why: Asks whether a loopback port is in use. Simlock needs this to decide whether the port
+ * it wants for its own server is already taken, which is a fail-closed decision rather
+ * than a diagnostic one -- see ADR 0001.
+ */
 export interface TcpProbe {
   /** why: true when something is accepting connections on `<host>:<port>` right now; the host is `127.0.0.1` unless named. */
   isListening(port: number, timeoutMs?: number, host?: LoopbackHost): Promise<boolean>;

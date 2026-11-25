@@ -43,6 +43,9 @@ export class OutputRelay {
   #deliver: ((chunk: RelayedChunk) => Promise<void>) | undefined;
   #dropped = false;
 
+  /** why: How many chunks are held right now. Only the starting window can be non-zero -- see the
+   * class doc for why this is not "at most one per stream" (a paused readable can still
+   * deliver more than one at EOF); a test asserts on it, the route never reads it. */
   get bufferedCount(): number {
     return this.#buffered.length;
   }

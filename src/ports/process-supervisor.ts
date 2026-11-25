@@ -1,6 +1,13 @@
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
 import { windowsKillCommand } from "./process-tree-kill.js";
 
+/**
+ * why: Liveness and signalling for a process addressed by pid rather than by a handle.
+ *
+ * `ProcessRunner` covers processes this daemon spawned and still holds; this port covers
+ * the ones it does not: a supervised child recorded on disk outlives the daemon that
+ * started it, so after a crash the only thing left to ask about it is its pid.
+ */
 export interface ProcessSupervisor {
   isAlive(pid: number): boolean;
   /**
@@ -242,6 +249,7 @@ function endArgument(split: ArgumentSplit): void {
   split.current = undefined;
 }
 
+/** why: The pid is gone, or belongs to a user this process may not signal. */
 const NOT_ALIVE_CODES = new Set(["ESRCH", "EPERM"]);
 
 const NO_SUCH_PROCESS_CODES = new Set(["ESRCH"]);

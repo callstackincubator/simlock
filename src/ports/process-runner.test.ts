@@ -364,7 +364,10 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       {
         onChunk: (_stream, chunk) => {
           seen.push(chunk);
-          return new Promise<void>(() => {});
+          return new Promise<void>(() => {
+            // why: Never resolves: models a consumer (an SSE write, a socket write) whose
+            // backpressure never clears.
+          });
         },
       },
     );

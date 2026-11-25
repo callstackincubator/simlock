@@ -3,10 +3,15 @@
  * dies, and a TTL cannot bound a holder that was reparented and keeps renewing.
  */
 export interface ParentWatch {
+  /**
+   * why: Starts watching `pid`. Calls `onExit` at most once, the first time the
+   * process is observed to be gone.
+   */
   watch(pid: number, onExit: () => void): ParentWatchHandle;
 }
 
 export interface ParentWatchHandle {
+  /** why: Stops watching. Safe to call more than once, and after `onExit` already fired. */
   stop(): void;
 }
 
