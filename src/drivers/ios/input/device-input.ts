@@ -18,6 +18,7 @@ import type {
   ProcessRunner,
 } from "../../../ports/index.js";
 import { stopProgram } from "../screen-capture.js";
+import { errorMessage } from "../../../shared/index.js";
 
 export interface IosDeviceInputOptions {
   readonly command: string;
@@ -208,9 +209,7 @@ class IosDeviceInput implements DeviceInput {
       if (message.button !== "app_switcher" && message.button !== "lock") return Promise.resolve();
     }
     return this.#child.writeStdin(frameOfMessage(message)).catch((error: unknown) => {
-      const failure = new Error(
-        `The input helper stopped taking input: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const failure = new Error(`The input helper stopped taking input: ${errorMessage(error)}`);
       this.#fail(failure);
       throw failure;
     });

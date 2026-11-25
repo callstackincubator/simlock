@@ -170,6 +170,9 @@ export class WarmPool {
   #owners: readonly { readonly index: number; readonly spec: VirtualSpec }[] = [];
   #loggedShort = new Set<string>();
   #retryTimer: TimerHandle | undefined;
+  /** why: the clock time the wait after the latest simulator or emulator grant ends; in memory only, a restart refills at once. */
+  #refillHeldUntil: number | undefined;
+  #refillTimer: TimerHandle | undefined;
   #running: Promise<void> | undefined;
   #tick: TimerHandle | undefined;
 
@@ -236,6 +239,7 @@ export class WarmPool {
           (candidate) => candidate.id === payload.deviceId,
         );
         if (device === undefined) return;
+        this.#holdRefill();
         this.#recording("learn a lease", () =>
           this.#learned.learn(
             device.spec,
@@ -253,6 +257,30 @@ export class WarmPool {
         ),
       );
     }
+  }
+
+  /** why: a grant of a simulator or emulator starts the wait before the pool refills; the timer's pass is the one that fills, as no other event need come. */
+  #holdRefill(): void {
+    const delay = this.options.config.refillDelayMs;
+    if (delay <= 0 || this.#disposed) return;
+    const { clock } = this.options;
+    this.#refillHeldUntil = clock.now() + delay;
+    if (this.#refillTimer !== undefined) clock.cancel(this.#refillTimer);
+    this.#armRefillTimer(delay);
+  }
+
+  /** why: a timer can fire before the clock `holdFill` reads has reached the deadline; the wait is then re-armed for what is left, as no other event need come before the next tick. */
+  #armRefillTimer(delay: number): void {
+    const { clock } = this.options;
+    this.#refillTimer = clock.setTimer(delay, () => {
+      this.#refillTimer = undefined;
+      const left = (this.#refillHeldUntil ?? 0) - clock.now();
+      if (left > 0 && !this.#disposed) {
+        this.#armRefillTimer(left);
+        return;
+      }
+      this.#trigger();
+    });
   }
 
   /** why: a failing record costs the pool what it learns, never a lease or a pass: the error is logged and the work goes on. */
@@ -315,6 +343,8 @@ export class WarmPool {
     this.#tick = undefined;
     if (this.#retryTimer !== undefined) this.options.clock.cancel(this.#retryTimer);
     this.#retryTimer = undefined;
+    if (this.#refillTimer !== undefined) this.options.clock.cancel(this.#refillTimer);
+    this.#refillTimer = undefined;
   }
 
   /** Runs a pass, or joins the one running and asks for one more. Resolves when they are done. */
@@ -693,6 +723,7 @@ export class WarmPool {
       learned,
       leases,
       now: this.options.clock.now(),
+      ...(this.#refillHeldUntil === undefined ? {} : { refillHeldUntil: this.#refillHeldUntil }),
       onItsWay: this.#onItsWay(devices),
       pressure: {
         mayShed:

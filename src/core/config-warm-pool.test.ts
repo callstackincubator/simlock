@@ -141,6 +141,17 @@ describe("loadConfig", () => {
       }
     });
 
+    it("loads warmPool.refillDelayMs, 60000 when unset, and refuses a negative or non-number value naming the key", async () => {
+      expect((await load()).warmPool.refillDelayMs).toBe(60_000);
+      expect((await load({ refillDelayMs: 0 })).warmPool.refillDelayMs).toBe(0);
+      expect((await load({ refillDelayMs: 1500.5 })).warmPool.refillDelayMs).toBe(1500.5);
+      for (const bad of [-1, "60s"]) {
+        await expect(load({ refillDelayMs: bad }), `${JSON.stringify(bad)}`).rejects.toThrow(
+          'Invalid config value for "warmPool.refillDelayMs": expected a non-negative number',
+        );
+      }
+    });
+
     it("loads a target with a model, an OS range, a mode and a count, and a boot cap of two", async () => {
       const config = await load({
         maxConcurrentBoots: 2,

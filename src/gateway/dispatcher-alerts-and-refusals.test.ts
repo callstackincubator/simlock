@@ -321,6 +321,12 @@ describe("GatewayDispatcher", () => {
           "(simlock component install --worker <id> or --all-workers)",
       ],
       [
+        "seed.make",
+        { model: "Pixel 8", platform: "android" },
+        "admin",
+        "seed acts on one machine's devices; run it against a worker",
+      ],
+      [
         "component.list",
         {},
         "agent",

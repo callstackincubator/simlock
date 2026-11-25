@@ -66,6 +66,7 @@ export interface DaemonServerEngineOptions {
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
   readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
+  readonly seeds?: DispatcherOptions["seeds"];
   readonly passthrough?: PassthroughResolver;
   readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
@@ -162,7 +163,7 @@ export interface DaemonServerCommonOptions {
   readonly ownerRoutedFacts?: OwnerRoutedFacts & { dispose(): void };
   /**
    * why: #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
-   * suppression (`#handleRequest`'s `lease.release-all` case below). Worker mode reads its own
+   * suppression (`ConnectionRequests.handle`'s `lease.release-all` case below). Worker mode reads its own
    * registry directly and never needs this (`this.#engine?.registry` already answers it); a
    * gateway has no registry, so it supplies its fleet lease index's own entries here instead --
    * without it, a fleet client's own `lease.release-all` would push every one of its own
@@ -230,6 +231,7 @@ export function buildDispatcher(
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
     ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
     ...(options.baselines === undefined ? {} : { baselines: options.baselines }),
+    ...(options.seeds === undefined ? {} : { seeds: options.seeds }),
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
     ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),

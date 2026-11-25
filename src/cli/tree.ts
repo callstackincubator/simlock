@@ -12,6 +12,9 @@ export interface CommandContext {
   /** why: `--url`, else `SIMLOCK_URL`; `simlock tunnel` reads it even with `--local`, as it always has. */
   readonly url: string | undefined;
   readonly daemonFlag: DaemonFlag;
+  /** why: `--allow-insecure-http` and the variable's raw value, for `simlock tunnel`, which checks `SIMLOCK_URL` even with `--local`. */
+  readonly allowInsecureHttpFlag: boolean;
+  readonly allowInsecureHttpVariable: string | undefined;
 }
 
 export interface CommandModule {
@@ -72,6 +75,7 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "doctor", load: () => import("./commands/doctor.js") },
   { name: "nuke", load: () => import("./commands/nuke.js") },
   { name: "warm", load: warmModule, children: [{ name: "forget", load: warmModule }] },
+  { name: "seed", load: () => import("./commands/seed.js") },
   { name: "events", load: () => import("./commands/events.js") },
   { name: "stats", load: () => import("./commands/stats.js") },
   {

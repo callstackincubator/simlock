@@ -14,6 +14,7 @@ import {
   type ModelPreferences,
   type Platform,
   type StartupRead,
+  type VirtualSpec,
 } from "../core/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { LeaseAcquisitionCoordinator } from "./lease-acquisition-coordinator.js";
@@ -34,6 +35,7 @@ import { emitLeaseRefusal } from "./lease-refusal.js";
 import { LeaseStartup } from "./lease-startup.js";
 import { PhysicalDeviceWatcher } from "./physical-device-watcher.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
+import { errorMessage } from "../shared/index.js";
 
 export type LeasingConfig = Pick<Config, "health" | "lease">;
 
@@ -99,6 +101,13 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader, 
    */
   dispose(): void;
   waitingRequests(): readonly WaitingRequest[];
+  /** why: the lease's resolution of a kind with downloads off, and a full spec whatever the worker serves, because one seed serves every mode (ADR 0090 §4). */
+  resolveSeedSpec(request: {
+    readonly platform: Platform;
+    readonly model: string;
+    readonly osVersion?: string;
+    readonly imageTag?: string;
+  }): Promise<VirtualSpec>;
 }
 
 /**
@@ -305,6 +314,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
       return acquisition.physicalQueueDepth;
     },
     waitingRequests: () => requests.waiting(queue.places()),
+    resolveSeedSpec: (request) => acquisition.resolveSeedSpec(request),
     cancelPending: async (requesterId: string, platform?: Platform) =>
       acquisition.cancelPending(requesterId, platform),
     pendingRequestOwner: (requesterId: string, platform?: Platform) =>
@@ -314,5 +324,5 @@ export function createLeasing(options: LeasingOptions): Leasing {
 }
 
 function describeUnclassifiedFailure(error: unknown): LeaseRequestFailure {
-  return { code: "INTERNAL", message: error instanceof Error ? error.message : String(error) };
+  return { code: "INTERNAL", message: errorMessage(error) };
 }

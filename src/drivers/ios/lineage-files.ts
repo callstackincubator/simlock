@@ -5,9 +5,9 @@ import {
   type Logger,
   type SqliteOpener,
 } from "../../ports/index.js";
-import { errorMessage } from "./command-run.js";
 import type { SourceFile } from "./source-data.js";
 import { SWAP_OVERLAP_BYTES, namesLineage, swapLineage, type LineageSwap } from "./udid-swap.js";
+import { errorMessage } from "../../shared/index.js";
 
 /** why: a window is read whole, so this bounds memory at any file size. */
 const WINDOW_BYTES = 1_048_576;

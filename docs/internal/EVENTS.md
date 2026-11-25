@@ -148,6 +148,15 @@ record. `requesterId` is the admin session's principal, never a caller-supplied 
 simulators the removal left unavailable and the asset-store download `simctl runtime delete`
 left behind (#79), each when there is one.
 
+## Seeds
+
+| Event | Payload (key fields) | Emitted when | Emitter | Status |
+|---|---|---|---|---|
+| `seed.settle-started` | platform, model, OS version, image tag (when the seed has one), source id (the quick seed being settled), leases (the plain leases copied from it), trigger (`background` or `operator`) | once per settle, after the settler holds its creation reservation and component claim and as it calls the driver's `settleSeed`; never for a seed an operator asked for that is settled already, and never for the make `simlock seed` runs first | SeedSettler | implemented |
+| `seed.settle-ended` | platform, model, OS version, image tag (when the seed has one), source id (the quick seed), outcome (`settled`, `cap` when the copy never went idle within 15 minutes and was saved anyway, `failed`, `aborted`), reason (only on `aborted`: `memory-pressure`, `daemon-stopping` or `nuke`), message (only on `failed`: the driver's, at most 500 characters), new source id and size in bytes (only on `settled` and `cap`), duration in milliseconds | once per `seed.settle-started`, after the driver returned or threw, and so after its swap of the settled seed for the quick one is committed | SeedSettler | implemented |
+
+`SeedSettler` (`src/core/seed-settle/`) is the only emitter; drivers settle but never emit (architecture rule 5). An aborted settle keeps its quick seed and is chosen again later (ADR 0090 §2).
+
 ## System
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |

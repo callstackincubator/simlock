@@ -13,13 +13,8 @@ import {
 import type { RequestFrame } from "../daemon-protocol/index.js";
 import type { Logger } from "../ports/index.js";
 import { classifyError } from "./error-code.js";
-import {
-  type Connection,
-  errorMessage,
-  parseOutput,
-  respondError,
-  writeFrame,
-} from "./server-connection.js";
+import { type Connection, parseOutput, respondError, writeFrame } from "./server-connection.js";
+import { errorMessage } from "../shared/index.js";
 
 interface HandshakeOptions {
   readonly defaultRequesterId: string;

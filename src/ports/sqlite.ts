@@ -1,6 +1,7 @@
 import { closeSync, openSync } from "node:fs";
 
 import type { MemoryFilesystem } from "./filesystem.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface SqliteRunResult {
   readonly changes: number | bigint;
@@ -39,7 +40,7 @@ export class NodeSqliteOpener implements SqliteOpener {
     try {
       engine = await import("node:sqlite");
     } catch (error: unknown) {
-      throw new SqliteUnavailableError(error instanceof Error ? error.message : String(error));
+      throw new SqliteUnavailableError(errorMessage(error));
     }
     // why: SQLite creates a missing file 0644 (less the umask) and gives -wal and -shm the main
     // file's mode, so creating it 0600 first keeps all three owner-only, like the other local state.

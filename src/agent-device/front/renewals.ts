@@ -2,6 +2,7 @@ import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
 import type { Clock } from "../../ports/index.js";
 import type { FrontContext } from "./context.js";
+import { errorMessage } from "../../shared/index.js";
 
 export type RenewOutcome =
   | { readonly kind: "renewed" }
@@ -36,7 +37,7 @@ export async function renewLease(
     return { kind: "renewed" };
   } catch (error) {
     if (mapError(error).code === "UNKNOWN_LEASE") return { kind: "gone" };
-    return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+    return { kind: "failed", message: errorMessage(error) };
   }
 }
 

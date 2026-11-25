@@ -96,7 +96,7 @@ the status is stale.
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9; §1 and §2 narrowed by 0083 |
-| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4; §5 narrowed by 0062 |
+| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4; §5 narrowed by 0062; §1 and §2 narrowed by 0090 |
 | [0062](0062-the-warm-pool-learns-a-baseline-after-repeated-leases-and-follows-its-newest-version.md) | The warm pool learns a baseline after repeated leases, and follows its newest version | Accepted; narrows 0038 §1, §4, §5, §8, 0050 and 0061 §5 |
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md) | A tunnel reaches an iOS simulator's ports and an emulator's adb port | Accepted; narrows 0054 §2, §5, §6, 0001 §4 and 0005 Non-goals |
@@ -110,7 +110,7 @@ the status is stale.
 | [0073](0073-a-worker-may-enrol-the-phones-plugged-into-it.md) | A worker may enrol the phones plugged into it | Accepted; narrows 0022 §3, §5 and §6; §2 and §5 narrowed by 0080 |
 | [0074](0074-an-admission-command-ranks-or-refuses-a-gateway-request-and-an-ended-chosen-lease-id-is-remembered.md) | An admission command ranks or refuses a gateway request, and an ended chosen lease id is remembered | Accepted; narrows 0005 items 10 and 11, decision 5 and requirements 14 and 30; supersedes 0020 §1 in part |
 | [0075](0075-a-foldable-simulator-streams-the-panel-in-use-and-a-stream-may-change-size.md) | A foldable simulator streams the panel in use, and a stream may change size while it runs | Accepted; narrows 0031's Consequences and 0052 §4 |
-| [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted; narrows 0061 §1, §2 and §4 |
+| [0076](0076-an-ios-clone-names-only-its-own-folders-before-its-first-boot.md) | An iOS clone names only its own folders before its first boot | Accepted; narrows 0061 §1, §2 and §4; §1 and §2 narrowed by 0090 |
 | [0077](0077-the-repository-is-a-workspace-and-its-packages-release-together-under-one-version.md) | The repository is a workspace, and its packages release together under one version | Accepted |
 | [0078](0078-an-android-worker-tries-its-default-image-tag-first-and-falls-back-to-none.md) | An Android worker tries its default image tag first, and a lease falls back to none | Accepted |
 | [0079](0079-one-capture-per-device-is-shared-by-every-viewer-and-every-capture-sends-a-key-frame-every-5-s.md) | One capture per device is shared by every viewer, and every capture sends a key frame at least every 5 s | Accepted; narrows 0045 §5 |
@@ -125,3 +125,4 @@ the status is stale.
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
 | [0091](0091-an-operator-names-a-workers-tags-and-a-lease-may-require-them.md) | An operator names a worker's tags, and a lease may require them | Accepted — not yet implemented |
+| [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted; narrows 0061 §1 and §2 and 0076 §1 and §2 |

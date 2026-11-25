@@ -24,6 +24,8 @@ export {
   WorkingDirectoryFilesystem,
 } from "./test-sdk-fixtures.js";
 
+export { androidSourceDataOwner } from "./source-data.js";
+
 export type { FitImage, Refusal } from "./test-sdk-fixtures.js";
 
 export {

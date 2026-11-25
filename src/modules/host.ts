@@ -18,6 +18,7 @@ import type {
   OptionalModuleDefinition,
   WorkerModule,
 } from "./types.js";
+import { errorMessage } from "../shared/index.js";
 
 function profileOrigin(host: string, port: number): string {
   const reachable = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
@@ -130,7 +131,7 @@ function moduleFindings(module: string, found: readonly ModuleFinding[]) {
 type StopHook = "beforeDrain" | "beforeDriversDispose";
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 function checkNames(definitions: readonly OptionalModuleDefinition<unknown>[]): void {

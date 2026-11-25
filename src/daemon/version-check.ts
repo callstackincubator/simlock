@@ -1,5 +1,6 @@
 import { updateRequestedVersionSchema } from "../contract/index.js";
 import type { Clock, Logger, NpmCli, TimerHandle } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -27,7 +28,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
       (outcome) => outcome,
       (error: unknown) => ({
         ok: false as const,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       }),
     );
     if (disposed) return;

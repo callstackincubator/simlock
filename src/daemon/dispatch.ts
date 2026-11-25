@@ -27,6 +27,7 @@ import {
   requesterIdSchema,
   type AuthorizeContext,
   type ComponentProgress,
+  type SeedProgress,
   type Effect,
   type OperationDefinition,
   type OperationName,
@@ -34,6 +35,7 @@ import {
   type UsageOutput,
   type leaseProgressSchema,
 } from "../contract/index.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * Request-scoped progress, as the contract declares it. Structurally identical to `core`'s own
@@ -41,6 +43,14 @@ import {
  * through to the other -- but named from the contract here so this module stays core-free.
  */
 export type DispatchProgress = z.infer<typeof leaseProgressSchema>;
+
+/** why: the seed a `seed.make` call is about, as its `seed-progress` pushes name it. */
+export interface SeedKind {
+  readonly platform: "ios" | "android";
+  readonly model: string;
+  readonly osVersion: string;
+  readonly imageTag?: string;
+}
 
 export interface DispatchSession {
   readonly principal: string;
@@ -109,6 +119,8 @@ export interface DispatchSession {
    * `worker.install-component` calls it too, with the id of the worker the update came from
    * (ADR 0010 §7). */
   readonly onComponentProgress?: (progress: ComponentProgress, workerId?: string) => void;
+  /** why: called for each stage a `seed.make` call reports; the kind is the seed the call is about. Ignored by every other operation. */
+  readonly onSeedProgress?: (kind: SeedKind, progress: SeedProgress) => void;
   // why: set by the socket transport only; the relay operations are refused without `isGatewayUplink` before they read it.
   readonly relays?: RelayConnection;
   readonly onRelayHead?: (
@@ -295,9 +307,7 @@ function logOperation(
   const failed = {
     ...fields,
     code,
-    ...(call.input === undefined
-      ? {}
-      : { message: error instanceof Error ? error.message : String(error) }),
+    ...(call.input === undefined ? {} : { message: errorMessage(error) }),
   };
   if (code === "INTERNAL") observe.logger.error("operation", failed);
   else observe.logger.info("operation", failed);
@@ -431,7 +441,7 @@ export async function usageAnswer(
   } catch (error) {
     throw new DispatchError(
       "INTERNAL",
-      `The usage figures could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      `The usage figures could not be read: ${errorMessage(error)}`,
     );
   }
   if (result.kind === "figures") return result.usage;
@@ -453,10 +463,7 @@ export async function eventsPageAnswer(read: Promise<EventsPageRead>): Promise<E
   try {
     result = await read;
   } catch (error) {
-    throw new DispatchError(
-      "INTERNAL",
-      `The events could not be read: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    throw new DispatchError("INTERNAL", `The events could not be read: ${errorMessage(error)}`);
   }
   if (result.kind === "events") return result.events;
   if (result.kind === "unavailable") {

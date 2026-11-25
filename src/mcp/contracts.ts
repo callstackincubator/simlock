@@ -58,8 +58,10 @@ export const leaseSimulatorInputSchema = leaseRequestFields.omit({
 export const leaseSimulatorCheckedInputSchema =
   leaseSimulatorInputSchema.superRefine(refuseModelWithClass());
 
-/** `lease.request`'s output verbatim -- the device/lease/timing grant. */
-export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;
+/** why: `lease.request`'s output plus `hint`, which only this tool adds, so no contract shape changes (no protocol bump). */
+export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output.extend({
+  hint: z.string().optional(),
+});
 
 // ---- list_devices -------------------------------------------------------------------------
 

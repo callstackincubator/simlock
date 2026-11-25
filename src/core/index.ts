@@ -49,6 +49,7 @@ export {
   plannedCapacityDevice,
 } from "./capacity/index.js";
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
+export { IdleWatch } from "./idle-watch.js";
 export { CleanupReaper } from "./reaper.js";
 export {
   booleanValue,
@@ -84,6 +85,7 @@ export {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverSettleResult,
   type DriverSource,
   type DriverRejection,
   type DriverToolVersion,
@@ -114,7 +116,10 @@ export {
   BadDeviceRequestError,
   KeptCategoriesError,
   UnsupportedRequestOptionError,
+  SeedSettleFailedError,
+  SeedSettlerStoppedError,
 } from "./driver.js";
+export type { SeedSettler } from "./seed-settle/index.js";
 export {
   DriverCatalog,
   NoDriverError,

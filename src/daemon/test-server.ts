@@ -79,7 +79,8 @@ export interface ServerFrame {
     | "output"
     | "progress"
     | "started"
-    | "component-progress";
+    | "component-progress"
+    | "seed-progress";
 }
 
 export const runningDaemons: DaemonServer[] = [];
@@ -286,12 +287,18 @@ export async function createHarness(
     filesystem: new MemoryFilesystem(),
     registry,
   });
+  // why: the worker starts the settler after the warm pool, so an operator's `seed.make` has a check to run.
+  engine.core.seedSettler.start();
   const daemon = new DaemonServer({
     ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
     warmPool: engine,
     deviceModes: engine,
     catalog: engine,
+    seeds: {
+      resolveSeedSpec: (request) => engine.leasing.resolveSeedSpec(request),
+      settler: engine.core.seedSettler,
+    },
     ...(options.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     instanceId: "instance-test",
     clock,

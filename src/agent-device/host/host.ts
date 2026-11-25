@@ -6,6 +6,7 @@ import { FRONT_PREFIX, PROXY_BASE_PATH } from "../shared/paths.js";
 import { frontReply, refusal } from "../shared/replies.js";
 import { recordingFetch, ReleaseScopeRecord } from "./lease-end.js";
 import type { AgentDeviceUpstream } from "./upstream.js";
+import { errorMessage } from "../../shared/index.js";
 
 type ProxyModule = typeof import("@agent-device/proxy");
 type DaemonProxy = ReturnType<ProxyModule["createDaemonProxy"]>;
@@ -166,7 +167,7 @@ export class AgentDeviceHost {
     this.#loading ??= import("@agent-device/proxy").then(
       (module) => module,
       (error: unknown) => {
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = errorMessage(error);
         this.#loadError = `could not load @agent-device/proxy: ${reason}`;
         return undefined;
       },

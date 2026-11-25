@@ -145,6 +145,8 @@ export function harness(
     refuseClaim?: boolean;
     targets?: readonly WarmTarget[];
     maxConcurrentBoots?: number;
+    /** why: the wait after a grant before a refill; 0 by default, so a test refills at once. */
+    refillDelayMs?: number;
     /** why: The mode a request naming none plans on iOS: `ios.defaultMode`; full when none is set. */
     defaultMode?: "slim" | "full";
     /** why: What a target resolves to; by default the request's own model and OS (26.0 when none). */
@@ -309,6 +311,7 @@ export function harness(
         ? {}
         : { baselineLearnAfter: options.baselineLearnAfter }),
       maxConcurrentBoots: options.maxConcurrentBoots ?? 1,
+      refillDelayMs: options.refillDelayMs ?? 0,
       reserveRunning: { android: 0, ios: 0 },
       targets: options.targets ?? [],
     },

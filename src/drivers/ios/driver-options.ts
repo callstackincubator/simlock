@@ -7,6 +7,7 @@ import type {
   IdGenerator,
   Logger,
   ProcessRunner,
+  ProcessTable,
   SqliteDatabase,
   SqliteOpener,
   TcpListenerFactory,
@@ -29,6 +30,8 @@ export interface IosSimctlDriverOptions {
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly processRunner: ProcessRunner;
+  /** why: a settle judges its copy idle from the copy's own process tree (ADR 0090); with none given the driver offers no `settleSeed`. */
+  readonly processTable?: ProcessTable;
   readonly simlockHome: string;
   readonly uid?: number;
   /** why: the daemon's pid is named in the staging directory of a new root. */
