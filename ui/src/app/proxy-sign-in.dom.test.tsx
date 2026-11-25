@@ -17,7 +17,11 @@ type Mode = "signed-in" | "expired" | "signed-out" | "redirect" | "html";
 // answers its login page, or redirects to it, which `fetch` cannot follow. A call that carries an
 // operator token is not the proxy's to judge.
 function proxyDaemon(
-  options: { readonly signOutUrl?: string; readonly signInUrl?: string } = {
+  options: {
+    readonly signOutUrl?: string;
+    readonly signInUrl?: string;
+    readonly lateRead?: { readonly path: string; readonly until: Promise<void> };
+  } = {
     signOutUrl: SIGNED_OUT_URL,
   },
 ) {
@@ -55,6 +59,8 @@ function proxyDaemon(
             status: 401,
           };
         case "html":
+          // why: a loaded runner answers one read after the others.
+          if (call.path === options.lateRead?.path) await options.lateRead.until;
           return { body: "<h1>Proxy sign-in</h1>", status: 403 };
         case "redirect":
           throw new TypeError("Failed to fetch");
@@ -219,6 +225,27 @@ describe("signing in through a proxy", () => {
       expect(reload).toHaveBeenCalledOnce();
     },
   );
+
+  it("the proxy's own session ending in html reloads the page with Your sign-in has ended. not shown, when one read is answered after the identity check settled", async () => {
+    let release = () => {};
+    const reloaded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reload = vi.fn(() => release());
+    const proxy = proxyDaemon({
+      lateRead: { path: "/v1/leases", until: reloaded },
+      signOutUrl: SIGNED_OUT_URL,
+    });
+    const view = renderConsole({ reload, routes: proxy.routes, token: null });
+    await waitFor(() => signedInAs("Alice"));
+
+    proxy.state.mode = "html";
+    await returnToTab();
+    await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    await waitFor(() => expect(view.callsTo("GET", "/v1/healthz")).toHaveLength(2));
+
+    expect(screen.queryByText("Your sign-in has ended.")).not.toBeInTheDocument();
+  });
 
   it("revoking the token a person signed in with takes the console to the proxy session", async () => {
     const proxy = proxyDaemon();
