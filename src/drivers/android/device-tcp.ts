@@ -16,6 +16,7 @@ import type {
   TcpStream,
   TcpStreamConnector,
 } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 // why: the worker keeps these loopback ports for tunnels, so a rule into them is Simlock's own and a sweep may remove it.
 const TUNNEL_PORT_FIRST = 47_000;
@@ -102,14 +103,7 @@ async function connectWithin(
         finish(() => resolve(stream));
       },
       (error: unknown) =>
-        finish(() =>
-          reject(
-            new DeviceTcpError(
-              "TUNNEL_FAILED",
-              cut(error instanceof Error ? error.message : String(error)),
-            ),
-          ),
-        ),
+        finish(() => reject(new DeviceTcpError("TUNNEL_FAILED", cut(errorMessage(error))))),
     );
   });
 }
@@ -148,7 +142,7 @@ async function attempt(
   } catch (error) {
     warn("An adb tunnel cleanup call failed", {
       args,
-      error: cut(error instanceof Error ? error.message : String(error)),
+      error: cut(errorMessage(error)),
     });
   }
   return undefined;
@@ -319,10 +313,7 @@ export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): Androi
         );
       } catch (error) {
         return await refuse(
-          new DeviceTcpError(
-            "TUNNEL_FAILED",
-            `${named}: ${cut(error instanceof Error ? error.message : String(error))}`,
-          ),
+          new DeviceTcpError("TUNNEL_FAILED", `${named}: ${cut(errorMessage(error))}`),
         );
       }
       if (result.code !== 0) {
@@ -356,7 +347,7 @@ export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): Androi
             );
             if (removed.code !== 0) failure = new Error(cut(removed.stderr.trim()));
           } catch (error) {
-            failure = new Error(cut(error instanceof Error ? error.message : String(error)));
+            failure = new Error(cut(errorMessage(error)));
           }
           // why: a rule that is still set points at this port, so the listener stays reserved until the device's reclaim removes the rule.
           if (failure !== undefined) throw failure;

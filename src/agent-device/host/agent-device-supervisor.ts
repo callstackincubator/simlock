@@ -25,6 +25,7 @@ import {
 } from "../shared/daemon-environment.js";
 import type { AgentDeviceHealthProbe } from "./health.js";
 import { findAgentDevice, pathVariableOf } from "./install.js";
+import { errorMessage } from "../../shared/index.js";
 
 export type AgentDevicePlatform = "ios" | "android";
 
@@ -139,7 +140,7 @@ type ReadyOutcome =
 type ReapOutcome = { readonly ok: true } | { readonly ok: false; readonly message: string };
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 function describeExit(result: ProcessResult): string {

@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { OwnedRootError } from "../../core/index.js";
 import type { Filesystem } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 export const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 const MARK_FILE_NAME = "simlock-mark.json";
@@ -77,7 +78,7 @@ async function readFolder(filesystem: Filesystem, folder: string): Promise<strin
   } catch (error: unknown) {
     if (errorCode(error) === "ENOENT") return [];
     throw new OwnedRootError(
-      `Refusing the ios device set: ${folder} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      `Refusing the ios device set: ${folder} could not be read: ${errorMessage(error)}`,
       "unreadable",
       folder,
       "ios",

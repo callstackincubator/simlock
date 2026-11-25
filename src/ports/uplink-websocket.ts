@@ -37,6 +37,7 @@ import {
   type UplinkListenerFactory,
   type UplinkTransportConnection,
 } from "./uplink.js";
+import { errorMessage } from "../shared/index.js";
 
 // why: the daemon entry imports the router through this file, the one `ws` file it is already allowed to reach into.
 export { createUpgradeRouter } from "./upgrade-router.js";
@@ -380,11 +381,7 @@ function toUplinkError(error: unknown): UplinkError {
     code === "ENOTFOUND" ||
     code === "EHOSTUNREACH" ||
     code === "ETIMEDOUT";
-  return new UplinkError(
-    unreachable ? "unreachable" : "unknown",
-    error instanceof Error ? error.message : String(error),
-    error,
-  );
+  return new UplinkError(unreachable ? "unreachable" : "unknown", errorMessage(error), error);
 }
 
 function isUplinkPath(url: string | undefined): boolean {

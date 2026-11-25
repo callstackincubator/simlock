@@ -4,9 +4,10 @@ import { type RequestFrame, type RequestId } from "../daemon-protocol/index.js";
 import { leaseRelease, leaseReleaseRun, relayChannelSchema } from "../contract/index.js";
 import { type LinkChannel } from "../link/index.js";
 import { type ContractDispatcher, type DispatchSession } from "./dispatcher.js";
-import { type Connection, errorMessage } from "./server-connection.js";
+import { type Connection } from "./server-connection.js";
 import { parseInput, ProtocolError } from "./server-hello.js";
 import { ConnectionPushes } from "./server-pushes.js";
+import { errorMessage } from "../shared/index.js";
 
 interface ConnectionRequestsOptions {
   readonly dispatcher: ContractDispatcher;

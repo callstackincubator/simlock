@@ -24,6 +24,7 @@ import { writeError } from "../errors.js";
 import { reconnectToFarm } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
+import { errorMessage } from "../../shared/index.js";
 
 /**
  * why: A key that is safe to the left of `=` in a shell `export`. Anything else is a command
@@ -299,7 +300,7 @@ async function runLease(
       if (disconnected) {
         endHoldingLease(
           "DAEMON_CONNECTION_LOST",
-          `could not release the lease: ${error instanceof Error ? error.message : String(error)}`,
+          `could not release the lease: ${errorMessage(error)}`,
         );
       } else {
         queueErrorWrite(error);

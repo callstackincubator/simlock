@@ -12,6 +12,7 @@ import type { Clock, Logger } from "../ports/index.js";
 import { isUplinkLost, liveClient, type FleetViews, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetLeaseEntry, FleetLeaseIndex } from "./lease-index.js";
 import type { FleetLeaseRecord } from "./queue.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface FleetExecInput {
   readonly leaseId: string;
@@ -313,7 +314,7 @@ export class FleetForwarding {
       client.releaseLease({ leaseId: workerLeaseId }),
     ).catch((error: unknown) => {
       this.options.logger.warn("Failed to release a lease the gateway will not route", {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
         workerId,
         workerLeaseId,
       });

@@ -26,6 +26,7 @@ import type { SystemImage } from "./data.js";
 import { type DeviceProfile } from "./device-profile-source.js";
 import { fits, misfitReason } from "./image-fit.js";
 import type { AndroidSdkPaths } from "./sdk-paths.js";
+import { errorMessage } from "../../shared/index.js";
 
 // why: `sdkmanager --licenses` prompts once per outstanding license with a bare `y/N`. Answering
 // more times than there are real licenses is harmless -- the extra `y`s land after the prompt
@@ -180,9 +181,7 @@ export class SystemImages {
         { signal: options.signal, timeoutMs: COMPONENT_REMOVAL_TIMEOUT_MS },
       );
     } catch (error: unknown) {
-      throw new DriverCrashError(
-        `${command} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new DriverCrashError(`${command} failed: ${errorMessage(error)}`);
     }
     if (outcome.timedOut) {
       throw new DriverCrashError(
@@ -353,8 +352,7 @@ export class SystemImages {
       );
     } catch (error: unknown) {
       throw new DriverCrashError(
-        `${this.#sdk.sdkmanager} ${args.join(" ")} failed: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
+        `${this.#sdk.sdkmanager} ${args.join(" ")} failed: ` + `${errorMessage(error)}`,
       );
     }
     if (outcome.stopped) {

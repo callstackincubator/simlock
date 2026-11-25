@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import type { Filesystem } from "./filesystem.js";
 import { DATA_DIRECTORY_MODE, type DaemonRole } from "./paths.js";
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
+import { errorMessage } from "../shared/index.js";
 export type ServiceManagerName = "launchd" | "systemd" | "task-scheduler";
 
 export type ServiceState =
@@ -338,7 +339,7 @@ export class SystemdServiceManager implements ServiceManager {
         timeoutMs: LAUNCHCTL_TIMEOUT_MS,
       });
     } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = errorMessage(error);
       throw new ServiceFailedError(`systemctl ${userArgs.join(" ")} failed: ${reason}`);
     }
     if (result.code === null) {
