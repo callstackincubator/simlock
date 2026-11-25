@@ -126,3 +126,63 @@ describe("a platform nuke with --delete-devices", () => {
     expect(await android.sourcesOf(android.ios)).toEqual(kept.ios);
   });
 });
+
+describe("a platform nuke and the warm pool's learned kinds", () => {
+  it("forgets only that platform's learned kinds, a baseline kind included", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      knownModels: [request.model],
+      platform: "ios",
+    });
+    const android = new FakeDriver({
+      availableOsVersions: ["36"],
+      clock,
+      knownModels: [androidRequest.model],
+      platform: "android",
+    });
+    const harness = await createHarness({
+      driver: ios,
+      drivers: [ios, android],
+      limits: {
+        android: { maxDevices: 2, maxRunning: 2 },
+        ios: { maxDevices: 3, maxRunning: 3 },
+        maxRunning: 5,
+      },
+      startPool: true,
+      warmPool: { baselineLearnAfter: 1 },
+    });
+    const lease = async (spec: Parameters<typeof harness.engine.request>[0], who: string) =>
+      harness.engine.request(spec, { ownerId: who, requesterId: who });
+    const saver = await lease(request, "saver");
+    await harness.engine.core.baselines.save({
+      leaseId: saver.lease.id,
+      name: "checkout",
+      requesterId: "saver",
+    });
+    for (const [spec, who] of [
+      [request, "plain-ios"],
+      [{ baseline: "checkout", platform: "ios" }, "baseline-ios"],
+      [androidRequest, "plain-android"],
+    ] as const) {
+      await harness.engine.release((await lease(spec, who)).lease.id, "explicit");
+    }
+    await flush();
+    await harness.engine.core.passWarmPool();
+    const learned = () =>
+      harness.engine
+        .figures()
+        .targets.filter((target) => target.origin === "learned")
+        .map((target) => target.platform);
+    expect(learned().sort()).toEqual(["android", "ios", "ios"]);
+
+    await new Nuke({ executor: harness.engine, registry: harness.registry }).run({
+      deleteDevices: false,
+      platform: "ios",
+    });
+    await harness.engine.core.passWarmPool();
+
+    expect(learned()).toEqual(["android"]);
+  });
+});
