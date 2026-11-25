@@ -51,16 +51,20 @@ describe("CLI: simlock nuke --platform", () => {
       ["Nuke Simlock-managed devices? [y/N] "],
     ]);
 
-    for (const argv of [
-      ["nuke", "--yes", "--platform", "windows"],
-      ["nuke", "--yes", "--platform", "iOS"],
-      ["nuke", "--yes", "--platform"],
-    ]) {
-      const refused = await runNuke(argv);
+    for (const [argv, message] of [
+      [
+        ["nuke", "--yes", "--platform", "windows"],
+        "nuke --platform must be ios or android (run `simlock --help` for usage)",
+      ],
+      [
+        ["nuke", "--yes", "--platform", "iOS"],
+        "nuke --platform must be ios or android (run `simlock --help` for usage)",
+      ],
+      [["nuke", "--yes", "--platform"], "Option '--platform <value>' argument missing"],
+    ] as const) {
+      const refused = await runNuke([...argv]);
       expect([refused.code, refused.connected, argv.join(" ")]).toEqual([2, false, argv.join(" ")]);
-      expect(JSON.parse(refused.stderr)).toEqual({
-        error: { code: "USAGE", message: expect.any(String) },
-      });
+      expect(JSON.parse(refused.stderr)).toEqual({ error: { code: "USAGE", message } });
     }
 
     const help = await runNuke(["nuke", "--help"]);

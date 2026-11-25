@@ -615,7 +615,7 @@ simlock nuke [--delete-devices] [--platform <ios|android>] [--yes]
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--delete-devices` | Also delete every device, seed and baseline Simlock manages. | Off |
-| `--platform` | Reset one platform, `ios` or `android`: end its leases, stop and delete its devices, seeds and baselines, and make the warm pool forget its kinds. The other platform is left as it is. Any other value is a usage error. | Both platforms |
+| `--platform` | Reset one platform, `ios` or `android`: end its leases, stop its devices, and make the warm pool forget its kinds; with `--delete-devices` it also deletes its devices, seeds and baselines. The other platform is left as it is. Any other value is a usage error. | Both platforms |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).

@@ -20,7 +20,7 @@ async function run(
   }
   const { platform } = values;
   if (platform !== undefined && platform !== "ios" && platform !== "android") {
-    throw new UsageError(withHelpHint("nuke --platform takes ios or android"));
+    throw new UsageError(withHelpHint("nuke --platform must be ios or android"));
   }
   const confirmed =
     values.yes ??

@@ -814,7 +814,7 @@ function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }
 
-/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime, device type or simulator by id; a simulator gone from the sources set is named last, so a missing runtime is told first. */
+/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id; a simulator gone from the sources set is told last, with what to do, so a missing runtime is told first. */
 function sourceStaleReason(
   row: SourceRow,
   catalog: SimctlCatalog,
@@ -827,8 +827,14 @@ function sourceStaleReason(
   }
   return (
     catalogStaleReason(row, catalog) ??
-    (row.udid !== undefined && !folders.has(row.udid) ? `simulator ${row.udid} is gone` : undefined)
+    (row.udid !== undefined && !folders.has(row.udid) ? goneReason(row) : undefined)
   );
+}
+
+function goneReason(row: SourceRow): string {
+  return row.kind === "baseline"
+    ? "its simulator is gone; save it again"
+    : "its simulator is gone; the next lease of its kind makes it again";
 }
 
 function catalogStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {

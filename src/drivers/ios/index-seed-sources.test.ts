@@ -162,11 +162,10 @@ describe("IosSimctlDriver", () => {
     { name: "a stale source is refused", id: "planted-old", cloned: false },
     { name: "a source with no lineage is refused", id: "planted-unlineaged", cloned: false },
     {
-      name: "a source whose simulator is gone is refused, naming the simulator",
+      name: "a baseline whose simulator is gone is refused with what to do",
       id: "planted-gone",
       cloned: false,
-      refusal:
-        "source planted-gone is stale: simulator 00000000-0000-0000-0000-0000000000ff is gone",
+      refusal: "source planted-gone is stale: its simulator is gone; save it again",
     },
   ])("provision with a source: $name", async ({ id, cloned, refusal }) => {
     const namedUdid = "00000000-0000-0000-0000-0000000000bb";
@@ -615,7 +614,7 @@ describe("IosSimctlDriver", () => {
       edit: () => undefined,
       gone: true,
       persists: true,
-      reason: `simulator ${seedUdid} is gone`,
+      reason: "its simulator is gone; the next lease of its kind makes it again",
     },
     {
       name: "a baseline's simulator is gone, which a new simulator does not clear",
@@ -623,7 +622,7 @@ describe("IosSimctlDriver", () => {
       gone: true,
       persists: true,
       planted: { kind: "baseline", lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
-      reason: `simulator ${seedUdid} is gone`,
+      reason: "its simulator is gone; save it again",
     },
     {
       name: "its runtime is gone and so is its simulator, so the runtime is named first, and the simulator once the runtime is back",
@@ -633,7 +632,7 @@ describe("IosSimctlDriver", () => {
         );
       },
       gone: true,
-      later: `simulator ${seedUdid} is gone`,
+      later: "its simulator is gone; the next lease of its kind makes it again",
       reason: `runtime ${driverData.runtimeId} is not installed`,
     },
   ])(
