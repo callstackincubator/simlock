@@ -179,6 +179,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
         ...(options.downloads === undefined ? {} : { downloads: { policy: options.downloads } }),
         http: { enabled: true, host: "127.0.0.1", port },
+        warmPool: { refillDelayMs: 0 },
         lease: {
           defaultTtlMs,
           maxTtlMs,
