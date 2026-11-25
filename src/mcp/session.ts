@@ -16,6 +16,7 @@ import {
   awaitWithin,
   reconnectWhileWaiting,
   RELEASE_TIMEOUT_MS,
+  slimLeaseHint,
   startLeaseRenewal,
   startReconnect,
   UNREACHABLE_GIVE_UP_MS,
@@ -204,7 +205,8 @@ export class McpSession {
       }
       this.#heldLeaseId = grant.lease.id;
       this.#startRenewal(grant.lease);
-      return grant;
+      const hint = await slimLeaseHint({ clock: this.#clock, client, grant, frontend: "mcp" });
+      return hint === undefined ? grant : { ...grant, hint };
     });
   }
 

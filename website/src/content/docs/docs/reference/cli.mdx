@@ -149,6 +149,8 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--export-env` | Print the lease's environment as shell `export` lines in place of the JSON grant, for `eval "$(...)"`. | Off |
 | `--bind-pid <pid>` | Release the lease when this process exits, in place of the command's parent. Positive integer. Ignored with `--detach`. | The parent process |
 
+On a slim iOS simulator the command also prints one `notice` line on stderr, after the grant, that names the slim categories the lease has turned off and the way out: `{"notice":"slim: <categories> off; use --except <name> or --mode full"}` The categories are the iOS catalog's slim set minus the `--except` names the lease kept. The line is absent for a full, Android or physical lease, when `--except` keeps every category, and when the catalog read fails or takes longer than 2 seconds. It changes neither the grant on stdout nor the exit code, and `--detach` and `--export-env` print it too.
+
 Without `--detach`, the command renews the lease every third of its TTL and releases it on `SIGINT`, `SIGTERM`, or when the watched process exits. It exits:
 
 - 0 after it released the lease on request. The same signal or exit while the request still waits in the queue cancels the request and exits 0, with nothing printed on stdout.

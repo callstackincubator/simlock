@@ -3,6 +3,7 @@ import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
   startLeaseRenewal,
+  slimLeaseHint,
   startReconnect,
   UNREACHABLE_GIVE_UP_MS,
   type LeaseRenewal,
@@ -394,7 +395,20 @@ async function runLease(
     const result = { ...grant, role: client.role };
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult((value) => environment.stdout.write(value), result);
-    if (termination === undefined) return 0;
+    // why: the hint is a courtesy that may wait up to 2 s for the catalog; the grant is already out.
+    const writeHint = async (): Promise<void> => {
+      const hint = await slimLeaseHint({
+        clock: environment.clock,
+        client,
+        grant,
+        frontend: "cli",
+      });
+      if (hint !== undefined) environment.stderr.write(`${JSON.stringify({ notice: hint })}\n`);
+    };
+    if (termination === undefined) {
+      await writeHint();
+      return 0;
+    }
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
     const grantedLease = grant.lease;
     const beginRenewal = (ttlMs: number, ttlDeadline: number): void => {
@@ -473,6 +487,8 @@ async function runLease(
       };
     }
     beginRenewal(grant.lease.ttlMs, grant.lease.ttlDeadline);
+    // why: after onDropped is set, so a drop during the catalog wait reconnects like a full lease.
+    await writeHint();
     await Promise.race([termination.settled, leaseLostSignal, connectionLostSignal]);
     if (leaseLost) return LEASE_LOST_EXIT_CODE;
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
