@@ -40,7 +40,6 @@
       "Bash(.agents/scripts/review-inputs.sh *)",
       "Bash(scripts/slow-e2e.sh*)"
     ],
-    "ask": ["Bash(pnpm run test:e2e:slow*)", "Bash(pnpm test:e2e:slow*)"],
     "deny": [
       "Bash(git commit --no-verify*)",
       "Bash(git commit -n*)",
@@ -65,7 +64,8 @@
       "Bash(gh repo delete *)",
       "Bash(npm publish*)",
       "Bash(pnpm publish*)"
-    ]
+    ],
+    "ask": ["Bash(pnpm run test:e2e:slow*)", "Bash(pnpm test:e2e:slow*)"]
   },
   "hooks": {
     "PreToolUse": [
@@ -147,5 +147,27 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "ast-grep@simlock-pinned": true
+  },
+  "extraKnownMarketplaces": {
+    "simlock-pinned": {
+      "source": {
+        "source": "settings",
+        "name": "simlock-pinned",
+        "plugins": [
+          {
+            "name": "ast-grep",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/ast-grep/agent-skill.git",
+              "path": "ast-grep",
+              "sha": "0613dc7f82bbfb3b557380b54726b92f73358460"
+            }
+          }
+        ]
+      }
+    }
   }
 }

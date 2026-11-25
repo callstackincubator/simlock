@@ -25,6 +25,14 @@ Accepted ADRs under [docs/internal/adr/](docs/internal/adr/) bind; one
 marked _Accepted — not yet implemented_ is the target: build toward it, and
 never "fix" docs that describe it (ADRs 0004, 0005) back to today's code.
 
+## Code search
+
+Search for a code shape (a call form, a construct, a helper's body written
+again) with `ast-grep`, not grep; grep finds names and text. Before writing
+a helper, list what the modules already export. Outline a file before
+reading it in full. Commands and traps: [toolchain.md, Code
+search](docs/internal/agent-rules/toolchain.md#code-search).
+
 ## Where to look
 
 | Need                              | Read                                                                             |
