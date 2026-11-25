@@ -1,3 +1,4 @@
+import type { Platform } from "./domain.js";
 import type { NukeExecutor } from "./core-ports.js";
 import type { Registry } from "./registry.js";
 
@@ -8,6 +9,8 @@ export interface NukeOptions {
 
 export interface NukeRunOptions {
   readonly deleteDevices: boolean;
+  /** why: names the one platform to reset; absent resets both. */
+  readonly platform?: Platform;
 }
 
 /** Thin operator command facade over the dedicated nuke capability. */

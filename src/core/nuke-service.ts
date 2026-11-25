@@ -1,4 +1,4 @@
-import type { LeaseRecord, VirtualDevice } from "./domain.js";
+import type { LeaseRecord, Platform, VirtualDevice } from "./domain.js";
 import type { Driver } from "./driver.js";
 import { type Logger, NoopLogger } from "../ports/index.js";
 import type { NukeExecutor } from "./core-ports.js";
@@ -78,7 +78,7 @@ export class NukeService implements NukeExecutor {
     this.#logger = options.logger?.child("nuke") ?? new NoopLogger();
   }
 
-  async nuke(deleteDevices: boolean): Promise<NukeReport> {
+  async nuke(deleteDevices: boolean, _platform?: Platform): Promise<NukeReport> {
     let release!: () => void;
     const previous = this.#tail;
     this.#tail = new Promise<void>((resolve) => {
