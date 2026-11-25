@@ -1,5 +1,6 @@
 import type { ZodType } from "zod";
 
+import { capabilityNameSchema } from "../contract/index.js";
 import type { LogLevel } from "../ports/index.js";
 import type { AuthStrategyDefinition } from "../auth/index.js";
 import {
@@ -327,8 +328,6 @@ function capabilitiesValidator(modules: readonly ModuleConfigEntry[]): Validator
   };
 }
 
-/** why: the capability name pattern of the contract (`capabilityNameSchema`), repeated here because core never imports the contract; a tag is a capability a lease can require. */
-const TAG_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const MAX_TAGS = 8;
 
 /** why: ADR 0091 §1: a tag that names a module would hide that module's real state, so it is refused, also after an update adds such a module. */
@@ -336,7 +335,7 @@ function tagsValidator(modules: readonly ModuleConfigEntry[]): Validator {
   return (value, path) => {
     if (!Array.isArray(value)) throw invalidValue(path, "a list of tag names");
     value.forEach((name, index) => {
-      if (typeof name !== "string" || !TAG_NAME_PATTERN.test(name)) {
+      if (typeof name !== "string" || !capabilityNameSchema.safeParse(name).success) {
         throw invalidValue(
           `${path}[${String(index)}]`,
           "a name of 1 to 32 lowercase letters, digits and hyphens that starts with a letter",
