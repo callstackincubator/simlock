@@ -247,4 +247,15 @@ describe("doctorReportSchema's sources", () => {
     expect(parses({ ...source, orphan: false })).toBe(false);
     expect(doctorReportSchema.safeParse({ findings: [] }).success).toBe(false);
   });
+
+  it("keeps a quick seed's settled flag and lease count, and refuses a count that is negative or not whole", () => {
+    const quick = { ...source, settled: false, leases: 3 };
+    expect(doctorReportSchema.parse({ findings: [], sources: [quick] }).sources).toStrictEqual([
+      quick,
+    ]);
+    expect(parses({ ...source, settled: true, leases: 0 })).toBe(true);
+    expect(parses({ ...source, leases: -1 })).toBe(false);
+    expect(parses({ ...source, leases: 1.5 })).toBe(false);
+    expect(parses({ ...source, settled: "yes" })).toBe(false);
+  });
 });

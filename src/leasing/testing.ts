@@ -1,5 +1,11 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
+import {
+  type Clock,
+  type IdGenerator,
+  type Logger,
+  MemoryFilesystem,
+  type SystemStats,
+} from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import {
   type CapacityReader,
@@ -98,6 +104,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     decisions: options.decisions,
     drivers: options.drivers,
     eventBus: options.eventBus,
+    filesystem: new MemoryFilesystem(),
     logger: options.logger,
     ...(options.memoryPressure === undefined ? {} : { memoryPressure: options.memoryPressure }),
     modelPreferences: options.modelPreferences,

@@ -249,6 +249,28 @@ export interface EventMap {
     readonly leaseId: string;
     readonly requesterId: string;
   };
+  "seed.settle-started": {
+    readonly platform: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly imageTag?: string;
+    readonly sourceId: string;
+    readonly leases: number;
+    readonly trigger: "background" | "operator";
+  };
+  "seed.settle-ended": {
+    readonly platform: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly imageTag?: string;
+    readonly sourceId: string;
+    readonly outcome: "settled" | "cap" | "failed" | "aborted";
+    readonly reason?: "memory-pressure" | "daemon-stopping" | "nuke";
+    readonly message?: string;
+    readonly newSourceId?: string;
+    readonly sizeBytes?: number;
+    readonly durationMs: number;
+  };
   "baseline.removed": {
     readonly name: string;
     readonly version: number;
