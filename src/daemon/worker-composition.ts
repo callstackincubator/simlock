@@ -727,6 +727,7 @@ export async function composeWorker(
       auth,
     });
     const gateway = new HttpGateway(app, {
+      clock,
       host: config.http.host,
       logger: httpLogger,
       onServerCreated: (server) =>

@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { Server } from "node:http";
+import { connect, Socket } from "node:net";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
@@ -201,13 +202,22 @@ describe("withConsole", () => {
   });
 });
 
+// why: longer than any linger, so advancing the clock by it fires every timer an answer armed.
+const PAST_THE_LINGER_MS = 60_000;
+
 describe("HttpGateway", () => {
-  async function started(root: string, onServerCreated?: (server: Server) => void) {
+  async function started(
+    root: string,
+    onServerCreated?: (server: Server) => void,
+    fetch: (request: Request) => Response | Promise<Response> = () => new Response("api"),
+  ) {
+    const clock = new FakeClock(0);
     const logSink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock: new FakeClock(0), sink: logSink });
     const gateway = new HttpGateway(
-      { fetch: () => new Response("api") },
+      { fetch },
       {
+        clock,
         consoleRoot: root,
         host: "127.0.0.1",
         logger,
@@ -218,7 +228,7 @@ describe("HttpGateway", () => {
     const { port } = await gateway.start();
     const warnings = () =>
       logSink.records.filter((record) => record.level === "warn").map((r) => r.message);
-    return { gateway, port, warnings };
+    return { clock, gateway, port, warnings };
   }
 
   it("serves the console page at / on its listener, with no warning when it is built", async () => {
@@ -244,6 +254,98 @@ describe("HttpGateway", () => {
     try {
       expect(created?.requestTimeout).toBe(0);
     } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("an upload refused after its first bytes were read is answered, then its connection is cut while the client still sends, even when the adapter's half-close never becomes a close", async () => {
+    const refuseAfterFirstChunk = async (request: Request) => {
+      await request.body?.getReader().read();
+      return new Response("refused", { status: 503 });
+    };
+    const { clock, gateway, port } = await started(
+      await emptyRoot(),
+      undefined,
+      refuseAfterFirstChunk,
+    );
+    // why: on the macOS gateway in issue 1810 the adapter's `destroySoon()` sent the FIN and the close never followed; this holds the socket in that state.
+    const halfCloseOnly = vi.spyOn(Socket.prototype, "destroySoon").mockImplementation(function (
+      this: Socket,
+    ) {
+      this.end();
+    });
+    const client = connect({ allowHalfOpen: true, host: "127.0.0.1", port });
+    const sending = setInterval(() => client.write(Buffer.alloc(64 * 1024)), 5);
+    try {
+      let received = "";
+      client.on("data", (chunk: Buffer) => (received += chunk.toString()));
+      client.on("error", () => undefined);
+      const cut = new Promise<boolean>((resolve) => client.once("close", () => resolve(true)));
+      client.write(
+        "PUT /v1/upload HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 1099511627776\r\n\r\n",
+      );
+      await vi.waitFor(() => expect(clock.pendingTimerCount).toBe(1));
+
+      clock.advance(PAST_THE_LINGER_MS);
+      const wasCut = await cut;
+
+      expect(received).toMatch(/^HTTP\/1\.1 503 Service Unavailable\r\n[\s\S]*\r\nrefused/);
+      expect(wasCut).toBe(true);
+    } finally {
+      clearInterval(sending);
+      halfCloseOnly.mockRestore();
+      client.destroy();
+      await gateway.stop();
+    }
+  });
+
+  it("a request whose whole body arrived keeps its connection open for the next request, though the app never read the body", async () => {
+    const { clock, gateway, port } = await started(await emptyRoot());
+    const client = connect({ host: "127.0.0.1", port });
+    try {
+      let received = "";
+      client.on("data", (chunk: Buffer) => (received += chunk.toString()));
+      const put = "PUT /v1/upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4\r\n\r\nbody";
+      client.write(put);
+      await vi.waitFor(() => expect(received).toMatch(/\r\napi\r\n0\r\n\r\n$/));
+      clock.advance(PAST_THE_LINGER_MS);
+
+      client.write("GET /v1/healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+
+      await vi.waitFor(() => expect(received.match(/\r\napi\r\n/g)).toHaveLength(2));
+      expect(client.destroyed).toBe(false);
+    } finally {
+      client.destroy();
+      await gateway.stop();
+    }
+  });
+
+  it("a keep-alive connection that carries many answers sent before their bodies were read does not collect listeners", async () => {
+    let serverSocket: Socket | undefined;
+    const { clock, gateway, port } = await started(await emptyRoot(), (server) =>
+      server.on("connection", (socket: Socket) => (serverSocket = socket)),
+    );
+    const client = connect({ host: "127.0.0.1", port });
+    let received = "";
+    client.on("data", (chunk: Buffer) => (received += chunk.toString()));
+    const answers = () => received.match(/\r\napi\r\n/g)?.length ?? 0;
+    const post = "POST /v1/thing HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\nhi";
+    try {
+      client.write(post);
+      await vi.waitFor(() => expect(answers()).toBe(1));
+      clock.advance(PAST_THE_LINGER_MS);
+      const before = serverSocket?.listenerCount("close");
+
+      for (let sent = 2; sent <= 16; sent += 1) {
+        client.write(post);
+        await vi.waitFor(() => expect(answers()).toBe(sent));
+        clock.advance(PAST_THE_LINGER_MS);
+      }
+
+      expect(serverSocket?.listenerCount("close")).toBe(before);
+      expect(client.destroyed).toBe(false);
+    } finally {
+      client.destroy();
       await gateway.stop();
     }
   });
