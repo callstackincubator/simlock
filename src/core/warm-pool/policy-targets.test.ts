@@ -225,11 +225,9 @@ describe("warm pool policy", () => {
       const counted = ofKind("counted", "ready", { readyAt: 1 });
       const extra = ofKind("extra", "ready", { readyAt: 2, createdAt: 2 });
 
-      // A target of one counts the older device only; the other one is not targeted and goes.
       expect(proposalsOf(view([counted, extra], { targets: [target(1)] }))).toEqual([
         { action: "shutdown", deviceId: "extra", reason: "never-leased-idle" },
       ]);
-      // A queued request the extra device serves keeps it: it is about to be granted.
       expect(
         proposalsOf(
           view([counted, extra], { targets: [target(1)], waiting: [modelDemand("iPhone 17")] }),

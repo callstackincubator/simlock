@@ -2,7 +2,7 @@ import type { VirtualDevice, VirtualSpec } from "../domain.js";
 import type { PlannedCapacityDevice, RegisteredCapacityDevice } from "./strategy.js";
 
 /**
- * The one place a registry record or a spec becomes a capacity device. A slim
+ * why: The one place a registry record or a spec becomes a capacity device. A slim
  * device uses its platform's full RAM until its slim pass runs, so a device that
  * has not booted yet counts at the full size, whatever its spec plans. A device
  * still `provisioning` is one of those. Every other device counts by the mode its
@@ -24,7 +24,6 @@ export function capacityDevices(
   return records.map(capacityDevice);
 }
 
-/** A device about to be created counts at its platform's full size, whatever its spec plans. */
 export function plannedCapacityDevice(spec: VirtualSpec): PlannedCapacityDevice {
   return { mode: "full", platform: spec.platform };
 }

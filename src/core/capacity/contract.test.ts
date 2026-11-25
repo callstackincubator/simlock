@@ -6,10 +6,6 @@ import type { CapacityDevice, CapacityStrategy } from "./strategy.js";
 
 const gibibyte = 1024 ** 3;
 
-/**
- * Behaviour every strategy owes its callers, whatever policy it implements.
- * A new strategy is wired into this suite by the registry alone.
- */
 function build(name: CapacityStrategyName): CapacityStrategy {
   const systemStats = new FakeSystemStats({
     cpuCount: 8,

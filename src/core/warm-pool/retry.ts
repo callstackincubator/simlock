@@ -1,15 +1,11 @@
 import { type VirtualSpec, sameSpec } from "../domain.js";
 
-/** The wait after a spec's first failure; each further failure in a row doubles it. */
 export const RETRY_FIRST_MS = 60_000;
-/** The longest the wait grows to. */
 export const RETRY_MAX_MS = 600_000;
 
 interface Failure {
   readonly spec: VirtualSpec;
-  /** Failures in a row since the last success. */
   readonly count: number;
-  /** The first moment a try is allowed again. */
   readonly retryAt: number;
 }
 
@@ -46,7 +42,6 @@ export class RetrySchedule {
     this.#failures = this.#failures.filter((failure) => !sameSpec(failure.spec, spec));
   }
 
-  /** The earliest moment after `now` that a spec held back may be tried again. */
   nextAttemptAt(now: number): number | undefined {
     let earliest: number | undefined;
     for (const { retryAt } of this.#failures) {

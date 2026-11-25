@@ -9,7 +9,7 @@ const gibibyte = 1024 ** 3;
 function strategy(options: FixedStrategyOptions) {
   return fixedStrategy.create(
     options,
-    // Passed for interface parity only: nothing in this strategy reads it.
+    // why: Passed for interface parity only: nothing in this strategy reads it.
     new FakeSystemStats({ cpuCount: 1, totalRamBytes: gibibyte }),
   );
 }
@@ -93,7 +93,6 @@ describe("fixed strategy", () => {
       });
     }
     const shutdown: CapacityDevice = { mode: "slim", platform: "ios", state: "shutdown" };
-    // 1 GiB of RAM and three devices: a strategy with a RAM budget would refuse this boot.
     expect(fixed.canBoot(shutdown, [...mixed, shutdown])).toEqual({ ok: true });
     expect(fixed.ramBudget(mixed)).toBeUndefined();
   });

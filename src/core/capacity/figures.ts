@@ -6,12 +6,9 @@ import type {
   RunningCapacityEntry,
 } from "./strategy.js";
 
-/** What the figures are read from: the live strategy, through the engine. */
 export interface CapacityFiguresSource {
   readonly runningCapacity: RunningCapacity;
-  /** Managed-device ceiling, taken from the live strategy rather than from config. */
   deviceLimit(platform: CapacityPlatform): number;
-  /** `undefined` when the strategy keeps no RAM budget. */
   readonly ramBudget: RamBudget | undefined;
   atRamBudget(platform: CapacityPlatform): boolean;
 }
@@ -31,7 +28,7 @@ export interface CapacityFigures {
 }
 
 /**
- * The one place the capacity figures are built from a registry snapshot and the live strategy.
+ * why: The one place the capacity figures are built from a registry snapshot and the live strategy.
  * `status.get` reports them as they are; `capacity.changed` carries the part of them an event
  * history needs (`capacityChangedPayload`), so what an operator sees and what the history holds
  * cannot disagree.

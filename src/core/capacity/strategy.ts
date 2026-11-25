@@ -5,7 +5,6 @@ export type CapacityPlatform = "ios" | "android";
 
 export type CapacityMode = "slim" | "full";
 
-/** A device a strategy has yet to admit: what it will be, before it exists. */
 export interface PlannedCapacityDevice {
   readonly platform: CapacityPlatform;
   readonly mode: CapacityMode;
@@ -13,14 +12,11 @@ export interface PlannedCapacityDevice {
 
 export interface CapacityDevice extends PlannedCapacityDevice {
   readonly state: string;
-  /** The registry id, so the coordinator can find a device it holds a boot reservation for. */
   readonly id?: string;
 }
 
-/** A capacity device the registry knows, so a boot reservation can find it again. */
 export type RegisteredCapacityDevice = CapacityDevice & { readonly id: string };
 
-/** A strategy's RAM budget as it stands: its limit, what devices use, and whether use exceeds it. */
 export interface RamBudget {
   readonly limitBytes: number;
   readonly usedBytes: number;
@@ -55,7 +51,7 @@ export interface RunningCapacity {
 }
 
 /**
- * Decides how many devices may exist and run at once.
+ * why: Decides how many devices may exist and run at once.
  *
  * Implementations are pure: every decision is taken from the snapshot and
  * reservations handed in by `CapacityCoordinator`, which owns all the stateful
@@ -64,7 +60,7 @@ export interface RunningCapacity {
  */
 export interface CapacityStrategy {
   /**
-   * Whether `device` may be created. `devices` includes synthetic entries for
+   * why: Whether `device` may be created. `devices` includes synthetic entries for
    * in-flight provisioning reservations, and counts a device being booted at its
    * full size, so a strategy sees pending work as though it had already landed in
    * the registry.
@@ -89,19 +85,11 @@ export interface CapacityStrategy {
     reservations: readonly CapacityPlatform[],
   ): RunningCapacity;
 
-  /** Managed-device ceiling for a platform, for reporting. */
   deviceLimit(platform: CapacityPlatform): number;
 
-  /** The RAM budget over `devices`, or `undefined` for a strategy that keeps none. */
   ramBudget(devices: readonly CapacityDevice[]): RamBudget | undefined;
 }
 
-/**
- * A strategy's registry entry: its name, how to default and validate its own
- * options block, and how to build it. Adding a strategy means adding a
- * directory and one registry line -- nothing else in the config or the
- * coordinator changes.
- */
 export interface CapacityStrategyDefinition<Name extends string, Options> {
   readonly name: Name;
   defaults(systemStats: SystemStats): Options;

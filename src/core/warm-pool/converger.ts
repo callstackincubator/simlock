@@ -59,15 +59,9 @@ export interface WarmPoolOptions {
   };
   readonly acquisition: {
     kick(): void;
-    /** An operator reset (`nuke`) holds acquisition closed: the pool leaves every device alone. */
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
-    /**
-     * Resolves a request the way a lease request is resolved, with downloads off, and answers
-     * the spec or why there is none. A target is such a request (ADR 0007 §2, ADR 0015 §5).
-     */
     resolve(request: DeviceRequest): Promise<TargetResolution>;
-    /** The mode a request naming none plans on a platform: where a target with no mode lands. */
     defaultMode(platform: Platform): DeviceMode;
   };
   readonly capacity: Pick<
@@ -100,7 +94,6 @@ export interface WarmPoolOptions {
 /** why: how many failed boots or creations in a row make the pool give a learned kind up. */
 const LEARNED_FAILURES_LIMIT = 3;
 
-/** The tick that re-runs a pass when no event does, so a slot freed silently is still used. */
 export const WARM_POOL_TICK_MS = 30_000;
 
 /** why: a boot or creation of the pool that runs beside the pass, for a target or a waiter: its spec, and its end. */
@@ -127,7 +120,6 @@ export class WarmPool {
   readonly #unsubscribe: (() => void)[] = [];
   /** why: when a device whose shutdown failed may be tried again, by device id. */
   readonly #retryAfter = new Map<string, number>();
-  /** When a target's spec whose boot or creation failed may be tried again. */
   readonly #schedule = new RetrySchedule();
   readonly #flights = new Set<Flight>();
   readonly #learned: LearnedKinds;
@@ -138,35 +130,21 @@ export class WarmPool {
   #readLogged = false;
   #again = false;
   #disposed = false;
-  /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
   #draining = false;
   #started = false;
   /** why: the `readingAt` of the reading the last shed was proposed for: a reading sheds once, however many passes run on it. */
   #shedAt: number | undefined;
-  /** Devices shut down under an operator reset that have not left `shutdown` since. */
   readonly #reset = new Set<string>();
-  /** The targets the last pass planned for: their counts and specs, which `targeted()` also reads. */
   #resolved: readonly ResolvedTarget[] = [];
-  /** Targets refused as `unresolvable` that keep their last spec: spared, never planned for. */
   #spared: readonly ResolvedTarget[] = [];
   #hasResolved = false;
-  /** The spec each target last resolved to, which a transient refusal does not take away. */
   readonly #lastSpecs = new Map<string, VirtualSpec>();
-  /** Every target's state as the last pass left it. */
   #reports: readonly TargetReport[] = [];
   /** why: every report of the last pass, learned kinds included, which `figures()` lists and the log and the event leave out. */
   #figured: readonly TargetReport[] = [];
-  /** Whether a pass has left its reports yet: until one has, the figures come from the config. */
   #passed = false;
-  /**
-   * The configured targets (by position in `warmPool.targets`) that missed their count and have
-   * not been met since: the event fires on entering this, and a target leaves it only when its
-   * ready devices reach its count.
-   */
   #missed = new Set<number>();
-  /** Which configured targets each report stands for: a report merges those of one spec. */
   #covers = new WeakMap<TargetReport, readonly number[]>();
-  /** The spec each resolved target resolved to this pass, by position in `warmPool.targets`. */
   #owners: readonly { readonly index: number; readonly spec: VirtualSpec }[] = [];
   #loggedShort = new Set<string>();
   #retryTimer: TimerHandle | undefined;
@@ -347,7 +325,6 @@ export class WarmPool {
     this.#refillTimer = undefined;
   }
 
-  /** Runs a pass, or joins the one running and asks for one more. Resolves when they are done. */
   pass(): Promise<void> {
     if (this.#running !== undefined) {
       this.#again = true;
@@ -360,7 +337,6 @@ export class WarmPool {
     return running;
   }
 
-  /** Resolves once no pass is running or waiting, and no target boot or creation is running. */
   async settle(): Promise<void> {
     while (this.#running !== undefined || this.#flights.size > 0) {
       await this.#running;
@@ -369,7 +345,7 @@ export class WarmPool {
   }
 
   /**
-   * A graceful stop: starts nothing new, then waits for the pass and the boots and creations
+   * why: A graceful stop: starts nothing new, then waits for the pass and the boots and creations
    * already running (architecture rule 12). Without it each flight that ends would ask for the
    * next pass, and a stop would create every missing target device before it exited.
    */
@@ -379,7 +355,7 @@ export class WarmPool {
   }
 
   /**
-   * Closes the pool to new work, ahead of `drain`: a graceful stop closes it before anything it
+   * why: Closes the pool to new work, ahead of `drain`: a graceful stop closes it before anything it
    * waits for can ask for a pass.
    */
   close(): void {
@@ -415,11 +391,6 @@ export class WarmPool {
     );
   }
 
-  /**
-   * What `status`, `doctor` and the console read: the pool as the last pass left it. With the
-   * pool off, or before a pass has run, every configured target as the operator wrote it: short
-   * `disabled` with the pool off, and with no reason before the first pass.
-   */
   figures(): WarmPoolFigures {
     const { enabled, targets } = this.options.config;
     const reserveRunning = this.#reserveOnServedPlatforms();
@@ -458,7 +429,6 @@ export class WarmPool {
     });
   }
 
-  /** One timer, for the earliest moment a target held back by a failure may be tried again. */
   #armRetry(): void {
     if (this.#retryTimer !== undefined) this.options.clock.cancel(this.#retryTimer);
     this.#retryTimer = undefined;
@@ -540,7 +510,7 @@ export class WarmPool {
   }
 
   /**
-   * Resolves every target the way a request is resolved. Per pass, so a runtime installed since
+   * why: Resolves every target the way a request is resolved. Per pass, so a runtime installed since
    * the last one takes effect without a restart. Returns the reports of the targets that were
    * refused, one that failed to resolve for no settled reason included; the policy merges the
    * ones that resolved.
@@ -565,7 +535,7 @@ export class WarmPool {
         resolved.push({ count: target.count, spec: resolution.spec });
         continue;
       }
-      // A refusal that is no settled fact (no driver, no such runtime or model) may be a read that
+      // why: A refusal that is no settled fact (no driver, no such runtime or model) may be a read that
       // failed once: the target keeps the spec it last resolved to only to spare its devices, which
       // the pass does not treat as unwanted. It is reported short all the same, and gets no boot or
       // creation from a spec that may be stale.
@@ -573,7 +543,6 @@ export class WarmPool {
       if (last === undefined) this.#lastSpecs.delete(key);
       else spared.push({ count: target.count, spec: last });
       const report: TargetReport = {
-        // What of the spec it last resolved to is still being booted or created.
         booting:
           last === undefined
             ? 0
@@ -602,7 +571,6 @@ export class WarmPool {
     return { devices, isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId), leases };
   }
 
-  /** Keeps the reports, and logs a target the first pass it is short for a reason. */
   #note(reports: readonly TargetReport[]): void {
     this.#reports = reports;
     this.#passed = true;
@@ -624,7 +592,7 @@ export class WarmPool {
   }
 
   /**
-   * Emits `warm-pool.target-missed` for a target that is short after this pass and has not missed
+   * why: Emits `warm-pool.target-missed` for a target that is short after this pass and has not missed
    * since it was last met: the edge, not each short pass (ADR 0017 §7). A target that is filling,
    * or short again after a retry, is still the same miss; only ready devices reaching its count
    * end it. Once the pass's actions have run, so a subscriber never reads a pool the pass has not
@@ -658,7 +626,6 @@ export class WarmPool {
     }
   }
 
-  /** The configured targets a report stands for: its own, or those that resolved to its spec. */
   #coveredBy(report: TargetReport): readonly number[] {
     const own = this.#covers.get(report);
     if (own !== undefined) return own;
@@ -667,7 +634,6 @@ export class WarmPool {
       .map((owner) => owner.index);
   }
 
-  /** A configured target's kind as a report names it: the mode it names, else the platform's. */
   #kindOfTarget(target: WarmTarget): TargetKind {
     return {
       mode: target.mode ?? this.options.acquisition.defaultMode(target.platform),
@@ -713,7 +679,7 @@ export class WarmPool {
         shutdownAfterMs: this.options.idle.shutdownAfterMs,
       },
       devices,
-      // A `ready` device under a `boot` claim is one handed to a lease, not yet granted.
+      // why: A `ready` device under a `boot` claim is one handed to a lease, not yet granted.
       handoffInFlight: devices.some(
         (device) =>
           device.state === "ready" && this.options.claims.operationFor(device.id) === "boot",
@@ -813,7 +779,7 @@ export class WarmPool {
           step: "flight",
           error: stableError(error),
         });
-        // Held back like any failure, so the pass it asks for does not try again at once.
+        // why: Held back like any failure, so the pass it asks for does not try again at once.
         this.#failed(spec);
         return true;
       })
@@ -876,7 +842,7 @@ export class WarmPool {
   }
 
   /**
-   * Creates a device for a target and boots it. The reservation is taken in the gate, so the
+   * why: Creates a device for a target and boots it. The reservation is taken in the gate, so the
    * budget sees the device before it exists; the provisioner gives it back. The device is made
    * ready under an ownerless `boot` claim, so a request that serves it may wait on it (#369), and
    * the claim ends once it is ready and unleased.
@@ -909,7 +875,6 @@ export class WarmPool {
     return true;
   }
 
-  /** Remembers the failure; the pass the ended flight asks for arms the timer for the retry. */
   #failed(target: VirtualSpec): void {
     this.#schedule.failed(target, this.options.clock.now());
     if (this.#schedule.failures(target) < LEARNED_FAILURES_LIMIT) return;
@@ -932,7 +897,6 @@ export class WarmPool {
     );
   }
 
-  /** The device, when it is still in `state`, has no lease and no operation claim on it. */
   #unleased(deviceId: string, state: VirtualDevice["state"]): VirtualDevice | undefined {
     const { leases, virtualDevices: devices } = this.options.registry.snapshot;
     const device = devices.find((candidate) => candidate.id === deviceId);
@@ -984,7 +948,6 @@ function configuredOnly(reports: readonly TargetReport[]): TargetReport[] {
     });
 }
 
-/** A report as `figures()` lists it: the kind, the numbers and the reason, never the message. */
 function figureOf(report: TargetReport): WarmTargetFigures {
   return {
     ...report.kind,
@@ -998,7 +961,6 @@ function figureOf(report: TargetReport): WarmTargetFigures {
   };
 }
 
-/** A target as a request: the platform, the exact model, and what it names of OS and mode. */
 function requestFor(target: WarmTarget): DeviceRequest {
   return {
     model: target.model,

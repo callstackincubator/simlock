@@ -152,7 +152,6 @@ describe("resource strategy RAM budget by mode", () => {
     maxRunning: 40,
   };
 
-  /** 12 GiB of RAM leaves an 8 GiB budget once the 4 GiB reserve is taken. */
   function sized(ramBudget: ResourceStrategyOptions["ramBudget"]): CapacityStrategy {
     return resourceStrategy.create(
       { limits: roomy, ramBudget },
@@ -169,10 +168,6 @@ describe("resource strategy RAM budget by mode", () => {
     state = "ready",
   ): CapacityDevice => ({ mode, platform, state });
 
-  /**
-   * How many devices of one mode the strategy admits, one at a time, before it refuses. Each
-   * is planned at the full size, as every new device is, and counts by its mode once booted.
-   */
   function admitted(strategy: CapacityStrategy, mode: "slim" | "full"): number {
     const devices: CapacityDevice[] = [];
     while (strategy.canProvision({ mode: "full", platform: "ios" }, devices).ok) {
@@ -192,7 +187,6 @@ describe("resource strategy RAM budget by mode", () => {
       iosSlimBytesPerDevice: gibibyte,
     });
 
-    // 8 GiB, 2 GiB full, 1 GiB slim: the seventh slim device is the last with full-size room.
     expect(admitted(strategy, "full")).toBe(4);
     expect(admitted(strategy, "slim")).toBe(7);
   });
@@ -254,7 +248,6 @@ describe("resource strategy RAM budget by mode", () => {
     expect(strategy.ramBudget([device("ios", "slim")])?.usedBytes).toBe(2.5 * gibibyte);
     expect(strategy.ramBudget([device("android", "slim")])?.usedBytes).toBe(3 * gibibyte);
     expect(admitted(strategy, "slim")).toBe(admitted(strategy, "full"));
-    // The boot of a slim device adds nothing: its size already is the full one.
     const shutdown = device("ios", "slim", "shutdown");
     expect(
       strategy.canBoot(shutdown, [shutdown, device("ios", "full"), device("ios", "full")]),

@@ -23,13 +23,6 @@ const OS_RAM_RESERVE_BYTES = 4 * GIBIBYTE;
 // why: a shut-down device holds no RAM, so it is the one state the budget leaves out.
 const SHUTDOWN = "shutdown";
 
-/**
- * Device and running ceilings derived from the machine, with a RAM budget gate
- * on top: a device may be created only if its budgeted RAM still fits under the
- * machine's total minus a reserve left for the OS, and a shut-down device may
- * boot only if the full size it boots at still fits. Each device counts by its
- * own mode; a slim size left unset means the platform's full size.
- */
 export interface ResourceStrategyOptions {
   readonly limits: CapacityLimits;
   readonly ramBudget: {
@@ -129,7 +122,6 @@ const ramBudgetValidator = objectValidator({
   androidSlimBytesPerDevice: nonNegativeNumber,
 });
 
-/** Exported for the legacy top-level `limits` / `ramBudget` keys in `config.ts`. */
 export const resourceOptionValidators = {
   limits: limitsValidator,
   ramBudget: ramBudgetValidator,
