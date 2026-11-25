@@ -62,7 +62,7 @@ export interface NukeServiceOptions {
   /** why: a nuke deletes seeds, so no settle runs or swaps a seed while it does (ADR 0090 §2). */
   readonly seedSettler: Pick<SeedSettler, "holdWhile">;
   /** why: nuke starts the warm pool over, so the kinds it learned are not booted back. */
-  readonly warmPool: { forget(): void };
+  readonly warmPool: { forget(platform?: Platform): void };
 }
 
 /**
@@ -105,7 +105,7 @@ export class NukeService implements NukeExecutor {
         platform,
       );
       try {
-        this.options.warmPool.forget();
+        this.options.warmPool.forget(platform);
       } catch (error: unknown) {
         this.#logger.error("nuke could not clear the warm pool's record", {
           error: stableError(error),

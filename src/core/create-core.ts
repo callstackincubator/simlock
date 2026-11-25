@@ -398,7 +398,7 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
     seedSettler,
-    warmPool: { forget: () => warmPool.forget() },
+    warmPool: { forget: (platform) => warmPool.forget(platform) },
   });
   const doctor = new Doctor({
     baselines,
