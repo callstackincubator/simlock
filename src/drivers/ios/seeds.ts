@@ -132,9 +132,10 @@ export class Seeds {
     const orphans = await this.#orphanSources();
     if (rows.length === 0) return orphans;
     const catalog = await this.#simctl.loadCatalog();
+    const folders = new Set(await this.#sourceFolders());
     return [
       ...rows.map((row) => {
-        const staleReason = sourceStaleReason(row, catalog);
+        const staleReason = sourceStaleReason(row, catalog, folders);
         return {
           id: row.sourceId,
           kind: row.kind,
@@ -500,7 +501,11 @@ export class Seeds {
     if (row?.state !== "ready" || row.udid === undefined) {
       throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
     }
-    const reason = sourceStaleReason(row, await this.#simctl.loadCatalog());
+    const reason = sourceStaleReason(
+      row,
+      await this.#simctl.loadCatalog(),
+      new Set(await this.#sourceFolders()),
+    );
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
     return {
       lineage: row.lineage,
@@ -809,8 +814,12 @@ function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }
 
-/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
-function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime, device type or simulator by id; a simulator gone from the sources set is named last, so a missing runtime is told first. */
+function sourceStaleReason(
+  row: SourceRow,
+  catalog: SimctlCatalog,
+  folders: ReadonlySet<string>,
+): string | undefined {
   if (row.kind === "baseline" && row.lineage === undefined) {
     return row.savedWithoutLineage
       ? "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease"
@@ -828,6 +837,7 @@ function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | und
   if (!catalog.deviceTypes.some((entry) => entry.identifier === row.deviceTypeId)) {
     return `device type ${row.deviceTypeId} is not available`;
   }
+  if (row.udid !== undefined && !folders.has(row.udid)) return `simulator ${row.udid} is gone`;
   return undefined;
 }
 
