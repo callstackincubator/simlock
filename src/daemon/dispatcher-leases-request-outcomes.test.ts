@@ -173,16 +173,15 @@ describe("Dispatcher: lease.request requires", () => {
     );
     expect(afterUnavailable.lease.id).toBe(first.lease.id);
     for (const requires of [[...names, "vpn-eu"], names.slice(0, 1), undefined]) {
-      await expect(
-        dispatcher.dispatch(
+      const conflict = await dispatcher
+        .dispatch(
           "lease.request",
           { ...ask, ...(requires === undefined ? {} : { requires }) },
           session(),
-        ),
-      ).rejects.toMatchObject({
-        code: "IDEMPOTENCY_CONFLICT",
-        message: expect.stringContaining("or required capabilities"),
-      });
+        )
+        .catch((error: unknown) => error);
+      expect(classifyError(conflict)).toBe("IDEMPOTENCY_CONFLICT");
+      expect((conflict as Error).message).toContain("or required capabilities");
     }
     const restarted = (await buildDispatcher({ capabilitySources: [bank], state })).dispatcher;
     const afterRestart = await restarted.dispatch(
@@ -191,9 +190,10 @@ describe("Dispatcher: lease.request requires", () => {
       session(),
     );
     expect(afterRestart.lease.id).toBe(first.lease.id);
-    await expect(
-      restarted.dispatch("lease.request", { ...ask, requires: [...names, "vpn-eu"] }, session()),
-    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    const afterRestartConflict = await restarted
+      .dispatch("lease.request", { ...ask, requires: [...names, "vpn-eu"] }, session())
+      .catch((error: unknown) => error);
+    expect(classifyError(afterRestartConflict)).toBe("IDEMPOTENCY_CONFLICT");
 
     capability.current.state = "available";
     const empty = { ...IOS, idempotencyKey: "key-2", requesterId: "b" } as const;

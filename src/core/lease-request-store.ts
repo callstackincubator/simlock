@@ -23,6 +23,7 @@ export interface NewLeaseRequest {
   readonly leaseId?: string;
   readonly runId?: string;
   readonly label?: string;
+  readonly requires?: readonly string[];
   readonly fleetRequestId?: string;
   readonly request: DeviceRequest;
 }
@@ -110,6 +111,10 @@ export function newLeaseRequestRecord<Grant>(
       leaseId: input.leaseId,
       runId: input.runId,
       label: input.label,
+      requires:
+        input.requires === undefined || input.requires.length === 0
+          ? undefined
+          : [...input.requires],
       fleetRequestId: input.fleetRequestId,
     }),
     ownerId: input.ownerId,
