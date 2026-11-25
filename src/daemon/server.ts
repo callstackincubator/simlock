@@ -527,7 +527,7 @@ export class DaemonServer {
       isGatewayUplink: link !== undefined,
       link,
       // why: Overwritten by `Handshake.handle` before any dispatched request can read them -- every
-      // path that reaches `#handleRequest` has `connection.helloReceived === true` by
+      // path that reaches `ConnectionRequests.handle` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `Handshake.handle` until then). A session has its
       // token's principal from the start, and `hello` keeps it.
       principal: session?.principal ?? "",
