@@ -77,6 +77,16 @@ const startedPushSchema = z.object({
   requestId: requestIdSchema,
 });
 
+/**
+ * why: ADR 0010 §6: what a running `component.install` call hears, keyed by the originating
+ * request's frame id exactly as `progress` is. `waiting` while another install on the platform
+ * runs ahead of it; `downloading` once its own install runs, with `fraction` from 0 to 1 when
+ * the platform's installer printed one.
+ *
+ * `workerId` names the worker the update came from. A gateway relaying
+ * `worker.install-component` always sets it (ADR 0010 §7); a worker's own `component.install`
+ * never does.
+ */
 const componentProgressPushSchema = z.object({
   requestId: requestIdSchema,
   workerId: z.string().min(1).max(128).optional(),

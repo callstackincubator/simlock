@@ -1,6 +1,10 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+/**
+ * why: The web console's build (ADR 0011 §1, §2, §7). Run with `ui` as Vite's root (`vite build ui`),
+ * so every path below is relative to this directory.
+ */
 export default defineConfig({
   plugins: [react()],
   build: {

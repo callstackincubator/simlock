@@ -53,6 +53,9 @@ export interface ErrorDetailsMap {
   /** why: a missing `leaseId`, `runId` or `label` on either side counts as different, so a retry
    * that adds or drops one conflicts instead of replaying. */
   IDEMPOTENCY_CONFLICT: Record<string, never>;
+  /** why: `lease.request` named a `leaseId` an active lease or a waiting request already holds
+   * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the
+   * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
   LEASE_ID_TAKEN: { readonly leaseId: string };
   /** why: `lease.request` named a `leaseId` whose lease ended within `lease.endedIdRetentionMs`
    * (ADR 0074 §4); `endedAt` is when, in milliseconds since the epoch. The request is stored nowhere. */
@@ -91,6 +94,10 @@ export interface ErrorDetailsMap {
     readonly component: string;
     readonly timeoutMs: number;
   };
+  /**
+   * why: ADR 0010 §4: an explicit component install under `downloads.policy: "never"`. No role and
+   * no operation overrides that policy, so the install never starts.
+   */
   DOWNLOADS_DISABLED: { readonly policy: "never" };
   COMPONENT_NOT_OWNED: Record<string, never>;
   COMPONENT_IN_USE: { readonly devices: number; readonly foreignDevices: number };
