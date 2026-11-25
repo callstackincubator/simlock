@@ -521,7 +521,7 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await Promise.resolve();
     controller.abort();
 
-    await waitFor(() => state.state !== "pending" || harness.engine.queueDepth === 1);
+    await waitFor(() => state.state !== "pending");
     harness.clock.advance(60_001);
 
     expect(await outcome).toMatchObject({ code: "CANCELLED" });
