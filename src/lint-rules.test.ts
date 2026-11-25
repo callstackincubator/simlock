@@ -299,6 +299,15 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
+    "fails a shared file importing a component, a package or a Node module, and passes its own siblings",
+    [
+      ["fails", "src/shared/x.ts", "../core/index.js"],
+      ["fails", "src/shared/x.ts", "zod", "unbuilt"],
+      ["fails", "src/shared/x.ts", "node:path"],
+      ["passes", "src/shared/x.ts", "./y.js"],
+    ],
+  ],
+  [
     "fails a file inside drivers importing past the ios or android index from outside it, and passes the index",
     [
       ["fails", "src/drivers/installer-process.ts", "./ios/prerequisites.js"],
