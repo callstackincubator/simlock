@@ -1,16 +1,3 @@
-/**
- * MCP tool schemas, derived from the contract's operation schemas (ADR 0003 §11: "MCP tool
- * schemas are derived from the contract schemas. Tool names stay."). Nothing here hand-declares
- * a field the contract already declares -- each schema below is the contract's own zod object
- * for that operation, or a small `.omit()`/`.extend()`/`.partial()` composition of it. A
- * contract schema change is a compile-time (or, for a structurally-compatible-but-different
- * shape, a test) change here too, not a silent drift.
- *
- * Field names follow the contract's own vocabulary (camelCase: `leaseId`, `deviceId`,
- * `allowDownload`, ...), not the snake_case this module used before PR 4. This is a deliberate
- * break (0.x, ADR "Alternatives considered": "one vocabulary everywhere is the point") -- see
- * the PR report for the tradeoffs.
- */
 import { z } from "zod";
 
 import {
@@ -24,8 +11,6 @@ import {
   platformSchema,
   refuseModelWithClass,
 } from "../contract/index.js";
-
-// ---- lease_simulator ---------------------------------------------------------------------
 
 /**
  * why: `lease.request`'s input, minus the fields this tool never lets the caller set:
@@ -51,7 +36,7 @@ export const leaseSimulatorInputSchema = leaseRequestFields.omit({
 });
 
 /**
- * The tool's input with the contract's model-or-class check on top, for the handler to run
+ * why: The tool's input with the contract's model-or-class check on top, for the handler to run
  * before asking: the SDK lists and validates the plain object above, which is all it can read.
  */
 export const leaseSimulatorCheckedInputSchema =
@@ -61,8 +46,6 @@ export const leaseSimulatorCheckedInputSchema =
 export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output.extend({
   hint: z.string().optional(),
 });
-
-// ---- list_devices -------------------------------------------------------------------------
 
 export const listDevicesInputSchema = OPERATIONS["catalog.get"].input;
 
@@ -80,22 +63,15 @@ export const listDevicesOutputSchema = OPERATIONS["catalog.get"].output.extend({
   physicalDevices: z.array(physicalDeviceSchema),
 });
 
-// ---- release_simulator ---------------------------------------------------------------------
-
 export const releaseSimulatorInputSchema = OPERATIONS["lease.release"].input;
-/** `lease.release`'s output (`{leaseId}`) plus a friendly `released: true` literal -- an
- * addition on top of the contract shape, not a hand duplicate of it. */
 export const releaseSimulatorOutputSchema = OPERATIONS["lease.release"].output.extend({
   released: z.literal(true),
 });
 
-// ---- lease_status -------------------------------------------------------------------------
-
-/** `lease_status` is one `lease.list` call (ADR §9), not a session-local cache read. */
 export const leaseStatusInputSchema = OPERATIONS["lease.list"].input;
 
 /**
- * `lease.list` returns `{leases: LeaseRecord[]}`, filtered by the daemon to the owner
+ * why: `lease.list` returns `{leases: LeaseRecord[]}`, filtered by the daemon to the owner
  * principal only -- it can include leases this session never requested (see
  * `McpSession#status`'s doc comment). `session.ts` narrows that array down to at most one
  * entry -- the lease this session's own `lease()` call obtained, if any -- before this schema

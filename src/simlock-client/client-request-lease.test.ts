@@ -141,7 +141,6 @@ describe("requestLease abort (ADR §10)", () => {
     controller.abort();
     await flushMicrotasks();
 
-    // No lease.cancel was ever sent for an already-resolved request.
     expect(connection.sent).toHaveLength(before);
   });
 });
@@ -152,7 +151,6 @@ describe("principal resolution (ADR §4, B3)", () => {
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
     const hello = connection.lastSentOf("hello")!;
-    // No principal was supplied -- the daemon resolves its own default (a pid, in practice).
     expect((hello.payload as { principal?: string }).principal).toBeUndefined();
     connection.reply(hello.id, {
       daemonProtocolRange: { max: 3, min: 3 },
@@ -193,9 +191,6 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
     controller.abort();
     await flushMicrotasks();
     const cancelCall = connection.lastSentOf("lease.cancel")!;
-    // Before this fix, this was always "" -- the daemon fixes the connection's principal to
-    // its own default, and the client had no way to learn it. Sent as the resolved principal
-    // now, never "".
     expect((cancelCall.payload as { requesterId?: string }).requesterId).toBe("48213");
 
     connection.reply(cancelCall.id, { result: "cancelled" });
@@ -204,7 +199,6 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
 
     await expect(leasePromise).rejects.toMatchObject({ code: "CANCELLED" });
 
-    // No lease is held: connection death fires no onLeaseLost for anything.
     const leaseLost = vi.fn();
     client.onLeaseLost(leaseLost);
     connection.simulateDeath();
@@ -231,10 +225,6 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
     controller.abort();
     await flushMicrotasks();
     const cancelCall = connection.lastSentOf("lease.cancel")!;
-    // Before this fix, the daemon's `authorize` hook compared this `requesterId` straight to
-    // the principal and rejected FORBIDDEN outright -- exactly ADR §4's proxy case. The
-    // request is still sent with the proxied requesterId (attribution); the daemon now
-    // authorizes the cancel against the pending request's recorded *owner* instead.
     expect((cancelCall.payload as { requesterId?: string }).requesterId).toBe("agent-7");
     connection.reply(cancelCall.id, { result: "not-cancellable" });
     await flushMicrotasks();
@@ -247,7 +237,6 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
 
     await expect(leasePromise).rejects.toMatchObject({ code: "CANCELLED" });
 
-    // Already released via the abandoned-grant path -- not tracked as held any more.
     const leaseLost = vi.fn();
     client.onLeaseLost(leaseLost);
     connection.simulateDeath();
@@ -275,7 +264,6 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
     connection.fail(cancelCall.id, "FORBIDDEN", "not authorized");
 
     await expect(leasePromise).rejects.toMatchObject({ code: "FORBIDDEN" });
-    // Not misread as the connection dying -- it's still alive and usable for another call.
     expect(connection.closed).toBe(false);
     const anotherCall = client.cancelLease();
     await flushMicrotasks();

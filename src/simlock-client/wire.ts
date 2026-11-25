@@ -21,10 +21,6 @@ import type {
 } from "./types.js";
 import { errorMessage } from "../shared/index.js";
 
-/** The one legacy code a protocol-2 daemon answers `hello` with. There is no live protocol-2
- * daemon left in this repository to negotiate against, so this constant documents the historical
- * fact ADR §6's compatibility note depends on rather than something exercised against a real
- * peer. */
 const LEGACY_MISMATCH_CODE = "PROTOCOL_VERSION_MISMATCH";
 
 // why: the largest real daemon reply is a usage ledger of 100,000 entries, about 54 MB with every field set; this leaves it room.
@@ -40,22 +36,13 @@ export interface HelloResult {
   readonly daemonProtocolRange: ProtocolRange;
   readonly daemonVersion: string;
   readonly role: Role;
-  /** ADR §4: the connection's resolved, fixed-for-its-lifetime principal -- see
-   * `helloReplySchema`'s comment. */
   readonly principal: string;
 }
 
-/** The request-scoped pushes one call listens for, each routed to it by frame id. */
 export interface CallHooks {
   readonly onProgress?: ((progress: LeaseProgress) => void) | undefined;
-  /** ADR 0005 §19a's `output` push, routed exactly like `progress`: by frame id, to the call
-   * that is still waiting on it. */
   readonly onOutput?: ((chunk: DeviceOutputChunk) => void) | undefined;
-  /** ADR 0005 §19a's `started` push, routed by frame id like `output`. Fires once, between the
-   * spawn and the first chunk; a call that never sees it simply never had a process. */
   readonly onStarted?: (() => void) | undefined;
-  /** ADR 0010 §6's `component-progress` push, routed by frame id like `progress`. `workerId` is
-   * set when a gateway relays the update from one of its workers (§7). */
   readonly onComponentProgress?:
     | ((progress: ComponentInstallProgress, workerId: string | undefined) => void)
     | undefined;
@@ -115,7 +102,7 @@ export class SimlockWire {
    * never rolled back, it permanently muted the real `lease-lost` push that arrives when the
    * lease later expires for real. */
   readonly #deliveredLeaseLost = new Set<string>();
-  /** Last lease-scoped health kind delivered per lease id, so `device-unhealthy` and
+  /** why: Last lease-scoped health kind delivered per lease id, so `device-unhealthy` and
    * `device-recovered` toggle: delivering one clears the other's suppression, so an
    * unhealthy → recovered → unhealthy cycle (a real second crash) delivers all three, while a
    * duplicate push of the *same* state in a row (the owner-routed fan-out re-delivering one
@@ -156,7 +143,7 @@ export class SimlockWire {
     }
   }
 
-  /** Sends `hello` and returns its reply, or throws the contract's typed mismatch/auth error.
+  /** why: Sends `hello` and returns its reply, or throws the contract's typed mismatch/auth error.
    * Called exactly once, before any other frame -- see `client.ts`'s `connect*` functions. */
   async hello(options: HelloOptions): Promise<HelloResult> {
     let raw: unknown;
@@ -232,7 +219,6 @@ export class SimlockWire {
     return () => this.#eventListeners.delete(listener);
   }
 
-  /** Fires exactly once, when this connection dies (socket close/error, or `close()`). */
   onDeath(listener: (error: AnySimlockError) => void): () => void {
     this.#closeListeners.add(listener);
     return () => this.#closeListeners.delete(listener);
@@ -341,9 +327,6 @@ export class SimlockWire {
       case "output": {
         const parsed = PUSH_SCHEMAS.output.safeParse(payload);
         if (!parsed.success) return;
-        // Same routing as `progress` directly above, deliberately: both are request-scoped, and
-        // a chunk for a call that already settled (or was never this connection's) is dropped
-        // rather than surfaced anywhere -- ADR 0003 §8's rule for ids no longer tracked.
         const requestId = parsed.data.requestId;
         const id = typeof requestId === "number" ? requestId : Number(requestId);
         const pending = this.#pending.get(id);
@@ -353,8 +336,6 @@ export class SimlockWire {
       case "started": {
         const parsed = PUSH_SCHEMAS.started.safeParse(payload);
         if (!parsed.success) return;
-        // Same routing as `output` above: request-scoped, by frame id, dropped for a call that
-        // already settled or was never this connection's (ADR 0003 §8).
         const requestId = parsed.data.requestId;
         const id = typeof requestId === "number" ? requestId : Number(requestId);
         this.#pending.get(id)?.onStarted?.();
@@ -363,8 +344,6 @@ export class SimlockWire {
       case "component-progress": {
         const parsed = PUSH_SCHEMAS["component-progress"].safeParse(payload);
         if (!parsed.success) return;
-        // Same routing as `progress`: request-scoped, by frame id, dropped for a call that
-        // already settled or was never this connection's (ADR 0003 §8).
         const requestId = parsed.data.requestId;
         const id = typeof requestId === "number" ? requestId : Number(requestId);
         this.#pending.get(id)?.onComponentProgress?.(parsed.data.progress, parsed.data.workerId);

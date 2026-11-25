@@ -10,8 +10,6 @@ import type { leaseProgressSchema } from "../contract/schemas.js";
 type OpInput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["input"]>;
 type OpOutput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
 
-// ---- agent-visible operations -------------------------------------------------------------
-
 export type CatalogGetInput = OpInput<"catalog.get">;
 export type CatalogGetOutput = OpOutput<"catalog.get">;
 export type StatusGetOutput = OpOutput<"status.get">;
@@ -43,8 +41,6 @@ export type RotateOutput = OpOutput<"device.rotate">;
  * (ADR 0005 §19a). */
 export type ExecOutput = OpOutput<"device.exec">;
 
-// ---- admin-only operations ------------------------------------------------------------------
-
 export type LeaseReleaseAllOutput = OpOutput<"lease.release-all">;
 export type ListGetInput = OpInput<"list.get">;
 export type ListGetOutput = OpOutput<"list.get">;
@@ -72,9 +68,7 @@ export type TokenListOutput = OpOutput<"token.list">;
 export type TokenRevokeInput = OpInput<"token.revoke">;
 export type TokenRevokeOutput = OpOutput<"token.revoke">;
 
-// ---- fleet operations (ADR 0005 §23) ----------------------------------------------------------
-//
-// Declared on the admin client like every other admin row. A *worker* answers them as a fleet
+// why: Declared on the admin client like every other admin row. A *worker* answers them as a fleet
 // of one (ADR 0012): `worker.list` returns the worker itself, and drain, undrain and remove
 // answer `UNSUPPORTED_IN_WORKER_MODE`. They are not gated client-side: the daemon says what it
 // is, rather than the client guessing from a mode it was never told.
@@ -136,7 +130,7 @@ export interface LeaseLostPush {
   readonly leaseId: string;
   readonly deviceId: string;
   /**
-   * Why the daemon ended this lease: `"expired"`, `"explicit"`, `"killed"`, or
+   * why: Why the daemon ended this lease: `"expired"`, `"explicit"`, `"killed"`, or
    * `"device-lost"`. Always server-reported -- ADR 0004 §3 removed the client-synthesized
    * `"daemon-connection-lost"`, because a dead connection ends no lease, and `"closed"` left
    * the daemon's own vocabulary with it. Not a closed enum on the wire, so kept as `string`
@@ -156,14 +150,12 @@ export interface DeviceRecoveredPush {
   readonly attempts: number;
 }
 
-// ---- connect options --------------------------------------------------------------------------
-
 /** ADR 0005 §19a: `onOutput` is to `exec` what `onProgress` is to `requestLease` -- the live
  * half of one call, delivered while it is still in flight. A caller that omits it still gets
  * the exit code; the output is simply not observed. */
 export interface ExecOptions {
   readonly onOutput?: (chunk: DeviceOutputChunk) => void;
-  /** ADR 0005 §19a: the command's process now exists on the machine that owns the device --
+  /** why: ADR 0005 §19a: the command's process now exists on the machine that owns the device --
    * fired once, after every failure that can happen before a process exists and before any
    * output. A transport chooses its response shape on this, which is why a gateway forwarding
    * the command relays it rather than inferring one. */

@@ -1,5 +1,5 @@
 /**
- * The typed client (ADR 0003 §10): one connection, methods derived from the contract, and one
+ * why: The typed client (ADR 0003 §10): one connection, methods derived from the contract, and one
  * stateful behaviour -- abort. `connectSimlock`/`connectSimlockAdmin` (the two public entry
  * points, `../client/index.ts` and `../admin/index.ts`) both funnel through
  * `connectSimlockClient` here; the split between them is only which type the caller gets back
@@ -121,17 +121,13 @@ export {
 export type { RelayClientMethods, SimlockAdminClient, SimlockClient } from "./client-api.js";
 
 export interface ConnectOptions {
-  /** Pre-connected transport (a scripted `IpcConnection` in tests, or the real result of an
-   * `IpcConnector`). Exactly one of `connection`/`connector` must be given. */
+  /** why: Pre-connected transport (a scripted `IpcConnection` in tests, or the real result of an
+   * `IpcConnector`). It wins when set; otherwise `connector` and `endpoint` are both needed. */
   readonly connection?: IpcConnection;
-  /** A connector plus its endpoint -- the normal production path (`NodeIpcTransport` +
-   * a socket path). */
   readonly connector?: IpcConnector;
   readonly endpoint?: string;
-  /** ADR §4: the connection's fixed principal. Defaults to whatever the daemon assigns when
-   * omitted (today: its own default requester id). */
   readonly principal?: string;
-  /** ADR §5's first credential source in the resolution order: "the `credential` connect
+  /** why: ADR §5's first credential source in the resolution order: "the `credential` connect
    * option (programmatic client)". Only meaningful via `connectSimlockAdmin` -- the base
    * `connectSimlock` does not accept one, by design (ADR §10: "the split is by import path"). */
   readonly credential?: string;

@@ -36,24 +36,20 @@ interface StdinLifecycle {
   readonly readableEnded?: boolean;
 }
 
-/** The runner needs only the lifecycle portion of the SDK transport contract. */
 export interface McpTransport {
   close(): Promise<void>;
   onclose?: () => void;
 }
 
 export interface McpStdioEnvironment {
-  /** The `Clock` the session's renew timer runs on; a real one unless a test injects otherwise. */
   readonly clock?: Clock;
   readonly connect?: () => Promise<SimlockClient>;
-  /** The renew timer's connect (ADR 0004 §2) -- never launches a daemon. Falls back only to
+  /** why: The renew timer's connect (ADR 0004 §2) -- never launches a daemon. Falls back only to
    * the non-launching default, never to `connect`, so injecting `connect` alone cannot hand
    * the timer an auto-launching path; a test that wants both usually injects both. */
   readonly connectForRenew?: () => Promise<SimlockClient>;
   readonly createServer?: (session: McpSession, options: { readonly clock: Clock }) => McpServer;
   readonly createTransport?: () => McpTransport;
-  /** Source for `SIMLOCK_AGENT_ID` and the agent tool's session id (`resolveRequesterId`) when
-   * `requesterId` is not given explicitly. */
   readonly env?: NodeJS.ProcessEnv;
   readonly daemonFlag?: DaemonFlag;
   readonly requesterId?: string;
@@ -65,7 +61,7 @@ export interface McpStdioEnvironment {
   readonly webSocket?: WebSocketClientConnector;
   readonly serviceManager?: ServiceManager;
   readonly signals?: Signals;
-  /** The stdio transport currently does not surface stdin EOF as onclose. */
+  /** why: The stdio transport currently does not surface stdin EOF as onclose. */
   readonly stdin?: StdinLifecycle;
 }
 
@@ -74,22 +70,17 @@ export interface McpStdioRunner {
   readonly finished: Promise<void>;
 }
 
-/**
- * Connects the MCP server to stdio and remains pending until the connection closes.
- * The caller owns process exit status and any fatal diagnostic rendering.
- */
 export async function runMcpStdio(environment: McpStdioEnvironment = {}): Promise<void> {
   const runner = await startMcpStdio(environment);
   await runner.finished;
 }
 
-/** Starts an injectable MCP stdio lifecycle; primarily useful to integration-test shutdown. */
 export async function startMcpStdio(
   environment: McpStdioEnvironment = {},
 ): Promise<McpStdioRunner> {
   const env = environment.env ?? process.env;
   const requesterId = environment.requesterId ?? resolveRequesterId(env, `mcp:${process.pid}`);
-  // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
+  // why: One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
   // loop must not be able to disagree about what time it is (architecture rule 9).
   const clock = environment.clock ?? new SystemClock();
   const remote = environment.remote;
@@ -101,7 +92,7 @@ export async function startMcpStdio(
     clock,
     ...(remote === undefined ? {} : { farm: { origin: remote.url, requesterId } }),
     connect: environment.connect ?? defaults.connect,
-    // Never falls back to `connect`: that one may auto-launch a daemon, and ADR 0004 §2 is
+    // why: Never falls back to `connect`: that one may auto-launch a daemon, and ADR 0004 §2 is
     // explicit that the renew timer must not -- an embedder supplying only `connect` gets the
     // non-launching default rather than a timer that could undo an operator's `daemon stop`.
     connectForRenew: environment.connectForRenew ?? defaults.connectForRenew,
@@ -115,7 +106,7 @@ export async function startMcpStdio(
     resolveFinished = resolve;
   });
   let shutdownPromise: Promise<void> | undefined;
-  // Guards synchronous re-entrancy, not just repeated calls after the fact: the SDK's
+  // why: Guards synchronous re-entrancy, not just repeated calls after the fact: the SDK's
   // own transport.close() can invoke `onclose` synchronously, inside the same call
   // stack that reaches it via `server.close()` below -- at that point `shutdownPromise
   // ??= ...` has not finished assigning yet (the assignment happens only after the IIFE
@@ -145,7 +136,7 @@ export async function startMcpStdio(
       signals.off("SIGINT", onSignal);
       signals.off("SIGTERM", onSignal);
       stdin.off("end", onStdinEnd);
-      // McpServer owns its transport once connect starts; its close() closes the
+      // why: McpServer owns its transport once connect starts; its close() closes the
       // transport and fires onclose. Close a never-connected transport ourselves.
       await Promise.allSettled([
         session.close(),
@@ -221,7 +212,7 @@ function defaultEnvironment(
     return home;
   };
   return {
-    // The tool-call trigger: auto-launches a daemon that is not running, exactly as the CLI
+    // why: The tool-call trigger: auto-launches a daemon that is not running, exactly as the CLI
     // does. ADR 0004 §2/§4: the session keeps its lease alive with its own `lease.renew` timer
     // and releases explicitly when the agent goes away (stdin EOF -> session.close()), so it
     // declares no daemon-initiated heartbeat -- there is none left to declare.
@@ -242,7 +233,7 @@ function defaultEnvironment(
         socketPath: resolveDaemonSocketPath(dataDirectory),
       });
     },
-    // The renew timer's trigger: connects to a daemon that is already listening and never
+    // why: The renew timer's trigger: connects to a daemon that is already listening and never
     // launches one, so an operator's `simlock daemon stop` is not undone by an idle session
     // (ADR 0004 §2).
     connectForRenew: async () =>

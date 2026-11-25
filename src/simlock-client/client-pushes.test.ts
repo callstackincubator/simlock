@@ -20,7 +20,7 @@ describe("pushes", () => {
     await flushMicrotasks();
     const requestCall = connection.lastSentOf("lease.request")!;
 
-    // A push can arrive before the response to the request that caused it (ADR §8).
+    // why: A push can arrive before the response to the request that caused it (ADR §8).
     connection.push("progress", {
       progress: { etaMs: 500, stage: "provisioning" },
       requestId: requestCall.id,
@@ -30,7 +30,6 @@ describe("pushes", () => {
 
     expect(onProgress).toHaveBeenCalledWith({ etaMs: 500, stage: "provisioning" });
 
-    // Dropped: no call is tracked under this id any more.
     connection.push("progress", {
       progress: { etaMs: 1, stage: "booting" },
       requestId: requestCall.id,
@@ -79,7 +78,6 @@ describe("pushes", () => {
   });
 
   it("routes component-progress pushes to that installComponent call's onProgress, and stops at its reply", async () => {
-    // ADR 0010 §6: `component-progress` is request-scoped like `progress`.
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection });
     await flushMicrotasks();
@@ -119,7 +117,6 @@ describe("pushes", () => {
   });
 
   it("hands installComponentOnWorkers each relayed update with its workerId, and drops one that names no worker", async () => {
-    // ADR 0010 §7: a gateway sets `workerId` on every `component-progress` push it relays.
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection });
     await flushMicrotasks();
@@ -157,8 +154,6 @@ describe("pushes", () => {
   });
 
   it("routes device.exec output chunks to that call's onOutput, in order, and stops at its reply", async () => {
-    // ADR 0005 §19a: `output` is request-scoped like `progress`, so it reaches the call that is
-    // still waiting on its frame id and nothing else.
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
@@ -188,8 +183,6 @@ describe("pushes", () => {
       { chunk: "two", stream: "stderr" },
     ]);
 
-    // The call is no longer tracked, so a late chunk is dropped rather than delivered to a
-    // caller that has already been told the command finished.
     connection.push("output", { chunk: "late", requestId: execCall.id, stream: "stdout" });
     expect(onOutput).toHaveBeenCalledTimes(2);
   });
@@ -232,10 +225,6 @@ describe("pushes", () => {
   });
 
   it("routes a device.exec started push to that call's onStarted, once, before output, and not to another call in flight", async () => {
-    // ADR 0005 §19a: `started` is request-scoped like `output` -- the fact a transport chooses
-    // its response shape on. Round 5 review: the send site and this route could both be deleted
-    // with the whole suite green, because every test of this frame stopped at the coordinator's
-    // own callback. This one exercises the wire.
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
@@ -257,7 +246,6 @@ describe("pushes", () => {
     connection.push("started", { requestId: firstCall.id });
     connection.push("output", { chunk: "one", requestId: firstCall.id, stream: "stdout" });
 
-    // Only the call it names, and before that call's own output.
     expect(first.onStarted).toHaveBeenCalledTimes(1);
     expect(second.onStarted).not.toHaveBeenCalled();
     expect(first.onStarted.mock.invocationCallOrder[0]).toBeLessThan(
@@ -269,7 +257,6 @@ describe("pushes", () => {
     await expect(firstPromise).resolves.toEqual({ exitCode: 0 });
     await expect(secondPromise).resolves.toEqual({ exitCode: 0 });
 
-    // Settled calls are no longer tracked, so a late frame is dropped rather than delivered.
     connection.push("started", { requestId: firstCall.id });
     expect(first.onStarted).toHaveBeenCalledTimes(1);
   });
@@ -316,7 +303,7 @@ describe("pushes", () => {
       reason: "crashed",
     });
     connection.push("device-recovered", { attempts: 1, deviceId: "device_1", leaseId: "lease_1" });
-    // A genuine second crash on the same lease -- `LeaseHealthMonitor` clears its recovery
+    // why: A genuine second crash on the same lease -- `LeaseHealthMonitor` clears its recovery
     // bookkeeping after a successful recovery, so this is a real, distinct fact, not a
     // redundant re-push of the first one.
     connection.push("device-unhealthy", {
@@ -345,7 +332,6 @@ describe("pushes", () => {
       reason: "crashed",
     });
     connection.push("device-recovered", { attempts: 1, deviceId: "device_1", leaseId: "lease_1" });
-    // The owner-routed fan-out re-delivering the same recovered fact must still be suppressed.
     connection.push("device-recovered", { attempts: 1, deviceId: "device_1", leaseId: "lease_1" });
 
     expect(recovered).toHaveBeenCalledTimes(1);
@@ -388,7 +374,7 @@ describe("pushes", () => {
     const releasePromise = client.releaseLease({ leaseId: "lease_1" });
     await flushMicrotasks();
     const releaseCall = connection.lastSentOf("lease.release")!;
-    // Unlike the real daemon (which never sends this push to the releasing connection), the
+    // why: Unlike the real daemon (which never sends this push to the releasing connection), the
     // scripted connection sends nothing here either -- this asserts the client does not
     // itself need to remember and swallow a self-initiated release.
     connection.reply(releaseCall.id, { leaseId: "lease_1" });
@@ -415,14 +401,13 @@ describe("pushes", () => {
     );
     await grantPromise;
 
-    // The release itself fails -- e.g. an agent-role client hitting FORBIDDEN.
     const releasePromise = client.releaseLease({ leaseId: "lease_1" });
     await flushMicrotasks();
     const releaseCall = connection.lastSentOf("lease.release")!;
     connection.fail(releaseCall.id, "FORBIDDEN", "not authorized");
     await expect(releasePromise).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-    // The lease later genuinely expires/crashes -- this is a real loss the client must
+    // why: The lease later genuinely expires/crashes -- this is a real loss the client must
     // still surface, not residue from the earlier failed release attempt.
     connection.push("lease-lost", {
       deviceId: "device_1",
@@ -444,7 +429,7 @@ describe("pushes", () => {
     completeHello(connection);
     const client = await connectPromise;
 
-    // Not reachable against a protocol-4 daemon (the ranges do not overlap, so `hello` fails
+    // why: Not reachable against a protocol-4 daemon (the ranges do not overlap, so `hello` fails
     // first), but the wire must not answer a push it no longer understands.
     connection.push("lease.heartbeat", { nonce: 12345 });
     await flushMicrotasks();
@@ -512,7 +497,7 @@ describe("event pushes", () => {
     ]) {
       connection.push("event", { subscriptionId: "sub_1", event: bad });
     }
-    // `1e999` is valid JSON that parses to Infinity, a value JSON.stringify cannot emit; the
+    // why: `1e999` is valid JSON that parses to Infinity, a value JSON.stringify cannot emit; the
     // same raw channel carries the well-formed twin, which proves the line is delivered at all.
     const rawPush = (timestamp: string) =>
       JSON.stringify({
