@@ -86,6 +86,11 @@ describe("HTTP API", () => {
       ]),
     });
 
+    // why: 4. An admin-only route rejects an agent token with 403, not 401 -- the token
+    //    is valid, it just doesn't carry the role this route requires. `GET /v1/devices`
+    //    dispatches `list.get`, which the contract declares `role: "admin"` (ADR 0003 §3);
+    //    `GET /v1/leases` dispatches `lease.list`, which is `role: "agent"` and so is not a
+    //    usable 403 fixture any more.
     const operatorRouteAsAgent = await fetch(`${baseUrl}/v1/devices`, { headers: agentAuth });
     expect(operatorRouteAsAgent.status).toBe(403);
     expect(((await operatorRouteAsAgent.json()) as { error: { code: string } }).error.code).toBe(
@@ -202,6 +207,9 @@ describe("HTTP API", () => {
       error: { code: "BAD_REQUEST" },
     });
 
+    // why: The same request with `allowDownload: true`, which settles its own `201` synchronously
+    // rather than waiting on the dispatch -- the case that used to slip past the cap and fail
+    // later on the request resource instead.
     const overCapWithDownload = await postJson("/v1/lease-requests", {
       platform: "ios",
       device: "iPhone 16",

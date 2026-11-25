@@ -145,6 +145,13 @@ describe("leased device crash recovery", () => {
     await held.waitForExit(15_000).catch(() => undefined);
   });
 
+  // why: Regression guard: writing this suite found that the held CLI never learned its
+  // lease had died. The daemon has always pushed `lease-lost` for a `device-lost`
+  // release -- the same push MCP's `#handleLeaseLost` reacts to -- but `runLease`'s
+  // onPush handler ignored that kind, so the held process neither reported the loss
+  // nor exited; it sat forever awaiting an OS signal while holding nothing. Recovery
+  // giving up is the first thing that ends a lease with no human involved, which is
+  // what made the gap matter enough to fix.
   it("gives the lease up as device-lost when a leased device cannot be recovered, and the held CLI reports it and exits 14", async () => {
     const env = await withDaemon({
       configOverrides: {
@@ -188,6 +195,9 @@ describe("leased device crash recovery", () => {
       label: "held CLI reports the lease ending",
       timeout: 5_000,
     });
+    // why: `deviceId` here is the registry device id (what `simlock list --devices` calls
+    // `id`), not the driver's `driverDeviceId` the grant returns on stdout -- these
+    // pushes carry the same identifier the event bus does.
     const lost = healthLines(held).find((line) => line.push === "lease-lost");
     expect(lost).toMatchObject({
       deviceId: expect.stringMatching(/^dev_/),
@@ -195,6 +205,8 @@ describe("leased device crash recovery", () => {
       reason: "device-lost",
     });
 
+    // why: It must also stop holding a lease it no longer has, with an exit code that
+    // distinguishes "the daemon took it" from a holder ending its own lease.
     const exit = await held.waitForExit(5_000);
     expect(exit.code).toBe(14);
   });
