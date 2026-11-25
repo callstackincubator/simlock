@@ -10,15 +10,13 @@ describe("AdbRegistrar", () => {
 
     await registrar.register(5587);
 
-    // Four hex digits of length, big-endian, then the service: `host:emulator:5587`
-    // is 18 characters, so `0012`.
     expect(tcp.sends).toEqual([{ payload: "0012host:emulator:5587", port: 5038 }]);
   });
 
   it("treats no reply at all as success", async () => {
     const tcp = new FakeTcpProbe();
 
-    // adb's own source says of this service that "we don't even need to send a reply", so
+    // why: adb's own source says of this service that "we don't even need to send a reply", so
     // silence is the ordinary answer rather than a lost round trip.
     await expect(
       new AdbRegistrar({ serverPort: 5038, tcp }).register(5587),

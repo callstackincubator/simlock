@@ -41,7 +41,7 @@ async function missingAndroidPrerequisites(
     platform,
   );
   if (location.kind === "absent") {
-    // One finding, not one per tool: with no SDK at all, every tool is missing for the same reason.
+    // why: One finding, not one per tool: with no SDK at all, every tool is missing for the same reason.
     return [
       {
         message: `No Android SDK found; searched: ${location.searched.join(", ")}.`,
@@ -53,7 +53,6 @@ async function missingAndroidPrerequisites(
     ];
   }
 
-  // The SDK discovery runs, when it found one; otherwise the first root there is.
   const root = location.kind === "complete" ? location.paths.root : location.root;
   const missing: MissingPrerequisite[] = [];
   const tools = await sdkToolBin(root, options.filesystem, platform);
@@ -118,7 +117,7 @@ async function outdatedEmulator(
 }
 
 /**
- * `sdkmanager` is a Java program, so a failing `--version` is how a missing or unusable JDK
+ * why: `sdkmanager` is a Java program, so a failing `--version` is how a missing or unusable JDK
  * shows. A run the timeout ended (`null` exit code) says nothing about the JDK and rejects.
  */
 async function missingJdk(

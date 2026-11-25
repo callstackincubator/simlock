@@ -92,7 +92,6 @@ describe("labelsFor", () => {
   it("dedupes labels shared across categories and sorts them", () => {
     const store = SLIM_CATEGORIES.find((c) => c.name === "store")!;
     const icloud = SLIM_CATEGORIES.find((c) => c.name === "icloud")!;
-    // store and icloud both list com.apple.amsaccountsd et al.
     const labels = labelsFor([store, icloud]);
     const asSet = new Set(labels);
     expect(asSet.size).toBe(labels.length);

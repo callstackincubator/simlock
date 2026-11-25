@@ -17,7 +17,6 @@ async function writeFile(filesystem: MemoryFilesystem, path: string): Promise<vo
   await filesystem.writeFileAtomic(path, "");
 }
 
-/** A complete SDK at `sdk`, minus whatever `without` names. */
 async function sdkFilesystem(
   without: readonly ("cmdline-tools" | "emulator" | "platform-tools")[] = [],
 ): Promise<MemoryFilesystem> {
@@ -163,7 +162,6 @@ describe("androidPrerequisites", () => {
 
   it("reports android-cmdline-tools when no tool bin is complete, and does not run sdkmanager", async () => {
     const filesystem = await sdkFilesystem(["cmdline-tools"]);
-    // A bin with only one of the two tools is not complete.
     await writeFile(filesystem, sdkmanager);
     const runner = new ScriptedProcessRunner([EMULATOR_ACCEPTS_EVERYTHING]);
 
@@ -284,7 +282,7 @@ describe("androidPrerequisites", () => {
   });
 
   it("rejects when `sdkmanager --version` times out, and reports nothing as missing", async () => {
-    // A `null` exit code is how the runner reports a process its timeout ended.
+    // why: A `null` exit code is how the runner reports a process its timeout ended.
     const runner = new ScriptedProcessRunner([
       sdkmanagerVersion({ code: null, stderr: "", stdout: "" }),
     ]);

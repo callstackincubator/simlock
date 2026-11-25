@@ -44,7 +44,7 @@ describe("runInstallerProcess", () => {
   });
 
   it("reads a percentage written with a decimal comma, as xcodebuild prints it in a region that uses one", async () => {
-    // Byte for byte as `xcodebuild -downloadPlatform iOS -buildVersion 18.4` wrote it under
+    // why: Byte for byte as `xcodebuild -downloadPlatform iOS -buildVersion 18.4` wrote it under
     // language English, region Poland: one `\n`, then `\r`-separated redraws, a line with only
     // the title, a "Preparing" line, comma decimals in the percentage and the sizes, and a
     // redraw padded with trailing spaces.

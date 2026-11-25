@@ -16,10 +16,6 @@ import {
 import { AndroidDriver } from "./index.js";
 import { binaries, memoryAndroidSourceDatabase } from "./testing.js";
 
-// Two Simlock instances on one machine, set up the way CLI.md and CONFIGURATION.md say to:
-// a distinct `SIMLOCK_HOME` each, and a distinct `drivers.android.adbServerPort` each.
-// They share the SDK, the system images, and the machine's TCP ports.
-
 const sdk = "/android-sdk";
 const home = "/home/simlock";
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
@@ -28,7 +24,6 @@ const spec = { physical: false, model: "Pixel 8", osVersion: "34", platform: "an
 interface Instance {
   readonly adbServerPid: number;
   readonly adbServerPort: number;
-  /** The id of the first AVD this instance creates; its name is `simlock_<avdId>`. */
   readonly avdId: string;
   readonly instanceId: string;
   readonly simlockHome: string;
@@ -53,7 +48,7 @@ describe("AndroidDriver with two Simlock instances on one machine (#257)", () =>
   it("boots a device on a console port no other instance's emulator is listening on", async () => {
     const machine = await Machine.with([first, second]);
 
-    // The second instance is already running when the first boots a device, so nothing has
+    // why: The second instance is already running when the first boots a device, so nothing has
     // announced that emulator to the second instance's server.
     const secondDriver = await machine.start(second);
     const firstDriver = await machine.start(first);
@@ -88,14 +83,10 @@ describe("AndroidDriver with two Simlock instances on one machine (#257)", () =>
  * above it are TCP ports on the machine, so a probe sees them whichever instance owns them.
  */
 class Machine {
-  /** Console port -> the AVD whose emulator is listening on it. */
   readonly #listening = new Map<number, string>();
-  /** Console port -> the directory of the AVD whose emulator is listening on it. */
   readonly #avdPaths = new Map<number, string>();
-  /** Console port -> the adb servers holding a transport to the emulator on it. */
   readonly #attached = new Map<number, Set<number>>();
   readonly #exits = new Map<number, () => void>();
-  /** AVD name -> the console port its emulator was last started on. */
   readonly spawnedOn = new Map<string, number>();
   #nextPid = 1;
 
@@ -112,7 +103,6 @@ class Machine {
     }
     await filesystem.mkdirp(`${sdk}/system-images/android-34/google_apis/arm64-v8a`);
     for (const instance of instances) {
-      // Each instance's own root, created and marked by an earlier run of that instance.
       const root = deviceRootOf(instance);
       await filesystem.mkdirp(root);
       await filesystem.writeFileAtomic(
@@ -124,7 +114,6 @@ class Machine {
           schemaVersion: 1,
         }),
       );
-      // Each instance's own adb server, already running, which the driver adopts.
       await filesystem.writeFileAtomic(
         `${instance.simlockHome}/adb-server.json`,
         JSON.stringify({ pid: instance.adbServerPid, port: instance.adbServerPort, startedAt: 1 }),
@@ -133,7 +122,7 @@ class Machine {
     return new Machine(filesystem, instances);
   }
 
-  /** Starts one instance's Android driver: a daemon process of its own, so a runner of its own. */
+  /** why: Starts one instance's Android driver: a daemon process of its own, so a runner of its own. */
   async start(instance: Instance): Promise<AndroidDriver> {
     let nextId = 0;
     return AndroidDriver.create({
@@ -155,7 +144,6 @@ class Machine {
     });
   }
 
-  /** The AVD whose emulator is listening on `serial`'s console port, or `undefined`. */
   avdListeningAt(serial: string | undefined): string | undefined {
     return this.#listening.get(consolePortOf(serial));
   }
@@ -168,7 +156,7 @@ class Machine {
         this.#listening.has(port - 1),
       send: async (serverPort, payload) => {
         const adbPort = Number(/host:emulator:(\d+)$/.exec(payload)?.[1]);
-        // adb answers by connecting out to the emulator's adb port; nothing there, no transport.
+        // why: adb answers by connecting out to the emulator's adb port; nothing there, no transport.
         if (this.#listening.has(adbPort - 1)) this.#attach(adbPort - 1, serverPort);
         return "";
       },
@@ -244,7 +232,7 @@ class Machine {
       return ok("OK: killing emulator, bye bye\n");
     }
     if (rest.startsWith("shell echo ")) return ok();
-    // The console answers with the AVD's directory, then `OK`.
+    // why: The console answers with the AVD's directory, then `OK`.
     if (rest === "emu avd path") return ok(`${this.#avdPaths.get(port) ?? ""}\nOK\n`);
     const answer = ADB_ANSWERS.get(rest);
     return answer === undefined ? undefined : ok(answer);
@@ -271,13 +259,13 @@ class Machine {
       this.#listening.set(port, avdName);
       this.#avdPaths.set(port, `${options?.env?.["ANDROID_AVD_HOME"] ?? ""}/${args[1] ?? ""}.avd`);
       this.#exits.set(port, () => exit(ok()));
-      // An emulator announces itself to the server its environment names.
+      // why: An emulator announces itself to the server its environment names.
       this.#attach(port, serverPortOf(options));
     } else {
       exit({ code: 1, stderr: `console port ${port} is already used`, stdout: "" });
     }
     return {
-      // Killing an emulator that never bound must not stop the one that did.
+      // why: Killing an emulator that never bound must not stop the one that did.
       kill: () => {
         if (bound && this.#listening.get(port) === avdName) this.#exit(port);
       },
@@ -333,5 +321,5 @@ function ok(stdout = ""): ProcessResult {
 }
 
 async function* emptyLines(): AsyncIterable<string> {
-  // An emulator Simlock spawns is never read from.
+  // why: An emulator Simlock spawns is never read from.
 }

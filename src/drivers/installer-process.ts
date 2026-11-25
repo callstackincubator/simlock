@@ -1,31 +1,26 @@
 import type { ComponentInstallProgress } from "../core/index.js";
 import type { Clock, ProcessHandle, ProcessResult, ProcessRunner } from "../ports/index.js";
 
-// A platform installer ignoring `SIGTERM` must not hold an aborted install open: after this long
+// why: A platform installer ignoring `SIGTERM` must not hold an aborted install open: after this long
 // it gets `SIGKILL`, the same escalation `NodeProcessRunner.run` applies to a timeout.
 const SIGTERM_TO_SIGKILL_GRACE_MS = 10_000;
-// How long to keep reading output lines after the process ended. Lines already captured are
+// why: How long to keep reading output lines after the process ended. Lines already captured are
 // read in microtasks; this only bounds a pipe some grandchild still holds open.
 const OUTPUT_DRAIN_MS = 1_000;
 
 export interface InstallerProcessOptions {
   readonly onProgress: (progress: ComponentInstallProgress) => void;
   readonly signal: AbortSignal;
-  /** Written to stdin, then closed: `sdkmanager --licenses`'s `y` answers. */
   readonly input?: string;
 }
 
-/**
- * How an installer process ended. `stopped` means `signal` fired and the process was ended for
- * it; `result` is then whatever the killed process left.
- */
 export interface InstallerProcessOutcome {
   readonly result: ProcessResult;
   readonly stopped: boolean;
 }
 
 /**
- * Runs one platform installer (`xcodebuild -downloadPlatform`, `sdkmanager --install`) with no
+ * why: Runs one platform installer (`xcodebuild -downloadPlatform`, `sdkmanager --install`) with no
  * timeout of its own -- the caller's budget is `ComponentInstaller`'s, and reaches this process
  * only through `signal`, which ends it. Every output line, ended at `\n` or at a bare `\r`, is
  * scanned for a percentage and reported as progress; a line with none yields nothing. Shared by both drivers so the two
@@ -41,7 +36,7 @@ export async function runInstallerProcess(
   if (options.signal.aborted) {
     return { result: { code: null, stderr: "", stdout: "" }, stopped: true };
   }
-  // Installers redraw their progress bar in place with a bare `\r`; ending a line there is what
+  // why: Installers redraw their progress bar in place with a bare `\r`; ending a line there is what
   // lets each redraw be read as it happens instead of all at once when the process exits.
   const handle = runner.spawn(command, args, {
     lineEnd: "carriage-return-too",
@@ -70,7 +65,7 @@ export async function runInstallerProcess(
 }
 
 /**
- * The last percentage printed on a line, e.g. `12.5` from `Downloading iOS 18.0: 12.5%`.
+ * why: The last percentage printed on a line, e.g. `12.5` from `Downloading iOS 18.0: 12.5%`.
  * `xcodebuild` formats it in the user's locale, so the decimal separator may be a comma
  * (`12,5%`); a percentage never reaches a thousand, so no grouping separator comes before `%`.
  */
@@ -108,15 +103,10 @@ function killQuietly(handle: ProcessHandle, signal: NodeJS.Signals): void {
   try {
     handle.kill(signal);
   } catch {
-    // Already exited.
+    // why: Already exited.
   }
 }
 
-/**
- * Runs one platform removal (`sdkmanager --uninstall`) like `runInstallerProcess`, with a
- * deadline of its own as well as `signal`: whichever comes first ends the process, `SIGTERM`
- * then `SIGKILL`. `timedOut` says the deadline did it.
- */
 export async function runBoundedProcess(
   runner: ProcessRunner,
   clock: Clock,

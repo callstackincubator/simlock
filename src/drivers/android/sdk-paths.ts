@@ -1,7 +1,7 @@
 import type { Filesystem } from "../../ports/index.js";
 
 /**
- * Where each Android SDK tool lives. Driver discovery and the `doctor` prerequisite check both
+ * why: Where each Android SDK tool lives. Driver discovery and the `doctor` prerequisite check both
  * ask this file, so the two can never disagree about whether a tool is there (architecture
  * rule 10).
  */
@@ -38,7 +38,6 @@ function defaultSdkRoot(
     : `${localAppData}/Android/Sdk`;
 }
 
-/** The SDK roots searched, in order: `ANDROID_HOME`, `ANDROID_SDK_ROOT`, then Android Studio's default. */
 function sdkSearchRoots(
   env: Readonly<Record<string, string | undefined>>,
   homeDirectory: string,
@@ -52,7 +51,7 @@ function sdkSearchRoots(
 }
 
 /**
- * Which SDK root is the SDK. `complete`: the first searched root holding every tool, the one
+ * why: Which SDK root is the SDK. `complete`: the first searched root holding every tool, the one
  * driver discovery runs. Otherwise `incomplete`: the first searched root that is a directory, the
  * one a prerequisite check reports on. Otherwise `absent`. Both discovery and the check ask this,
  * so a running driver's SDK is never the one reported as missing tools.
@@ -87,7 +86,6 @@ async function isDirectory(filesystem: Filesystem, path: string): Promise<boolea
   try {
     return (await filesystem.stat(path)).kind === "directory";
   } catch {
-    // Absent or unreadable: not an SDK this daemon could use either.
     return false;
   }
 }
@@ -100,7 +98,6 @@ export function adbPath(root: string, platform: NodeJS.Platform = process.platfo
   return withWindowsExtension(`${root}/platform-tools/adb`, platform, ".exe");
 }
 
-/** Every tool the driver runs, when all of them are at `root`; otherwise `undefined`. */
 async function sdkPathsAt(
   root: string,
   filesystem: Filesystem,
@@ -119,10 +116,6 @@ async function sdkPathsAt(
   return { adb, emulator, root, ...tools };
 }
 
-/**
- * The newest `cmdline-tools/<version>/bin` holding both `avdmanager` and `sdkmanager`, or the
- * obsolete `tools/bin` when none does.
- */
 export async function sdkToolBin(
   root: string,
   filesystem: Filesystem,

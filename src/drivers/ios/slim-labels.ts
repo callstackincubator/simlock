@@ -13,7 +13,6 @@ import { createHash } from "node:crypto";
 // and is deliberately kept out of any logic module so that resyncing it
 // never requires touching driver behavior.
 
-/** A named group of launchd daemon labels a slim boot may disable together. */
 export interface SlimCategory {
   readonly name: string;
   readonly description: string;
@@ -300,7 +299,7 @@ export const SLIM_CATEGORIES: readonly SlimCategory[] = [
 ];
 
 /**
- * Resolves a set of requested category names to their {@link SlimCategory}
+ * why: Resolves a set of requested category names to their {@link SlimCategory}
  * definitions. `undefined` (no filter given) resolves to every category.
  * Names that don't match any known category are reported separately as
  * `unknown` rather than throwing, so a caller can warn and proceed with the
@@ -380,7 +379,6 @@ export function overridesFor(
   return wanted;
 }
 
-/** Deduplicated, deterministically sorted labels across the given categories. */
 export function labelsFor(categories: readonly SlimCategory[]): readonly string[] {
   const labels = new Set<string>();
   for (const category of categories) {
@@ -394,14 +392,14 @@ export function labelsFor(categories: readonly SlimCategory[]): readonly string[
 const SIGNATURE_SCHEMA_VERSION = "v1";
 
 /**
- * A short, stable signature over the resolved category names and their
+ * why: A short, stable signature over the resolved category names and their
  * labels. Used as an idempotence marker: it changes whenever either the
  * requested category selection or the shipped label data changes, so a
  * stored marker from a stale config or an older simlock version is detected
  * as stale rather than silently trusted.
  */
 export function slimSignature(categories: readonly SlimCategory[]): string {
-  // Pure computation over in-memory data (no filesystem/process/network
+  // why: Pure computation over in-memory data (no filesystem/process/network
   // access), so this does not need a port per architecture rule 9.
   const sorted = [...categories].sort((a, b) => a.name.localeCompare(b.name));
   const payload = sorted.map((c) => `${c.name}:${[...c.labels].sort().join(",")}`).join("|");
