@@ -1,21 +1,11 @@
-/**
- * The worker's half of the uplink (ADR 0005 §4): one outbound connection to `gateway.url`,
- * redialled with capped, jittered exponential backoff after any disconnect, and handed to this
- * daemon's own `DaemonServer` as one more connection to serve.
- *
- * It is a supervisor, not a protocol: everything about what travels over the link lives in
- * `DaemonServer` (which serves it) and in the gateway (which drives it). All this class decides
- * is *when to dial*.
- */
 import { createLink, type LinkConnection } from "../link/index.js";
 import type { Clock, Logger, TimerHandle, UplinkConnector } from "../ports/index.js";
 import { NoopLogger, UplinkError } from "../ports/index.js";
 import { errorMessage } from "../shared/index.js";
 
 export interface UplinkBackoff {
-  /** Delay before the first retry. */
   readonly initialMs: number;
-  /** Ceiling the delay grows to and stays at (ADR 0005 §4/§8: a worker whose token was revoked
+  /** why: Ceiling the delay grows to and stays at (ADR 0005 §4/§8: a worker whose token was revoked
    * keeps retrying *at the cap* -- an operator may mint a new token at any time, and a worker
    * that gave up would then need a restart nobody would think to perform). */
   readonly maxMs: number;
@@ -31,28 +21,22 @@ const DEFAULT_UPLINK_BACKOFF: UplinkBackoff = {
 export interface GatewayUplinkOptions {
   readonly clock: Clock;
   readonly connector: UplinkConnector;
-  /** `gateway.url` -- the gateway's base URL. The uplink endpoint (`/v1/uplink`) is derived
-   * from it by the connector, so this is exactly what the operator configured. */
   readonly url: string;
-  /** `gateway.token`, the join token this worker presents. */
   readonly token: string;
-  /** `gateway.label`, display-only (ADR 0005 §3a). */
   readonly label?: string;
   /** why: `gateway.headers` is sent on every dial, not only the first. */
   readonly headers?: Readonly<Record<string, string>> | undefined;
-  /** This worker's instance id (`instance.json`) -- its fleet identity (§3a). */
   readonly workerId: string;
-  /** Hands an established uplink to whoever serves it (`DaemonServer#acceptUplink`). */
   readonly accept: (connection: LinkConnection) => void;
   readonly logger?: Logger;
   readonly backoff?: UplinkBackoff;
-  /** H1: how long a connection must stay up before `#attempt` resets to 0. Defaults to the
+  /** why: H1: how long a connection must stay up before `#attempt` resets to 0. Defaults to the
    * backoff's own cap (`backoff.maxMs`) so a link that never survives that long never looks
    * "recovered" -- an accept-then-immediately-close loop grows into, and stays at, the cap
    * instead of redialling forever at `backoff.initialMs`. */
   readonly minStableMs?: number;
   /**
-   * Jitter source, injected so a test gets a deterministic schedule. Defaults to `Math.random`.
+   * why: Jitter source, injected so a test gets a deterministic schedule. Defaults to `Math.random`.
    * Jitter matters here for the same reason it does in any reconnect loop: a gateway restart
    * disconnects every worker at once, and an unjittered fleet would redial in lockstep forever.
    */
@@ -68,11 +52,11 @@ export class GatewayUplink {
   #timer: TimerHandle | undefined;
   #connection: LinkConnection | undefined;
   #stopped = false;
-  /** Guards against two dials in flight at once -- a `close` arriving while a dial is pending
+  /** why: Guards against two dials in flight at once -- a `close` arriving while a dial is pending
    * would otherwise schedule a second one beside it. */
   #dialing = false;
   /**
-   * H1: armed on a successful connect, cancelled on close. `#attempt` used to reset to 0 the
+   * why: H1: armed on a successful connect, cancelled on close. `#attempt` used to reset to 0 the
    * moment `connect()` resolved, regardless of how long the link actually stayed up -- so a
    * gateway that accepts the TCP/WebSocket upgrade and then immediately closes it (a proxy
    * misconfiguration, a protocol-version mismatch the gateway itself does not retry past, a
@@ -92,7 +76,7 @@ export class GatewayUplink {
   }
 
   /**
-   * Dials now, and keeps redialling for the daemon's lifetime. Deliberately synchronous and
+   * why: Dials now, and keeps redialling for the daemon's lifetime. Deliberately synchronous and
    * fire-and-forget: a worker whose gateway is down must still come up and serve its local
    * agents, so nothing in the daemon's startup path ever waits on this.
    */
@@ -101,7 +85,6 @@ export class GatewayUplink {
     void this.#dial();
   }
 
-  /** Stops redialling and closes the current uplink, if any. */
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
@@ -131,7 +114,7 @@ export class GatewayUplink {
         headers: this.options.headers,
       });
       if (this.#stopped) {
-        // A stop that landed while the dial was in flight: close what we just opened rather
+        // why: A stop that landed while the dial was in flight: close what we just opened rather
         // than handing a connection to a daemon that is shutting down.
         await connection.close();
         return;
@@ -148,7 +131,7 @@ export class GatewayUplink {
         workerId: this.options.workerId,
       });
       this.options.accept(link);
-      // H1: `#attempt` resets only once this link has actually stayed up for `#minStableMs` --
+      // why: H1: `#attempt` resets only once this link has actually stayed up for `#minStableMs` --
       // not the instant `connect()` resolves. Cancelled in `#onClosed`/`stop` if the close
       // beats it, which is exactly the accept-then-immediately-close case this guards against.
       this.#stableTimer = this.options.clock.setTimer(this.#minStableMs, () => {
@@ -157,7 +140,7 @@ export class GatewayUplink {
       });
     } catch (error: unknown) {
       const delayMs = this.#nextDelayMs();
-      // `warn`, not `error`: a gateway that is down is an expected state for a worker, which
+      // why: `warn`, not `error`: a gateway that is down is an expected state for a worker, which
       // goes on serving its local agents throughout. The `reason` is what tells an operator a
       // revoked token apart from an unreachable gateway -- both retry, only one is fixable by
       // waiting.
@@ -197,7 +180,7 @@ export class GatewayUplink {
   }
 
   /**
-   * Exponential up to the cap, then jittered across the lower half of the resulting window
+   * why: Exponential up to the cap, then jittered across the lower half of the resulting window
    * (`[delay/2, delay]`). Half-window rather than full: a fleet redialling after a gateway
    * restart must spread out, but a worker should not idle for a full cap's worth of seconds
    * when the gateway is already back.

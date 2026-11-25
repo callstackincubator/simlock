@@ -59,12 +59,12 @@ function passthroughOptions(command: PassthroughCommand): object {
 }
 
 /**
- * Binds an ephemeral loopback port and releases it. A fixed port fails whenever two runs of
+ * why: Binds an ephemeral loopback port and releases it. A fixed port fails whenever two runs of
  * this file overlap -- two worktrees running the suite at once, or Stryker's parallel runners
  * -- with an `EADDRINUSE` that has nothing to do with the code under test.
  */
 const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0" };
-/** Picked by `startGateway`/`startRestartableGateway` just before each gateway listens, so the
+/** why: Picked by `startGateway`/`startRestartableGateway` just before each gateway listens, so the
  * port is free for as short a time as possible; the restart test reuses its own port across
  * the restart. */
 let gatewayPort = 0;
@@ -92,7 +92,7 @@ function agentSession(overrides: Partial<DispatchSession> = {}): DispatchSession
 }
 
 /**
- * C3 (round 1 review, #119): `connection === "connected"` alone does not mean a worker's view is
+ * why: C3 (round 1 review, #119): `connection === "connected"` alone does not mean a worker's view is
  * usable. `WorkerLink#start` (`worker-link.ts`) calls `registry.connected(...)` *before*
  * `events.subscribe` and before the first `refresh({ includeCatalog: true })` lands, so there is
  * a real window in which a worker reports `connected` while its view still carries an empty
@@ -223,14 +223,13 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     readonly stdout: string;
     readonly gatewayUrl?: string;
     /**
-     * C1 (round 1 review, #119): reuse an already-`mkdtemp`'d directory and its `Filesystem`
+     * why: C1 (round 1 review, #119): reuse an already-`mkdtemp`'d directory and its `Filesystem`
      * instead of minting fresh ones -- what restarting *this same worker machine* after an
      * outage needs, so its `instance.json` (and therefore the `workerId` the gateway already
      * knows) survives the restart, exactly as `startRestartableGateway` reuses the gateway's own
      * directory and filesystem below. Omit for a worker that starts once and is never restarted.
      */
     readonly existing?: { readonly filesystem: Filesystem; readonly directory: string };
-    /** The worker's own socket transport; omitted, the real one. */
     readonly ipc?: IpcConnector & IpcListenerFactory;
     readonly alerts?: { destinations: readonly AlertDestination[]; poster: FakeWebhookPoster };
     readonly onDriver?: (driver: FakeDriver) => void;
@@ -448,7 +447,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       expect(workerServes(workers, "Pixel-B")).toBe(true);
     });
 
-    // The gateway's own host: the machine it runs on, and no tools, since it runs no drivers.
+    // why: The gateway's own host: the machine it runs on, and no tools, since it runs no drivers.
     const status = await gateway.dispatch("status.get", {}, agentSession());
     expect(status.host).toEqual({ ...GATEWAY_HOST, tools: [] });
 
@@ -458,8 +457,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       agentSession(),
     );
 
-    // ADR §16: the gateway lease id names its worker -- and the worker actually chosen must be
-    // the one that could serve "Pixel-B" (worker-a's catalog only knows "Pixel-A").
     expect(grant.lease.worker?.label).toBe("worker-b");
     expect(grant.lease.id.startsWith(`${grant.lease.worker?.id}.`)).toBe(true);
 
@@ -474,8 +471,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       }),
     );
 
-    // The real child process worker-b's own `FakeDriver` builds actually ran, on that worker,
-    // reached through the gateway's proxy -- not worker-a's, and not simulated.
     expect(result.exitCode).toBe(7);
     expect(chunks.join("")).toBe("hello-from-b");
 
@@ -488,11 +483,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     });
   }, 30_000);
 
-  /**
-   * #395: a worker whose own socket takes a while to claim. The gateway must still see it as
-   * running once it has started, and route to it, rather than keep the view it read while the
-   * worker was starting until its next periodic refresh.
-   */
   it("reports a worker running and grants a no-wait lease on it, when the worker's socket claim is slow", async () => {
     const gateway = await startGateway();
     const { secret } = await gateway.dispatch(
@@ -520,7 +510,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       stdout: "hello-from-a",
       token: secret,
     });
-    // The claim is held long enough for an uplink that dials at once to join and be read.
+    // why: The claim is held long enough for an uplink that dials at once to join and be read.
     await vi
       .waitFor(
         async () => {
@@ -586,7 +576,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       gatewayUrl: restartGatewayUrl(),
     });
 
-    // C3 (round 1 review, #119): gate on both views actually being usable, not merely
+    // why: C3 (round 1 review, #119): gate on both views actually being usable, not merely
     // `connected` -- see `workerServes`'s own doc comment. This also doubles as the second-order
     // fix the review calls for: it is a positive assertion, *before* draining, that worker-b's
     // view already carries "Pixel-B" -- so the later `NO_CAPACITY` below can only mean the drain
@@ -615,17 +605,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     );
     expect(grant.lease.worker?.label).toBe("worker-a");
 
-    // Drain worker-b (ADR §9). It holds no lease of its own here; the point of draining it is
-    // that the drain has to survive everything below, not just this call.
     await firstGateway.dispatch("worker.drain", { workerId: workerBId }, adminSession());
     await vi.waitFor(async () => {
       const { workers } = await firstGateway.dispatch("worker.list", {}, adminSession());
       expect(workers.find((worker) => worker.id === workerBId)?.drained).toBe(true);
     });
-    // No new dispatch reaches a drained worker: a `noWait: true` request only worker-b could
-    // serve is rejected outright (H3, round 1 review: it does not queue -- with worker-b the
-    // only worker for "Pixel-B" now excluded, there is no eligible worker at all) rather than
-    // landing on worker-b -- proven over the real uplink, not a scripted directory.
     await expect(
       firstGateway.dispatch(
         "lease.request",
@@ -634,11 +618,10 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       ),
     ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
-    // Kill worker-b outright: an operator taking a drained machine down for maintenance.
     await workerB.daemon.stop("test");
     daemons.splice(daemons.indexOf(workerB.daemon), 1);
 
-    // Restart the gateway. Everything it held only in memory -- worker views, the lease index,
+    // why: Restart the gateway. Everything it held only in memory -- worker views, the lease index,
     // the fleet queue -- is gone (ADR §30); only what it persisted survives, because this reuses
     // the *same* directory and the *same* `Filesystem` instance rather than fabricating a fresh
     // gateway that merely happens to listen on the same port.
@@ -656,8 +639,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     });
     daemons.push(restartedGateway);
 
-    // worker-a's own uplink was never touched -- it keeps redialling on its own backoff and
-    // finds the restarted gateway listening again on the same port.
     await vi.waitFor(
       async () => {
         const { workers } = await restartedGateway.dispatch("worker.list", {}, adminSession());
@@ -713,7 +694,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     await restartedWorkerB.daemon.stop("test");
     daemons.splice(daemons.indexOf(restartedWorkerB.daemon), 1);
 
-    // The lease survives the restart (ADR §30) and renewing resumes for its original requester
+    // why: The lease survives the restart (ADR §30) and renewing resumes for its original requester
     // once the reconnect rebuild has run -- retried because the rebuild races the reconnect
     // itself becoming visible above.
     const renewed = await vi.waitFor(
@@ -727,7 +708,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     );
     expect(renewed.ttlDeadline).toBeGreaterThan(grant.lease.ttlDeadline);
 
-    // ...and refused for anyone else (ADR §27a, pinned end to end across a real restart): the
+    // why: ...and refused for anyone else (ADR §27a, pinned end to end across a real restart): the
     // owner this gateway forwarded before it died is what the rebuilt lease authorizes against,
     // not whichever principal happens to ask first.
     await expect(

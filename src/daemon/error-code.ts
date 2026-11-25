@@ -44,7 +44,7 @@ import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./d
 import { AdminAuthenticationFailedError } from "../auth/index.js";
 
 /**
- * Thrown to a request parked on startup readiness (ADR §2 step 4's `awaitReady`) when
+ * why: Thrown to a request parked on startup readiness (ADR §2 step 4's `awaitReady`) when
  * convergence rejected. Lives here (not `server.ts`) so both transports can recognize it:
  * `DaemonServer#awaitReady` throws it directly into the shared dispatcher's `dispatch()`, which
  * neither socket nor HTTP request handling wraps -- so an HTTP route can catch this exact class
@@ -58,7 +58,7 @@ export class StartupFailedError extends Error {
 }
 
 /**
- * Classifies a thrown error into the contract's closed `SimlockErrorCode` set. Every branch
+ * why: Classifies a thrown error into the contract's closed `SimlockErrorCode` set. Every branch
  * here has a matching row in `ERROR_TABLE` (`src/contract/errors.ts`) by construction; a caller
  * that needs a transport-specific column (HTTP status, CLI exit code) looks the returned code
  * up in that table itself rather than this function guessing a transport's own representation.
@@ -93,7 +93,7 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof LeaseRequestForbiddenError) {
     return "FORBIDDEN";
   }
-  // The gateway's own admission refusal (`FleetLeaseCoordinator#admit`) is a plain
+  // why: The gateway's own admission refusal (`FleetLeaseCoordinator#admit`) is a plain
   // `DispatchError("NO_CAPACITY", ...)`, not a distinct class -- caught by the `DispatchError`
   // branch above (H9, round 2 review). Before this it was its own class in
   // `src/gateway/fleet-coordinator.ts`, imported here so `src/daemon` -- every worker-mode
@@ -143,7 +143,7 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof BaselineStaleError) {
     return "BASELINE_STALE";
   }
-  // A request option the platform's driver does not have: the request itself is wrong, and
+  // why: A request option the platform's driver does not have: the request itself is wrong, and
   // asking again unchanged can never succeed.
   if (error instanceof UnsupportedRequestOptionError || error instanceof BadDeviceRequestError) {
     return "BAD_REQUEST";
@@ -157,13 +157,11 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof ComponentInstallTimeoutError) {
     return "DOWNLOAD_TIMEOUT";
   }
-  // A component install still open when the daemon stopped (ADR 0010 §6): running it again,
+  // why: A component install still open when the daemon stopped (ADR 0010 §6): running it again,
   // against the restarted daemon, is the recovery.
   if (error instanceof ComponentInstallerClosedError || error instanceof SeedSettlerStoppedError) {
     return "DAEMON_STOPPING";
   }
-  // ADR 0010 §8's refused removals. `COMPONENT_IN_USE` carries its counts as details, so the
-  // dispatcher's `component.remove` handler raises it as a `DispatchError` (above).
   if (error instanceof ComponentNotOwnedError) {
     return "COMPONENT_NOT_OWNED";
   }
@@ -182,7 +180,7 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof NukeUnavailableError) {
     return "NUKE_UNAVAILABLE";
   }
-  // `device.exec`'s timeout path (`Dispatcher#awaitExec`) swallows this one before it can
+  // why: `device.exec`'s timeout path (`Dispatcher#awaitExec`) swallows this one before it can
   // reach here -- once the kill is issued, `EXEC_TIMEOUT` is the authoritative answer, not a
   // race with this rejection. What lands here is the other case: a command that exited on its
   // own while a chunk's delivery to a stalled consumer was still outstanding. There is no more
@@ -200,7 +198,7 @@ function isErrorCode(code: string): code is SimlockErrorCode {
 }
 
 /**
- * What a failed lease request stores: the code `classifyError` gives the failure, and its
+ * why: What a failed lease request stores: the code `classifyError` gives the failure, and its
  * message -- except for a failure nothing classifies, which stores `INTERNAL` with a generic
  * message. A stored message is replayed to every frontend, the HTTP one included, which never
  * shows an unclassified error's own text (see `mapError`), so it is never stored either.

@@ -700,10 +700,8 @@ describe("startDaemon", () => {
     const clock = new FakeClock(1_000);
     const { daemon } = await start({
       drivers: [
-        new ToolsFakeDriver(
-          { availableOsVersions: ["26.5"], clock, platform: "ios" },
-          // What an iOS driver whose `xcodebuild` fails looks like from here.
-          () => Promise.reject(new Error("xcodebuild -version exited with 1")),
+        new ToolsFakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }, () =>
+          Promise.reject(new Error("xcodebuild -version exited with 1")),
         ),
         new ToolsFakeDriver({ availableOsVersions: ["35"], clock, platform: "android" }, () =>
           Promise.resolve([{ name: "emulator", version: "35.4.9" }]),

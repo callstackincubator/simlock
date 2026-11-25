@@ -262,7 +262,5 @@ export class ExecHandlers {
 function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): void {
   try {
     handle.kill(signal);
-  } catch {
-    // Already gone.
-  }
+  } catch {}
 }

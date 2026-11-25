@@ -1,8 +1,3 @@
-/**
- * The renew cadence ADR 0004 §2 specifies, exercised on a hand-advanced `FakeClock`: a third of
- * the lease's own `ttlMs`, bounded by the deadline the daemon returned, recomputed from every
- * answer, and nothing at all after `stop()`.
- */
 import { describe, expect, it } from "vitest";
 
 import { SimlockError } from "../contract/index.js";
@@ -10,12 +5,10 @@ import { FakeClock } from "../ports/index.js";
 import type { LeaseRenewal } from "./index.js";
 import { awaitWithin, RELEASE_TIMEOUT_MS, startLeaseRenewal } from "./index.js";
 
-/** Lets the awaited `renew` call settle; the fake clock never moves on its own. */
 async function flushMicrotasks(times = 10): Promise<void> {
   for (let index = 0; index < times; index += 1) await Promise.resolve();
 }
 
-/** The daemon's two "this lease is not yours to renew" answers, with their real detail shapes. */
 function leaseGoneError(code: "UNKNOWN_LEASE" | "FORBIDDEN"): SimlockError {
   return code === "UNKNOWN_LEASE"
     ? new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lse_1" })
@@ -33,7 +26,7 @@ describe("startLeaseRenewal", () => {
       renew: (leaseId) => {
         renewedAt.push(clock.now());
         seenLeaseIds.push(leaseId);
-        // The daemon's answer -- deliberately a shorter TTL than the grant's, and a
+        // why: The daemon's answer -- deliberately a shorter TTL than the grant's, and a
         // deadline the grant's own (10_000) could never produce, so a cadence derived from
         // anything but this value shows up as a wrong timestamp below.
         return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
@@ -50,9 +43,6 @@ describe("startLeaseRenewal", () => {
     expect(renewedAt).toEqual([4_000]);
     expect(seenLeaseIds).toEqual(["lse_1"]);
 
-    // 3_000ms of TTL came back at 4_000, so the next renewal is 1_000ms out -- not the
-    // 2_000ms the grant's own deadline would still imply, and not 3_000ms after the previous
-    // scheduled time either.
     clock.advance(999);
     await flushMicrotasks();
     expect(renewedAt).toEqual([4_000]);
@@ -64,7 +54,7 @@ describe("startLeaseRenewal", () => {
   });
 
   it("takes the cadence from the lease's own width, not from the time left on the deadline", async () => {
-    // The two disagree on purpose: a third of the width is 20_000, a third of the remaining
+    // why: The two disagree on purpose: a third of the width is 20_000, a third of the remaining
     // time is 30_000. ADR 0004 stores the width on the record precisely so a client can renew
     // at the right *rate* without sharing a clock with the daemon, so the width is what the
     // cadence follows -- and the deadline stays what it is, the bound.
@@ -88,14 +78,13 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(renewedAt).toEqual([20_000]);
 
-    // And again off the answer's own width, not off its (further out) deadline.
     clock.advance(20_000);
     await flushMicrotasks();
     expect(renewedAt).toEqual([20_000, 40_000]);
   });
 
   it("clamps the cadence to the deadline when the width would overshoot it", async () => {
-    // A lease whose deadline is closer than its width -- a renewal that came back short, a
+    // why: A lease whose deadline is closer than its width -- a renewal that came back short, a
     // clock that jumped -- must not sleep a full third of the width straight past the moment
     // it is renewing towards.
     const clock = new FakeClock(0);
@@ -108,7 +97,6 @@ describe("startLeaseRenewal", () => {
         return Promise.resolve({ ttlMs: 60_000, ttlDeadline: clock.now() + 60_000 });
       },
       ttlMs: 60_000,
-      // 9_000 left, not 60_000: the first attempt is due at 3_000, well before it.
       ttlDeadline: 9_000,
     });
 
@@ -116,14 +104,13 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(renewedAt).toEqual([3_000]);
 
-    // Once the answer restores a full-width deadline, the width sets the pace again.
     clock.advance(20_000);
     await flushMicrotasks();
     expect(renewedAt).toEqual([3_000, 23_000]);
   });
 
   it("falls back to the remaining time when an answer carries no width", async () => {
-    // A caller with an older record shape (or a test double scripting one field) still gets
+    // why: A caller with an older record shape (or a test double scripting one field) still gets
     // the pre-width behaviour rather than no cadence at all.
     const clock = new FakeClock(0);
     const renewedAt: number[] = [];
@@ -146,7 +133,7 @@ describe("startLeaseRenewal", () => {
   });
 
   it("says nothing more after a holder stops renewal from inside onError", async () => {
-    // A holder that hears a failed attempt and decides it is done with the lease (the CLI's
+    // why: A holder that hears a failed attempt and decides it is done with the lease (the CLI's
     // `finally`, an MCP session ending) calls `stop()` from inside the handler. The very next
     // line of `tick` would otherwise notice the deadline has passed and announce the lease
     // gone -- news about a lease nobody is holding any more, delivered after the loop was
@@ -163,7 +150,7 @@ describe("startLeaseRenewal", () => {
       },
       onLeaseGone: (reason) => gone.push(reason),
       renew: () => Promise.reject(new Error("INTERNAL")),
-      // The first (and only) attempt is due at 250, exactly when the lease runs out: the
+      // why: The first (and only) attempt is due at 250, exactly when the lease runs out: the
       // rejection is reported, and the give-up test right after it would fire.
       ttlDeadline: 250,
     });
@@ -276,7 +263,7 @@ describe("startLeaseRenewal", () => {
       onError: (error) => errors.push(error),
       renew: () => {
         attemptsAt.push(clock.now());
-        // A client that validates its input before it ever reaches the wire throws here
+        // why: A client that validates its input before it ever reaches the wire throws here
         // rather than rejecting; that must not escape into the unawaited tick.
         if (attemptsAt.length === 1) throw new Error("BAD_REQUEST");
         return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
@@ -316,7 +303,7 @@ describe("startLeaseRenewal", () => {
       ttlDeadline: 3_000,
     });
 
-    // A daemon that failed to persist one renewal is still willing to serve the next, and the
+    // why: A daemon that failed to persist one renewal is still willing to serve the next, and the
     // one-third cadence exists precisely to leave room for the retry.
     clock.advance(1_000);
     await flushMicrotasks();
@@ -327,7 +314,6 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(attemptsAt).toEqual([1_000, 1_666]);
     expect(errors).toHaveLength(1);
-    // The successful retry put the lease back on a full TTL: renewal continues from there.
     expect(clock.pendingTimerCount).toBe(1);
   });
 
@@ -348,7 +334,7 @@ describe("startLeaseRenewal", () => {
       ttlDeadline: 3_000,
     });
 
-    // Every retry is a third of what is *left* of the TTL, so the ladder shrinks towards the
+    // why: Every retry is a third of what is *left* of the TTL, so the ladder shrinks towards the
     // deadline instead of marching past it at a fixed interval.
     clock.advance(1_000);
     await flushMicrotasks();
@@ -361,7 +347,7 @@ describe("startLeaseRenewal", () => {
     expect(attemptsAt).toEqual([1_000, 1_666, 2_110]);
     expect(errors.map((error) => error.message)).toEqual(["INTERNAL", "INTERNAL", "INTERNAL"]);
 
-    // Once the deadline is behind us there is nothing left to save. That is the end of the
+    // why: Once the deadline is behind us there is nothing left to save. That is the end of the
     // lease, not one more failed attempt, so it is reported as such -- a holder that only
     // watched `onError` would sit alive holding nothing.
     clock.advance(60_000);
@@ -398,7 +384,7 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(attemptsAt).toEqual([1_000]);
 
-    // The attempt is abandoned at its bound (a third of the 2_000ms left), and only then does
+    // why: The attempt is abandoned at its bound (a third of the 2_000ms left), and only then does
     // the daemon answer it. The request still reached the daemon, so that deadline is real.
     clock.advance(666);
     await flushMicrotasks();
@@ -409,8 +395,6 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(attemptsAt).toEqual([1_000, 2_110]);
 
-    // Working towards 30_000 now, not the stale 3_000: a retry lands long after the deadline
-    // this renewal would otherwise have given up at, because the lease has not expired.
     clock.advance(9_296);
     await flushMicrotasks();
     expect(attemptsAt).toEqual([1_000, 2_110, 11_406]);
@@ -427,7 +411,7 @@ describe("startLeaseRenewal", () => {
       onError: (error) => errors.push(error),
       renew: () => {
         calls += 1;
-        // Accepted and never answered: the wire has no request timeout of its own.
+        // why: Accepted and never answered: the wire has no request timeout of its own.
         return new Promise<{ ttlDeadline: number }>(() => {});
       },
       ttlDeadline: 9_000,
@@ -438,7 +422,7 @@ describe("startLeaseRenewal", () => {
     expect(calls).toBe(1);
     expect(errors).toEqual([]);
 
-    // The attempt is bounded by a third of what is left of the TTL when it starts (2_000ms of
+    // why: The attempt is bounded by a third of what is left of the TTL when it starts (2_000ms of
     // the 6_000ms remaining at 3_000), so it does not swallow the rest of the TTL in silence.
     clock.advance(2_000);
     await flushMicrotasks();
@@ -467,7 +451,6 @@ describe("startLeaseRenewal", () => {
           return new Promise<{ ttlDeadline: number }>((resolve) => {
             answerFirst = resolve;
           });
-        // The second attempt is the daemon's newest word: 3_000ms from now.
         if (attempts === 2) return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
         return Promise.reject(new Error("INTERNAL"));
       },
@@ -482,7 +465,7 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(attempts).toBe(2);
 
-    // Attempt 1 finally answers, with a far longer deadline -- but it is older than attempt 2,
+    // why: Attempt 1 finally answers, with a far longer deadline -- but it is older than attempt 2,
     // whose answer is the daemon's current word. Adopting it would have this holder renewing
     // towards a deadline the daemon never promised.
     answerFirst({ ttlDeadline: 999_999 });
@@ -503,8 +486,6 @@ describe("startLeaseRenewal", () => {
       leaseId: "lse_1",
       renew: () => {
         attemptsAt.push(clock.now());
-        // The first two attempts are accepted and left unanswered until the end of the test;
-        // everything after fails, so the schedule is driven purely by `deadline`.
         if (attemptsAt.length <= 2)
           return new Promise<{ ttlDeadline: number }>((resolve) => {
             answers.push(resolve);
@@ -524,7 +505,7 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(attemptsAt).toEqual([3_000, 6_333]);
 
-    // Both abandoned requests did reach the daemon, and answer out of order. Attempt 2 is the
+    // why: Both abandoned requests did reach the daemon, and answer out of order. Attempt 2 is the
     // newer request, so its 12_000 is the truth; attempt 1's 900_000 is stale, and being the
     // larger number does not make it newer -- adopting it would leave this holder renewing
     // long after the lease was gone.
@@ -537,8 +518,6 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(attemptsAt).toEqual([3_000, 6_333, 7_814]);
 
-    // A third of what is left of 12_000 at 7_814 is 1_395ms -- so the next attempt lands at
-    // 9_209. Against the stale 900_000 it would not have come for another five minutes.
     clock.advance(1_395);
     await flushMicrotasks();
     expect(attemptsAt).toEqual([3_000, 6_333, 7_814, 9_209]);
@@ -557,7 +536,7 @@ describe("startLeaseRenewal", () => {
       ttlDeadline: 3_000,
     });
 
-    // The timer has fired -- the tick is running -- but `stop()` lands before the request
+    // why: The timer has fired -- the tick is running -- but `stop()` lands before the request
     // leaves. "No further `renew` call" has to mean this too, or a released lease gets one
     // last renewal after its release.
     clock.advance(1_000);
@@ -582,7 +561,7 @@ describe("startLeaseRenewal", () => {
       ttlDeadline: ninetyDays,
     });
 
-    // A third of 90 days is past what `setTimeout` can hold, and a truncated delay would fire
+    // why: A third of 90 days is past what `setTimeout` can hold, and a truncated delay would fire
     // in a millisecond -- the hot loop the floor exists to prevent, from the other end.
     clock.advance(2_147_483_646);
     await flushMicrotasks();
@@ -629,12 +608,12 @@ describe("startLeaseRenewal", () => {
       onLeaseGone: (reason) => gone.push({ reason }),
       renew: () => {
         renewedAt.push(clock.now());
-        // A daemon answering with a deadline that is not in the future. `lease.defaultTtlMs`
+        // why: A daemon answering with a deadline that is not in the future. `lease.defaultTtlMs`
         // must be positive (ADR 0004), so this is a clock jump or a daemon bug rather than a
         // configuration -- and either way a cadence derived from it would be a hot loop.
         return Promise.resolve({ ttlDeadline: clock.now() });
       },
-      // Already expired at the grant: the floor keeps even this from being an instant loop.
+      // why: Already expired at the grant: the floor keeps even this from being an instant loop.
       ttlDeadline: 500,
     });
 
@@ -645,7 +624,7 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(renewedAt).toEqual([1_250]);
 
-    // Nothing to renew towards: renewal ends -- and says so, rather than spinning at the floor
+    // why: Nothing to renew towards: renewal ends -- and says so, rather than spinning at the floor
     // forever or leaving the holder to infer it.
     expect(clock.pendingTimerCount).toBe(0);
     expect(gone).toEqual([{ reason: "renew-failed" }]);
@@ -656,7 +635,7 @@ describe("startLeaseRenewal", () => {
 });
 
 /**
- * The bound both frontends put on their farewell `lease.release`: an unresponsive daemon may
+ * why: The bound both frontends put on their farewell `lease.release`: an unresponsive daemon may
  * cost a holder the wait, never its exit.
  */
 describe("awaitWithin", () => {
@@ -666,7 +645,7 @@ describe("awaitWithin", () => {
     await expect(
       awaitWithin(clock, RELEASE_TIMEOUT_MS, Promise.resolve({ leaseId: "lse_1" }), "too slow"),
     ).resolves.toEqual({ leaseId: "lse_1" });
-    // A live timer here would keep a real process alive for the whole bound after the work
+    // why: A live timer here would keep a real process alive for the whole bound after the work
     // it was guarding had already finished.
     expect(clock.pendingTimerCount).toBe(0);
   });

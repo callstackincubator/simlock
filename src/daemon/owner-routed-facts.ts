@@ -39,7 +39,7 @@ export interface OwnerRoutedFacts {
 }
 
 /**
- * Subscribes to the underlying event bus once (at construction) and re-emits the three
+ * why: Subscribes to the underlying event bus once (at construction) and re-emits the three
  * lease-scoped facts, each carrying the lease's owner. `lease.expired`/`lease.released` carry
  * `ownerId` on the event payload itself (the lease is already gone from the registry by the
  * time either fires, so there is nothing left to look up); `device.crash-detected`/
