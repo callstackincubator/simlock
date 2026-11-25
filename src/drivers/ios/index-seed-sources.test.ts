@@ -518,7 +518,11 @@ describe("IosSimctlDriver", () => {
     edit: (catalog: Catalog) => void;
     planted?: Partial<PlantedSource>;
     persists?: true;
+    /** why: the sources set no longer holds the source's simulator. */
+    gone?: true;
     reason: string | undefined;
+    /** why: the reason of the second read, when the catalog is back, where it differs from a reason that persists. */
+    later?: string;
   }>([
     { name: "healthy", edit: () => undefined, reason: undefined },
     {
@@ -575,9 +579,35 @@ describe("IosSimctlDriver", () => {
       },
       reason: `device type ${driverData.deviceTypeId} is not available`,
     },
+    {
+      name: "a seed's simulator is gone, which a new simulator does not clear",
+      edit: () => undefined,
+      gone: true,
+      persists: true,
+      reason: `simulator ${seedUdid} is gone`,
+    },
+    {
+      name: "a baseline's simulator is gone, which a new simulator does not clear",
+      edit: () => undefined,
+      gone: true,
+      persists: true,
+      planted: { kind: "baseline", lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
+      reason: `simulator ${seedUdid} is gone`,
+    },
+    {
+      name: "its runtime is gone and so is its simulator, so the runtime is named first, and the simulator once the runtime is back",
+      edit: (catalog: Catalog) => {
+        catalog.runtimes = catalog.runtimes.filter(
+          (entry) => entry.identifier !== driverData.runtimeId,
+        );
+      },
+      gone: true,
+      later: `simulator ${seedUdid} is gone`,
+      reason: `runtime ${driverData.runtimeId} is not installed`,
+    },
   ])(
     "lists a ready source with its model, version and size, and its staleReason when $name, which clears once it is back",
-    async ({ edit, persists, planted, reason }) => {
+    async ({ edit, gone, later, persists, planted, reason }) => {
       const catalogOf = (change: (catalog: Catalog) => void) => {
         const catalog = JSON.parse(listFixture) as Catalog;
         for (const entry of catalog.runtimes) {
@@ -601,7 +631,16 @@ describe("IosSimctlDriver", () => {
         udid: seedUdid,
         ...planted,
       });
-      const driver = await createDriver(runner, new FakeClock(), undefined, database);
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        undefined,
+        database,
+        undefined,
+        undefined,
+        {},
+        gone !== true,
+      );
 
       expect(await driver.listSources()).toMatchObject([
         {
@@ -614,7 +653,8 @@ describe("IosSimctlDriver", () => {
       ]);
       // why: a lineage the source never had does not come back with the catalog, so its reason stays.
       const again = (await driver.listSources())[0];
-      if (persists === true) expect(again).toHaveProperty("staleReason", reason);
+      if (later !== undefined) expect(again).toHaveProperty("staleReason", later);
+      else if (persists === true) expect(again).toHaveProperty("staleReason", reason);
       else expect(again).not.toHaveProperty("staleReason");
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list"]);
     },
