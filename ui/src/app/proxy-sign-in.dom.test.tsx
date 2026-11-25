@@ -202,7 +202,11 @@ describe("signing in through a proxy", () => {
   it.each(["html", "redirect"] as const)(
     "the proxy's own session ending in %s reloads the page, and a second ending within 60 seconds shows Your sign-in has ended.",
     async (ending) => {
-      const reload = vi.fn();
+      // why: reload is a mock, so the page stays alive after it; a late refusal would start a second check and draw the ended screen before a look after the reload. The page is judged at the moment the reload is asked for.
+      let endedAtReload: boolean | undefined;
+      const reload = vi.fn(() => {
+        endedAtReload = screen.queryByText("Your sign-in has ended.") !== null;
+      });
       const proxy = proxyDaemon();
       renderConsole({ reload, routes: proxy.routes, token: null });
       await waitFor(() => signedInAs("Alice"));
@@ -210,7 +214,7 @@ describe("signing in through a proxy", () => {
       proxy.state.mode = ending;
       await returnToTab();
       await waitFor(() => expect(reload).toHaveBeenCalledOnce());
-      expect(screen.queryByText("Your sign-in has ended.")).not.toBeInTheDocument();
+      expect(endedAtReload).toBe(false);
 
       await returnToTab();
 
