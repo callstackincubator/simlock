@@ -161,10 +161,18 @@ describe("IosSimctlDriver", () => {
     { name: "an unknown source is refused", id: "nope", cloned: false },
     { name: "a stale source is refused", id: "planted-old", cloned: false },
     { name: "a source with no lineage is refused", id: "planted-unlineaged", cloned: false },
-  ])("provision with a source: $name", async ({ id, cloned }) => {
+    {
+      name: "a source whose simulator is gone is refused, naming the simulator",
+      id: "planted-gone",
+      cloned: false,
+      refusal:
+        "source planted-gone is stale: simulator 00000000-0000-0000-0000-0000000000ff is gone",
+    },
+  ])("provision with a source: $name", async ({ id, cloned, refusal }) => {
     const namedUdid = "00000000-0000-0000-0000-0000000000bb";
     const oldUdid = "00000000-0000-0000-0000-0000000000cc";
     const unlineagedUdid = "00000000-0000-0000-0000-0000000000dd";
+    const goneUdid = "00000000-0000-0000-0000-0000000000ff";
     const database = await seededDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
     const namedLineage = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
@@ -187,6 +195,15 @@ describe("IosSimctlDriver", () => {
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-unlineaged' WHERE udid = ?")
       .run(unlineagedUdid);
+    plantSource(database, {
+      ...kind,
+      kind: "baseline",
+      lineage: [namedLineage],
+      udid: goneUdid,
+    });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-gone' WHERE udid = ?")
+      .run(goneUdid);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
     await plantSeedClone(filesystem);
@@ -208,7 +225,20 @@ describe("IosSimctlDriver", () => {
         result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
       },
     ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+    // why: `createDriver` plants a folder for every ready row; the gone source's folder is the one a deleted simulator leaves missing.
+    const driver = await createDriver(
+      runner,
+      new FakeClock(),
+      filesystem,
+      database,
+      undefined,
+      undefined,
+      {},
+      id !== "planted-gone",
+    );
+    if (id !== "planted-gone") {
+      await plantSeedClone(filesystem, sourcesSetPath, namedUdid);
+    }
 
     const provisioned = driver.provision(spec, { source: id });
 
@@ -228,6 +258,7 @@ describe("IosSimctlDriver", () => {
       ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
     } else {
       await expect(provisioned).rejects.toBeInstanceOf(DriverCrashError);
+      if (refusal !== undefined) await expect(provisioned).rejects.toThrow(refusal);
       expect(runner.calls.map((call) => call.args[3])).not.toContain("clone");
     }
   });
