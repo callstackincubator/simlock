@@ -964,3 +964,47 @@ describe("the time outside src/ports/", () => {
     expect(found).toEqual(KNOWN_TIME_READS);
   });
 });
+
+// why: architecture rule 10 for the error-message unwrap, which no import rule can see: src/shared
+// holds the one `errorMessage`, so no other source of src/ writes its own copy or its inline form.
+const ERROR_MESSAGE_COPY =
+  /\binstanceof\s+Error\s*\?\s*[\w$.]+\.message\s*:\s*String\s*\(|\bfunction\s+errorMessage\b/g;
+
+const errorMessageCopies = (text: string): number =>
+  blankSource(text, { strings: true }).match(ERROR_MESSAGE_COPY)?.length ?? 0;
+
+describe("the error-message unwrap outside src/shared/", () => {
+  it("is written nowhere but in src/shared/, as a copy of errorMessage or inline", () => {
+    expect(
+      errorMessageCopies(
+        [
+          "const one = e instanceof Error ? e.message : String(e);",
+          "const split = e instanceof Error\n  ? e.message\n  : String(e);",
+          "const inside = `failed: ${e instanceof Error ? e.message : String(e)}`;",
+          "function errorMessage(error: unknown): string { return ''; }",
+          "// e instanceof Error ? e.message : String(e)",
+          "const quoted = 'e instanceof Error ? e.message : String(e)';",
+          "const other = e instanceof Error ? e.stack : String(e);",
+        ].join("\n"),
+      ),
+    ).toBe(4);
+    const sources = spawnSync("git", ["ls-files", "src/*.ts", "src/*.tsx"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+      .stdout.split("\n")
+      .filter(
+        (name) => name !== "" && !name.startsWith("src/shared/") && !/\.test\.tsx?$/.test(name),
+      );
+    const found = Object.fromEntries(
+      sources
+        .map(
+          (name) => [name, errorMessageCopies(readFileSync(join(repoRoot, name), "utf8"))] as const,
+        )
+        .filter(([, count]) => count > 0),
+    );
+
+    expect(sources).toEqual(expect.arrayContaining(["src/cli/errors.ts", "src/mcp/connect.ts"]));
+    expect(found).toEqual({});
+  });
+});
