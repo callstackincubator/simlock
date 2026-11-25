@@ -254,6 +254,8 @@ function daemonConfig(mode: "worker" | "gateway", port: number, options: StartOp
             "agent-device": { enabled: false },
             ...(extraConfig.capabilities as object | undefined),
           },
+          // why: the console specs wait for a refill right after a grant; the wait itself is proven at the WarmPool seam.
+          warmPool: { refillDelayMs: 0, ...(extraConfig.warmPool as object | undefined) },
         }
       : {}),
   };
