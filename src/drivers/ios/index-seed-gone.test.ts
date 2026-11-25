@@ -54,7 +54,16 @@ describe("IosSimctlDriver: a seed whose simulator is gone", () => {
       ...(provisions === 2 ? [copy(remade ? seedUdid : goneUdid, copyUdid)] : []),
     ]);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
-    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+    const driver = await createDriver(
+      runner,
+      new FakeClock(),
+      filesystem,
+      database,
+      undefined,
+      undefined,
+      {},
+      false,
+    );
     return { database, driver, runner };
   }
 

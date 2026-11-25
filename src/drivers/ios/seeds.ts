@@ -490,6 +490,11 @@ export class Seeds {
     }
   }
 
+  /** why: a seed deleted by hand leaves a ready row whose simulator is not in the sources set. */
+  async #folderGone(udid: string): Promise<boolean> {
+    return !(await this.#sourceFolders()).includes(udid);
+  }
+
   async #namedSource(sourceId: string): Promise<ReadySeed> {
     const row = this.#sources.findRow(sourceId);
     if (row?.state !== "ready" || row.udid === undefined) {
@@ -523,8 +528,13 @@ export class Seeds {
 
   async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     const seed = this.#sources.findReadySeed(specKey);
-    if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
-    if (seed !== undefined) await this.#destroySeed(seed);
+    if (seed !== undefined && !(await this.#folderGone(seed.udid))) {
+      if (!seedIsStale(seed, resolved)) return seed;
+      await this.#destroySeed(seed);
+    } else if (seed !== undefined) {
+      // why: safety rule 1: a seed whose simulator is gone has nothing left to delete, so its row goes and no `simctl` call is made.
+      this.#sources.deleteRow(seed.sourceId);
+    }
     return this.#makeSeed(resolved, specKey);
   }
 
