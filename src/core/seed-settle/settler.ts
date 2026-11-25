@@ -20,6 +20,9 @@ const LIST_SOURCES_BOUND_MS = 60_000;
 /** why: a seed that cannot settle must not boot a device at every check (ADR 0090 §2). */
 const RETRY_AFTER_FAILURE_MS = 60 * 60_000;
 
+/** why: an operator's call waits at most this long from its arrival; the settle it started goes on (ADR 0090 §4). */
+const OPERATOR_WAIT_MS = 60 * 60_000;
+
 /** why: an operator's run that must give back its reservation and wait: the pressure came while it made the seed. */
 class Requeue extends Error {}
 
@@ -144,11 +147,29 @@ class SeedSettlerImpl implements SeedSettler {
   ): Promise<SeedSettleResult> {
     if (this.#stopping) return Promise.reject(new SeedSettlerStoppedError());
     return new Promise((resolve, reject) => {
+      const timer = this.options.clock.setTimer(OPERATOR_WAIT_MS, () => {
+        const queued = this.#operators.indexOf(entry);
+        if (queued >= 0) this.#operators.splice(queued, 1);
+        reject(
+          new SeedSettleFailedError(
+            spec.platform,
+            spec.model,
+            "timed-out",
+            `seed ${spec.model} was not settled within 60 minutes`,
+          ),
+        );
+      });
       const entry: OperatorEntry = {
         needsMake: true,
         onProgress,
-        reject,
-        resolve,
+        reject: (error) => {
+          this.options.clock.cancel(timer);
+          reject(error);
+        },
+        resolve: (result) => {
+          this.options.clock.cancel(timer);
+          resolve(result);
+        },
         spec,
         specKey: [spec.platform, spec.model, spec.osVersion, spec.imageTag ?? ""].join("|"),
       };
@@ -305,6 +326,7 @@ class SeedSettlerImpl implements SeedSettler {
     if (entry === undefined || driver === undefined) return;
     this.#operators.splice(index, 1);
     // why: a call that runs again after a wait reports its waits and its make afresh.
+    const waitedFor = entry.lastWaiting;
     entry.lastWaiting = undefined;
     const started = await this.#begin({
       driver,
@@ -314,7 +336,9 @@ class SeedSettlerImpl implements SeedSettler {
     });
     if (!started) {
       this.#operators.unshift(entry);
-      entry.onProgress({ reason: "capacity", stage: "waiting" });
+      // why: a refused reservation is told once per wait, like every other wait.
+      entry.lastWaiting = "capacity";
+      if (waitedFor !== "capacity") entry.onProgress({ reason: "capacity", stage: "waiting" });
     }
   }
 

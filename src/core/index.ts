@@ -116,7 +116,10 @@ export {
   BadDeviceRequestError,
   KeptCategoriesError,
   UnsupportedRequestOptionError,
+  SeedSettleFailedError,
+  SeedSettlerStoppedError,
 } from "./driver.js";
+export type { SeedSettler } from "./seed-settle/index.js";
 export {
   DriverCatalog,
   NoDriverError,

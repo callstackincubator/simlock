@@ -43,6 +43,9 @@ import type {
   IdentityOutput,
   InstallComponentOnWorkersOptions,
   InstallComponentOptions,
+  MakeSeedOptions,
+  SeedMakeInput,
+  SeedMakeOutput,
   LeaseCancelInput,
   LeaseCancelOutput,
   LeaseGrant,
@@ -194,6 +197,13 @@ export interface SimlockAdminClient extends SimlockClient {
     input: ComponentInstallInput,
     options?: InstallComponentOptions,
   ): Promise<ComponentInstallOutput>;
+
+  /**
+   * why: ADR 0090 §4: makes a kind's seed and settles it, on a worker. Resolves with the settled seed, or
+   * `already-settled`; `options.onProgress` hears each stage with the seed's kind. Refused with
+   * `SEED_SETTLE_FAILED` when the make or the settle fails or 60 minutes pass; a gateway refuses it.
+   */
+  makeSeed(input: SeedMakeInput, options?: MakeSeedOptions): Promise<SeedMakeOutput>;
 
   /**
    * ADR 0010 §7, gateway-only: installs one component on named workers (`workers: [ids]`) or on

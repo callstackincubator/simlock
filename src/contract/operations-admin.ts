@@ -6,6 +6,7 @@ import {
   eventsPageWithoutSince,
 } from "./events-page.js";
 import { defineOperation, type Effect } from "./operation-definition.js";
+import { refuseBadOsVersion } from "./operations-lease-request.js";
 import { type Role } from "./roles.js";
 import {
   baselineEntrySchema,
@@ -273,4 +274,35 @@ export const tokenRevoke = defineOperation({
   effect: "write",
   input: z.object({ id: z.string() }),
   output: z.object({ revoked: z.boolean() }),
+});
+
+/**
+ * why: ADR 0090 §4: makes a kind's seed and settles it before anyone leases it. Worker only: a
+ * gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`. `osVersion` is the lease's OS grammar, so a range
+ * resolves to the exact version the lease would get, which the answer names.
+ */
+export const seedMake = defineOperation({
+  name: "seed.make",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      platform: platformSchema,
+      model: z.string().min(1).max(200),
+      // why: a plain string, bounded by `refuseBadOsVersion` as the lease's `osVersion` is.
+      osVersion: z.string().optional(),
+      imageTag: imageTagSchema.optional(),
+    })
+    .strict()
+    .superRefine(refuseBadOsVersion()),
+  output: z.object({
+    platform: platformSchema,
+    model: z.string().max(200),
+    osVersion: z.string().max(64),
+    imageTag: imageTagSchema.optional(),
+    sourceId: z.string().max(256),
+    sizeBytes: z.number().int().nonnegative().optional(),
+    outcome: z.enum(["settled", "already-settled"]),
+    settledAfterMs: z.number().int().nonnegative().optional(),
+  }),
 });

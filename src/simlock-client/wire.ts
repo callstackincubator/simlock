@@ -13,7 +13,12 @@ import {
   type Role,
 } from "../contract/index.js";
 import { parseDaemonResponse, serializeFrame } from "../daemon-protocol/index.js";
-import type { ComponentInstallProgress, DeviceOutputChunk, LeaseProgress } from "./types.js";
+import type {
+  ComponentInstallProgress,
+  DeviceOutputChunk,
+  LeaseProgress,
+  SeedProgressUpdate,
+} from "./types.js";
 import { errorMessage } from "../shared/index.js";
 
 /** The one legacy code a protocol-2 daemon answers `hello` with. There is no live protocol-2
@@ -54,6 +59,8 @@ export interface CallHooks {
   readonly onComponentProgress?:
     | ((progress: ComponentInstallProgress, workerId: string | undefined) => void)
     | undefined;
+  /** why: the `seed-progress` push, routed by frame id like `progress`. */
+  readonly onSeedProgress?: ((update: SeedProgressUpdate) => void) | undefined;
   readonly onRelayHead?: ((head: RelayHead) => void) | undefined;
   readonly onRelayInvalid?: (() => void) | undefined;
 }
@@ -361,6 +368,17 @@ export class SimlockWire {
         const requestId = parsed.data.requestId;
         const id = typeof requestId === "number" ? requestId : Number(requestId);
         this.#pending.get(id)?.onComponentProgress?.(parsed.data.progress, parsed.data.workerId);
+        return;
+      }
+      case "seed-progress": {
+        const parsed = PUSH_SCHEMAS["seed-progress"].safeParse(payload);
+        if (!parsed.success) return;
+        const requestId = parsed.data.requestId;
+        const id = typeof requestId === "number" ? requestId : Number(requestId);
+        this.#pending.get(id)?.onSeedProgress?.({
+          kind: parsed.data.kind,
+          progress: parsed.data.progress,
+        });
         return;
       }
       case "relay-head": {

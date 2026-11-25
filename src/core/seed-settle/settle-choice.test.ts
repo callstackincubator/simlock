@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { SeedSettleProgress } from "./types.js";
 import {
   expectSettled,
   flush,
+  iphoneSpec,
   leaseReservation,
   minute,
   newDevicesPaused,
@@ -112,6 +114,24 @@ describe("seed settler: which seed it settles and when", () => {
     expect(reserve).toHaveBeenCalledTimes(1);
     await refused.advance(5 * minute);
     expectSettled(refused, ["seed"], "the next check");
+
+    const asked = await settlerRig();
+    const told: SeedSettleProgress[] = [];
+    asked.ios.sources = [quick("seed", 3)];
+    const refusing = vi
+      .spyOn(asked.capacity, "tryReserveProvisioning")
+      .mockReturnValue({ ok: false, reason: "ram-budget" });
+    await asked.started();
+    const answer = asked.settler.settle(iphoneSpec, { onProgress: (next) => told.push(next) });
+    await flush();
+    for (let check = 0; check < 3; check += 1) await asked.advance(5 * minute);
+    expect(refusing, "the reservation is tried again at every check").toHaveBeenCalledTimes(4);
+    expect(told, "a capacity wait is told once, not at every check").toEqual([
+      { reason: "capacity", stage: "waiting" },
+    ]);
+    refusing.mockRestore();
+    await asked.advance(5 * minute);
+    await expect(answer).resolves.toMatchObject({ outcome: "settled" });
 
     const throws = await settlerRig();
     throws.ios.sources = [quick("seed", 3)];

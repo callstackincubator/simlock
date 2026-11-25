@@ -306,6 +306,14 @@ export function fakeClient(overrides: Partial<SimlockAdminClient> = {}): Simlock
         version: input.version,
       }),
     installComponentOnWorkers: () => Promise.resolve({ results: [] }),
+    makeSeed: (input) =>
+      Promise.resolve({
+        model: input.model,
+        osVersion: input.osVersion ?? "26.5",
+        outcome: "settled" as const,
+        platform: input.platform,
+        sourceId: "seed-1",
+      }),
     removeComponent: (input) =>
       Promise.resolve({
         outcome: input.dryRun === true ? ("would-remove" as const) : ("removed" as const),

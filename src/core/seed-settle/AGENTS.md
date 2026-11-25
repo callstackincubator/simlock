@@ -10,3 +10,4 @@ Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGE
 - Nuke runs inside `holdWhile`: it aborts a settle, waits for it, and the settler starts nothing until the work is done.
 - `beginStop` at stop start only makes the settler start nothing and refuse new operator calls; `stop` rejects the queued ones, aborts the running settle and waits for it. Both come before the drivers are disposed.
 - Events are emitted only when the driver's `settleSeed` is called: nothing for an operator call on a seed that is already settled.
+- An operator call waits 60 minutes from its arrival, then fails `timed-out`; a settle it started goes on.

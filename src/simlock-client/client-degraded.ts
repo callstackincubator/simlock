@@ -71,6 +71,7 @@ export function buildDegradedClient(
     testAlertDestination: () => rejected(),
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
+    makeSeed: () => rejected(),
     removeComponent: () => rejected(),
     saveBaseline: () => rejected(),
     listBaselines: () => rejected(),

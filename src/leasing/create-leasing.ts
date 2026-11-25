@@ -14,6 +14,7 @@ import {
   type ModelPreferences,
   type Platform,
   type StartupRead,
+  type VirtualSpec,
 } from "../core/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { LeaseAcquisitionCoordinator } from "./lease-acquisition-coordinator.js";
@@ -100,6 +101,13 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader, 
    */
   dispose(): void;
   waitingRequests(): readonly WaitingRequest[];
+  /** why: the lease's resolution of a kind with downloads off, and a full spec whatever the worker serves, because one seed serves every mode (ADR 0090 §4). */
+  resolveSeedSpec(request: {
+    readonly platform: Platform;
+    readonly model: string;
+    readonly osVersion?: string;
+    readonly imageTag?: string;
+  }): Promise<VirtualSpec>;
 }
 
 /**
@@ -306,6 +314,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
       return acquisition.physicalQueueDepth;
     },
     waitingRequests: () => requests.waiting(queue.places()),
+    resolveSeedSpec: (request) => acquisition.resolveSeedSpec(request),
     cancelPending: async (requesterId: string, platform?: Platform) =>
       acquisition.cancelPending(requesterId, platform),
     pendingRequestOwner: (requesterId: string, platform?: Platform) =>

@@ -176,6 +176,34 @@ Other slim settings:
 | Turn off only some groups of services | `ios.slim.categories`: a list of `widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`. |
 | Give a slim first boot more or less time | `ios.slim.bootTimeoutMs` (10 minutes by default). |
 
+## Settle a seed before the first lease
+
+A seed is the simulator or emulator Simlock copies to make each device a lease gets. The first lease of a kind makes a quick seed, and Simlock settles it in the background: it boots the seed until it goes idle, then saves it, so later copies do less work. Until then, copies are more costly. To pay that cost before anyone leases the kind, settle it yourself.
+
+<Steps>
+
+1. Make and settle the seed of one kind, on the worker:
+
+   ```sh
+   simlock seed ios "iPhone 17" --os 26.5
+   ```
+
+   ```text
+   seed iPhone 17, iOS 26.5: making the seed…
+   seed iPhone 17, iOS 26.5: settling…
+   seed iPhone 17, iOS 26.5: settled in 3m01s (1.7 GiB)
+   ```
+
+</Steps>
+
+**Check:** run it again. It answers `already settled` at once.
+
+- A settle waits while another settle runs, while the machine is under memory pressure, while free disk is below `diskPressure.freeBytesThreshold`, and while no device fits in the capacity limits. Each wait shows as a `waiting:` line.
+- Ctrl-C stops the command only. The settle goes on in the daemon.
+- After 60 minutes without a settled seed it fails with `SEED_SETTLE_FAILED` (`reason` `timed-out`); a make or settle that fails answers it with `reason` `failed`.
+- It needs the admin role and runs on a worker. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`.
+- The runtime or system image must be installed already; `simlock seed` never downloads one. Otherwise it fails with `RUNTIME_MISSING`.
+
 ## When it fails
 
 | What you see | Cause | Fix |

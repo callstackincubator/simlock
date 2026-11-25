@@ -17,6 +17,7 @@ import {
   NoDriverError,
   PassthroughRefusedError,
   RuntimeMissingError,
+  SeedSettlerStoppedError,
   UnknownBaselineError,
   UnknownLeaseError,
   UnknownModelError,
@@ -158,7 +159,7 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   // A component install still open when the daemon stopped (ADR 0010 §6): running it again,
   // against the restarted daemon, is the recovery.
-  if (error instanceof ComponentInstallerClosedError) {
+  if (error instanceof ComponentInstallerClosedError || error instanceof SeedSettlerStoppedError) {
     return "DAEMON_STOPPING";
   }
   // ADR 0010 §8's refused removals. `COMPONENT_IN_USE` carries its counts as details, so the
