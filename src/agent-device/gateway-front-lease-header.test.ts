@@ -55,7 +55,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(pathsReceived(other)).toEqual(before);
   });
 
-  it("the preflight's ticket URL names the gateway's origin, its `upload.headers` carry the caller's own `authorization`, W2 received its own daemon's token in `authorization` and `x-agent-device-token` and none of the caller's credentials, and a `PUT` to it with the lease header and those headers reaches W2", async () => {
+  it("the preflight's ticket URL names the gateway's origin, its `upload.headers` carry the caller's own `authorization`, W2 received its own daemon's token in `authorization` and `x-agent-device-token` and none of the caller's credentials, and a `PUT` to it with the lease header and those headers reaches W2, and behind `x-forwarded-proto: https` the ticket URL is `https`", async () => {
     const rig = await twoLeasesOnTwoWorkers();
     const target = holderOf(rig, 2);
 
@@ -88,6 +88,13 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(put.status).toBe(200);
     expect(target.fake.uploads).toEqual(["artifact bytes"]);
     expect(holderOf(rig, 1).fake.uploads).toEqual([]);
+
+    const behindTls = await send(rig, "/upload/preflight", {
+      body: "{}",
+      headers: { ...leased(2), "x-forwarded-proto": "https" },
+    });
+    const tlsTicket = ((await behindTls.json()) as { upload: { url: string } }).upload;
+    expect(tlsTicket.url.startsWith(`${rig.origin.replace("http:", "https:")}/v1/`)).toBe(true);
   });
 
   it("a finalize, a `POST /upload`, a `GET artifacts/<id>` and a diagnostics `GET`, each with the header, reach the lease's worker", async () => {

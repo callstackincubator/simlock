@@ -112,7 +112,7 @@ describe("AgentDeviceSupervisor finding agent-device", () => {
         platforms: ["ios", "android"],
         state: "running",
         token,
-        version: "0.21.28",
+        version: "0.21.40",
       });
       expect(commandsRun(harness)[0]).toEqual([nodePath, realCli, "--version"]);
       expect(daemonSpawns(harness)[0]?.[1]).toBe(internalEntry);
@@ -130,7 +130,7 @@ describe("AgentDeviceSupervisor finding agent-device", () => {
       reason: "not-found",
     });
     expect(unavailable(harness).remedy).toContain("capabilities.agent-device.command");
-    expect(unavailable(harness).remedy).toContain("0.21.28 or later");
+    expect(unavailable(harness).remedy).toContain("0.21.40 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(harness.runner.calls).toEqual([]);
   });
@@ -219,14 +219,14 @@ describe("AgentDeviceSupervisor checking the install", () => {
     const harness = await run({ expectations: [versionRun("0.20.3\n")] });
 
     expect(unavailable(harness)).toMatchObject({
-      message: "found 0.20.3, need 0.21.28 or later",
+      message: "found 0.20.3, need 0.21.40 or later",
       reason: "wrong-version",
     });
-    expect(unavailable(harness).remedy).toContain("0.21.28 or later");
+    expect(unavailable(harness).remedy).toContain("0.21.40 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
   });
 
-  it.each(["abc", "0.21", "0.9.100", "0.21.27", "0.21.28-nightly.20261013.49"])(
+  it.each(["abc", "0.21", "0.9.100", "0.21.39", "0.21.40-nightly.20261119.1"])(
     "reports %s as wrong-version",
     async (printed) => {
       const harness = await run({ expectations: [versionRun(`${printed}\n`)] });
@@ -236,7 +236,7 @@ describe("AgentDeviceSupervisor checking the install", () => {
     },
   );
 
-  it.each(["0.21.28", "0.21.28+build.7", "0.21.29-dev", "0.22.0", "0.100.0", "1.0.0+build.7"])(
+  it.each(["0.21.40", "0.21.40+build.7", "0.21.41-dev", "0.22.0", "0.100.0", "1.0.0+build.7"])(
     "starts a daemon for the version %s",
     async (printed) => {
       const harness = await run({ expectations: [versionRun(`${printed}\n`), daemonSpawn()] });

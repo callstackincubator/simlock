@@ -31,7 +31,7 @@ async function arrange(version: string) {
   const filesystem = new MemoryFilesystem();
   const probe = new FakeTcpProbe();
   const health = new FakeAgentDeviceHealth();
-  health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+  health.respondWith({ rpcProtocolVersion: 3, service: "agent-device-daemon" });
   await filesystem.mkdirp(home);
   await filesystem.mkdirp("/usr/local/bin");
   await filesystem.mkdirp(`${packageRoot}/bin`);
@@ -106,7 +106,7 @@ async function started(harness: Awaited<ReturnType<typeof arrange>>): Promise<vo
 
 describe("the agent-device upstream adapter over the supervisor", () => {
   it("reports running with the supervisor's base URL, token, generation and the ceiling", async () => {
-    const harness = await arrange("0.21.28");
+    const harness = await arrange("0.21.40");
     await started(harness);
     const availability = harness.supervisor.availability();
     if (availability.state !== "running") throw new Error(`got ${availability.state}`);
@@ -122,7 +122,7 @@ describe("the agent-device upstream adapter over the supervisor", () => {
   });
 
   it("reports unavailable with starting while the supervisor starts", async () => {
-    const harness = await arrange("0.21.28");
+    const harness = await arrange("0.21.40");
     const starting = harness.supervisor.start();
     starting.catch(() => undefined);
 
