@@ -51,8 +51,7 @@ broader search (the bare call, or grep) shows what it left out. Traps,
 each measured on this repo:
 
 - A pattern matches whole nodes. `new Promise($$$)` skips `new
-  Promise<void>(…)`, and `$R => …` skips `(r) => …`; match on `kind` with
-  `has`, or write each spelling.
+  Promise<void>(…)`; match on `kind` with `has`, or write each spelling.
 - `async` and `await` are not kinds; match them with `regex`.
 - `try { $$$ } catch ($E) {}` misses `catch {}` and matches a catch that
   holds only a comment.
