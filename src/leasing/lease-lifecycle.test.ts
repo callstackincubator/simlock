@@ -184,8 +184,6 @@ describe("LeaseLifecycle", () => {
     const renewed = await before.lifecycle.renew(grant.lease.id, 30);
     expect(renewed.ttlDeadline).toBe(1_035);
 
-    // Simulate a daemon restart: a fresh clock/event bus/scheduler/lifecycle reload the
-    // same persisted registry state and restore timers from it.
     const afterClock = new FakeClock(1_005);
     const afterEventBus = new EventBus(afterClock);
     const afterRegistry = await loadTestRegistry({
@@ -207,13 +205,10 @@ describe("LeaseLifecycle", () => {
     });
     await afterLifecycle.restoreExpiryTimers();
 
-    // Advance to (and past) the original grant-time deadline: a restart that restored the
-    // stale grant-time deadline instead of the renewed one would have expired the lease here.
     afterClock.advance(20);
     await new Promise((resolve) => setImmediate(resolve));
     expect(afterRegistry.snapshot.leases).toHaveLength(1);
 
-    // The renewed deadline still fires.
     afterClock.advance(15);
     await vi.waitFor(() => expect(afterRegistry.snapshot.leases).toEqual([]));
   });

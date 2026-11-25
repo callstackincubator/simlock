@@ -64,29 +64,23 @@ export class LeaseLifecycle {
     readonly deviceId: string;
     readonly ownerId: string;
     readonly requesterId: string;
-    /** The stored request this grant serves, carried on `lease.granted`. */
     readonly requestId: string;
     /**
-     * What a repeat of the request answers besides the device and lease: stored with the lease in
+     * why: What a repeat of the request answers besides the device and lease: stored with the lease in
      * the one write, so a crash after it cannot leave the request open.
      */
     readonly environment: LeaseGrant["environment"];
     readonly timing: LeaseGrant["timing"];
-    /** How the device came to be ready, carried on `lease.granted`. */
     readonly source: EventMap["lease.granted"]["source"];
-    /** ADR 0004 §4: this lease's initial width; `lease.defaultTtlMs` when the request named
+    /** why: ADR 0004 §4: this lease's initial width; `lease.defaultTtlMs` when the request named
      * none. Whatever it resolves to is stored on the record, because that is what a later
      * body-less renew re-applies. */
     readonly ttlMs?: number;
-    /** ADR 0020: the lease ID the requester chose, when it did. The caller has already refused one
-     * that is in use. */
     readonly leaseId?: string;
     readonly runId?: string;
     readonly label?: string;
     /** why: the categories a slim lease keeps running, written to the device in the grant commit (ADR 0066 §4). */
     readonly except?: readonly string[];
-    /** ADR 0021: the gateway's request id, when the request is a gateway dispatch, carried on
-     * `lease.granted`. */
     readonly fleetRequestId?: string;
   }): Promise<LeaseGrant> {
     const { ttlMs, requestId, environment, timing, source, fleetRequestId, ...createInput } = input;
@@ -103,7 +97,7 @@ export class LeaseLifecycle {
     if (device === undefined)
       throw new Error(`Granted device disappeared from registry: ${lease.deviceId}`);
 
-    // ADR 0004's Consequences: `mode` leaves this payload, a deliberate one-off exception to
+    // why: ADR 0004's Consequences: `mode` leaves this payload, a deliberate one-off exception to
     // events rule 6 (additive payloads only) taken while the package is 0.x -- there is no mode
     // left to report. `EVENTS.md` records the exception.
     this.options.eventBus.emit(
@@ -125,7 +119,7 @@ export class LeaseLifecycle {
   }
 
   /**
-   * The one thing that keeps a lease alive (ADR 0004 §1). An omitted `ttlMs` re-applies the
+   * why: The one thing that keeps a lease alive (ADR 0004 §1). An omitted `ttlMs` re-applies the
    * lease's own stored width, never `lease.defaultTtlMs`: a lease granted for four hours keeps
    * its four hours through renewals that do not ask for anything different. A named `ttlMs`
    * changes that width from this renewal on, which is why it is written back to the record.
@@ -150,11 +144,6 @@ export class LeaseLifecycle {
     return renewed;
   }
 
-  /**
-   * ADR 0004's Consequences: `closed` and `orphaned` are gone from the reasons a lease can end
-   * with. Neither concept survives -- a closing connection is not a release (§3), and there is
-   * no startup sweep left to orphan anything.
-   */
   async beginRelease(
     leaseId: string,
     reason: LeaseEndReason,
@@ -209,7 +198,7 @@ export class LeaseLifecycle {
     }
   }
 
-  /** Re-arms every remaining lease's TTL timer from its own deadline. Startup runs it after the
+  /** why: Re-arms every remaining lease's TTL timer from its own deadline. Startup runs it after the
    * reconciler has ended the leases whose device is not running (ADR 0019): a restart does not
    * prove a holder is dead, so a lease whose device is running is kept, and one whose deadline
    * passed while no daemon ran expires here. */

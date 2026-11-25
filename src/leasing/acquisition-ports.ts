@@ -72,17 +72,13 @@ export interface LeaseAcquisitionCoordinatorOptions {
   /** why: a run release ends a lease its request got at the grant; the release coordinator is built after this one, so the root hands the ending in. */
   readonly endLease: (leaseId: string) => Promise<void>;
   readonly eventBus: Pick<EventBus, "emit">;
-  /** Mints a request's id before admission checks, so a request refused there still has one. */
+  /** why: Mints a request's id before admission checks, so a request refused there still has one. */
   readonly idGenerator: IdGenerator;
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<
     ManagedDeviceLifecycle,
     "bootForLease" | "destroy" | "dispose" | "rebootForLease" | "shutdown"
   >;
-  /**
-   * The model names to try for each class, per platform, operator's list first (ADR 0015 §4),
-   * built at the composition root. This coordinator holds no model name of its own.
-   */
   readonly modelPreferences: ModelPreferences;
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;

@@ -8,7 +8,6 @@ import { inspectCommits } from "./test-lease-acquisition-commits.js";
 describe("LeaseAcquisitionCoordinator stored requests", () => {
   const keyed = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" } as const;
 
-  /** Grants the one device capacity allows to `holder`, then frees it again on demand. */
   async function holdTheOnlyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
     const held = await harness.coordinator.request(request, {
       ownerId: "holder",
@@ -114,7 +113,7 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     });
 
     expect(granted.lease.requesterId).toBe("agent");
-    // The grant and its stored result land in one commit; the flush lets the wait settle.
+    // why: The grant and its stored result land in one commit; the flush lets the wait settle.
     await flush();
     expect(harness.registry.leaseRequests().map((record) => record.state)).toEqual([
       "granted",

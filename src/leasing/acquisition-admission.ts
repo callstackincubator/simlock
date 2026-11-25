@@ -60,7 +60,7 @@ export class AcquisitionAdmission {
   }
 
   /**
-   * ADR 0020: the one clash check on a host, inside the same admission section as the
+   * why: ADR 0020: the one clash check on a host, inside the same admission section as the
    * one-lease-per-requester check and after it. An ID is held by an active lease and by a
    * request still waiting, so a restart, which fails every waiting request, frees it.
    */

@@ -17,8 +17,6 @@ function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogS
 describe("LeaseAcquisitionCoordinator", () => {
   it("A failed eviction shutdown logs the device id and the error, and the waiter is deferred as before.", async () => {
     const { logger, sink } = capturingLogger();
-    // Two devices allowed but only one running: a running device of another spec is
-    // evicted by shutdown (not deleted) to make room for the request.
     const harness = await createHarness({ logger, maxDevices: 2 });
     const victim = await seedReady(harness, { ...request, model: "iPhone SE" });
     harness.driver.failOn("shutdown", 1, new DriverCrashError("shutdown wedged"));
@@ -46,7 +44,6 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
-    // Deferred: back in the queue, still pending, and the victim untouched.
     expect(settled).toBe(false);
     expect(harness.coordinator.queueDepth).toBe(1);
     expect(harness.registry.snapshot.devices.find((device) => device.id === victim.id)?.state).toBe(
@@ -58,7 +55,6 @@ describe("LeaseAcquisitionCoordinator", () => {
 
   it("A failed eviction delete logs the device id and the error.", async () => {
     const { logger, sink } = capturingLogger();
-    // One device allowed: a managed device of another spec is deleted to make room.
     const harness = await createHarness({ logger, maxDevices: 1 });
     const victim = await seedShutdown(harness, { ...request, model: "iPhone SE" });
     harness.driver.failOn("destroy", 1, new DriverCrashError("simctl delete refused"));
@@ -206,7 +202,6 @@ describe("LeaseAcquisitionCoordinator", () => {
         return await realMakeReady(...args);
       } finally {
         failedBoots += 1;
-        // The record leaves `shutdown` while the boot fails, so the destroy finds nothing to claim.
         if (failedBoots === 1) {
           await harness.registry.transitionDevice(shutdown.id, "deleted", {
             event: "device.deleted",
@@ -260,8 +255,6 @@ describe("LeaseAcquisitionCoordinator", () => {
   );
 
   it("releases the running slot reserved to boot a shut-down device for a waiter when the boot fails and another boot claims the device before it is destroyed", async () => {
-    // The warm pool's boot reserves its own slot and claims the device in one decision. Here it
-    // lands after the failed boot has released its claim and before the destroy claims the device.
     let raced = false;
     let warmBoot: { release(): void } | undefined;
     const harness = await createHarness({
@@ -290,7 +283,6 @@ describe("LeaseAcquisitionCoordinator", () => {
       }),
     });
     await seedShutdown(harness);
-    // Call 1 is seedShutdown's own boot; call 2 is the waiter's.
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
 
     await expect(
@@ -298,7 +290,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
     expect(raced).toBe(true);
 
-    // The warm pool's boot ends and gives back its own claim and slot.
     warmBoot?.release();
     await settle();
 

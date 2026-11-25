@@ -11,12 +11,10 @@ export interface LeaseStartupRegistry {
   failOpenLeaseRequests(failure: LeaseRequestFailure): Promise<readonly LeaseRequestRecord[]>;
 }
 
-/** Restores every persisted lease's TTL timer. */
 export interface LeaseTimerRestorer {
   restoreExpiryTimers(): Promise<void>;
 }
 
-/** Ends every lease whose device the startup read says is not running. */
 export interface LeaseStartupReconciler {
   run(read: StartupRead): Promise<void>;
 }
@@ -30,7 +28,7 @@ export interface LeaseStartupOptions {
 }
 
 /**
- * What a request still open at a restart is settled with. `INTERNAL` rather than a transport
+ * why: What a request still open at a restart is settled with. `INTERNAL` rather than a transport
  * code: the request is finished, and a client that retried a transport error under the same key
  * would only ever get this answer back.
  */
@@ -40,7 +38,7 @@ const DAEMON_RESTARTED: LeaseRequestFailure = {
 };
 
 /**
- * The lease half of startup, run around core's startup read and before admission opens (the
+ * why: The lease half of startup, run around core's startup read and before admission opens (the
  * dispatcher parks every request until startup resolves).
  *
  * First, no wait from the previous process survived it, so every request it left open is settled

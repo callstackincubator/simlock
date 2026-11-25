@@ -42,7 +42,7 @@ export class LeaseReconciler {
     const now = this.options.clock.now();
     for (const lease of [...leases].sort(byDeadline)) {
       const device = devices.find((candidate) => candidate.id === lease.deviceId);
-      // A physical device is not in a root a start reads: its lease and its state stay as they
+      // why: A physical device is not in a root a start reads: its lease and its state stay as they
       // are (ADR 0022 §7), and the expiry timers restored next end the lease on its deadline.
       if (device === undefined || device.physical) continue;
       const outcome = deviceOutcome(device, read);
@@ -55,7 +55,6 @@ export class LeaseReconciler {
   }
 }
 
-/** What becomes of a lease's device, or undefined when the device is running and the lease stays. */
 function deviceOutcome(device: DeviceRecord, read: StartupRead): StartupDeviceOutcome | undefined {
   const reality = read.reality(device.spec.platform);
   if (reality === undefined) return "wait";

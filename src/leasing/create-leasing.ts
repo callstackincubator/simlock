@@ -52,10 +52,6 @@ export interface LeasingOptions {
    */
   readonly logger?: Logger | undefined;
   readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
-  /**
-   * The worker's default device mode per platform, built from config by the composition root
-   * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
-   */
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
   /** why: the device modes the worker serves per platform, built from config by the composition root (ADR 0082 §2). Omitted, or silent on a platform, means every mode. */
   readonly servedModes?: Readonly<Partial<Record<Platform, readonly DeviceMode[]>>> | undefined;
@@ -110,10 +106,6 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader, 
   }): Promise<VirtualSpec>;
 }
 
-/**
- * Composition root for the lease subsystem, built on top of `core` (ADR 0018 §2). Wires leasing's
- * parts together and returns the ports core declared as `corePorts`; the daemon connects them.
- */
 export function createLeasing(options: LeasingOptions): Leasing {
   const { core } = options;
   const { decisions, registry } = core;
@@ -200,7 +192,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
         }),
     lifecycle: leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
-    // Called once a backgrounded reclaim has given up its claim; the warm pool can act on the
+    // why: Called once a backgrounded reclaim has given up its claim; the warm pool can act on the
     // device from this moment (see `Core#passWarmPool`).
     notifyAvailability: () => {
       acquisition.kick();
