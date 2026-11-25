@@ -1,8 +1,9 @@
 import type { EventBus, EventEnvelope } from "../bus/index.js";
-import { PUSH_SCHEMAS, type ComponentProgress } from "../contract/index.js";
+import { PUSH_SCHEMAS, type ComponentProgress, type SeedProgress } from "../contract/index.js";
 import type { LeaseProgress } from "../core/index.js";
 import type { RequestId } from "../daemon-protocol/index.js";
 import type { IpcConnection, Logger } from "../ports/index.js";
+import type { SeedKind } from "./dispatch.js";
 import { type Connection, parseOutput, writeFrame } from "./server-connection.js";
 
 interface ConnectionPushesOptions {
@@ -48,6 +49,23 @@ export class ConnectionPushes {
         PUSH_SCHEMAS["relay-head"],
         { headers, requestId, status },
         "push:relay-head",
+      ),
+    });
+  }
+
+  async seedProgress(
+    socket: IpcConnection,
+    requestId: RequestId,
+    kind: SeedKind,
+    progress: SeedProgress,
+  ): Promise<void> {
+    return writeFrame(socket, {
+      push: "seed-progress",
+      payload: parseOutput(
+        this.options.logger,
+        PUSH_SCHEMAS["seed-progress"],
+        { kind, progress, requestId },
+        "push:seed-progress",
       ),
     });
   }

@@ -11,6 +11,7 @@ import {
   uninstallPlan,
 } from "../../core/index.js";
 import type { Filesystem, IdGenerator, ProcessResult } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 
 export type DevicectlOutcome =
   | { readonly kind: "finished"; readonly result: ProcessResult }
@@ -404,7 +405,7 @@ export class IosPhysicalHandler {
       }
       return { json: parseDevicectlJson(await filesystem.readFile(path)), ok: true };
     } catch (error: unknown) {
-      return { ok: false, why: error instanceof Error ? error.message : String(error) };
+      return { ok: false, why: errorMessage(error) };
     } finally {
       try {
         await filesystem.rm(path);

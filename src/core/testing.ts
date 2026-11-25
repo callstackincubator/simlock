@@ -66,8 +66,10 @@ export function testComponentWiring<
 }): {
   readonly components: Components | ComponentInstaller;
   readonly decisions: SerializedDecision;
+  readonly filesystem: MemoryFilesystem;
 } {
   const decisions = new SerializedDecision();
+  const filesystem = new MemoryFilesystem();
   return {
     components:
       options.components ??
@@ -77,11 +79,12 @@ export function testComponentWiring<
         diskSpace: new DiskSpaceGuard(),
         drivers: new DriverCatalog(options.drivers),
         eventBus: options.eventBus,
-        filesystem: new MemoryFilesystem(),
+        filesystem,
         registry: options.registry,
         timeoutMs: 1_200_000,
       }),
     decisions,
+    filesystem,
   };
 }
 

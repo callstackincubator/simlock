@@ -37,7 +37,11 @@ export interface Output {
  * this one is named for what the CLI holds rather than shared, which would couple the two. */
 export type McpStdioLauncher = (options: {
   readonly daemonFlag: DaemonFlag;
-  readonly remote?: { readonly url: string; readonly token: string };
+  readonly remote?: {
+    readonly url: string;
+    readonly token: string;
+    readonly allowInsecureHttp: boolean;
+  };
 }) => Promise<void>;
 
 export interface ServiceSetup {
@@ -65,10 +69,15 @@ export interface CliServiceAccess {
 export interface RemoteFarm {
   readonly url: string;
   readonly token: string | undefined;
+  /** why: `--allow-insecure-http`, and the variable's raw value; the farm URL check judges them, so a command that checks none never refuses a stale one. */
+  readonly allowInsecureHttpFlag: boolean;
+  readonly allowInsecureHttpVariable: string | undefined;
 }
 
 export interface CliEnvironment {
   readonly remote?: RemoteFarm | undefined;
+  /** why: the raw `SIMLOCK_ALLOW_INSECURE_HTTP`, unjudged: only a farm URL check reads it, so a leftover value never breaks a command that checks none. */
+  readonly allowInsecureHttpFromEnv?: string | undefined;
   readonly clock: Clock;
   readonly configPath: string;
   readonly daemonHome: DaemonHome;

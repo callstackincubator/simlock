@@ -117,6 +117,17 @@ describe("CLI: simlock files", () => {
       size: 9,
     });
 
+    const insecure = await files(["files", "list", "--allow-insecure-http"], undefined, {
+      env: { ...AGENT_A, SIMLOCK_URL: "http://100.75.181.35:7300" },
+    });
+    expect(insecure.code).toBe(0);
+    expect(insecure.farm.connections.map(({ url }) => url)).toEqual([
+      "ws://100.75.181.35:7300/v1/session",
+    ]);
+    expect(insecure.stream.requests.map(({ url }) => url)).toEqual([
+      "http://100.75.181.35:7300/v1/leases/lse_1/files",
+    ]);
+
     const named = await files(["files", "put", "app-debug.apk", "--name", "app.apk"], stored);
     expect(named.stream.requests.map(({ url }) => url)).toEqual([
       `${URL}/v1/leases/lse_1/files/app.apk`,

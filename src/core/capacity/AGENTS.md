@@ -14,6 +14,7 @@ Does: how many virtual devices may exist and run at once — limits, RAM budget,
 - At `new-devices-paused` (the memory pressure port) every reservation that adds a device or RAM is refused `memory-pressure` before the strategy is asked, under every strategy; it evicts nothing. `canProvision` and `canBoot` stay the strategy's answer.
 - A boot refused for RAM evicts nothing; the request waits.
 - Over the RAM limit (sizes raised by a restart), every create and every boot that adds RAM is refused. Nothing is stopped or reclaimed for it.
+- `onBootActivity(listener)` is told, after every take and release, how many creations and boots are under way. The seed settler uses it for its quiet rule.
 - Release is idempotent. Every take and release calls the observer.
 - `CapacityObserver.changed()` runs after every registry commit and reservation change, and emits `capacity.changed` only when the payload differs from the last one. It is silent until `start()` in `core.converge`, which emits once.
 - Top-level `limits` and `ramBudget` are folded into `capacity.config` under `resource`, and ignored with a warning under `fixed` (`core/config-role-checks.ts`).

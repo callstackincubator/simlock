@@ -11,6 +11,7 @@ import {
   type SqliteSchemaOwner,
   SqliteUnavailableError,
 } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export const STATE_DB_NAME = "state.db";
 
@@ -40,7 +41,7 @@ class StateRefusal extends Error {
 }
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 function damaged(path: string, detail: string, cause: unknown): StateRefusal {

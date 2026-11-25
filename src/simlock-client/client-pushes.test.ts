@@ -38,6 +38,46 @@ describe("pushes", () => {
     expect(onProgress).toHaveBeenCalledTimes(1);
   });
 
+  it("routes seed-progress pushes with the seed's kind to that makeSeed call's onProgress, and stops at its reply", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const onProgress = vi.fn();
+    const seedPromise = client.makeSeed({ model: "iPhone 17", platform: "ios" }, { onProgress });
+    await flushMicrotasks();
+    const seedCall = connection.lastSentOf("seed.make")!;
+    expect(seedCall.payload).toEqual({ model: "iPhone 17", platform: "ios" });
+
+    const kind = { model: "iPhone 17", osVersion: "26.5", platform: "ios" };
+    connection.push("seed-progress", {
+      kind,
+      progress: { stage: "making" },
+      requestId: seedCall.id,
+    });
+    connection.push("seed-progress", {
+      kind,
+      progress: { reason: "capacity", stage: "waiting" },
+      requestId: seedCall.id,
+    });
+    const result = { ...kind, outcome: "settled", sourceId: "seed-1" };
+    connection.reply(seedCall.id, result);
+
+    await expect(seedPromise).resolves.toEqual(result);
+    expect(onProgress.mock.calls.map(([update]) => update)).toEqual([
+      { kind, progress: { stage: "making" } },
+      { kind, progress: { reason: "capacity", stage: "waiting" } },
+    ]);
+    connection.push("seed-progress", {
+      kind,
+      progress: { stage: "settling" },
+      requestId: seedCall.id,
+    });
+    expect(onProgress).toHaveBeenCalledTimes(2);
+  });
+
   it("routes component-progress pushes to that installComponent call's onProgress, and stops at its reply", async () => {
     // ADR 0010 §6: `component-progress` is request-scoped like `progress`.
     const connection = new ScriptedConnection();

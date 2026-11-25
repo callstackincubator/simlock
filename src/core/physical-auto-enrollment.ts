@@ -12,6 +12,7 @@ import {
 } from "./physical-enrollment.js";
 import type { RegistrySnapshot } from "./registry.js";
 import { stableError } from "./stable-error.js";
+import { errorMessage } from "../shared/index.js";
 
 interface Attachment {
   heldOut: boolean;
@@ -127,7 +128,7 @@ export class PhysicalAutoEnrollment {
       this.#listFailures.delete(platform);
       return attached;
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (this.#listFailures.get(platform) !== message) {
         this.#listFailures.set(platform, message);
         this.#logger.warn(`auto-enroll: could not list ${platform} phones: ${message}`);

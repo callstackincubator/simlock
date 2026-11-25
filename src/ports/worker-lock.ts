@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
 import type { ProcessSupervisor } from "./process-supervisor.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface WorkerLockOwner {
   readonly pid: number;
@@ -101,7 +102,7 @@ export class NodeWorkerLock implements WorkerLock {
       if (details.mode !== 0o700) await filesystem.chmod(parent, 0o700);
       return undefined;
     } catch (error: unknown) {
-      return error instanceof Error ? error.message : String(error);
+      return errorMessage(error);
     }
   }
 

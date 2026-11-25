@@ -7,8 +7,8 @@ import {
   UsageError,
   writeResult,
 } from "../args.js";
-import { errorMessage } from "../errors.js";
 import type { CommandContext } from "../tree.js";
+import { errorMessage } from "../../shared/index.js";
 
 const SECRET_FLAG = { "show-secrets": { type: "boolean" } } as const;
 

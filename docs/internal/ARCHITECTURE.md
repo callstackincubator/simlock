@@ -42,6 +42,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | leasing | Every lease rule: admit, queue, plan, grant, renew, end | [leasing](../../src/leasing/AGENTS.md) |
 | core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, baselines, doctor | [core](../../src/core/AGENTS.md) |
 | core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
+| core/seed-settle | When a quick seed is settled in the background | [seed-settle](../../src/core/seed-settle/AGENTS.md) |
 | core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
 | core/usage | Usage figures from the history rows, read on a thread | [usage](../../src/core/usage/AGENTS.md) |
 | drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [android input](../../src/drivers/android/input/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) · [ios input](../../src/drivers/ios/input/AGENTS.md) |
@@ -68,6 +69,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
 | instructions | The static rules text for agents: `simlock instructions`, the MCP server instructions and resource; `simlock setup`, which installs the router skill | [instructions](../../src/instructions/AGENTS.md) |
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
+| shared | Small pure helpers two or more components use; imports nothing | [shared](../../src/shared/AGENTS.md) |
 | daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
 | test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |
 | `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [console.mdx](../../website/src/content/docs/docs/reference/console.mdx) |
@@ -86,10 +88,10 @@ Arrows point from the optional to the required (architecture rule 15).
 | `no-fs-or-process` | Everything under `src/` but `ports/` uses ports, never `fs` or `child_process` |
 | `definition-is-light` | A module's or a driver's definition file imports its own module only for types or by dynamic import |
 | `auth-imports-little` | `src/auth` imports only ports and contract |
-| `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract and core, and the bus for types |
+| `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract, core and shared, and the bus for types |
 | `not-modules` | Core, leasing, drivers, gateway and contract import nothing from modules or module-registry |
 | `not-agent-device` | Core, leasing and drivers import nothing from agent-device |
-| `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
+| `host-load-imports-ports-only`, `not-host-load` | host-load stands alone, apart from shared |
 | `alerts-imports-bus-ports-core-only`, `not-alerts` | alerts imports the bus, ports and core only; only `src/daemon/main.ts` imports it |
 | `not-stream`, `stream-not-edges` | Nothing required imports stream; stream imports no frontend, gateway or driver |
 | `not-input`, `input-not-edges` | Nothing required imports input; input imports no frontend, gateway or driver |
@@ -97,6 +99,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `only-main-knows-gateway` | In daemon, only `src/daemon/main.ts` imports the gateway |
 | `link-is-portable`, `link-imports-port-types-only` | The link uses no Node module or package, and only the types of ports |
 | `contract-imports-nothing` | The contract imports nothing outside itself |
+| `shared-imports-nothing` | `src/shared` imports nothing: no component, package or Node module |
 | `packages-not-from-root-code`, `packages-not-in-root-code` | Nothing under `packages/` imports `src/`, `ui/` or `e2e/`, and none of those imports `packages/`, except an `e2e/` test file driving a package (ADR 0077 §3) |
 
 A directory under `src/` with an index file is a component. Two components

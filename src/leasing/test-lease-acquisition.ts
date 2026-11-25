@@ -38,6 +38,7 @@ import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseRequestBook } from "./lease-request-book.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { WaitQueue } from "./wait-queue.js";
+import { errorMessage } from "../shared/index.js";
 
 export const gibibyte = 1024 ** 3;
 export const request = {
@@ -63,6 +64,7 @@ function config(maxDevices = 1, maxRunning = 1): Pick<Config, "capacity" | "warm
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
+      refillDelayMs: 0,
       reserveRunning: { android: 0, ios: 0 },
       targets: [],
       quarantine: {
@@ -231,7 +233,7 @@ export async function createHarness(
       decisions,
       describeFailure: (error) => ({
         code: error instanceof NoCapacityError ? "NO_CAPACITY" : "INTERNAL",
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       }),
       store: registry,
     }),

@@ -18,6 +18,7 @@ import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface SavedSource {
   readonly sourceId: string;
@@ -242,7 +243,7 @@ export class ReclaimCoordinator {
       .catch((error: unknown) => {
         this.options.logger?.error("deferred reclaim failed", {
           deviceId: device.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
           leaseId,
         });
       })

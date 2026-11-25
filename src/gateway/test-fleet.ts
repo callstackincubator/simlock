@@ -21,6 +21,7 @@ import {
   statusFixture,
 } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
+import { errorMessage } from "../shared/index.js";
 
 export const GATEWAY_PREFIX = "gw:instance-1:";
 
@@ -132,7 +133,7 @@ export function buildFleet(
     directory,
     describeFailure: (error) => ({
       code: "INTERNAL",
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     }),
     leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     eventBus,

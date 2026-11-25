@@ -6,6 +6,7 @@ import {
   UnknownModelError,
 } from "../core/index.js";
 import { type WaitingReason } from "./acquisition-planner.js";
+import { errorMessage } from "../shared/index.js";
 
 export class NoCapacityError extends Error {
   constructor(readonly reason?: WaitingReason) {
@@ -16,7 +17,7 @@ export class NoCapacityError extends Error {
 
 export class ProvisionFailedError extends Error {
   constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    super(errorMessage(cause), { cause });
     this.name = "ProvisionFailedError";
   }
 }

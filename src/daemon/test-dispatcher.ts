@@ -23,6 +23,8 @@ import {
   Nuke,
   PassthroughRefusedError,
   type CatalogReader,
+  type Driver,
+  type VirtualSpec,
   type MemoryPressureReader,
   type PassthroughResolver,
 } from "../core/index.js";
@@ -44,6 +46,24 @@ import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { deviceModeWiring } from "./worker-composition.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
+
+/** why: a driver that offers the seed verbs a test scripts, as the real drivers do; `FakeDriver` offers none. */
+class SeedingDriver extends FakeDriver {
+  constructor(
+    options: FakeDriverOptions,
+    private readonly verbs: Required<Pick<Driver, "ensureSeed" | "settleSeed">>,
+  ) {
+    super(options);
+  }
+
+  ensureSeed(spec: VirtualSpec) {
+    return this.verbs.ensureSeed(spec);
+  }
+
+  settleSeed(sourceId: string, options: { readonly signal: AbortSignal }) {
+    return this.verbs.settleSeed(sourceId, options);
+  }
+}
 
 export const gibibyte = 1024 ** 3;
 
@@ -186,6 +206,8 @@ export async function buildDispatcher(
     /** why: the worker's memory pressure step at the start; a test changes it with `setMemoryPressure`. */
     readonly memoryPressureStep?: MemoryPressureStep;
     readonly warmPool?: Partial<Config["warmPool"]>;
+    /** why: the free disk bytes below which the worker is under disk pressure; a test sets it above what the memory filesystem reports to put the worker there. */
+    readonly diskPressureThreshold?: number;
     /** why: the `ios.defaultMode` `catalog.get` reports. */
     readonly iosDefaultMode?: "slim" | "full";
     /** why: the `ios.modes` the worker serves; the default mode and the leasing engine follow it as the loader and the daemon's wiring do (ADR 0082 §1). */
@@ -196,6 +218,8 @@ export async function buildDispatcher(
     readonly virtualDevices?: Readonly<Partial<Record<"ios" | "android", boolean>>>;
     /** why: the two boot deadlines `config.get` reports. */
     readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };
+    /** why: the seed verbs the worker's driver offers, scripted by the test. */
+    readonly seedVerbs?: Required<Pick<Driver, "ensureSeed" | "settleSeed">>;
     readonly components?: Pick<
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
@@ -237,13 +261,17 @@ export async function buildDispatcher(
     idGenerator: sequence(),
     state,
   });
-  const driver = new FakeDriver({
+  const driverOptions: FakeDriverOptions = {
     availableOsVersions: ["26.5"],
     clock,
     platform: "ios",
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
-  });
+  };
+  const driver =
+    overrides.seedVerbs === undefined
+      ? new FakeDriver(driverOptions)
+      : new SeedingDriver(driverOptions, overrides.seedVerbs);
   const baseConfig = withHttp(
     withGatewayLabel(
       testConfig(
@@ -278,6 +306,9 @@ export async function buildDispatcher(
             android: { ...baseConfig.android, defaultImageTag: overrides.androidDefaultImageTag },
           }),
       warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+      ...(overrides.diskPressureThreshold === undefined
+        ? {}
+        : { diskPressure: { freeBytesThreshold: overrides.diskPressureThreshold } }),
       ios,
       ...(overrides.bootTimeouts === undefined
         ? {}
@@ -372,6 +403,10 @@ export async function buildDispatcher(
     leases: engine,
     ...(overrides.load === undefined ? {} : { load: overrides.load }),
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
+    seeds: {
+      resolveSeedSpec: (request) => engine.leasing.resolveSeedSpec(request),
+      settler: engine.core.seedSettler,
+    },
     ...(overrides.warmKinds === undefined ? {} : { warmKinds: overrides.warmKinds }),
     ...(overrides.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
@@ -388,6 +423,8 @@ export async function buildDispatcher(
   });
   return {
     clock,
+    /** why: the config the dispatcher and the settler share, so a test that lifts disk pressure changes the threshold they both read. */
+    config,
     components: wiring.components,
     dispatcher,
     doctor,

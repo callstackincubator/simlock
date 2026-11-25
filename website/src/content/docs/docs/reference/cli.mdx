@@ -35,6 +35,7 @@ What each command accepts. The **Guide** column links the task page that uses it
 | [`simlock doctor`](#simlock-doctor) | Check the machine and fix Simlock's records | [A worker misbehaves](/simlock/docs/troubleshooting/worker) |
 | [`simlock cleanup`](#simlock-cleanup) | Run the cleanup rules now | [Free disk space](/simlock/docs/worker/free-disk) |
 | [`simlock nuke`](#simlock-nuke) | End every lease and stop every device at once | [Free disk space and reset a machine](/simlock/docs/worker/free-disk) |
+| [`simlock seed`](#simlock-seed) | Make and settle the seed of a model before anyone leases it | [Settle a seed before the first lease](/simlock/docs/worker/capacity) |
 | [`simlock warm`](#simlock-warm) | Forget a kind the warm pool learned from a lease | [Make leases start faster](/simlock/docs/worker/warm-pool) |
 | [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Install iOS runtimes and Android images](/simlock/docs/worker/runtimes-and-images) |
 | [`simlock baseline`](#simlock-baseline) | Save a held device as a named baseline, list baselines, remove one | [Save a prepared device](/simlock/docs/worker/save-a-prepared-device) |
@@ -54,9 +55,10 @@ These flags work anywhere on the command line, before or after the command.
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token for a farm (see [Remote mode](#remote-mode)). `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
-| `--url <url>` | The farm to run the command on: a standalone worker or a gateway, `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. `--url=<url>` also works. A `--url` that is not valid is a usage error. | `SIMLOCK_URL`. See [Remote mode](#remote-mode) |
+| `--url <url>` | The farm to run the command on: a standalone worker or a gateway, `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost` unless you pass `--allow-insecure-http`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. `--url=<url>` also works. A `--url` that is not valid is a usage error. | `SIMLOCK_URL`. See [Remote mode](#remote-mode) |
 | `--gateway` | Send the command to this machine's gateway, the daemon in `~/.simlock/gateway`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--local` | Send the command to this machine's worker, the daemon in `~/.simlock`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
+| `--allow-insecure-http` | Let a farm URL be `http://` to any host, not only `127.0.0.1`, `[::1]` or `localhost`. The token then travels unencrypted. Takes no value (`--allow-insecure-http=1` is a usage error). Read only when a command checks a farm URL. | `SIMLOCK_ALLOW_INSECURE_HTTP=1` |
 | `--help`, `-h` | As the first word, or with no command: print the list of commands. | — |
 
 `--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`. So is `--url` with either of them.
@@ -147,6 +149,8 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--allow-download` | Allow Simlock to download a missing runtime or system image. `downloads.policy` can force downloads on (`always`) or off (`never`). Has no effect through a gateway. | Off |
 | `--export-env` | Print the lease's environment as shell `export` lines in place of the JSON grant, for `eval "$(...)"`. | Off |
 | `--bind-pid <pid>` | Release the lease when this process exits, in place of the command's parent. Positive integer. Ignored with `--detach`. | The parent process |
+
+On a slim iOS simulator the command also prints one `notice` line on stderr, after the grant, that names the slim categories the lease has turned off and the way out: `{"notice":"slim: <categories> off; use --except <name> or --mode full"}` The categories are the iOS catalog's slim set minus the `--except` names the lease kept. The line is absent for a full, Android or physical lease, when `--except` keeps every category, and when the catalog read fails or takes longer than 2 seconds. It changes neither the grant on stdout nor the exit code, and `--detach` and `--export-env` print it too.
 
 Without `--detach`, the command renews the lease every third of its TTL and releases it on `SIGINT`, `SIGTERM`, or when the watched process exits. It exits:
 
@@ -278,7 +282,7 @@ simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<ca
 | `forward <device-port>[:<caller-port>]` | Make `localhost:<caller-port>` on this machine reach `localhost:<device-port>` on the device. It adds no `adb forward` rule. The caller port is 1024 to 65535 and listens on loopback only; the command binds it before it asks the worker for anything. | The caller port is the device port |
 | `emulator adb[:<caller-port>]` | Let your own `adb`, and so Android Studio, list the leased Android emulator as a device and drive it: shell, install, Logcat, the debugger and `adb reverse`. The command runs `adb connect 127.0.0.1:<caller-port>` itself once the worker confirms, and `adb disconnect` when it ends. Name it once; `adb` is the only emulator port. The caller port is 1024 to 65535 and listens on loopback only. A lease on a phone or an iOS simulator is refused with `TUNNEL_UNSUPPORTED`. | A free caller port, printed in the line |
 | `--lease <lease-id>` | The lease to reach, 1 to 256 characters. | An agent token's only lease; an operator token must name one |
-| `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. A `--url` that is not, is a usage error. | `SIMLOCK_URL` |
+| `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost` unless you pass `--allow-insecure-http` or set `SIMLOCK_ALLOW_INSECURE_HTTP=1`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. A `--url` that is not, is a usage error. | `SIMLOCK_URL` |
 | `--token <secret>` | The bearer token, 1 to 4096 characters. | `SIMLOCK_TOKEN` |
 
 It prints one line per tunnel, and runs until Ctrl-C or SIGTERM, which close the tunnels and exit 0:
@@ -542,7 +546,7 @@ simlock doctor [--fix] [--purge-orphans] [--yes]
 | `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record, or a saved baseline's copy that no baseline names. Needs the admin role. Asks for confirmation. | Off |
 | `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
 
-The report also lists, under `sources`, the copies on disk that new devices are made from. Each has `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when it no longer matches the installed runtime, or when an iOS baseline was saved before simulators stopped sharing folders, or from a lease made before that. A baseline source also has `baselineName` and `baselineVersion`. A seed is a simulator Simlock copies to make each iOS simulator a lease gets: it takes disk space but is never leased. A seed with no record, or a baseline copy no baseline names, shows `orphan: true`. That is not a finding; only `--purge-orphans` deletes it.
+The report also lists, under `sources`, the copies on disk that new devices are made from. Each has `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and, for a seed, `settled` (whether its background settle is done) and `leases` (how many devices it has made for leases), and `staleReason` when it no longer matches the installed runtime, or when an iOS baseline was saved before simulators stopped sharing folders, or from a lease made before that. A baseline source also has `baselineName` and `baselineVersion`. A seed is a simulator Simlock copies to make each iOS simulator a lease gets: it takes disk space but is never leased. A seed with no record, or a baseline copy no baseline names, shows `orphan: true`. That is not a finding; only `--purge-orphans` deletes it.
 
 On a worker whose login service names a Node or `main.js` that is gone, the report holds a `service-broken` finding and stderr gets `Service broken: <name> (<manager>) names missing <path>. Run `simlock daemon install` again.` (`<path>, <path>` for two).
 
@@ -614,6 +618,31 @@ simlock nuke [--delete-devices] [--yes]
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+
+## simlock seed
+
+Make the seed of one kind and settle it, so the first leases of that kind start from a settled copy. Waits until the seed is settled, and prints each stage on stderr. Needs the admin role and runs on a worker; a gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2). See [Settle a seed before the first lease](/simlock/docs/worker/capacity).
+
+```text
+simlock seed <ios|android> <model> [--os <version|range>] [--image-tag <tag>] [--json]
+```
+
+| Argument or flag | Meaning | Default |
+| --- | --- | --- |
+| `<ios\|android>` | The platform of the kind. | Required |
+| `<model>` | The exact model name, as `simlock catalog` lists it. | Required |
+| `--os <version\|range>` | The OS version, or a range, as `simlock lease --os` takes it. | The newest installed |
+| `--image-tag <tag>` | The Android system image tag. | The default tag |
+| `--json` | Print the answer as one JSON line, and no stage lines. | Off |
+
+```text
+$ simlock seed ios "iPhone 17"
+seed iPhone 17, iOS 26.5: making the seed…
+seed iPhone 17, iOS 26.5: settling…
+seed iPhone 17, iOS 26.5: settled in 3m01s (1.7 GiB)
+```
+
+A seed that is already settled answers `already settled` with its size. The `--json` answer carries `platform`, `model`, `osVersion`, `imageTag` when the seed has one, `sourceId`, `sizeBytes` when known, `outcome` (`settled` or `already-settled`) and `settledAfterMs` on `settled`. Ctrl-C stops waiting and exits 0; the settle goes on in the daemon. It never downloads a runtime: a missing one fails with `RUNTIME_MISSING`, and a failed or 60-minute settle with `SEED_SETTLE_FAILED`.
 
 ## simlock warm
 
@@ -894,6 +923,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_AGENT_ID` | The requester identity: printable, no control characters, at most 256 characters. When set, it wins over the session variables below. | Unset |
 | `SIMLOCK_RUN` | The run id `simlock lease` gives its lease when `--run` is not given: 1 to 128 letters, digits, `.`, `_` or `-`. An empty value is unset; any other bad value exits 2, naming the variable. Without it, on GitHub Actions (`GITHUB_ACTIONS` is `true` and `GITHUB_RUN_ID` is set), the run id is `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT`. | Unset |
 | `SIMLOCK_URL` | The farm every command runs on, when `--url` is not given; the same rules as `--url`. See [Remote mode](#remote-mode). | Unset |
+| `SIMLOCK_ALLOW_INSECURE_HTTP` | `1` lets a farm URL be `http://` to any host, as `--allow-insecure-http` does; the token then travels unencrypted. Empty counts as unset; any other value is a usage error, and only where a command checks a farm URL. | Unset |
 | `SIMLOCK_TOKEN` | The bearer token sent to the farm, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
 | `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |

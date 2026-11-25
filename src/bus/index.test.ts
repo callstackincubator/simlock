@@ -41,6 +41,8 @@ const EVENT_NAMES: Record<EventName, true> = {
   "component.install-failed": true,
   "component.removed": true,
   "baseline.saved": true,
+  "seed.settle-started": true,
+  "seed.settle-ended": true,
   "baseline.removed": true,
   "baseline.stale": true,
   "device.foreign-state-detected": true,

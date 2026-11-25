@@ -1,0 +1,20 @@
+0 0 19961718750 
+4 0 46875000 
+172 4 0 
+212 4 0 
+760 4 0 
+1112 1104 0 
+1200 1104 0 
+1220 1192 0 
+1276 1200 156250 
+1300 1200 0 
+1312 1200 156250 C:\Windows\system32\lsass.exe
+1388 1192 156250 winlogon.exe
+1508 1276 156250 C:\Windows\system32\svchost.exe -k DcomLaunch -p
+1536 1200 0 "fontdrvhost.exe"
+1544 1388 0 "fontdrvhost.exe"
+1644 1276 312500 C:\Windows\system32\svchost.exe -k RPCSS -p
+1744 1276 468750 C:\Windows\system32\svchost.exe -k LocalSystemNetworkRestricted -p
+1752 1276 156250 C:\Windows\System32\svchost.exe -k NetworkService
+1820 1276 625000 C:\Windows\system32\svchost.exe -k LocalService -p
+1828 1276 0 C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted

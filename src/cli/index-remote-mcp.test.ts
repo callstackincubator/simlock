@@ -326,10 +326,26 @@ async function queuedRequestIsReattachedAfterADrop(): Promise<void> {
   await vi.waitFor(() => expect(meets.exitCode()).toBe(0));
 }
 
+// why: a tool call's connect goes through the typed client, which checks the farm URL again, so it must carry the opt-in `simlock mcp` took.
+async function toolCallsReachAnHttpFarmByTheOptIn(): Promise<void> {
+  const insecure = await serveRemoteMcp({
+    ...ENV,
+    SIMLOCK_ALLOW_INSECURE_HTTP: "1",
+    SIMLOCK_URL: "http://100.75.181.35:7300",
+  });
+  await insecure.tool("lease_simulator", lease);
+  expect(insecure.farm.connections.map(({ url }) => url)).toEqual([
+    "ws://100.75.181.35:7300/v1/session",
+  ]);
+  insecure.stdin.end();
+  await vi.waitFor(() => expect(insecure.exitCode()).toBe(0));
+}
+
 describe("CLI: simlock mcp against a farm", () => {
   it("remote simlock mcp serves its tools from the farm, rides out a drop, and releases at the end", async () => {
     await noTokenStopsAtStart();
     await toolsUseTheFarm();
+    await toolCallsReachAnHttpFarmByTheOptIn();
     await dropsAreRiddenOut();
     await endsWithoutALease();
     await endingTheSessionStopsTheReconnect();

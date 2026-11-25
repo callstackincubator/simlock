@@ -15,7 +15,6 @@ import {
   type DoctorReconcileOptions,
   type DoctorReport,
   type DoctorSource,
-  errorMessage,
   key,
   type OptionalModuleFinding,
   type OrphanDeviceFinding,
@@ -36,6 +35,7 @@ import {
   type WarmTargetFigures,
 } from "./warm-pool/index.js";
 import type { StartupRead } from "./startup-read.js";
+import { errorMessage } from "../shared/index.js";
 
 export type {
   DoctorConfig,
@@ -158,9 +158,7 @@ export class Doctor {
             platform: driver.platform,
           }));
         } catch (error: unknown) {
-          this.#logger.warn(
-            `could not list ${driver.platform} sources: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          this.#logger.warn(`could not list ${driver.platform} sources: ${errorMessage(error)}`);
           return [];
         }
       }),
@@ -173,9 +171,7 @@ export class Doctor {
     try {
       await this.options.baselines?.checkStale();
     } catch (error: unknown) {
-      this.#logger.warn(
-        `could not check baselines for staleness: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.#logger.warn(`could not check baselines for staleness: ${errorMessage(error)}`);
     }
   }
 
@@ -191,7 +187,7 @@ export class Doctor {
       this.#logger.error("Could not purge orphan source", {
         platform: driver.platform,
         sourceId: source.id,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
       return false;
     }

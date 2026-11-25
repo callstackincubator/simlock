@@ -4,6 +4,7 @@ import type { UsageOutput } from "../../contract/index.js";
 import { openUsageReads } from "../../history/index.js";
 import { filterSqliteExperimentalWarning, NodeSqliteOpener } from "../../ports/index.js";
 import { computeUsage, ledgerOf } from "./compute-usage.js";
+import { errorMessage } from "../../shared/index.js";
 
 export interface ReadRequest {
   readonly id: number;
@@ -79,7 +80,7 @@ if (parentPort !== null) {
       (response) => port.postMessage(response),
       (error: unknown) =>
         port.postMessage({
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
           id: request.id,
         } satisfies ReadResponse),
     );

@@ -109,6 +109,12 @@ export interface ErrorDetailsMap {
   UNKNOWN_LEASE: { readonly leaseId: string };
   /** why: a save that ended the lease but kept no baseline: the driver could not make the source. */
   BASELINE_SAVE_FAILED: { readonly name: string; readonly leaseId: string };
+  /** why: ADR 0090 §4: `simlock seed` could not settle a kind's seed: the make or the settle failed, or its 60 minutes ran out. */
+  SEED_SETTLE_FAILED: {
+    readonly platform: Platform;
+    readonly model: string;
+    readonly reason: "failed" | "timed-out";
+  };
   UNKNOWN_BASELINE: { readonly name: string };
   /** why: a lease request named a baseline and a field it also named differs; `field` is the first that differs. */
   BASELINE_MISMATCH: {
@@ -263,6 +269,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   COMPONENT_IN_USE: true,
   UNKNOWN_LEASE: true,
   BASELINE_SAVE_FAILED: true,
+  SEED_SETTLE_FAILED: true,
   UNKNOWN_BASELINE: true,
   BASELINE_MISMATCH: true,
   BASELINE_STALE: true,
@@ -555,6 +562,12 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   COMPONENT_BUSY: { code: "COMPONENT_BUSY", kind: "domain", cliExitCode: 11, httpStatus: 409 },
   BASELINE_SAVE_FAILED: {
     code: "BASELINE_SAVE_FAILED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 500,
+  },
+  SEED_SETTLE_FAILED: {
+    code: "SEED_SETTLE_FAILED",
     kind: "domain",
     cliExitCode: 1,
     httpStatus: 500,
