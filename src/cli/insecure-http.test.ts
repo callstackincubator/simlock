@@ -47,4 +47,28 @@ describe("CLI: plain http to a remote farm by opt-in", () => {
       ]);
     }
   });
+
+  it("an http farm URL to a non-loopback host with no opt-in exits 2 naming the flag and the variable, before it connects", async () => {
+    const refusal = {
+      error: {
+        code: "USAGE",
+        message:
+          "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost; to connect over plain http anyway (the token is sent unencrypted), pass --allow-insecure-http or set SIMLOCK_ALLOW_INSECURE_HTTP=1",
+      },
+    };
+    const refused: { setup: Setup; argv: string[] }[] = [
+      { setup: {}, argv: ["whoami", "--url", TAILSCALE] },
+      { setup: { url: TAILSCALE }, argv: ["whoami"] },
+      { setup: { url: TAILSCALE }, argv: ["tunnel", "forward", "8081"] },
+      { setup: { url: TAILSCALE }, argv: ["files", "list"] },
+      { setup: { url: TAILSCALE }, argv: ["mcp"] },
+      { setup: { insecureVariable: "", url: TAILSCALE }, argv: ["whoami"] },
+    ];
+    for (const { setup, argv } of refused) {
+      const { farm, output, run } = session(setup);
+      expect(await run(argv), argv.join(" ")).toBe(2);
+      expect(JSON.parse(output.stderr), argv.join(" ")).toEqual(refusal);
+      expect(farm.connections, argv.join(" ")).toEqual([]);
+    }
+  });
 });
