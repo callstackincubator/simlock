@@ -501,11 +501,7 @@ export function buildCliEnvironment(
     ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
     ...runFieldsFromEnv(env),
-    ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
-    ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
-    ...(env.SIMLOCK_ALLOW_INSECURE_HTTP === undefined
-      ? {}
-      : { allowInsecureHttpFromEnv: env.SIMLOCK_ALLOW_INSECURE_HTTP }),
+    ...farmFieldsFromEnv(env),
     writeConfigFile: async (contents) => {
       const { DATA_DIRECTORY_MODE } = await import("../ports/index.js");
       await filesystem.mkdirp(dataDirectory, { mode: DATA_DIRECTORY_MODE });
@@ -573,6 +569,20 @@ async function confirmTerminal(question: string): Promise<boolean> {
   } finally {
     prompt.close();
   }
+}
+
+function farmFieldsFromEnv(env: NodeJS.ProcessEnv): {
+  readonly tunnelUrl?: string;
+  readonly tunnelToken?: string;
+  readonly allowInsecureHttpFromEnv?: string;
+} {
+  return {
+    ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
+    ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
+    ...(env.SIMLOCK_ALLOW_INSECURE_HTTP === undefined
+      ? {}
+      : { allowInsecureHttpFromEnv: env.SIMLOCK_ALLOW_INSECURE_HTTP }),
+  };
 }
 
 function runFieldsFromEnv(env: NodeJS.ProcessEnv): {

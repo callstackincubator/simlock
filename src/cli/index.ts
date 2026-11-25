@@ -102,6 +102,17 @@ function takeValueFlag(
   return undefined;
 }
 
+function takeNamedValueFlag(
+  argv: readonly string[],
+  index: number,
+): { readonly name: "token" | "url"; readonly value: string; readonly next: number } | undefined {
+  for (const name of ["token", "url"] as const) {
+    const flag = takeValueFlag(argv, index, name);
+    if (flag !== undefined) return { name, ...flag };
+  }
+  return undefined;
+}
+
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
   readonly url: string | undefined;
@@ -115,12 +126,10 @@ function extractGlobalFlags(argv: readonly string[]): {
   let allowInsecureHttp = false;
   let index = 0;
   while (index < argv.length) {
-    const taken = (["token", "url"] as const)
-      .map((name) => ({ name, flag: takeValueFlag(argv, index, name) }))
-      .find(({ flag }) => flag !== undefined);
-    if (taken?.flag !== undefined) {
-      values[taken.name] = taken.flag.value;
-      index = taken.flag.next;
+    const taken = takeNamedValueFlag(argv, index);
+    if (taken !== undefined) {
+      values[taken.name] = taken.value;
+      index = taken.next;
       continue;
     }
     if (isInsecureHttpFlag(argv[index] as string)) {
